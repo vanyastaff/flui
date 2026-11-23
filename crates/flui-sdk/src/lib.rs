@@ -8,25 +8,29 @@
 //! The crate is **Evolving**: it has its own `0.N` version, bumped on every
 //! train, and its surface may change on any train without a `flui` major.
 //!
-//! - **Whole modules** at the facade's paths: [`animation`], [`foundation`],
-//!   [`geometry`] and [`widgets`] are the internal crates (or, for
-//!   `geometry`, foundation's module) themselves, so `flui_sdk::widgets::Text`
-//!   and `flui::widgets::Text` are one type. [`view`] is a glob of the whole
-//!   `flui-view` crate that shadows its `__runtime` seam (ADR-0081 §4).
-//! - **Curated modules** at the facade's paths: [`interaction`], [`painting`],
-//!   [`platform`] and [`rendering`] hold the subset of the facade's module that
-//!   packages use, as the same items, not wrappers.
+//! - **Whole modules**: [`animation`], [`foundation`], [`geometry`] and
+//!   [`widgets`] are the internal crates (for `geometry`, foundation's module)
+//!   themselves, and [`view`] is a glob of the whole `flui-view` crate. Each
+//!   shadows its `__runtime` seam where it has one (ADR-0081 §4). An item the
+//!   facade also exposes keeps the facade's path, so `flui_sdk::widgets::Text`
+//!   and `flui::widgets::Text` are one type; the facade's `foundation` is
+//!   curated and the SDK's is not.
+//! - **Curated modules** at the facade's paths: [`interaction`], [`painting`]
+//!   (the `paint`, `styling` and `typography` modules whole, and selected root
+//!   items), [`platform`], [`rendering`], [`scheduler`] and [`semantics`] hold
+//!   the subset of the facade's module that packages use, as the same items,
+//!   not wrappers. [`interaction`] also holds `text_input`, which the facade
+//!   does not have.
 //! - **Evolving modules** [`pipeline`] and [`hooks`]: render-object internals
 //!   and development hooks the facade does not expose. A package's exposure to
 //!   them is `grep -E 'flui_sdk::(pipeline|hooks)::'`.
 //!
-//! Each item is here because `flui-material`, `flui-cupertino` or
-//! `flui-devtools` imports it outside its tests, or because an approved
-//! feature spec places it in the package-author surface (the input
-//! completeness spec's placement table: arena observation, gesture presets,
-//! the gesture slots' locks, the swipe recognizer, system preferences, haptic
-//! feedback kinds and input regions);
-//! `tests/surface.rs` pins the list.
+//! An item is here because a package imports it, or because an accepted ADR or
+//! spec places it in the package-author surface (ADR-0088 §4): the capability
+//! seam, drag and drop, the clipboard and primary-selection handles, the
+//! recognizer extension surface, the semantics vocabulary and the system
+//! preferences have no consumer in this repository. `tests/surface.rs` pins
+//! the list.
 
 // Derive expansions use the same absolute owner path in library and integration targets.
 #[allow(
@@ -81,6 +85,16 @@ pub mod view {
     mod __runtime {}
 }
 
+/// The frame scheduler's handles packages hold, at the facade's path: the
+/// asynchronous driver and the token of a task it runs, the post-frame handle,
+/// and the waker that requests a frame.
+pub mod scheduler {
+    pub use flui_scheduler::AsyncDriver;
+    pub use flui_scheduler::FrameWaker;
+    pub use flui_scheduler::PostFrameHandle;
+    pub use flui_scheduler::TaskToken;
+}
+
 /// Platform values: brightness, locale, a clipboard read's answer and a write, haptic
 /// feedback kinds, the host's system preferences (its haptics setting among
 /// them) and every type its accessors return, the target platform (the one a
@@ -107,7 +121,6 @@ pub mod platform {
     pub use flui_platform::InvalidRegionalFormat;
     pub use flui_platform::Locale;
     pub use flui_platform::MeasurementSystem;
-    pub use flui_platform::MemoryPressureLevel;
     pub use flui_platform::MotionPreference;
     pub use flui_platform::NativeMouseGeometry;
     pub use flui_platform::NativeTouchGeometry;
@@ -131,13 +144,17 @@ pub mod platform {
     pub use flui_platform::WheelStep;
     pub use flui_platform::WindowMode;
     pub use flui_platform::WindowState;
-    pub use flui_platform::text::store::Autofill;
-    pub use flui_platform::text::store::Capitalization;
-    pub use flui_platform::text::store::Correction;
-    pub use flui_platform::text::store::EnterAction;
-    pub use flui_platform::text::store::NumberFormat;
-    pub use flui_platform::text::store::TextInputOptions;
-    pub use flui_platform::text::store::TextInputPurpose;
+
+    /// The text store a text field shares with the system's input method.
+    pub mod text_store {
+        pub use flui_platform::text::store::Autofill;
+        pub use flui_platform::text::store::Capitalization;
+        pub use flui_platform::text::store::Correction;
+        pub use flui_platform::text::store::EnterAction;
+        pub use flui_platform::text::store::NumberFormat;
+        pub use flui_platform::text::store::TextInputOptions;
+        pub use flui_platform::text::store::TextInputPurpose;
+    }
 
     /// The capability seam (ADR-0152): what a package declares, provides and
     /// registers a platform capability with, and the owner-thread result of a
@@ -238,6 +255,7 @@ pub mod interaction {
     pub use flui_interaction::gesture::ContestCancel;
     pub use flui_interaction::gesture::DownTake;
     pub use flui_interaction::gesture::DragDownDetails;
+    pub use flui_interaction::gesture::DragEndDetails;
     pub use flui_interaction::gesture::GestureArena;
     pub use flui_interaction::gesture::GestureArenaEntry;
     pub use flui_interaction::gesture::GestureArenaMember;
@@ -253,6 +271,8 @@ pub mod interaction {
     pub use flui_interaction::gesture::GestureSettings;
     pub use flui_interaction::gesture::GestureSettingsProvider;
     pub use flui_interaction::gesture::MotionRole;
+    pub use flui_interaction::gesture::MultiTapCount;
+    pub use flui_interaction::gesture::MultiTapCountError;
     pub use flui_interaction::gesture::ObservedComposition;
     pub use flui_interaction::gesture::ObservedMember;
     pub use flui_interaction::gesture::ObserverHandle;
@@ -284,6 +304,7 @@ pub mod interaction {
     pub use flui_interaction::text_input::SelectionText;
     pub use flui_platform::EventTime;
     pub use flui_platform::input::capabilities::PointerKindSet;
+    pub use flui_platform::input::pointer::ButtonChange;
     pub use flui_platform::input::pointer::PointerKind;
 
     /// Drag-and-drop (ADR-0211): what a source widget starts through the
@@ -327,37 +348,14 @@ pub mod interaction {
 /// `DrawOp` is here for packages' paint tests, which read back the recorded
 /// operations; no package names it outside its tests.
 pub mod painting {
-    pub use flui_foundation::TextDirection;
     pub use flui_painting::Alignment;
     pub use flui_painting::AlignmentDirectional;
     pub use flui_painting::BlurSigma;
     pub use flui_painting::Canvas;
     pub use flui_painting::DrawOp;
     pub use flui_painting::TextSizing;
-    pub use flui_painting::paint::Clip;
-    pub use flui_painting::paint::ClipOp;
-    pub use flui_painting::paint::Morph;
-    pub use flui_painting::paint::Paint;
-    pub use flui_painting::paint::Path;
-    pub use flui_painting::paint::PathCommand;
-    pub use flui_painting::paint::RoundedPolygon;
-    pub use flui_painting::paint::StrokeCap;
-    pub use flui_painting::paint::material_shapes;
-    pub use flui_painting::styling::Border;
-    pub use flui_painting::styling::BorderRadius;
-    pub use flui_painting::styling::BorderRadiusExt;
-    pub use flui_painting::styling::BorderSide;
-    pub use flui_painting::styling::BorderStyle;
-    pub use flui_painting::styling::BoxDecoration;
-    pub use flui_painting::styling::BoxShadow;
-    pub use flui_painting::styling::Color;
-    pub use flui_painting::styling::Shadow;
-    pub use flui_painting::typography::DecorationThickness;
-    pub use flui_painting::typography::FontWeight;
-    pub use flui_painting::typography::TextDecoration;
-    pub use flui_painting::typography::TextDecorationLines;
-    pub use flui_painting::typography::TextDecorationStyle;
-    pub use flui_painting::typography::TextStyle;
+    pub use flui_painting::{paint, styling, typography};
+    pub use flui_rendering::delegates::CustomPainter;
     pub use flui_semantics::SemanticsRegion;
     pub use flui_semantics::SemanticsRegionKey;
 }
@@ -366,13 +364,50 @@ pub mod painting {
 pub mod rendering {
     pub use flui_interaction::pointer::HitTestBehavior;
     pub use flui_rendering::constraints::BoxConstraints;
+    pub use flui_rendering::delegates::FlowDelegate;
+    pub use flui_rendering::delegates::FlowPaintingContext;
+    pub use flui_rendering::delegates::MultiChildLayoutContext;
+    pub use flui_rendering::delegates::MultiChildLayoutDelegate;
+    pub use flui_rendering::delegates::SingleChildLayoutDelegate;
+    pub use flui_rendering::parent_data::TableCellVerticalAlignment;
     pub use flui_rendering::protocol::BoxProtocol;
     pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
 
-    /// The built-in render objects packages compose, at `flui::rendering::objects`.
+    /// The built-in render objects packages compose and the configuration types the widgets
+    /// take from them, at `flui::rendering::objects`.
     pub mod objects {
+        pub use flui_objects::CarouselLayout;
+        pub use flui_objects::CrossAxisAlignment;
+        pub use flui_objects::FloatingHeaderSnapConfiguration;
+        pub use flui_objects::FocusRingStyle;
+        pub use flui_objects::HitShape;
+        pub use flui_objects::MainAxisAlignment;
+        pub use flui_objects::MainAxisSize;
+        pub use flui_objects::StackFit;
+        pub use flui_objects::TableColumnWidth;
         pub use flui_objects::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction};
     }
+}
+
+/// The semantics vocabulary a package's widgets describe themselves with, at the paths
+/// `flui::semantics` uses.
+pub mod semantics {
+    pub use flui_semantics::AutoComplete;
+    pub use flui_semantics::CellPosition;
+    pub use flui_semantics::Current;
+    pub use flui_semantics::HasPopup;
+    pub use flui_semantics::HeadingLevel;
+    pub use flui_semantics::Invalid;
+    pub use flui_semantics::LiveSetting;
+    pub use flui_semantics::NumericRange;
+    pub use flui_semantics::NumericRangeError;
+    pub use flui_semantics::SemanticsAnchor;
+    pub use flui_semantics::SemanticsRole;
+    pub use flui_semantics::SetSize;
+    pub use flui_semantics::SortDirection;
+    pub use flui_semantics::TableShape;
+    pub use flui_semantics::TextSelection;
+    pub use flui_semantics::Toggled;
 }
 
 /// Render internals that the facade does not expose.
@@ -389,15 +424,15 @@ pub mod pipeline {
 /// **Evolving** (ADR-0088 §4), like [`pipeline`]:
 ///
 /// - frame telemetry that development tooling reads. No public API produces a
-///   `FrameSnapshot` yet: the presentation's frame clock is internal to the
-///   app host. A public snapshot source is the follow-up recorded in
-///   ADR-0088's move 4.
+///   `FrameSnapshot`: a UI runtime builds them crate-privately. The gap is
+///   `docs/gaps.md#development-tooling-reads-frame-snapshots-nothing-public-produces`.
 /// - the plugin ABI of `flui-hot-reload`'s dlopen path (ADR-0311 §6): the
 ///   [`PluginPipeline`](hooks::PluginPipeline) a scene plugin mounts its root
 ///   on and the [`Scene`](hooks::Scene) of a retained version it hands back,
 ///   the [`TextContextHandle`](hooks::TextContextHandle) it measures with, and
 ///   the [`LayerTree`](hooks::LayerTree) a scene plugin builds its image from,
-///   which `Scene::new` makes a version. They leave with that path (ADR-0311 §7).
+///   which `Scene::new` makes a version, and the [`SceneError`](hooks::SceneError)
+///   a refused frame reports as its source. They leave with that path (ADR-0311 §7).
 ///
 /// The tree-observation seam is not here; it is `foundation::observe`, at the
 /// facade's path.
@@ -406,6 +441,7 @@ pub mod hooks {
 
     pub use flui_layer::LayerTree;
     pub use flui_layer::Scene;
+    pub use flui_layer::SceneError;
     pub use flui_rendering::pipeline::TextContextHandle;
     pub use flui_scheduler::FrameSnapshot;
     pub use plugin_pipeline::PluginFrameError;

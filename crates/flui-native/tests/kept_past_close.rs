@@ -10,7 +10,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use flui_native::{HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform as _};
+use flui_native::testing::{HeadlessHostWindow, HeadlessPlatform};
+use flui_native::{HostWindow, Platform as _};
 use flui_platform::{
     DispatchEventResult, ImeEvent, PlatformInput, SurfaceTarget, WindowCommand, WindowOptions,
 };
@@ -40,8 +41,7 @@ fn open(
     let window = platform
         .open_window(WindowOptions::default(), handler.clone())
         .expect("a headless window opens");
-    let headless = window
-        .as_any()
+    let headless = (&*window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("the headless platform opens headless windows")
         .clone();

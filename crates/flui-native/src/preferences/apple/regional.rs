@@ -4,7 +4,10 @@
 //! next sample reads the autoupdating locale and calendar again.
 
 // The locale keys are Foundation's statics.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "the locale keys are Foundation's statics, which are read through `unsafe`"
+)]
 
 use flui_platform::{Locale, RegionalFormats};
 use objc2_foundation::{

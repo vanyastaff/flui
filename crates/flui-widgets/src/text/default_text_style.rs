@@ -94,7 +94,7 @@ impl InheritedView for DefaultTextStyle {
         &self.style
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

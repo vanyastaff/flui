@@ -17,8 +17,9 @@
 //! app, just a compile-and-mount smoke check for the facade surface itself.
 
 use flui::prelude::*;
+use flui_testing::find;
+use flui_testing::tester::Tester;
 use flui_testing::widgets::{lay_out, tight};
-use flui_testing::{Tester, find};
 
 /// A trivial tree authored entirely off `flui::prelude::*` — the same import
 /// shape `src/lib.rs`'s crate-level doc-test demonstrates.
@@ -42,7 +43,8 @@ fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
 #[test]
 fn a_fixed_oval_clip_is_configured_through_the_facade() {
     use flui::geometry::{RRect, Rect};
-    use flui::widgets::{ClipOval, Oval};
+    use flui::rendering::objects::Oval;
+    use flui::widgets::ClipOval;
 
     let bounds = Rect::from_ltrb(20.0, 30.0, 80.0, 70.0);
     let tree = lay_out(

@@ -9,8 +9,10 @@
 //! stateful wrapper through the `RebuildHandle` it captured at mount
 //! (ADR-0018).
 
-// `unwrap` in test code: a panic IS the failure report (docs/PANIC-POLICY.md).
-#![expect(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic from `unwrap` is the test failure report (docs/PANIC-POLICY.md)"
+)]
 
 use crate::common;
 
@@ -22,7 +24,7 @@ use common::{lay_out, loose};
 use flui_cupertino::{
     CupertinoApp, CupertinoColor, CupertinoColors, CupertinoTheme, CupertinoThemeData,
 };
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;

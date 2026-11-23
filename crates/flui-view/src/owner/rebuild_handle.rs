@@ -5,7 +5,7 @@
 //!
 //! An owned, cloneable, thread-safe capability to schedule **one specific
 //! element** for rebuild on the next frame. It is what a `ViewState` captures in
-//! `init_state` so that a callback firing later — an async completion, a stream
+//! `create_state` so that a callback firing later — an async completion, a stream
 //! event, a worker thread — can ask for a rebuild without holding any borrow of
 //! the tree, the owner, or the context.
 //!
@@ -18,7 +18,7 @@
 //! A burst of calls between frames collapses to one entry while retaining every
 //! distinct cause; only the first asks the binding for a frame.
 //! `BuildOwner::build_scope` absorbs that inbox throughout the drain — at the
-//! top of every heap pop, not only once at the start (issue #1180) — so a
+//! top of every heap pop, not only once at the start — so a
 //! `schedule` call made from a build already in progress joins that SAME
 //! drain instead of waiting for the next frame. Either way, the element is
 //! marked dirty and rebuilt on the frame thread, never inline at `schedule`
@@ -67,7 +67,7 @@ struct Active {
 /// rebuild.
 ///
 /// Obtain one from [`LifecycleContext::rebuild_handle`](crate::context::LifecycleContext::rebuild_handle)
-/// inside `init_state`, store it in your `ViewState`, and call
+/// in `StatefulView::create_state`, keep it in your `ViewState`, and call
 /// [`schedule`](Self::schedule) from a completion callback on any thread.
 ///
 /// The rebuild itself runs on the frame thread during the next frame's build
@@ -76,14 +76,31 @@ struct Active {
 /// # Example
 ///
 /// ```rust,ignore
-/// fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-///     let handle = ctx.rebuild_handle();
-///     std::thread::spawn(move || {
-///         let value = expensive();
-///         *shared.lock() = Some(value);
-///         handle.schedule(RebuildReason::StateChange);
-///         // Rebuilds on the next frame, on the frame thread.
-///     });
+/// struct WorkerState {
+///     rebuild: RebuildHandle,
+///     result: Arc<Mutex<Option<Value>>>,
+/// }
+///
+/// impl StatefulView for Worker {
+///     type State = WorkerState;
+///
+///     fn create_state(&self, ctx: &dyn LifecycleContext) -> WorkerState {
+///         // The state is born bound: the handle is a field, not an `Option`.
+///         WorkerState { rebuild: ctx.rebuild_handle(), result: Arc::default() }
+///     }
+/// }
+///
+/// impl ViewState<Worker> for WorkerState {
+///     fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+///         let rebuild = self.rebuild.clone();
+///         let result = Arc::clone(&self.result);
+///         std::thread::spawn(move || {
+///             *result.lock() = Some(expensive());
+///             rebuild.schedule(RebuildReason::StateChange);
+///             // Rebuilds on the next frame, on the frame thread.
+///         });
+///     }
+///     // `build` reads `self.result`.
 /// }
 /// ```
 #[derive(Clone)]
@@ -118,9 +135,8 @@ impl RebuildHandle {
     /// Called from a build already in progress (this handle's owner, or any
     /// other element, calling it synchronously on the owner thread), the
     /// rebuild joins that SAME `build_scope` drain instead — absorbed at the
-    /// top of the drain's next heap pop, not deferred a whole frame (issue
-    /// #1180). Either way this call itself only writes to the shared inbox
-    /// and (on a fresh entry) fires the frame-request hook; it never mutates
+    /// top of the drain's next heap pop, not deferred a whole frame. Either way
+    /// this call itself only writes to the shared inbox
     /// the tree inline.
     ///
     /// Callable from **any thread**. Idempotent within one absorption window:
@@ -187,17 +203,18 @@ mod tests {
     };
 
     use crate::{
-        BuildOwner, LifecycleContext, RebuildHandle, RebuildReason,
+        LifecycleContext, RebuildHandle, RebuildReason,
         context::BuildContext,
+        owner::BuildOwner,
         tree::ElementTree,
-        view::{IntoView, RenderView, RootRenderView, StatefulView, View, ViewState},
+        view::{IntoView, RenderView, RootRenderView, StatefulView, View, ViewExt, ViewState},
     };
 
-    /// A stateful view whose state captures a `RebuildHandle` in `init_state` —
-    /// the exact shape ADR-0018's `FutureBuilder` will use.
+    /// A stateful view whose state hands the `RebuildHandle` it was created
+    /// with to the test.
     #[derive(Clone, Debug)]
     struct Capturing {
-        /// Where the state parks the handle it captured.
+        /// Where `create_state` parks the handle it was given.
         captured: Arc<parking_lot::Mutex<Option<RebuildHandle>>>,
         /// Counts `build` calls, to observe that a schedule caused a rebuild.
         builds: Arc<AtomicUsize>,
@@ -205,27 +222,21 @@ mod tests {
 
     #[derive(Debug)]
     struct CapturingState {
-        captured: Arc<parking_lot::Mutex<Option<RebuildHandle>>>,
         builds: Arc<AtomicUsize>,
     }
 
     impl StatefulView for Capturing {
         type State = CapturingState;
 
-        fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+            // The capability outlives the borrow of `ctx`.
+            let _prev = self.captured.lock().replace(ctx.rebuild_handle());
             CapturingState {
-                captured: Arc::clone(&self.captured),
                 builds: Arc::clone(&self.builds),
             }
         }
     }
-
     impl ViewState<Capturing> for CapturingState {
-        fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-            // The capability outlives the borrow of `ctx`.
-            let _prev = self.captured.lock().replace(ctx.rebuild_handle());
-        }
-
         fn build(&self, _view: &Capturing, _ctx: &dyn BuildContext) -> impl IntoView {
             self.builds.fetch_add(1, Ordering::Relaxed);
             Leaf
@@ -293,14 +304,14 @@ mod tests {
         // would orphan `Leaf`'s render object (the mount-time refusal shape).
         let render_root = RootRenderView::new(view);
         let render_root_element = tree.mount_root_with_pipeline_owner(
-            &render_root,
+            &render_root.boxed(),
             Some(PipelineCell::new(PipelineOwner::new(
                 flui_rendering::TextContextHandle::standalone(),
             ))),
             &mut owner.element_owner_mut(),
         );
 
-        // `init_state` runs during the first build, which also reconciles the
+        // `create_state` runs during the first build, which also reconciles the
         // content child under the render root.
         owner.schedule_build_for(render_root_element, 0, RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
@@ -312,11 +323,11 @@ mod tests {
         let handle = captured
             .lock()
             .clone()
-            .expect("init_state must have captured a handle");
+            .expect("create_state must have captured a handle");
         (owner, tree, handle, builds, root)
     }
 
-    // ── 1. captured in init_state, usable afterwards ────────────────────────
+    // ── 1. captured in create_state, usable afterwards ──────────────────────
 
     // ── 2. coalescing ───────────────────────────────────────────────────────
 

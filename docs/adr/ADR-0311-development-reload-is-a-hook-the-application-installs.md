@@ -8,6 +8,9 @@
   [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   for the `xtask send-positions` gate only (Confirmation): the rule stands and its reader confirms
   it.
+  [ADR-0391](ADR-0391-every-native-host-drives-the-scene-frame.md) for §4's `DevSceneHook` column
+  and its sentence on a desktop scene plugin's own driver only: every native host asks the scene
+  hook for each presentation's frame.
 - **Related:** [ADR-0094](ADR-0094-hot-reload-through-subsecond.md) (the rejected Subsecond
   record this one takes the seam from); [ADR-0108](ADR-0108-plugin-scene-render-callback-safety.md)
   (the scene callback's lifetime contract); [ADR-0111](ADR-0111-worker-image-lifetime.md) (worker
@@ -42,10 +45,10 @@ is rejected, so the seam had no accepted record. What `main` holds:
 | The application installs one instance, `AppConfig::dev_reload(impl DevReloadHook)`, and every clone of the configuration shares it | `crates/flui-app/src/app/config.rs` |
 | The `Send` bound is there only because the instance travels inside `AppConfig`, which is `Send`; every call is on the owner thread | the trait's docs; `crates/flui-app/src/app/hot_reload.rs` |
 | The host keeps the instance in `Arc<Mutex<Slot>>`, lends it out of the slot for each call and catches each call's panic by hand | `crates/flui-app/src/app/hot_reload.rs` (`DevReload`, `lend`, `disable`) |
-| Hosts call different methods: desktop and iOS `attach`, `poll` and `detach`; Android only `scene_frame`; the web none. A worker hook does nothing on Android, a scene hook nothing elsewhere | the trait's module table; `runner/desktop.rs`, `runner/ios.rs`, `runner/main_window.rs`, `runner/android.rs` |
+| Hosts called different methods when this record was accepted: desktop and iOS `attach`, `poll` and `detach`; Android only `scene_frame`; the web none. A worker hook did nothing on Android, a scene hook nothing elsewhere ([ADR-0391](ADR-0391-every-native-host-drives-the-scene-frame.md) has every native host ask the scene hook) | the trait's module table; `runner/desktop.rs`, `runner/ios.rs`, `runner/main_window.rs`, `runner/android.rs` |
 | `flui-app` has no edge to `flui-hot-reload` under any feature | `FACTS` in `tools/xtask/src/workspace/reach.rs` |
 | `flui-hot-reload` is an official package (`tier-kind = "official"`) under `packages/`, implementing both hooks behind its `host-hook` feature | `packages/flui-hot-reload/Cargo.toml`, `src/hook.rs` |
-| Ten manifest exceptions are debt of the dlopen path: in `flui-hot-reload` two `reach-exceptions` and six `globals`; in `flui-view` two `globals` (`REGISTRY_STACK` and `TEST_REGISTRY`, `ManuallyDrop` for a hot-reload `cdylib`) | the manifests' `[package.metadata.flui]` |
+| Nine manifest exceptions are debt of the dlopen path: in `flui-hot-reload` two `reach-exceptions` and six `globals`; in `flui-view` one `globals` (`REGISTRY_STACK`, `ManuallyDrop` for a hot-reload `cdylib`) | the manifests' `[package.metadata.flui]` |
 
 What is the contract of the reload seam, independent of the tool behind it, and where do the dlopen
 path's exceptions exit?
@@ -182,15 +185,16 @@ lent scene is rendered inline (ADR-0305 §10).
 
 | Host | `DevReloadHook` | `DevSceneHook` |
 |---|---|---|
-| Windows, macOS, Linux | `attach`, `poll` at each boundary, `detach` | not driven |
-| iOS | `attach`, `poll` at each boundary, `detach` | not driven |
+| Windows, macOS, Linux | `attach`, `poll` at each boundary, `detach` | `scene_frame` every presentation's frame ([ADR-0391](ADR-0391-every-native-host-drives-the-scene-frame.md)) |
+| iOS | `attach`, `poll` at each boundary, `detach` | `scene_frame` every presentation's frame ([ADR-0391](ADR-0391-every-native-host-drives-the-scene-frame.md)) |
 | Android | not driven | `scene_frame` every frame |
 | Web | not driven | not driven |
 
 A host that does not drive an installed hook never calls its factory and logs once, when its loop
-starts, that the hook is not driven there. A desktop scene plugin runs through the package's own
-driver in the application's frame loop (`packages/flui-hot-reload/examples/scene_render.rs`), not through the host. Widget
-reload on Android and the web is a shortfall in `docs/gaps.md`, not part of this contract.
+starts, that the hook is not driven there. Every native host asks the scene hook for each
+presentation's frame through one seam in `flui-app`, and a window whose executor turns on a raster
+thread asks it nothing ([ADR-0391](ADR-0391-every-native-host-drives-the-scene-frame.md) §1, §2).
+Widget reload on Android and the web is a shortfall in `docs/gaps.md`, not part of this contract.
 
 §5. **A hook's failure costs hot reload, never the frame.** The factory and every hook method are
 user code:
@@ -242,7 +246,7 @@ user code:
   the package implements the hooks today. The framework states no rule about them; ADR-0108 and
   ADR-0111 hold their lifetime contracts.
 - What the path keeps in the framework is debt whose `exit` is this record: `flui-view`'s
-  `REGISTRY_STACK` and `TEST_REGISTRY` in `ManuallyDrop` form; the package's `globals` entries
+  `REGISTRY_STACK` in `ManuallyDrop` form; the package's `globals` entries
   (`dispatch::REQUEST_REBUILD`, the three statics `app_plugin!` emits,
   `worker::REGISTRATION_SESSION`, `worker::WORKER_BUILDS`); its `reach-exceptions` for `windows`
   and `android_log-sys`, which the loader needs.
@@ -318,8 +322,8 @@ user code:
 - Good, because nothing changes and the tests already pass.
 - Bad, because `Send` stays on a value that never leaves the owner thread, and the host keeps it
   behind `Arc<Mutex<_>>`, both in the "Not" column.
-- Bad, because one trait holds two roles that no host calls together: a worker hook does nothing on
-  Android, a scene hook nothing on the desktop, and the trait's docs carry the table that says so.
+- Bad, because one trait holds two roles that a host may not call together: a worker hook does
+  nothing on Android, and the trait's docs carry the table that says which host calls which.
 - Bad, because one instance cannot serve two owner threads.
 
 ### 2. A factory, an owner-thread hook and a scene hook of its own (chosen)

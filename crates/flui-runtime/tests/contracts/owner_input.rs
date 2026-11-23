@@ -521,7 +521,7 @@ fn pending_metrics_do_not_cross_ordered_operations() {
 fn a_runtime_starts_in_its_window_lifecycle() {
     use flui_scheduler::AppLifecycleState::{Hidden, Inactive, Resumed};
 
-    let window = Rc::new(flui_testing::MockWindow::new().visible(false));
+    let window = Rc::new(flui_platform::testing::MockWindow::new().visible(false));
     let runtime = UiRuntime::for_test_with_window(window);
     assert_eq!(runtime.scheduler().lifecycle_state(), Hidden);
     let observed = Rc::new(RefCell::new(Vec::new()));
@@ -543,7 +543,7 @@ fn a_runtime_starts_in_its_window_lifecycle() {
     // focused takes the focus, and the first window steps down to Inactive.
     let mut runtime = runtime;
     let hidden: Rc<dyn flui_platform::PlatformWindow> =
-        Rc::new(flui_testing::MockWindow::new().visible(false));
+        Rc::new(flui_platform::testing::MockWindow::new().visible(false));
     let hidden = runtime.assemble_presentation(hidden);
     let hidden = runtime.install_presentation(hidden);
     runtime.synchronize_window_snapshot(hidden, WindowExecutionState::Running, false, false);
@@ -551,7 +551,7 @@ fn a_runtime_starts_in_its_window_lifecycle() {
     runtime.update_window_visibility(id, false);
     assert_eq!(*observed.borrow(), [Inactive, Resumed, Inactive, Hidden]);
     let focused: Rc<dyn flui_platform::PlatformWindow> =
-        Rc::new(flui_testing::MockWindow::new().focused(true));
+        Rc::new(flui_platform::testing::MockWindow::new().focused(true));
     let focused = runtime.assemble_presentation(focused);
     let focused = runtime.install_presentation(focused);
     runtime.synchronize_window_snapshot(focused, WindowExecutionState::Running, true, true);
@@ -981,7 +981,7 @@ fn a_platform_entry_while_the_runtime_is_checked_out_runs_no_owner_code() {
 
     let owner = OwnerHost::new();
     let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
-        std::sync::Arc::new(flui_native::FakeTextInput::new());
+        std::sync::Arc::new(flui_native::testing::FakeTextInput::new());
     let mut runtime = UiRuntime::for_test_with_text_input(Some(text_input));
     let store = InMemoryTextStore::new("ab");
     let erased: Rc<dyn TextStore> = store.clone(); // the presentation holds the field's store through the erased contract.

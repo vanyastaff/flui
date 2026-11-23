@@ -1,7 +1,7 @@
 use flui_sdk::animation::MotionValue;
 use flui_sdk::{animation::AnimationVector, geometry::Lerp};
 use flui_sdk::geometry::Offset;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 
 type Position = Offset<f64>;
 

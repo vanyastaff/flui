@@ -89,8 +89,7 @@ impl UiRuntime {
     }
 
     /// Number of presentations this UI runtime currently hosts — for the
-    /// isolation test suite (production topology allows any number since
-    /// this slice lifted `PresentationForest`'s former ratchet).
+    /// isolation test suite (production topology allows any number).
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_count(&self) -> usize {
@@ -108,7 +107,10 @@ impl UiRuntime {
     /// If `id` names no presentation of this UI runtime.
     #[cfg(any(test, feature = "testing"))]
     #[must_use]
-    pub fn presentation_widgets_for_test(&self, id: PresentationId) -> &flui_view::WidgetsBinding {
+    pub fn presentation_widgets_for_test(
+        &self,
+        id: PresentationId,
+    ) -> &flui_view::__runtime::WidgetsBinding {
         self.presentations
             .get(id)
             .expect("BUG: presentation_widgets_for_test called with an unknown id")
@@ -167,9 +169,7 @@ impl UiRuntime {
     }
 
     /// Install an already-[`assembled`](Self::assemble_presentation)
-    /// presentation into this UI runtime's forest — the production entry point
-    /// (this slice lifted `PresentationForest::install`'s former
-    /// `len()<=1` ratchet).
+    /// presentation into this UI runtime's forest — the production entry point.
     ///
     /// The caller is responsible for minting this presentation's
     /// `WindowRegistry` mapping BEFORE calling this (typically between
@@ -307,7 +307,7 @@ impl UiRuntime {
     #[cfg(test)]
     pub(crate) fn install_second_presentation_for_test(&mut self) -> PresentationId {
         let window: Rc<dyn flui_platform::PlatformWindow> =
-            Rc::new(flui_testing::MockWindow::new().focused(false));
+            Rc::new(flui_platform::testing::MockWindow::new().focused(false));
         let presentation = self.assemble_presentation(window);
         self.install_presentation(presentation)
     }
@@ -440,7 +440,7 @@ impl UiRuntime {
     /// only: a caller that drives the tree through it outside
     /// [`Self::enter`] bypasses the UI runtime's entry scope.
     #[must_use]
-    pub fn widgets(&self) -> &flui_view::WidgetsBinding {
+    pub fn widgets(&self) -> &flui_view::__runtime::WidgetsBinding {
         self.presentations.primary().widgets()
     }
 
@@ -577,8 +577,8 @@ impl UiRuntime {
         presentation.gestures().cancel_active_pointers();
     }
 
-    /// Focus state for the UI runtime's current primary presentation. Since
-    /// issue #555's addressed-routing slice, [`Self::handle_input_addressed`] reads the ADDRESSED
+    /// Focus state for the UI runtime's current primary presentation.
+    /// [`Self::handle_input_addressed`] reads the ADDRESSED
     /// presentation's own `focus_manager()` directly instead of through this
     /// primary-only wrapper; kept for the tests that still exercise a
     /// single-presentation UI runtime's focus tree without addressing.
@@ -630,8 +630,7 @@ impl UiRuntime {
     }
 
     /// Apply a hot reload at the given tier,
-    /// requesting a redraw if it actually changed anything. Moved here from
-    /// the retired `AppBinding::perform_hot_reload_entered`.
+    /// requesting a redraw if it actually changed anything.
     #[cfg(feature = "hot-reload")]
     pub fn perform_hot_reload_entered(&self, tier: crate::reload::ReloadTier) {
         if self.apply_hot_reload(tier) {

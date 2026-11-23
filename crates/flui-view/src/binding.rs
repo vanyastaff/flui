@@ -12,13 +12,13 @@
 //!   ├── build_owner: BuildOwner     (manages dirty elements)
 //!   ├── element_tree: ElementTree   (stores elements)
 //!   ├── root_element: ElementId     (root of element tree)
-//!   └── observers: Vec<Observer>    (lifecycle notifications)
+//!   └── lifecycle: LifecycleSource (app lifecycle state and its subscribers)
 //! ```
 //!
 //! # Usage
 //!
 //! ```rust,ignore
-//! use flui_view::WidgetsBinding;
+//! use flui_view::__runtime::WidgetsBinding;
 //!
 //! // The UiRuntime owns the binding; construct it directly.
 //! let binding = WidgetsBinding::new();
@@ -32,16 +32,11 @@
 
 mod tree_cell;
 
-use std::{
-    cell::RefCell,
-    future::Future,
-    pin::Pin,
-    rc::Rc,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-};
+use std::{cell::RefCell, rc::Rc};
+
+// The build-phase flag is a debug assertion: release builds carry no `Cell`.
+#[cfg(debug_assertions)]
+use std::cell::Cell;
 
 use flui_foundation::ElementId;
 use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
@@ -54,226 +49,14 @@ use tree_cell::TreePhase;
 use crate::{
     owner::{BuildOwner, RecoveredPanic},
     tree::ElementTree,
-    view::{RootRenderView, View},
+    view::{BoxedView, RootRenderView, View},
 };
-
-// ============================================================================
-// Route Information
-// ============================================================================
-
-/// Information about a route for navigation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteInformation {
-    /// The URI of the route (path + query + fragment).
-    pub uri: String,
-    /// Optional state key associated with this route.
-    /// A string key that can reference stored state elsewhere, rather than
-    /// carrying arbitrary state.
-    pub state_key: Option<String>,
-}
-
-impl RouteInformation {
-    /// Create a new RouteInformation with just a URI.
-    pub fn new(uri: impl Into<String>) -> Self {
-        Self {
-            uri: uri.into(),
-            state_key: None,
-        }
-    }
-
-    /// Create a new RouteInformation with URI and state key.
-    pub fn with_state_key(uri: impl Into<String>, state_key: impl Into<String>) -> Self {
-        Self {
-            uri: uri.into(),
-            state_key: Some(state_key.into()),
-        }
-    }
-}
-
-// ============================================================================
-// View Focus Event
-// ============================================================================
-
-/// Event describing a change in view focus state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ViewFocusEvent {
-    /// The view ID that changed focus.
-    pub view_id: u64,
-    /// Whether the view gained or lost focus.
-    pub state: ViewFocusState,
-    /// The direction of focus change.
-    pub direction: ViewFocusDirection,
-}
-
-/// The state of view focus.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[expect(clippy::exhaustive_enums, reason = "a view gains focus or loses it")]
-pub enum ViewFocusState {
-    /// View gained focus.
-    Focused,
-    /// View lost focus.
-    Unfocused,
-}
-
-/// The direction of focus change.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ViewFocusDirection {
-    /// Focus moved forward (e.g., Tab).
-    Forward,
-    /// Focus moved backward (e.g., Shift+Tab).
-    Backward,
-    /// Focus changed without direction (e.g., mouse click).
-    Undefined,
-}
-
-// ============================================================================
-// Predictive Back Event (Android)
-// ============================================================================
-
-/// Event for predictive back gesture (Android 13+).
-#[derive(Debug, Clone, Copy)]
-pub struct PredictiveBackEvent {
-    /// Progress of the back gesture (0.0 to 1.0).
-    pub progress: f64,
-    /// X coordinate of the touch.
-    pub touch_x: f64,
-    /// Y coordinate of the touch.
-    pub touch_y: f64,
-    /// Whether the swipe is from the left edge.
-    pub swipe_edge_left: bool,
-}
-
-// ============================================================================
-// WidgetsBindingObserver
-// ============================================================================
-
-/// Observer for widgets binding lifecycle events.
-///
-/// Implement this trait to receive notifications about:
-/// - Locale changes
-/// - Metrics changes (window resize)
-/// - App lifecycle changes
-/// - Memory pressure
-/// - Navigation events
-/// - Back gestures (Android predictive back)
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use flui_view::{WidgetsBindingObserver, AppLifecycleState};
-/// use std::future::Future;
-/// use std::pin::Pin;
-///
-/// struct MyObserver;
-///
-/// impl WidgetsBindingObserver for MyObserver {
-///     fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
-///         println!("App lifecycle changed to: {:?}", state);
-///     }
-///
-///     fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
-///         Box::pin(async {
-///             // Handle back navigation
-///             true // We handled it
-///         })
-///     }
-/// }
-/// ```
-pub trait WidgetsBindingObserver {
-    // ========================================================================
-    // Navigation
-    // ========================================================================
-
-    /// Called when the system tells the app to pop the current route.
-    ///
-    /// This is triggered by the system back button or back gesture.
-    /// Return `true` if handled (e.g., by closing a dialog), `false` otherwise.
-    /// If no observer returns `true`, the application may quit.
-    fn did_pop_route(&self) -> Pin<Box<dyn Future<Output = bool> + '_>> {
-        Box::pin(async { false })
-    }
-
-    /// Called when the host tells the app to push a new route.
-    ///
-    /// Return `true` if handled, `false` otherwise.
-    fn did_push_route_information(
-        &self,
-        _route: &RouteInformation,
-    ) -> Pin<Box<dyn Future<Output = bool> + '_>> {
-        Box::pin(async { false })
-    }
-
-    // ========================================================================
-    // Predictive Back Gesture (Android 13+)
-    //
-    // REMOVE_BY: 2026-12-22 — scheduled cleanup reminder. These four trait
-    // methods + the matching `WidgetsBinding::handle_*_back_gesture`
-    // impls + the `back_gesture_observers` storage are Android-13+
-    // infrastructure waiting on the `flui-native` Android wire-up. No
-    // in-workspace `impl WidgetsBindingObserver` overrides them today.
-    // Still deferred: the `flui-native` Android backend is compiled
-    // and linted in CI but dispatches no back-gesture events — nothing
-    // in the workspace constructs a `PredictiveBackEvent` outside this
-    // crate — so there is still nothing to wire this surface to. By
-    // this date either delete the whole surface (no consumer
-    // materialized) OR wire the platform side and drop this marker.
-    // ========================================================================
-
-    /// Called at the start of a predictive back gesture.
-    ///
-    /// Return `true` to handle the gesture (start animation), `false`
-    /// otherwise. If `true`, subsequent gesture events will be sent to this
-    /// observer.
-    fn handle_start_back_gesture(&self, _event: PredictiveBackEvent) -> bool {
-        false
-    }
-
-    /// Called when a predictive back gesture moves.
-    ///
-    /// Only called if `handle_start_back_gesture` returned `true`.
-    fn handle_update_back_gesture_progress(&self, _event: PredictiveBackEvent) {}
-
-    /// Called when a predictive back gesture is committed.
-    ///
-    /// The route should be popped.
-    fn handle_commit_back_gesture(&self) {}
-
-    /// Called when a predictive back gesture is canceled.
-    ///
-    /// The animation should be reversed.
-    fn handle_cancel_back_gesture(&self) {}
-
-    // ========================================================================
-    // Metrics and Display
-    // ========================================================================
-
-    /// Called when window metrics change (size, DPI, etc).
-    ///
-    /// System preferences (locales, text scale, contrast, motion) and the
-    /// presentation's brightness reach widgets through `MediaQuery` and its
-    /// field-specific dependencies (ADR-0172), not through this observer.
-    fn did_change_metrics(&self) {}
-
-    // ========================================================================
-    // App Lifecycle
-    // ========================================================================
-
-    /// Called when app lifecycle state changes.
-    fn did_change_app_lifecycle_state(&self, _state: AppLifecycleState) {}
-
-    /// Called when the view focus changes.
-    fn did_change_view_focus(&self, _event: ViewFocusEvent) {}
-}
 
 /// Application lifecycle states.
 ///
-/// Re-exported from [`flui_scheduler::AppLifecycleState`] — the canonical
-/// lifecycle enum (`UpdateScheduler::handle_app_lifecycle_state_change`).
-/// `flui-view` previously defined its own parallel
-/// `Resumed`/`Inactive`/`Hidden`/`Paused`/`Detached` enum; the two were
-/// consolidated onto the scheduler's copy (ADR-0035) since it is the one
-/// tied to real frame-scheduling behavior (`frames_enabled`).
+/// Re-exported from [`flui_scheduler::AppLifecycleState`], the one lifecycle
+/// enum (`UpdateScheduler::handle_app_lifecycle_state_change`), which is tied
+/// to frame-scheduling behavior (`frames_enabled`) (ADR-0035).
 pub use flui_scheduler::AppLifecycleState;
 
 /// The owner-local binding for one widgets layer.
@@ -281,7 +64,7 @@ pub use flui_scheduler::AppLifecycleState;
 /// WidgetsBinding manages:
 /// - A single ElementTree rooted at `root_element`
 /// - A BuildOwner that tracks dirty elements
-/// - Lifecycle observers
+/// - The app lifecycle state and its subscribers
 /// - First frame tracking
 ///
 /// # Ownership
@@ -321,52 +104,15 @@ pub struct WidgetsBinding {
     /// it with the cell's borrow released.
     on_need_frame: RefCell<Option<Rc<dyn Fn()>>>,
 
-    /// Whether the first frame has been rasterized.
-    first_frame_rasterized: AtomicBool,
-
-    /// Whether binding is ready to produce frames.
-    ready_to_produce_frames: AtomicBool,
-
-    /// Whether we are currently building dirty elements (debug-only flag).
+    /// Whether a frame is building dirty elements (debug builds only).
     ///
-    /// Hoisted out of `WidgetsBindingInner` so that `handle_build_scheduled`
-    /// can check it WITHOUT taking the `inner` RwLock. This eliminates the
-    /// deadlock that would occur when `schedule_build_for` is called from
-    /// inside `build_scope` (which holds `inner.write()`) and the
-    /// `on_build_scheduled` callback calls `handle_build_scheduled`:
-    ///
-    /// * Before (broken): callback → `handle_build_scheduled` → `inner.read()`
-    ///   → parking_lot non-reentrant read-under-write → deadlock.
-    /// * After (E0a): callback → `handle_build_scheduled` → atomic load →
-    ///   no lock acquired.
-    ///
-    /// The flag is set/cleared in `draw_frame` at the same program points
-    /// the previous `inner.debug_building_dirty_elements` field was, so the
-    /// semantics are unchanged.
+    /// Outside `inner`: `handle_build_scheduled` runs from inside
+    /// `build_scope` (the `on_build_scheduled` callback) while the frame
+    /// holds `inner`, so it reads this flag without borrowing the tree.
+    /// `draw_frame_impl` sets it for the frame and a guard clears it on
+    /// every exit, unwinding included.
     #[cfg(debug_assertions)]
-    debug_building_dirty_elements: AtomicBool,
-}
-
-// Each physical registry member and notification snapshot owns its own
-// reference; it is destroyed normally (ADR-0281).
-#[derive(Clone)]
-struct BindingObserverOwner(Arc<dyn WidgetsBindingObserver>);
-
-impl BindingObserverOwner {
-    fn new(observer: Arc<dyn WidgetsBindingObserver>) -> Self {
-        Self(observer)
-    }
-
-    fn as_arc(&self) -> &Arc<dyn WidgetsBindingObserver> {
-        &self.0
-    }
-}
-
-impl std::ops::Deref for BindingObserverOwner {
-    type Target = dyn WidgetsBindingObserver;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
+    debug_building_dirty_elements: Cell<bool>,
 }
 
 /// Which build pass of a frame [`WidgetsBinding::draw_frame_impl`] runs.
@@ -393,22 +139,6 @@ struct WidgetsBindingInner {
     /// This is set by the application binding (`flui-app`'s `UiRuntime`)
     /// and propagated to elements during mounting.
     pipeline_owner: Option<PipelineCell>,
-
-    /// Lifecycle observers.
-    observers: Vec<BindingObserverOwner>,
-
-    /// Observers currently handling a predictive back gesture (Android).
-    ///
-    // REMOVE_BY: 2026-12-22 — scheduled cleanup reminder. The predictive-
-    // back-gesture surface (`handle_*_back_gesture` trait methods +
-    // `back_gesture_observers` storage + `WidgetsBinding::handle_*_
-    // back_gesture` impls) is Android-13+ infrastructure waiting on the
-    // `flui-native` Android side, which still dispatches no such
-    // events — see the matching marker on the trait surface above for
-    // the verified detail. By this date either delete this surface (no
-    // consumer materialized) OR wire the platform side and drop this
-    // marker.
-    back_gesture_observers: Vec<BindingObserverOwner>,
 
     /// Whether a build has been scheduled.
     build_scheduled: bool,
@@ -467,8 +197,6 @@ impl WidgetsBinding {
             element_tree: ElementTree::new(),
             root_element: None,
             pipeline_owner: None,
-            observers: Vec::new(),
-            back_gesture_observers: Vec::new(),
             build_scheduled: false,
             need_to_report_first_frame: true,
         }));
@@ -478,10 +206,8 @@ impl WidgetsBinding {
             inner,
             global_key_registry,
             on_need_frame: RefCell::new(None),
-            first_frame_rasterized: AtomicBool::new(false),
-            ready_to_produce_frames: AtomicBool::new(false),
             #[cfg(debug_assertions)]
-            debug_building_dirty_elements: AtomicBool::new(false),
+            debug_building_dirty_elements: Cell::new(false),
         }
     }
 
@@ -608,7 +334,7 @@ impl WidgetsBinding {
     /// # Examples
     ///
     /// ```
-    /// use flui_view::WidgetsBinding;
+    /// use flui_view::__runtime::WidgetsBinding;
     ///
     /// let binding = WidgetsBinding::new();
     /// let recovered = binding.take_recovered_panics();
@@ -744,24 +470,11 @@ impl WidgetsBinding {
 
         // Wrap the user view in `RootRenderView` so the render tree is
         // bootstrapped through `RootRenderElement` instead of mounting the
-        // user view directly.
-        //
-        // The user view is cloned (not `BoxedView`-wrapped) so the
-        // concrete `V` is preserved as the `RootRenderView<V>` /
-        // `RootRenderElement<V>` type parameter. On subsequent root
-        // rebuilds `RootRenderElement::perform_build` hands the stored
-        // child to `Element<V>::update_view` via `&dyn View`; that
-        // method downcasts the trait object back to `V`. A `BoxedView`
-        // wrap would make the runtime type `BoxedView` (not `V`), the
-        // downcast in `ElementCore::update_view` would fail, and the
-        // root update would be silently skipped — this was caught as a
-        // real regression, so keep the clone-not-wrap shape.
-        //
-        // The `Clone + 'static` bound is no real
-        // restriction in practice — every concrete `View` in this
-        // codebase already satisfies it (see `Element<V, A, B>`'s
-        // own bound).
-        let root_render_view = RootRenderView::new(view.clone());
+        // user view directly. The root holds its child as a `BoxedView`
+        // (a `BoxedView` passed here is held as it is) and hands that shared
+        // allocation to the reconciler, which unwraps it to update the
+        // child's `Element<V>` in place.
+        let root_render_view = BoxedView::new(RootRenderView::new(view.clone()));
 
         // Mount the `RootRenderView` as the element-tree root with the
         // PipelineOwner. This ensures `RootRenderElement` (and the
@@ -952,7 +665,7 @@ impl WidgetsBinding {
                 continue;
             };
 
-            // E3 (atomic box→arena swap): children come from the slab
+            // Children come from the slab
             // node's `child_ids` list — the single element graph. They
             // are already in forward slot order; we collect into a scratch
             // buffer so we can push them back onto the LIFO stack in
@@ -980,7 +693,7 @@ impl WidgetsBinding {
     /// It is called from inside `build_scope` (via the `on_build_scheduled`
     /// callback on `BuildOwner`) while `draw_frame` holds `inner.write()`,
     /// so borrowing `inner` here would be refused as re-entry. Instead the
-    /// building flag is an `AtomicBool` on `WidgetsBinding` itself (outside
+    /// building flag is a `Cell<bool>` on `WidgetsBinding` itself (outside
     /// `inner`). The `on_need_frame` callback is cloned out of its cell and
     /// called with no borrow held, so it may call
     /// [`set_on_need_frame`](Self::set_on_need_frame) or schedule another
@@ -994,7 +707,7 @@ impl WidgetsBinding {
         #[cfg(debug_assertions)]
         {
             assert!(
-                !self.debug_building_dirty_elements.load(Ordering::Relaxed),
+                !self.debug_building_dirty_elements.get(),
                 "setState() or markNeedsBuild() called during build.\n\
                  While the widget tree was being built, laid out, and painted, \
                  a new frame was scheduled to rebuild the widget tree.\n\
@@ -1111,7 +824,7 @@ impl WidgetsBinding {
         #[cfg(debug_assertions)]
         let _building_guard = {
             assert!(
-                !self.debug_building_dirty_elements.load(Ordering::Relaxed),
+                !self.debug_building_dirty_elements.get(),
                 "draw_frame called while already building dirty elements; \
                  ensure draw_frame is not called recursively or from a build callback"
             );
@@ -1127,14 +840,13 @@ impl WidgetsBinding {
             // `true` across that unwind would turn every retry into this
             // assert's false positive ("recursive draw_frame") instead of
             // re-running the frame.
-            struct BuildingFlagReset<'a>(&'a AtomicBool);
+            struct BuildingFlagReset<'a>(&'a Cell<bool>);
             impl Drop for BuildingFlagReset<'_> {
                 fn drop(&mut self) {
-                    self.0.store(false, Ordering::Relaxed);
+                    self.0.set(false);
                 }
             }
-            self.debug_building_dirty_elements
-                .store(true, Ordering::Relaxed);
+            self.debug_building_dirty_elements.set(true);
             BuildingFlagReset(&self.debug_building_dirty_elements)
         };
 
@@ -1201,29 +913,17 @@ impl WidgetsBinding {
     ///
     /// This is the **production entry point** for lazy `SliverList` /
     /// `ListView::builder` child building, on a platform runner and a headless
-    /// host alike, and must be called immediately after
-    /// `PipelineOwner::run_frame` releases its write-lock so no node of the
-    /// render tree is entered.
+    /// host alike, and runs after `PipelineOwner::run_frame` has returned, so
+    /// no node of the render tree is entered.
     ///
-    /// `UiRuntime::draw_frame` (`flui-app`) calls this method after the
-    /// `run_frame` write-guard drops, passing the same shared `PipelineOwner`
-    /// that `run_frame` used. The lock order is `widgets → pipeline`: the
-    /// `widgets` write-lock (`WidgetsBinding::inner`) is held here; the brief
-    /// `pipeline.write()` taken inside the delegate is a narrower, nested
-    /// acquisition. This matches the order established in Phase 1 (`build_scope`
-    /// → `pipeline`) and does not introduce a new ordering edge.
+    /// `UiRuntime::draw_frame` (`flui-app`) calls it with the same
+    /// `PipelineCell` that `run_frame` used. The tree is borrowed for the call
+    /// and the pipeline owner is entered inside it, in the order `build_scope`
+    /// already uses (tree, then pipeline).
     ///
-    /// # True cost on a no-lazy-list app
-    ///
-    /// This method is **not** a free no-op on applications without lazy lists.
-    /// It always takes a brief `pipeline.write()` to drain the two pending
-    /// `Vec`s (`pending_child_requests` and `pending_retain_bands`) before
-    /// the early-return triggered by their being empty. On a no-lazy-list app
-    /// that is two short lock acquisitions on empty vecs per frame (~microseconds
-    /// on an uncontested `parking_lot::RwLock`). Callers that need to avoid even
-    /// this overhead can gate on `pipeline.read().has_pending_child_requests()`
-    /// before calling, but the unconditional call is simpler and the cost is
-    /// negligible in practice.
+    /// On an application without lazy lists the call only finds the two
+    /// pending lists (`pending_child_requests`, `pending_retain_bands`) empty
+    /// and returns.
     ///
     /// # One path for every frame
     ///
@@ -1285,70 +985,20 @@ impl WidgetsBinding {
         build_owner.settle_layout_with_builders(element_tree, pipeline)
     }
 
-    /// Check if we are currently building dirty elements.
-    ///
-    /// Reads the atomic flag directly — no lock acquired.
+    /// Whether a frame of this binding is building dirty elements; read
+    /// without borrowing the tree.
     #[cfg(debug_assertions)]
     pub fn is_building(&self) -> bool {
-        self.debug_building_dirty_elements.load(Ordering::Relaxed)
+        self.debug_building_dirty_elements.get()
     }
 
-    // ========================================================================
-    // Observers
-    // ========================================================================
-
-    /// Add a lifecycle observer.
-    pub fn add_observer(&self, observer: Arc<dyn WidgetsBindingObserver>) {
-        self.inner
-            .write()
-            .observers
-            .push(BindingObserverOwner::new(observer));
-    }
-
-    /// Remove a lifecycle observer.
-    pub fn remove_observer(&self, observer: &Arc<dyn WidgetsBindingObserver>) {
-        self.inner
-            .write()
-            .observers
-            .retain(|o| !Arc::ptr_eq(o.as_arc(), observer));
-    }
-
-    /// Notify all observers of metrics change.
-    ///
-    /// Snapshots the observer list under the read lock and releases the
-    /// lock before invoking callbacks. An observer callback
-    /// that re-enters the binding (e.g., adds or removes an observer,
-    /// reads `observer_count`, or schedules a build) would deadlock if
-    /// the iteration held the lock across the dispatch.
-    pub fn handle_metrics_changed(&self) {
-        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_change_metrics();
-        }
-    }
-
-    /// Commit a local lifecycle observation and notify legacy and scoped listeners.
-    /// Legacy observers retain their snapshot iteration behavior. Scoped
-    /// subscriptions still drain when a legacy observer panics.
+    /// Commit a local lifecycle observation and deliver it to the
+    /// presentation's [`LifecycleHandle::subscribe`](crate::LifecycleHandle::subscribe)
+    /// subscribers.
     pub fn handle_app_lifecycle_state_changed(&self, state: AppLifecycleState) {
         if self.lifecycle.commit(state).is_ok() {
-            self.notify_lifecycle(state);
+            self.lifecycle.drain();
         }
-    }
-
-    pub(crate) fn notify_lifecycle(&self, state: AppLifecycleState) {
-        // An observer that panics ends the observers' walk, as any binding
-        // notification does; the scoped subscribers still hear the state,
-        // and the observer's panic is the one resumed.
-        let mut first = FirstPanic::new();
-        first.contain(|| {
-            let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-            for observer in &observers {
-                observer.did_change_app_lifecycle_state(state);
-            }
-        });
-        first.contain(|| self.lifecycle.drain());
-        first.resume();
     }
 
     /// Get the number of elements in the tree.
@@ -1356,169 +1006,11 @@ impl WidgetsBinding {
         self.inner.read().element_tree.len()
     }
 
-    /// Get the number of observers.
-    pub fn observer_count(&self) -> usize {
-        self.inner.read().observers.len()
-    }
-
     /// Give the elements of this binding the window they are presented in, so
     /// `LifecycleContext::window` answers. Call before the root is attached.
     #[doc(hidden)]
     pub fn set_window_handle(&self, handle: crate::WindowHandle) {
         self.inner.write().build_owner.set_window_handle(handle);
-    }
-
-    // ========================================================================
-    // First Frame Tracking
-    // ========================================================================
-
-    /// Whether the first frame has been rasterized.
-    ///
-    /// Usually, the time that a frame is rasterized is very close to the time
-    /// it gets presented on the display.
-    pub fn first_frame_rasterized(&self) -> bool {
-        self.first_frame_rasterized.load(Ordering::Acquire)
-    }
-
-    /// Mark the first frame as rasterized.
-    ///
-    /// Called by the engine after the first frame is painted.
-    pub fn mark_first_frame_rasterized(&self) {
-        self.first_frame_rasterized.store(true, Ordering::Release);
-        tracing::debug!("First frame rasterized");
-    }
-
-    // Note: the first-frame *deferral counter* (`defer_first_frame` /
-    // `allow_first_frame` / `send_frames_to_engine`) used to be duplicated
-    // here as its own independent `AtomicU32` + `AtomicBool` pair. There
-    // must be exactly one such counter; a second, unrelated counter on this
-    // binding could drift from the real one and never actually gated
-    // anything reachable from the production frame path. It has been
-    // removed — the single canonical counter lives on the renderer binding
-    // (`crates/flui-app/src/bindings/renderer_binding.rs`), forwarded through `UiRuntime::defer_first_frame`
-    // / `allow_first_frame` / `send_frames_to_engine`, and consulted by
-    // `UiRuntime::render_frame_entered`.
-
-    /// Whether the binding is ready to produce frames.
-    pub fn is_ready_to_produce_frames(&self) -> bool {
-        self.ready_to_produce_frames.load(Ordering::Acquire)
-    }
-
-    /// Mark the binding as ready to produce frames.
-    pub fn mark_ready_to_produce_frames(&self) {
-        self.ready_to_produce_frames.store(true, Ordering::Release);
-    }
-
-    // ========================================================================
-    // Navigation Handling
-    // ========================================================================
-
-    /// Handle a pop route request from the system.
-    ///
-    /// Notifies observers until one returns `true`, meaning it handled the
-    /// request. If none return `true`, the application may quit.
-    pub async fn handle_pop_route(&self) -> bool {
-        let observers: Vec<_> = self.inner.read().observers.clone();
-        for observer in observers {
-            if observer.did_pop_route().await {
-                return true;
-            }
-        }
-        // No observer handled - application may quit
-        false
-    }
-
-    /// Handle a push route request from the host.
-    pub async fn handle_push_route(&self, route: &RouteInformation) -> bool {
-        let observers: Vec<_> = self.inner.read().observers.clone();
-        for observer in observers {
-            if observer.did_push_route_information(route).await {
-                return true;
-            }
-        }
-        false
-    }
-
-    // ========================================================================
-    // Predictive Back Gesture (Android)
-    //
-    // REMOVE_BY: 2026-12-22 — scheduled cleanup reminder. See the matching
-    // marker on the `WidgetsBindingObserver::handle_*_back_gesture` trait
-    // surface for the rationale and dispose-or-wire decision rule.
-    // ========================================================================
-
-    /// Handle the start of a predictive back gesture.
-    ///
-    /// Returns `true` if any observer is handling the gesture.
-    pub fn handle_start_back_gesture(&self, event: PredictiveBackEvent) -> bool {
-        let mut inner = self.inner.write();
-        inner.back_gesture_observers.clear();
-
-        // Clone observers to avoid holding lock during callback
-        let observers: Vec<_> = inner.observers.clone();
-        drop(inner);
-
-        let mut handling_observers = Vec::new();
-        for observer in observers {
-            if observer.handle_start_back_gesture(event) {
-                handling_observers.push(observer);
-            }
-        }
-
-        if handling_observers.is_empty() {
-            false
-        } else {
-            self.inner.write().back_gesture_observers = handling_observers;
-            true
-        }
-    }
-
-    /// Handle progress update for a predictive back gesture.
-    pub fn handle_update_back_gesture_progress(&self, event: PredictiveBackEvent) {
-        let observers: Vec<_> = self.inner.read().back_gesture_observers.clone();
-        for observer in &observers {
-            observer.handle_update_back_gesture_progress(event);
-        }
-    }
-
-    /// Handle commit of a predictive back gesture.
-    ///
-    /// If no observer was handling the gesture, falls back to
-    /// `handle_pop_route`.
-    pub async fn handle_commit_back_gesture(&self) {
-        let observers: Vec<_> = self.inner.read().back_gesture_observers.clone();
-        if observers.is_empty() {
-            // No predictive handler - fall back to normal pop
-            self.handle_pop_route().await;
-            return;
-        }
-        for observer in &observers {
-            observer.handle_commit_back_gesture();
-        }
-    }
-
-    /// Handle cancellation of a predictive back gesture.
-    pub fn handle_cancel_back_gesture(&self) {
-        let observers: Vec<_> = self.inner.read().back_gesture_observers.clone();
-        for observer in &observers {
-            observer.handle_cancel_back_gesture();
-        }
-    }
-
-    // ========================================================================
-    // View Focus
-    // ========================================================================
-
-    /// Handle view focus change.
-    ///
-    /// Snapshots the observer list under the read lock and releases the
-    /// lock before invoking callbacks. See
-    /// [`Self::handle_metrics_changed`] for the deadlock-safety rationale.
-    pub fn handle_view_focus_changed(&self, event: ViewFocusEvent) {
-        let observers: Vec<BindingObserverOwner> = self.inner.read().observers.clone();
-        for observer in &observers {
-            observer.did_change_view_focus(event);
-        }
     }
 }
 
@@ -1528,17 +1020,8 @@ impl std::fmt::Debug for WidgetsBinding {
         f.debug_struct("WidgetsBinding")
             .field("root_element", &inner.root_element)
             .field("build_scheduled", &inner.build_scheduled)
-            .field(
-                "first_frame_rasterized",
-                &self.first_frame_rasterized.load(Ordering::Relaxed),
-            )
-            .field(
-                "ready_to_produce_frames",
-                &self.ready_to_produce_frames.load(Ordering::Relaxed),
-            )
             .field("dirty_count", &inner.build_owner.dirty_count())
             .field("element_count", &inner.element_tree.len())
-            .field("observer_count", &inner.observers.len())
             .finish_non_exhaustive()
     }
 }
@@ -1556,7 +1039,8 @@ mod tests {
 
     use super::*;
     use crate::__runtime::BindingRuntime as _;
-    use crate::RootRenderElement;
+    use crate::view::RootRenderElement;
+    use std::cell::Cell;
 
     // Carries a `PipelineCell` (via `CoreState::pipeline_owner`), so it must
     // stay pinned `!Send + !Sync` -- a stray `unsafe impl` here would let a
@@ -1741,10 +1225,9 @@ mod tests {
         // The RootRenderElement created a RenderView and registered it
         // as the PipelineOwner's root node.
         binding.with_element_tree(|tree| {
-            let element = tree.get(root_id).expect("root node").element();
+            let element: &dyn std::any::Any = tree.get(root_id).expect("root node").element();
             let root_render_element = element
-                .as_any()
-                .downcast_ref::<RootRenderElement<LeafView>>()
+                .downcast_ref::<RootRenderElement>()
                 .expect("root is RootRenderElement");
             assert!(
                 root_render_element.render_id().is_some(),
@@ -1759,11 +1242,11 @@ mod tests {
 
     #[derive(Clone)]
     struct DisposeMarkerView {
-        disposed: Arc<parking_lot::Mutex<bool>>,
+        disposed: Rc<Cell<bool>>,
     }
 
     struct DisposeMarkerState {
-        disposed: Arc<parking_lot::Mutex<bool>>,
+        disposed: Rc<Cell<bool>>,
     }
 
     impl crate::StatefulView for DisposeMarkerView {
@@ -1771,7 +1254,7 @@ mod tests {
 
         fn create_state(&self, _ctx: &dyn crate::LifecycleContext) -> Self::State {
             DisposeMarkerState {
-                disposed: Arc::clone(&self.disposed),
+                disposed: Rc::clone(&self.disposed),
             }
         }
     }
@@ -1786,7 +1269,7 @@ mod tests {
         }
 
         fn dispose(&mut self) {
-            *self.disposed.lock() = true;
+            self.disposed.set(true);
         }
     }
 
@@ -1825,21 +1308,21 @@ mod tests {
         }
 
         let binding = WidgetsBinding::new();
-        let disposed = Arc::new(parking_lot::Mutex::new(false));
+        let disposed = Rc::new(Cell::new(false));
         let view = ParentOfDisposeMarker {
             child: DisposeMarkerView {
-                disposed: Arc::clone(&disposed),
+                disposed: Rc::clone(&disposed),
             },
         };
 
         binding.attach_root_widget(&view).expect("attach succeeds");
         binding.draw_frame();
-        assert!(!*disposed.lock(), "precondition: nothing has torn down yet");
+        assert!(!disposed.get(), "precondition: nothing has torn down yet");
 
         binding.detach_root_widget();
 
         assert!(
-            *disposed.lock(),
+            disposed.get(),
             "detach_root_widget must run State::dispose for every descendant, \
              not just unmount the (internal RootRenderView-wrapped) root node"
         );
@@ -1889,15 +1372,6 @@ mod tests {
     // 3. Order is deterministic across runs.
     // 4. Deep linear chains do not exhaust the stack (the walk is
     //    iterative).
-
-    // ========================================================================
-    // Snapshot-then-fire fix — regression tests for sync handle_* event
-    // handlers
-    // ========================================================================
-
-    // ========================================================================
-    // E0a — deadlock-safe wake chain
-    // ========================================================================
 
     // ========================================================================
     // did_change_app_lifecycle_state dispatch

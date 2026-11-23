@@ -42,19 +42,19 @@ use flui_sdk::animation::{
     AnimatedValue, AnimatedValueView, Animation as _, Curve as _, MotionSpec, SharedCurve, Vsync,
     curves,
 };
-use flui_sdk::foundation::panic::{PanicRecovery, RecoveryScope};
+use flui_sdk::foundation::panic::{FirstPanic, PanicRecovery, RecoveryScope};
 use flui_sdk::foundation::{
     ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, MutatedDuringBuild,
     Subscription,
 };
 use flui_sdk::pipeline::ScrollDirection;
+use flui_sdk::semantics::SemanticsAnchor;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
 use flui_sdk::widgets::{
     Alternative, CompanionLink, CompanionRegistration, CompanionSpec, GestureAlternatives,
-    GestureCommand, Intent, MotionBuilder, PageController, SemanticsAnchor, SingleActivator,
-    ViewportFraction,
+    GestureCommand, Intent, MotionBuilder, PageController, SingleActivator, ViewportFraction,
 };
 
 /// Select the tab after or before the selected one: what a
@@ -214,7 +214,7 @@ impl Shared {
     }
 
     /// Whether a widget that bound this controller to its clock is building
-    /// (ADR-0086 §7).
+    /// (ADR-0074 §5.2).
     fn building(&self) -> bool {
         self.clocks
             .borrow()
@@ -313,7 +313,7 @@ impl Shared {
         let Some(owner) = self.owner.borrow_mut().take() else {
             return false;
         };
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         {
             let mut slot = OwnerSlot {
                 cell: &self.owner,
@@ -323,12 +323,12 @@ impl Shared {
                 .owner
                 .as_mut()
                 .expect("BUG: the owner stays in its slot while it is driven");
-            recovery.run(|| first(self, owner));
+            failure.contain(|| first(self, owner));
             while let Some((target, change)) = self.pending_drive.take() {
-                recovery.run(|| self.apply_drive(owner, target, change));
+                failure.contain(|| self.apply_drive(owner, target, change));
             }
         }
-        recovery.finish();
+        failure.resume();
         true
     }
 
@@ -763,7 +763,7 @@ impl TabController {
     /// leaves them unfulfilled.
     ///
     /// The view builds these itself. They are public so that
-    /// `flui_testing::assert_gesture_alternatives` can check the pair against
+    /// `flui_testing::gesture_alternatives::assert_gesture_alternatives` can check the pair against
     /// a mounted view and bar.
     #[must_use]
     pub fn step_alternatives(&self) -> GestureAlternatives {
@@ -988,7 +988,7 @@ impl InheritedView for TabControllerScope {
         &self.controller
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

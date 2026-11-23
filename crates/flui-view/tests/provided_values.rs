@@ -9,10 +9,11 @@ use std::rc::Rc;
 use flui_foundation::ElementId;
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook};
 use flui_view::{
-    BoxedView, BuildContext, BuildContextExt, BuildOwner, ElementTree, GlobalKey, InheritedView,
-    IntoView, LifecycleContext, LifecycleHook, Provided, ProvidedValue, RebuildReason, RenderView,
-    Signal, SignalWriteExt, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BoxedView, BuildContext, BuildContextExt, GlobalKey, InheritedView, IntoView, LifecycleContext,
+    Provided, ProvidedValue, RebuildReason, RenderView, Signal, SignalWriteExt, StatefulView,
+    StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -147,7 +148,7 @@ impl InheritedView for Inherit {
         &self.tone
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -339,7 +340,7 @@ impl RenderView for Group {
         true
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.0 {
             visitor(child);
         }
@@ -418,27 +419,38 @@ struct Frames {
     tree: Rc<RefCell<ElementTree>>,
     owner: Rc<RefCell<BuildOwner>>,
     root: ElementId,
+    _registry: flui_view::testing::GlobalKeyRegistryActivation,
 }
 
 struct Unmounted {
     tree: Rc<RefCell<ElementTree>>,
     owner: Rc<RefCell<BuildOwner>>,
+    registry: flui_view::testing::GlobalKeyRegistryActivation,
 }
 
 impl Unmounted {
-    fn mounted(self, view: &dyn View) -> Frames {
-        let Self { tree, owner } = self;
+    fn mounted(self, view: &BoxedView) -> Frames {
+        let Self {
+            tree,
+            owner,
+            registry,
+        } = self;
         let root = tree
             .borrow_mut()
             .mount_root(view, &mut owner.borrow_mut().element_owner_mut());
-        let frames = Frames { tree, owner, root };
+        let frames = Frames {
+            tree,
+            owner,
+            root,
+            _registry: registry,
+        };
         frames.build(RebuildReason::InitialMount);
         frames
     }
 }
 
 impl Frames {
-    fn mount(view: &dyn View) -> Self {
+    fn mount(view: &BoxedView) -> Self {
         Self::empty().mounted(view)
     }
 
@@ -447,8 +459,12 @@ impl Frames {
     fn empty() -> Unmounted {
         let tree = Rc::new(RefCell::new(ElementTree::new()));
         let owner = Rc::new(RefCell::new(BuildOwner::new()));
-        flui_view::test_only_set_global_key_registry(&tree, &owner);
-        Unmounted { tree, owner }
+        let registry = flui_view::testing::activate_global_key_registry(&tree, &owner);
+        Unmounted {
+            tree,
+            owner,
+            registry,
+        }
     }
 
     /// Build what is scheduled, without scheduling the root.
@@ -515,7 +531,6 @@ pub(crate) fn provided_value_change_notifies_like_inherited_element() {
     }
 }
 
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn provided_value_follows_a_moved_subtree() {
     for kind in &KINDS {
         let probe = Seen::default();
@@ -535,7 +550,7 @@ pub(crate) fn provided_value_follows_a_moved_subtree() {
             };
             Group(vec![(kind.provider)(1, first), (kind.provider)(2, second)])
         };
-        let frames = Frames::mount(&view(true));
+        let frames = Frames::mount(&view(true).boxed());
         assert_eq!(probe.seen.get(), Some(1), "{}: under the first", kind.name);
 
         frames.update(&view(false));
@@ -583,7 +598,7 @@ pub(crate) fn provided_value_unmount_releases_dependents() {
 
         // The provider leaves with a reader under it, and another mounts.
         let probe = Seen::default();
-        let frames = Frames::mount(&Group(vec![(kind.provider)(1, (kind.reader)(&probe))]));
+        let frames = Frames::mount(&Group(vec![(kind.provider)(1, (kind.reader)(&probe))]).boxed());
         frames.update(&Group(vec![Leaf.boxed()]));
         let late = Seen::default();
         frames.update(&Group(vec![(kind.provider)(3, (kind.reader)(&late))]));
@@ -849,7 +864,6 @@ pub(crate) fn a_provider_any_number_of_providers_up_is_found_and_the_nearest_sha
     }
 }
 
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn a_subtree_moved_to_another_depth_reads_its_new_ancestry() {
     // Two branches of different depths under one root; a keyed chain of its
     // own providers moves from the end of the shallow one to the end of the
@@ -901,7 +915,7 @@ pub(crate) fn a_subtree_moved_to_another_depth_reads_its_new_ancestry() {
             ])
         };
 
-        let frames = Frames::mount(&view(false));
+        let frames = Frames::mount(&view(false).boxed());
         expect_chain(
             &shallow,
             &carried,
@@ -948,7 +962,7 @@ pub(crate) fn a_provide_panic_is_recorded_and_keeps_the_frame() {
                 reader::<Palette>(&probe),
             )])
         };
-        let frames = Frames::mount(&view(1));
+        let frames = Frames::mount(&view(1).boxed());
         assert_eq!(probe.seen.get(), Some(1), "{name}: published");
 
         fail.set(true);
@@ -1054,12 +1068,15 @@ pub(crate) fn a_failure_after_provide_ends_the_build_phase() {
     let writer = frames.owner.borrow().writer_source();
     let armed = Rc::new(Cell::new(false));
     let mounted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        frames.mounted(&Group(vec![
-            Brittle {
-                armed: Rc::clone(&armed),
-            }
+        frames.mounted(
+            &Group(vec![
+                Brittle {
+                    armed: Rc::clone(&armed),
+                }
+                .boxed(),
+            ])
             .boxed(),
-        ]))
+        )
     }));
     assert!(!armed.get(), "the authored failure fired");
     drop(mounted);

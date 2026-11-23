@@ -246,9 +246,10 @@ shorter first, then segment by segment with a literal above a parameter, so
 slice pattern with literal equality per candidate, and parses fields with
 `FromStr`; the first field that fails in a candidate whose literals matched is
 the `Param` error when nothing matches in full, otherwise `NoMatch`. The
-generated code calls only `flui_widgets::router::__derive` (`segments`,
-`Matcher`, `assert_segment`), a `#[doc(hidden)]` module with no semver
-promise, so `RouteParseError` stays `#[non_exhaustive]`; `assert_segment` is
+generated code calls only `flui_widgets::__derive` (`segments`, `Matcher`,
+`assert_segment`, and the `RoutePath` and `RouteParseError` it names), a
+`#[doc(hidden)]` module with no semver promise, so `RouteParseError` stays
+`#[non_exhaustive]`; `assert_segment` is
 spanned at each field type, so a missing `FromStr` or `Display` is reported on
 the field. **Tests:** the parser, ordering and shape rules in
 `src/derive/routable/pattern.rs`; `crates/flui-widgets/tests/routable_ui.rs`

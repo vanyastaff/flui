@@ -15,9 +15,7 @@ pub(crate) mod intent_tests {
         input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
     };
     use flui_widgets::SizedBox;
-    use flui_widgets::interaction::{
-        Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator,
-    };
+    use flui_widgets::{Actions, CallbackAction, Focus, Intent, Shortcuts, SingleActivator};
 
     use crate::common::harness::mount;
 
@@ -177,7 +175,7 @@ pub(crate) mod tab_tests {
     };
     use flui_view::ViewExt;
     use flui_view::prelude::*;
-    use flui_widgets::interaction::{Focus, FocusScope};
+    use flui_widgets::{Focus, FocusScope};
     use flui_widgets::{Positioned, SizedBox, Stack};
 
     use crate::common::harness::mount;
@@ -497,7 +495,7 @@ pub(crate) mod activation_tests {
         input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey},
     };
     use flui_widgets::SizedBox;
-    use flui_widgets::interaction::{Actions, ActivateIntent, CallbackAction, Focus};
+    use flui_widgets::{Actions, ActivateIntent, CallbackAction, Focus};
 
     use crate::common::harness::mount;
 
@@ -573,7 +571,7 @@ pub(crate) mod event_context_tests {
     };
     use flui_view::prelude::*;
     use flui_widgets::SizedBox;
-    use flui_widgets::interaction::{
+    use flui_widgets::{
         Actions, CallbackAction, CallbackShortcuts, Focus, Intent, Shortcuts, SingleActivator,
     };
 
@@ -717,7 +715,7 @@ pub(crate) mod activator_tests {
         EventTime,
         input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, Modifiers},
     };
-    use flui_widgets::interaction::SingleActivator;
+    use flui_widgets::SingleActivator;
 
     fn down(character: &str, modifiers: Modifiers) -> KeyEvent {
         KeyEvent::new(

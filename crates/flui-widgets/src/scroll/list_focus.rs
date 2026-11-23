@@ -1,4 +1,4 @@
-﻿//! Keyboard focus over a lazy list: one Tab stop, roving focus over its rows.
+//! Keyboard focus over a lazy list: one Tab stop, roving focus over its rows.
 //!
 //! [`FocusableList`] wraps whatever hosts the rows (a `ListView`'s or
 //! `GridView`'s viewport, or one sliver under `FocusableSliver`) in the **list
@@ -31,9 +31,9 @@ use flui_platform::input::keyboard::{Key, KeyEvent, KeyState, Modifiers, NamedKe
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::view::{ScrollPosition, ViewportOffset as _};
 use flui_view::element::ElementKind;
-use flui_view::owner::{KeepAliveHandle, KeepAliveLease};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, impl_inherited_view};
+use flui_view::{KeepAliveHandle, KeepAliveLease};
 
 use super::{ScrollController, ScrollPositionScope};
 use crate::anchored_box::AnchoredSliver;
@@ -86,7 +86,7 @@ struct Inner {
     reach: RefCell<Option<Reach>>,
     /// The controller of the enclosing scrollable: the list asks it to jump,
     /// so the move is a programmatic step of the scrollable's chain
-    /// (ADR-0209 Â§3). Used only while its position is the list's own.
+    /// (ADR-0209 §3). Used only while its position is the list's own.
     requests: RefCell<Option<ScrollController>>,
     /// Reads the axis and direction a list over a sliver was laid out with;
     /// `None` for a list over a box viewport, which takes them from its
@@ -596,7 +596,7 @@ impl InheritedView for ListFocusScope {
         &self.controller
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -863,7 +863,7 @@ pub(crate) struct ListItemFocusState {
     /// The pin refresh the controller calls; the controller holds it weakly.
     refresh: Rc<dyn Fn()>,
     subscription: Option<Subscription>,
-    post_frame: Option<flui_view::PostFrameHandle>,
+    post_frame: Option<flui_scheduler::PostFrameHandle>,
 }
 
 impl StatefulView for ListItemFocus {

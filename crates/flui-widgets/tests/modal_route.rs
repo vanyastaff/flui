@@ -29,8 +29,8 @@ use flui_widgets::__test_access::{
     ModalRoute, NavigatorProbe as _, OverlayEntryProbe as _, TransitionHandle,
 };
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, SimpleRoute};
+use flui_widgets::RouteId;
 use flui_widgets::SizedBox;
-use flui_widgets::navigator::RouteId;
 
 use crate::common::harness::{Harness, mount};
 

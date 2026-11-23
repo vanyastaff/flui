@@ -31,7 +31,10 @@
 //!    through a reference to the whole slot, so reading the header of a slot whose node is borrowed
 //!    up the call stack touches no memory that borrow covers.
 
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "slots are `UnsafeCell`s reached through raw pointers under the invariants in the module docs"
+)]
 
 use std::cell::{Cell, UnsafeCell};
 use std::marker::PhantomData;

@@ -1,12 +1,12 @@
 //! What a frame became once a backend drew it.
 //!
 //! [`PresentDisposition`] is the answer a window slot of the raster executor
-//! ([`crate::RasterExecutor`]) and the renderer of a scene
-//! drawn outside one (`Renderer::render_scene`) give for each frame.
+//! ([`crate::RasterExecutor`]) gives for each frame, a scene lent outside the
+//! slot's frames included.
 
 /// What a backend did with the frame it was handed.
 ///
-/// A three-state answer rather than the `bool` this used to be, because the
+/// A three-state answer rather than a `bool`, because the
 /// two ways a frame fails to reach `present()` are not the same event and
 /// have opposite consequences for the caller's pacing:
 ///

@@ -36,13 +36,15 @@ use flui_rendering::{
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use flui_objects::RenderConstrainedBox;
 /// use flui_rendering::constraints::BoxConstraints;
 ///
 /// // Force the child to be at least 200x100 logical pixels.
-/// let extra = BoxConstraints::new(200.0, (f64::INFINITY), 100.0, (f64::INFINITY));
-/// let _node = RenderConstrainedBox::new(extra);
+/// let extra = BoxConstraints::new(200.0, f64::INFINITY, 100.0, f64::INFINITY);
+/// let node = RenderConstrainedBox::new(extra);
+/// assert_eq!(node.additional_constraints().min_width, 200.0);
+/// assert_eq!(node.additional_constraints().min_height, 100.0);
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderConstrainedBox {

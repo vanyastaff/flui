@@ -55,7 +55,7 @@ impl host::Preferences<HeadlessLoop> for HeadlessPreferences {
 }
 
 /// The headless platform's system preferences after `run` has consumed it:
-/// obtained from [`HeadlessPlatform::preference_source`](crate::HeadlessPlatform::preference_source) before `run`.
+/// obtained from [`HeadlessPlatform::preference_source`](crate::testing::HeadlessPlatform::preference_source) before `run`.
 ///
 /// A change commits to the platform's preferences and then wakes the owner, as
 /// a native source does when the OS reports a setting change, so it works from

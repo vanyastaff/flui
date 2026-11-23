@@ -780,8 +780,8 @@ impl<D> ResultRouter<D> {
 
 #[cfg(test)]
 mod tests {
+    use rustc_hash::FxHashMap;
     use std::cell::RefCell;
-    use std::collections::HashMap;
     use std::num::NonZeroU64;
     use std::rc::Rc;
     use std::sync::{Arc, Mutex};
@@ -912,7 +912,7 @@ mod tests {
 
     thread_local! {
         /// One registration per capability name, as one registry mints.
-        static IDS: RefCell<HashMap<&'static str, CapabilityId>> = RefCell::default();
+        static IDS: RefCell<FxHashMap<&'static str, CapabilityId>> = RefCell::default();
     }
 
     /// The identity the registrar minted for the capability named `name`.

@@ -148,8 +148,8 @@ mod tests {
         CompositionEnd, TextStore, TextStoreHost, TextStoreHostError,
     };
 
-    use crate::HeadlessPlatform;
     use crate::platform::Platform;
+    use crate::testing::HeadlessPlatform;
 
     struct Host;
 

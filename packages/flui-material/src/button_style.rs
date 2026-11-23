@@ -14,8 +14,8 @@
 //! - **Inner `Option<V>` inside the [`WidgetStateProperty`]** — the property
 //!   IS configured, but has nothing to say for the *current* states (that one
 //!   resolution falls through, per [`WidgetStateProperty`]'s own
-//!   `Option`-fallthrough contract — see `flui_sdk::widgets::widget_state`'s
-//!   module docs, the substrate this button family was built against).
+//!   `Option`-fallthrough contract — see the `widget_state` module docs of `flui-widgets`,
+//!   the substrate this button family was built against).
 //!
 //! Both signals fall through identically in
 //! `crate::button_style_button`'s resolver: an unset *property* and a property
@@ -73,12 +73,12 @@
 //!   button styles included, half way; a button style interpolates once a
 //!   component needs its colours to blend during a theme change.
 
-use flui_sdk::painting::BorderSide;
-use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::styling::BorderSide;
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::widgets::WidgetStateProperty;
 use flui_sdk::{
     geometry::{EdgeInsets, Size},
-    painting::Color,
+    painting::styling::Color,
 };
 
 use crate::shape::MaterialShape;
@@ -90,7 +90,7 @@ use crate::shape::MaterialShape;
 /// ```rust
 /// use flui_material::ButtonStyle;
 /// use flui_sdk::widgets::WidgetStateProperty;
-/// use flui_sdk::painting::Color;
+/// use flui_sdk::painting::styling::Color;
 ///
 /// let style = ButtonStyle {
 ///     background_color: Some(WidgetStateProperty::all(Some(Color::rgb(0, 255, 0)))),

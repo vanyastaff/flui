@@ -31,7 +31,13 @@
 // `Send`/`Sync` by hand: the workspace lint `unsafe_code = "warn"` is opted out
 // here, at the module boundary, rather than for the whole crate (see `lib.rs`).
 // Its pure part forbids it.
-#![cfg_attr(target_arch = "wasm32", expect(unsafe_code))]
+#![cfg_attr(
+    target_arch = "wasm32",
+    expect(
+        unsafe_code,
+        reason = "the browser drag state is marked Send and Sync by hand"
+    )
+)]
 
 /// The decidable half of the backend (ADR-0312, ADR-0211 §11): how
 /// `DataTransfer` types and effect names map to transfer formats and actions,
@@ -276,10 +282,12 @@ mod mapping {
 #[cfg(target_arch = "wasm32")]
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
     sync::Arc,
 };
+
+#[cfg(target_arch = "wasm32")]
+use rustc_hash::FxHashMap;
 
 #[cfg(target_arch = "wasm32")]
 use flui_foundation::{DataTransferId, geometry::Point};
@@ -338,9 +346,9 @@ enum Held {
 struct Offers {
     table: OfferTable,
     /// The answer each live offer's target last cached.
-    feedback: HashMap<DataTransferId, DropFeedback>,
+    feedback: FxHashMap<DataTransferId, DropFeedback>,
     /// What each live offer holds, by representation index.
-    held: HashMap<DataTransferId, Vec<Held>>,
+    held: FxHashMap<DataTransferId, Vec<Held>>,
 }
 
 /// The platform's HTML drag-and-drop transport (see the module doc).

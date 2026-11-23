@@ -22,10 +22,9 @@ use std::cell::{Cell, RefCell};
 use std::ops::Range;
 use std::rc::{Rc, Weak};
 
-use flui_foundation::RenderId;
-use flui_foundation::TextDirection;
 use flui_foundation::geometry::Rect;
 use flui_foundation::panic::FirstPanic;
+use flui_foundation::{CreationSite, RenderId, TextDirection};
 use flui_interaction::focus::FocusNode;
 use flui_interaction::{
     focus::KeyEventResult,
@@ -37,13 +36,13 @@ use flui_painting::styling::Color;
 use flui_painting::text_boundaries;
 use flui_painting::typography::TextLink;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+use flui_scheduler::PostFrameHandle;
 use flui_semantics::{DocumentPosition, DocumentSelection, SemanticsAnchor, SemanticsRole};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{
-    BoxedView, CreationSite, EventContext, EventOutcome, InheritedView, LifecycleContext,
-    PostFrameHandle, RebuildHandle, RebuildReason, StatefulView, View, ViewExt, ViewState,
-    WriterSource, impl_inherited_view,
+    BoxedView, EventContext, EventOutcome, InheritedView, LifecycleContext, RebuildHandle,
+    RebuildReason, StatefulView, View, ViewExt, ViewState, WriterSource, impl_inherited_view,
 };
 
 pub use self::controller::{SelectError, SelectionController};
@@ -1221,7 +1220,7 @@ impl InheritedView for SelectionScope {
         &self.data
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

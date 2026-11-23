@@ -246,6 +246,10 @@ impl ViewportOffset for FixedViewportOffset {
 /// rules, so one failed listener neither silences the offset nor skips the rest.
 #[derive(Default)]
 pub(crate) struct OffsetListeners {
+    #[expect(
+        clippy::type_complexity,
+        reason = "the pair is only ever built and searched inside this type"
+    )]
     identities: RefCell<Vec<(Subscription, Weak<dyn Fn()>)>>,
     notifier: ChangeNotifier,
 }

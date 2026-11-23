@@ -26,7 +26,7 @@ use flui_platform::capability::{Capability, Plugin};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{LifecycleContext, LifecycleContextExt};
 use flui_sdk::widgets::{Column, SizedBox};
-use flui_testing::{HeadlessHost, HeadlessWindow, HeadlessWindowId};
+use flui_testing::host::{HeadlessHost, HeadlessWindow, HeadlessWindowId};
 
 /// What a widget acquired in `init_state`.
 type Acquired<C> = Rc<RefCell<Option<Result<<C as Capability>::Handle, Unsupported>>>>;

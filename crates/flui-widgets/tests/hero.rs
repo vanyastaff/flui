@@ -11,7 +11,7 @@ use flui_foundation::ValueKey;
 use flui_view::prelude::*;
 
 use flui_widgets::__test_access::{HeroRegistry, HeroScope, HeroTag};
-use flui_widgets::navigator::Hero;
+use flui_widgets::Hero;
 use flui_widgets::{Center, SizedBox};
 
 use crate::common::harness::mount;
@@ -128,7 +128,7 @@ mod registry_reentry {
     fn fly(operation: &str) {
         use flui_view::environment::VsyncScope;
         use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver};
-        use flui_widgets::navigator::{HeroController, PageRoute};
+        use flui_widgets::{HeroController, PageRoute};
         let page = || {
             PageRoute::<i32>::new(|_ctx, _primary, _secondary| {
                 Center::new()

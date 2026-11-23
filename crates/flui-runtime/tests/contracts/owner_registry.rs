@@ -464,7 +464,7 @@ fn install_beside(prepare: impl FnOnce(&UiRuntime)) -> SiblingInstalled {
 }
 
 /// A new window that takes the focus steps its focused sibling down to
-/// `Inactive`. A sibling's observer that panics there fails the sibling, not
+/// `Inactive`. A sibling's lifecycle subscriber that panics there fails the sibling, not
 /// the installation: its failure is reported against the sibling, which keeps
 /// the state it committed, and the new window is ready. A failure the
 /// snapshot's pass owns, as a lifecycle listener of the whole application,
@@ -472,21 +472,24 @@ fn install_beside(prepare: impl FnOnce(&UiRuntime)) -> SiblingInstalled {
 fn a_siblings_failure_in_a_new_windows_snapshot_is_the_siblings() {
     use flui_platform::WindowExecutionState::Running;
     use flui_runtime::owner::InitializationOutcome::{Failed, Ready};
-    use flui_scheduler::AppLifecycleState::{Hidden, Inactive};
-    use std::sync::{Arc, Mutex};
+    use flui_scheduler::AppLifecycleState::{Detached, Hidden, Inactive};
+    use std::rc::Rc;
 
-    struct Panicking(Arc<Mutex<Vec<flui_scheduler::AppLifecycleState>>>);
-    impl flui_view::WidgetsBindingObserver for Panicking {
-        fn did_change_app_lifecycle_state(&self, state: flui_scheduler::AppLifecycleState) {
-            self.0.lock().expect("observer log").push(state);
-            assert_ne!(state, Inactive, "the sibling's observer fails");
-        }
-    }
-    let seen = Arc::new(Mutex::new(Vec::new()));
-    let observer = Arc::new(Panicking(Arc::clone(&seen)));
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let subscription = RefCell::new(None);
     let installed = install_beside(|runtime| {
         runtime.synchronize_window_snapshot(runtime.presentation_id(), Running, true, true);
-        runtime.widgets().add_observer(observer);
+        let seen = Rc::clone(&seen);
+        let (_, subscribed) = runtime
+            .widgets()
+            .with_build_owner(flui_view::__runtime::BuildOwner::lifecycle_handle)
+            .expect("presentation lifecycle handle")
+            .subscribe(move |state| {
+                seen.borrow_mut().push(state);
+                assert_ne!(state, Inactive, "the sibling's subscriber fails");
+            })
+            .expect("lifecycle subscription while open");
+        *subscription.borrow_mut() = Some(subscribed);
     });
     assert_eq!(installed.outcomes, [Ready], "the new window installs");
     assert!(!installed.resumed, "the sibling's failure stays contained");
@@ -498,8 +501,9 @@ fn a_siblings_failure_in_a_new_windows_snapshot_is_the_siblings() {
     );
     // `Inactive` is the state of a visible window without focus: the
     // sibling's focus moved and its lifecycle step committed before its
-    // observer failed.
-    assert_eq!(*seen.lock().expect("observer log"), [Inactive]);
+    // subscriber failed. The subscription outlives the runtime, so the
+    // runtime's teardown after the install delivers its terminal `Detached`.
+    assert_eq!(*seen.borrow(), [Inactive, Detached]);
 
     // The primary is hidden, so the new window moves the application from
     // Hidden through Inactive; the application's listener fails there.

@@ -1,4 +1,4 @@
-//! [`Progress`] â€” what an `Animate`'s stages read: one parent animation and
+//! [`Progress`] — what an `Animate`'s stages read: one parent animation and
 //! the side of a transition, either of which changes the pose.
 
 use flui_foundation::Subscription;

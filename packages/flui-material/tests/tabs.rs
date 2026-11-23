@@ -19,8 +19,9 @@ use flui_material::{
     DefaultTabController, Tab, TabBar, TabController, TabIndicatorAnimation, Theme, ThemeData,
 };
 use flui_sdk::animation::{MotionOverride, MotionSpec, SharedCurve, Vsync, curves};
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::foundation::{Listenable as _, Subscription};
-use flui_sdk::painting::{DrawOp, TextDirection};
+use flui_sdk::painting::DrawOp;
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::environment::VsyncScope;
@@ -690,7 +691,7 @@ impl flui_sdk::view::ViewState<TabsInBuild> for TabsInBuildState {
 }
 
 /// `set_index` and `animate_to` called from `build` are refused with a typed
-/// error: the index stays and no listener hears of it (ADR-0086 §7).
+/// error: the index stays and no listener hears of it (ADR-0074 §5.2).
 pub(crate) fn controller_mutation_during_build_is_refused() {
     let controller = linear_controller();
     let vsync = Vsync::new();

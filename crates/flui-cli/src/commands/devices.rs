@@ -36,7 +36,13 @@ pub(crate) enum Kind {
     Emulator,
     /// An iOS Simulator runtime instance (only discovered on macOS; kept
     /// in the model so `--json` has one schema on every host).
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    #[cfg_attr(
+        not(target_os = "macos"),
+        allow(
+            dead_code,
+            reason = "only macOS hosts discover simulators; the variant stays so `--json` has one schema on every host"
+        )
+    )]
     Simulator,
     /// An installed web browser.
     #[cfg_attr(

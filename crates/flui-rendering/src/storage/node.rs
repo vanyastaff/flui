@@ -768,14 +768,20 @@ impl RenderNode {
     /// [`PipelineOwner::update_render_object`](crate::pipeline::PipelineOwner::update_render_object)
     /// lends it to an update this way and applies the impact the update returns.
     pub(crate) fn downcast_render_object_mut<T: std::any::Any>(&mut self) -> Option<&mut T> {
-        with_entry!(self, entry => entry.render_object_mut().as_any_mut().downcast_mut::<T>())
+        with_entry!(self, entry => {
+            let object: &mut dyn std::any::Any = entry.render_object_mut();
+            object.downcast_mut::<T>()
+        })
     }
 
     /// Downcasts this node's render object to a concrete type `T` for reading:
     /// a read of the live render object's own state (a lazy sliver's item
     /// count, a configuration knob) without checking the node out mutably.
     pub fn downcast_render_object<T: std::any::Any>(&self) -> Option<&T> {
-        with_entry!(self, entry => entry.render_object().as_any().downcast_ref::<T>())
+        with_entry!(self, entry => {
+            let object: &dyn std::any::Any = entry.render_object();
+            object.downcast_ref::<T>()
+        })
     }
 
     /// Clears the needs_paint flag.

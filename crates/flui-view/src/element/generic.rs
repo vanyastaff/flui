@@ -291,15 +291,14 @@ where
     ///
     /// The `(self_id, depth)` pair stamped here is what `setState` pushes
     /// onto the dirty heap that
-    /// [`BuildOwner::build_scope`](crate::BuildOwner) drains.
+    /// [`BuildOwner::build_scope`](crate::owner::BuildOwner) drains.
     //
-    // E3 (atomic box→arena swap): the per-element `children: A::Storage`
-    // box graph is gone. Children are slab-resident nodes addressed by
+    // Children are slab-resident nodes addressed by
     // `ElementId` in the single [`ElementTree`](crate::tree::ElementTree);
     // a node's child list is its
     // [`ElementNode::child_ids`](crate::tree::ElementNode). `A: ElementArity`
-    // still enforces the child-count constraint at the type level — it
-    // simply no longer carries storage. The build half returns OWNED child
+    // enforces the child-count constraint at the type level and carries no
+    // storage. The build half returns OWNED child
     // views (`build_into_views`); the reconcile half runs against the slab
     // in `BuildOwner::build_scope`.
     state: CoreState,
@@ -343,7 +342,7 @@ where
     ///
     /// Read by the behaviors to anchor the live build-time
     /// [`LiveBuildContext`](crate::context::BuildContext) ancestor walk at the real
-    /// node (PR-K); the in-flight element is extracted by value during build,
+    /// node; the in-flight element is extracted by value during build,
     /// so this id addresses the now-empty slot the walk skips.
     pub(crate) fn self_id(&self) -> Option<ElementId> {
         self.state.self_id
@@ -408,11 +407,11 @@ where
 
     /// Unmount this element (permanently removed).
     ///
-    /// Sets lifecycle to Defunct. E3: children are slab-resident nodes —
+    /// Sets lifecycle to Defunct. Children are slab-resident nodes:
     /// the [`ElementTree`](crate::tree::ElementTree) drives the
     /// deepest-first id-unmount of descendants (via
     /// `BuildOwner::finalize_tree` / `collect_elements_to_unmount`), so
-    /// this element no longer frees a child subtree implicitly. The
+    /// this element does not free a child subtree itself. The
     /// split-borrow `owner` handle is kept on the signature so behavior
     /// `on_unmount` hooks (GlobalKey deregistration, dependent-set
     /// cleanup) still run through the unified `Element::unmount`.
@@ -423,7 +422,7 @@ where
 
     /// Activate this element (re-inserted into tree).
     ///
-    /// Sets lifecycle to Active. E3: child activation is the slab's job
+    /// Sets lifecycle to Active. Child activation is the slab's job
     /// (descendants are independent nodes), not a recursive walk from
     /// here.
     #[inline]
@@ -433,7 +432,7 @@ where
 
     /// Deactivate this element (temporarily removed from tree).
     ///
-    /// Sets lifecycle to Inactive. E3: child deactivation is the slab's
+    /// Sets lifecycle to Inactive. Child deactivation is the slab's
     /// job (descendants are independent nodes), not a recursive walk from
     /// here.
     #[inline]
@@ -506,14 +505,11 @@ where
         self.state.dirty.set(true);
     }
 
-    // E3 (atomic box→arena swap): the child-management methods
-    // (`update_or_create_child` / `update_or_create_children` /
-    // `rebuild_children`) are gone. They reconciled and recursively built
-    // a box-owned child graph in place. The element now only PRODUCES its
+    // Child management lives outside the element. It only PRODUCES its
     // child views (`build_into_views`, on the behavior); the reconcile +
     // recursive build runs against the slab-resident
     // [`ElementTree`](crate::tree::ElementTree) in
-    // [`BuildOwner::build_scope`](crate::BuildOwner) via
+    // [`BuildOwner::build_scope`](crate::owner::BuildOwner) via
     // [`reconcile_children_by_id`](crate::tree::id_reconcile), which
     // schedules each child as its own drain entry. No element ever holds a
     // `&mut` into the slab across a second slab mutation.
@@ -546,7 +542,7 @@ where
     /// The `RenderId` that this element's *children* should attach their
     /// `RenderObject`s under.
     ///
-    /// E3 propagation contract: when the slab inserts a child below this
+    /// Propagation contract: when the slab inserts a child below this
     /// element, the child's `set_parent_render_id` receives this value.
     /// For a component element (Stateless/Stateful/Proxy/Inherited) it is
     /// the `parent_render_id` this element itself received — the nearest
@@ -639,7 +635,7 @@ where
     /// `Listenable`): the returned callback is registered with the listenable,
     /// so a `notify_listeners` fired between frames (an animation tick) queues
     /// the element on the external build inbox and requests a frame. The drain
-    /// in [`BuildOwner::build_scope`](crate::BuildOwner) marks the element
+    /// in [`BuildOwner::build_scope`](crate::owner::BuildOwner) marks the element
     /// dirty, so the callback holds no reference to the element's own state.
     ///
     /// The `ExternalBuildScheduler` + `self_id` are captured by value, so the
@@ -686,11 +682,8 @@ where
         self.state.parent_render_id
     }
 
-    // E3 (atomic box→arena swap): `visit_children` / `children` /
-    // `children_mut` / `has_children` / `child_count` are gone —
-    // `ElementCore` no longer owns a child graph. Children are
-    // slab-resident; traverse them via
-    // `tree.get(id).child_ids()` on the single
+    // `ElementCore` owns no child graph. Children are slab-resident;
+    // traverse them via `tree.get(id).child_ids()` on the single
     // [`ElementTree`](crate::tree::ElementTree).
 }
 

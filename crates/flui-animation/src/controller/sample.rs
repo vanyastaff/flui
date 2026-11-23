@@ -75,7 +75,7 @@ impl AnimationController {
             TickSource::Repeat(run) => {
                 let profile = crate::observability::ProfileSpan::sampling();
                 let sample = run.sample(cycle);
-                profile.close(retirement);
+                profile.close();
                 let mut inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
@@ -107,7 +107,7 @@ impl AnimationController {
                         && (simulation.reached_bound(sampled) || simulation.is_done(cycle));
                     prepared = Some((sampled, done));
                 });
-                profile.close(retirement);
+                profile.close();
                 let Some((sampled, done)) = prepared else {
                     return;
                 };
@@ -151,7 +151,7 @@ impl AnimationController {
                     };
                     prepared = Some(value);
                 });
-                profile.close(retirement);
+                profile.close();
                 let Some(value) = prepared else {
                     return;
                 };

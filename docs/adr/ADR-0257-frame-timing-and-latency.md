@@ -147,9 +147,9 @@ and `Mailbox` needs a pacer FLUI does not have.
   `tests/contracts/frame_clock.rs`) pins the sampling, both clamps and the fallback.
 - `a_target_present_time_bounds_the_idle_work_of_its_frame` pins the idle bound and that the
   host's deadline is not asked when the request names one.
-- `a_frame_latency_setting_reaches_the_configuration_and_survives_release` (flui-engine) pins the
-  stored setting, and the `recording_vocabulary` row for `Frame` pins `target_present` through a
-  recording's round trip.
+- `a_windows_colour_and_latency_reach_the_backend_once_a_turn` (flui-engine) pins that the
+  setting reaches the window's slot, and the `recording_vocabulary` row for `Frame` pins
+  `target_present` through a recording's round trip.
 - `a_presentation_report_bounds_the_idle_work_of_a_later_frame` (flui-runtime) pins the bound by
   the report's grid and the stale report; `the_idle_work_of_a_frame_reached_late_ends_at_a_refresh_still_ahead`
   pins that the next refresh is one after the frame's start, never the report itself;

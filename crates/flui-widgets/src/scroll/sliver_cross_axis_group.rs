@@ -5,7 +5,7 @@ use flui_rendering::{
     parent_data::{SliverCrossAxisAllocation, SliverCrossAxisParentData},
     protocol::SliverProtocol,
 };
-use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, seq::ViewSeq};
+use flui_view::{BoxedView, IntoView, ParentDataView, ViewExt, ViewSeq};
 use std::{fmt, num::NonZeroU32};
 
 /// Presents multiple slivers as parallel tracks in one scrolling coordinate.
@@ -51,7 +51,7 @@ impl<C: ViewSeq + Clone + 'static> flui_view::RenderView for SliverCrossAxisGrou
     fn has_children(&self) -> bool {
         !self.slivers.is_empty()
     }
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         self.slivers.for_each(|_, child| visitor(child));
     }
 }
@@ -88,7 +88,7 @@ impl SliverCrossAxisItem {
 
 impl ParentDataView for SliverCrossAxisItem {
     type ParentData = SliverCrossAxisParentData;
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
     fn create_parent_data(&self) -> Self::ParentData {

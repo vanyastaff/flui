@@ -51,13 +51,13 @@ re-checked:
 | `APP_RUNTIME` | `crates/flui-app/src/app/runner/host.rs:25-47` | `thread_local!` host of every UI runtime |
 | `POLLING_PENDING_WINDOWS`, `PENDING_SECONDARY_WINDOW_OPENS`, `PENDING_SECONDARY_WINDOW_COMPLETIONS` | `crates/flui-app/src/app/runner/secondary_window.rs:453-471` | `thread_local!` queues beside the host cell |
 | `REQUEST_REBUILD` | `packages/flui-hot-reload/src/dispatch.rs:24` | `static LazyLock<Mutex<…>>` hook slot |
-| `REGISTRY_STACK`, `TEST_REGISTRY` | `crates/flui-view/src/key/registry.rs:198-212` | `thread_local!`, `ManuallyDrop` for a hot-reload cdylib |
+| `REGISTRY_STACK` | `crates/flui-view/src/key/registry.rs` | `thread_local!`, `ManuallyDrop` for a hot-reload cdylib |
 | `LOCAL_LANES`, `ACTIVE_LANES` | `crates/flui-interaction/src/pointer/interaction_lane.rs` | `thread_local!` lane registries |
 
 Beside them sit monotonic ID counters (`UNIQUE_KEYS`, `crates/flui-foundation/src/key.rs`;
 `NEXT_GRAPH_ID`, `crates/flui-view/src/reactive/mod.rs:72`; `NEXT_INCARNATION`,
 `crates/flui-app/src/app/runtime.rs:190`, and others), warn-once flags
-(`crates/flui-engine/src/batches/gradients.rs:64,77`), and platform cells that OS callbacks read
+(`crates/flui-engine/src/record/batches/gradients.rs:64,77`), and platform cells that OS callbacks read
 to find their owner (`DELEGATE_STATE`, `crates/flui-native/src/owner/apple/ios.rs`;
 `ACTIVE_EVENT_LOOP` in the winit owner, since deleted with that host;
 `ON_OWNER_QUEUE`, `crates/flui-native/src/owner/apple/macos/owner_lane.rs`). This list is
@@ -198,9 +198,9 @@ runs on the pinned stable toolchain, which dylint does not.
 - Environment-variable selection: `FLUI_HEADLESS`, on when set to anything but empty or `0` (`crates/flui-native/src/lib.rs`),
   `FLUI_SELF_CLOSE_AFTER_MS` and `FLUI_SELF_CLOSE_ROUTE` (in the winit owner,
   since deleted with that host), `FLUI_DX12_NO_DCOMP`
-  (`crates/flui-engine/src/renderer.rs`) choose process-wide behavior without any static.
+  (`crates/flui-engine/src/surface/present.rs`) choose process-wide behavior without any static.
 - Build-script output pulled in through `include!(concat!(env!("OUT_DIR"), …))`, as the six
-  `crates/flui-engine/src/*/generated.rs` files do: the scan reads the source tree, not
+  `crates/flui-engine/src/filters/*/generated.rs` files do: the scan reads the source tree, not
   `OUT_DIR`. Any other `include!`, and a `mod x;` inside a fn, impl or block body, is an error
   rather than a file the scan never reads.
 - Expansions of dependency macros and proc-macros. FLUI's own `macro_rules!` and `quote!`

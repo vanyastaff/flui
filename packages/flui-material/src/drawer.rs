@@ -63,10 +63,11 @@ use std::time::Duration;
 
 use flui_sdk::animation::Animatable;
 use flui_sdk::animation::{Animation, AnimationController, DrivenController, Tween};
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::Radius;
 use flui_sdk::interaction::GestureEndReason;
-use flui_sdk::painting::{BorderRadius, BorderRadiusExt, Color};
-use flui_sdk::painting::{Clip, TextDirection};
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::painting::styling::{BorderRadius, BorderRadiusExt, Color};
 use flui_sdk::rendering::objects::TranslationFraction;
 use flui_sdk::rendering::{BoxConstraints, HitTestBehavior};
 use flui_sdk::view::environment::MediaQuery;
@@ -143,7 +144,7 @@ impl InheritedView for DrawerSideScope {
         &self.side
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

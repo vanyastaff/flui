@@ -132,7 +132,7 @@ composition must still end somewhere.
 - `TextInputOwner::new` takes a `TextInputBackend` (a breaking change, `changelog.d/`), and
   `TextInputOwner::active_store` and the UI runtime's test-only `active_text_store` are gone. Tests reach
   the focused store through the host the headless window offers:
-  `HeadlessWindow::with_text_store_host` and `flui_testing::RecordingTextStoreHost`;
+  `HeadlessWindow::with_text_store_host` and `flui_testing::text_store_host::RecordingTextStoreHost`;
   `widgets::harness::mount_with_ime` is pull-model and `mount_with_push_ime` keeps the push
   recorder. A presentation without input-method support passes `TextInputBackend::Unsupported`.
 - A platform-level test makes a headless window pull-model with

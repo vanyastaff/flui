@@ -31,7 +31,7 @@
 //! owner-lane [`PathClipTarget`] for path factories; executable clipper
 //! callbacks never live in render storage.
 
-use std::{borrow::Borrow, fmt, marker::PhantomData, sync::Arc};
+use std::{borrow::Borrow, fmt, marker::PhantomData, rc::Rc, sync::Arc};
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Point, RRect, RSuperellipse, Rect, Size};
@@ -116,7 +116,7 @@ struct ClipSourceMarker;
 /// # let _ = raw;
 /// ```
 #[derive(Clone)]
-pub struct ClipSourceToken(Arc<ClipSourceMarker>);
+pub struct ClipSourceToken(Rc<ClipSourceMarker>);
 
 impl fmt::Debug for ClipSourceToken {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -126,7 +126,7 @@ impl fmt::Debug for ClipSourceToken {
 
 impl PartialEq for ClipSourceToken {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        Rc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -136,7 +136,7 @@ impl ClipSourceToken {
     /// Allocates a new source identity.
     #[must_use]
     pub fn fresh() -> Self {
-        Self(Arc::new(ClipSourceMarker))
+        Self(Rc::new(ClipSourceMarker))
     }
 }
 

@@ -19,7 +19,7 @@
 //! are kept here as normal fields: the M3 baseline tables still populate
 //! them, and dropping them would silently break consumers that read them.
 
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
 
 /// The full set of Material 3 color roles
@@ -334,10 +334,10 @@ impl ColorScheme {
     /// use flui_material::{ColorScheme, ColorSchemeOverrides};
     ///
     /// let scheme = ColorScheme::light().copy_with(ColorSchemeOverrides {
-    ///     primary: Some(flui_sdk::painting::Color::from_argb(0xFF00_66CC)),
+    ///     primary: Some(flui_sdk::painting::styling::Color::from_argb(0xFF00_66CC)),
     ///     ..Default::default()
     /// });
-    /// assert_eq!(scheme.primary, flui_sdk::painting::Color::from_argb(0xFF00_66CC));
+    /// assert_eq!(scheme.primary, flui_sdk::painting::styling::Color::from_argb(0xFF00_66CC));
     /// ```
     #[must_use]
     pub fn copy_with(&self, overrides: ColorSchemeOverrides) -> Self {

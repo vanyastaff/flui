@@ -6,56 +6,50 @@
     )
 )]
 // `missing_debug_implementations` is suppressed crate-wide for the public
-// types that hold `lyon`/atlas state or boxed closures with no `Debug`
-// (`WgpuPainter`, the pre-present hook). wgpu 30's
+// types that hold `lyon`/atlas state or boxed closures with no `Debug`:
+// `GpuContext` (its painter, its device-loss wake) and, under `testing`, the
+// bench re-exports (`WgpuPainter`, `OffscreenRenderer`, `PathCache`). wgpu 30's
 // own handles (Device, Queue, Texture, Buffer, …) all derive `Debug`, so they
 // are not the reason. It is an `expect`, not an `allow`: if the last such
 // type gains `Debug`, the attribute must go with it.
-#![expect(missing_debug_implementations)]
+#![expect(
+    missing_debug_implementations,
+    reason = "`GpuContext` holds a painter with lyon and atlas state and a device-loss wake, a boxed closure, with no `Debug`"
+)]
 // No hand-written production `unsafe` in this crate but two: surfaces come from wgpu's safe
 // `create_surface` over an owned `WindowTarget` (ADR-0063), and every GPU
 // handle is a wgpu value type. The exceptions are the read of DXGI frame
-// statistics (`renderer::dxgi_frame_statistics`), whose swap chain wgpu hands
+// statistics (`surface::present::dxgi_frame_statistics`), whose swap chain wgpu hands
 // out only through its hal escape, and the creation of the pipeline cache
-// from stored data (`pipeline_store::create_cache`), which wgpu offers only as
+// from stored data (`pipelines::store::create_cache`), which wgpu offers only as
 // an `unsafe fn`; each carries its own `expect`. `deny` rather than `forbid` because
 // wgsl_bindgen's generated wrappers (`*/generated.rs`) declare an
 // `unsafe fn from_raw` this crate never calls and `allow` it locally.
-// `fake_window_target` uses test-only raw-handle borrows for synthetic window
+// `surface::fake_target` uses test-only raw-handle borrows for synthetic window
 // and display handles, gated on `cfg(test)`.
 #![cfg_attr(not(test), deny(unsafe_code))]
 // `unreachable_pub` is a warning, not an error, because the workspace lint set
 // does not carry it: it fires for a `pub` item in a private or `pub(crate)`
 // module, which is a real finding (it claims reachability it does not have)
-// but not a correctness one. It caught 180 such declarations in this crate
-// when it was enabled, and every remaining `pub` now either reaches the crate
+// but not a correctness one. Every `pub` in this crate either reaches the crate
 // root or carries a scoped `#[cfg_attr(..., expect(unreachable_pub))]` naming
 // the feature that makes it reachable. Keep it on: the next one is a warning,
 // not a discovery.
 #![warn(unreachable_pub)]
-// Two lints are suppressed crate-wide for the wgpu backend, each with a
-// named site rather than a blanket rationale:
-//
-// - `struct_field_names`: the instance batches carry one `*_batch` field per
-//   primitive family (`rect_batch`, `circle_batch`, …), which is the field's
-//   domain name, not a redundant suffix.
-// - `large_enum_variant`: `command_ir::ImageFilterSpec` and
-//   `layer_compositor::RestoreOutcome` are dominated by one variant each;
-//   both are short-lived per-frame values, so boxing the large variant would
-//   trade an allocation on the frame path for a stack-size nit.
-#![expect(clippy::struct_field_names, clippy::large_enum_variant)]
 // The next-generation trait solver counts auto-trait proof depth honestly,
-// and proving `wgpu::Renderer: Send` descends through wgpu-core
-// (`Global -> Hub -> Registry -> RwLock<Storage<..>>`) past the default
-// limit of 128. On stable that is invisible; on nightly it is the
-// future-incompat lint `recursion_depth_exceeding_limit`
-// (rust-lang/rust#159228), which becomes a hard error once the solver
-// stabilises. Auto-trait proofs are structural and re-run in every crate
-// that needs `Renderer: Send`, so flui-app and the root examples carry the
-// same attribute. A manual `impl Send` on an intermediate type would
-// short-circuit the proof, but reopening a hand-written `Send` assertion
-// is exactly what ADR-0045 decision 1 removed; the limit is the honest fix
-// until wgpu adds the impls upstream (same class as rust-lang/rust#160036).
+// and proving that the raster thread's closure is `Send` (its lifecycle
+// channel carries a `ProbedDevice`, a wgpu device and queue) descends
+// through wgpu-core (`wgpu::Queue -> Global -> Hub -> Registry ->
+// RwLock<Storage<..>>`) past the default limit of 128. On stable that is
+// invisible; on nightly it is the future-incompat lint
+// `recursion_depth_exceeding_limit` (rust-lang/rust#159228), which becomes a
+// hard error once the solver stabilises. Auto-trait proofs are structural and
+// re-run in every crate that needs a wgpu handle to be `Send`, so flui-app
+// carries the same attribute. A manual `impl Send` on an intermediate type
+// would short-circuit the proof, but reopening a hand-written `Send`
+// assertion is exactly what ADR-0045 decision 1 removed; the limit is the
+// honest fix until wgpu adds the impls upstream (same class as
+// rust-lang/rust#160036).
 #![recursion_limit = "256"]
 
 //! GPU compositor for FLUI: it turns a [`flui_layer::Scene`] into wgpu draw
@@ -70,50 +64,38 @@
 //!
 //! | You are | Use |
 //! |---|---|
-//! | rendering into a window | [`Renderer::new`] — owns one window's device, queue, and surface, and recovers from device loss |
+//! | presenting every window of an application | [`RasterExecutor`] over one [`GpuContext`] ([`GpuContext::bootstrap`]) — each window a slot of one device, its surface made by the [`SurfaceFactory`] (ADR-0305) |
 //! | rendering without a window (tests, screenshots, thumbnails, CI) | [`HeadlessRenderer::new`] — rasterizes a layer tree to RGBA8 bytes |
-//! | driving draw calls yourself | [`WgpuPainter`] — the per-frame painter; `examples/painting_demo` is the worked example |
-//! | presenting every window of an application | [`RasterExecutor`] over one [`GpuContext`] — each window a slot of one device (ADR-0305) |
 //!
-//! All three constructors are `async`, because wgpu's adapter and device
-//! requests are. The library does not choose a blocking strategy for you: an
-//! embedder with an async runtime awaits, and one without wraps the call in
-//! its own `block_on`.
+//! What either draws is a [`Scene`](flui_layer::Scene): record draw calls on a
+//! `flui_painting::Canvas`, put the display list it finishes into a picture
+//! layer, and hand the scene to the executor as a frame. There is no public
+//! painter below the scene.
 //!
-//! # One frame
+//! An application does not drive these itself: it draws through a
+//! `CustomPaint` (as `examples/painting_demo` does), and `flui-app`'s runners
+//! bootstrap the context, attach each window's surface as a slot and send the
+//! executor its frames. An embedder that wants a scene's whole path reads
+//! those runners, or starts from [`HeadlessRenderer`], which rasterizes a
+//! scene without a window.
 //!
-//! ```rust,no_run
-//! # async fn frame(
-//! #     window: std::sync::Arc<dyn flui_platform::SurfaceTarget>,
-//! #     scene: &flui_layer::Scene,
-//! # ) -> Result<(), flui_engine::EngineError> {
-//! use flui_engine::Renderer;
-//!
-//! // `window` is the window's surface target (`PlatformWindow::surface_target`):
-//! // the renderer keeps it for as long as its surface lives, so it outlives
-//! // this stack frame, and reads from it who paces the surface.
-//! let mut renderer = Renderer::new(window).await?;
-//!
-//! // Render on every frame your event loop asks for; `render_scene` is sync
-//! // and does not block on vsync unless the surface does.
-//! // `Ok(false)` means the frame was skipped (no damage, or an occluded
-//! // surface) rather than drawn.
-//! renderer.render_scene(scene)?;
-//! # Ok(())
-//! # }
-//! ```
+//! The context and headless constructors are `async`, because wgpu's adapter
+//! and device requests are. The library does not choose a blocking strategy
+//! for you: an embedder with an async runtime awaits, and one without wraps
+//! the call in its own `block_on`.
 //!
 //! # Architecture
 //!
-//! Everything below [`Scene`](flui_layer::Scene) is this crate's internals,
+//! Everything below [`Scene`](flui_layer::Scene) is this crate's internals
+//! (none of `LayerDispatcher`, `WgpuPainter` or `GpuReplay` is public),
 //! reached through the entry point you picked above:
 //!
 //! ```text
 //! Scene (flui-layer)          built by the widget tree's Canvas
 //!     │
 //!     ▼
-//! Renderer                    owns one window's GPU stack
-//!     │ walks the LayerTree
+//! RasterExecutor              renders each slot of one GpuContext
+//!     │ walks the scene's version
 //!     ▼
 //! LayerDispatcher             routes each DrawCommand to the painter
 //!     │
@@ -161,337 +143,81 @@ compile_error!(
      — see flui-engine Cargo.toml [target.wasm32] note"
 );
 
-// ============================================================================
-// ABSTRACT LAYER (backend-agnostic)
-// ============================================================================
-
-/// Common error types for all rendering backends
-pub mod error;
-
-/// The command dispatch surface (`CommandRenderer` — crate-private). Plumbing: the
-/// layer walk dispatches through it, no embedder implements it today.
-pub(crate) mod command_renderer;
-
-/// The layer-tree state hand-off (`LayerStateStack`), the sibling of
-/// `command_renderer`.
-pub(crate) mod layer_state_stack;
-
-/// `DrawCommand` dispatch functions (crate-private). Same as the traits.
-pub(crate) mod dispatch;
-
-/// Backend-agnostic superellipse (iOS squircle) path generation.
-/// Pure geometry — no wgpu, no lyon.
-///
-/// Test-only since issue #935 retired the tessellation route: a squircle clip
-/// is a signed distance field evaluated per fragment, so nothing in a shipped
-/// build asks for the path. What the CPU generator is now is the ORACLE for
-/// that SDF — `common/clip.wgsl`'s `sdRoundedSuperellipse` is the shipped
-/// evaluator of the same `n = 4` parametric form, and
-/// `the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary` holds
-/// the two to each other pixel by pixel. Compiling it only where that test is
-/// compiled says so plainly, rather than shipping a function nothing calls —
-/// and the feature half of the gate is load-bearing, not belt-and-braces: the
-/// readback suite lives under `mod wgpu`, so `--no-default-features` drops the
-/// oracle and `cfg(test)` alone would leave the generator unused there. The
-/// per-feature CI pass is what catches that; a default-feature build does not.
-#[cfg(test)]
-pub(crate) mod superellipse;
-
-/// What a frame became once a backend drew it ([`PresentDisposition`]).
-pub mod raster;
-
-/// The raster executor: one mutator rendering every presentation's slot,
-/// fed by closed commands and settling each frame by its stamp (ADR-0305).
-pub mod raster_executor;
-
-/// Test support: a GPU-free stand-in for the raster executor's backend.
-#[cfg(feature = "testing")]
-pub mod testing;
-
-/// Portable monotonic timestamps for GPU-path diagnostic spans.
-/// Acquire/present timers must not panic on wasm32 before the wgpu backend is
-/// even asked for a surface texture (issue #1045).
-pub(crate) mod frame_timing;
-
-// ============================================================================
-// THE wgpu RASTER PIPELINE
-// ============================================================================
-
 /// The wgpu this crate links against, re-exported so embedders name the same
 /// version (device handoff, surface formats, `wgpu::Features` queries).
 pub use ::wgpu;
 
-/// Advanced dst-read blend composite driver: backdrop copy, pipeline, and
-/// `flush_advanced_layer`; the synthetic-op GPU gate in this module is the
-/// authoritative WGSL gate.
-/// Shared adapter/device acquisition policy: the one `RequestAdapterOptions`
-/// used everywhere, the capability-negotiated `DeviceDescriptor`, and the
-/// composed offscreen acquisition the offscreen stacks share.
-mod adapter;
-pub(crate) mod advanced_blend;
-mod atlas;
-/// Record-side draw accumulation helpers: `DrawBatcher` owns the tessellator,
-/// path cache, and superellipse cache so they can be borrowed independently
-/// from the flush-side state during draw recording.
-mod batches;
-/// Separable Gaussian blur filter: two H/V sub-passes with `exp(-0.5·i²/σ²)`
-/// running-sum renormalisation. Premultiplied-direct, sRGB-encoded (PINNED #2).
-/// [`blur::apply_blur`] is called by `apply_image_filter_passes` for
-/// `ImageFilterPass::Blur`. [`blur::BlurPipeline`] owns the pipeline and
-/// bind-group layout. Uses `FilterMode::Linear` (bilinear) — distinct from the
-/// morphology pipeline (`NonFiltering` nearest).
-pub(crate) mod blur;
-mod buffer_pool;
-mod clip_chain;
-mod clip_geometry;
-mod clip_mask;
-/// Per-pixel 5×4 color-matrix filter pass: [`color_matrix::apply_color_matrix`]
-/// applies a [`command_ir::LayerFilter::ColorMatrix`] to a premultiplied layer
-/// offscreen via ping-pong into a 2nd pooled texture, then returns the filtered
-/// texture for compositing.  [`color_matrix::ColorMatrixPipeline`] owns the
-/// pipeline and bind-group layout.
-pub(crate) mod color_matrix;
-/// Command IR data types: `DrawSegment`, `DrawItem`, `SavedLayer`,
-/// `PendingOpacityLayer`, ordered backdrop records, and their helpers
-/// (`ScissorRect`, `ScissorRegion`, `TessellatedBatch`). Moved here from
-/// `painter` so the future batcher/compositor modules share one type home.
-pub(crate) mod command_ir;
-/// Per-frame dirty-rect accumulator behind the `render_scene` scissor.
-mod damage;
-mod device_domain;
-#[cfg(not(target_arch = "wasm32"))]
-mod device_worker;
-/// Gradient, shadow, and blur instance descriptors: the batch payloads the
-/// shader-paint and shadow dispatch build from a `Paint`/`DrawOp`.
-mod effects;
-mod effects_pipeline;
-mod external_texture_registry;
-/// The frame protocol the windowed renderer and the headless retained
-/// capture share: damage, retained target, and the plan-to-GPU sequence.
-mod frame_latency;
-mod frame_protocol;
-/// Per-channel sRGB ↔ linear-light gamma transfer filter pass:
-/// [`gamma::apply_gamma`] applies a [`command_ir::LayerFilter::Gamma`] to a
-/// premultiplied layer offscreen (unpremul → transfer per RGB → clamp →
-/// repremul), writing the result into a 2nd pooled texture (ping-pong).
-/// Alpha is unchanged.  [`gamma::GammaPipeline`] owns the pipeline and
-/// bind-group layout.
-pub(crate) mod gamma;
-/// Which GPU backend the renderer draws with and the order it tries them in
-/// (ADR-0244 §1).
-mod gpu_backend;
-mod gpu_context;
-mod gpu_probe;
-mod gpu_timer;
-/// Windowless GPU capture: rasterize a `LayerTree` to an offscreen texture and
-/// read the pixels back (golden-image / screenshot tooling).
-pub mod headless;
-mod image_source_filter;
-/// GPU instance-buffer types: `RectInstance`, `CircleInstance`,
-/// `ArcInstance`, `TextureInstance`, and the gradient/shadow instances.
-/// Consumed by `painter`, which owns the per-primitive batch layout.
-mod instancing;
-/// Opacity/layer save-state machine: `opacity_stack`, `current_opacity`, and
-/// `layer_stack` extracted from `WgpuPainter`.  Owns the book-keeping half of
-/// `save_layer`/`restore_layer`; GPU emission lives in `GpuReplay`.
-pub(crate) mod layer_compositor;
-mod layer_dispatcher;
-/// Offscreen-layer rendering and compositing: `render_segment_to_offscreen`,
-/// `render_layer_to_offscreen`, `flush_opacity_layer`, and the filter-chain
-/// folding they drive. Named for the job (a layer rendered to a texture), not
-/// for one of its callers.
-pub(crate) mod layer_offscreen;
-/// Per-pixel ColorFilter::Mode blend pass: [`mode::apply_mode`] applies a
-/// [`command_ir::LayerFilter::Mode`] by compositing a solid filter color (SRC)
-/// over each layer pixel (DST) using one of the 28 Porter-Duff / W3C blend
-/// modes (unpremul DST → blend in straight sRGB → clamp → emit premul).
-/// [`mode::ModePipeline`] owns the pipeline and bind-group layout.
-pub(crate) mod mode;
-/// Separable morphological filter (dilate / erode) pass: [`morphology::apply_morphology`]
-/// applies an [`command_ir::ImageFilterPass::Morph`] to a premultiplied layer
-/// offscreen via two H/V sub-passes into pooled ping-pong textures, then returns
-/// the filtered texture for compositing via `DrawItem::Filter`.
-/// [`morphology::MorphologyPipeline`] owns the pipeline and bind-group layout.
-pub(crate) mod morphology;
+mod device;
+mod error;
+mod filters;
+mod frame;
+mod layers;
 mod offscreen;
 mod painter;
-/// Path tessellation cache; `PathCache` is re-exported under
-/// `testing` for the `render_throughput` bench alone.
-mod path_cache;
-/// Pipeline key types and cache consumed by `painter`: `PipelineKey`
-/// (opaque/alpha-blend factory methods + bitfield queries), `PipelineCache`
-/// (get_or_create, viewport_bind_group_layout), and `pipeline_key_from_paint`.
-mod pipeline_cache;
-mod pipeline_device;
-/// `pipeline_set.rs` — `PipelineSet` composes the live `PipelineCache` from
-/// `pipeline_cache.rs` and adds the nine named pipelines previously scattered
-/// as painter fields. The name-colliding earlier file with its own
-/// `PipelineCache`/`PipelineBuilder` is gone; this module is the surviving
-/// half.
-pub(crate) mod pipeline_set;
-#[cfg(not(target_arch = "wasm32"))]
-mod pipeline_store;
-#[cfg(not(target_arch = "wasm32"))]
-mod pipeline_warmup;
-/// Whole-pixel moves of recorded IR, which let a chunk moved by whole device
-/// pixels replay its recording (ADR-0304 §9).
-mod pixel_shift;
-mod portable_coverage;
-/// Values in the order of their last use, for least-recently-used eviction.
-mod recency;
-mod recording_budget;
-/// A chunk's IR kept past its frame and replayed for an unchanged chunk drawn
-/// under the same transform and ambient state (ADR-0304 §9).
-mod recording_cache;
-/// Whether a partial frame redraws a region rect by rect or under its
-/// bounding box, by what each is predicted to cost (ADR-0304 §9).
-mod region_cost;
-/// Frame render-target descriptor: `view` + optional back-reference `texture`
-/// for dst-read blend passes.  Frame-scoped borrow, never stored in IR types.
-pub(crate) mod render_target;
-mod renderer;
-/// Replay/submit component: owns GPU plumbing fields, the per-frame
-/// `texture_batch` scratch, all six segment-flush phases, the top-level
-/// `submit` dispatch loop, and `flush_opacity_layer` recursion.
-pub(crate) mod replay;
-/// Affine resample pass: [`resample::apply_resample`] shows a texture through
-/// an affine map, read nearest or bilinearly, for a transform image filter.
-/// [`resample::ResamplePipeline`] owns the pipeline.
-pub(crate) mod resample;
-pub(crate) mod resources;
-mod retained_target;
+mod pipelines;
+mod raster;
+mod raster_executor;
+mod record;
+mod replay;
+mod resources;
 mod shaders;
-/// SSAA (2× supersampled) path anti-aliasing: downsample pipeline and replay
-/// helper `GpuReplay::render_ssaa_path` / `GpuReplay::downsample_ssaa_tile`.
-/// Handles Fill + SrcOver arbitrary paths that were diverted by `draw_path`.
-pub(crate) mod ssaa;
-/// Transform and clip state with complete save/restore snapshots, owned by `WgpuPainter`.
-pub(crate) mod state_stack;
-// The owned-target/surface protocol (`SurfaceLease`) — GPU-free so its
-// probe-before-build and drop-order invariants can be tested and (later)
-// interpreted under Miri without a real `wgpu::Surface`. See the module's
-// own `//!` doc for details; no outer doc here to avoid duplicating it in a
-// scope where its intra-doc links resolve differently (rustdoc quirk).
-mod glyph_atlas;
-mod surface_color;
-mod surface_factory;
-mod surface_lease;
-mod surface_pacing;
-mod surface_present;
-/// A hash map that counts, in tests, the entries each access touches.
-mod tallied_map;
-mod tessellator;
-pub(crate) mod texture_cache;
-mod texture_pool;
-mod uniform_pool;
-mod vertex;
-mod window_slot;
-// What a windowed `Renderer` draws into: an owned, `'static`, `Send + Sync`
-// handle source (issue #1043). Exported here beside `Renderer`. See the
-// module's own `//!` doc for details; no outer doc here for the same reason
-// as `surface_lease` above.
-mod window_target;
+mod surface;
 
-// ============================================================================
-// LAYER RENDERING
-// ============================================================================
+mod gpu_context;
+mod headless;
 
-pub(crate) mod layer_render;
-pub(crate) mod layer_walk;
+#[cfg(test)]
+mod superellipse;
 
-// readback_dump is shared test-support for every GPU readback/oracle test in
-// this module: when `FLUI_READBACK_DUMP_DIR` is set, each local readback
-// helper dumps the actual frame as a PNG there (the CI GPU job uploads
-// `<dir>/**/*.png` as an artifact on oracle failure). With the env var
-// unset every entry point is a no-op.
+#[cfg(feature = "testing")]
+pub mod testing;
+
 #[cfg(all(test, feature = "testing"))]
 mod readback_dump;
 
-// test_support is the other half of the shared scaffolding: adapter/device
-// acquisition, render-target creation, clear passes, and the padded-row
-// staging readback that every GPU suite previously carried its own copy of.
-//
-// Gated on `cfg(test)` alone, not on `testing`. It was gated on the
-// feature "like its consumers" while every consumer was a feature-gated filter
-// suite; the three readback suites below are `cfg(test)` only, and they are the
-// ones that needed `renderer_or_skip` — a helper that lives behind a feature its
-// callers do not have is a helper they cannot call.
 #[cfg(test)]
-pub(crate) mod test_support;
+mod test_support;
 
-// A GPU-free `WindowTarget` test double shared by `surface_lease.rs`'s and
-// `renderer.rs`'s own unit tests, so both exercise the identical fake
-// instead of two copies that could silently diverge (issue #1043).
-#[cfg(test)]
-pub(crate) mod fake_window_target;
-
-#[cfg(test)]
-mod clip_layer_readback_tests;
-
-// The engine paints the paragraph it is handed and shapes nothing (ADR-0065).
-#[cfg(test)]
-mod paragraph_readback_tests;
-// Partial frames through the retained target, read back; `cfg(test)` alone
-// like the suites above, self-skipping without an adapter.
-#[cfg(test)]
-mod damage_readback_tests;
-// A retained version drawn by the engine walk, against its flattened tree.
-#[cfg(test)]
-mod version_readback_tests;
-
-#[cfg(test)]
-#[path = "layer_effect_tests.rs"]
-mod layer_effect_readback_tests;
-
-// The CPU model of the fixed-function blender that every readback suite
-// asserting an exact blended byte predicts against.
 #[cfg(test)]
 mod blend_oracle;
 
-// The clip suite's companion: same clip, but asserting the ARITHMETIC of a
-// partially covered blend rather than counting clipped pixels.
+#[cfg(test)]
+mod clip_layer_readback_tests;
 #[cfg(test)]
 mod coverage_blend_readback_tests;
-
-// The same two questions asked of the GRADIENT path, which reaches the blender
-// through its own instanced pipelines rather than the tessellated funnel.
+#[cfg(test)]
+mod damage_readback_tests;
 #[cfg(test)]
 mod gradient_blend_readback_tests;
-
-// Analytic anti-aliasing oracle and the GPU readbacks measured against it.
-#[cfg(all(test, feature = "testing"))]
-mod aa_oracle_tests;
-
-// layer_blend_tests contains both cfg(test) unit tests and
-// cfg(all(test, feature = "testing")) GPU tests.
-// Include the file whenever test compilation is active.
 #[cfg(test)]
 mod layer_blend_tests;
+#[cfg(test)]
+#[path = "layer_effect_tests.rs"]
+mod layer_effect_readback_tests;
+#[cfg(test)]
+mod paragraph_readback_tests;
+#[cfg(test)]
+mod version_readback_tests;
 
-// color_matrix_filter_tests contains GPU readback tests for the
-// color-matrix filter pass (identity, swap-R↔B, translucent premul roundtrip,
-// transpose-bug discriminator, brightness on translucent, nested opacity).
 #[cfg(all(test, feature = "testing"))]
-mod color_matrix_filter_tests;
-
-// GPU readback of the morphology filter pass.
-#[cfg(all(test, feature = "testing"))]
-mod morphology_filter_tests;
-
-// GPU readback of the Gaussian blur filter pass against the CPU oracle.
+mod aa_oracle_tests;
 #[cfg(all(test, feature = "testing"))]
 mod blur_filter_tests;
+#[cfg(all(test, feature = "testing"))]
+mod color_matrix_filter_tests;
+#[cfg(all(test, feature = "testing"))]
+mod compositing_readback_tests;
+#[cfg(all(test, feature = "testing"))]
+mod morphology_filter_tests;
 
 // ============================================================================
 // RE-EXPORTS (convenience)
 // ============================================================================
 
-// Abstract traits and errors
+// Each public item has this one path; the modules that hold them are private.
+// `ExternalTextureError` is public as the payload of `EngineError::ExternalTexture`,
+// which a scene naming an unregistered texture returns.
 pub use error::{EngineError, EngineResult, ExternalTextureError, GeometryError, Recoverability};
-pub use external_texture_registry::{
-    ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
-    ExternalTextureEntry, ExternalTextureRegistry,
-};
 pub use raster::PresentDisposition;
 // The raster executor and its commands (ADR-0305).
 // The threaded placement's handle (ADR-0305 §10); the web turns inline.
@@ -499,24 +225,33 @@ pub use raster::PresentDisposition;
 pub use raster_executor::ExecutorHandle;
 pub use raster_executor::{
     DETACH_DEADLINE, DeviceAnswered, DeviceHealth, DeviceRetries, DeviceTicket, ExecutorFailure,
-    ExecutorHealth, PainterResets, RasterBackend, RasterCommand, RasterExecutor, RasterPlacement,
-    RasterSendError, RasterSender, RasterVerdict, SendReceipt, SlotChange, SlotConfig, SlotFailure,
-    SlotId, SlotPhase, SlotRecord, SlotSettlement, SlotSize, SlotSurface, SlotTarget,
-    SlotVisibility, SurfaceHold, TurnOutcome,
+    ExecutorHealth, LIFECYCLE_CAPACITY, PainterResets, RasterBackend, RasterCommand,
+    RasterExecutor, RasterPlacement, RasterSendError, RasterSender, RasterVerdict, SendReceipt,
+    SlotChange, SlotConfig, SlotDomain, SlotFailure, SlotId, SlotPhase, SlotRecord, SlotSettlement,
+    SlotSize, SlotSurface, SlotTarget, SlotVisibility, SurfaceHold, TurnOutcome,
 };
 // Windowless capture (golden-image / screenshot tooling).
 pub use headless::HeadlessRenderer;
 // The one GPU context every slot renders through (ADR-0305 §1).
+pub use device::probe::{GpuProbe, ProbedDevice};
 pub use gpu_context::{GpuBootstrap, GpuContext};
-pub use gpu_probe::{GpuProbe, ProbedDevice};
-pub use painter::WgpuPainter;
-pub use surface_factory::{SurfaceFactory, UnconfiguredSurface};
-// Renderer (the one externally-consumed wgpu/* type)
-pub use frame_latency::FrameLatency;
-pub use gpu_backend::{BackendFailure, GpuBackend};
-pub use renderer::{GpuCapabilities, Renderer};
-pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
+pub use surface::factory::{SurfaceFactory, UnconfiguredSurface};
+// The swapchain latency a slot asks for, and the backend a context draws with.
+pub use device::backend::{BackendFailure, GpuBackend};
+pub use surface::color::SurfaceColor;
+pub use surface::latency::FrameLatency;
 
+// The painter below the scene and its external-texture registry — re-exported
+// ONLY under the `testing` feature, for the engine's benches and its
+// warm-path allocation test, which drive draw calls directly. An application
+// draws through `flui_painting::Canvas` into a `flui_layer::Scene`.
+#[cfg(feature = "testing")]
+pub use painter::WgpuPainter;
+#[cfg(feature = "testing")]
+pub use resources::external_textures::{
+    ExternalAlpha, ExternalColorEncoding, ExternalSampling, ExternalTextureDescriptor,
+    ExternalTextureEntry, ExternalTextureRegistry,
+};
 // Presentation blit helper — re-exported ONLY under the
 // `testing` feature for the retained-presentation blit benchmark.
 // Gated so benching does not widen the public surface.
@@ -524,4 +259,4 @@ pub use surface_color::{ResolvedSurfaceColor, SurfaceColor};
 pub use offscreen::OffscreenRenderer;
 // The tessellation cache, for the `render_throughput` bench's warm-hit case.
 #[cfg(feature = "testing")]
-pub use path_cache::PathCache;
+pub use record::path_cache::{PathCache, TessellationKey};

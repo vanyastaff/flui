@@ -1,6 +1,7 @@
 //! [`BackdropFilter`] — filters what is already painted behind its child —
 //! and [`BackdropGroup`], whose grouped filters share one backdrop.
 
+use flui_foundation::CreationSite;
 use flui_layer::BackdropGroupKey;
 use flui_objects::RenderBackdropFilter;
 use flui_painting::paint::{BlendMode, ImageFilter};
@@ -8,8 +9,8 @@ use flui_rendering::protocol::BoxProtocol;
 use flui_view::LifecycleContext;
 use flui_view::prelude::{BuildContext, BuildContextExt, StatefulView, StatelessView, ViewState};
 use flui_view::{
-    BoxedView, Child, CreationSite, InheritedView, IntoView, RenderView, View, ViewExt,
-    impl_inherited_view, impl_render_view,
+    BoxedView, Child, InheritedView, IntoView, RenderView, ViewExt, impl_inherited_view,
+    impl_render_view,
 };
 
 /// Filters whatever is already painted behind its child — a frosted-glass
@@ -200,7 +201,7 @@ impl InheritedView for BackdropGroupScope {
         &self.key
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

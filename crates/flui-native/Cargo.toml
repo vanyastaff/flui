@@ -166,10 +166,8 @@ tokio = { workspace = true, features = ["net", "io-util"] }
 
 # macOS platform
 [target.'cfg(target_os = "macos")'.dependencies]
-# `objc2` is the backend's binding stack. The `cocoa`/`objc` pair it replaced
-# is gone entirely: `objc` had not released since 2019, and `cocoa` deprecated
-# its whole surface in favor of this family. Versions are the ones `wgpu-hal`
-# already pins, so no new crate generation was introduced.
+# `objc2` is the backend's binding stack, at the versions `wgpu-hal` already
+# pins, so the macOS host and the GPU stack share one crate generation.
 objc2.workspace = true
 objc2-foundation = { workspace = true, features = [
     "std",
@@ -475,8 +473,7 @@ futures-util = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["macros", "net"] }
 
 # iOS native backend (UIKit + Metal). `objc2` is the maintained Objective-C
-# binding stack — the `objc` crate the macOS backend still uses has not
-# released since 2019, and `cocoa` has no UIKit surface at all. Only the
+# binding stack, as on macOS: `cocoa` has no UIKit surface at all. Only the
 # classes this backend messages are enabled: objc2-ui-kit exposes one feature
 # per header and turns all ~456 on by default, which would compile the whole
 # framework's bindings for a handful of classes. Versions are the ones already
@@ -691,17 +688,21 @@ single-instance = []
 # release build with the feature compiles none of the journal (ADR-0151 §16).
 native-capture = ["dep:flui-protocol", "dep:serde", "dep:serde_json"]
 
-# The headless host's doubles and controls at the crate root: `HeadlessPlatform`,
-# `HeadlessHostWindow`, `FakeTextInput`, `FakeAccessibility` and the other
-# `Headless*` handles a test drives the headless host with. Off, the headless
-# host still runs (`FLUI_HEADLESS`, `headless_platform`) and the crate's public
-# paths name no double. `testing` turns it on, as do flui-app's `testing` and
-# the dev-dependencies of the crates whose tests drive the headless host.
+# The `testing` module with the headless host's doubles and controls
+# (`testing::HeadlessPlatform`, `testing::HeadlessHostWindow`,
+# `testing::FakeTextInput`, `testing::FakeAccessibility` and the other
+# `testing::Headless*` handles a test drives the headless host with). Off, the
+# module does not exist, the headless host still runs (`FLUI_HEADLESS`,
+# `headless_platform`) and the crate's public paths name no double. `testing`
+# turns it on, as do flui-app's `testing` and the dev-dependencies of the crates
+# whose tests drive the headless host.
 scripted = []
 
-# The `testing` module (ADR-0243): what a test of a native host's windows
-# needs from the host itself, such as turns of the AppKit event loop, and the
-# native recording codec the tests replay recordings through. Off by
+# The rest of the `testing` module (ADR-0243), beside the doubles of `scripted`:
+# what a test of a native host's windows needs from the host itself, such as
+# turns of the AppKit event loop, and the native recording codec the tests
+# replay recordings through; with it the hidden `haptics`, `host`, `input` and
+# `text` modules are `pub` for the conformance tests. Off by
 # default and not part of the release API; this crate's tests turn it on
 # through the dev-dependency on itself. On Linux it brings the server half of
 # the Wayland crates and the descriptor primitives the kit's compositor
@@ -734,10 +735,17 @@ cfg_aliases = { workspace = true }
 flui-testing = { path = "../flui-testing" }
 # `fonts::android`'s parse, which runs on every host over recorded files.
 roxmltree.workspace = true
-# The host's own test support, the `testing` module, and the `http` client its
-# tests run against a loopback server. Checkout-only test edge:
-# versionless, so Cargo drops it from the published manifest.
-flui-native = { path = ".", features = ["testing", "http", "single-instance"] }
+# The host's own test support, the `testing` module, the `http` client its
+# tests run against a loopback server, and the native journal's capture (a
+# debug test build compiles it). With the capture the conformance table's
+# recording rows drive each backend's delivery, and the capture cases run live
+# instead of reporting CANNOT_VERIFY: the browser and pulled device sessions
+# held against their goldens and the capture and family cases
+# (`native_recording`), the captured headless pointer and mouse sessions
+# (`contract`), and the X11 sessions captured on an X server (`x11_input`,
+# `x11_window`). Checkout-only test edge: versionless, so Cargo drops it from
+# the published manifest.
+flui-native = { path = ".", features = ["testing", "http", "single-instance", "native-capture"] }
 # `panicking_waker` for a request whose waker fails as it is answered.
 flui-foundation = { path = "../flui-foundation", features = ["testing"] }
 # `WindowId::try_from_raw`, by which a test of a backend's pure part names a

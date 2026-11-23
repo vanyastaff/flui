@@ -26,7 +26,7 @@ use {
     std::sync::{Arc, Weak},
 };
 
-/// One display a [`HeadlessPlatform`](crate::HeadlessPlatform) is built with.
+/// One display a [`HeadlessPlatform`](crate::testing::HeadlessPlatform) is built with.
 ///
 /// Displays are laid out left to right in the order given; the first is the
 /// primary display.
@@ -241,8 +241,8 @@ impl<H: Host<Loop = HeadlessLoop>> HostPlatform<H> {
 }
 
 /// Changes the headless platform's displays after `run` has consumed it —
-/// obtained from [`HeadlessPlatform::display_controls`](crate::HeadlessPlatform::display_controls) before `run`, the same
-/// take-a-handle-first shape as [`HeadlessPlatform::owner_turns`](crate::HeadlessPlatform::owner_turns).
+/// obtained from [`HeadlessPlatform::display_controls`](crate::testing::HeadlessPlatform::display_controls) before `run`, the same
+/// take-a-handle-first shape as [`HeadlessPlatform::owner_turns`](crate::testing::HeadlessPlatform::owner_turns).
 ///
 /// A change commits to the platform's snapshot and then wakes the owner, as a
 /// native source does when the OS reports a mode switch, and so works from any

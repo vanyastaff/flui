@@ -3,7 +3,7 @@
 //! ## The optimistic graft, and what happens when it is wrong
 //!
 //! A `GlobalKey` is resolved optimistically. `reuse_or_mount` →
-//! `retake_active_global_key` (`crates/flui-view/src/tree/element_tree.rs`)
+//! `retake_active_global_key` (`crates/flui-view/src/tree/element_tree/global_key_retake.rs`)
 //! takes the keyed element even when it is still attached to a live parent:
 //! the old parent is assumed to be about to give the child up, and the only
 //! way that assumption is false is if the key is duplicated. The cases below
@@ -17,7 +17,7 @@
 //!   (`finalize_tree`), reporting a duplicate when two parents reserved one
 //!   key. The losing parent is repaired so teardown does not cascade. The
 //!   verification is not debug-only, and the duplicate arrives as a typed
-//!   [`DuplicateGlobalKey`](flui_view::DuplicateGlobalKey) on
+//!   [`DuplicateGlobalKey`](flui_view::__runtime::DuplicateGlobalKey) on
 //!   `BuildOwner::take_global_key_diagnostics` instead of being thrown —
 //!   a duplicate key is caller-controlled input, so the frame completes.
 //!
@@ -33,12 +33,13 @@
 // satisfy clippy — the sibling `global_key.rs` carries the same waiver for the
 // same reason, and a future UiRuntime/`Rc` migration removes both.
 
-use flui_foundation::ViewKey;
+use flui_foundation::{ElementId, ViewKey};
 use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::LifecycleContext;
 use flui_view::{
-    BuildContext, BuildOwner, ElementId, ElementTree, GlobalKey, IntoView, KeyLookup, RenderView,
-    StatefulView, StatelessView, View, ViewExt, ViewState,
+    BoxedView, BuildContext, GlobalKey, IntoView, KeyLookup, RenderView, StatefulView,
+    StatelessView, View, ViewExt, ViewState,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -158,7 +159,7 @@ impl RenderView for SlotHost {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -199,7 +200,8 @@ fn tree_with_parents(
     let root = tree.borrow_mut().mount_root_with_pipeline_owner(
         &SlotHost {
             children: Vec::new(),
-        },
+        }
+        .boxed(),
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),
@@ -210,7 +212,8 @@ fn tree_with_parents(
             tree.borrow_mut().insert(
                 &SlotHost {
                     children: Vec::new(),
-                },
+                }
+                .boxed(),
                 root,
                 slot,
                 &mut owner.borrow_mut().element_owner_mut(),
@@ -268,12 +271,11 @@ fn children_of(tree: &Rc<RefCell<ElementTree>>, parent: ElementId) -> Vec<Elemen
 /// The graft happens first and only *afterwards*, at end of frame, is the tree
 /// judged illegal. This test pins the graft half; the verdict half is pinned by
 /// the tug-of-war test below.
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn a_second_parent_grafts_the_same_element_rather_than_creating_another() {
     let (tree, owner) = fresh_tree();
     // `GlobalKey::current_element` reads a ui_runtime-scoped registry that is
     // inactive in unit tests driving `ElementTree` directly.
-    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let _registry = flui_view::testing::activate_global_key_registry(&tree, &owner);
     let parents = tree_with_parents(&tree, &owner, 2);
     let key = GlobalKey::<KeyedState>::new();
 
@@ -306,8 +308,6 @@ pub(crate) fn a_second_parent_grafts_the_same_element_rather_than_creating_anoth
         KeyLookup::Mounted(first),
         "the registry points at the single surviving element",
     );
-
-    flui_view::test_only_clear_global_key_registry();
 }
 
 /// A parent whose *build output* carries the key, expressed through the build
@@ -349,21 +349,21 @@ impl View for KeyedParent {
 /// before relinking it, so raw inserts never leave two parents claiming the
 /// key and never cross a frame boundary. Here both parents genuinely declare
 /// the key in one frame, so the check must see the conflict.
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
     let (tree, owner) = fresh_tree();
     CREATED_BY.set(None);
-    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let _registry = flui_view::testing::activate_global_key_registry(&tree, &owner);
     let key = GlobalKey::<KeyedState>::new();
 
     let root = tree
         .borrow_mut()
-        .mount_root(&Filler, &mut owner.borrow_mut().element_owner_mut());
+        .mount_root(&Filler.boxed(), &mut owner.borrow_mut().element_owner_mut());
     let parent_a = tree.borrow_mut().insert(
         &KeyedParent {
             key: key.clone(),
             tag: 1,
-        },
+        }
+        .boxed(),
         root,
         0,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -372,7 +372,8 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
         &KeyedParent {
             key: key.clone(),
             tag: 2,
-        },
+        }
+        .boxed(),
         root,
         1,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -466,8 +467,6 @@ pub(crate) fn two_parents_declaring_one_key_in_one_frame_are_reported() {
         owner.borrow_mut().take_global_key_diagnostics().is_empty(),
         "the duplicate must not be re-reported every subsequent frame",
     );
-
-    flui_view::test_only_clear_global_key_registry();
 }
 
 // ============================================================================

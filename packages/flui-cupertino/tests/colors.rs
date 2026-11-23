@@ -1,7 +1,10 @@
 //! Mounted color resolution: selective dependencies, live contrast and
 //! brightness changes, authored colors and nested media overrides.
 
-#![expect(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic from `unwrap` is the test failure report (docs/PANIC-POLICY.md)"
+)]
 
 use crate::common;
 
@@ -9,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
 use flui_cupertino::{CupertinoColor, CupertinoDynamicColor, CupertinoTheme, CupertinoThemeData};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
@@ -78,7 +81,7 @@ impl View for RetainedChild {
 }
 
 impl ProxyView for RetainedChild {
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.0
     }
 }

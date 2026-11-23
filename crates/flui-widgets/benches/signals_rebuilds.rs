@@ -23,7 +23,8 @@ use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_testing::widgets::{LaidOut, lay_out, loose};
-use flui_view::{FrameBuildReport, Reactive, RebuildHandle, RebuildReason, Signal, View};
+use flui_view::__runtime::FrameBuildReport;
+use flui_view::{Reactive, RebuildHandle, RebuildReason, Signal, View};
 use flui_widgets::prelude::*;
 use flui_widgets::{Column, SizedBox};
 

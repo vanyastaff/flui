@@ -4,7 +4,8 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_native::{AppHandler, ExitAnswer, HeadlessPlatform, OwnerPlatform, Platform};
+use flui_native::testing::HeadlessPlatform;
+use flui_native::{AppHandler, ExitAnswer, OwnerPlatform, Platform};
 
 use super::{
     OwnerHostClearGuard, app_handler, install_owner_platform, route_exit_policy, route_quit,
@@ -138,11 +139,11 @@ fn launch_refused_by(
     bootstrap: impl FnOnce(OwnerPlatform) -> Result<(), flui_native::BootstrapError> + 'static,
 ) -> (
     Result<(), flui_native::PlatformError>,
-    flui_testing::CapturedLog,
+    flui_testing::log_capture::CapturedLog,
 ) {
     use flui_platform::{Launch, OpenTarget, Opened, OpenedFile};
 
-    flui_testing::disarm_interest_cache();
+    flui_testing::log_capture::disarm_interest_cache();
     let heard = Rc::new(Cell::new(0_usize));
     let files = Rc::clone(&heard);
     let settings = crate::app::runner::OpenSettings {
@@ -162,7 +163,7 @@ fn launch_refused_by(
         )
         .0,
     );
-    let (ran, log) = flui_testing::capture(|| {
+    let (ran, log) = flui_testing::log_capture::capture(|| {
         Box::new(platform).run(crate::app::runner::opening_app_handler(settings, bootstrap))
     });
     assert_eq!(
@@ -174,7 +175,7 @@ fn launch_refused_by(
 }
 
 /// The files and the link of the launch, each refused by count and reason.
-fn assert_launch_refused(log: &flui_testing::CapturedLog) {
+fn assert_launch_refused(log: &flui_testing::log_capture::CapturedLog) {
     let refused: Vec<(Option<&str>, Option<&str>)> = log
         .records()
         .iter()
@@ -214,7 +215,7 @@ mod handler_containment {
 
     /// A routed headless window of an installed owner, torn down on drop.
     struct Routed {
-        native: flui_native::HeadlessHostWindow,
+        native: flui_native::testing::HeadlessHostWindow,
         window: Rc<dyn flui_platform::PlatformWindow>,
         routes: Rc<crate::app::runner::window_routes::WindowRoutes>,
         _clear: OwnerHostClearGuard,
@@ -236,9 +237,8 @@ mod handler_containment {
             .expect("an installed owner")
             .and_then(flui_native::WindowOpen::try_ready)
             .expect("headless windows are ready");
-            let native = host_window
-                .as_any()
-                .downcast_ref::<flui_native::HeadlessHostWindow>()
+            let native = (&*host_window as &dyn std::any::Any)
+                .downcast_ref::<flui_native::testing::HeadlessHostWindow>()
                 .expect("headless window")
                 .clone();
             let window: Rc<dyn flui_platform::PlatformWindow> = host_window;

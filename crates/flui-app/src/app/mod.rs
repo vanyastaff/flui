@@ -34,7 +34,7 @@ pub(crate) mod native_window;
     not(target_arch = "wasm32")
 ))]
 pub(crate) mod placement_recorder;
-pub mod runner;
+pub(crate) mod runner;
 pub(crate) mod runtime;
 pub(crate) mod storage_host;
 pub(crate) mod window_control;
@@ -52,9 +52,10 @@ pub use flui_runtime::frame_failure::{
     FrameFailureHandlerFactory, FrameFailureKind, FrameFailureReport, PanicText, SamplingFailure,
     SamplingFailureOrigin, SamplingStage, SegmentPhase,
 };
-pub use flui_runtime::owner_turn::{
-    CloseRequest, CloseRequestError, CloseRequestHandler, CloseResponse,
-};
+#[cfg(not(target_os = "ios"))]
+pub use flui_runtime::owner_turn::{CloseRequest, CloseResponse};
+pub use flui_runtime::owner_turn::{CloseRequestError, CloseRequestHandler};
+#[cfg(not(target_os = "ios"))]
 pub use flui_view::CloseReason;
 pub use hot_reload::DevReload;
 // The recording hook (ADR-0215 §1): the tap and the records it observes.
@@ -103,8 +104,8 @@ pub use flui_runtime::execution::{
 };
 
 // Re-export RootRenderView and RootRenderElement from flui-view
-pub use flui_view::{LifecycleHook, RecoveredAt};
-pub use flui_view::{RootRenderElement, RootRenderView};
+pub use flui_view::__runtime::{LifecycleHook, RecoveredAt};
+pub use flui_view::__runtime::{RootRenderElement, RootRenderView};
 
 #[cfg(all(
     not(target_os = "android"),

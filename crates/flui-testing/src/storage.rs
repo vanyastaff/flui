@@ -31,7 +31,7 @@
 //! assert_eq!(storage.contents(&NOTES).as_deref(), Some(&b"saved"[..]));
 //! ```
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::future::Future;
 use std::num::NonZeroU64;
@@ -46,6 +46,7 @@ use flui_platform::{
     WriteMode,
 };
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 
 /// A [`Storage`] that keeps its values in memory.
 ///
@@ -54,6 +55,7 @@ use parking_lot::Mutex;
 /// storage restarts the application without a disk.
 #[derive(Clone, Default)]
 pub struct MemoryStorage {
+    // `Arc<Mutex>`: `Storage` is `Send + Sync + 'static`; every handle below shares it.
     state: Arc<Mutex<State>>,
     /// The run this handle publishes for; `None` for the test's own handles.
     run: Option<RunId>,
@@ -67,7 +69,11 @@ pub(crate) struct RunId(NonZeroU64);
 #[derive(Default)]
 struct State {
     /// The committed values: what a read returns.
-    values: HashMap<StorageName, Vec<u8>>,
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by storage names the application supplies"
+    )]
+    values: std::collections::HashMap<StorageName, Vec<u8>>,
     /// Request futures not yet dropped.
     live: usize,
     /// Reads asked for so far, refused ones included.
@@ -79,7 +85,7 @@ struct State {
     /// kill a test makes.
     killed: Vec<RunId>,
     /// The answer slot of every write future not yet dropped.
-    writes: HashMap<u64, WriteSlot>,
+    writes: FxHashMap<u64, WriteSlot>,
     /// Accepted while a [`WriteHold`] is alive; not started.
     queued: Vec<Write>,
     /// Written while a [`CommitBarrier`] is alive; not committed.
@@ -102,7 +108,11 @@ struct State {
     /// The error every copy aside fails with, if set.
     fail_copies: Option<StorageError>,
     /// The copies [`Storage::copy_aside`] kept of each name, in order.
-    kept: HashMap<StorageName, Vec<Vec<u8>>>,
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keyed by storage names the application supplies"
+    )]
+    kept: std::collections::HashMap<StorageName, Vec<Vec<u8>>>,
 }
 
 /// An accepted value on its way to [`State::values`].

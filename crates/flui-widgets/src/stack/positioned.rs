@@ -14,7 +14,7 @@
 //! [`Stack`]: crate::Stack
 
 use flui_rendering::parent_data::{HorizontalInsets, StackParentData};
-use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, impl_parent_data_view};
+use flui_view::{BoxedView, IntoView, ParentDataView, ViewExt, impl_parent_data_view};
 
 /// The vertical insets and explicit size both positioned views share.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -159,7 +159,7 @@ impl Positioned {
 impl ParentDataView for Positioned {
     type ParentData = StackParentData;
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -258,7 +258,7 @@ impl DirectionalPositioned {
 impl ParentDataView for DirectionalPositioned {
     type ParentData = StackParentData;
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

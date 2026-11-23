@@ -3,8 +3,8 @@
 //! `GpuReplay` owns the five static GPU plumbing fields shared by every flush
 //! method, the per-frame texture-instance scratch batch, all six segment
 //! flushers that submit recorded `DrawSegment` IR to the GPU, the top-level
-//! `submit` dispatch loop, and opacity-layer recursion. The split keeps record
-//! and replay ownership explicit while each implementation unit stays bounded.
+//! `submit` dispatch loop, and opacity-layer recursion. Record and replay
+//! ownership stay separate: the IR crosses between them and nothing else.
 //!
 //! ## Recorded order invariant
 //!
@@ -20,12 +20,12 @@
 //! pipeline whose layout at its index is group-equivalent (the same entries),
 //! so it also binds under the sets the painter builds for other target
 //! formats; a layout with other entries is a validation error. See the
-//! `pipeline_set.rs` module doc.
+//! `pipelines/set.rs` module doc.
 //!
-//! ## C4 rule — no `Matrix4` in this module
+//! ## No `Matrix4` in this module
 //!
 //! This module is `Matrix4`-free (same rule as
-//! `batches/`).  Transforms live in `GpuStateStack` (glam internally) and cross
+//! `record/batches/`).  Transforms live in `GpuStateStack` (glam internally) and cross
 //! the record/replay boundary as baked float arrays in the `DrawSegment` IR.
 
 use std::sync::Arc;
@@ -35,21 +35,21 @@ use wgpu::util::DeviceExt;
 use crate::error::EngineResult;
 
 use crate::{
-    advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
-    command_ir::{DrawItem, DrawSegment},
-    glyph_atlas::TextAtlas,
-    instancing::{InstanceBatch, TextureInstance},
-    layer_offscreen::apply_image_filter_passes,
-    pipeline_set::PipelineSet,
-    render_target::RenderTarget,
+    filters::advanced_blend::{AdvancedBlendOp, flush_advanced_layer},
+    frame::render_target::RenderTarget,
+    layers::offscreen::apply_image_filter_passes,
+    pipelines::set::PipelineSet,
+    record::command_ir::{DrawItem, DrawSegment},
+    record::instancing::{InstanceBatch, TextureInstance},
     resources::GpuResources,
+    resources::glyph_atlas::TextAtlas,
 };
 
 struct CapturedExternalBinding {
     // Strong identity prevents allocation-pointer ABA while the cache lives.
-    _lease: crate::external_texture_registry::ExternalAllocationLease,
+    _lease: crate::resources::external_textures::ExternalAllocationLease,
     binding: wgpu::BindGroup,
-    charge: Arc<crate::device_domain::PreparedPermit>,
+    charge: Arc<crate::device::domain::PreparedPermit>,
     last_enrolled_epoch: Option<u64>,
 }
 
@@ -62,7 +62,7 @@ struct UnclippedBinding {
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct ClipBindingKey {
     // Strong clip identity prevents allocation-pointer ABA during replay.
-    clip: crate::clip_chain::ClipChain,
+    clip: crate::record::clip_chain::ClipChain,
     mapping: [u64; 6],
     attachment_size: (u32, u32),
     uniform_size: (u32, u32),
@@ -103,7 +103,7 @@ pub(super) struct GpuReplay {
     // clip can hold masks over different crops; a request reuses any whose
     // crop contains its own.
     clip_bindings: rustc_hash::FxHashMap<ClipBindingKey, Vec<(clip::MaskCrop, wgpu::BindGroup)>>,
-    clip_mask_pipeline: Option<crate::clip_mask::ClipMaskPipeline>,
+    clip_mask_pipeline: Option<crate::replay::clip_mask::ClipMaskPipeline>,
 
     /// Shared unit-quad vertex buffer (0,0 to 1,1) reused by all instanced
     /// pipelines.
@@ -122,7 +122,7 @@ pub(super) struct GpuReplay {
     external_linear_sampler: wgpu::Sampler,
     // Frame-local strong leases prevent pointer reuse while bindings are cached.
     external_bindings: rustc_hash::FxHashMap<
-        (usize, crate::external_texture_registry::ExternalSampling),
+        (usize, crate::resources::external_textures::ExternalSampling),
         CapturedExternalBinding,
     >,
 
@@ -158,7 +158,7 @@ impl GpuReplay {
     /// entries.
     ///
     /// Mirrors the viewport-buffer / bind-group / unit-quad / sampler
-    /// construction that previously lived inside `WgpuPainter::with_shared_device`.
+    /// construction a painter built over a shared device needs.
     pub(super) fn new(
         device: &wgpu::Device,
         pipelines: &PipelineSet,
@@ -300,7 +300,7 @@ impl GpuReplay {
         self.clip_bindings = rustc_hash::FxHashMap::default();
     }
 
-    /// Update CPU target state; previously encoded bindings remain immutable.
+    /// Update CPU target state; bindings already encoded remain immutable.
     pub(super) fn update_viewport(&mut self, width: u32, height: u32) {
         self.uniform_size = (width, height);
         self.attachment_origin = (0, 0);
@@ -319,7 +319,7 @@ impl GpuReplay {
             return Ok(());
         }
         resources.admit_foreground_target(size, format, 1)?;
-        resources.reserve_prepared(crate::device_domain::PreparedCost {
+        resources.reserve_prepared(crate::device::domain::PreparedCost {
             gpu_bytes: 128,
             cpu_bytes: 128,
             objects: 6,
@@ -362,7 +362,10 @@ impl GpuReplay {
     /// loop and all `flush_opacity_layer` recursion.  Every `flush_texture_batch*`
     /// call drains and clears it before returning, so depth-N+1 content cannot
     /// leak into depth-N.  `&mut self` serializes the recursion.
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "device, queue, pipelines, resources, glyph atlas and encoder are independent borrows of the frame's state that the caller holds as separate locals"
+    )]
     pub(super) fn submit(
         &mut self,
         items: Vec<DrawItem>,
@@ -445,7 +448,7 @@ impl GpuReplay {
                 // `blend(transparent_fg, stale_backdrop)` there, potentially
                 // preserving prior-frame stale pixels in the out-of-damage slice.
                 //
-                // Self-healing: `renderer.rs` detects straddling advanced shapes
+                // Self-healing: the frame protocol detects straddling advanced shapes
                 // after `render_layer_recursive` and sets
                 // `FrameProtocol::force_full_next_frame`, so the NEXT frame repaints the
                 // full `device_bounds` without scissor restriction. A partial
@@ -542,7 +545,7 @@ impl GpuReplay {
                         )?;
                     }
                 }
-                // ── SSAA-supersampled path — PR-3 (SrcOver) / PR-4 (all modes) ──
+                // ── SSAA-supersampled path, every blend mode ──
                 //
                 // Z-correctness: all prior draw_order items have been flushed
                 // before this arm executes (loop order), so the SSAA tile
@@ -551,7 +554,7 @@ impl GpuReplay {
                 //
                 // Surface stays sample_count=1; the 2× texture is a normal texture.
                 //
-                // Advanced-blend composite (PR-4): `target.texture` is the sampleable
+                // Advanced-blend composite: `target.texture` is the sampleable
                 // surface required by flush_advanced_layer for the backdrop copy.
                 // View-only targets pass `None` → advanced falls back to SrcOver
                 // (same fallback as AdvancedShape; warns once in that case).
@@ -693,10 +696,9 @@ impl GpuReplay {
     }
 }
 
-// The ordered segment-flush machinery (flush_segment + typed-arena
-// flush helper it drives) is split out to restore the C1 <1500-LOC cap.
-mod flush;
-
 mod clip;
-
+pub(crate) mod clip_mask;
 mod composite;
+mod flush;
+pub(crate) mod portable_coverage;
+pub(crate) mod ssaa;

@@ -1,12 +1,12 @@
-error[E0277]: `Rc<RefCell<controller::ControllerInner>>` cannot be sent between threads safely
+error[E0277]: `Rc<RefCell<widgets::text::controller::ControllerInner>>` cannot be sent between threads safely
  --> tests/ui/thread_boundary/text_editing_controller_stays_on_its_thread.rs:6:30
   |
 6 |     require_thread_spawnable(controller);
-  |     ------------------------ ^^^^^^^^^^ `Rc<RefCell<controller::ControllerInner>>` cannot be sent between threads safely
+  |     ------------------------ ^^^^^^^^^^ `Rc<RefCell<widgets::text::controller::ControllerInner>>` cannot be sent between threads safely
   |     |
   |     required by a bound introduced by this call
   |
-  = help: within `TextEditingController`, the trait `Send` is not implemented for `Rc<RefCell<controller::ControllerInner>>`
+  = help: within `TextEditingController`, the trait `Send` is not implemented for `Rc<RefCell<widgets::text::controller::ControllerInner>>`
 note: required because it appears within the type `TextEditingController`
  --> crates/flui-widgets/src/text/controller.rs
   |

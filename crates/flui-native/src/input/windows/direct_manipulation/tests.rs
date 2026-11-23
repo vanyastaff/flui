@@ -124,8 +124,7 @@ fn fixture(nested: Option<fn(HWND)>) -> Fixture {
             handler.clone(),
         )
         .expect("window");
-    let hwnd = window
-        .as_any()
+    let hwnd = (&*window as &dyn std::any::Any)
         .downcast_ref::<WindowsWindow>()
         .expect("Win32 window")
         .hwnd();

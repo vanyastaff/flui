@@ -89,7 +89,7 @@ readback не меняются.
 | `recording_cache_hits`, `recording_cache_evictions`, `recording_cache_bytes` | RS12 | кэш записей |
 | `gpu_devices`, `glyph_atlases`, `pipeline_builds` | RS14 | для G5, читаются из `GpuContext` в тестах движка |
 
-Счётчики движка — `RasterCounters` (`crates/flui-engine/src/frame_protocol.rs`): поля фиксированы,
+Счётчики движка — `RasterCounters` (`crates/flui-engine/src/frame/protocol.rs`): поля фиксированы,
 тип `Copy`, счёт ничего не аллоцирует. Протокол кадра хранит их за последний кадр и пишет в trace-событие
 кадра; ворота движка (половины G1, G3, G4, G6) читают их в тестах движка на lavapipe (`gpu-test`).
 `HeadlessHost` их не сообщает, и в `FrameReport` их нет: путь через расчёт слота в `FrameReport`

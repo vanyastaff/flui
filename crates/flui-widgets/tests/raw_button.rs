@@ -6,16 +6,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_interaction::pointer::HitTestBehavior;
-use flui_testing::{Action, ActionRequest, NodeId, TreeId};
+use flui_semantics::SemanticsRole;
+use flui_testing::a11y::{Action, ActionRequest, NodeId, TreeId};
 use flui_view::prelude::*;
 use flui_view::{SignalError, WriterSource};
-use flui_widgets::interaction::{
+use flui_widgets::{
     Action as IntentAction, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
     ButtonActivateIntent, Focus, FocusRing, GestureDetector,
 };
 use flui_widgets::{
-    Column, RawButton, Semantics, SemanticsRole, Text, WidgetState, WidgetStates,
-    WidgetStatesController,
+    Column, RawButton, Semantics, Text, WidgetState, WidgetStates, WidgetStatesController,
 };
 
 use crate::common::{LaidOut, lay_out, loose};
@@ -109,7 +109,7 @@ fn value(seen: &Seen) -> Result<u32, SignalError> {
 }
 
 /// The node of the button: the one labelled with the button's text.
-fn button_node(app: &mut LaidOut) -> (flui_testing::A11yTree, NodeId) {
+fn button_node(app: &mut LaidOut) -> (flui_testing::a11y::A11yTree, NodeId) {
     app.enable_semantics();
     app.pump();
     let tree = app.a11y_tree().expect("semantics enabled before the frame");
@@ -178,7 +178,7 @@ pub(crate) fn raw_button_activates_from_the_keyboard() {
     use std::cell::Cell;
 
     use flui_platform::input::keyboard::{Key, NamedKey};
-    use flui_widgets::interaction::{ButtonActivateIntent, Shortcuts, SingleActivator};
+    use flui_widgets::{ButtonActivateIntent, Shortcuts, SingleActivator};
     use flui_widgets::{Row, SizedBox};
 
     use crate::common::harness::mount;
@@ -748,7 +748,7 @@ pub(crate) fn a_raw_button_presses_after_its_gesture_policy_changes() {
 /// An intent no button binds, which a binding above the button answers.
 #[derive(Clone, Copy, Debug)]
 struct Archive;
-impl flui_widgets::interaction::Intent for Archive {}
+impl flui_widgets::Intent for Archive {}
 
 /// Logs `name` when it answers `Archive`.
 struct Archiving {
@@ -790,7 +790,7 @@ impl ViewState<UnderSwitchedBinding> for UnderSwitchedBindingState {
     }
 
     fn build(&self, view: &UnderSwitchedBinding, ctx: &dyn BuildContext) -> impl IntoView {
-        use flui_widgets::interaction::{Shortcuts, SingleActivator};
+        use flui_widgets::{Shortcuts, SingleActivator};
 
         let name = if self.second.get(ctx) {
             "second"

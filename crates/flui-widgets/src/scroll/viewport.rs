@@ -13,7 +13,7 @@ use flui_rendering::view::{
     CacheExtentStyle, ScrollPosition, SliverPaintOrder, ViewportOffset as _,
 };
 use flui_view::BoxedView;
-use flui_view::seq::ViewSeq;
+use flui_view::ViewSeq;
 
 use crate::__private::generic_render_view_element;
 use crate::localization::{Directionality, resolve_horizontal_axis_direction};
@@ -239,7 +239,7 @@ where
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&flui_view::BoxedView)) {
         self.children.for_each(|_index, child| visitor(child));
     }
 }
@@ -372,7 +372,7 @@ where
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&flui_view::BoxedView)) {
         self.children.for_each(|_index, child| visitor(child));
     }
 }

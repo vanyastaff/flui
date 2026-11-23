@@ -84,20 +84,21 @@
 use std::rc::Rc;
 
 use flui_sdk::foundation::{Listenable, Subscription};
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::semantics::{SemanticsRole, Toggled};
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    ConstrainedBox, DefaultTextStyle, Padding, SemanticsRole, Toggled, WidgetState,
-    WidgetStateProperty, WidgetStates, WidgetStatesController,
+    ConstrainedBox, DefaultTextStyle, Padding, WidgetState, WidgetStateProperty, WidgetStates,
+    WidgetStatesController,
 };
 
 use crate::button_style::ButtonStyle;
 use crate::ink_well::InkWell;
 use crate::material::Material;
-use flui_sdk::widgets::interaction::node::Description;
+use flui_sdk::widgets::__private::node::Description;
 
 pub(crate) use crate::event_callback::PressCallback;
 

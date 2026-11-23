@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use common::{lay_out, tight};
 use flui_material::{AlertDialog, Theme, ThemeData};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::ViewExt;
 use flui_sdk::widgets::{ColoredBox, GestureDetector, SizedBox, Text};
 

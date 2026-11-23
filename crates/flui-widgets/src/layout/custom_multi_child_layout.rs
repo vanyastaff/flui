@@ -8,8 +8,8 @@ use flui_objects::RenderCustomMultiChildLayoutBox;
 use flui_rendering::delegates::MultiChildLayoutDelegate;
 use flui_rendering::parent_data::MultiChildLayoutParentData;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::seq::ViewSeq;
-use flui_view::{BoxedView, IntoView, ParentDataView, View, ViewExt, impl_parent_data_view};
+use flui_view::ViewSeq;
+use flui_view::{BoxedView, IntoView, ParentDataView, ViewExt, impl_parent_data_view};
 
 use crate::support::generic_render_view_element;
 
@@ -39,7 +39,7 @@ impl LayoutId {
 impl ParentDataView for LayoutId {
     type ParentData = MultiChildLayoutParentData;
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -124,7 +124,7 @@ where
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn flui_view::View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&flui_view::BoxedView)) {
         self.children.for_each(|_index, child| visitor(child));
     }
 }

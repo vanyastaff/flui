@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::common::{lay_out, loose, size};
-use flui_view::view::InheritedView;
+use flui_view::InheritedView;
 use flui_view::{BuildContextExt, Signal, SignalError, StatelessView};
 use flui_widgets::prelude::*;
 use flui_widgets::{Column, SizedBox};
@@ -211,7 +211,7 @@ impl View for OrderedReader {
 #[derive(Clone)]
 struct Level {
     value: u32,
-    child: Column,
+    child: BoxedView,
 }
 
 impl InheritedView for Level {
@@ -219,7 +219,7 @@ impl InheritedView for Level {
     fn data(&self) -> &u32 {
         &self.value
     }
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
     fn update_should_notify(&self, old: &Self) -> bool {
@@ -255,7 +255,8 @@ fn reader_rebuild_orders() -> (Vec<usize>, Vec<usize>) {
                     .boxed()
                 })
                 .collect::<Vec<_>>(),
-        ),
+        )
+        .boxed(),
     };
     laid.pump_widget(page(0));
     log.borrow_mut().clear();

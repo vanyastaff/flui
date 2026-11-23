@@ -1,15 +1,17 @@
+//! The identity presentation path: a retained intermediate image reaches a
+//! surface texture by a direct copy when format and extent match, and
+//! otherwise through one fullscreen blit pipeline per swapchain format
+//! (`encode_presentation`, `blit_to_surface`). A surface whose colour is not
+//! plain sRGB goes through `transform_blit` instead.
+
 use super::{EngineResult, PreparedCost};
-// Fullscreen intermediate→surface blit pipeline creation and blit_to_surface execution.
-//
-// Moved from `offscreen.rs` into `offscreen/blit.rs` as part of the C1 LOC-cap
-// concern-separation split.  Zero behaviour changes.
 
 use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
 
 use super::{BlitPipeline, FullscreenVertex, OffscreenRenderer};
-use crate::surface_color::OutputEncoding;
+use crate::surface::color::OutputEncoding;
 
 impl OffscreenRenderer {
     /// Presents a retained image into the allocation backing its default view.
@@ -41,7 +43,7 @@ impl OffscreenRenderer {
         view: &wgpu::TextureView,
         output: OutputEncoding,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
+    ) -> EngineResult<Arc<crate::device::domain::PreparedPermit>> {
         if let OutputEncoding::Transform(transform) = output {
             return self.encode_transform_blit(
                 retained,
@@ -253,7 +255,13 @@ impl OffscreenRenderer {
     /// * `surface_format` — the swapchain surface format.
     // `pub` under `testing`: the `render_throughput` bench measures the
     // retained-target blit. Private otherwise.
-    #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+    #[cfg_attr(
+        not(feature = "testing"),
+        expect(
+            unreachable_pub,
+            reason = "the crate root re-exports it only under `testing`, for the benches"
+        )
+    )]
     /// # Errors
     /// Returns admission, submission-backpressure or device-progress failures.
     #[cfg(feature = "testing")]
@@ -285,7 +293,7 @@ impl OffscreenRenderer {
         surface_view: &wgpu::TextureView,
         surface_format: wgpu::TextureFormat,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
+    ) -> EngineResult<Arc<crate::device::domain::PreparedPermit>> {
         self.domain.poll()?;
         let permit = self.domain.reserve(PreparedCost {
             objects: 1,

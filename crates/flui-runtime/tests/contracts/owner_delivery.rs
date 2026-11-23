@@ -1082,7 +1082,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
         // Deliberately inherit OwnerEffects::text_sizing's default refusal.
     }
     let owner = OwnerHost::new();
-    let host = flui_testing::RecordingTextStoreHost::new();
+    let host = flui_testing::text_store_host::RecordingTextStoreHost::new();
     let focus = flui_interaction::focus::FocusNode::new();
     let authored_size = Rc::new(Cell::new(14.0));
     let rebuild = Rc::new(RefCell::new(None));

@@ -198,7 +198,7 @@ fn opaque(width: u32, height: u32) -> PixelImage {
 /// under is retired, so a result that reaches the publish point anyway is
 /// dropped there. This test asserts the end-to-end outcome; the generation
 /// guard's own behaviour is pinned by the unit tests in
-/// `flui_widgets::image::resolve`.
+/// `crates/flui-widgets/src/image/resolve.rs`.
 fn a_retired_providers_late_completion_cannot_replace_the_current_image() {
     let (old_provider, old_completer) = ControlledProvider::new("out-of-order-old");
     let (new_provider, new_completer) = ControlledProvider::new("out-of-order-new");
@@ -374,8 +374,8 @@ fn asset_images_share_their_runtimes_cache_until_memory_pressure() {
     let path = directory.join("image.png");
     std::fs::write(&path, include_bytes!("fixtures/tiny.png")).expect("source fixture writes");
 
-    let mut host = flui_testing::HeadlessHost::new(
-        flui_testing::HeadlessWindow::new(100, 100)
+    let mut host = flui_testing::host::HeadlessHost::new(
+        flui_testing::host::HeadlessWindow::new(100, 100)
             .with_assets(flui_platform::assets::DirectoryAssets::new(&directory)),
     );
     let cache = image_cache::runtime_image_cache(&mut host);
@@ -402,7 +402,8 @@ fn asset_images_share_their_runtimes_cache_until_memory_pressure() {
         Arc::ptr_eq(&cache, &image_cache::runtime_image_cache(&mut host)),
         "one UI runtime keeps one cache"
     );
-    let mut other = flui_testing::HeadlessHost::new(flui_testing::HeadlessWindow::new(100, 100));
+    let mut other =
+        flui_testing::host::HeadlessHost::new(flui_testing::host::HeadlessWindow::new(100, 100));
     let other_cache = image_cache::runtime_image_cache(&mut other);
     assert!(
         !Arc::ptr_eq(&cache, &other_cache) && other_cache.get(&source).is_none(),

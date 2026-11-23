@@ -16,7 +16,7 @@ use flui_platform::TargetPlatform;
 use flui_platform::input::capabilities::PointerKindSet;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;
-use flui_view::{BoxedView, InheritedView, View};
+use flui_view::{BoxedView, InheritedView};
 
 use flui_rendering::constraints::AxisDirection;
 
@@ -191,7 +191,7 @@ impl InheritedView for ScrollConfiguration {
         &self.behavior
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

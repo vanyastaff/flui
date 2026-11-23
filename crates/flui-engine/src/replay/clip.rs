@@ -8,12 +8,12 @@
 //! rectangle are such scissors, so neither pays for pixels no draw writes.
 use super::GpuReplay;
 use crate::{
-    clip_chain::ClipChain,
-    clip_mask::{ClipMaskPipeline, MaskEdge, MaskMapping, MaskNode},
-    command_ir::{DrawRun, DrawSegment, ScissorRect},
-    device_domain::PreparedCost,
+    device::domain::PreparedCost,
     error::{EngineResult, GeometryError},
-    pipeline_set::PipelineSet,
+    pipelines::set::PipelineSet,
+    record::clip_chain::ClipChain,
+    record::command_ir::{DrawRun, DrawSegment, ScissorRect},
+    replay::clip_mask::{ClipMaskPipeline, MaskEdge, MaskMapping, MaskNode},
     resources::GpuResources,
 };
 use flui_foundation::geometry::Rect;
@@ -279,7 +279,10 @@ impl GpuReplay {
     /// The binding through which the draws of `segment` under `clip` read
     /// their coverage, resolved over `footprint`, the attachment pixels those
     /// draws can write (see [`MaskFootprint`]).
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "device, pipelines, resources and encoder are independent borrows of the frame's GPU state that the caller holds as separate locals"
+    )]
     pub(crate) fn prepare_clip_binding(
         &mut self,
         segment: &DrawSegment,
@@ -392,9 +395,9 @@ impl GpuReplay {
         };
         // The work of the mask the pipeline will resolve: the same tape and
         // mapping, so the interior admitted here is the one it skips.
-        let (work, _) = crate::clip_mask::membership_work(&tape.nodes, &mapping)?;
+        let (work, _) = crate::replay::clip_mask::membership_work(&tape.nodes, &mapping)?;
         segment.budget.admit_clip_work(work)?;
-        crate::clip_mask::validate_device_limits(device)?;
+        crate::replay::clip_mask::validate_device_limits(device)?;
         if self.clip_mask_pipeline.is_none() {
             resources.reserve_prepared(PreparedCost {
                 gpu_bytes: 0,
@@ -550,7 +553,7 @@ mod tests {
             footprint,
         ) {
             MaskCrop::Region { extent, .. } => {
-                crate::clip_mask::work_units(extent, 0, 1, 0, false).expect("in range")
+                crate::replay::clip_mask::work_units(extent, 0, 1, 0, false).expect("in range")
             }
             MaskCrop::Empty => 0,
         };

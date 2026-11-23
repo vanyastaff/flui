@@ -58,7 +58,7 @@
 //! "remove twice rapidly" test below asserts on this), and from the status
 //! listeners, in the animation tick that settled a controller with no
 //! explicit API call in between. Never from `build`: reconciling drives the
-//! controllers, which refuse mutation while the tree builds (ADR-0086 §7).
+//! controllers, which refuse mutation while the tree builds (ADR-0074 §5.2).
 //! A listener fired by a reconcile's own command returns at once
 //! (`MessengerCore::reconciling`); the running loop polls that change.
 //! `reconcile` loops until a full pass
@@ -108,7 +108,7 @@
 //!   listener runs inside a frame, and an `on_closed` that calls
 //!   `show_snack_bar` there would mutate the queue in the middle of the
 //!   frame's animation pass. `MessengerCore::pop_and_advance` instead defers
-//!   the fire through the [`flui_sdk::view::PostFrameHandle`] acquired in
+//!   the fire through the [`flui_sdk::scheduler::PostFrameHandle`] acquired in
 //!   [`ScaffoldMessengerState::init_state`] (ADR-0021) — the callback runs
 //!   after this frame's build/layout/paint have committed, its own reentrant
 //!   `show_snack_bar`/etc. call landing squarely in a safe, ordinary
@@ -188,7 +188,7 @@ use flui_sdk::animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, PlaybackRate, Vsync,
 };
 use flui_sdk::foundation::ElementId;
-use flui_sdk::view::PostFrameHandle;
+use flui_sdk::scheduler::PostFrameHandle;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{RebuildHandle, impl_inherited_view};
@@ -399,7 +399,7 @@ struct MessengerCore {
     /// This core, for the controllers' status listeners: a purely
     /// tick-driven settle (no explicit API call in between) reaches
     /// [`Self::reconcile`] from the tick that settled it, never from `build`,
-    /// where the controllers refuse mutation (ADR-0086 §7).
+    /// where the controllers refuse mutation (ADR-0074 §5.2).
     this: Weak<MessengerCore>,
     /// Set while [`Self::reconcile`] runs: a status listener a reconcile's
     /// own command fires returns at once, and the running loop polls the
@@ -688,12 +688,12 @@ impl MessengerCore {
         self.last_duration_status
             .set(AnimationStatus::ReverseSettled);
         let outgoing = self.duration_controller.borrow_mut().replace(owner);
-        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
-        recovery.run(|| {
+        let mut failure = flui_sdk::foundation::panic::FirstPanic::new();
+        failure.contain(|| {
             let _ = controller.forward();
         });
-        recovery.retire(outgoing);
-        recovery.finish();
+        failure.retire(outgoing);
+        failure.resume();
     }
 
     fn cancel_display_timer(&self) {
@@ -838,13 +838,13 @@ impl ScaffoldMessengerHandle {
         self.shared.vsync.replace(vsync.clone());
         let entry = self.shared.entry_owner.borrow_mut().take();
         let timer = self.shared.duration_controller.borrow_mut().take();
-        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
+        let mut failure = flui_sdk::foundation::panic::FirstPanic::new();
         for (slot, owner) in [
             (&self.shared.entry_owner, entry),
             (&self.shared.duration_controller, timer),
         ] {
             if let Some(mut owner) = owner {
-                recovery.run(|| {
+                failure.contain(|| {
                     if let Err(error) = owner.rebind(vsync.as_ref()) {
                         tracing::error!(%error, "ScaffoldMessenger lost its frame registry");
                     }
@@ -857,10 +857,10 @@ impl ScaffoldMessengerHandle {
                         Some(owner)
                     }
                 };
-                recovery.retire(outgoing);
+                failure.retire(outgoing);
             }
         }
-        recovery.finish();
+        failure.resume();
     }
 
     /// Release both owning handles.
@@ -1053,7 +1053,7 @@ impl InheritedView for ScaffoldMessengerScope {
         &self.handle
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

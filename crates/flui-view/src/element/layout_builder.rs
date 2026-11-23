@@ -87,7 +87,7 @@ pub(crate) type LayoutWidgetBuilder = Rc<dyn Fn(&dyn BuildContext, BoxConstraint
 ///
 /// ```
 /// use flui_view::element::LayoutBuilder;
-/// use flui_view::view::ErrorView;
+/// use flui_view::ErrorView;
 ///
 /// let responsive = LayoutBuilder::new(|_ctx, constraints| {
 ///     if constraints.max_width > 600.0 {
@@ -175,7 +175,7 @@ impl RenderView for LayoutBuilder {
         false
     }
 
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {}
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&BoxedView)) {}
 }
 
 impl View for LayoutBuilder {
@@ -378,7 +378,7 @@ mod tests {
     use flui_objects::RenderSizedBox;
     use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 
-    use crate::{BuildOwner, IntoView, tree::ElementTree, view::ViewExt};
+    use crate::{IntoView, owner::BuildOwner, tree::ElementTree, view::ViewExt};
 
     /// A leaf view of a fixed size — the child a builder returns.
     #[derive(Clone, Debug)]
@@ -420,7 +420,7 @@ mod tests {
     }
 
     impl Harness {
-        fn mount(view: &dyn View, constraints: BoxConstraints) -> Self {
+        fn mount(view: &crate::BoxedView, constraints: BoxConstraints) -> Self {
             let pipeline = PipelineCell::new(PipelineOwner::new(
                 flui_rendering::TextContextHandle::standalone(),
             ));
@@ -547,7 +547,7 @@ mod tests {
         let first = tight(120.0, 80.0);
         let second = tight(60.0, 40.0);
 
-        let mut h = Harness::mount(&view, first);
+        let mut h = Harness::mount(&view.boxed(), first);
         h.frame();
         assert_eq!(log.lock().as_slice(), &[first]);
 

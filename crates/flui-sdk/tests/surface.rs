@@ -1,8 +1,6 @@
 //! The SDK's surface is the measured list, and each re-export is the item it
 //! names, not a copy.
-//!
-//! The list starts with the package imports measured in ARCHITECTURE.md and
-//! pins subsequent consumer additions and removals, plus `painting::DrawOp`,
+//! The list pins the package imports, plus `painting::DrawOp`,
 //! which the design systems' paint tests read, `painting::Shadow` and
 //! `painting::BlurSigma`, which a text style's shadows and the op a
 //! paragraph's shadow records name (ADR-0309), the four decoration types
@@ -15,7 +13,10 @@
 //! presets, system preferences and haptic feedback kinds, input regions, the
 //! snap policies scrollables settle through, the anchored drag built on them,
 //! the theme-free context menu the design systems style, and the collapsing
-//! header the scroll channel moves.
+//! header the scroll channel moves. The value types the widgets take from other
+//! crates (semantics roles, layout enums and delegates, pointer events) are
+//! measured at their owners' paths (`semantics`, `rendering`, `interaction`,
+//! `painting`), as the facade places them.
 //! The typed inspection model the flui-driver spec places in the SDK (ADR-0242 §4) follows:
 //! the trait with its derive, the snapshot a package's tests read, the diff and the renderer.
 //! `custom_recognizer` proves the extension surface with a recognizer written
@@ -64,6 +65,7 @@ mod measured {
         SnapshotError as _, SnapshotNode as _, SnapshotQuery as _, ToValue as _, Unit as _,
         Value as _, diff as _, render as _, snapshot as _,
     };
+    use flui_sdk::foundation::memory::MemoryPressureLevel as _;
     use flui_sdk::foundation::panic::{PanicRecovery as _, RecoveryScope as _};
     use flui_sdk::foundation::{
         ChangeNotifier as _, ElementId as _, Listenable as _, ListenerCallback as _,
@@ -73,7 +75,7 @@ mod measured {
     use flui_sdk::geometry::{EdgeInsets as _, RRect as _, Radius as _};
     use flui_sdk::hooks::{
         FrameSnapshot as _, LayerTree as _, PluginFrameError as _, PluginPipeline as _, Scene as _,
-        TextContextHandle as _,
+        SceneError as _, TextContextHandle as _,
     };
     use flui_sdk::interaction::{
         ArenaMembership as _, BeginContactError as _, CancelOutcome as _, CompositionBranch as _,
@@ -105,24 +107,27 @@ mod measured {
     use flui_sdk::painting::Alignment as _;
     // The start and end alignment a table cell resolves against the reading direction.
     use flui_sdk::painting::AlignmentDirectional as _;
-    use flui_sdk::painting::{
+    use flui_sdk::painting::styling::{
         Border as _, BorderRadius as _, BorderRadiusExt as _, BorderSide as _, BorderStyle as _,
         BoxDecoration as _, BoxShadow as _, Color as _,
     };
     // A text style's shadows and the op a paragraph's shadow records (ADR-0309).
-    use flui_sdk::painting::{BlurSigma as _, Shadow as _};
+    use flui_sdk::painting::BlurSigma as _;
+    use flui_sdk::painting::styling::Shadow as _;
     // A text style's decoration (ADR-0310).
-    use flui_sdk::painting::{Canvas as _, DrawOp as _};
-    use flui_sdk::painting::{Clip as _, ClipOp as _, Paint as _, Path as _, StrokeCap as _};
-    use flui_sdk::painting::{
+    use flui_sdk::foundation::TextDirection as _;
+    use flui_sdk::painting::TextSizing as _;
+    use flui_sdk::painting::paint::{
+        Clip as _, ClipOp as _, Paint as _, Path as _, StrokeCap as _,
+    };
+    use flui_sdk::painting::typography::{
         DecorationThickness as _, TextDecoration as _, TextDecorationLines as _,
         TextDecorationStyle as _,
     };
+    use flui_sdk::painting::typography::{FontWeight as _, TextStyle as _};
+    use flui_sdk::painting::{Canvas as _, DrawOp as _};
     // The shapes the Material 3 Expressive loading indicators morph between.
-    use flui_sdk::painting::{
-        FontWeight as _, TextDirection as _, TextSizing as _, TextStyle as _,
-    };
-    use flui_sdk::painting::{
+    use flui_sdk::painting::paint::{
         Morph as _, PathCommand as _, RoundedPolygon as _, material_shapes as _,
     };
     use flui_sdk::painting::{SemanticsRegion as _, SemanticsRegionKey as _};
@@ -144,6 +149,11 @@ mod measured {
         ProviderContext as _, Resolver as _, WindowRef as _,
     };
     // The Android Activity a provider starts activities for results through.
+    use flui_sdk::interaction::{
+        ButtonChange as _, DragEndDetails as _, MultiTapCount as _, MultiTapCountError as _,
+        PointerDispatch as _, PointerEvent as _,
+    };
+    use flui_sdk::painting::CustomPainter as _;
     use flui_sdk::platform::capability::{
         Activity as _, ActivityResult as _, DataRefused as _, IntentFrame as _,
         InvalidResultKey as _, JniFrame as _, ResultCode as _, ResultIntent as _, ResultKey as _,
@@ -153,15 +163,33 @@ mod measured {
     use flui_sdk::platform::{
         AdmissionError as _, Brightness as _, ClipboardError as _, DurationScale as _,
         GesturePreferences as _, HapticFeedback as _, HostNotice as _, InvalidLocale as _,
-        InvalidPreference as _, Locale as _, MemoryPressureLevel as _, MotionPreference as _,
-        NativeMouseGeometry as _, NativeTouchGeometry as _, SessionEndBlock as _,
-        SessionEndRequest as _, SubmitError as _, SystemPreferences as _, TargetPlatform as _,
-        TextWeightPreference as _, WheelPreferences as _, WheelStep as _, WindowMode as _,
-        WindowState as _,
+        InvalidPreference as _, Locale as _, MotionPreference as _, NativeMouseGeometry as _,
+        NativeTouchGeometry as _, SessionEndBlock as _, SessionEndRequest as _, SubmitError as _,
+        SystemPreferences as _, TargetPlatform as _, TextWeightPreference as _,
+        WheelPreferences as _, WheelStep as _, WindowMode as _, WindowState as _,
+    };
+    use flui_sdk::rendering::objects::{
+        CarouselLayout as _, CrossAxisAlignment as _, FloatingHeaderSnapConfiguration as _,
+        FocusRingStyle as _, HitShape as _, MainAxisAlignment as _, MainAxisSize as _,
+        StackFit as _, TableColumnWidth as _,
     };
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
         RenderResult as _, RenderUpdateImpact as _,
+    };
+    use flui_sdk::rendering::{
+        FlowDelegate as _, FlowPaintingContext as _, HitTestBehavior as _,
+        MultiChildLayoutContext as _, MultiChildLayoutDelegate as _,
+        SingleChildLayoutDelegate as _, TableCellVerticalAlignment as _,
+    };
+    use flui_sdk::scheduler::{
+        AsyncDriver as _, FrameWaker as _, PostFrameHandle as _, TaskToken as _,
+    };
+    use flui_sdk::semantics::{
+        AutoComplete as _, CellPosition as _, Current as _, HasPopup as _, HeadingLevel as _,
+        Invalid as _, LiveSetting as _, NumericRange as _, NumericRangeError as _,
+        SemanticsAnchor as _, SemanticsRole as _, SetSize as _, SortDirection as _,
+        TableShape as _, TextSelection as _, Toggled as _,
     };
     use flui_sdk::view::LifecycleContextExt as _;
     use flui_sdk::view::dev_agent::{
@@ -169,25 +197,23 @@ mod measured {
     };
     use flui_sdk::view::dev_reload::{DevReloadHook as _, ReloadEvent as _, ReloadWake as _};
     use flui_sdk::view::element::ElementKind as _;
+    use flui_sdk::view::element::SliverPersistentHeaderDelegate as _;
     use flui_sdk::view::environment::{GestureArenaScope as _, VsyncScope as _};
     use flui_sdk::view::environment::{MediaQuery as _, MediaQueryData as _};
     use flui_sdk::view::prelude::{BuildContext as _, InheritedData as _, StatelessView as _};
     use flui_sdk::view::{
-        AnimatedView as _, AsyncDriver as _, BoxedView as _, BuildContext as _,
-        BuildContextExt as _, Child as _, FieldMask as _, FrameWaker as _, GlobalKey as _,
-        HostNoticeSubscription as _, InheritedData as _, InheritedView as _, IntoView as _,
-        LifecycleHandle as _, PostFrameHandle as _, RebuildHandle as _, RebuildReason as _,
-        RenderObjectContext as _, RenderView as _, StatefulView as _, View as _, ViewExt as _,
-        ViewState as _, WindowClosed as _, WindowHandle as _, WindowSubscription as _,
-        impl_animated_view as _, impl_inherited_view as _, impl_render_view as _,
-        single_child_view_children as _,
+        AnimatedView as _, BoxedView as _, BuildContext as _, BuildContextExt as _, Child as _,
+        FieldMask as _, GlobalKey as _, HostNoticeSubscription as _, InheritedData as _,
+        InheritedView as _, IntoView as _, LifecycleHandle as _, RebuildHandle as _,
+        RebuildReason as _, RenderObjectContext as _, RenderView as _, StatefulView as _,
+        View as _, ViewExt as _, ViewState as _, WindowClosed as _, WindowHandle as _,
+        WindowSubscription as _, impl_animated_view as _, impl_inherited_view as _,
+        impl_render_view as _, single_child_view_children as _,
     };
     use flui_sdk::widgets::__private::{
         AnchoredBox as _, FlightSeat as _, SeatClaim as _, SeatHold as _, TextFormFieldConfig as _,
         TextFormFieldCore as _,
     };
-    use flui_sdk::widgets::icon::IconData as _;
-    use flui_sdk::widgets::layout::PreferredSizeView as _;
     use flui_sdk::widgets::prelude::{BoxConstraints as _, BoxFit as _};
     use flui_sdk::widgets::{
         Actions as _, ActivateIntent as _, ActivationPressIntent as _, Align as _, AnchorSnap as _,
@@ -196,63 +222,50 @@ mod measured {
         AutovalidateMode as _, BackIntent as _, BoxedLocalizationsDelegate as _,
         ButtonActivateIntent as _, CallbackAction as _, Center as _, ClipRect as _,
         ColoredBox as _, Column as _, ConstrainedBox as _, Container as _, ContentShape as _,
-        CrossAxisAlignment as _, CustomMultiChildLayout as _, CustomPaint as _, CustomPainter as _,
-        DecoratedBox as _, DefaultFocusRingStyle as _, DefaultTextStyle as _, Directionality as _,
-        Disclosure as _, DisclosureState as _, DismissIntent as _, DragSlot as _,
-        DraggableAnchors as _, DraggableAnchorsBuilder as _, EditableText as _, Expanded as _,
-        ExpansionState as _, FadeTransition as _, Flexible as _,
-        FloatingHeaderSnapConfiguration as _, Focus as _, FocusRing as _, FocusRingStyle as _,
-        ForcePressSlot as _, FormFieldHandle as _, GestureDetector as _,
-        GestureRecognizerFactory as _, HeadingLevel as _, HeroMode as _, HitShape as _,
-        HitSlop as _, HitTestBehavior as _, Icon as _, IconData as _, IconTheme as _,
-        IconThemeData as _, InheritedTheme as _, IntrinsicWidth as _, InvalidViewportFraction as _,
-        LayoutId as _, MainAxisAlignment as _, MainAxisSize as _, MergeSemantics as _,
-        MouseRegion as _, MultiChildLayoutContext as _, MultiChildLayoutDelegate as _,
-        NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
+        CustomMultiChildLayout as _, CustomPaint as _, DecoratedBox as _,
+        DefaultFocusRingStyle as _, DefaultTextStyle as _, Directionality as _, Disclosure as _,
+        DisclosureState as _, DismissIntent as _, DragSlot as _, DraggableAnchors as _,
+        DraggableAnchorsBuilder as _, EditableText as _, Expanded as _, ExpansionState as _,
+        FadeTransition as _, Flexible as _, Focus as _, FocusRing as _, ForcePressSlot as _,
+        FormFieldHandle as _, GestureDetector as _, GestureRecognizerFactory as _, HeroMode as _,
+        HitSlop as _, Icon as _, IconData as _, IconTheme as _, IconThemeData as _,
+        InheritedTheme as _, IntrinsicWidth as _, InvalidViewportFraction as _, LayoutId as _,
+        MergeSemantics as _, MouseRegion as _, Offstage as _, Opacity as _, Padding as _,
         PageRoute as _, PageSnap as _, PanClaimRegion as _, PopupRoute as _, Positioned as _,
         PreferredSizeView as _, RawGestureDetector as _, RecognizerContext as _,
         RefreshController as _, RefreshIndicator as _, RefreshIntent as _, RouteAnimation as _,
         RouteResult as _, Row as _, SafeArea as _, SelectAllTextIntent as _, Semantics as _,
-        SemanticsAnchor as _, SemanticsRole as _, SharedSnapPolicy as _, SizedBox as _,
-        SlideTransition as _, Slider as _, SliderState as _, SliverPersistentHeader as _,
-        SliverPersistentHeaderDelegate as _, SnapPolicy as _, Stack as _, StackFit as _,
-        SubmitCallback as _, Table as _, TableCell as _, TableCellVerticalAlignment as _,
-        TableColumnWidth as _, TableRow as _, Text as _, TextEditingController as _,
-        TickerMode as _, Toggled as _, Transform as _, TransformSlot as _, ViewportFraction as _,
-        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
+        SharedSnapPolicy as _, SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
+        SliverPersistentHeader as _, SnapPolicy as _, Stack as _, SubmitCallback as _, Table as _,
+        TableCell as _, TableRow as _, Text as _, TextEditingController as _, TickerMode as _,
+        Transform as _, TransformSlot as _, ViewportFraction as _, WidgetState as _,
+        WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
         WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::widgets::{
         Actions as _, ActivateIntent as _, ActivityArc as _, ActivityIndicator as _, Align as _,
-        AnimatedBuilder as _, AnimatedLerp as _, AppBuilder as _, AutoComplete as _,
-        AutovalidateMode as _, BoxedLocalizationsDelegate as _, ButtonActivateIntent as _,
-        ButtonChange as _, CallbackAction as _, Carousel as _, CarouselAutoplay as _,
-        CarouselController as _, CarouselItemScope as _, CarouselLayout as _, Center as _,
-        ClipRect as _, ColoredBox as _, Column as _, ConstrainedBox as _, Container as _,
-        CrossAxisAlignment as _, Current as _, CustomMultiChildLayout as _, CustomPaint as _,
-        CustomPainter as _, DecoratedBox as _, DecoratedBoxTransition as _, DefaultTextStyle as _,
-        Directionality as _, Disclosure as _, DisclosureState as _, EditableText as _,
-        ExcludeSemantics as _, Expanded as _, ExpansionState as _, FadeTransition as _,
-        FittedBox as _, Flexible as _, FloatingHeaderSnapConfiguration as _, Focus as _,
-        FormFieldHandle as _, GestureDetector as _, HasPopup as _, HeadingLevel as _,
-        HeroMode as _, HitTestBehavior as _, Icon as _, IconData as _, IconTheme as _,
-        IconThemeData as _, IgnorePointer as _, InheritedTheme as _, IntrinsicWidth as _,
-        Invalid as _, KeylineSnap as _, LayoutBuilder as _, LayoutId as _, Listener as _,
-        MainAxisAlignment as _, MainAxisSize as _, MergeSemantics as _, MotionBuilder as _,
-        MouseRegion as _, MultiChildLayoutContext as _, MultiChildLayoutDelegate as _,
-        NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
-        PageController as _, PageRoute as _, PageTransitionBuilder as _, PageTransitions as _,
-        PageView as _, ParallaxPageTransition as _, PointerDispatch as _, PointerEvent as _,
-        PopupRoute as _, Positioned as _, PreferredSizeView as _, RefreshIndicatorPhase as _,
+        AnimatedBuilder as _, AnimatedLerp as _, AppBuilder as _, AutovalidateMode as _,
+        BoxedLocalizationsDelegate as _, ButtonActivateIntent as _, CallbackAction as _,
+        Carousel as _, CarouselAutoplay as _, CarouselController as _, CarouselItemScope as _,
+        Center as _, ClipRect as _, ColoredBox as _, Column as _, ConstrainedBox as _,
+        Container as _, CustomMultiChildLayout as _, CustomPaint as _, DecoratedBox as _,
+        DecoratedBoxTransition as _, DefaultTextStyle as _, Directionality as _, Disclosure as _,
+        DisclosureState as _, EditableText as _, ExcludeSemantics as _, Expanded as _,
+        ExpansionState as _, FadeTransition as _, FittedBox as _, Flexible as _, Focus as _,
+        FormFieldHandle as _, GestureDetector as _, HeroMode as _, Icon as _, IconData as _,
+        IconTheme as _, IconThemeData as _, IgnorePointer as _, InheritedTheme as _,
+        IntrinsicWidth as _, KeylineSnap as _, LayoutBuilder as _, LayoutId as _, Listener as _,
+        MergeSemantics as _, MotionBuilder as _, MouseRegion as _, Offstage as _, Opacity as _,
+        Padding as _, PageController as _, PageRoute as _, PageTransitionBuilder as _,
+        PageTransitions as _, PageView as _, ParallaxPageTransition as _, PopupRoute as _,
+        Positioned as _, PreferredSizeView as _, RefreshIndicatorPhase as _,
         RefreshIndicatorStyle as _, RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _,
-        ScaleTransition as _, SelectAllTextIntent as _, Semantics as _, SemanticsAnchor as _,
-        SemanticsRole as _, SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
-        SliverFadeTransition as _, SliverPersistentHeader as _,
-        SliverPersistentHeaderDelegate as _, Stack as _, StackFit as _, SubmitCallback as _,
-        Table as _, TableCell as _, TableCellVerticalAlignment as _, TableColumnWidth as _,
-        TableRow as _, Text as _, TextEditingController as _, TickerMode as _, Toggled as _,
-        Transform as _, WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _,
-        WidgetStates as _, WidgetStatesController as _, WidgetsApp as _,
+        ScaleTransition as _, SelectAllTextIntent as _, Semantics as _, SizedBox as _,
+        SlideTransition as _, Slider as _, SliderState as _, SliverFadeTransition as _,
+        SliverPersistentHeader as _, Stack as _, SubmitCallback as _, Table as _, TableCell as _,
+        TableRow as _, Text as _, TextEditingController as _, TickerMode as _, Transform as _,
+        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
+        WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::widgets::{
         Alternative as _, AlternativeKind as _, CommandAppearance as _, CommandHandle as _,
@@ -265,9 +278,6 @@ mod measured {
     };
     use flui_sdk::widgets::{
         AnimatedIcon as _, AnimatedIconData as _, IconCommand as _, IconPath as _,
-    };
-    use flui_sdk::widgets::{
-        CellPosition as _, SetSize as _, SortDirection as _, TableShape as _, TextSelection as _,
     };
     use flui_sdk::widgets::{
         CollapsingHeader as _, CollapsingHeaderState as _, HeaderExtents as _,
@@ -287,7 +297,6 @@ mod measured {
         Dismissible as _, DismissibleState as _, SwipeAction as _, SwipeActions as _,
         SwipeActionsError as _, SwipeActionsState as _, SwipeAlternative as _, SwipeEdge as _,
     };
-    use flui_sdk::widgets::{MultiTapCount as _, MultiTapCountError as _};
     use flui_sdk::widgets::{
         PageIndicator as _, PageIndicatorState as _, PageIndicatorStyle as _,
         PageIndicatorStyleError as _,
@@ -301,7 +310,7 @@ mod measured {
         geometry::{
             EdgeInsets as _, Lerp as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _,
         },
-        painting::{Alignment as _, Color as _},
+        painting::{Alignment as _, styling::Color as _},
     };
 }
 
@@ -324,9 +333,14 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::animation::Keyframes<f64>) -> flui_sdk::animation::Keyframes<f64> = |x| x;
     let _: fn(flui::foundation::ElementId) -> flui_sdk::foundation::ElementId = |x| x;
     let _: fn(flui::geometry::Rect) -> flui_sdk::geometry::Rect = |x| x;
-    let _: fn(flui::painting::styling::Color) -> flui_sdk::painting::Color = |x| x;
+    let _: fn(flui::painting::styling::Color) -> flui_sdk::painting::styling::Color = |x| x;
+    let _: fn(flui::foundation::TextDirection) -> flui_sdk::foundation::TextDirection = |x| x;
+    let _: fn(
+        flui::foundation::memory::MemoryPressureLevel,
+    ) -> flui_sdk::foundation::memory::MemoryPressureLevel = |x| x;
+    let _: fn(flui::interaction::ContactEnd) -> flui_sdk::interaction::ContactEnd = |x| x;
     let _: fn(flui::view::RebuildHandle) -> flui_sdk::view::RebuildHandle = |x| x;
-    let _: fn(flui::view::WidgetsBinding) -> flui_sdk::view::WidgetsBinding = |x| x;
+    let _: fn(flui::scheduler::PostFrameHandle) -> flui_sdk::scheduler::PostFrameHandle = |x| x;
     let _: fn(flui::view::dev_reload::ReloadWake) -> flui_sdk::view::dev_reload::ReloadWake = |x| x;
     let _: fn(flui::view::persist::SaveStatus) -> flui_sdk::view::persist::SaveStatus = |x| x;
     let _: fn(flui::widgets::Text) -> flui_sdk::widgets::Text = |x| x;
@@ -398,18 +412,19 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::painting::SemanticsRegionKey) -> flui_sdk::painting::SemanticsRegionKey = |x| x;
     let _: fn(flui::painting::DrawOp) -> flui_sdk::painting::DrawOp = |x| x;
     let _: fn(flui::painting::BlurSigma) -> flui_sdk::painting::BlurSigma = |x| x;
-    let _: fn(flui::painting::styling::Shadow) -> flui_sdk::painting::Shadow = |x| x;
-    let _: fn(flui::painting::typography::TextDecoration) -> flui_sdk::painting::TextDecoration =
-        |x| x;
+    let _: fn(flui::painting::styling::Shadow) -> flui_sdk::painting::styling::Shadow = |x| x;
+    let _: fn(
+        flui::painting::typography::TextDecoration,
+    ) -> flui_sdk::painting::typography::TextDecoration = |x| x;
     let _: fn(
         flui::painting::typography::TextDecorationLines,
-    ) -> flui_sdk::painting::TextDecorationLines = |x| x;
+    ) -> flui_sdk::painting::typography::TextDecorationLines = |x| x;
     let _: fn(
         flui::painting::typography::TextDecorationStyle,
-    ) -> flui_sdk::painting::TextDecorationStyle = |x| x;
+    ) -> flui_sdk::painting::typography::TextDecorationStyle = |x| x;
     let _: fn(
         flui::painting::typography::DecorationThickness,
-    ) -> flui_sdk::painting::DecorationThickness = |x| x;
+    ) -> flui_sdk::painting::typography::DecorationThickness = |x| x;
     let _: fn(flui::painting::TextSizing) -> flui_sdk::painting::TextSizing = |x| x;
     let _: fn(flui::platform::Brightness) -> flui_sdk::platform::Brightness = |x| x;
     let _: fn(flui::platform::InvalidLocale) -> flui_sdk::platform::InvalidLocale = |x| x;
@@ -430,6 +445,24 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(
         flui::rendering::objects::TranslationFraction,
     ) -> flui_sdk::rendering::objects::TranslationFraction = |x| x;
+    let _: fn(flui::rendering::objects::StackFit) -> flui_sdk::rendering::objects::StackFit = |x| x;
+    let _: fn(
+        flui::rendering::objects::FocusRingStyle,
+    ) -> flui_sdk::rendering::objects::FocusRingStyle = |x| x;
+    let _: fn(
+        flui::rendering::TableCellVerticalAlignment,
+    ) -> flui_sdk::rendering::TableCellVerticalAlignment = |x| x;
+    let _: fn(
+        Box<dyn flui::rendering::MultiChildLayoutDelegate>,
+    ) -> Box<dyn flui_sdk::rendering::MultiChildLayoutDelegate> = |x| x;
+    let _: fn(
+        Box<dyn flui::painting::CustomPainter>,
+    ) -> Box<dyn flui_sdk::painting::CustomPainter> = |x| x;
+    let _: fn(flui::interaction::ButtonChange) -> flui_sdk::interaction::ButtonChange = |x| x;
+    let _: fn(flui::interaction::MultiTapCount) -> flui_sdk::interaction::MultiTapCount = |x| x;
+    let _: fn(flui::semantics::SemanticsRole) -> flui_sdk::semantics::SemanticsRole = |x| x;
+    let _: fn(flui::semantics::Toggled) -> flui_sdk::semantics::Toggled = |x| x;
+    let _: fn(flui::semantics::NumericRange) -> flui_sdk::semantics::NumericRange = |x| x;
 }
 
 /// The unstable input surface a package opts into with `unstable-input`:
@@ -511,11 +544,13 @@ fn the_public_surface_is_the_measured_list() {
         "pub mod pipeline {",
         "pub mod platform {",
         "pub mod rendering {",
+        "pub mod scheduler {",
+        "pub mod semantics {",
         "pub mod text_input {",
+        "pub mod text_store {",
         "pub mod view {",
         "pub use flui_animation::*;",
         "pub use flui_foundation as foundation;",
-        "pub use flui_foundation::TextDirection;",
         "pub use flui_foundation::geometry;",
         "pub use flui_interaction::drag::AllowedActions;",
         "pub use flui_interaction::drag::Autoscroll;",
@@ -552,6 +587,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::gesture::ContestCancel;",
         "pub use flui_interaction::gesture::DownTake;",
         "pub use flui_interaction::gesture::DragDownDetails;",
+        "pub use flui_interaction::gesture::DragEndDetails;",
         "pub use flui_interaction::gesture::GestureArena;",
         "pub use flui_interaction::gesture::GestureArenaEntry;",
         "pub use flui_interaction::gesture::GestureArenaMember;",
@@ -567,6 +603,8 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::gesture::GestureSettings;",
         "pub use flui_interaction::gesture::GestureSettingsProvider;",
         "pub use flui_interaction::gesture::MotionRole;",
+        "pub use flui_interaction::gesture::MultiTapCount;",
+        "pub use flui_interaction::gesture::MultiTapCountError;",
         "pub use flui_interaction::gesture::ObservedComposition;",
         "pub use flui_interaction::gesture::ObservedMember;",
         "pub use flui_interaction::gesture::ObserverHandle;",
@@ -601,6 +639,16 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::text_input::committed_text;",
         "pub use flui_layer::LayerTree;",
         "pub use flui_layer::Scene;",
+        "pub use flui_layer::SceneError;",
+        "pub use flui_objects::CarouselLayout;",
+        "pub use flui_objects::CrossAxisAlignment;",
+        "pub use flui_objects::FloatingHeaderSnapConfiguration;",
+        "pub use flui_objects::FocusRingStyle;",
+        "pub use flui_objects::HitShape;",
+        "pub use flui_objects::MainAxisAlignment;",
+        "pub use flui_objects::MainAxisSize;",
+        "pub use flui_objects::StackFit;",
+        "pub use flui_objects::TableColumnWidth;",
         "pub use flui_objects::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction};",
         "pub use flui_painting::Alignment;",
         "pub use flui_painting::AlignmentDirectional;",
@@ -608,30 +656,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::Canvas;",
         "pub use flui_painting::DrawOp;",
         "pub use flui_painting::TextSizing;",
-        "pub use flui_painting::paint::Clip;",
-        "pub use flui_painting::paint::ClipOp;",
-        "pub use flui_painting::paint::Morph;",
-        "pub use flui_painting::paint::Paint;",
-        "pub use flui_painting::paint::Path;",
-        "pub use flui_painting::paint::PathCommand;",
-        "pub use flui_painting::paint::RoundedPolygon;",
-        "pub use flui_painting::paint::StrokeCap;",
-        "pub use flui_painting::paint::material_shapes;",
-        "pub use flui_painting::styling::Border;",
-        "pub use flui_painting::styling::BorderRadius;",
-        "pub use flui_painting::styling::BorderRadiusExt;",
-        "pub use flui_painting::styling::BorderSide;",
-        "pub use flui_painting::styling::BorderStyle;",
-        "pub use flui_painting::styling::BoxDecoration;",
-        "pub use flui_painting::styling::BoxShadow;",
-        "pub use flui_painting::styling::Color;",
-        "pub use flui_painting::styling::Shadow;",
-        "pub use flui_painting::typography::DecorationThickness;",
-        "pub use flui_painting::typography::FontWeight;",
-        "pub use flui_painting::typography::TextDecoration;",
-        "pub use flui_painting::typography::TextDecorationLines;",
-        "pub use flui_painting::typography::TextDecorationStyle;",
-        "pub use flui_painting::typography::TextStyle;",
+        "pub use flui_painting::{paint, styling, typography};",
         "pub use flui_platform::AdmissionError;",
         "pub use flui_platform::Availability;",
         "pub use flui_platform::Brightness;",
@@ -654,7 +679,6 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::InvalidRegionalFormat;",
         "pub use flui_platform::Locale;",
         "pub use flui_platform::MeasurementSystem;",
-        "pub use flui_platform::MemoryPressureLevel;",
         "pub use flui_platform::MotionPreference;",
         "pub use flui_platform::NativeMouseGeometry;",
         "pub use flui_platform::NativeTouchGeometry;",
@@ -723,6 +747,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::input::capabilities::InputCapabilities;",
         "pub use flui_platform::input::capabilities::PointerKindSet;",
         "pub use flui_platform::input::capabilities::PointerKindSet;",
+        "pub use flui_platform::input::pointer::ButtonChange;",
         "pub use flui_platform::input::pointer::PointerKind;",
         "pub use flui_platform::text::store::Autofill;",
         "pub use flui_platform::text::store::Capitalization;",
@@ -733,13 +758,40 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform::text::store::TextInputPurpose;",
         "pub use flui_platform::transfer::data::TransferActions;",
         "pub use flui_rendering::constraints::BoxConstraints;",
+        "pub use flui_rendering::delegates::CustomPainter;",
+        "pub use flui_rendering::delegates::FlowDelegate;",
+        "pub use flui_rendering::delegates::FlowPaintingContext;",
+        "pub use flui_rendering::delegates::MultiChildLayoutContext;",
+        "pub use flui_rendering::delegates::MultiChildLayoutDelegate;",
+        "pub use flui_rendering::delegates::SingleChildLayoutDelegate;",
+        "pub use flui_rendering::parent_data::TableCellVerticalAlignment;",
         "pub use flui_rendering::pipeline::TextContextHandle;",
         "pub use flui_rendering::protocol::BoxProtocol;",
         "pub use flui_rendering::view::ScrollDirection;",
         "pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};",
+        "pub use flui_scheduler::AsyncDriver;",
         "pub use flui_scheduler::FrameSnapshot;",
+        "pub use flui_scheduler::FrameWaker;",
+        "pub use flui_scheduler::PostFrameHandle;",
+        "pub use flui_scheduler::TaskToken;",
+        "pub use flui_semantics::AutoComplete;",
+        "pub use flui_semantics::CellPosition;",
+        "pub use flui_semantics::Current;",
+        "pub use flui_semantics::HasPopup;",
+        "pub use flui_semantics::HeadingLevel;",
+        "pub use flui_semantics::Invalid;",
+        "pub use flui_semantics::LiveSetting;",
+        "pub use flui_semantics::NumericRange;",
+        "pub use flui_semantics::NumericRangeError;",
+        "pub use flui_semantics::SemanticsAnchor;",
         "pub use flui_semantics::SemanticsRegion;",
         "pub use flui_semantics::SemanticsRegionKey;",
+        "pub use flui_semantics::SemanticsRole;",
+        "pub use flui_semantics::SetSize;",
+        "pub use flui_semantics::SortDirection;",
+        "pub use flui_semantics::TableShape;",
+        "pub use flui_semantics::TextSelection;",
+        "pub use flui_semantics::Toggled;",
         "pub use flui_view::*;",
         "pub use flui_widgets as widgets;",
         "pub use plugin_pipeline::PluginFrameError;",

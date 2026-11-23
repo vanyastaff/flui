@@ -1,18 +1,23 @@
 # Платформенный слой — задачи
 
 - **Статус:** редакция 3 утверждена: ADR-0151, 0152, 0153, 0154, 0254 и 0255 приняты 2026-10-21.
-  Из 134 задач серии 131 закрыта и 3 открыты (сверено с отметками записей «Хода исполнения» на
-  `main` @ `bc2f0ec33`, закрытием LY102 и закрытием LY98 трассой драйвера, FD10 спеки
-  flui-driver); открытые — неотмеченные записи раздела «Ход исполнения». Прогоны на устройствах,
-  которых ждут закрытые задачи, — строки `crates/flui-native/platform-parity.toml`. Открытые
-  задачи и код, которого они ждут:
-  - LY96 и LY99 — Windows-, macOS-, X11- и Android-lane драйвера есть; ждут прогонов на рабочем
-    столе, принимающем ввод, и на Mac (Narrator, VoiceOver, сценарий conformance через `os`-lane),
-    сеанса TalkBack и идентификатора узла в `accesskit_android`, и lane остальных ОС спеки
-    flui-driver;
-  - LY97 — запись драйвером есть (трасса держит слои `input` и `native`); ждёт прогонов на
-    Windows, macOS и Linux, lane Android (FD13) и прогона Chrome-lane (FD12, есть, с настоящим
-    браузером не прогонялся) спеки flui-driver.
+  Из 134 задач серии 132 закрыты и 2 открыты: LY96 и LY99 (сверено с отметками записей
+  «Хода исполнения» на `main` @ `d55e975c0`, где слиты Windows-, macOS-, X11-, Wayland-,
+  Android- и Chrome-lane драйвера и его трасса, FD10–FD14 и FD16 спеки flui-driver; LY97
+  закрыта с ADR-0390 и строками записей таблицы conformance).
+  Прогоны на устройствах — строки `crates/flui-native/platform-parity.toml`. Что держит
+  открытые задачи и кто может это снять:
+  - LY99 — прогон сценария conformance через Windows `os`-lane на рабочем столе, принимающем
+    ввод пользователя: на отдельном рабочем столе nextest он `cannot_verify` (прогон
+    2026-11-20 в записи), а на рабочий стол пользователя тесты выходят только с
+    `FLUI_TEST_VISIBLE_DESKTOP=1`, и этот прогон делает владелец;
+  - LY96 — сценариев TalkBack и VoiceOver на iOS нет в коде: Android-lane не читает дерево
+    доступности, пока `accesskit_android` не ставит `viewIdResourceName` (правка AccessKit
+    написана, upstream не отправлена: владелец отправляет её, затем lane читает дерево), а
+    iOS-Simulator-lane (FD15 спеки flui-driver) запускает приложение и снимает экран, но ввода
+    не шлёт и дерева доступности не читает: спайк HID ответил no-go, и канал ввода — решение
+    владельца, а дерево `accesskit_ios` хосту недоступно; сеансы Narrator, VoiceOver, Orca и
+    TalkBack — долг строки parity.
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -351,7 +356,7 @@ graph LR
 | **LY106** | **Хост Wayland: ограниченные данные композитора и гигиена протокола.** Клиентская рамка ограничивает масштаб и площадь рисования и держит ограниченный набор буферов на часть; на устройство один представленный, ещё не назначенный offer, и он уничтожается; `damage_buffer` только с версии 4 `wl_surface`; ушедшие seat и указатель снимают свои grab и фокус клавиатуры (удержанные клавиши получают KeyUp); реестр не хранит глобалы, которых не привязывает; источник drag берёт разрешение на запись до вызова провайдера приложения; одновременные чтения clipboard делят один ответ; ввод пользуется глобалами цикла, состояние указателя рамки — на seat; случаи `wayland_window`, которым нужен протокол сверх xdg-shell или seat (`wayland_window::optional`), CI гоняет и под headless Weston, и под headless sway (`cargo xtask wayland-optional`, где недостающее — падение), остальной `wayland_window` — под Weston: sway 1.9 тайлит и предлагает `xdg_wm_base` 2, так что maximize не исполняет; пропустивший тест говорит это в выводе | — | `crates/flui-native/src/{window,input,owner,display,clipboard}/linux/wayland*`, `transfer/linux/*`, `drag/wayland/*`, `.github/workflows/*` | `module-dag`, `file-length`, `ci-verify` | враждебный масштаб не выделяет гигабайт; композитор, не отдающий буферы; поток `data_offer` без `selection` не растёт; seat, ушедший с удержанной кнопкой; каждый падает при откате; `wayland_window::optional` под sway | L; Dev: Linux (Wayland) |
 | **LY107** | **Ядро владельца: одна точка вызова, одно решение на отказ.** Обработчик раскладки клавиатуры — один `HandlerSlot` в `owner/` для каждого цикла, `OwnerTurnSlot` реализует `HandlerSlot`; исход паники `exit_policy` решает `AppDelivery::exit_policy` один раз (ADR-0258, ADR-0281), а не хост; `AppDelivery::question` сохраняет ответ обработчика, когда падает отчёт после него; правило «наступивший срок не крутит цикл» — одно, через `WakeDeadline::{take_due, arm}`; у `Services::page_origin` и запечатанного `Platform` нет тел по умолчанию; `bind` ставит `delivering`; `owner/handlers.rs` назван по содержимому, тесты `OwnerSignal` — рядом с `signal.rs`; лестница хостов в `lib.rs` написана один раз; маркеры и формулировки удержания после ADR-0281 убраны | LY105, LY106 | `crates/flui-native/src/owner/*`, `input/{linux,windows,headless}*`, `host.rs`, `platform.rs`, `lib.rs`, `tools/xtask/src/globals/fixture.rs` | `module-dag`, `globals`, `panic-boundary`, `markers`, `file-length` | повторная регистрация обработчика раскладки одинакова на каждом цикле; паника `exit_policy` — одна строка таблицы на все хосты; вето конца сессии переживает панику отчёта; trybuild: `impl Services` без `page_origin` не компилируется; каждый падает при откате | L + W + T; Dev: macOS (насос AppKit) |
 | **LY108** | **flui-app честно отвечает своим обработчикам.** Маршрут кадра — `FnMut(FrameRequest) -> FrameOutcome`, и каждый отказ runtime получает свой ответ; `WindowDelivery::run` возвращает результат только той доставки, которую поставил этот вызов; `Held.inputs` не ограничен числом (ограничение отбрасывало бы ввод): ввод ждёт маршрута не дольше одного хода владельца; размещение окна читается один раз, до открытия, без второго блокирующего `recall`; размещение читается и пишется через хранилище, которое даёт реестр возможностей запуска (переопределение `StorageCapability` приложения), без блокировки потока владельца (исключение — последняя запись при выходе из цикла и в конце сеанса, в пределах их дедлайна) и с границей ожидания чтения; `display_handle` Android и Web отвечает `Unavailable` там же, где `window_handle`; маркеры задач убраны | — | `crates/flui-app/src/app/{runner/window_routes.rs,runner/desktop.rs,runner/*}`, `crates/flui-native/src/{owner/window_delivery.rs,window/android.rs,window/web.rs}` | `workspace`, `reach`, `markers`, `cross-typecheck` | таблица «отказ runtime → `FrameOutcome`»; ввод, поставленный с другого потока, не отдаёт свой ответ чужому вызову; размещение читается из хранилища один раз; каждый путь runner ставит маршрут ввода к концу хода, который устанавливает окно; каждый падает при откате | L + W + T; Dev: Android |
-| **LY109** | **Отчёты о показе, цвет и граница паники.** Отметка времени показа ограничена в одном месте, через которое проходит каждый хост; пойманная паника в делегате `URLSession` завершает передачу ошибкой; ivar'ы, владеющие пользовательским кодом, снимаются под containment при отсоединении, и гейт `panic-boundary` видит ivar'ы каждого `define_class!`; `DisplayColor` держит свой инвариант типом (перечисление `Standard(gamut)` / `High(gamut, headroom)`, у стандартного диапазона headroom нет); headroom или яркость поверхности, которым нельзя верить, читаются как SDR; срок простоя не бывает уже прошедшим; каждую фичу фасада поодиночке собирает `feature-matrix` (`cargo hack clippy --workspace --each-feature`), `facade-combos` не меняется | — | `crates/flui-native/src/{owner/*,http/apple.rs,window/apple/ios.rs}`, `crates/flui-platform/src/display.rs`, `crates/flui-engine/src/surface_color.rs`, `crates/flui-scheduler/src/frame_clock.rs`, `tools/xtask/src/{panic_boundary/*,tasks/facade.rs}` | `panic-boundary` (+ `--self-test`), `facade-combos`, `feature-matrix`, гейт API-замыкания, `cross-typecheck` | отчёт с отметкой из будущего не останавливает обратную связь окна, поток отметок с опережением доходит до каждого запроса; самотест гейта с посаженным ivar; строка записи, противоречащая себе, — ошибка разбора; headroom NaN и ∞, белый уровень 0 и ниже; каждый падает при откате | L + T; Dev: macOS, iOS |
+| **LY109** | **Отчёты о показе, цвет и граница паники.** Отметка времени показа ограничена в одном месте, через которое проходит каждый хост; пойманная паника в делегате `URLSession` завершает передачу ошибкой; ivar'ы, владеющие пользовательским кодом, снимаются под containment при отсоединении, и гейт `panic-boundary` видит ivar'ы каждого `define_class!`; `DisplayColor` держит свой инвариант типом (перечисление `Standard(gamut)` / `High(gamut, headroom)`, у стандартного диапазона headroom нет); headroom или яркость поверхности, которым нельзя верить, читаются как SDR; срок простоя не бывает уже прошедшим; каждую фичу фасада поодиночке собирает `feature-matrix` (`cargo hack clippy --workspace --each-feature`), `facade-combos` не меняется | — | `crates/flui-native/src/{owner/*,http/apple.rs,window/apple/ios.rs}`, `crates/flui-platform/src/display.rs`, `crates/flui-engine/src/surface/color.rs`, `crates/flui-scheduler/src/frame_clock.rs`, `tools/xtask/src/{panic_boundary/*,tasks/facade.rs}` | `panic-boundary` (+ `--self-test`), `facade-combos`, `feature-matrix`, гейт API-замыкания, `cross-typecheck` | отчёт с отметкой из будущего не останавливает обратную связь окна, поток отметок с опережением доходит до каждого запроса; самотест гейта с посаженным ivar; строка записи, противоречащая себе, — ошибка разбора; headroom NaN и ∞, белый уровень 0 и ниже; каждый падает при откате | L + T; Dev: macOS, iOS |
 | **LY110** | **Escape hatch делает то, что говорит, и имеет потребителя.** Команды `AppKitWindow` возвращают `Result<_, AppKitWindowError>`, проверяют закрытое окно (проверки главной дорожки нет: окно AppKit создаётся на главном потоке — `new_inner` берёт `MainThreadMarker` — и не `Send` и не `Sync`, так что его вид не попадает на другой поток); прозрачность приложения хранится в состоянии окна и переживает отложенный первый показ, её тип не держит NaN; главное окно достижимо из того, что держит виджет, и это показывает один пример; у каждого метода `Win32Window` есть тест, либо метод удалён; `NotOnTheOwnerThread` удалён; `MacOSWindowLevel` и `MacOSCollectionBehavior` не публикуют сырые значения ОС | — | `crates/flui-native/src/window/{apple/macos/ext.rs,windows/*}`, `crates/flui-app/src/*`, `src/*` (фасад), `examples/*`, `docs/{gaps,extending}.md` | `workspace`, `reach`, `facade-combos`, `doc-strict`, гейт API-замыкания | команда на закрытом окне отвечает типизированной ошибкой; прозрачность после первого показа; пример собирается; тесты методов `Win32Window`; каждый падает при откате | L + W + T; Dev: macOS |
 | **LY111** | **Манифесты объявляют только то, что линкует сборка.** `flui build` берёт фичи каждого узла из `cargo tree -e normal,no-proc-macro`: фича dev-зависимости ничего не объявляет (Android; iOS и остальные манифесты проверяются на то же); строка LY56 и R5.12 переписаны под объём ADR-0307, остаток открыт в `docs/gaps.md` | — | `crates/flui-cli/src/{declarations.rs,build/*}`, `docs/plans/specs/platform-layer/{tasks,requirements}.md`, `docs/gaps.md` | `workspace`, `checks` | строка «фича dev-зависимости ничего не объявляет» падает при откате; `the_manifest_declares_what_the_linked_crates_need` проходит без ребра dev-зависимости | L |
 | **LY112** | **Одно правило написано один раз.** Порядок «полноэкранный важнее развёрнутого» у Wayland — через `mode_of`, и у `every_window_system_decides_the_mode_alike` есть столбец Wayland; `every_backend_steps_a_turn_alike` покрывает X11 и Wayland; перевод логического размера в размер устройства — один, с одним поведением вне диапазона; масштаб едет от контракта вниз как `DevicePixelRatio` (`DisplayDescription::scale_factor`), без ручных `is_finite() && > 0.0`; такты счётчика в наносекунды — одна функция; `drag/{wayland,x11}.rs` переезжают в `drag/linux/` | LY104, LY105, LY106 | `crates/flui-native/src/{window,input,drag}/*`, `crates/flui-platform/src/display.rs`, `crates/flui-foundation/src/*` | `module-dag`, `file-length`, `workspace`, гейт API-замыкания | табличные тесты с новыми столбцами; `rg` по ручной проверке масштаба пуст; перенос — тот же набор зелёный до и после | L + W + T |
@@ -409,7 +414,7 @@ GPU-память простаивающего или невидимого окн
 | **LY145** | **Headless-хост закрывает, отставляет и регистрирует как настоящий; тест доставляет жизненный цикл и регистрирует плагины; сервисы видят жизненный цикл.** Сейчас `HeadlessHost` закрывает основное окно тестовым путём `stop_presentation_for_test` (`crates/flui-testing/src/host.rs`): фокус не переходит, представление не удаляется, без выжившего runtime не отставляется, и удержанные ответы исполняют замыкания там, где настоящий хост кончает их `OwnerRetired`. Встроенные возможности отличаются от runner (`crates/flui-app/src/app/capability.rs`): primary selection на любой платформе, HTTP всегда, нет возможности нативного окна, так что вставка средней кнопкой проходит headless под конвенцией Windows. `Tester` не регистрирует плагин или override, и приложение с `flui::services::system` получает `NotRegistered`. Ни один headless-хост не доставляет suspend и resume, давление памяти, сон, потерю поверхности, а доки `Tester::set_window_visible` обещают фон телефона. Предположительно: `ServiceContext` не видит жизненного цикла и давления памяти, и фоновая работа идёт в фоне на мобильных. После: закрытие через `close_presentation_entered`, последнее закрытие отставляет задания владельца; встроенные возможности выводятся из платформы окна и фич runner; плагины в `TestWindow` и `HeadlessHost`; доставка исполнения окна, уведомлений хоста, сценарного вердикта submit, фона и возврата в порядке настоящего хоста; `ServiceContext` видит жизненный цикл | LY54 | `crates/flui-testing/src/{host.rs,tester.rs}`, `crates/flui-app/src/app/{capability.rs,lifecycle.rs}`, закрытие в `crates/flui-runtime` | `testing`, `workspace`, гейт API-замыкания, `public-api` | фокус переходит к выжившему, ответ, отпущенный после последнего закрытия, не исполняется; вставка средней кнопкой под Windows отказывается headless; плагин, зарегистрированный в тесте, отвечает; сервис записывает переходы через сценарные фон и возврат; каждый падает при откате | L |
 | **LY146** | **Пакеты Android подписаны, версионированы и собраны найденным NDK.** Сейчас release APK на пути Gradle не подписан (у типа release в шаблоне нет signing config), и `adb install` падает, а путь SDK-tools молча подписывает отладочным ключом, хотя строка parity говорит о заданном ключе. NDK, который `flui` находит и печатает, не передаётся `cargo ndk` (`crates/flui-cli/src/build/android.rs`), версия выбирается лексически. `flui run --scene` не кладёт плагин: `adb shell` склеивает аргументы, устройство исполняет `sh -c cp` без операндов, нет `-s <serial>`, `--package` уходит в shell непроверенным. versionCode и versionName зашиты (1 и "1.0"); на пути SDK-tools нет `extractNativeLibs="false"`, хотя доки модуля говорят, что библиотеки отображаются из архива; пробы окружения без срока и требуют `rustup`; `[platforms.android] min` не ограничен сверху targetSdk. Предположительно: отладочный keystore ищется не там, где у AGP (`HOME` раньше `USERPROFILE`, нет `ANDROID_USER_HOME`), и два упаковщика подписывают разными ключами. После: один вход подписи для обоих путей (keystore и alias, пароли из окружения, не в argv), без него `--release` отказывает или называет отладочную подпись; `ANDROID_NDK_HOME` и `ANDROID_HOME` на каждом вызове, версии сравниваются числами; сцена кладётся `adb -s <serial> shell run-as <AppId> cp …` с путём `.so` из сообщения cargo; одно отображение SemVer в versionCode; атрибут в манифесте; пробы с таймаутом и через `rustc --print target-libdir`; `min` выше targetSdk отказывает; keystore — как у AGP | — | `crates/flui-cli/src/build/{android.rs,android_package.rs,app_floor.rs,gradle_project.rs,util/environment.rs}`, `crates/flui-cli/src/{commands/run.rs,proc.rs}`, шаблоны Gradle и манифеста со снимками, `crates/flui-native/platform-parity.toml` и его рендер | `workspace`, `platform-floor`, `checks` | подставной Gradle пишет `app-release-unsigned.apk` — сборка отказывает или подписывает; подставной `cargo` видит `ANDROID_NDK_HOME`; golden аргументов `aapt2` с версией; аргументы `adb` сцены; `min` выше targetSdk отказан; каждый падает при откате | L; Dev: Android |
 | **LY147** | **Пакеты Apple несут версию; инструмент проверяет то, что пишет и что отдаёт.** Сейчас `Info.plist` macOS зашит (`1` и `1.0`, `crates/flui-cli/src/build/desktop.rs`), и магазин отказывает обновлению; `flui build ios --lib` при `platforms/ios/flui.xcodeproj` идёт оставшейся веткой `xcodebuild`, игнорирует собранные библиотеки и возвращает `flui.app` под ярлыком «xcframework»; `flui platform add` пишет непроверенное имя из `flui.toml` в шаблоны Kotlin, HTML и JSON. Предположительно: dev-сервер принимает любой `Host` (DNS rebinding) и запускает поток на соединение без предела (`serve.rs`); проверка «один MIME на расширение» есть в `add_opening`, но не в `join` между целями (`declarations.rs`); каждый объявленный тип файла экспортируется как Owner под id приложения, включая системные `png`, `json` и `pdf` (`build/apple_opening.rs`). После: то же отображение SemVer, что у Android; ветка `xcodebuild` удалена; имя разбирается как `ProjectName` при загрузке; `Host` — только `127.0.0.1:<port>` или `localhost:<port>`, соединения ограничены; `join` проверяет MIME; системные типы импортируются, экспортируются только свои | LY146 | `crates/flui-cli/src/{build/desktop.rs,build/ios.rs,build/apple_opening.rs,commands/build.rs,commands/platform.rs,config.rs,serve.rs,declarations.rs}` | `workspace`, `checks` | golden plist macOS с версией; `--lib` с проектом Xcode возвращает xcframework; имя с кавычкой отказано при загрузке; при подтверждении — запрос с чужим `Host` отказан, `join` с конфликтом MIME отказывает, `png` — в импортированных типах; каждый падает при откате | L; Dev: macOS |
-| **LY148** | **Перекрытое окно известно перекрытым, а окно без темпа или с отказанной поверхностью отступает.** Сейчас `Occlusion` Win32 — только `cloaked` и `session_locked` (`crates/flui-native/src/window/windows/proc.rs`): окно, закрытое другим окном, считается видимым и рисует (`docs/gaps.md` это записывает); Rune считает перекрытие обходом z-order по требованию, как Chromium. Предположительно: с перекрытием DWM при открытии окна покажет устаревший кадр, пока трекер не заметит. Ничто не предупреждает об окне, которое перерисовывается без темпа сотни раз в секунду или раз за разом не получает drawable. Вопрос: `acquire` с ответом `Occluded` пропускает кадр (`crates/flui-engine/src/surface_present.rs`), но спрашивает ли владелец снова на следующем такте — вращение, пока ОС молчит, — не прослежено. После: чистая функция обхода z-order с табличным тестом, `Occlusion::covered`, обход не чаще раза в 250 мс и только при сроке кадра; перекрытое окно рисует один долг после тишины; счётчик промахов и кадров без темпа на слот с одним `warn!`; `Occluded` отступает от 250 мс до 2 с | LY123 | `crates/flui-native/src/window/windows/*`, `crates/flui-app/src/app/runner/raster_host.rs`, `crates/flui-engine/src/surface_present.rs`, `docs/gaps.md`, `crates/flui-native/platform-parity.toml` | `module-dag`, `panic-boundary` | таблица обхода z-order; перекрытое окно после тишины рисует один кадр; поверхность, вечно отвечающая `Occluded`, — ограниченное число acquire в секунду; каждый падает при откате | L + W |
+| **LY148** | **Перекрытое окно известно перекрытым, а окно без темпа или с отказанной поверхностью отступает.** Сейчас `Occlusion` Win32 — только `cloaked` и `session_locked` (`crates/flui-native/src/window/windows/proc.rs`): окно, закрытое другим окном, считается видимым и рисует (`docs/gaps.md` это записывает); Rune считает перекрытие обходом z-order по требованию, как Chromium. Предположительно: с перекрытием DWM при открытии окна покажет устаревший кадр, пока трекер не заметит. Ничто не предупреждает об окне, которое перерисовывается без темпа сотни раз в секунду или раз за разом не получает drawable. Вопрос: `acquire` с ответом `Occluded` пропускает кадр (`crates/flui-engine/src/surface/present.rs`), но спрашивает ли владелец снова на следующем такте — вращение, пока ОС молчит, — не прослежено. После: чистая функция обхода z-order с табличным тестом, `Occlusion::covered`, обход не чаще раза в 250 мс и только при сроке кадра; перекрытое окно рисует один долг после тишины; счётчик промахов и кадров без темпа на слот с одним `warn!`; `Occluded` отступает от 250 мс до 2 с | LY123 | `crates/flui-native/src/window/windows/*`, `crates/flui-app/src/app/runner/raster_host.rs`, `crates/flui-engine/src/surface/present.rs`, `docs/gaps.md`, `crates/flui-native/platform-parity.toml` | `module-dag`, `panic-boundary` | таблица обхода z-order; перекрытое окно после тишины рисует один кадр; поверхность, вечно отвечающая `Occluded`, — ограниченное число acquire в секунду; каждый падает при откате | L + W |
 | **LY149** | **macOS: Low Power Mode и дисплеи 0 Гц задают темп верно; вырез — безопасная область.** Предположительно (поведение ОС взято из Rune): в Low Power Mode встроенная панель ProMotion идёт на 60 Гц, а CVDisplayLink и `NSScreen` говорят 120, и подача на 120 переполняет очередь drawable; `isLowPowerModeEnabled` не читается (`crates/flui-native/src/display/apple/macos.rs`). Подтверждено: дисплей, чей режим говорит 0 Гц, идёт на 60 Гц по умолчанию, запасной путь CVDisplayLink не написан (`docs/gaps.md`); у полноэкранного окна нет верхней вставки выреза, `safeAreaInsets` читается только на iOS. Предположительно: `CAMetalLayer` без `contentsGravity` (`owner/apple/metal_layer.rs`) растягивает несовпавший drawable при живом resize. После: период встроенного дисплея при Low Power Mode — не короче 1/60 с, смена режима питания даёт новую ревизию; при 0 Гц — номинальный период CVDisplayLink; верхняя вставка из `safeAreaInsets.top`, перечитываемая при смене экрана и полноэкранного режима; gravity к верхнему левому углу по оценке на глаз | LY139 | `crates/flui-native/src/{display/apple/macos.rs,window/apple/macos.rs,owner/apple/metal_layer.rs}`, `docs/gaps.md` | `cross-typecheck` | чистая функция периода: Low Power на встроенном дисплее 120 Гц даёт 60; 0 Гц с номинальным периодом даёт его; вставка выреза из подставных insets; каждый падает при откате | T; Dev: macOS |
 | **LY150** | **Present на Wayland не блокирует владельца; хост проверяется против композитора, который ошибается по сценарию.** Предположительно: движок всегда просит `PresentMode::Fifo` (`crates/flui-engine/src/renderer.rs`), а raster-исполнитель идёт на потоке владельца, так что после секундной отсрочки у окна, которое композитор не рисует и не помечает `suspended` (`xdg_toplevel` до версии 6), FIFO-present драйвера, ждущего своего frame callback, блокирует владельца. Подтвердить это нечем: FLUI тестирует швы провода и гоняет настоящие Weston и sway, которых нельзя заставить ошибиться нарочно. После: сценарный композитор на `wayland-server` в тестовых модулях `flui-native` с выбранными глобалами и сбоями (не конфигурирует, не отдаёт frame callbacks, нулевой или абсурдный дробный масштаб, выход уходит из-под поверхности, ошибка протокола после N запросов); окно говорит, кто задаёт ему темп, и поверхность с темпом композитора берёт `Mailbox` (иначе `Immediate`), где они предложены | LY132 | `crates/flui-native/src/{testing/*,window/linux/wayland.rs}`, dev-зависимость `wayland-server`, `crates/flui-engine/src/renderer.rs` | `module-dag`, `deps`, `checks` | композитор не отдаёт frame callbacks: ход владельца возвращается; окно, которое не конфигурируют, и мёртвое соединение кончаются типизированно; каждый падает при откате | L |
 | **LY151** | **Системные предпочтения несут акцентный цвет и предпочтения полос прокрутки.** Сейчас у `SystemPreferences` (`crates/flui-platform/src/preferences.rs`) нет акцента (`docs/gaps.md` это записывает), хотя Windows (`AccentPalette`, `UISettings`), macOS (`controlAccentColor`, цвет кольца фокуса), портал Settings (`accent-color` GNOME 47 и KDE) и Android его дают; нет предпочтений полос прокрутки: показывать ли, клик в дорожке — страница или переход, оверлей при тачпаде (`AppleShowScrollBars`, `preferredScrollerStyle`, `UISettings.AutoHideScrollBars`, `gtk-overlay-scrolling`). После: акцент с кольцом фокуса из проверенных sRGB и предпочтение полос прокрутки, оба необязательные; каждый хост читает их и следит за изменением, headless их подаёт; запись gaps сужается до того, что не прогнано | — | `crates/flui-platform/src/preferences.rs`, `crates/flui-native/src/preferences/*`, headless, `docs/gaps.md`, `crates/flui-native/platform-parity.toml` | `workspace`, гейт API-замыкания, `public-api`, `cross-typecheck`, `recording-vocabulary` | headless-подача акцента доходит до подписчика; таблица разбора значений портала и реестра; NaN в цвете отказан; каждый падает при откате | L + W + T; Dev: macOS, Android, Linux |
@@ -5021,8 +5026,7 @@ GPU-память простаивающего или невидимого окн
   9 из 9 после переноса). Захват на Windows, macOS, iOS и Android не прогонялся — строка качества
   parity «Recorded native input replays deterministically on the headless host».
 
-- [ ] **LY97** (ждёт `--record` `os`-lane драйвера на каждой ОС) — на `main` всё, кроме
-  `--record`: потоки журнала `registry`, `app`, `window`, `platform` и `window_state` с replay на
+- [x] **LY97** (записи на устройствах — долг строки parity) — словарь и replay на headless на `main`: потоки журнала `registry`, `app`, `window`, `platform` и `window_state` с replay на
   headless (`NativeRecording::replay_into`, отказ — типизированный `ReplayError`), строки IME,
   закрытия и блокировок хранилища pull-модели (`store_focus`, `store_lock`; защищённое хранилище —
   одна строка `protected`), чтения предпочтений и дисплеев, снимки состояния окна;
@@ -5040,13 +5044,54 @@ GPU-память простаивающего или невидимого окн
   присоединённого через любой lane, — запись идёт от агента приложения, не от lane, поэтому
   Windows-, macOS-, X11-, Wayland- и Android-lane ничего своего для неё не требуют; Android-lane
   (FD13) запускает приложение и присоединяет драйвер через проброшенный порт
-  (`lane::android::launch`), Chrome-lane (FD12) — через экспорт страницы в headless Chrome.
-  Остаётся: прогон записи `os`-lane на Windows, macOS, Linux и Android с отладочной сборкой
-  приложения (`native-capture`) и в настоящем браузере — строка parity «Recorded native input
-  replays deterministically on the headless host». Захват настоящего метода ввода на
-  устройствах — та же строка parity.
+  (`lane::android::launch`), Chrome-lane (FD12, #2953) — через экспорт страницы в headless
+  Chrome. Словарь схемы (`flui_protocol::native_recording::Row`) держит композицию IME (`ime`,
+  `store_focus`, `store_lock`), lifecycle (`notice`, `session_end`, `reopen`, `close_request`,
+  `closed`, снимки окна `state` потока `window_state`), предпочтения (`preferences`) и дисплеи (`displays`); таблица
+  `native_recording::native_recording_contracts` прошла на Windows 11 2026-11-20
+  (`cargo heli nextest run -p flui-native -E 'test(/native_recording/)'`, 1 из 1).
+  **Web** ([ADR-0390](../../../adr/ADR-0390-a-page-journals-its-native-layer-as-a-native-host-does.md),
+  заменяет предложение ADR-0288 §11 «A page records the input layer only»): отладочная
+  web-сборка ведёт журнал как нативный хост — `cfg(native_journal)` ставится и странице
+  (`crates/flui-app/build.rs`), `compile_error!` в `app::agent` держит его равным
+  `debug_assertions` на `unix`, `windows` и wasm32, web-раннер стартует через
+  `start_journaled(Backend::Web, …)`: захват до платформы, конец без агента и при неудачном старте
+  (`a_loop_keeps_its_journal_only_when_its_platform_starts_and_the_agent_is_served`, на каждом
+  хосте); каждый раннер держит журнал в `JournalStart`, который заканчивает его при drop до
+  чтения запуска (`a_journal_whose_start_goes_unsettled_ends_and_one_handed_to_its_loop_stays`);
+  hello страницы перечисляет `native`, строки
+  `record_native` идут через экспорт страницы
+  (`a_page_conversation_carries_the_native_layer_of_a_recording`), трасса Chrome-lane держит
+  потоки `app`, `window`, `platform` и `window_state` страницы
+  (`a_trace_of_a_page_session_holds_the_pages_native_layer`, против подставной страницы).
+  Компиляцию web-раннера под `cfg(native_journal)` доказывает job `wasm-check` на `main` (на
+  Windows-хосте нет std для wasm32). **`assert_backend_conforms` по видам записей:** группа
+  `RowGroup::Recordings` таблицы (`flui-testing`), строка на вид —
+  `a_recorded_composition_replays_as_it_was_delivered`,
+  `a_recorded_lifecycle_replays_as_it_was_reported` (notices, фазы конца сеанса, reopen и
+  снимки окна), `recorded_preference_reads_replay_as_they_were_answered`,
+  `recorded_display_reads_replay_as_they_were_answered` (два дисплея одного имени различает их
+  id); `BackendUnderTest::replay_recording` без тела по умолчанию проводит сеанс через доставку
+  бэкенда с установленным захватом его журнала, читает записанное и проигрывает на headless,
+  строка сверяет и доставленное, и проигранное с сеансом. Для декодеров доставка — общий код,
+  через который журналирует каждый нативный хост (`owner/app_delivery.rs`,
+  `owner/window_delivery.rs`, чтения платформы, состояние окна), на headless с захватом этого
+  бэкенда; строки держатся для headless, `native x11` и профилей Win32, AppKit, UIKit, Android,
+  web и Wayland (`each_backend_s_recordings_replay_on_the_headless_host`) и падают на бэкенде,
+  который ставит захват после платформы, журналирует с редакцией или не доставляет reopen
+  (`each_conformance_row_fails_against_a_broken_backend`: `JournalInstalledLate`,
+  `RedactingJournal`, `ReopenUntranslated`). Настоящие окна Win32 и X11 не проводят сеанс —
+  они доставляют то, что сообщает ОС, — и отвечают `NotDriven`, который роняет строку
+  (`FailureKind::NotDriven`); их наборы называют эти строки (`win32_window_conforms`,
+  `UNEXERCISED` в `x11_backend_conformance`). Поломка вручную: `AppDelivery::reopen` без записи
+  в журнал роняет `a_recorded_lifecycle_replays_as_it_was_reported` на каждом бэкенде таблицы,
+  `RecordedDisplay::of` с меткой по имени — `recorded_display_reads_replay_as_they_were_answered`
+  (Windows 11, 2026-11-20). **Долг устройств:** запись драйвером на Windows, macOS, Linux, Android и в Chrome с
+  отладочной сборкой приложения и захват настоящего метода ввода — строка parity «Recorded native
+  input replays deterministically on the headless host».
 
-- [ ] **LY96** (Windows и macOS начаты, остальные ОС ждут своих lane спеки flui-driver) — Windows-lane
+- [ ] **LY96** (сценариев TalkBack и VoiceOver на iOS нет в коде; сеансы ассистивных технологий в
+  долгу) — Windows-lane
   драйвера (`flui-driver::lane::windows`, FD11 [спеки flui-driver](../flui-driver/tasks.md)) читает
   приложение через UI Automation, то дерево, что читает Narrator: нормализованная проекция дерева
   UIA равна дереву приложения, каждая роль таблицы ролей читается своим control type, элемент
@@ -5058,26 +5103,53 @@ GPU-память простаивающего или невидимого окн
   приложение через AT-SPI, то дерево, что читает Orca: проекция равна дереву приложения, каждая
   роль таблицы ролей AT-SPI читается своей ролью, элемент нажимается через действие AT-SPI
   (`x11_desktop::at_spi_reads_and_invokes_the_app_as_a_screen_reader_does`,
-  `x11_desktop::every_role_reads_back_as_its_at_spi_role`, на своём Xvfb и шинах AT-SPI, WSL и CI).
-  Chrome-lane (FD12) вводит в web-сборку через WebDriver BiDi, но дерева доступности не читает:
-  ARIA-зеркало канваса есть, его чтение через дерево доступности Chrome не построено.
-  Android-lane (FD13) вводит через `adb`, но дерево TalkBack не читает: `accesskit_android` не
-  ставит `viewIdResourceName`, и идентификатор узла до UI Automator не доходит (`docs/gaps.md`);
-  проекция и нажатие через accessibility на Android ждут этого поля в AccessKit. `uiautomator
-  dump`, которым lane находит окно, на время дампа приостанавливает службы accessibility, и
-  TalkBack тоже: сценарий TalkBack находит окно до включения TalkBack и дальше не вызывает
-  `uiautomator` (`docs/gaps.md`).
+  `x11_desktop::every_role_reads_back_as_its_at_spi_role`, на своём Xvfb и шинах AT-SPI, WSL и CI);
+  Wayland-lane (FD16) читает AT-SPI тем же клиентом. Headless-половины сценариев:
+  `scenarios::the_accessibility_scenario_passes_on_the_headless_target` (кнопка, переключатель,
+  действие через семантический путь), `scenarios::each_role_publishes_the_wire_role_ui_automation_folds_it_to`
+  (каждая роль таблицы, поле ввода и список среди них),
+  `scenarios::the_conformance_scenario_passes_on_the_headless_target`; на Windows 11 2026-11-20 —
+  3 из 3. **Чего нет в коде.** Android-lane (FD13, #2954) вводит через `adb`, но дерево TalkBack
+  не читает (`read_tree` и `invoke` — `not_supported`): `accesskit_android` не ставит
+  `viewIdResourceName`, и идентификатор узла до UI Automator не доходит; правка AccessKit
+  написана и upstream не отправлена (`docs/gaps.md`, «No accessibility on mobile and the Web» и
+  «The driver's Android lane reads no accessibility tree…»), снимает это владелец отправкой
+  правки и выпуском AccessKit, затем lane читает дерево. iOS-Simulator-lane (FD15,
+  `flui-driver::lane::ios_simulator`) запускает приложение через `simctl` с сокетом агента и
+  токеном в переменных `SIMCTL_CHILD_` и снимает экран через `simctl io screenshot`, но ввода не
+  шлёт (каждое событие — `not_supported` с именем `ios_simulator_hid`: спайк HID ответил no-go,
+  канал Indigo из Xcode 27 теряет кнопки и клавиши, а DTUHID — приватный XPC без подтверждения
+  доставки) и дерева доступности не читает: дерево `accesskit_ios` живёт внутри Simulator, и
+  публичного API хоста к нему нет (`docs/gaps.md`, «The driver's iOS Simulator lane sends no
+  input and reads no accessibility tree»). Прогон на Simulator в долгу, сценария VoiceOver на iOS
+  нет; канал ввода — решение владельца. Chrome-lane (FD12, #2953) дерева
+  доступности страницы не читает (в строке задачи Web нет). `uiautomator dump`, которым
+  Android-lane находит окно, на время дампа приостанавливает службы accessibility, и TalkBack
+  тоже: сценарий TalkBack находит окно до включения TalkBack и дальше не вызывает `uiautomator`.
   Долг: сеанс Narrator на Windows, VoiceOver на macOS, Orca в сеансе GNOME и KDE, TalkBack —
   строка качества parity «Conformance executed with assistive technology on each OS».
 
-- [ ] **LY99** (сценарий есть; прогон на Windows через `os`-lane в долгу) — сценарий conformance
-  драйвера `scenarios::conformance` (`crates/flui-driver/tests/scenarios.rs`): имя, роль и
-  идентификатор кнопки, её нажатие и прочитанный эффект, через `os`-lane ещё и дерево UIA. На
-  headless в CI — `scenarios::the_conformance_scenario_passes_on_the_headless_target`; через
-  `os`-lane на Windows — `windows_desktop::the_conformance_scenario_runs_through_the_os_lane`,
-  который на отдельном рабочем столе nextest объявляет OS-ввод и выходит `cannot_verify` (ввод
-  туда не доходит) и проходит только на рабочем столе, принимающем ввод пользователя; этот прогон
-  — долг строки качества parity «Real OS input drives an app through the driver's OS lane». Через
+- [ ] **LY99** (сценарий есть; прогон через Windows `os`-lane на рабочем столе, принимающем
+  ввод, ждёт владельца) — сценарий conformance драйвера `scenarios::conformance`
+  (`crates/flui-driver/tests/scenarios.rs`): имя, роль и идентификатор кнопки, её нажатие и
+  прочитанный эффект, через `os`-lane ещё и дерево UIA. На headless в CI —
+  `scenarios::the_conformance_scenario_passes_on_the_headless_target` (на Windows 11 2026-11-20
+  тоже проходит). Через `os`-lane на Windows —
+  `windows_desktop::the_conformance_scenario_runs_through_the_os_lane`. Прогон
+  `cargo heli nextest run -p flui-driver -E 'test(/windows_desktop::the_conformance_scenario_runs_through_the_os_lane/)'`
+  на отдельном рабочем столе nextest (Windows 11 build 26300, `main` @ `2fa8bc6cc`,
+  2026-11-20) объявил ввод («OS input: will take mouse on this desktop for about 5 s») и вывел
+  `CANNOT_VERIFY the_conformance_scenario_runs_through_the_os_lane: it needs the desktop that
+  takes the user's input`. Тест при этом зелёный: вне рабочего стола ввода он требует вердикт
+  `cannot_verify` с `windows_lane` в списке недостающего, а не `pass`, поэтому приёмку этот
+  прогон не выполняет. Её выполняет тот же тест на рабочем столе, принимающем ввод пользователя
+  (`FLUI_TEST_VISIBLE_DESKTOP=1`, с `FLUI_REQUIRE_INPUT_DESKTOP=1`, чтобы прогон вне него упал);
+  его делает владелец, это долг строки качества parity «Real OS input drives an app through the
+  driver's OS lane». Форма отчёта для строки parity есть: `Report::to_json` пишет `lane`,
+  `verdict`, `cannot_verify` и `isolation`, `Display` — строки `lane: …` и
+  `FLUI_DRIVER_VERDICT=…`; тест требует `report.lane() == Some("windows")`,
+  `policy::a_certification_scenario_takes_the_os_path_announced_once_before_its_first_event` —
+  `to_json()["lane"]`. Через
   `os`-lane на macOS — `macos_desktop::the_conformance_scenario_runs_through_the_os_lane`, тоже в
   долгу до прогона на Mac. Через X11-lane сценарий проходит в CI на Xvfb
   (`x11_desktop::the_conformance_scenario_runs_through_the_os_lane`); долг Linux — прогон на X

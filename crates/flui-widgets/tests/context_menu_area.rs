@@ -18,9 +18,11 @@ use flui_platform::EventTime;
 use flui_platform::input::keyboard::{Code, Key, KeyEvent, KeyPress, KeyState, NamedKey};
 use flui_platform::input::pointer::PointerButton;
 use flui_testing::a11y::{A11yRect, A11yTree, Action, ActionRequest, Role, TreeId};
+use flui_testing::gesture_alternatives::{
+    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
+};
 use flui_testing::replay::{MouseScript, PointerScript, TouchScript};
 use flui_testing::widgets::SharedSignal;
-use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 use flui_widgets::__test_access::{Navigator, NavigatorHandle};

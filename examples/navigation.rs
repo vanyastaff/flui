@@ -13,7 +13,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui::prelude::*;
-use flui::view::{AsyncDriver, TaskToken, WriterSource};
+use flui::scheduler::{AsyncDriver, TaskToken};
+use flui::view::WriterSource;
 
 #[derive(Routable, Clone, Debug, PartialEq)]
 enum AppRoute {

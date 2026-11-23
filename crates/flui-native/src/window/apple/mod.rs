@@ -11,7 +11,13 @@
 
 // The view a surface target keeps is retained and released through
 // Objective-C, behind the safe `MainRetainedView`.
-#![cfg_attr(any(target_os = "macos", target_os = "ios"), expect(unsafe_code))]
+#![cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    expect(
+        unsafe_code,
+        reason = "the surface view is retained and released through Objective-C"
+    )
+)]
 
 pub(crate) mod geometry;
 #[cfg(target_os = "ios")]

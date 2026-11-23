@@ -6,11 +6,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use flui_app::app::{
+use flui_app::testing::{HeadlessRun, RunExit, TeardownStep};
+use flui_app::{
     AppConfig, AppHandle, Application, ExitPolicy, ServiceDefinition, ServiceLifetime,
     WindowPolicy, open_secondary_window,
 };
-use flui_app::testing::{HeadlessRun, RunExit, TeardownStep};
 use flui_platform::{SessionEndAnswer, SessionEndPhase};
 
 /// The order every loop's teardown runs in.
@@ -158,7 +158,7 @@ pub(crate) fn a_hung_service_and_compute_job_end_within_the_exit_budget() {
 /// returned.
 fn watched_application() -> (
     Application,
-    std::sync::mpsc::Receiver<flui_app::app::LifecycleWatch>,
+    std::sync::mpsc::Receiver<flui_app::LifecycleWatch>,
     std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
     let (watches, watched) = std::sync::mpsc::channel();
@@ -531,7 +531,7 @@ struct ComposingField {
     /// The loop of the run, when the test asks whether it still ran at
     /// Detached; what it answered then.
     loop_at_detached: Option<(
-        flui_native::HeadlessOwnerTurns,
+        flui_native::testing::HeadlessOwnerTurns,
         Rc<std::cell::Cell<Option<bool>>>,
     )>,
     /// How long the field's session-end notice subscriber blocks.
@@ -632,8 +632,8 @@ pub(crate) fn closing_during_composition_commits_before_detached() {
     };
     let application =
         Application::new().config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
-    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
-        flui_testing::RecordingTextStoreHost::new()
+    let platform = flui_native::testing::HeadlessPlatform::new().with_text_store_host(|| {
+        flui_testing::text_store_host::RecordingTextStoreHost::new()
             as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
     let run = HeadlessRun::start_on(application, field, platform);
@@ -747,7 +747,7 @@ fn guarded_run(
     hold_on: HoldOn,
 ) -> (
     flui_app::testing::HeadlessRunHandle,
-    flui_native::HeadlessHostEvents,
+    flui_native::testing::HeadlessHostEvents,
     Rc<RefCell<Guarded>>,
 ) {
     guarded_run_with(hold_on, AppConfig::new())
@@ -759,7 +759,7 @@ fn guarded_run_with(
     config: AppConfig,
 ) -> (
     flui_app::testing::HeadlessRunHandle,
-    flui_native::HeadlessHostEvents,
+    flui_native::testing::HeadlessHostEvents,
     Rc<RefCell<Guarded>>,
 ) {
     let shared = Rc::new(RefCell::new(Guarded::default()));
@@ -768,7 +768,7 @@ fn guarded_run_with(
         shared: Rc::clone(&shared),
     };
     let application = Application::new().config(config.exit_policy(ExitPolicy::OnLastWindowClosed));
-    let platform = flui_native::HeadlessPlatform::new();
+    let platform = flui_native::testing::HeadlessPlatform::new();
     let events = platform.host_events();
     let run = HeadlessRun::start_on(application, view, platform);
     run.run_owner_turn();
@@ -898,10 +898,10 @@ pub(crate) fn a_session_end_with_a_checked_out_runtime_calls_no_user_code() {
 pub(crate) fn a_session_end_asks_the_handler_before_the_guard() {
     let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = std::sync::Arc::clone(&asked);
-    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+    let handler = flui_app::CloseRequestHandler::new(move |request| {
         assert_eq!(request.reason(), flui_view::CloseReason::SessionEnd);
         counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        flui_app::app::CloseResponse::Close
+        flui_app::CloseResponse::Close
     });
     let (run, _events, shared) = guarded_run_with(
         HoldOn::Decision,
@@ -1004,8 +1004,8 @@ pub(crate) fn session_end_commits_composition_before_the_flush() {
 
     let store = flui_interaction::testing::InMemoryTextStore::new("ab");
     let seen: SeenAtDetached = Rc::new(RefCell::new(None));
-    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
-        flui_testing::RecordingTextStoreHost::new()
+    let platform = flui_native::testing::HeadlessPlatform::new().with_text_store_host(|| {
+        flui_testing::text_store_host::RecordingTextStoreHost::new()
             as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
     let running = Rc::new(std::cell::Cell::new(None));
@@ -1065,10 +1065,10 @@ pub(crate) fn a_notify_only_session_end_leaves_the_application_running() {
     };
     let application =
         Application::new().config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
-    let platform = flui_native::HeadlessPlatform::new()
+    let platform = flui_native::testing::HeadlessPlatform::new()
         .with_session_end_support(flui_platform::SessionEndSupport::NotifyOnly)
         .with_text_store_host(|| {
-            flui_testing::RecordingTextStoreHost::new()
+            flui_testing::text_store_host::RecordingTextStoreHost::new()
                 as Rc<dyn flui_platform::text::store::TextStoreHost>
         });
     let run = HeadlessRun::start_on(application, field, platform);
@@ -1106,8 +1106,8 @@ const SPENT_MARGIN: Duration = Duration::from_millis(2_500);
 /// observer runs while the loop still runs.
 pub(crate) fn session_end_skips_detached_once_the_notice_spent_the_margin() {
     let seen: SeenAtDetached = Rc::new(RefCell::new(None));
-    let platform = flui_native::HeadlessPlatform::new().with_text_store_host(|| {
-        flui_testing::RecordingTextStoreHost::new()
+    let platform = flui_native::testing::HeadlessPlatform::new().with_text_store_host(|| {
+        flui_testing::text_store_host::RecordingTextStoreHost::new()
             as Rc<dyn flui_platform::text::store::TextStoreHost>
     });
     let running = Rc::new(std::cell::Cell::new(None));
@@ -1172,7 +1172,7 @@ enum SlowOn {
 /// ran and then blocks for `delay`, as a slow save does.
 #[derive(Clone)]
 struct SlowDetached {
-    turns: flui_native::HeadlessOwnerTurns,
+    turns: flui_native::testing::HeadlessOwnerTurns,
     running: Rc<std::cell::Cell<Option<bool>>>,
     delay: Duration,
     slow_on: SlowOn,
@@ -1254,7 +1254,7 @@ impl flui_view::View for SlowDetached {
 /// windows' observers run while the loop still runs.
 pub(crate) fn a_slow_observer_stops_the_session_end_delivery() {
     for slow_on in [SlowOn::SessionEnded, SlowOn::Detached] {
-        let platform = flui_native::HeadlessPlatform::new();
+        let platform = flui_native::testing::HeadlessPlatform::new();
         let windows: [Rc<std::cell::Cell<Option<bool>>>; 2] = Default::default();
         let root = |running: &Rc<std::cell::Cell<Option<bool>>>| SlowDetached {
             turns: platform.owner_turns(),
@@ -1303,9 +1303,9 @@ pub(crate) fn a_slow_observer_stops_the_session_end_delivery() {
 pub(crate) fn a_refused_session_end_is_released_by_an_explicit_close() {
     let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
     let seen = std::sync::Arc::clone(&refused);
-    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+    let handler = flui_app::CloseRequestHandler::new(move |request| {
         *seen.lock().expect("unpoisoned") = Some(request.address());
-        flui_app::app::CloseResponse::KeepOpen
+        flui_app::CloseResponse::KeepOpen
     });
     let (run, events, _shared) = guarded_run_with(
         HoldOn::Nothing,
@@ -1334,7 +1334,7 @@ pub(crate) fn a_refused_session_end_is_released_by_an_explicit_close() {
 /// A close handler that panics on a session end refuses it, and the answer
 /// is still given (ADR-0260 §1).
 pub(crate) fn a_session_end_handler_panic_refuses() {
-    let handler = flui_app::app::CloseRequestHandler::new(|_| panic!("the handler failed"));
+    let handler = flui_app::CloseRequestHandler::new(|_| panic!("the handler failed"));
     let (run, _events, _shared) = guarded_run_with(
         HoldOn::Nothing,
         AppConfig::new().close_request_handler(handler),
@@ -1358,19 +1358,19 @@ pub(crate) fn a_session_end_handler_panic_refuses() {
 pub(crate) fn a_window_closed_during_the_query_does_not_hold_the_session() {
     let refused = std::sync::Arc::new(std::sync::Mutex::new(None));
     let seen = std::sync::Arc::clone(&refused);
-    let handler = flui_app::app::CloseRequestHandler::new(move |request| {
+    let handler = flui_app::CloseRequestHandler::new(move |request| {
         let mut first = seen.lock().expect("unpoisoned");
         match *first {
             // The first window asked waits for its save.
             None => {
                 *first = Some(request.address());
-                flui_app::app::CloseResponse::KeepOpen
+                flui_app::CloseResponse::KeepOpen
             }
             // The next one finishes that save and closes the first window.
             Some(address) => {
                 drop(first);
                 flui_app::request_presentation_close(address).expect("the first window closes");
-                flui_app::app::CloseResponse::Close
+                flui_app::CloseResponse::Close
             }
         }
     });
@@ -1408,7 +1408,7 @@ pub(crate) fn a_window_closed_during_the_query_does_not_hold_the_session() {
 /// still ran, and whose session-ended subscriber blocks for `notice_delay`.
 #[derive(Clone)]
 struct TornDown {
-    turns: flui_native::HeadlessOwnerTurns,
+    turns: flui_native::testing::HeadlessOwnerTurns,
     dropped: Rc<std::cell::Cell<Option<bool>>>,
     notice_delay: Duration,
 }
@@ -1473,7 +1473,7 @@ impl flui_view::View for TornDown {
 /// drops only after the loop stopped.
 pub(crate) fn session_end_tears_down_only_with_time_left() {
     for (notice_delay, inline) in [(Duration::ZERO, true), (SPENT_MARGIN, false)] {
-        let platform = flui_native::HeadlessPlatform::new();
+        let platform = flui_native::testing::HeadlessPlatform::new();
         let dropped = Rc::new(std::cell::Cell::new(None));
         let root = TornDown {
             turns: platform.owner_turns(),
@@ -1589,7 +1589,7 @@ pub(crate) fn a_notice_subscriber_panic_never_leaves_the_handler() {
         let root = PanickingSubscriber { panics_on };
         let application =
             Application::new().config(AppConfig::new().exit_policy(ExitPolicy::OnLastWindowClosed));
-        let platform = flui_native::HeadlessPlatform::new();
+        let platform = flui_native::testing::HeadlessPlatform::new();
         let events = platform.host_events();
         let run = HeadlessRun::start_on(application, root, platform);
         run.run_owner_turn();
@@ -1773,11 +1773,10 @@ fn reporting_callback_panics(panics: &CallbackPanics) -> AppConfig {
     let panics = std::sync::Arc::clone(panics);
     AppConfig::new()
         .exit_policy(ExitPolicy::OnLastWindowClosed)
-        .frame_failure_handler(flui_app::app::FrameFailureHandlerFactory::new(move || {
+        .frame_failure_handler(flui_app::FrameFailureHandlerFactory::new(move || {
             let panics = std::sync::Arc::clone(&panics);
-            flui_app::app::FrameFailureHandler::new(move |report| {
-                if let flui_app::app::FrameFailureKind::CallbackPanic { message, .. } = &report.kind
-                {
+            flui_app::FrameFailureHandler::new(move |report| {
+                if let flui_app::FrameFailureKind::CallbackPanic { message, .. } = &report.kind {
                     panics
                         .lock()
                         .expect("BUG: the frame-failure handler does not panic")
@@ -1791,7 +1790,7 @@ fn reporting_callback_panics(panics: &CallbackPanics) -> AppConfig {
 /// running after each.
 fn tap(
     run: &flui_app::testing::HeadlessRunHandle,
-    window: &flui_native::HeadlessHostWindow,
+    window: &flui_native::testing::HeadlessHostWindow,
     at: flui_foundation::geometry::Offset<f64>,
 ) {
     use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
@@ -1812,7 +1811,7 @@ pub(crate) fn a_panicking_tap_handler_reports_once_and_the_next_tap_works() {
     let taps = Rc::new(std::cell::Cell::new(0_u32));
     let counted = Rc::clone(&taps);
     let root = flui_widgets::GestureDetector::new()
-        .behavior(flui_widgets::HitTestBehavior::Opaque)
+        .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
         .on_tap(move |_| {
             counted.set(counted.get() + 1);
             assert!(counted.get() > 1, "the first tap's handler failed");
@@ -1853,7 +1852,7 @@ pub(crate) fn a_panicking_tap_handler_reports_once_and_the_next_tap_works() {
 /// post-frame handle for the test.
 #[derive(Clone)]
 struct PostFramePanics {
-    handle: Rc<RefCell<Option<flui_view::PostFrameHandle>>>,
+    handle: Rc<RefCell<Option<flui_scheduler::PostFrameHandle>>>,
 }
 
 struct PostFramePanicsState {
@@ -1940,7 +1939,7 @@ pub(crate) fn a_panicking_post_frame_callback_reports_once_and_the_next_frame_bu
 /// last window as the user does and joins the run.
 fn close_after(
     run: flui_app::testing::HeadlessRunHandle,
-    drive: impl FnOnce(&flui_app::testing::HeadlessRunHandle, &flui_native::HeadlessHostWindow),
+    drive: impl FnOnce(&flui_app::testing::HeadlessRunHandle, &flui_native::testing::HeadlessHostWindow),
 ) -> flui_app::testing::ExitReport {
     run.run_owner_turn();
     let window = run
@@ -1993,7 +1992,7 @@ fn fail_the_tap() {
 fn exit_code_after_a_tap_handler_panic() {
     let panics = CallbackPanics::default();
     let root = flui_widgets::GestureDetector::new()
-        .behavior(flui_widgets::HitTestBehavior::Opaque)
+        .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
         .on_tap(|_| fail_the_tap())
         .child(flui_widgets::SizedBox::square(100.0));
     let application = Application::new().config(reporting_callback_panics(&panics));
@@ -2052,12 +2051,12 @@ fn exit_code_after_a_build_panic() {
 
 fn exit_code_after_a_close_handler_panic() {
     let panicked = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let handler = flui_app::app::CloseRequestHandler::new(move |_| {
+    let handler = flui_app::CloseRequestHandler::new(move |_| {
         assert!(
             panicked.swap(true, std::sync::atomic::Ordering::SeqCst),
             "the close-request handler failed"
         );
-        flui_app::app::CloseResponse::Close
+        flui_app::CloseResponse::Close
     });
     let application = Application::new().config(
         AppConfig::new()
@@ -2246,7 +2245,7 @@ impl flui_view::ViewState<NoteView> for NoteViewState {
         };
         let counted = Rc::clone(&self.0.0);
         flui_widgets::GestureDetector::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
             .on_tap(move |_| {
                 let rebuild = {
                     let mut shared = counted.borrow_mut();
@@ -2271,7 +2270,7 @@ impl flui_view::View for NoteView {
 /// `pools`, storing under `root`, with [`Note`] loaded.
 struct NoteRun {
     run: flui_app::testing::HeadlessRunHandle,
-    events: flui_native::HeadlessHostEvents,
+    events: flui_native::testing::HeadlessHostEvents,
     shared: Rc<RefCell<NoteShared>>,
     pools: flui_runtime::execution::DeterministicExecutors,
     root: tempfile::TempDir,
@@ -2284,7 +2283,9 @@ impl NoteRun {
 
     /// [`Self::start`] on the headless platform `configure` makes.
     fn start_on(
-        configure: impl FnOnce(flui_native::HeadlessPlatform) -> flui_native::HeadlessPlatform,
+        configure: impl FnOnce(
+            flui_native::testing::HeadlessPlatform,
+        ) -> flui_native::testing::HeadlessPlatform,
     ) -> Self {
         let root = tempfile::tempdir().expect("a temporary data root");
         let pools = flui_runtime::execution::DeterministicExecutors::new();
@@ -2299,7 +2300,8 @@ impl NoteRun {
                 )
                 .exit_policy(ExitPolicy::OnLastWindowClosed),
         );
-        let platform = configure(flui_native::HeadlessPlatform::new().with_data_root(root.path()));
+        let platform =
+            configure(flui_native::testing::HeadlessPlatform::new().with_data_root(root.path()));
         let events = platform.host_events();
         let run = HeadlessRun::start_on(application, view, platform);
         run.run_owner_turn();
@@ -2405,7 +2407,7 @@ pub(crate) fn session_end_flushes_the_registry_within_the_framework_budget() {
         "the Ending phase returned with the published bytes on disk"
     );
     assert!(
-        took < flui_testing::SESSION_END_BUDGET,
+        took < flui_testing::host::SESSION_END_BUDGET,
         "the flush took {took:?}"
     );
     note.run.run_owner_turn();
@@ -2424,7 +2426,7 @@ pub(crate) fn session_end_flushes_the_registry_within_the_framework_budget() {
     let took = started.elapsed();
     assert!(!note.stores("never written"));
     assert!(
-        took < flui_testing::SESSION_END_BUDGET + Duration::from_secs(1),
+        took < flui_testing::host::SESSION_END_BUDGET + Duration::from_secs(1),
         "a stuck write held the session end for {took:?}"
     );
 }
@@ -2432,7 +2434,7 @@ pub(crate) fn session_end_flushes_the_registry_within_the_framework_budget() {
 /// A phone's background, as the headless platform stands in for one.
 fn phone(
     window: Duration,
-) -> impl FnOnce(flui_native::HeadlessPlatform) -> flui_native::HeadlessPlatform {
+) -> impl FnOnce(flui_native::testing::HeadlessPlatform) -> flui_native::testing::HeadlessPlatform {
     move |platform| {
         platform.with_session_end_support(flui_platform::SessionEndSupport::Background { window })
     }
@@ -2485,7 +2487,8 @@ pub(crate) fn a_phone_holds_its_background_for_the_writes_in_flight() {
         .set(Note("stored in the background".to_owned()))
         .expect("the loaded document takes the value");
     note.run.run_owner_turn();
-    let driver = note.drive_io_after(flui_testing::SESSION_END_BUDGET + Duration::from_millis(300));
+    let driver =
+        note.drive_io_after(flui_testing::host::SESSION_END_BUDGET + Duration::from_millis(300));
     assert_eq!(
         note.run.end_session(SessionEndPhase::Ending),
         SessionEndAnswer::Block,

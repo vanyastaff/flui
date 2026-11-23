@@ -17,7 +17,7 @@ use std::rc::Rc;
 
 use common::{LaidOut, lay_out, loose};
 use flui_material::{ColorSchemeOverrides, MaterialApp, Theme, ThemeData, ThemeMode};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;

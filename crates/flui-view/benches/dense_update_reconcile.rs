@@ -4,9 +4,6 @@
 //! measured operation updates the real render parent and drains `BuildOwner`, so
 //! every child crosses the production dense `update_child` path.
 
-// Bench harness, not public API; `criterion_group!` generates the entry point.
-#![allow(missing_docs)]
-
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
@@ -15,7 +12,8 @@ use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     protocol::BoxProtocol,
 };
-use flui_view::{BoxedView, BuildOwner, ElementTree, RenderView, View, ViewExt};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::{BoxedView, RenderView, View, ViewExt};
 
 #[derive(Clone)]
 struct KeyedLeaf {
@@ -82,7 +80,7 @@ impl RenderView for DenseHost {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -133,7 +131,7 @@ fn setup(fan_out: usize, update_order: UpdateOrder) -> Fixture {
         children: children(fan_out, 0, UpdateOrder::Stable),
     };
     let parent = tree.mount_root_with_pipeline_owner(
-        &initial,
+        &initial.boxed(),
         Some(pipeline),
         &mut owner.element_owner_mut(),
     );

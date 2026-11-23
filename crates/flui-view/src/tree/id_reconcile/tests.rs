@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::{IntoView, View, ViewExt};
-use crate::{BuildContext, BuildOwner, StatelessView};
+use crate::{BuildContext, StatelessView, owner::BuildOwner};
 use flui_foundation::ValueKey;
 
 /// A keyless leaf-ish stateless test view. `tag` distinguishes
@@ -61,8 +61,8 @@ impl StatelessView for KeyedView {
 /// tags.
 fn plain_views(tags: &[u32]) -> crate::view::ChildViews {
     tags.iter()
-        .map(|&t| Box::new(TestView::new(t)) as Box<dyn View>)
-        .collect::<Vec<Box<dyn View>>>()
+        .map(|&t| TestView::new(t).boxed())
+        .collect::<Vec<crate::BoxedView>>()
         .into()
 }
 
@@ -70,8 +70,8 @@ fn plain_views(tags: &[u32]) -> crate::view::ChildViews {
 /// keys.
 fn keyed_views(keys: &[u32]) -> crate::view::ChildViews {
     keys.iter()
-        .map(|&k| Box::new(KeyedView::new(k)) as Box<dyn View>)
-        .collect::<Vec<Box<dyn View>>>()
+        .map(|&k| KeyedView::new(k).boxed())
+        .collect::<Vec<crate::BoxedView>>()
         .into()
 }
 
@@ -79,7 +79,7 @@ fn keyed_views(keys: &[u32]) -> crate::view::ChildViews {
 fn fixture() -> (ElementTree, BuildOwner, ElementId) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
-    let root_id = tree.mount_root(&TestView::new(0), &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&TestView::new(0).boxed(), &mut owner.element_owner_mut());
     (tree, owner, root_id)
 }
 
@@ -199,7 +199,7 @@ mod emission {
     use super::{fixture, keyed_views};
     use std::sync::OnceLock;
 
-    use crate::BuildOwner;
+    use crate::owner::BuildOwner;
     use crate::tree::ElementTree;
     use crate::tree::ReconcileEventKind;
     use crate::tree::test_utils::{CollectedEvent, ReconcileEventCollector};
@@ -294,7 +294,7 @@ mod emission {
             .set_child_ids(&ids);
     }
 
-    /// The S_3 permutation corpus (FR-024(b)) on the slab:
+    /// The S_3 permutation corpus on the slab:
     /// for each of the 6 permutations of keyed `[1, 2, 3]`, the
     /// disposition multiset matches the keyed-reconcile contract AND
     /// every key's element moves to its permuted slot (never rebuilt).

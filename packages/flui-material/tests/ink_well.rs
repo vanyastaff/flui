@@ -19,11 +19,10 @@ use flui_painting::DrawOp;
 use flui_painting::styling::Color;
 use flui_sdk::geometry::Offset;
 use flui_sdk::interaction::FocusNode;
+use flui_sdk::rendering::objects::FocusRingStyle;
 use flui_sdk::view::SignalWriteExt;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{
-    Center, FocusRingStyle, SizedBox, WidgetState, WidgetStates, WidgetStatesController,
-};
+use flui_sdk::widgets::{Center, SizedBox, WidgetState, WidgetStates, WidgetStatesController};
 use flui_testing::replay::MouseScript;
 
 pub fn press_highlight_lasts_its_delay_under_reduced_motion() {
@@ -345,7 +344,7 @@ fn logging(log: &TapLog, entry: &'static str) -> OnTap {
 /// `focusable`/`focused`) or its click (the enabled well offers none).
 pub fn ink_well_a11y_tree_matches_wrappers() {
     use flui_sdk::widgets::{Column, Text};
-    use flui_testing::Action;
+    use flui_testing::a11y::Action;
 
     for enabled in [true, false] {
         for focused in [false, true] {

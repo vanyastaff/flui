@@ -15,8 +15,9 @@
 //! focus node, the same semantics.
 //!
 //! It is not an authoring surface. It has no styling and no layout. It is
-//! `pub` only because the official catalogs (`flui-material`,
-//! `flui-cupertino`) are separate crates: the module is `#[doc(hidden)]`, in
+//! public only because the official catalogs (`flui-material`,
+//! `flui-cupertino`) are separate crates: they reach it as
+//! `flui_widgets::__private::node`, doc-hidden, in
 //! no prelude, outside the API contract, and may change in any release
 //! (ADR-0322 §1). Applications compose the public wrappers.
 
@@ -55,7 +56,8 @@ use super::listener::{ContactCallbacks, pointer_callback, release_targets};
 use super::raw_gesture_detector::{FactoryEntry, RecognizerHost};
 use crate::support::{event_callback, value_callback};
 use crate::widget_state::{WidgetState, WidgetStates, WidgetStatesController};
-use crate::{Listener, MouseRegion, Semantics, SemanticsAnchor, SemanticsRole, Toggled};
+use crate::{Listener, MouseRegion, Semantics};
+use flui_semantics::{SemanticsAnchor, SemanticsRole, Toggled};
 
 /// The behaviours of a control around its child, in one element.
 ///

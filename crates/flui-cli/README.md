@@ -12,11 +12,12 @@ platform, and checks your environment.
 FLUI is at 0.x: the framework API and this tool's `flui.toml` keys can still
 change between minor versions. The CLI contract that scripts depend on
 (flags, `--json` events, exit codes) is listed below and changes are called
-out in the [changelog](https://github.com/vanyastaff/flui/blob/main/crates/flui-cli/CHANGELOG.md).
+out in the [changelog](https://github.com/vanyastaff/flui/blob/main/CHANGELOG.md).
 
-- **Fast to install and start.** A standalone binary with no FLUI crate in its
-  dependency graph: `cargo install flui-cli` compiles no framework code, and
-  the tool starts in about 25 ms.
+- **Fast to install and start.** A standalone binary that links no framework
+  runtime (only the wire crates `flui-protocol` and `flui-driver`):
+  `cargo install flui-cli` compiles no framework code, and the tool starts in
+  about 25 ms.
 - **Scriptable.** Every command has `--json` (NDJSON on stdout), a documented
   exit-code contract, and `--non-interactive`; human text never touches
   stdout.
@@ -567,7 +568,7 @@ cargo nextest run -p flui-cli
 
 The integration tests drive the built `flui` binary, so every command has
 both a human-mode and a `--json` assertion; a change to output or exit codes
-belongs in the tables above and in [CHANGELOG.md](CHANGELOG.md).
+belongs in the tables above and in the [changelog](https://github.com/vanyastaff/flui/blob/main/CHANGELOG.md).
 
 ## License
 

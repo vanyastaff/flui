@@ -86,7 +86,8 @@ fn chip_only_point() -> (f64, f64) {
 /// edge activates the chip.
 pub fn a_right_to_left_chip_puts_its_delete_icon_on_the_left() {
     use flui_material::FilterChip;
-    use flui_sdk::painting::{Color, TextDirection};
+    use flui_sdk::foundation::TextDirection;
+    use flui_sdk::painting::styling::Color;
     use flui_sdk::view::{BoxedView, ViewExt};
     use flui_sdk::widgets::{ColoredBox, Directionality, SizedBox};
 
@@ -351,7 +352,8 @@ pub fn a_chip_is_its_own_node_and_disabled_only_when_it_says_so() {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_sdk::widgets::{Semantics, SemanticsRole};
+    use flui_sdk::semantics::SemanticsRole;
+    use flui_sdk::widgets::Semantics;
     use flui_testing::a11y::{Action, ActionRequest, Role, TreeId};
 
     for enabled in [true, false] {
@@ -455,7 +457,7 @@ pub fn a_chip_is_its_own_node_and_disabled_only_when_it_says_so() {
                     );
                     (
                         node.id(),
-                        delete_buttons.first().map(flui_testing::A11yNode::id),
+                        delete_buttons.first().map(flui_testing::a11y::A11yNode::id),
                     )
                 };
                 if operable {

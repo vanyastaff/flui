@@ -11,5 +11,5 @@ note: found an item that was configured out
   |
   | #[cfg(all(not(target_os = "ios"), feature = "unstable-windows"))]
   |                                   ---------------------------- the item is gated behind the `unstable-windows` feature
-  | pub use flui_app::app::WindowPolicy;
-  |                        ^^^^^^^^^^^^
+  | pub use flui_app::WindowPolicy;
+  |                   ^^^^^^^^^^^^

@@ -445,7 +445,11 @@ impl Watchdog {
         let start = {
             let mut watch = self.lock();
             let order = watch.next;
-            watch.next = watch.next.wrapping_add(1);
+            // A tie-break, not an identity: nothing looks a deadline up by
+            // it. One is taken per request a client starts, so 2^64 is not
+            // reached; were it, deadlines of one instant would compare equal
+            // and pop in either order, all of them passed at once.
+            watch.next = watch.next.saturating_add(1);
             watch.due.push(Reverse(Due {
                 at,
                 order,

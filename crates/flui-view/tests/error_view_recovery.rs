@@ -4,7 +4,7 @@
 //! catch the unwind and substitute the registered `ErrorView` instead of
 //! letting the panic abort the frame.
 //!
-//! E3 + H3: the element no longer owns its children, and component
+//! The element does not own its children, and component
 //! builds require the live tree-backed `LiveBuildContext` supplied by
 //! `BuildOwner::build_scope`. These tests drive the production
 //! mount/schedule/build-scope path and inspect the materialized slab
@@ -19,10 +19,10 @@
     clippy::disallowed_methods,
     reason = "test code catches a panic to assert on it (ADR-0303 §5)"
 )]
-// Target-level lint relaxations — crate-level allows don't reach this
-// target. `unwrap` in test/example code: a panic IS the failure report
-// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![expect(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic from `unwrap` is the test failure report (docs/PANIC-POLICY.md)"
+)]
 
 use std::{
     any::TypeId,
@@ -32,9 +32,11 @@ use std::{
     },
 };
 
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::element::Lifecycle;
 use flui_view::{
-    BuildContext, BuildOwner, ElementTree, ErrorView, FrameworkError, IntoView, Lifecycle,
-    LifecycleContext, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BoxedView, BuildContext, ErrorView, FrameworkError, IntoView, LifecycleContext, StatefulView,
+    StatelessView, View, ViewExt, ViewState,
 };
 
 // ============================================================================
@@ -49,8 +51,8 @@ struct PanickingView {
 
 impl StatelessView for PanickingView {
     // `!` does not implement `IntoView` — bind the panic through an
-    // explicit `Box<dyn View>` so the inference uses the
-    // `IntoView for Box<dyn View>` shim. The line still panics (the
+    // explicit `BoxedView` so the inference has a
+    // concrete `IntoView` type. The line still panics (the
     // assignment never completes); the bind exists purely to anchor
     // a concrete `impl IntoView`-satisfying type.
     #[expect(
@@ -59,7 +61,7 @@ impl StatelessView for PanickingView {
         reason = "panic body — see comment above"
     )]
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let v: Box<dyn View> = panic!("{}", self.message);
+        let v: BoxedView = panic!("{}", self.message);
         v
     }
 }
@@ -92,11 +94,11 @@ impl<C: View + Clone + 'static> View for WrapperView<C> {
 
 #[derive(Clone)]
 struct InitPanicView {
-    failed_ids: std::sync::Arc<Mutex<Vec<flui_view::ElementId>>>,
+    failed_ids: std::sync::Arc<Mutex<Vec<flui_foundation::ElementId>>>,
 }
 
 struct InitPanicState {
-    failed_ids: std::sync::Arc<Mutex<Vec<flui_view::ElementId>>>,
+    failed_ids: std::sync::Arc<Mutex<Vec<flui_foundation::ElementId>>>,
 }
 
 impl StatefulView for InitPanicView {
@@ -130,14 +132,14 @@ impl View for InitPanicView {
 // Helpers
 // ----------------------------------------------------------------------------
 
-fn mount_and_build(view: &dyn View) -> (ElementTree, BuildOwner, flui_view::ElementId) {
+fn mount_and_build(view: &BoxedView) -> (ElementTree, BuildOwner, flui_foundation::ElementId) {
     mount_and_build_with(view, None)
 }
 
 fn mount_and_build_with(
-    view: &dyn View,
+    view: &BoxedView,
     error_view_builder: Option<flui_view::ErrorViewBuilder>,
-) -> (ElementTree, BuildOwner, flui_view::ElementId) {
+) -> (ElementTree, BuildOwner, flui_foundation::ElementId) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     owner.capabilities_mut().error_view_builder = error_view_builder;
@@ -147,7 +149,7 @@ fn mount_and_build_with(
     (tree, owner, root_id)
 }
 
-fn count_error_child_elements(tree: &ElementTree, parent: flui_view::ElementId) -> usize {
+fn count_error_child_elements(tree: &ElementTree, parent: flui_foundation::ElementId) -> usize {
     child_ids(tree, parent)
         .into_iter()
         .filter(|&child_id| {
@@ -156,7 +158,10 @@ fn count_error_child_elements(tree: &ElementTree, parent: flui_view::ElementId) 
         .count()
 }
 
-fn child_ids(tree: &ElementTree, parent: flui_view::ElementId) -> Vec<flui_view::ElementId> {
+fn child_ids(
+    tree: &ElementTree,
+    parent: flui_foundation::ElementId,
+) -> Vec<flui_foundation::ElementId> {
     tree.iter_nodes()
         .filter_map(|(id, node)| (node.parent() == Some(parent)).then_some(id))
         .collect()
@@ -172,9 +177,9 @@ fn stateless_build_panic_substitutes_registered_error_view() {
     // the rendered child even under parallel cargo-test runs.
     static BUILDER_HITS: AtomicUsize = AtomicUsize::new(0);
     BUILDER_HITS.store(0, Ordering::SeqCst);
-    fn builder(error: &FrameworkError) -> Box<dyn View> {
+    fn builder(error: &FrameworkError) -> BoxedView {
         BUILDER_HITS.fetch_add(1, Ordering::SeqCst);
-        Box::new(ErrorView::new(format!("custom: {}", error.message)))
+        BoxedView::new(ErrorView::new(format!("custom: {}", error.message)))
     }
 
     let view = PanickingView {
@@ -182,7 +187,7 @@ fn stateless_build_panic_substitutes_registered_error_view() {
     };
     // The frame must NOT unwind here — build_scope catches the panic and the
     // reconciler materializes the substituted ErrorView as a child element.
-    let (tree, _owner, root_id) = mount_and_build_with(&view, Some(builder));
+    let (tree, _owner, root_id) = mount_and_build_with(&view.boxed(), Some(builder));
 
     assert_eq!(
         BUILDER_HITS.load(Ordering::SeqCst),
@@ -219,7 +224,8 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
             child: InitPanicView {
                 failed_ids: std::sync::Arc::clone(&failed_ids),
             },
-        },
+        }
+        .boxed(),
         &mut owner.element_owner_mut(),
     );
     owner.schedule_build_for(root, 0, flui_view::RebuildReason::InitialMount);
@@ -291,7 +297,7 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
     assert_eq!(recovered.len(), 1, "the prior recovery record must survive");
     assert!(matches!(
         recovered[0].at,
-        flui_view::RecoveredAt::Element {
+        flui_view::__runtime::RecoveredAt::Element {
             element,
             parent: None,
             ..
@@ -306,7 +312,7 @@ fn lifecycle_recovery_factory_panic_leaves_the_original_child_retryable() {
 
 fn nested_child_build_panic_replaces_only_that_subtree() {
     // Parent is a well-behaved wrapper; its child is a PanickingView.
-    // E3: the parent's build returns its child view, and the slab
+    // The parent's build returns its child view, and the slab
     // id-reconciler builds that child as its own drain entry, where the
     // child's panic is caught.
     let view = WrapperView {
@@ -314,7 +320,7 @@ fn nested_child_build_panic_replaces_only_that_subtree() {
             message: "boom in nested child",
         },
     };
-    let (tree, _owner, root_id) = mount_and_build(&view);
+    let (tree, _owner, root_id) = mount_and_build(&view.boxed());
 
     // The parent did NOT panic — it built fine. Its direct child remains the
     // PanickingView element; only that child's own subtree is replaced.
@@ -354,7 +360,7 @@ fn repeated_build_after_panic_stays_stable() {
     let view = PanickingView {
         message: "boom — repeated",
     };
-    let (mut tree, mut owner, root_id) = mount_and_build(&view);
+    let (mut tree, mut owner, root_id) = mount_and_build(&view.boxed());
     assert_eq!(count_error_child_elements(&tree, root_id), 1);
 
     // Force a rebuild and run build_scope again: still exactly one ErrorView

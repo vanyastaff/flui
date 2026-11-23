@@ -17,13 +17,14 @@
 //! t.expect(find::text("Hello")).to_exist();
 //! ```
 
+pub use flui_testing::drop_ledger::{DropLedger, DropSentinel};
 pub use flui_testing::find;
+pub use flui_testing::host::HostClock;
 pub use flui_testing::storage::{CommitBarrier, CopyHold, MemoryStorage, ReadHold, WriteHold};
-pub use flui_testing::{DropLedger, DropSentinel};
-pub use flui_testing::{
-    Expectation, HostClock, InspectField, InspectNode, InspectReading, InspectValue, Locator,
-    LogicalPoint, LogicalRect, Match, Node, Pick, Role, StateFilter, TestError, TestWindow, Tester,
-    TextMatch, Tree,
+pub use flui_testing::tester::{
+    Expectation, InspectField, InspectNode, InspectReading, InspectValue, Locator, LogicalPoint,
+    LogicalRect, Match, Node, Pick, Role, StateFilter, TestError, TestWindow, Tester, TextMatch,
+    Tree,
 };
 
 /// Render-object tests that drive layout and queries without a widget tree,

@@ -51,7 +51,10 @@ use crate::{
 ///
 /// When no plugin is loaded, [`build_scene()`](Self::build_scene) returns
 /// `None`, allowing the caller to fall back to a built-in scene.
-#[expect(missing_debug_implementations)]
+#[expect(
+    missing_debug_implementations,
+    reason = "`HotReloadDriver` owns a `ScenePlugin`, which holds raw library handles and has no `Debug`"
+)]
 pub struct HotReloadDriver {
     plugin: Option<ScenePlugin>,
     lib_path: PathBuf,
@@ -153,7 +156,10 @@ impl HotReloadDriver {
     /// Forwards [`ScenePlugin::build_scene`]'s contract unchanged — see it for
     /// the obligations the caller must establish about host/plugin agreement
     /// and about dropping the `Scene` before the library is unloaded.
-    #[expect(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "an `unsafe fn` that forwards `ScenePlugin::build_scene`'s contract, stated under `# Safety`"
+    )]
     pub unsafe fn build_scene(&self, width: f64, height: f64) -> Option<Scene> {
         // SAFETY: the caller of this fn has assumed the same obligations.
         self.plugin
@@ -194,7 +200,10 @@ impl HotReloadDriver {
     /// # Safety
     ///
     /// Forwards [`Self::build_scene`]'s contract unchanged.
-    #[expect(unsafe_code)]
+    #[expect(
+        unsafe_code,
+        reason = "an `unsafe fn` that forwards `build_scene`'s contract, stated under `# Safety`"
+    )]
     pub unsafe fn build_scene_or<F>(&self, width: f64, height: f64, fallback: F) -> Scene
     where
         F: FnOnce(f64, f64) -> Scene,

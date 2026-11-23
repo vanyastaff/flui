@@ -2,9 +2,10 @@
 //! each new style.
 
 use flui_animation::MotionSpec;
+use flui_foundation::CreationSite;
 use flui_painting::typography::{TextAlign, TextStyle};
 use flui_view::prelude::{BuildContext, StatelessView};
-use flui_view::{BoxedView, CreationSite, IntoView, ViewExt};
+use flui_view::{BoxedView, IntoView, ViewExt};
 
 use crate::animated::MotionBuilder;
 use crate::{AnimatedLerp, DefaultTextStyle};

@@ -1,6 +1,6 @@
 //! The real headless windows flui-app's test modules open, for tests that exercise the
 //! platform's own capabilities. A test that needs only a window uses
-//! `flui_testing::MockWindow`.
+//! `flui_platform::testing::MockWindow`.
 
 #[cfg(not(target_os = "android"))]
 use crate::app::runner::window_routes::OpenRouted as _;

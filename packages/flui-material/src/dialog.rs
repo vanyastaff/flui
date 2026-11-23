@@ -147,19 +147,20 @@
 //!   `Theme`, which the oracle's capture step exists specifically to fix.
 
 use flui_sdk::geometry::Radius;
-use flui_sdk::painting::BorderRadius;
-use flui_sdk::painting::Clip;
-use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::painting::styling::BorderRadius;
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize};
+use flui_sdk::semantics::{SemanticsAnchor, SemanticsRole};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Flexible, IntrinsicWidth,
-    MainAxisAlignment, MainAxisSize, MergeSemantics, Padding, PageError, PageHandle, PopupRoute,
-    RouteResult, Row, Semantics, SemanticsAnchor, SemanticsRole, SizedBox,
+    Align, Column, ConstrainedBox, DefaultTextStyle, Flexible, IntrinsicWidth, MergeSemantics,
+    Padding, PageError, PageHandle, PopupRoute, RouteResult, Row, Semantics, SizedBox,
 };
 use flui_sdk::{
     geometry::EdgeInsets,
-    painting::{Alignment, Color},
+    painting::{Alignment, styling::Color},
 };
 
 use crate::material::Material;

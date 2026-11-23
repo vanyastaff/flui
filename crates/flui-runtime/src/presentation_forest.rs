@@ -1,12 +1,11 @@
 //! `PresentationForest` — the insertion-ordered collection of
 //! [`PresentationState`]s one `UiRuntime` owns (ADR-0043 §1).
 //!
-//! Production topology now allows any number of presentations per UI runtime
-//! (issue #555's addressed-routing slice lifts the mechanical 1×N ratchet this type used to
-//! enforce): `UiRuntime::install_presentation` is the production entry point
+//! A UI runtime holds any number of presentations:
+//! `UiRuntime::install_presentation` is the production entry point
 //! that assembles and installs a second (third, ...) presentation sharing
 //! this UI runtime's `GlobalKeyScope` and dispatch handles, with its own real
-//! `WindowRegistry` mapping (`runner.rs::install_presentation_alongside`).
+//! `WindowRegistry` mapping (`runner/owner_dispatch.rs::install_presentation_alongside`).
 //! Opening a genuinely independent, unrelated window still installs a second
 //! UI runtime (`AppRuntime`'s `UiRuntimeId`-keyed map) — this forest is for windows
 //! that share one UI runtime's GlobalKey scope, focus arbitration, and scheduler.
@@ -51,9 +50,8 @@ impl PresentationForest {
 
     /// Install another presentation into this forest.
     ///
-    /// Production entry point (issue #555 lifted the former `len()<=1`
-    /// ratchet): `UiRuntime::install_presentation` is the
-    /// UI runtime-level caller, and `runner.rs::install_presentation_alongside`
+    /// Production entry point: `UiRuntime::install_presentation` is the
+    /// UI runtime-level caller, and `runner/owner_dispatch.rs::install_presentation_alongside`
     /// is the caller that also mints this presentation's real
     /// `WindowRegistry` mapping — the two steps a hosted presentation needs
     /// to be genuinely dispatchable, not just forest-resident.

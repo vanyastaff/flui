@@ -26,7 +26,8 @@ use std::time::Duration;
 
 use flui_protocol::events::Event;
 use flui_protocol::session::{AppDescription, HelloReply};
-use flui_testing::{HeadlessAgentService, HeadlessConversation, HeadlessHost, HeadlessWindow};
+use flui_testing::agent_service::{HeadlessAgentService, HeadlessConversation};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use serde_json::Value;
 use web_time::Instant;
 
@@ -277,6 +278,7 @@ fn serve(
         name,
         width,
         height,
+        insets,
         reply_timeout,
         attach,
     } = launch;
@@ -285,7 +287,9 @@ fn serve(
     let mut agent = service.dev_agent();
     // A native window offers text input, so a focused field takes a composition's commit here as
     // it does there.
-    let window = HeadlessWindow::new(width, height).with_text_input();
+    let window = HeadlessWindow::new(width, height)
+        .with_text_input()
+        .with_insets(insets);
     let mut host = HeadlessHost::new(window).with_dev_agent(&mut agent);
     attach(&host)?;
     for _ in 0..STARTUP_FRAMES {

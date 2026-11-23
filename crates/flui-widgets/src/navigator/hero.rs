@@ -64,6 +64,10 @@ use super::flight_seat::{FlightSeat, PlaceholderBuilder, SeatClaim, SeatHold};
 use super::hero_tags::{HeroTags, TagSeat};
 use super::lifecycle::{RetiredMap, RetiredValues, Terminal};
 use std::cell::{Cell, RefCell};
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are hero tags, supplied by the application"
+)]
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -230,6 +234,10 @@ impl HeroRegistry {
     ///
     /// Sources resolve outside borrows. Owning registry identities bound traversal
     /// when a source resolves to an already visited registry, including itself.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keys are hero tags, supplied by the application"
+    )]
     pub(crate) fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
         let mut all = RetiredMap(HashMap::new());
         let mut visited = RetiredValues(Vec::new());
@@ -287,6 +295,7 @@ impl HeroRegistry {
     /// The handle registered under `tag`, cloned out. Test-facing: production
     /// matching goes through `all_heroes`, which also reaches a
     /// nested `Navigator`'s heroes.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn get(&self, tag: &HeroTag) -> Option<HeroHandle> {
         self.inner.heroes.get(tag)
@@ -305,6 +314,7 @@ impl HeroRegistry {
         clippy::len_without_is_empty,
         reason = "a test-facing count; nothing asks whether the registry is empty"
     )]
+    #[cfg(any(test, feature = "testing"))]
     pub fn len(&self) -> usize {
         self.inner.heroes.len()
     }
@@ -735,8 +745,8 @@ impl InheritedView for HeroScope {
         &self.registry
     }
 
-    fn child(&self) -> &dyn View {
-        &*self.child
+    fn child(&self) -> &BoxedView {
+        &self.child
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {
@@ -938,6 +948,7 @@ impl HeroHandle {
     }
 
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn includes_child(&self) -> bool {
         self.inner.seat.includes_child()
@@ -962,6 +973,7 @@ impl HeroHandle {
     /// `include_child_in_placeholder` is `true` for the *from* hero of a push and
     /// `false` otherwise: the source subtree is preserved offstage so its
     /// state survives the flight, while the destination's is not yet needed.
+    #[cfg(any(test, feature = "testing"))]
     pub fn start_flight(&self, include_child_in_placeholder: bool) -> Option<Size> {
         // The temporary test-access seam freezes a settled placeholder without
         // a running manager. Production flights always supply their identity.
@@ -1029,7 +1041,7 @@ impl fmt::Debug for HeroHandle {
 /// tag.
 ///
 /// A `HeroController` must observe the `Navigator` for flights to run; a bare
-/// `Navigator` now installs a default one, and `HeroControllerScope` customizes or
+/// `Navigator` installs a default one, and `HeroControllerScope` customizes or
 /// disables that. The public surface includes the baseline `tag`/`child` plus the
 /// customization hooks: [`create_rect_tween`](Self::create_rect_tween),
 /// [`flight_shuttle_builder`](Self::flight_shuttle_builder), FLUI's
@@ -1238,21 +1250,21 @@ impl HeroState {
             seat: None,
         });
         let previous = Terminal::new(std::mem::replace(&mut self.registry, next));
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         if let Some(previous) = previous.as_ref()
             && let Some(seat) = previous.seat.as_ref()
         {
-            recovery.run(|| previous.registry.deregister(seat));
+            failure.contain(|| previous.registry.deregister(seat));
         }
         if let Some(next) = self.registry.as_mut() {
-            recovery.run(|| {
+            failure.contain(|| {
                 next.seat = next
                     .registry
                     .register(next.tag.clone(), self.handle.clone());
             });
         }
-        recovery.retire(previous);
-        recovery.finish();
+        failure.retire(previous);
+        failure.resume();
     }
 }
 
@@ -1287,14 +1299,14 @@ impl ViewState<Hero> for HeroState {
                 .borrow_mut()
                 .replace(configuration),
         );
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         let registry = self
             .registry
             .as_ref()
             .map(|entry| (*entry.registry).clone());
-        recovery.run(|| self.sync_registration(registry, new_view.tag.clone()));
-        recovery.retire(previous);
-        recovery.finish();
+        failure.contain(|| self.sync_registration(registry, new_view.tag.clone()));
+        failure.retire(previous);
+        failure.resume();
     }
 
     /// Bind the render seat during mount, and establish the route dependency that subsequent lifecycle changes refresh.
@@ -1330,16 +1342,16 @@ impl ViewState<Hero> for HeroState {
         let rebuild = Terminal::new(self.handle.inner.rebuild.take());
         let configuration = Terminal::new(self.handle.inner.configuration.borrow_mut().take());
         let registry = Terminal::new(self.registry.take());
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         if let Some(registry) = registry.as_ref()
             && let Some(seat) = registry.seat.as_ref()
         {
-            recovery.run(|| registry.registry.deregister(seat));
+            failure.contain(|| registry.registry.deregister(seat));
         }
-        recovery.retire(rebuild);
-        recovery.retire(configuration);
-        recovery.retire(registry);
-        recovery.finish();
+        failure.retire(rebuild);
+        failure.retire(configuration);
+        failure.retire(registry);
+        failure.resume();
     }
 
     /// Builds the hero's seat: the anchored box, with the state-preserving custom
@@ -1448,7 +1460,7 @@ impl InheritedView for HeroModeScope {
         &self.enabled
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

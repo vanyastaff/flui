@@ -14,7 +14,7 @@
 use std::rc::Rc;
 
 use flui_sdk::interaction::FocusNode;
-use flui_sdk::platform::TextInputOptions;
+use flui_sdk::platform::text_store::TextInputOptions;
 use flui_sdk::view::element::ElementKind;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::__private::{TextFormFieldConfig, TextFormFieldCore};

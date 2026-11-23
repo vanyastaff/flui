@@ -13,7 +13,7 @@ app's trees, frames and input, and this crate composes that with what only the O
   app's page export is reached through the Chrome lane's BiDi session (`connect` with a channel as
   `onLine`, each line a `script.message`, each request a `send` through `script.callFunction`),
   and the headless target runs the agent's own `flui_runtime::agent::Session` through
-  `flui_testing::HeadlessAgentService`, so the in-process answers are the ones a socket carries.
+  `flui_testing::agent_service::HeadlessAgentService`, so the in-process answers are the ones a socket carries.
   The `Connection` trait is private.
 - **Virtual time on the headless target.** The headless app's host runs on a thread of its own and
   pumps no frame by itself: a call that waits asks for one frame at a time, each 16 ms of the
@@ -67,7 +67,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   released.
 - **A lane imports no other lane.** What more than one lane uses is a module of `lane`:
   `lane::walk` (the bounded accessibility walk), `lane::pacing` (the guard-watched slices of a
-  pause and the echo deadline) and `lane::screen` (a window's geometry from its device origin).
+  pause and the echo deadline), `lane::screen` (a window's geometry from its device origin) and
+  `lane::tool` (a host tool, `adb` or `xcrun`, run to its end within a deadline and a bound on
+  what it prints).
 - **A lane's OS code builds on its OS only; its tables build everywhere.** `lane::windows` keeps
   the key, role, coordinate and activity tables, the safety rules and the contact frames pure, so
   Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
@@ -78,7 +80,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   pure, `lane::atspi::roles` and `lane::wayland::mapping` are pure, and the parts that reach an X
   server, AT-SPI or libei are Linux only (libei with the `wayland` feature). `lane::android` is
   host code that drives `adb`, so all of it builds on every host, and its tests script the device
-  (`testing::ScriptedAdb`). `lane::chrome` (feature `chrome`) is host code on every desktop: its
+  (`testing::ScriptedAdb`); `lane::ios_simulator` drives `xcrun` the same way
+  (`testing::ScriptedXcrun`), and only starting an app needs a Unix host, whose socket the
+  simulator reaches. `lane::chrome` (feature `chrome`) is host code on every desktop: its
   keys, actions, input-method steps and screenshot decoding are pure tables, and what reaches a
   browser goes through its session.
 - **The Android lane reaches the device through one door.** Every `adb` command runs through
@@ -104,6 +108,17 @@ app's trees, frames and input, and this crate composes that with what only the O
   its own: a window dump at a path of the session's, and a forward from a loopback port the lane
   picked, asked for with `--no-rebind` (a port another session holds is refused and another
   picked) and removed by that port at its end once `adb` made it or may have.
+- **The iOS Simulator lane sends no input** until a supported channel exists (the flui-driver
+  spec's rule; `lane::ios_simulator::xcode` has the evidence): `Lane::check` refuses every input
+  event as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything
+  is sent. It reads the screen through `simctl io screenshot`, whose file length and declared size
+  are checked against the window before a pixel is decoded, and takes no simulator nobody named
+  (`FLUI_IOS_SIMULATOR_UDID`). A session holds its simulator (`SimulatorLock`), since the launch
+  and the terminate name the app by its bundle identifier; it always ends the app it started with
+  `simctl terminate`, since an iOS app does not exit when its driver goes, reading an answer that
+  nothing runs as an app that already exited. The launch values reach the app as
+  `SIMCTL_CHILD_` variables in `simctl`'s environment, never in a command's text or debug form,
+  and no such variable inherited from the driver's environment reaches it.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

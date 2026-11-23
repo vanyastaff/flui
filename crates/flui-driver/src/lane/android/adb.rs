@@ -20,29 +20,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use flui_protocol::act::{Effect, EffectKind};
 use flui_protocol::error::ErrorCode;
 
 use super::LANE;
 use crate::error::{Error, Result};
+use crate::lane::tool::{self, end};
 
 /// The most bytes one record of a stream may hold.
 pub const MAX_RECORD: usize = 4096;
 
 /// How many records of a stream wait for the lane before its reader stops reading.
 pub const RECORD_ROOM: usize = 1024;
-
-/// The most bytes of a command's error output kept: enough for the device's message.
-const MAX_STDERR: usize = 64 * 1024;
-
-/// How long a command's output readers may take to finish once the command ended: an `adb` that
-/// left a child holding its pipes is not waited on past this.
-const READERS_WITHIN: Duration = Duration::from_secs(1);
-
-/// How often a running command is looked at for its end, its deadline and its bound.
-const POLL: Duration = Duration::from_millis(5);
 
 /// One `adb` command against the device.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -360,51 +351,11 @@ impl HostAdb {
 
 impl Adb for HostAdb {
     fn run(&mut self, command: &AdbCommand, limit: usize, timeout: Duration) -> Result<AdbReply> {
-        let mut process = self.command(command);
-        process
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = process.spawn().map_err(|error| self.started(&error))?;
-        let stdout = child
-            .stdout
-            .take()
-            .expect("BUG: the command's output was piped");
-        let stderr = child
-            .stderr
-            .take()
-            .expect("BUG: the command's error output was piped");
-        let (out_done, out) = mpsc::channel();
-        let (err_done, err) = mpsc::channel();
-        thread::Builder::new()
-            .name("flui-driver-adb-out".into())
-            .spawn(move || {
-                let _ = out_done.send(read_bounded(stdout, limit));
-            })?;
-        thread::Builder::new()
-            .name("flui-driver-adb-err".into())
-            .spawn(move || {
-                let _ = err_done.send(read_bounded(stderr, MAX_STDERR));
-            })?;
-        let deadline = Instant::now().checked_add(timeout);
-        let mut early: Option<Bounded> = None;
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break Some(status);
-            }
-            // Output past the bound ends the command at once.
-            match out.try_recv() {
-                Ok(read) if read.over => {
-                    early = Some(read);
-                    end(&mut child);
-                    break None;
-                }
-                Ok(read) => early = Some(read),
-                Err(_) => {}
-            }
-            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                end(&mut child);
-                return Err(Error::Timeout {
+        let finished = tool::run(self.command(command), limit, timeout, "adb").map_err(
+            |failure| match failure {
+                tool::Failure::Start(error) => self.started(&error),
+                tool::Failure::Io(error) => Error::Io(error),
+                tool::Failure::Timeout => Error::Timeout {
                     effect: Some(Effect::new(EffectKind::MayHaveRun).detail(format!(
                         "`adb {command}` was ended after {} ms; the device may have done it",
                         timeout.as_millis()
@@ -414,29 +365,19 @@ impl Adb for HostAdb {
                         timeout.as_millis()
                     ),
                     retry: ErrorCode::Timeout.default_retry(),
-                });
-            }
-            thread::sleep(POLL);
-        };
-        let read = match early {
-            Some(read) => read,
-            None => out
-                .recv_timeout(READERS_WITHIN)
-                .map_err(|_| lane_error(format!("`adb {command}` left its output open")))?,
-        };
-        if read.over {
-            return Err(lane_error(format!(
-                "`adb {command}` printed more than {limit} bytes; nothing past them was read"
-            )));
-        }
-        let stderr = err.recv_timeout(READERS_WITHIN).map_or_else(
-            |_| String::new(),
-            |read| String::from_utf8_lossy(&read.bytes).into_owned(),
-        );
+                },
+                tool::Failure::OverLimit => lane_error(format!(
+                    "`adb {command}` printed more than {limit} bytes; nothing past them was read"
+                )),
+                tool::Failure::OutputLeftOpen => {
+                    lane_error(format!("`adb {command}` left its output open"))
+                }
+            },
+        )?;
         Ok(AdbReply {
-            exit: status.and_then(|status| status.code()),
-            stdout: read.bytes,
-            stderr,
+            exit: finished.exit,
+            stdout: finished.stdout,
+            stderr: finished.stderr,
         })
     }
 
@@ -464,35 +405,6 @@ impl Adb for HostAdb {
             reader: Some(reader),
             ended: None,
         }))
-    }
-}
-
-/// Kill `child` and reap it.
-fn end(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// What a reader read: at most its bound, and whether there was more.
-struct Bounded {
-    bytes: Vec<u8>,
-    over: bool,
-}
-
-/// Read `from` to its end, keeping at most `limit` bytes; past them, stop reading.
-fn read_bounded(mut from: impl Read, limit: usize) -> Bounded {
-    let mut bytes = Vec::new();
-    let mut buffer = [0_u8; 16 * 1024];
-    loop {
-        match from.read(&mut buffer) {
-            Ok(0) | Err(_) => return Bounded { bytes, over: false },
-            Ok(read) => {
-                if bytes.len() + read > limit {
-                    return Bounded { bytes, over: true };
-                }
-                bytes.extend_from_slice(&buffer[..read]);
-            }
-        }
     }
 }
 

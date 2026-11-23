@@ -49,6 +49,18 @@
 //!   field. A backend whose path FLUI has not driven yet reports the rows as
 //!   its `docs/gaps.md` entry ([`RowOutcome::Gap`]).
 //!
+//! - **recordings** (ADR-0215 §4, ADR-0390): what the backend delivers beside
+//!   input, its native journal records, and that recording replays on the
+//!   headless host to what the application heard, one row per kind: the input
+//!   method's composition, the lifecycle the host reports (its notices, a
+//!   session's end, a reopen, the window's snapshots), and the application's
+//!   reads of the system preferences and of the displays. The backend drives
+//!   each session through its own delivery with a journal capture installed
+//!   ([`BackendUnderTest::replay_recording`]), so a backend that delivers the
+//!   session otherwise, journals the wrong thing or nothing fails its row; a
+//!   backend whose delivery cannot be driven where the table runs fails it as
+//!   [`FailureKind::NotDriven`], which its suite names.
+//!
 //! A row the backend cannot take part in (the clock rows of a backend with no
 //! performance counter, the trackpad rows of a backend without trackpad
 //! gestures) is reported as not applicable, never as passed.
@@ -57,6 +69,7 @@ mod drag_rows;
 mod haptic_rows;
 mod ime_rows;
 mod key_rows;
+mod recording_rows;
 mod rows;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -66,6 +79,9 @@ use std::time::Duration;
 use flui_platform::input::capabilities::InputCapabilities;
 use flui_platform::input::pointer::PointerKind;
 use flui_platform::text::store::TextStore;
+use flui_platform::{
+    DisplayParts, ImeEvent, SessionEndPhase, SystemNotice, SystemPreferences, WindowStateParts,
+};
 /// The input a backend delivers, re-exported for implementors.
 pub use flui_runtime::HostInput;
 
@@ -124,6 +140,68 @@ pub trait BackendUnderTest {
     /// driven, still a gap, or absent by design, so a missing path fails
     /// loudly as its gap instead of passing as not applicable.
     fn focus_text_store(&mut self, store: Rc<dyn TextStore>) -> TextInputPath;
+
+    /// Deliver `session`, what the OS reported of one kind, in order, through
+    /// the backend's own delivery with a native journal capture installed
+    /// (ADR-0215 §4), read back what the journal recorded and replay it on the
+    /// headless host, for the recording rows: what the application heard live
+    /// and what it heard from the replay. No default: a backend whose delivery
+    /// cannot be driven where the table runs answers
+    /// [`RecordingReplay::NotDriven`], which fails the row, so a missing
+    /// replay fails loudly instead of passing as not applicable.
+    fn replay_recording(&mut self, session: &[Recorded]) -> RecordingReplay;
+}
+
+/// One entry of what a native journal records beside input (ADR-0215 §4), as
+/// the application hears it.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum Recorded {
+    /// The focused window's input method delivered this event.
+    Ime(ImeEvent),
+    /// The host reported this system notice.
+    Notice(SystemNotice),
+    /// The host asked about this phase of the session ending.
+    SessionEnd(SessionEndPhase),
+    /// The user reopened the application.
+    Reopen,
+    /// The window published a snapshot of these facts; its revision is the
+    /// publishing window's own.
+    WindowState(Box<WindowStateParts>),
+    /// A read of the system preferences answered these.
+    Preferences(Box<SystemPreferences>),
+    /// A read of the displays answered these displays, in the snapshot's
+    /// order, each beside the order in which the session first saw its id:
+    /// one display keeps its number across reads, and two displays never share
+    /// one, whatever their names. The ids themselves are each registry's own.
+    Displays(Vec<(usize, DisplayParts)>),
+}
+
+/// What a backend delivered of one session, and what its recording replayed.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum RecordingReplay {
+    /// The backend delivered `live`, in order, while its journal recorded;
+    /// the recording, read back and replayed on the headless host, delivered
+    /// `replayed`.
+    Replayed {
+        /// What the application heard from the backend.
+        live: Vec<Recorded>,
+        /// What the application heard from the replay.
+        replayed: Vec<Recorded>,
+    },
+    /// The backend delivered `live`, but its recording could not be read
+    /// back or replayed, and why: a redacted or cut row, a gap.
+    Refused {
+        /// What the application heard from the backend.
+        live: Vec<Recorded>,
+        /// Why the recording did not replay.
+        why: String,
+    },
+    /// The backend's delivery of the kind cannot be driven where the table
+    /// runs, and why. The row fails as [`FailureKind::NotDriven`]: a
+    /// backend's suite names each row it expects so.
+    NotDriven(&'static str),
 }
 
 /// The clocks a backend stamps its readings on (ADR-0207 §2).
@@ -407,6 +485,9 @@ pub enum RowGroup {
     Ime,
     /// Keys the framework's default bindings name (ADR-0216).
     Keys,
+    /// What the backend's native journal records beside input, replayed on
+    /// the headless host (ADR-0215 §4).
+    Recordings,
 }
 
 /// What one row concluded.
@@ -451,6 +532,9 @@ pub enum FailureKind {
     Output,
     /// The row panicked, in the backend or in the table.
     Panicked,
+    /// The backend's path for the row cannot be driven where the table runs
+    /// ([`RecordingReplay::NotDriven`]).
+    NotDriven,
 }
 
 impl RowFailure {
@@ -482,6 +566,14 @@ impl RowFailure {
     pub(crate) const fn output(message: String) -> Self {
         Self {
             kind: FailureKind::Output,
+            message,
+        }
+    }
+
+    /// [`FailureKind::NotDriven`].
+    pub(crate) const fn not_driven(message: String) -> Self {
+        Self {
+            kind: FailureKind::NotDriven,
             message,
         }
     }

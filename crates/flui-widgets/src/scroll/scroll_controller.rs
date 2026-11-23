@@ -73,7 +73,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, AnimationRunFuture, MotionSpec, SharedCurve};
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{Listenable, MutatedDuringBuild};
 use flui_interaction::pointer::EventPropagation;
 use flui_platform::input::pointer::ScrollEvent;
@@ -127,7 +127,7 @@ pub(crate) struct ScrollableHooks {
     /// until the pass returns (ADR-0209 §3).
     pub(crate) in_pass: Box<dyn Fn() -> bool>,
     /// The build phase of the UI runtime the scrollable builds in: while it
-    /// builds, `jump_to` and `animate_to` refuse (ADR-0086 §7).
+    /// builds, `jump_to` and `animate_to` refuse (ADR-0074 §5.2).
     pub(crate) build_phase: flui_foundation::BuildPhase,
     /// The scrollable's wheel handling, for a scrollbar the wheel reaches
     /// instead of the content.
@@ -390,21 +390,21 @@ impl ScrollController {
             return;
         }
         if self.hooks().is_some_and(|hooks| (hooks.in_pass)()) {
-            let mut recovery = PanicRecovery::new();
+            let mut failure = FirstPanic::new();
             let (_, retired) = self.replace_pending_command(PendingScrollCommand::JumpTo {
                 target_pixels: pixels,
             });
-            recovery.scope().retire(retired);
-            recovery.finish();
+            failure.retire(retired);
+            failure.resume();
             return;
         }
         let clamped = pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let (authority, retired) = self.replace_pending_command(PendingScrollCommand::Cancel);
         // Stopping can synchronously reenter through the driver's listeners.
         if let Some(hooks) = self.hooks() {
-            recovery.scope().run(|| (hooks.stop)());
-            recovery.scope().retire(hooks);
+            failure.contain(|| (hooks.stop)());
+            failure.retire(hooks);
         }
         let current = self
             .pending_command
@@ -420,22 +420,22 @@ impl ScrollController {
             let writer = &self.writer;
             match self.hooks() {
                 Some(hooks) => {
-                    recovery.scope().run(|| {
+                    failure.contain(|| {
                         if !(hooks.jump)(clamped) {
                             writer.set_pixels(clamped, OffsetWriteCause::Programmatic);
                         }
                     });
-                    recovery.scope().retire(hooks);
+                    failure.retire(hooks);
                 }
-                None => recovery
-                    .scope()
-                    .run(|| writer.set_pixels(clamped, OffsetWriteCause::Programmatic)),
+                None => {
+                    failure.contain(|| writer.set_pixels(clamped, OffsetWriteCause::Programmatic));
+                }
             }
         }
         // Pixel publication precedes pending-curve destruction, so a newer jump
         // or animation cannot be overwritten by this jump's accepted tail.
-        recovery.scope().retire(retired);
-        recovery.finish();
+        failure.retire(retired);
+        failure.resume();
     }
 
     /// Animate the scroll offset from its current value to `target_pixels`
@@ -492,18 +492,18 @@ impl ScrollController {
             self.jump(target);
             return Ok(());
         }
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         let (_, retired) = self.replace_pending_command(PendingScrollCommand::AnimateTo {
             target_pixels: target,
             duration,
             curve,
         });
-        recovery.scope().retire(retired);
+        failure.retire(retired);
         // The attached scrollable services the slot when the position
         // notifies.
         let writer = &self.writer;
-        recovery.scope().run(|| writer.notify());
-        recovery.finish();
+        failure.contain(|| writer.notify());
+        failure.resume();
         Ok(())
     }
 
@@ -794,8 +794,8 @@ mod tests {
             // Establish a genuine RUNNING state FIRST, before any listener/hook
             // is wired up — otherwise starting the run itself would trigger the
             // reentrant cascade below synchronously, on this (main) thread,
-            // before the sanity check even runs. `fling_stub` is unbounded
-            // (#1183): `forward()` targets an infinite bound and is refused, so
+            // before the sanity check even runs. `fling_stub` is unbounded, so
+            // `forward()` targets an infinite bound and is refused;
             // `animate_to` with a large finite target is the unbounded-safe
             // substitute.
             fling

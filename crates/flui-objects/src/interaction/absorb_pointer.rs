@@ -97,12 +97,9 @@ impl RenderBox for RenderAbsorbPointer {
             // We are the target. The child is never tested.
             //
             // The truthy return IS the registration: the driver owns the
-            // hit path and builds the entry from this node's own id, so
-            // there is nothing for this method to add. The `add_self` this
-            // comment used to point at was deleted with the rest of the
-            // unread protocol-level result (issue #844); a node that needs
-            // to appear in the path WITHOUT blocking what is behind it uses
-            // `ctx.register_self_hit_entry()`.
+            // hit path and builds the entry from this node's own id. A node
+            // that needs to appear in the path WITHOUT blocking what is
+            // behind it uses `ctx.register_self_hit_entry()`.
             true
         } else if self.has_child {
             ctx.hit_test_child_at_offset(0, Offset::ZERO)

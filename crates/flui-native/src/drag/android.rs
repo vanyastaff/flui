@@ -380,7 +380,8 @@ mod clip {
 #[cfg(any(target_os = "android", test))]
 #[forbid(unsafe_code)]
 mod drops {
-    use std::collections::{HashMap, VecDeque};
+    use rustc_hash::FxHashMap;
+    use std::collections::VecDeque;
     use std::num::NonZeroU64;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -545,12 +546,12 @@ mod drops {
     pub(super) struct Drops {
         table: OfferTable,
         /// The answer each live offer's target last cached.
-        feedback: HashMap<DataTransferId, DropFeedback>,
+        feedback: FxHashMap<DataTransferId, DropFeedback>,
         /// Where each representation of a hovering offer is read from once
         /// it drops.
-        sources: HashMap<DataTransferId, Vec<ClipSource>>,
+        sources: FxHashMap<DataTransferId, Vec<ClipSource>>,
         /// Where each representation of a taken drop is read from.
-        dropped: HashMap<DataTransferId, Vec<ClipSource>>,
+        dropped: FxHashMap<DataTransferId, Vec<ClipSource>>,
         /// The offer over the view and the actions its drag permits.
         hover: Option<(DataTransferId, TransferActions)>,
         /// The media types of the drag in progress, from `ACTION_DRAG_STARTED`.
@@ -562,7 +563,7 @@ mod drops {
         /// The tickets of the reads of URIs' bytes.
         tickets: IdMint<NonZeroU64>,
         /// The reads holding a place, at most [`MAX_READS`].
-        reading: HashMap<NonZeroU64, Reading>,
+        reading: FxHashMap<NonZeroU64, Reading>,
         /// The reads waiting for a place, in the order they were asked for, at
         /// most [`MAX_WAITING`].
         waiting: VecDeque<Wanted>,

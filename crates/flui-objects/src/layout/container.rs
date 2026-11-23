@@ -42,7 +42,8 @@
 //!   collapse is the stable child slot above, not a lighter or fewer-node
 //!   tree.
 //!
-//! See `crates/flui-widgets/ARCHITECTURE.md` mapping decision 15.
+//! See `crates/flui-widgets/ARCHITECTURE.md`, "`Container` is one render object, not a
+//! conditional widget stack".
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};

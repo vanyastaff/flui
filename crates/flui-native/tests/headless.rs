@@ -7,12 +7,16 @@
 // `--test-threads 1`, which nothing in this repo sets for these tests. Under a
 // plain `cargo test -p flui-native` these calls race the other tests in the
 // same binary.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "`std::env::set_var` and `remove_var` are `unsafe` in edition 2024; nextest's process-per-test isolation keeps other threads off the environment"
+)]
 
 use flui_native::testing::app;
 
 use app::{AppCall, AppLog, run_keeping_owner};
-use flui_native::{CurrentHost, HeadlessPlatform, current_host, current_platform};
+use flui_native::testing::HeadlessPlatform;
+use flui_native::{CurrentHost, current_host, current_platform};
 use flui_platform::WindowOptions;
 use flui_testing::window_commands::AdmitAndApply as _;
 

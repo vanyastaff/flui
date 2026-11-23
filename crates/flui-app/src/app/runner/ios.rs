@@ -43,7 +43,7 @@ use super::owner_dispatch::{
     teardown_platform_ui_runtime,
 };
 use super::raster_host::RasterSlot;
-use crate::app::hot_reload::WorkerReload;
+use crate::app::hot_reload::{ScenePlugin, WorkerReload};
 use crate::app::{AppConfig, LaunchError};
 
 use super::session_controller::{SessionController, contain};
@@ -202,21 +202,24 @@ where
     V: View + Clone + 'static,
 {
     use flui_native::{IOSPlatform, Platform};
-    // Before the platform, whose registries report only to a capture already installed.
-    #[cfg(native_journal)]
-    super::native_journal::begin(flui_native::journal::codec::Backend::UiKit);
+    // Before the platform, whose registries report only to a capture already installed; ended
+    // if the platform fails to start. The loop reads the launch and settles it.
+    let journal = super::journal_start::JournalStart::begin(Some(
+        flui_protocol::native_recording::Backend::UiKit,
+    ));
     let platform = IOSPlatform::try_new().map_err(|error| {
         tracing::error!(%error, "iOS initialization failed");
         LaunchError::from_platform(error)
     })?;
+    journal.release_to_loop();
     // The loop makes a session's window, with its handler, before the
     // session connects; the connection names the session and its window, so
     // the routes made for that session are adopted for that window, whatever
     // order sessions are made and connected in.
-    let made = Rc::new(std::cell::RefCell::new(std::collections::HashMap::<
+    let made = Rc::new(std::cell::RefCell::new(rustc_hash::FxHashMap::<
         flui_native::IOSSceneSessionId,
         Rc<super::window_routes::WindowRoutes>,
-    >::new()));
+    >::default()));
     let adopting = Rc::clone(&made);
     let handlers = Box::new(move |session: &flui_native::IOSSceneSessionId| {
         let routes = super::window_routes::WindowRoutes::new();
@@ -420,6 +423,7 @@ where
     let frame =
         installation.frame_driver(super::frame_driver::FrameDriver::Ios(IosFrameDriver {
             raster,
+            scene_plugin: worker_reload.scene_plugin(),
             worker_reload,
         }))?;
     let binding = frame.binding;
@@ -471,6 +475,9 @@ where
 pub(super) struct IosFrameDriver {
     raster: RasterSlot,
     worker_reload: WorkerReload,
+    /// The same hook's scene plugin, which may draw this scene's frame in
+    /// place of the widget tree (ADR-0391).
+    scene_plugin: ScenePlugin,
 }
 
 impl IosFrameDriver {
@@ -494,10 +501,12 @@ impl IosFrameDriver {
         presentation: flui_foundation::PresentationId,
     ) {
         let worker_reload_frame = &self.worker_reload;
+        let scene_plugin = &self.scene_plugin;
+        let raster = &self.raster;
         // The gate half of the wake runs inside one ui_runtime entry and
         // decides; the pump below enters the ui_runtime itself.
         let raster_deadline = self.raster.frame_deadline();
-        let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
+        let (action, now, display_color, plugin_frame) = ui_runtime.enter(|ui_runtime| {
             let now = web_time::Instant::now();
             // Development reload: applies a queued rebuild at the frame
             // boundary (the `dlopen` stays owner-thread), exactly as the
@@ -505,6 +514,13 @@ impl IosFrameDriver {
             worker_reload_frame.poll_and_apply(ui_runtime);
 
             let inbox_redraw = ui_runtime.drain_owner_inbox();
+
+            // A live scene plugin owns this scene's frame
+            // (`ScenePlugin::own_frame`, the rule every native runner
+            // follows, ADR-0391).
+            if let Some(owned) = scene_plugin.own_frame(ui_runtime, raster) {
+                return (WakeAction::Skip, now, None, Some(owned));
+            }
 
             // The host's own deadlines (a lost device's next rebuild, a
             // surface's next attempt) are a dirty source as well as a wake
@@ -530,8 +546,16 @@ impl IosFrameDriver {
                 ui_runtime
                     .window_display(presentation)
                     .and_then(|display| display.color),
+                None,
             )
         });
+
+        // The plugin drew the frame: the runtime's background work runs in
+        // place of the widget frame.
+        if let Some(owned) = plugin_frame {
+            owned.finish(ui_runtime, &self.raster);
+            return;
+        }
 
         // A presentation whose frames are off cannot be seen: its slot is not
         // drawn, and draws in full when frames come back (ADR-0305).

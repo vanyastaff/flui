@@ -1,9 +1,9 @@
 //! [`RepaintBoundary`] — isolates its child's painting into its own layer.
 
-use flui_foundation::SaltedKey;
+use flui_foundation::{CreationSite, SaltedKey};
 use flui_objects::RenderRepaintBoundary;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, View};
+use flui_view::{Child, IntoView, RenderView, View};
 
 /// Isolates its child into a separate compositing layer so repaints of the
 /// child (or its siblings) don't force each other to re-paint.
@@ -111,7 +111,7 @@ impl View for RepaintBoundary {
             .map(|key| key as &dyn flui_foundation::ViewKey)
     }
 
-    fn creation_site(&self) -> flui_view::CreationSite {
+    fn creation_site(&self) -> flui_foundation::CreationSite {
         self.site
     }
 }

@@ -82,7 +82,7 @@ pub enum AnimationError {
     Disposed,
 
     /// A mutator was called while the presentation the controller ticks for
-    /// was building (ADR-0086 §7). The run, value and listeners are unchanged;
+    /// was building (ADR-0074 §5.2). The run, value and listeners are unchanged;
     /// mutate from an event callback or a lifecycle hook instead.
     #[error("AnimationController was mutated during build")]
     MutatedDuringBuild,

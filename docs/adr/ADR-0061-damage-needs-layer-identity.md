@@ -103,7 +103,7 @@ the field is always `None` in production. Populating it, or an equivalent
 
 ## Amendment (2026-09-18)
 
-`DamageTracker` moved from `flui-layer` to `flui-engine/src/damage.rs`, crate-private:
+`DamageTracker` moved from `flui-layer` to `flui-engine/src/frame/damage.rs`, crate-private:
 it is the renderer's runtime state, and the layer crate defines only the seam message
 `DamageRegion`. The tracker keeps the seam's `Region` of up to eight disjoint rects, and a partial
 frame redraws it rect by rect or under its bounding box, whichever ADR-0304 §9 predicts costs

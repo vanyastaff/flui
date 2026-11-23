@@ -28,6 +28,14 @@
 //! Each action and expectation panics at its caller with what it was looking
 //! for and what the window showed instead; its `try_` twin returns the same
 //! account as a [`TestError`].
+//!
+//! # Vocabulary
+//!
+//! [`Locator`], [`Match`], [`Pick`], [`StateFilter`], [`TextMatch`], [`Node`], [`Tree`],
+//! [`Role`], [`InspectField`], [`InspectNode`], [`InspectReading`], [`InspectValue`],
+//! [`LogicalPoint`] and [`LogicalRect`] are the agent protocol's types
+//! (`flui_protocol`), re-exported here so a scenario and the agent speak one
+//! vocabulary.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -39,21 +47,24 @@ use flui_protocol::method::{
 };
 use flui_protocol::{
     act::Actionability, act::ActionabilityCheck, act::ActionabilityParams, error::ErrorObject,
-    geometry::LogicalPoint, geometry::LogicalRect, input::ActionSequence, input::ImeAction,
-    input::InputParams, input::InputSource, input::KeyAction, input::PointerAction,
-    input::PointerButton, input::PointerDevice, inspect::InspectParams, inspect::InspectReading,
-    locator::LocateParams, locator::Locator, locator::Match, session::WindowParams,
-    tree::ElementId, tree::Node, tree::ReadParams, tree::Tree, tree::TreeDiagnostic, tree::outline,
-    wire::Checked, wire::Role,
+    input::ActionSequence, input::ImeAction, input::InputParams, input::InputSource,
+    input::KeyAction, input::PointerAction, input::PointerButton, input::PointerDevice,
+    inspect::InspectParams, locator::LocateParams, session::WindowParams, tree::ElementId,
+    tree::ReadParams, tree::TreeDiagnostic, tree::outline, wire::Checked,
+};
+// The agent protocol's types that `Tester` takes and returns (see the module docs).
+pub use flui_protocol::{
+    geometry::LogicalPoint, geometry::LogicalRect, inspect::InspectField, inspect::InspectNode,
+    inspect::InspectReading, inspect::InspectValue, locator::Locator, locator::Match,
+    locator::Pick, locator::StateFilter, locator::TextMatch, tree::Node, tree::Tree, wire::Role,
 };
 use flui_runtime::owner_turn::CloseRequestHandler;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::{CloseReason, View};
 use parking_lot::Mutex;
 
-use crate::host::{AppRegistrations, KitStorage};
+use crate::host::{AppRegistrations, HeadlessDevAgent, HeadlessHost, HeadlessWindow, KitStorage};
 use crate::storage::{MemoryStorage, RunId};
-use crate::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 
 /// One frame at 60 Hz: what [`Tester::pump`] advances and what an action or
 /// an expectation waits per frame the application asks for.
@@ -385,6 +396,7 @@ impl From<ErrorObject> for TestError {
 }
 
 /// Keeps the windows the host hands its development agent.
+// `Arc<Mutex>`: `DevAgentHook` is `Send`.
 struct Windows(Arc<Mutex<Vec<AgentWindow>>>);
 
 impl DevAgentHook for Windows {
@@ -401,7 +413,8 @@ impl DevAgentHook for Windows {
 /// `flutter_test`'s `WidgetTester`.
 ///
 /// ```
-/// use flui_testing::{Tester, find};
+/// use flui_testing::find;
+/// use flui_testing::tester::Tester;
 /// use flui_widgets::{Center, Text};
 ///
 /// let mut t = Tester::mount(Center::new().child(Text::new("Hello")));
@@ -578,7 +591,7 @@ impl Tester {
 
     /// The clock the application reads: frames, gesture deadlines and timers.
     #[must_use]
-    pub fn clock(&self) -> &crate::HostClock {
+    pub fn clock(&self) -> &crate::host::HostClock {
         self.host.clock()
     }
 
@@ -833,7 +846,7 @@ impl Tester {
                 }
             };
             // The frame is the first slot of the version's root, as the sink
-            // reads it ([`HeadlessSink::layer_tree`](crate::HeadlessSink::layer_tree)).
+            // reads it ([`HeadlessSink::layer_tree`](crate::host::HeadlessSink::layer_tree)).
             let commands = self.host.sink().version().and_then(|version| {
                 let frame = version.node(version.root())?.content().slots().next()?;
                 Some(scene_commands(version, frame, |painter| {

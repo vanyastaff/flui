@@ -31,8 +31,10 @@
 //! host; the Wayland backend (`text::linux::wayland`) supplies the wire.
 
 use std::cell::{Cell, RefCell};
+use std::num::NonZeroU64;
 use std::rc::{Rc, Weak};
 
+use flui_foundation::IdMint;
 use flui_foundation::geometry::Bounds;
 use flui_platform::text::store::utf16::{self, Utf16Offset, Utf16Range};
 use flui_platform::text::store::{
@@ -360,6 +362,11 @@ impl Preedit {
     }
 }
 
+/// One `enable` of a client's wire, minted by its client and compared only
+/// with that client's own: a grant made under one acts only while it holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Session(NonZeroU64);
+
 /// What the compositor sent since the last `done`, applied at the next.
 #[derive(Debug, Default)]
 struct Pending {
@@ -377,9 +384,13 @@ pub(crate) struct TextInputClient {
     wire: RefCell<Option<Rc<dyn TextInputWire>>>,
     /// Whether `enable` was sent on the wire since it entered.
     enabled: Cell<bool>,
-    /// Counts each `enable`: a grant made under one acts on the wire only
-    /// while the same one holds, never on the field that took focus since.
-    session: Cell<u64>,
+    /// The `enable` the wire is under, `None` before the first: a grant made
+    /// under one acts on the wire only while the same one holds, never on
+    /// the field that took focus since.
+    session: Cell<Option<Session>>,
+    /// The sessions' mint. Exhausted, it enables no more: the field goes
+    /// without the input method ([`Self::enable_on`]).
+    sessions: IdMint<NonZeroU64>,
     /// The content type the input method was last told under this
     /// `enable`.
     content: Cell<Option<ContentType>>,
@@ -533,7 +544,8 @@ impl TextInputClient {
             focused: RefCell::new(None),
             wire: RefCell::new(None),
             enabled: Cell::new(false),
-            session: Cell::new(0),
+            session: Cell::new(None),
+            sessions: IdMint::new(),
             content: Cell::new(None),
             pending: RefCell::new(Pending::default()),
             queue: HostQueue::new(),
@@ -702,9 +714,9 @@ impl TextInputClient {
         });
     }
 
-    /// The wire while the `enable` counted `session` holds: the field it
+    /// The wire while the `enable` of `session` holds: the field it
     /// enabled still has focus and the seat is still in the window.
-    fn wire_of(&self, session: u64) -> Option<Rc<dyn TextInputWire>> {
+    fn wire_of(&self, session: Option<Session>) -> Option<Rc<dyn TextInputWire>> {
         self.wire()
             .filter(|_| self.enabled.get() && self.session.get() == session)
     }
@@ -721,10 +733,7 @@ impl TextInputClient {
         };
         let store = self.focused().filter(|_| !self.retired.get());
         match (store, self.enabled.get()) {
-            (Some(store), false) => {
-                self.enabled.set(true);
-                self.enable_on(&wire, &store);
-            }
+            (Some(store), false) => self.enable_on(&wire, &store),
             (None, true) => {
                 self.enabled.set(false);
                 wire.disable();
@@ -734,9 +743,25 @@ impl TextInputClient {
         }
     }
 
-    /// Send `enable` and the state of `store` on `wire`.
+    /// Send `enable` and the state of `store` on `wire`, under a session of
+    /// its own.
+    ///
+    /// Once the sessions are exhausted no `enable` is sent: a wire enabled
+    /// before is disabled, and the field goes without the input method (its
+    /// keys arrive as typed), so no grant made under an earlier `enable`
+    /// finds the wire.
     fn enable_on(&self, wire: &Rc<dyn TextInputWire>, store: &Rc<dyn TextStore>) {
-        self.session.set(self.session.get().wrapping_add(1));
+        let Ok(session) = self.sessions.next().map(Session) else {
+            self.session.set(None);
+            if self.enabled.replace(false) {
+                wire.disable();
+                wire.commit();
+            }
+            tracing::warn!("the input method's sessions are exhausted: the field goes without it");
+            return;
+        };
+        self.enabled.set(true);
+        self.session.set(Some(session));
         // A batch the input method sent before this `enable` was for the
         // field it served then: its `done` applies nothing here.
         *self.pending.borrow_mut() = Pending::default();

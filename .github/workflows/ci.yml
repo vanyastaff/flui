@@ -1497,17 +1497,8 @@ jobs:
       # The surface-ownership drop order (ADR-0063, issue #1043): a generic
       # `SurfaceLease` fixture observes the surface dropping before its target.
       # The lib target links wgpu, but this test never enters GPU code.
-      - name: cargo miri test (surface_lease)
-        run: cargo +nightly miri test -p flui-engine --lib --locked surface_lease
-
-      # The cancellation oracle for `Renderer::new` (issue #1149): drives the
-      # production `probe_then_build` seam with a builder that suspends
-      # forever, then releases the external owner and observes target destruction
-      # after dropping the future. GPU-free by construction — the
-      # synthetic builder is what keeps wgpu out of the path, since a first
-      # poll of the production builder enters `wgpu::Instance::new`.
-      - name: cargo miri test (cancelling_renderer_new)
-        run: cargo +nightly miri test -p flui-engine --lib --locked cancelling_renderer_new
+      - name: cargo miri test (surface::lease)
+        run: cargo +nightly miri test -p flui-engine --lib --locked surface::lease
 
   # ─────────────────────────────────────────────────────────────────────────
   # test-without-agent — flui-app's agent tests in a build without debug

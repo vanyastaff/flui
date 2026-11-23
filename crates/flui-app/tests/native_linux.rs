@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use flui_app::app::{AppConfig, AppHandle, Application};
+use flui_app::{AppConfig, AppHandle, Application};
 use flui_foundation::Leaf;
 use flui_foundation::geometry::Size;
 use flui_rendering::{

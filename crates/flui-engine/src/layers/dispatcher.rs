@@ -1,0 +1,1196 @@
+//! `LayerDispatcher`, the engine's one implementation of `CommandRenderer` and
+//! `LayerStateStack`: it forwards each `DrawCommand` and each layer push/pop of
+//! the walk to a [`WgpuPainter`], which records it. Nothing is drawn here; the
+//! GPU target and effects are chosen later, at replay.
+
+use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
+use flui_painting::{paint::BlendMode, paint::Paint, paint::PointMode};
+use flui_painting::{
+    paint::{Image, Path},
+    styling::Color,
+};
+use smallvec::SmallVec;
+
+use std::sync::Arc;
+
+use crate::{layers::command_renderer::CommandRenderer, layers::state_stack::LayerStateStack};
+use crate::{
+    painter::WgpuPainter,
+    record::command_ir::GroupClip,
+    record::command_ir::{GammaDirection, ImageFilterPass, ImageFilterSpec, LayerFilter, MorphOp},
+};
+
+/// wgpu backend implementation of CommandRenderer.
+///
+/// Borrows the recorder only. GPU target and effects are selected during replay.
+pub(crate) struct LayerDispatcher<'frame> {
+    painter: &'frame mut WgpuPainter,
+    /// Cached command matrix and the ambient CTM it temporarily replaces.
+    /// Switching commands restores only the CTM: clips captured by commands
+    /// remain active until an explicit scope restore. Layer boundaries flush
+    /// the command transform before changing their ambient state.
+    active_transform: Option<CommandTransform>,
+    /// One entry per clip layer that is currently open, innermost last.
+    ///
+    /// [`LayerStateStack::pop_clip`] serves all three `push_clip_*` variants
+    /// and takes no argument, so nothing in the call itself can say whether the
+    /// matching push opened an offscreen. This stack is the only thing that
+    /// can, and [`LayerDispatcher::open_clip_frame`] is the only writer: it performs
+    /// the open and records it in the same call, so a push cannot open a layer
+    /// it did not record or record one it did not open.
+    clip_frames: Vec<ClipFrame>,
+    /// How many times a command's transform was compared with the installed
+    /// one by value, which a test reads to see the address test answer first.
+    #[cfg(test)]
+    value_comparisons: std::cell::Cell<usize>,
+}
+
+struct CommandTransform {
+    matrix: Matrix4,
+    /// The entry of the list the matrix was read from. Commands under one
+    /// entry yield the same reference (ADR-0306 §5), so a command whose
+    /// transform is this address skips the value comparison. The address is
+    /// only compared, never read, and only while its list is borrowed: a
+    /// list's dispatch opens and closes with `save_state` and
+    /// `restore_state`, which flush the installed transform, and so does the
+    /// scene walk at every node it enters and leaves.
+    source: *const Matrix4,
+    parent: Matrix4,
+}
+
+/// What one `push_clip_*` did to the painter, and therefore what the matching
+/// `pop_clip` must undo.
+///
+/// The variants name painter operations rather than clip modes on purpose:
+/// `pop_clip` does not need to know which `Clip` was asked for, only what is
+/// open.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ClipFrame {
+    /// `painter.save()` — balanced by `painter.restore()`.
+    Save,
+    /// `painter.save()` then `painter.save_layer_clipped(..)` — balanced by
+    /// `painter.restore_layer()` and then `painter.restore()`, in that order.
+    SaveLayer,
+}
+
+impl<'frame> LayerDispatcher<'frame> {
+    /// Create a new LayerDispatcher that borrows the given painter for the frame.
+    ///
+    pub(crate) fn new(painter: &'frame mut WgpuPainter) -> Self {
+        Self {
+            painter,
+            active_transform: None,
+            clip_frames: Vec::new(),
+            #[cfg(test)]
+            value_comparisons: std::cell::Cell::new(0),
+        }
+    }
+
+    /// Get a reference to the underlying painter.
+    pub(crate) fn painter(&self) -> &WgpuPainter {
+        self.painter
+    }
+
+    /// Get a mutable reference to the underlying painter.
+    pub(crate) fn painter_mut(&mut self) -> &mut WgpuPainter {
+        &mut *self.painter
+    }
+
+    /// Whether this push will render its subtree into an offscreen.
+    ///
+    /// Answered ONCE per push, before anything is installed, because two halves
+    /// depend on it and must agree: which clip call installs the content's clip
+    /// (per draw, or the bounding scissor alone with the rounded coverage saved
+    /// for the composite), and what [`LayerStateStack::pop_clip`] closes.
+    /// Deciding it after installing would leave a refused layer's content
+    /// clipped by its bounding box with the coverage dropped on the floor —
+    /// worse than either answer.
+    ///
+    /// The mode must ask for it ([`clip_opens_a_layer`]).
+    ///
+    /// Every one of the four `push_clip_*` sites installs a clip, so there is no
+    /// additional condition asking whether one landed: a mode that asks for NO clip
+    /// is refused a layer earlier, by [`clip_is_disabled`] on the canvas route
+    /// and by the layer's own `clips()` gate on the layer route. See
+    /// `ARCHITECTURE.md` for why that condition once existed and what removing
+    /// it proved.
+    fn opens_offscreen(behavior: flui_painting::paint::Clip) -> bool {
+        clip_opens_a_layer(behavior)
+    }
+
+    /// Open the offscreen a clip asked for, if it asked for one, and record the
+    /// frame [`LayerStateStack::pop_clip`] will close.
+    ///
+    /// `Some(clip)` means the push wants the offscreen and `clip` is the
+    /// coverage its group composite applies — see
+    /// [`WgpuPainter::save_layer_clipped`]. The group's complete inherited
+    /// expression applies at composite; child runs carry their local suffix.
+    /// `None` means the push installed its clip per draw and wants no layer.
+    ///
+    /// The only writer of `clip_frames`. The open and the record happen here, on
+    /// the two sides of one `if`, so they cannot be set apart: no caller can
+    /// record a `SaveLayer` without opening one, or open one without recording
+    /// it.
+    fn open_clip_frame(&mut self, composite_clip: Option<GroupClip>) {
+        let frame = if let Some(clip) = composite_clip {
+            // The clip's own scissor, which the caller has just installed: the
+            // clip's device-space bounds already intersected with every
+            // ancestor's, and a bound on everything the offscreen can hold.
+            let bounds = self.painter.clip_bounds();
+            self.painter.save_layer_clipped(clip, bounds);
+            ClipFrame::SaveLayer
+        } else {
+            ClipFrame::Save
+        };
+        self.clip_frames.push(frame);
+    }
+
+    /// Install a command's absolute matrix relative to the ambient layer CTM.
+    /// Consecutive equal matrices reuse the installed CTM. This changes no
+    /// clip or save-stack state: a clip is frozen at its command's transform,
+    /// independently of transforms used by subsequent drawing commands.
+    fn with_transform<F>(&mut self, transform: &Matrix4, draw_fn: F)
+    where
+        F: FnOnce(&mut WgpuPainter),
+    {
+        if transform.is_identity() {
+            self.flush_active_transform();
+            draw_fn(self.painter);
+            return;
+        }
+
+        if let Some(active) = &self.active_transform
+            && (std::ptr::eq(active.source, transform)
+                || self.same_value(&active.matrix, transform))
+        {
+            draw_fn(self.painter);
+            return;
+        }
+
+        self.flush_active_transform();
+        let parent = self.painter.current_transform_matrix();
+        self.painter.transform(transform);
+        self.active_transform = Some(CommandTransform {
+            matrix: *transform,
+            source: transform,
+            parent,
+        });
+        draw_fn(self.painter);
+    }
+
+    /// How many times a command's transform was compared with the installed
+    /// one by value.
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn value_comparisons(&self) -> usize {
+        self.value_comparisons.get()
+    }
+
+    /// Whether the installed matrix equals `transform` by value: the test for
+    /// a command under another entry that holds the same matrix.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "only a test build counts the comparisons on self"
+        )
+    )]
+    fn same_value(&self, installed: &Matrix4, transform: &Matrix4) -> bool {
+        #[cfg(test)]
+        self.value_comparisons.set(self.value_comparisons.get() + 1);
+        installed == transform
+    }
+
+    /// Return to the ambient layer CTM without restoring captured clips.
+    pub(crate) fn flush_active_transform(&mut self) {
+        if let Some(active) = self.active_transform.take() {
+            self.painter.restore_transform(&active.parent);
+        }
+    }
+}
+
+impl Drop for LayerDispatcher<'_> {
+    /// Restore the ambient CTM before returning the borrowed painter.
+    fn drop(&mut self) {
+        self.flush_active_transform();
+    }
+}
+
+/// Whether a clip layer's mode wants a hard boundary.
+///
+/// `HardEdge` is the scissor for a rect, and a thresholded SDF for a rounded
+/// one. `AntiAlias` feathers.
+///
+/// `None` is **not** handled here: it means "do not clip at all", and mapping
+/// it to any rounding would clip. It is filtered by [`clip_is_disabled`] before
+/// this is consulted. A render object choosing `Clip::None` pushes no clip
+/// LAYER, which is what made this look unreachable — but `Canvas::clip_rect_with`
+/// and its siblings emit a `DrawCommand` unconditionally, so the canvas path
+/// reaches it with any mode the caller passes.
+///
+/// `AntiAliasWithSaveLayer` answers `false`, and that is right as far as this
+/// question goes — the mode is anti-aliased. What distinguishes it from
+/// `AntiAlias` is decided by [`clip_opens_a_layer`] instead: its coverage is
+/// applied once, to a group composite, rather than per draw. `push_clip_rrect`
+/// therefore never consults this function for that mode.
+///
+/// The CANVAS clip commands (`clip_rect` / `clip_rrect` / `clip_rsuperellipse`
+/// on the `CommandRenderer` impl, the `DrawCommand` path) still do, and for them
+/// the mode really is approximated by `AntiAlias`. The natural shape for it
+/// on a canvas — clip anti-aliased, then `saveLayer` — would here be a
+/// `save_layer_alpha(.., 255)`, but that layer composites at opacity 1.0 with a
+/// white tint and `SrcOver`, which `LayerCompositor::pop_layer` reintegrates
+/// rather than compositing, and a group composited that way is arithmetically
+/// identical to drawing straight through. Tying the two commands together needs
+/// a `DrawCommand` carrying the clip and the layer as one, which is a change to
+/// the canvas vocabulary rather than to this backend, so the approximation
+/// stands. No in-repo caller reaches it: `RenderClip` and `RenderPhysicalModel` both
+/// paint through `PaintContext::with_clip_*`, which pushes a clip LAYER.
+/// Whether a clip layer's mode asks for an offscreen around the clipped
+/// subtree.
+///
+/// `AntiAliasWithSaveLayer` and nothing else. That mode renders the clipped
+/// subtree into an offscreen so the group composites against the clip edge
+/// ONCE; applying the coverage per draw instead makes the edge darker or more
+/// opaque wherever the content overlaps itself, because each draw is attenuated
+/// by the clip and then blended over an already-attenuated one. The offscreen
+/// is also what isolates a destructive or advanced blend inside the clip from
+/// the backdrop behind it — a semantic change, not a side effect.
+///
+/// Image filters preserve ordered nested layers, so this mode also opens an
+/// offscreen inside a filter.
+const fn clip_opens_a_layer(behavior: flui_painting::paint::Clip) -> bool {
+    matches!(behavior, flui_painting::paint::Clip::AntiAliasWithSaveLayer)
+}
+
+/// Whether a clip command asks for no clipping at all.
+///
+/// `Clip::None` reaching a clip call is not a contradiction: the layer path
+/// never emits one, but `Canvas::clip_rect_with` / `clip_rrect_with` /
+/// `clip_rsuperellipse_with` push their command whatever mode they are given.
+/// Honouring it means applying NO clip — the alternative, treating it as the
+/// cheapest clip, clips content the caller asked to leave alone.
+const fn clip_is_disabled(behavior: flui_painting::paint::Clip) -> bool {
+    matches!(behavior, flui_painting::paint::Clip::None)
+}
+
+fn recorded_clip_op(op: flui_painting::paint::ClipOp) -> crate::record::clip_chain::ClipOp {
+    match op {
+        flui_painting::paint::ClipOp::Intersect => crate::record::clip_chain::ClipOp::Intersect,
+        flui_painting::paint::ClipOp::Difference => crate::record::clip_chain::ClipOp::Difference,
+    }
+}
+
+impl CommandRenderer for LayerDispatcher<'_> {
+    fn render_rect(&mut self, rect: Rect<f64>, paint: &Paint, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            painter.draw_rect(rect, paint);
+        });
+    }
+
+    fn render_rrect(&mut self, rrect: RRect, paint: &Paint, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            painter.draw_rrect(rrect, paint);
+        });
+    }
+
+    fn render_circle(
+        &mut self,
+        center: Point<f64>,
+        radius: f32,
+        paint: &Paint,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| {
+            painter.draw_circle(center, radius, paint);
+        });
+    }
+
+    fn render_oval(&mut self, rect: Rect<f64>, paint: &Paint, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            painter.draw_oval(rect, paint);
+        });
+    }
+
+    fn render_line(&mut self, p1: Point<f64>, p2: Point<f64>, paint: &Paint, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            painter.draw_line(p1, p2, paint);
+        });
+    }
+
+    fn render_path(&mut self, path: &Path, paint: &Paint, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            painter.draw_path(path, paint);
+        });
+    }
+
+    fn render_arc(
+        &mut self,
+        rect: Rect<f64>,
+        start_angle: f32,
+        sweep_angle: f32,
+        use_center: bool,
+        paint: &Paint,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| {
+            painter.draw_arc(rect, start_angle, sweep_angle, use_center, paint);
+        });
+    }
+
+    fn render_drrect(&mut self, outer: RRect, inner: RRect, paint: &Paint, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            painter.draw_drrect(outer, inner, paint);
+        });
+    }
+
+    fn render_points(
+        &mut self,
+        mode: PointMode,
+        points: &[Point<f64>],
+        paint: &Paint,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| match mode {
+            PointMode::Points => {
+                let radius = paint.stroke_width / 2.0;
+                for point in points {
+                    painter.draw_circle(*point, radius as f32, paint);
+                }
+            }
+            PointMode::Lines => {
+                for i in (0..points.len()).step_by(2) {
+                    if i + 1 < points.len() {
+                        painter.draw_line(points[i], points[i + 1], paint);
+                    }
+                }
+            }
+            PointMode::Polygon => {
+                for i in 0..points.len().saturating_sub(1) {
+                    painter.draw_line(points[i], points[i + 1], paint);
+                }
+                if points.len() > 2 {
+                    painter.draw_line(points[points.len() - 1], points[0], paint);
+                }
+            }
+        });
+    }
+
+    fn render_paragraph(
+        &mut self,
+        paragraph: &Arc<flui_painting::ShapedParagraph>,
+        offset: Offset<f64>,
+        color: Color,
+        transform: &Matrix4,
+    ) {
+        let position = Point::new(offset.dx, offset.dy);
+        self.with_transform(transform, |painter| {
+            painter.draw_paragraph(Arc::clone(paragraph), position, color);
+        });
+    }
+
+    fn render_paragraph_shadow(
+        &mut self,
+        paragraph: &Arc<flui_painting::ShapedParagraph>,
+        offset: Offset<f64>,
+        color: Color,
+        sigma: flui_painting::BlurSigma,
+        transform: &Matrix4,
+    ) {
+        let position = Point::new(offset.dx, offset.dy);
+        self.with_transform(transform, |painter| {
+            painter.draw_paragraph_shadow(paragraph, position, color, sigma);
+        });
+    }
+
+    fn render_image(
+        &mut self,
+        image: &Image,
+        dst: Rect<f64>,
+        paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
+        self.render_image_region(
+            image,
+            Rect::from_xywh(
+                0.0,
+                0.0,
+                f64::from(image.width()),
+                f64::from(image.height()),
+            ),
+            dst,
+            None,
+            flui_painting::paint::ImageRepeat::NoRepeat,
+            None,
+            paint,
+            transform,
+        );
+    }
+
+    fn render_image_region(
+        &mut self,
+        image: &Image,
+        src: Rect<f64>,
+        dst: Rect<f64>,
+        tile: Option<Rect<f64>>,
+        repeat: flui_painting::paint::ImageRepeat,
+        filter: Option<flui_painting::paint::ColorFilter>,
+        paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| {
+            painter.draw_image_region(image, src, dst, tile, repeat, filter, paint);
+        });
+    }
+
+    fn render_atlas(
+        &mut self,
+        image: &Image,
+        sprites: &[Rect<f64>],
+        transforms: &[Matrix4],
+        colors: Option<&[Color]>,
+        blend_mode: BlendMode,
+        paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
+        let tint = Paint::fill(paint.map_or(Color::WHITE, |p| p.color)).with_blend_mode(blend_mode);
+        self.with_transform(transform, |painter| {
+            painter.draw_atlas_painted(image, sprites, transforms, colors, Some(&tint));
+        });
+    }
+
+    fn render_image_repeat(
+        &mut self,
+        image: &Image,
+        dst: Rect<f64>,
+        repeat: flui_painting::paint::ImageRepeat,
+        paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
+        self.render_image_region(
+            image,
+            Rect::from_xywh(
+                0.0,
+                0.0,
+                f64::from(image.width()),
+                f64::from(image.height()),
+            ),
+            dst,
+            None,
+            repeat,
+            None,
+            paint,
+            transform,
+        );
+    }
+
+    fn render_image_nine_slice(
+        &mut self,
+        image: &Image,
+        center_slice: Rect<f64>,
+        dst: Rect<f64>,
+        paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| {
+            painter.draw_image_nine_slice_painted(image, center_slice, dst, paint);
+        });
+    }
+
+    fn render_image_filtered(
+        &mut self,
+        image: &Image,
+        dst: Rect<f64>,
+        filter: flui_painting::paint::ColorFilter,
+        paint: Option<&Paint>,
+        transform: &Matrix4,
+    ) {
+        self.render_image_region(
+            image,
+            Rect::from_xywh(
+                0.0,
+                0.0,
+                f64::from(image.width()),
+                f64::from(image.height()),
+            ),
+            dst,
+            None,
+            flui_painting::paint::ImageRepeat::NoRepeat,
+            Some(filter),
+            paint,
+            transform,
+        );
+    }
+
+    fn render_texture(
+        &mut self,
+        texture_id: flui_painting::paint::TextureId,
+        dst: Rect<f64>,
+        src: Option<Rect<f64>>,
+        filter_quality: flui_painting::paint::FilterQuality,
+        opacity: f32,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| {
+            painter.draw_texture(texture_id, dst, src, filter_quality, opacity);
+        });
+    }
+
+    fn render_shadow(&mut self, path: &Path, color: Color, elevation: f32, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            painter.draw_shadow(path, color, elevation);
+        });
+    }
+
+    fn render_color(&mut self, color: Color, blend_mode: BlendMode, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            let viewport_bounds = painter.viewport_bounds();
+            // Carry the command's blend mode so the full-viewport fill composites
+            // correctly (e.g. `DrawColor` with `Clear` punches out the layer).
+            let paint = Paint::fill(color).with_blend_mode(blend_mode);
+            painter.draw_rect(viewport_bounds, &paint);
+        });
+    }
+
+    fn render_paint(&mut self, paint: &Paint, transform: &Matrix4) {
+        self.with_transform(transform, |painter| {
+            let viewport_bounds = painter.viewport_bounds();
+            painter.draw_rect(viewport_bounds, paint);
+        });
+    }
+
+    fn render_vertices(
+        &mut self,
+        vertices: &[Point<f64>],
+        colors: Option<&[Color]>,
+        tex_coords: Option<&[Point<f64>]>,
+        indices: &[u16],
+        paint: &Paint,
+        transform: &Matrix4,
+    ) {
+        self.with_transform(transform, |painter| {
+            painter.draw_vertices(vertices, colors, tex_coords, indices, paint);
+        });
+    }
+
+    fn clip_rect(
+        &mut self,
+        rect: Rect<f64>,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
+        transform: &Matrix4,
+    ) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        // The `Clip` MODE rides through; the painter decides how each shape
+        // honours it (see `WgpuPainter::clip_rect` for the one that cannot).
+        self.with_transform(transform, |painter| {
+            painter.clip_rect_operation(rect, clip_behavior, recorded_clip_op(clip_op));
+        });
+    }
+
+    fn clip_rrect(
+        &mut self,
+        rrect: RRect,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
+        transform: &Matrix4,
+    ) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        self.with_transform(transform, |painter| {
+            painter.clip_rrect_operation(rrect, clip_behavior, recorded_clip_op(clip_op));
+        });
+    }
+
+    fn clip_rsuperellipse(
+        &mut self,
+        rsuperellipse: flui_foundation::geometry::RSuperellipse,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
+        transform: &Matrix4,
+    ) {
+        // Override the trait default (which routes to clip_rrect against an
+        // approximating rounded rectangle). Delegate to the Painter's real
+        // SDF clip, populating `current_rsuperellipse_clip` so subsequent
+        // rect_instanced draws apply the iOS-squircle SDF via the
+        // per-instance kind=2 path.
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        self.with_transform(transform, |painter| {
+            painter.clip_rsuperellipse_operation(
+                rsuperellipse,
+                clip_behavior,
+                recorded_clip_op(clip_op),
+            );
+        });
+    }
+
+    fn clip_path(
+        &mut self,
+        path: &Path,
+        clip_op: flui_painting::paint::ClipOp,
+        clip_behavior: flui_painting::paint::Clip,
+        transform: &Matrix4,
+    ) {
+        // `Clip::None` asks for no clipping, and this is where the three sibling
+        // shapes honour it. `Canvas`'s whole `_ext` family refuses the mode
+        // before recording a command, so none of the four guards is reachable
+        // from the only producer in the tree today — they are the second half
+        // of a two-sided invariant, held here so a future producer of
+        // `DrawOp::ClipPath` cannot make this the one entry point that
+        // honours "do not clip" by clipping. Omitting it from this arm alone
+        // would be the asymmetry, not the guard.
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        self.with_transform(transform, |painter| {
+            painter.clip_path_operation(path, clip_behavior, recorded_clip_op(clip_op));
+        });
+    }
+
+    fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint, transform: &Matrix4) {
+        self.save_state();
+        // `bounds` are in the command's local space; the painter maps them
+        // through the transform installed here into the layer's device region.
+        self.with_transform(transform, |painter| {
+            painter.save_layer(bounds, paint);
+        });
+    }
+
+    fn restore_layer(&mut self, _transform: &Matrix4) {
+        self.flush_active_transform();
+        self.painter.restore_layer();
+        self.restore_state();
+    }
+
+    fn save_state(&mut self) {
+        // A scope captures ambient state, not a preceding command's CTM.
+        self.flush_active_transform();
+        self.painter.save();
+    }
+
+    fn restore_state(&mut self) {
+        // Clear the command override before restoring the saved scope.
+        self.flush_active_transform();
+        self.painter.restore();
+    }
+
+    // ===== Layer Tree Operations =====
+    //
+    // push_clip_* / push_offset / push_transform / push_opacity /
+    // push_color_filter / push_image_filter and their corresponding pop_*
+    // methods live in `impl LayerStateStack for LayerDispatcher` (below), not in
+    // this `CommandRenderer` impl. The visitor methods stay on this trait;
+    // the layer-tree state-stack methods live on the dedicated
+    // `LayerStateStack` trait. See the doc comment on that trait in
+    // traits.rs for why.
+}
+
+// ============================================================================
+// LAYER-STATE-STACK IMPL
+// ============================================================================
+//
+// The 13 push_/pop_ methods below are the `LayerStateStack` half of the
+// dispatcher: the layer walk mirrors a layer tree's nesting onto the painter's
+// state stack through them, while `CommandRenderer` carries the per-command
+// vocabulary (`crates/flui-engine/src/layers/state_stack.rs`).
+
+impl LayerStateStack for LayerDispatcher<'_> {
+    // Layer scopes operate on the ambient CTM. Flush the command override
+    // before changing a scope, leaving captured command clips untouched.
+
+    fn push_clip_rect(&mut self, rect: &Rect<f64>, clip_behavior: flui_painting::paint::Clip) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        self.flush_active_transform();
+        self.painter.save();
+        self.painter.clip_rect(*rect, clip_behavior);
+        // Move inherited coverage to the finished group.
+        let composite_clip =
+            Self::opens_offscreen(clip_behavior).then(|| self.painter.captured_group_clip());
+        self.open_clip_frame(composite_clip);
+    }
+
+    fn push_clip_rrect(&mut self, rrect: &RRect, clip_behavior: flui_painting::paint::Clip) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        self.flush_active_transform();
+        self.painter.save();
+        // Decided BEFORE installing anything: the two calls below clip the
+        // content differently, and picking the wrong one because the layer was
+        // refused afterwards would drop the rounded coverage entirely.
+        let composite_clip = if Self::opens_offscreen(clip_behavior) {
+            // Child runs start with an empty inherited prefix.
+            Some(self.painter.clip_rrect_at_composite(*rrect))
+        } else {
+            self.painter.clip_rrect(*rrect, clip_behavior);
+            None
+        };
+        self.open_clip_frame(composite_clip);
+    }
+
+    fn push_clip_rsuperellipse(
+        &mut self,
+        rse: &flui_foundation::geometry::RSuperellipse,
+        clip_behavior: flui_painting::paint::Clip,
+    ) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        self.flush_active_transform();
+        self.painter.save();
+        // The rrect shape exactly: decided BEFORE installing anything, because
+        // the two calls below clip the content differently and picking the
+        // wrong one because the layer was refused afterwards would drop the
+        // squircle coverage entirely.
+        //
+        // The SDF is the shape itself, not an approximation of it: the
+        // rounded rectangle sharing this squircle's outer rect and radii is
+        // INSCRIBED in it, so substituting one would clip corner content the
+        // squircle keeps.
+        let composite_clip = if Self::opens_offscreen(clip_behavior) {
+            Some(self.painter.clip_rsuperellipse_at_composite(*rse))
+        } else {
+            self.painter.clip_rsuperellipse(*rse, clip_behavior);
+            None
+        };
+        self.open_clip_frame(composite_clip);
+    }
+
+    fn push_clip_path(&mut self, path: &Path, clip_behavior: flui_painting::paint::Clip) {
+        if clip_is_disabled(clip_behavior) {
+            return;
+        }
+        self.flush_active_transform();
+        self.painter.save();
+        self.painter.clip_path_operation(
+            path,
+            clip_behavior,
+            crate::record::clip_chain::ClipOp::Intersect,
+        );
+        let composite_clip =
+            Self::opens_offscreen(clip_behavior).then(|| self.painter.captured_group_clip());
+        self.open_clip_frame(composite_clip);
+    }
+
+    fn pop_clip(&mut self) {
+        self.flush_active_transform();
+        match self.clip_frames.pop() {
+            Some(ClipFrame::SaveLayer) => {
+                // Inside out: the layer was opened after the save, so it closes
+                // before it. Reversing these leaves the composite reading the
+                // parent's clip state instead of the clip's own.
+                self.painter.restore_layer();
+                self.painter.restore();
+            }
+            Some(ClipFrame::Save) => self.painter.restore(),
+            None => {
+                // An unmatched pop, and it must NOT reach the painter.
+                //
+                // `WgpuPainter::restore` leaves state unchanged only when its
+                // own stack is EMPTY. Here the clip stack ran out while the
+                // painter's may not have: an enclosing `push_offset` or
+                // `push_transform` has a save on it, and restoring would pop
+                // THAT, silently dropping a transform every later draw depends
+                // on. The clip stack is the one that underflowed, so the clip
+                // stack is the only one that reports it.
+                tracing::warn!(
+                    "LayerDispatcher::pop_clip: no clip frame is open; the layer walk emitted a \
+                     pop_clip without a matching push_clip_* -- painter state left untouched"
+                );
+            }
+        }
+    }
+
+    fn push_offset(&mut self, offset: Offset<f64>) {
+        self.flush_active_transform();
+        self.painter.save();
+        self.painter.translate(offset);
+    }
+
+    fn push_transform(&mut self, transform: &Matrix4) {
+        self.flush_active_transform();
+        self.painter.save();
+        self.painter.transform(transform);
+    }
+
+    fn pop_transform(&mut self) {
+        self.flush_active_transform();
+        self.painter.restore();
+    }
+
+    fn push_opacity(&mut self, alpha: f32) {
+        self.flush_active_transform();
+        // Keep normalized opacity continuous until composition.
+        // Blend mode defaults to SrcOver via Paint::fill.
+        let paint = Paint::fill(Color::WHITE.with_opacity(f64::from(alpha)));
+        self.painter.save_layer(None, &paint);
+    }
+
+    fn push_opacity_blend(&mut self, alpha: f32, blend: flui_painting::paint::BlendMode) {
+        self.flush_active_transform();
+        // Propagate the explicit blend mode into the saveLayer paint so the
+        // compositor reads it from `paint.blend_mode`: an advanced mode takes
+        // the dst-read path, and any other mode composites the layer's whole
+        // region (the clip, as the layer is unbounded) with its own factors.
+        let paint = Paint::fill(Color::WHITE.with_opacity(f64::from(alpha))).with_blend_mode(blend);
+        self.painter.save_layer(None, &paint);
+    }
+
+    fn pop_opacity(&mut self) {
+        self.flush_active_transform();
+        self.painter.restore_layer();
+    }
+
+    fn push_color_filter(&mut self, filter: &flui_painting::paint::ColorFilter) {
+        use flui_painting::paint::ColorFilter;
+
+        self.flush_active_transform();
+
+        match filter {
+            ColorFilter::Matrix(m) => {
+                // Identity fast-path: no-op layer keeps push/pop balanced.
+                // Exact f32 comparison is correct: `ColorMatrix::identity()` is
+                // built from bit-exact 0.0/1.0 literals, so a transitive equality
+                // check correctly skips the GPU pass without ULP slop.
+                let identity = flui_painting::paint::ColorMatrix::identity();
+                if m.values == identity.values {
+                    self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+                    tracing::trace!("push_color_filter: identity matrix — no-op layer");
+                    return;
+                }
+                // Real color-matrix: open a filter layer.  The GPU shader applies the
+                // full 5×4 matrix per-pixel (unpremul → matrix → clamp → repremul).
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::ColorMatrix(m.values));
+                tracing::trace!(
+                    matrix = ?m.values,
+                    "push_color_filter: GPU color-matrix filter layer"
+                );
+            }
+            ColorFilter::Mode { color, blend_mode } => {
+                // Blend a solid filter color over each layer pixel via the
+                // Porter-Duff / W3C blend equation.  Unpremul → blend → clamp →
+                // repremul is applied by the GPU shader.
+                self.painter.save_layer_with_filter(
+                    None,
+                    LayerFilter::Mode {
+                        color: color.to_rgba_f32_array(),
+                        blend_mode: *blend_mode,
+                    },
+                );
+                tracing::trace!(
+                    ?color,
+                    ?blend_mode,
+                    "push_color_filter: GPU mode filter layer"
+                );
+            }
+            ColorFilter::LinearToSrgbGamma => {
+                // Linear-light → sRGB-encoded transfer per RGB channel; alpha
+                // passes through unchanged.
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::Gamma(GammaDirection::LinearToSrgb));
+                tracing::trace!("push_color_filter: GPU LinearToSrgb gamma filter layer");
+            }
+            ColorFilter::SrgbToLinearGamma => {
+                // sRGB-encoded → linear-light transfer per RGB channel; alpha
+                // passes through unchanged.
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::Gamma(GammaDirection::SrgbToLinear));
+                tracing::trace!("push_color_filter: GPU SrgbToLinear gamma filter layer");
+            }
+            // `ColorFilter` is `#[non_exhaustive]`; a wildcard arm is required by
+            // the compiler.  Open a balanced no-op layer so `pop_color_filter` has a
+            // matching restore, and warn once so unknown variants surface in logs.
+            _ => {
+                tracing::warn!(
+                    "push_color_filter: unknown ColorFilter variant (future extension?) \
+                     — falling back to no-op layer to keep push/pop balanced"
+                );
+                self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+            }
+        }
+    }
+
+    fn pop_color_filter(&mut self) {
+        self.flush_active_transform();
+        self.painter.restore_layer();
+    }
+
+    fn push_image_filter(&mut self, filter: &flui_painting::paint::ImageFilter) {
+        use flui_painting::paint::ImageFilter;
+
+        self.flush_active_transform();
+        if let Err(error) = validate_image_filter_parameters(filter) {
+            self.painter.reject_image_filter_parameter(error);
+        }
+        let matrix = self.painter.current_transform_matrix().m;
+
+        match filter {
+            ImageFilter::Blur { sigma_x, sigma_y } => {
+                // Full GPU separable Gaussian blur via two H/V sub-passes
+                // (premultiplied-direct, sRGB-encoded, √3·σ kernel).
+                self.painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Blur {
+                        sigma_x: (*sigma_x as f32),
+                        sigma_y: (*sigma_y as f32),
+                    });
+                tracing::trace!(
+                    sigma_x,
+                    sigma_y,
+                    "push_image_filter(Blur): GPU Gaussian blur layer opened"
+                );
+            }
+            ImageFilter::Dilate { radius } => {
+                self.painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Morph {
+                        radius: (*radius as f32),
+                        op: MorphOp::Dilate,
+                    });
+                tracing::trace!(
+                    radius,
+                    "push_image_filter(Dilate): GPU morphology dilate layer opened"
+                );
+            }
+            ImageFilter::Erode { radius } => {
+                self.painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Morph {
+                        radius: (*radius as f32),
+                        op: MorphOp::Erode,
+                    });
+                tracing::trace!(
+                    radius,
+                    "push_image_filter(Erode): GPU morphology erode layer opened"
+                );
+            }
+            ImageFilter::Matrix(matrix) => {
+                // Full GPU color-matrix pass — no approximation.
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::ColorMatrix(matrix.values));
+                tracing::trace!(
+                    matrix = ?matrix.values,
+                    "push_image_filter(Matrix): GPU color-matrix filter layer"
+                );
+            }
+            ImageFilter::ColorAdjust(adjustment) => {
+                // Promote to a color matrix so the same GPU pass handles it.
+                let matrix = adjustment.to_color_matrix();
+                self.painter
+                    .save_layer_with_filter(None, LayerFilter::ColorMatrix(matrix.values));
+                tracing::trace!(
+                    ?adjustment,
+                    "push_image_filter(ColorAdjust): GPU color-matrix filter layer"
+                );
+            }
+            ImageFilter::Compose(filters) => {
+                // Flatten the AST at record time (depth-first, left-to-right =
+                // inner-first).  The resulting flat `passes` vec is
+                // carried by `ImageFilterSpec::Chain` and handed to `restore_layer`,
+                // which emits a single `DrawItem::Filter` with `cumulative_growth`
+                // bounds and the full ordered chain.
+                let mut passes: SmallVec<[ImageFilterPass; 4]> = SmallVec::new();
+                if let Err(error) = flatten_compose(filters, &matrix, &mut passes) {
+                    self.painter.reject_image_filter(error);
+                    passes.clear();
+                }
+
+                if passes.is_empty() {
+                    // Degenerate empty Compose — no filter math to apply.  Open a
+                    // plain group layer so that save/restore remains balanced without
+                    // emitting a `DrawItem::Filter` for a zero-length chain.
+                    let paint = Paint::fill(Color::WHITE);
+                    self.painter.save_layer(None, &paint);
+                    tracing::trace!(
+                        "push_image_filter(Compose): empty Compose — opened plain group"
+                    );
+                } else {
+                    self.painter
+                        .save_layer_with_image_filter(ImageFilterSpec::Chain(passes));
+                    tracing::trace!(
+                        "push_image_filter(Compose): {} flattened passes",
+                        filters.len(),
+                    );
+                }
+            }
+            ImageFilter::Transform {
+                transform,
+                sampling,
+            } => match transform_pass(transform, *sampling, &matrix) {
+                Ok(pass) => self
+                    .painter
+                    .save_layer_with_image_filter(ImageFilterSpec::Chain(smallvec::smallvec![
+                        pass
+                    ])),
+                Err(error) => {
+                    // The frame fails; a plain group keeps save/restore balanced.
+                    self.painter.reject_image_filter(error);
+                    self.painter.save_layer(None, &Paint::fill(Color::WHITE));
+                }
+            },
+            #[cfg(debug_assertions)]
+            ImageFilter::OverflowIndicator {
+                overflow_h,
+                overflow_v,
+                ..
+            } => {
+                let paint = Paint::fill(Color::WHITE);
+                self.painter.save_layer(None, &paint);
+                tracing::debug!(
+                    "push_image_filter(OverflowIndicator): h={:.1}, v={:.1}",
+                    overflow_h,
+                    overflow_v,
+                );
+            }
+        }
+    }
+
+    fn pop_image_filter(&mut self) {
+        self.flush_active_transform();
+        self.painter.restore_layer();
+    }
+}
+
+// ─── Compose flatten ──────────────────────────────────────────────────────────
+
+/// Flatten a `Compose(Vec<ImageFilter>)` AST into an ordered `ImageFilterPass` vec.
+///
+/// Traverses `filters` depth-first, left-to-right (index 0 = innermost = applied
+/// first).
+/// Nested `Compose` nodes are recursed into at record time — the resulting `out`
+/// vec is flat with no GPU-side recursion and no nested IR.
+///
+/// ## Variant mapping
+///
+/// - `Blur{σx,σy}` → [`ImageFilterPass::Blur`]
+/// - `Dilate{r}` → [`ImageFilterPass::Morph`] (op: Dilate)
+/// - `Erode{r}` → [`ImageFilterPass::Morph`] (op: Erode)
+/// - `Matrix(m)` → [`ImageFilterPass::ColorMatrix`] (`m.values`)
+/// - `ColorAdjust(a)` → [`ImageFilterPass::ColorMatrix`] (`a.to_color_matrix().values`)
+/// - nested `Compose(inner)` → recurse (depth-first, index order preserved)
+/// - `OverflowIndicator` (debug only) → [`ImageFilterPass::Identity`] + `tracing::debug!`
+///   (index-faithful: never elide, never shift sibling positions)
+///
+/// ## No `_` catch-all
+///
+/// The inner `match` is exhaustive: adding a new `ImageFilter` variant forces
+/// a compile error here, ensuring the flatten stays up-to-date.
+pub(crate) fn flatten_compose(
+    filters: &[flui_painting::paint::ImageFilter],
+    matrix: &[f64; 16],
+    out: &mut SmallVec<[ImageFilterPass; 4]>,
+) -> Result<(), crate::record::command_ir::RecordError> {
+    use flui_painting::paint::ImageFilter;
+    for filter in filters {
+        match filter {
+            ImageFilter::Blur { sigma_x, sigma_y } => {
+                out.push(ImageFilterPass::Blur {
+                    sigma_x: (*sigma_x as f32),
+                    sigma_y: (*sigma_y as f32),
+                });
+            }
+            ImageFilter::Dilate { radius } => {
+                out.push(ImageFilterPass::Morph {
+                    radius: (*radius as f32),
+                    op: MorphOp::Dilate,
+                });
+            }
+            ImageFilter::Erode { radius } => {
+                out.push(ImageFilterPass::Morph {
+                    radius: (*radius as f32),
+                    op: MorphOp::Erode,
+                });
+            }
+            ImageFilter::Matrix(matrix) => {
+                out.push(ImageFilterPass::ColorMatrix(matrix.values));
+            }
+            ImageFilter::ColorAdjust(adjustment) => {
+                out.push(ImageFilterPass::ColorMatrix(
+                    adjustment.to_color_matrix().values,
+                ));
+            }
+            ImageFilter::Compose(inner_filters) => {
+                // Depth-first recursion: inner_filters[0] is innermost at this level.
+                flatten_compose(inner_filters, matrix, out)?;
+            }
+            ImageFilter::Transform {
+                transform,
+                sampling,
+            } => out.push(transform_pass(transform, *sampling, matrix)?),
+            #[cfg(debug_assertions)]
+            ImageFilter::OverflowIndicator {
+                overflow_h,
+                overflow_v,
+                ..
+            } => {
+                // Push Identity to preserve index positions — eliding would shift
+                // sibling filter positions, changing the fold order.
+                out.push(ImageFilterPass::Identity);
+                tracing::debug!(
+                    overflow_h,
+                    overflow_v,
+                    "flatten_compose(OverflowIndicator): no GPU pass for overflow \
+                     indicator inside Compose; pushing Identity to preserve chain indices"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The pass a transform filter lowers to under the 4x4 column-major
+/// `matrix` that maps its layer to root device pixels.
+fn transform_pass(
+    transform: &flui_painting::paint::ImageTransform,
+    sampling: flui_painting::paint::ImageSampling,
+    matrix: &[f64; 16],
+) -> Result<ImageFilterPass, crate::record::command_ir::RecordError> {
+    use crate::record::command_ir::RecordError;
+    let filter = crate::filters::resample::ResampleFilter::of(sampling).ok_or(
+        RecordError::ImageFilter("a transform image filter has no lowering for this sampling"),
+    )?;
+    let map =
+        crate::filters::resample::device_map(transform, matrix).map_err(RecordError::Geometry)?;
+    Ok(ImageFilterPass::Resample { map, filter })
+}
+/// Reject nonfinite and lossy-to-zero parameters before narrowing to GPU values.
+fn validate_image_filter_parameters(
+    filter: &flui_painting::paint::ImageFilter,
+) -> Result<(), crate::error::GeometryError> {
+    use crate::error::GeometryError;
+    use flui_painting::paint::ImageFilter;
+    let validate = |value: f64| {
+        if !value.is_finite() {
+            return Err(GeometryError::NonFinite {
+                context: "image filter parameter",
+            });
+        }
+        if value < 0.0 {
+            return Err(GeometryError::InvalidRadius);
+        }
+        if !(value as f32).is_finite() || (value > 0.0 && value as f32 == 0.0) {
+            return Err(GeometryError::Unrepresentable {
+                context: "image filter parameter",
+            });
+        }
+        Ok(())
+    };
+    match filter {
+        ImageFilter::Blur { sigma_x, sigma_y } => {
+            validate(*sigma_x)?;
+            validate(*sigma_y)?;
+        }
+        ImageFilter::Dilate { radius } | ImageFilter::Erode { radius } => validate(*radius)?,
+        ImageFilter::Compose(filters) => {
+            for filter in filters {
+                validate_image_filter_parameters(filter)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}

@@ -140,11 +140,12 @@ impl From<AspectRatioFactor> for f64 {
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
 /// use flui_objects::{AspectRatioFactor, RenderAspectRatio};
 ///
 /// // 16:9 video frame.
-/// let _node = RenderAspectRatio::new(AspectRatioFactor::WIDESCREEN_16_9);
+/// let node = RenderAspectRatio::new(AspectRatioFactor::WIDESCREEN_16_9);
+/// assert_eq!(node.aspect_ratio(), AspectRatioFactor::WIDESCREEN_16_9);
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderAspectRatio {

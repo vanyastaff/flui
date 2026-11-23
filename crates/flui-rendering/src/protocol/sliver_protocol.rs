@@ -1026,6 +1026,10 @@ impl<'ctx> DriverSliverLayoutContext<'ctx> {
     ///
     /// `pub(crate)`: the only constructor caller is the pipeline's sliver
     /// layout walk.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per walk-side seam the constructor's only caller wires; grouping them would only move the list into a struct"
+    )]
     pub(crate) fn new(
         constraints: SliverConstraints,
         children: &'ctx mut Vec<ErasedSliverChildState>,
@@ -1146,7 +1150,7 @@ impl ErasedSliverLayoutContext for DriverSliverLayoutContext<'_> {
         self.children
             .iter()
             .find_map(|slot| slot.parent_data.as_deref())
-            .map(|pd| pd.as_any().type_id())
+            .map(|pd| (pd as &dyn std::any::Any).type_id())
     }
 
     fn request_child_build(&mut self, logical_index: usize) -> ChildLayout {

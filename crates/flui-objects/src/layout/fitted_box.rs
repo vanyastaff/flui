@@ -176,12 +176,9 @@ impl RenderFittedBox {
     /// when [`BoxFit::apply`] crops the child (`Cover`/`FitWidth`/
     /// `FitHeight`/an overflowing `None`) under an off-center `alignment` —
     /// `Contain`/`Fill`/`ScaleDown` never crop, so `source_offset` is
-    /// always `Offset::ZERO` for them and this term is a no-op. Dropping
-    /// it (as an earlier version of this method did) left both paint and
-    /// hit-testing consistently wrong together for a cropped, off-center
-    /// `Cover` — silently, since the invariant this method exists to
-    /// enforce (paint and hit-test can't disagree WITH EACH OTHER) still
-    /// held; they simply agreed on the wrong point.
+    /// always `Offset::ZERO` for them and this term is a no-op. Omitting it
+    /// makes paint and hit-testing agree on the wrong point for a cropped,
+    /// off-center `Cover`.
     pub fn effective_transform(&self) -> Matrix4 {
         let t = Matrix4::translation(self.align_offset.dx, self.align_offset.dy, 0.0);
         let s = Matrix4::scaling(self.scale_x, self.scale_y, 1.0);
@@ -517,18 +514,23 @@ impl RenderBox for RenderFittedBox {
         // is cheaper — and equally correct — to apply as a child offset than
         // as a compositing layer; `BoxFit::None` under an off-centre alignment
         // is the case that reaches it.
-        let paint_transformed_child =
-            |ctx: &mut flui_rendering::context::PaintContext<'_, Single>| {
-                if let Some((dx, dy)) = transform.as_translation() {
-                    ctx.paint_child_at(Offset::new(dx, dy));
-                } else {
-                    // Not a redundant closure: `paint_child` is inherent on PaintContext
-                    // for both `Exact<1>` and `Variable`, so the bare path is
-                    // ambiguous (E0034) and the lint's rewrite does not compile.
-                    #[expect(clippy::redundant_closure_for_method_calls)]
-                    ctx.with_transform(transform, |ctx| ctx.paint_child());
-                }
-            };
+        let paint_transformed_child = |ctx: &mut flui_rendering::context::PaintContext<
+            '_,
+            Single,
+        >| {
+            if let Some((dx, dy)) = transform.as_translation() {
+                ctx.paint_child_at(Offset::new(dx, dy));
+            } else {
+                // Not a redundant closure: `paint_child` is inherent on PaintContext
+                // for both `Exact<1>` and `Variable`, so the bare path is
+                // ambiguous (E0034) and the lint's rewrite does not compile.
+                #[expect(
+                    clippy::redundant_closure_for_method_calls,
+                    reason = "paint_child` is ambiguous as a method path across `PaintContext` arities (E0034), so the lint's rewrite does not compile"
+                )]
+                ctx.with_transform(transform, |ctx| ctx.paint_child());
+            }
+        };
 
         if self.has_visual_overflow && self.clip_behavior != Clip::None {
             let bounds = Rect::from_origin_size(Point::ZERO, size);

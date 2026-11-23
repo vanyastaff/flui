@@ -1,7 +1,7 @@
-// ===== Layer Operations (Opacity, Filters, Save/Restore) =====
-//
-// Moved from `painter.rs` into `painter/layer.rs` as part of the C1 LOC-cap
-// refactor.  Zero behaviour changes.
+//! Layer operations of `WgpuPainter`: `save_layer` and `restore_layer` with
+//! their opacity, colour-filter and image-filter variants, and the shader-mask
+//! pair (`begin_shader_mask`, `end_shader_mask`). A saved layer collects its
+//! children into a segment of its own and composites them when it is restored.
 
 use smallvec::{SmallVec, smallvec};
 
@@ -9,11 +9,11 @@ use flui_foundation::geometry::Rect;
 use flui_painting::paint::Paint;
 
 use super::WgpuPainter;
-use crate::command_ir::{
+use crate::layers::compositor::RestoreOutcome;
+use crate::record::command_ir::{
     DrawItem, DrawSegment, FilterOp, ImageFilterPass, ImageFilterSpec, LayerFilter,
     LayerFilterChain, PendingOpacityLayer,
 };
-use crate::layer_compositor::RestoreOutcome;
 
 /// What a saved layer runs over its children before it composites.
 #[derive(Debug)]
@@ -102,7 +102,7 @@ fn supported_mask_shader(shader: &flui_painting::paint::Shader) -> bool {
         } if focal_radius.is_none_or(|radius| radius == 0.0) => (colors, stops),
         _ => return false,
     };
-    if colors.is_empty() || colors.len() > crate::batches::MAX_GRADIENT_STOPS {
+    if colors.is_empty() || colors.len() > crate::record::batches::MAX_GRADIENT_STOPS {
         return false;
     }
     // Match the shared lowerer's normalization: absent/missing stop entries
@@ -133,11 +133,11 @@ impl WgpuPainter {
     /// Return the full viewport bounds as a device-pixel rect.
     ///
     /// Equivalent to `Rect::from_ltrb(0, 0, width, height)` where
-    /// `(width, height)` is the size last set by [`Self::new`] or
+    /// `(width, height)` is the size the painter was built with or last set by
     /// [`Self::resize`].  Used as the fallback composite rect when a
     /// `save_layer` carries no explicit bounds.
     #[must_use]
-    pub fn viewport_bounds(&self) -> Rect<f64> {
+    pub(crate) fn viewport_bounds(&self) -> Rect<f64> {
         Rect::from_ltrb(
             0.0,
             0.0,
@@ -150,9 +150,9 @@ impl WgpuPainter {
     fn filter_fb_rect(
         &self,
         bounds: Rect<f64>,
-    ) -> Result<FilterFramebuffer, crate::command_ir::RecordError> {
-        use crate::command_ir::RecordError;
+    ) -> Result<FilterFramebuffer, crate::record::command_ir::RecordError> {
         use crate::error::GeometryError;
+        use crate::record::command_ir::RecordError;
         let edges = [
             (bounds.left() / 2.0).floor() * 2.0,
             (bounds.top() / 2.0).floor() * 2.0,
@@ -185,14 +185,14 @@ impl WgpuPainter {
     }
 
     /// Fail the frame for a layer filter that cannot be recorded.
-    pub(crate) fn reject_image_filter(&mut self, error: crate::command_ir::RecordError) {
+    pub(crate) fn reject_image_filter(&mut self, error: crate::record::command_ir::RecordError) {
         self.current_segment.budget.record_error(error);
     }
 
     pub(crate) fn reject_image_filter_parameter(&mut self, error: crate::error::GeometryError) {
         self.current_segment
             .budget
-            .record_error(crate::command_ir::RecordError::Geometry(error));
+            .record_error(crate::record::command_ir::RecordError::Geometry(error));
     }
 
     /// Bound a nested effect's desired output by all enclosing filters' input
@@ -200,13 +200,13 @@ impl WgpuPainter {
     /// next one in reads to draw that, and so on inwards.
     pub(super) fn filter_desired_output(
         &self,
-    ) -> Result<Rect<f64>, crate::command_ir::RecordError> {
+    ) -> Result<Rect<f64>, crate::record::command_ir::RecordError> {
         self.compositor
             .image_filters()
             .try_fold(self.viewport_bounds(), |desired, filter| {
                 filter.required_input(desired)
             })
-            .map_err(crate::command_ir::RecordError::Geometry)
+            .map_err(crate::record::command_ir::RecordError::Geometry)
     }
 
     fn queue_image_filter(
@@ -214,9 +214,9 @@ impl WgpuPainter {
         spec: ImageFilterSpec,
         input: DrawSegment,
         items: Vec<DrawItem>,
-        composite_clip: Option<crate::command_ir::GroupClip>,
+        composite_clip: Option<crate::record::command_ir::GroupClip>,
     ) {
-        use crate::command_ir::RecordError;
+        use crate::record::command_ir::RecordError;
         let planned = (|| {
             let passes = spec.into_passes();
             let mut desired = self.filter_desired_output()?;
@@ -537,21 +537,21 @@ impl WgpuPainter {
         local_bounds: Option<Rect<f64>>,
         _blend: flui_painting::paint::BlendMode,
         _content_was_clipped: bool,
-    ) -> Option<crate::command_ir::GroupClip> {
+    ) -> Option<crate::record::command_ir::GroupClip> {
         let mut chain = self.state.clip_chain();
         if let Some(bounds) = local_bounds {
-            let result = crate::clip_geometry::ValidatedClip::rect(bounds)
-                .map_err(crate::command_ir::RecordError::Geometry)
+            let result = crate::record::clip_geometry::ValidatedClip::rect(bounds)
+                .map_err(crate::record::command_ir::RecordError::Geometry)
                 .and_then(|shape| {
-                    crate::clip_geometry::ValidatedAffine::try_new(glam::DMat4::from_cols_array(
-                        &self.state.current_transform_matrix().m,
-                    ))
-                    .map_err(crate::command_ir::RecordError::Geometry)
+                    crate::record::clip_geometry::ValidatedAffine::try_new(
+                        glam::DMat4::from_cols_array(&self.state.current_transform_matrix().m),
+                    )
+                    .map_err(crate::record::command_ir::RecordError::Geometry)
                     .and_then(|affine| {
                         chain.append(
                             shape,
                             affine,
-                            crate::clip_chain::ClipOp::Intersect,
+                            crate::record::clip_chain::ClipOp::Intersect,
                             true,
                             &self.current_segment.budget,
                         )
@@ -562,8 +562,8 @@ impl WgpuPainter {
                 Err(error) => self.current_segment.budget.record_error(error),
             }
         }
-        (!chain.is_unclipped()).then_some(crate::command_ir::GroupClip {
-            legacy: crate::state_stack::ResolvedClip::NONE,
+        (!chain.is_unclipped()).then_some(crate::record::command_ir::GroupClip {
+            legacy: crate::record::state_stack::ResolvedClip::NONE,
             chain,
         })
     }
@@ -589,7 +589,7 @@ impl WgpuPainter {
     /// transparent source (`Src`, `Clear`, …) changes every pixel of the
     /// region, even for an empty layer (mapping decision 19 in
     /// `ARCHITECTURE.md`).
-    pub fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint) {
+    pub(crate) fn save_layer(&mut self, bounds: Option<Rect<f64>>, paint: &Paint) {
         let paint_alpha = paint.color.opacity();
         let layer_opacity = self.compositor.effective_layer_opacity(paint_alpha);
         let region = self.composite_region(bounds);
@@ -622,7 +622,7 @@ impl WgpuPainter {
     /// Child-local clip operations remain inside the group.
     pub(crate) fn save_layer_clipped(
         &mut self,
-        clip: crate::command_ir::GroupClip,
+        clip: crate::record::command_ir::GroupClip,
         bounds: Rect<f64>,
     ) {
         let layer_opacity = self.compositor.effective_layer_opacity(1.0);
@@ -650,18 +650,18 @@ impl WgpuPainter {
             return Err(crate::EngineError::UnsupportedMaskShader);
         }
         if self.compositor.depth() >= 64 {
-            self.current_segment
-                .budget
-                .record_error(crate::command_ir::RecordError::Limit {
+            self.current_segment.budget.record_error(
+                crate::record::command_ir::RecordError::Limit {
                     resource: "effect nesting",
                     requested: 65,
                     limit: 64,
-                });
+                },
+            );
             return self.recording_result().map(|()| false);
         }
-        let affine = crate::clip_geometry::ValidatedAffine::try_new(glam::DMat4::from_cols_array(
-            &self.current_transform_matrix().m,
-        ))?;
+        let affine = crate::record::clip_geometry::ValidatedAffine::try_new(
+            glam::DMat4::from_cols_array(&self.current_transform_matrix().m),
+        )?;
         let Some(device_bounds) = affine.map_bounds(bounds)? else {
             return Ok(false);
         };
@@ -682,13 +682,13 @@ impl WgpuPainter {
         let result = (|| {
             self.recording_result()?;
             let matrix = glam::DMat4::from_cols_array(&self.current_transform_matrix().m);
-            let affine = crate::clip_geometry::ValidatedAffine::try_new(matrix)?;
+            let affine = crate::record::clip_geometry::ValidatedAffine::try_new(matrix)?;
             if affine.is_empty() {
                 return Ok(());
             }
-            let inverse = crate::clip_geometry::ValidatedAffine::try_new(matrix.inverse())?;
+            let inverse = crate::record::clip_geometry::ValidatedAffine::try_new(matrix.inverse())?;
             let viewport = self.filter_desired_output().map_err(|error| match error {
-                crate::command_ir::RecordError::Geometry(error) => {
+                crate::record::command_ir::RecordError::Geometry(error) => {
                     crate::EngineError::InvalidGeometry(error)
                 }
                 _ => crate::EngineError::InvalidGeometry(
@@ -772,7 +772,7 @@ impl WgpuPainter {
         if let Err(error) = spec.validate() {
             self.current_segment
                 .budget
-                .record_error(crate::command_ir::RecordError::Geometry(error));
+                .record_error(crate::record::command_ir::RecordError::Geometry(error));
         }
         // Inherit the current ancestor opacity (same as `save_layer_with_filter`).
         let layer_opacity = self.compositor.effective_layer_opacity(1.0);
@@ -799,20 +799,20 @@ impl WgpuPainter {
         layer_tint_rgb: [f32; 3],
         layer_blend: flui_painting::paint::BlendMode,
         filters: LayerFilters,
-        composite_clip: Option<crate::command_ir::GroupClip>,
+        composite_clip: Option<crate::record::command_ir::GroupClip>,
     ) {
         if self.suppressed_layer_depth != 0 || self.compositor.depth() >= 64 {
             self.suppressed_layer_depth = self.suppressed_layer_depth.saturating_add(1);
-            self.current_segment
-                .budget
-                .record_error(crate::command_ir::RecordError::Limit {
+            self.current_segment.budget.record_error(
+                crate::record::command_ir::RecordError::Limit {
                     resource: "effect nesting",
                     requested: self
                         .compositor
                         .depth()
                         .saturating_add(self.suppressed_layer_depth),
                     limit: 64,
-                });
+                },
+            );
             return;
         }
         let inherited_scissor = self.state.current_scissor();
@@ -829,7 +829,7 @@ impl WgpuPainter {
             LayerFilters::Image(spec) => (LayerFilterChain::new(), Some(spec)),
         };
         let changes_nothing = inherited.is_unclipped()
-            && !crate::layer_compositor::composites(
+            && !crate::layers::compositor::composites(
                 layer_opacity,
                 layer_tint_rgb,
                 layer_blend,
@@ -841,8 +841,8 @@ impl WgpuPainter {
             self.state.keep_group_scissor();
         }
         let mut composite_clip = composite_clip.or_else(|| {
-            (!inherited.is_unclipped()).then_some(crate::command_ir::GroupClip {
-                legacy: crate::state_stack::ResolvedClip::NONE,
+            (!inherited.is_unclipped()).then_some(crate::record::command_ir::GroupClip {
+                legacy: crate::record::state_stack::ResolvedClip::NONE,
                 chain: inherited,
             })
         });
@@ -850,19 +850,21 @@ impl WgpuPainter {
         // Any other layer leaves its children unscissored, since a filter
         // under it may read past the scissor, and cuts its composite instead.
         if let Some((x, y, w, h)) = inherited_scissor.filter(|_| !changes_nothing) {
-            let clip = composite_clip.get_or_insert_with(|| crate::command_ir::GroupClip {
-                legacy: crate::state_stack::ResolvedClip::NONE,
-                chain: crate::clip_chain::ClipChain::default(),
+            let clip = composite_clip.get_or_insert_with(|| crate::record::command_ir::GroupClip {
+                legacy: crate::record::state_stack::ResolvedClip::NONE,
+                chain: crate::record::clip_chain::ClipChain::default(),
             });
             let rect = Rect::from_xywh(x as f64, y as f64, f64::from(w), f64::from(h));
-            let result = crate::clip_geometry::ValidatedClip::rect(rect)
-                .map_err(crate::command_ir::RecordError::Geometry)
+            let result = crate::record::clip_geometry::ValidatedClip::rect(rect)
+                .map_err(crate::record::command_ir::RecordError::Geometry)
                 .and_then(|shape| {
                     clip.chain.append(
                         shape,
-                        crate::clip_geometry::ValidatedAffine::try_new(glam::DMat4::IDENTITY)
-                            .expect("BUG: identity is an admitted clip transform"),
-                        crate::clip_chain::ClipOp::Intersect,
+                        crate::record::clip_geometry::ValidatedAffine::try_new(
+                            glam::DMat4::IDENTITY,
+                        )
+                        .expect("BUG: identity is an admitted clip transform"),
+                        crate::record::clip_chain::ClipOp::Intersect,
                         true,
                         &self.current_segment.budget,
                     )
@@ -921,7 +923,7 @@ impl WgpuPainter {
     ///   (`RestoreOutcome::Empty`). An empty layer whose mode replaces the
     ///   destination still composites: its transparent region is what the
     ///   mode writes.
-    /// - **A layer `layer_compositor::composites` finds unchanging** → content re-integrated
+    /// - **A layer `layers::compositor::composites` finds unchanging** → content re-integrated
     ///   directly into the parent draw order without an offscreen blit
     ///   (`RestoreOutcome::Reintegrate`).
     /// - **Opacity-/tint-/blend-mode layer** → `DrawItem::OpacityLayer` over
@@ -933,7 +935,7 @@ impl WgpuPainter {
     /// Calling `restore_layer` without a matching open is a logic error; the
     /// compositor logs a warning and reinstates the pre-restore draw state
     /// (`RestoreOutcome::Underflow`).
-    pub fn restore_layer(&mut self) {
+    pub(crate) fn restore_layer(&mut self) {
         if self.suppressed_layer_depth != 0 {
             self.suppressed_layer_depth -= 1;
             return;

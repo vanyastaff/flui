@@ -280,7 +280,7 @@ impl InheritedView for PageTransitionsScope {
         &self.hooks.page
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

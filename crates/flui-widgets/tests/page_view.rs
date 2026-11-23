@@ -10,7 +10,7 @@ use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::events::{Code, Key, KeyPress, KeyState, Modifiers, NamedKey};
 use flui_painting::styling::Color;
 use flui_platform::input::capabilities::PointerKindSet;
-use flui_testing::{MouseScript, PenScript, PointerScript, TouchScript};
+use flui_testing::replay::{MouseScript, PenScript, PointerScript, TouchScript};
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
@@ -568,7 +568,7 @@ fn assistive_technology_reads_the_page_showing() {
 #[test]
 fn the_page_label_comes_from_the_widgets_localizations() {
     use flui_platform::Locale;
-    use flui_widgets::localization::{
+    use flui_widgets::{
         BoxedLocalizationsDelegate, BoxedWidgetsLocalizations, DefaultWidgetsLocalizations,
         Localizations, LocalizationsDelegate, WidgetsLocalizations,
     };
@@ -716,7 +716,7 @@ fn labels(offered: &[(String, i32, flui_testing::a11y::NodeId)]) -> Vec<&str> {
 fn request_turn(
     laid: &LaidOut,
     (_, id, node): &(String, i32, flui_testing::a11y::NodeId),
-) -> Result<(), flui_testing::InvokeActionError> {
+) -> Result<(), flui_testing::a11y::InvokeActionError> {
     laid.invoke_semantics_action(flui_testing::a11y::ActionRequest {
         action: flui_testing::a11y::Action::CustomAction,
         target_tree: flui_testing::a11y::TreeId::ROOT,

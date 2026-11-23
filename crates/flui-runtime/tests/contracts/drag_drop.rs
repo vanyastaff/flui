@@ -17,9 +17,8 @@ use flui_interaction::drag::{
     ProcessNonce,
 };
 use flui_interaction::pointer::LocalPayloadTarget;
-use flui_native::{
-    HeadlessDragAndDrop, HeadlessHostWindow, HeadlessPlatform, HostWindow, Platform,
-};
+use flui_native::testing::{HeadlessDragAndDrop, HeadlessHostWindow, HeadlessPlatform};
+use flui_native::{HostWindow, Platform};
 use flui_objects::RenderMetaData;
 use flui_platform::WindowOptions;
 use flui_platform::transfer::data::{
@@ -176,9 +175,9 @@ impl flui_view::StatefulView for Removable {
 impl flui_view::ViewState<Removable> for RemovableState {
     fn build(&self, view: &Removable, _: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
         if view.shown.get() {
-            Box::new(view.receiver.clone()) as Box<dyn flui_view::View>
+            flui_view::BoxedView::new(view.receiver.clone())
         } else {
-            Box::new(SizedBox::new(300.0, 200.0))
+            flui_view::BoxedView::new(SizedBox::new(300.0, 200.0))
         }
     }
 }
@@ -496,8 +495,7 @@ fn side_by_side(first: &ReceiverAnchor, second: &ReceiverAnchor) -> World {
 }
 
 fn headless(window: &Rc<dyn HostWindow>) -> &HeadlessHostWindow {
-    window
-        .as_any()
+    (&**window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("a headless window")
 }
@@ -1237,7 +1235,7 @@ fn a_start_that_panics_is_a_refusal_and_the_next_still_starts() {
     let (host, _) = open(&platform);
     // A headless window that starts OS drags through the panicking source.
     let window: Rc<dyn PlatformWindow> = Rc::new(
-        flui_testing::MockWindow::over(as_platform(&host))
+        flui_platform::testing::MockWindow::over(as_platform(&host))
             .with_drag_source(Arc::new(FirstStartPanics::default())),
     );
     let runtime = runtime_over(

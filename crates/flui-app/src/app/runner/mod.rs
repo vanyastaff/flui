@@ -44,6 +44,7 @@ mod host;
 mod installed_host;
 #[cfg(target_os = "ios")]
 pub(super) mod ios;
+mod journal_start;
 mod native_bindings;
 #[cfg(native_journal)]
 pub(super) mod native_journal;
@@ -355,6 +356,7 @@ pub fn window_handle(
 /// its window system closes no window, and
 /// [`CloseRequestError::Failed`](crate::CloseRequestError::Failed) when the
 /// window took the close and failed it.
+#[cfg(not(target_os = "ios"))]
 pub fn request_presentation_close(
     address: flui_foundation::PresentationAddress,
 ) -> Result<(), PresentationCloseError> {
@@ -375,6 +377,7 @@ pub fn request_presentation_close(
     Ok(router.request_close(address)?)
 }
 
+#[cfg(not(target_os = "ios"))]
 /// Why [`request_presentation_close`] closed no window.
 #[derive(Debug, thiserror::Error, PartialEq)]
 #[non_exhaustive]
@@ -625,7 +628,6 @@ pub(crate) use stand_in_renderer::StandInRenderers;
 pub(crate) use {host::loop_turn_deadline, host::loop_wake_deadline, raster_host::RasterFactory};
 
 /// Whether this loop journals its backend, so the agent's hello lists the `native` layer.
-#[cfg(not(target_arch = "wasm32"))]
 fn journals_native() -> bool {
     #[cfg(native_journal)]
     {
@@ -638,7 +640,6 @@ fn journals_native() -> bool {
 }
 
 /// End the loop's native journal unless the driver agent is `served`.
-#[cfg(not(target_arch = "wasm32"))]
 fn keep_native_journal(served: bool) {
     #[cfg(native_journal)]
     native_journal::keep_if(served);
@@ -668,7 +669,7 @@ mod tests {
     /// `bootstrap_desktop`/`run_android`/`run_web` themselves cannot run in a
     /// unit test: each opens its window from inside a live platform event loop
     /// (`ActiveEventLoop` is unreachable outside `Platform::run`) and creates a
-    /// real GPU `Renderer`, gated behind the separate `testing` CI job
+    /// real GPU context, gated behind the separate `testing` CI job
     /// (WARP), not this one. This instead drives the exact ordering invariant
     /// headlessly: `HeadlessWindow::request_redraw` (flui-native's headless
     /// backend, used elsewhere in this crate's tests) dispatches its
@@ -839,7 +840,7 @@ mod tests {
 
         let heard = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let log = Arc::clone(&heard);
-        let platform = flui_native::HeadlessPlatform::new()
+        let platform = flui_native::testing::HeadlessPlatform::new()
             .with_text_store_host(move || std::rc::Rc::new(FocusLog(Arc::clone(&log))));
         let _clear_guard = OwnerHostClearGuard::arm();
         Box::new(platform)

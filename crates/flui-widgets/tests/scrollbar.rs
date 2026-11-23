@@ -895,7 +895,7 @@ pub(crate) fn a_bar_attached_mid_scroll_shows_for_the_run_under_way() {
 /// holds the thumb leaves the first finger's drag of the thumb as it was.
 pub(crate) fn a_second_finger_leaves_the_thumb_drag_to_the_first() {
     use flui_foundation::geometry::Offset;
-    use flui_testing::TouchScript;
+    use flui_testing::replay::TouchScript;
     for (name, second) in [
         ("content", Offset::new(150.0, 150.0)),
         ("track", Offset::new(297.0, 250.0)),

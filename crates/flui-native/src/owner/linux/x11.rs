@@ -1834,8 +1834,7 @@ mod tests {
         };
         let xid = handle.window.get();
         owner.windows.read_stale();
-        let x11 = window
-            .as_any()
+        let x11 = (&*window as &dyn std::any::Any)
             .downcast_ref::<crate::window::linux::x11::X11Window>()
             .expect("the X11 platform opens X11 windows");
         assert!(

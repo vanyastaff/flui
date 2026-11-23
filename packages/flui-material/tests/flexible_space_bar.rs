@@ -15,8 +15,8 @@ use common::{lay_out, tight};
 use flui_material::{FlexibleSpaceBar, SliverAppBar, Theme, ThemeData};
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::IntoView;
+use flui_sdk::view::ViewExt;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
-use flui_sdk::view::view::ViewExt;
 use flui_sdk::widgets::{
     ColoredBox, CustomScrollView, ScrollController, ScrollView, SizedBox, SliverToBoxAdapter, Text,
 };
@@ -33,10 +33,9 @@ fn bar_at(offset: f64) -> Theme {
         .title(Text::new("FLUI"))
         .expanded_height(200.0)
         .pinned(true)
-        .flexible_space(
-            FlexibleSpaceBar::new()
-                .background(ColoredBox::new(flui_sdk::painting::Color::rgb(10, 20, 30))),
-        );
+        .flexible_space(FlexibleSpaceBar::new().background(ColoredBox::new(
+            flui_sdk::painting::styling::Color::rgb(10, 20, 30),
+        )));
     Theme::new(
         ThemeData::light(),
         MediaQuery::new(

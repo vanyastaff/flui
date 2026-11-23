@@ -29,16 +29,18 @@ use flui_material::{
     MaterialApp, NavigationBar, NavigationDestination, Radio, Scaffold, Switch, Tab, TabBar,
     TabController, TextButton, Theme, ThemeData, show_dialog,
 };
+use flui_sdk::scheduler::{AsyncDriver, TaskToken};
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
-use flui_sdk::view::{AsyncDriver, Signal, TaskToken, WriterSource};
-use flui_sdk::widgets::icon::IconData;
+use flui_sdk::view::{Signal, WriterSource};
+use flui_sdk::widgets::IconData;
 use flui_sdk::widgets::{Column, Icon, PageHandle, Routable, Router, Text};
 use flui_testing::control_cost::{
     ControlCost, control_alone_under, control_over_text, control_over_text_under,
 };
+use flui_testing::find;
 use flui_testing::heap::{CountingAllocator, assert_rounds_plateau};
-use flui_testing::{Tester, find};
+use flui_testing::tester::Tester;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;

@@ -732,7 +732,8 @@ pub(crate) fn contain(body: impl FnOnce()) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui_native::{HeadlessPlatform, Platform};
+    use flui_native::Platform;
+    use flui_native::testing::HeadlessPlatform;
     use std::{cell::RefCell, rc::Rc};
 
     fn ingress() -> (Arc<Ingress>, flui_native::OwnerPlatform) {
@@ -818,7 +819,7 @@ mod tests {
 
         let router = Rc::new(CloseRequestRouter::new());
         let window: Rc<dyn flui_platform::PlatformWindow> =
-            Rc::new(flui_testing::MockWindow::new());
+            Rc::new(flui_platform::testing::MockWindow::new());
         let at = PresentationAddress {
             ui_runtime_id: flui_foundation::UiRuntimeId::new(1),
             presentation_id: flui_foundation::PresentationId::new(1),

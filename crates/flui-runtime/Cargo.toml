@@ -19,12 +19,12 @@ exclude = ["/ARCHITECTURE.md", "/fuzz/"]
 workspace = true
 
 [features]
-# Test hooks (`HeldPointerQueue::append`/`len`, the `SemanticsHost` surface
-# that has no production caller yet, and `ExecutionServices::with_limits`/
-# `default_pools_started`), and the `testing` module's `ScriptedSink` and
+# Test hooks (`ExecutionServices::with_limits`/`default_pools_started`, the
+# UI runtime's `for_test` constructors and `*_for_test` probes), and the
+# `testing` module's `ScriptedSink` and
 # `SceneTotals`, and decoding a recording's rows (`__runtime::record_from_wire`,
-# which names a window by value), for this crate's own tests, `flui-testing`'s and `flui-app`'s,
-# which enable it on their dev edge. Never on a normal edge.
+# which names a window by value), for this crate's own tests, `flui-app`'s dev
+# edge, and `flui-testing`, the host of the headless test loop (ADR-0083 §4).
 testing = ["flui-platform/testing", "flui-layer/testing"]
 # `reload::ReloadTier`, the development reload the UI runtime applies. Names no
 # hot-reload crate; `flui-app` always turns it on and translates an installed
@@ -79,6 +79,9 @@ flui-animation = { workspace = true }
 # The UI runtime's bounded owner inbox.
 crossbeam-channel = { workspace = true }
 parking_lot = { workspace = true }
+# The hash tables keyed by ids the process mints (`TypeId`, presentation
+# addresses, element references).
+rustc-hash = { workspace = true }
 # `SpawnError`'s messages.
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -114,7 +117,7 @@ flui-interaction = { workspace = true, features = ["testing"] }
 # Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
 flui-testing = { path = "../flui-testing" }
 # The UI runtime tests: the headless platform's windows and capability fakes
-# (`headless_platform`, and with `scripted` `FakeTextInput`, `FakeAccessibility`),
+# (`headless_platform`, and with `scripted` `testing::FakeTextInput`, `testing::FakeAccessibility`),
 # a dev edge only, so the shipped crate still links no backend; the concrete
 # render objects some tests mount; AccessKit action requests driven the way
 # an adapter would; and `!Send` pins on the UI runtime.

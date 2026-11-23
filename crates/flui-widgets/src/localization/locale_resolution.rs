@@ -12,6 +12,10 @@ use flui_platform::Locale;
 /// resolution loop below is a hash lookup per preferred locale rather than a
 /// linear scan. Tuple/`Option` keys are used rather than concatenated
 /// strings, which would conflate an absent subtag with one spelled `"null"`.
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are locale subtags, supplied by the application"
+)]
 struct SupportedLocaleIndex<'a> {
     /// Complete supported language identities, including variants and extensions.
     exact: HashSet<&'a Locale>,
@@ -26,6 +30,10 @@ struct SupportedLocaleIndex<'a> {
 }
 
 impl<'a> SupportedLocaleIndex<'a> {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keys are locale subtags, supplied by the application"
+    )]
     fn build(supported_locales: &'a [Locale]) -> Self {
         let mut index = Self {
             exact: HashSet::new(),

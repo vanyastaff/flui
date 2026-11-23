@@ -118,9 +118,10 @@ pub trait SliverPersistentHeaderDelegate {
     /// The over-scroll stretch behavior for this header, if any.
     ///
     /// `Some` makes the header stretch beyond [`max_extent`](Self::max_extent)
-    /// when the scroll view over-scrolls at the start, and reports trigger
-    /// crossings through the configuration's `StretchTriggerSignal`. Read on
-    /// every widget update (same path as the extents), so swapping a delegate
+    /// when the scroll view over-scrolls at the start, and runs the
+    /// configuration's `on_stretch_trigger` during the layout whose stretch
+    /// crosses its offset. Read on every widget update (same path as the
+    /// extents), so swapping a delegate
     /// can turn stretching on or off — subject to the same
     /// [`should_rebuild`](Self::should_rebuild) obligation.
     fn stretch_configuration(&self) -> Option<OverScrollHeaderStretchConfiguration> {
@@ -432,7 +433,7 @@ impl<R: PersistentHeaderRenderObject> RenderView for PersistentHeaderView<R> {
         false
     }
 
-    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&dyn View)) {}
+    fn visit_child_views(&self, _visitor: &mut dyn FnMut(&BoxedView)) {}
 }
 
 impl<R: PersistentHeaderRenderObject> View for PersistentHeaderView<R> {

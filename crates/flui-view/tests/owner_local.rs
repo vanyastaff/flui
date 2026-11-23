@@ -1,4 +1,4 @@
-//! A key, a stream builder and a binding observer hold owner-thread state: they
+//! A key and a stream builder hold owner-thread state: they
 //! carry no thread bound (ADR-0323 §4), so `Rc` and `Cell` values pass.
 
 use std::{
@@ -11,7 +11,7 @@ use std::{
 use flui_foundation::ViewKey;
 use flui_view::element::AsyncSnapshot;
 use flui_view::{
-    ErrorView, ObjectKey, ViewExt, WidgetsBindingObserver,
+    ErrorView, ObjectKey, ViewExt,
     element::{SnapshotBuilder, StreamBuilder, StreamFactory},
 };
 use futures_core::Stream;
@@ -32,18 +32,8 @@ impl Stream for Countdown {
     }
 }
 
-/// An observer whose answer is computed from owner-local state.
-struct BackHandled(Rc<Cell<bool>>);
-
-impl WidgetsBindingObserver for BackHandled {
-    fn did_pop_route(&self) -> Pin<Box<dyn std::future::Future<Output = bool> + '_>> {
-        let handled = Rc::clone(&self.0);
-        Box::pin(async move { handled.get() })
-    }
-}
-
 #[test]
-fn owner_local_values_build_keys_streams_and_observers() {
+fn owner_local_values_build_keys_and_streams() {
     let object = Rc::new(Cell::new(1_u8));
     let key = ObjectKey::new(&object);
     assert!(key.key_eq(&ObjectKey::new(&object)));
@@ -57,7 +47,5 @@ fn owner_local_values_build_keys_streams_and_observers() {
         Rc::new(|_, _: &AsyncSnapshot<Rc<u32>, Rc<str>>| ErrorView::new("leaf").boxed());
     let _view = StreamBuilder::keyed(Some(Rc::clone(&object)), make, builder).boxed();
 
-    let observer = BackHandled(Rc::new(Cell::new(true)));
-    let _answer = observer.did_pop_route();
     assert_eq!(remaining.get(), 2, "building the view polls nothing");
 }

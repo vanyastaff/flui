@@ -91,8 +91,8 @@ pub(super) const MAX_UNBOUNDED_WINDOW_CHILDREN: usize = 1_000_000;
 
 /// How many children the sentinel case actually lays out.
 ///
-/// Deliberately a SEPARATE number from [`MAX_UNBOUNDED_WINDOW_CHILDREN`], and
-/// conflating the two was a real bug. The threshold has to be high, since no
+/// Deliberately a SEPARATE number from [`MAX_UNBOUNDED_WINDOW_CHILDREN`], since
+/// conflating the two is a bug. The threshold has to be high, since no
 /// genuine data-source length may fall past it; the window served once it
 /// trips has to be small, because layout runs EVERY FRAME. Serving a
 /// threshold-sized window meant enqueueing a million build requests per frame
@@ -145,11 +145,7 @@ fn classify_cache_window(constraints: &SliverConstraints) -> CacheWindow {
 /// matching `max_paint_extent`, zero paint otherwise.
 fn poison_window_geometry(tile_layout: &SliverGridLayout, item_count: usize) -> SliverGeometry {
     let scroll_extent = tile_layout.compute_max_scroll_offset(item_count);
-    SliverGeometry {
-        scroll_extent,
-        max_paint_extent: scroll_extent,
-        ..SliverGeometry::ZERO
-    }
+    SliverGeometry::new(scroll_extent, 0.0, 0.0).with_max_paint_extent(scroll_extent)
 }
 
 /// A request-strategy lazily-virtualized 2-D grid sliver.
@@ -161,14 +157,12 @@ fn poison_window_geometry(tile_layout: &SliverGridLayout, item_count: usize) -> 
 ///
 /// # Construction
 ///
-/// ```ignore
+/// ```
 /// use flui_objects::RenderSliverGrid;
 /// use flui_rendering::delegates::SliverGridDelegateWithFixedCrossAxisCount;
 ///
-/// let grid = RenderSliverGrid::new(
-///     SliverGridDelegateWithFixedCrossAxisCount::new(2),
-///     50,
-/// );
+/// let grid = RenderSliverGrid::new(SliverGridDelegateWithFixedCrossAxisCount::new(2), 50);
+/// assert_eq!(grid.item_count(), 50);
 /// ```
 pub struct RenderSliverGrid {
     /// Grid layout delegate — controls tile sizes and cross-axis count.
@@ -507,11 +501,9 @@ impl RenderSliver for RenderSliverGrid {
             // Empty retain band tells the element tree to evict all off-window children.
             self.pinned.clear_slots();
             ctx.emit_retain_band(first_in_window, first_in_window);
-            return Ok(SliverGeometry {
-                scroll_extent,
-                max_paint_extent: scroll_extent,
-                ..SliverGeometry::ZERO
-            });
+            return Ok(
+                SliverGeometry::new(scroll_extent, 0.0, 0.0).with_max_paint_extent(scroll_extent)
+            );
         }
 
         // ── 4. Reconcile logical-index → dense-slot from parent data ──────────
@@ -578,24 +570,14 @@ impl RenderSliver for RenderSliverGrid {
         let cache_extent =
             self.calculate_cache_offset(&constraints, leading_row_offset, trailing_row_offset);
 
-        let geometry = SliverGeometry {
-            scroll_extent,
-            paint_extent,
-            layout_extent: paint_extent,
-            max_paint_extent: scroll_extent,
-            cache_extent,
-            hit_test_extent: paint_extent,
-            // Omitting this left `visible` at `SliverGeometry::ZERO`'s `false`
-            // unconditionally, which blocked the viewport's hit-test walk
-            // (`sliver_child_is_visible`,
-            // `flui-rendering/src/pipeline/owner/hit_test.rs`) from ever
-            // reaching a grid's children.
-            visible: paint_extent > 0.0,
-            has_visual_overflow: scroll_extent > paint_extent
-                || constraints.scroll_offset > 0.0
-                || constraints.overlap != 0.0,
-            ..SliverGeometry::ZERO
-        };
+        let geometry = SliverGeometry::new(scroll_extent, paint_extent, 0.0)
+            .with_max_paint_extent(scroll_extent)
+            .with_cache_extent(cache_extent)
+            .with_visual_overflow(
+                scroll_extent > paint_extent
+                    || constraints.scroll_offset > 0.0
+                    || constraints.overlap != 0.0,
+            );
 
         // ── 9. Commit attached count and position resident tiles ──────────────
         // Use the `logical_to_slot` map from step 4; no new arena children are

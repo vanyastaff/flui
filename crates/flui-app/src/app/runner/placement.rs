@@ -28,7 +28,6 @@ use flui_foundation::{MonotonicClock, PresentationAddress, SystemClock};
 use flui_platform::{DisplaySnapshot, StorageName, WindowOptions};
 use flui_runtime::capability::{CapabilityRegistry, HostCapabilities};
 use flui_view::persist::{StorageCapability, StorageHandle};
-use rustc_hash::FxHashSet;
 
 use super::desktop::OpeningWindow;
 use super::host::{APP_RUNTIME, with_owner_platform};
@@ -726,7 +725,11 @@ fn current_displays() -> DisplaySnapshot {
 /// The names windows of this run remember their placement under: one window
 /// per name, so two windows never overwrite each other's placement.
 #[derive(Default, Clone)]
-struct Claims(Rc<RefCell<FxHashSet<StorageName>>>);
+#[expect(
+    clippy::disallowed_types,
+    reason = "keyed by the placement names an application chooses"
+)]
+struct Claims(Rc<RefCell<std::collections::HashSet<StorageName>>>);
 
 impl Claims {
     /// Hold `name` for one window; `None` while another window holds it.

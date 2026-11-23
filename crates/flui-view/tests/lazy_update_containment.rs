@@ -11,11 +11,9 @@ use flui_rendering::constraints::BoxConstraints;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
 use flui_rendering::testing::SceneHost;
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook, RecoveredAt};
 use flui_view::element::SliverList;
-use flui_view::{
-    BoxedView, BuildOwner, ElementTree, ErrorView, LifecycleHook, RecoveredAt, RenderView, View,
-    ViewExt,
-};
+use flui_view::{BoxedView, ErrorView, RenderView, View, ViewExt};
 
 use crate::dense_reconcile_containment::first_render_descendant;
 
@@ -52,8 +50,8 @@ impl RenderView for LazyViewport {
         true
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
-        visitor(&self.sliver);
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
+        visitor(&self.sliver.clone().boxed());
     }
 }
 
@@ -185,7 +183,7 @@ pub(crate) fn lazy_render_update_panic_substitutes_at_its_logical_index() {
     let mut tree = ElementTree::new();
     let armed = Rc::new(Cell::new(false));
     let root = tree.mount_root_with_pipeline_owner(
-        &lazy_viewport(&armed),
+        &lazy_viewport(&armed).boxed(),
         Some(pipeline.clone()),
         &mut owner.element_owner_mut(),
     );

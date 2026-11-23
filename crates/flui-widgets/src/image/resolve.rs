@@ -37,19 +37,19 @@
 //! provider settling after a fast second one — is what a swap during a fast
 //! scroll produces.
 
+use std::cell::RefCell;
 use std::future::Future;
 use std::pin::Pin;
-use std::{rc::Rc, sync::Arc};
+use std::rc::Rc;
 
 use flui_painting::paint::Image as PixelImage;
 use flui_platform::executor::SpawnError;
 use flui_platform::http::HttpCapability;
 use flui_scheduler::{AsyncDriver, TaskToken};
+use flui_view::LifecycleContext;
 use flui_view::background::{BackgroundCapability, BackgroundError};
-use flui_view::context::LifecycleContext;
 use flui_view::prelude::LifecycleContextExt as _;
 use flui_view::{RebuildHandle, RebuildReason};
-use parking_lot::Mutex;
 
 use super::cache_key::ImageCacheKey;
 use super::provider::{ImageProvider, ImageProviderError, ImageServices};
@@ -91,10 +91,13 @@ impl Published {
 /// Lives in the widget's `ViewState`, so it is created before `init_state`
 /// and dropped on unmount. Not `Clone`: the subscription is the state's.
 pub(super) struct ImageResolver {
-    /// Shared with the in-flight task, which is why it is behind a lock:
+    /// Shared with the in-flight task, which is why it is behind a cell:
     /// `ViewState::build` takes `&self`, and the task writes from the frame's
-    /// async step.
-    published: Arc<Mutex<Published>>,
+    /// async step. The task is a `spawn_local_eager` future polled on this
+    /// thread, so the cell is owner-thread state (ADR-0323 §1). Every borrow
+    /// ends before code this module does not own runs: the rebuild is
+    /// scheduled, and the warning logged, after it.
+    published: Rc<RefCell<Published>>,
     /// Schedules the owning element's rebuild when a load completes.
     /// `did_update_view` and `dispose` receive no context, which is why the
     /// resolver owns it.
@@ -120,10 +123,10 @@ pub(super) struct ImageResolver {
 
 impl std::fmt::Debug for ImageResolver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Read under the lock and written after it: the formatter's writer
+        // Read under the borrow and written after it: the formatter's writer
         // is the caller's code, which may call back here.
         let (generation, has_frame) = {
-            let published = self.published.lock();
+            let published = self.published.borrow();
             (published.generation, published.image.is_some())
         };
         f.debug_struct("ImageResolver")
@@ -145,7 +148,7 @@ impl ImageResolver {
         handle: RebuildHandle,
     ) -> Self {
         Self {
-            published: Arc::new(Mutex::new(Published::default())),
+            published: Rc::new(RefCell::new(Published::default())),
             handle,
             driver: None,
             services: ImageServices::new(),
@@ -209,7 +212,7 @@ impl ImageResolver {
 
     /// The frame to display right now.
     pub(super) fn frame(&self) -> Option<PixelImage> {
-        self.published.lock().image.clone()
+        self.published.borrow().image.clone()
     }
 
     /// Whether this resolver holds a subscription at all — false for a
@@ -225,7 +228,7 @@ impl ImageResolver {
     pub(super) fn dispose(&mut self) {
         self.token = None; // Drop cancels.
         self.key = None;
-        self.published.lock().generation += 1;
+        self.published.borrow_mut().generation += 1;
     }
 
     /// Cancel the live load, open a new generation, and resolve `key`.
@@ -238,7 +241,7 @@ impl ImageResolver {
         self.key.clone_from(&key);
 
         let generation = {
-            let mut published = self.published.lock();
+            let mut published = self.published.borrow_mut();
             published.generation += 1;
             if !self.gapless_playback {
                 published.image = None;
@@ -253,7 +256,7 @@ impl ImageResolver {
         // An image the provider already holds resolves in this very frame,
         // with no placeholder.
         if let Some(hit) = self.provider.cached(&self.services) {
-            self.published.lock().publish(generation, hit);
+            self.published.borrow_mut().publish(generation, hit);
             return;
         }
 
@@ -298,19 +301,19 @@ impl ImageResolver {
                 }
                 None => self.provider.resolve_async(&self.services),
             };
-        let published = Arc::clone(&self.published);
-        self.published.lock().inline_window = true;
+        let published = Rc::clone(&self.published);
+        self.published.borrow_mut().inline_window = true;
 
         let token = driver.spawn_local_eager(Box::pin(async move {
             match future.await {
                 Ok(image) => {
-                    let schedule = published.lock().publish(generation, image);
+                    let schedule = published.borrow_mut().publish(generation, image);
                     if schedule {
                         handle.schedule(RebuildReason::AsyncCompletion);
                     }
                 }
                 Err(err) => {
-                    if published.lock().is_current(generation) {
+                    if published.borrow().is_current(generation) {
                         // Neither `?provider` nor `%err`: the provider's
                         // `Debug` holds the file path or URL, and the error's
                         // `Display` interpolates it. For a user-picked photo
@@ -325,7 +328,7 @@ impl ImageResolver {
             }
         }));
 
-        self.published.lock().inline_window = false;
+        self.published.borrow_mut().inline_window = false;
         self.token = token;
     }
 }

@@ -3,7 +3,8 @@ use crate::app::application::{DesktopRun, StartupWindow};
 use crate::app::lifecycle::{ServiceDefinition, ServiceLifetime};
 use crate::app::runner::window_routes::OwnerOpenRouted as _;
 use crate::app::runtime::{ExitPolicy, WindowPolicy};
-use flui_native::{HeadlessPlatform, Platform};
+use flui_native::Platform;
+use flui_native::testing::HeadlessPlatform;
 use std::sync::atomic::AtomicUsize;
 
 fn service_factory_can_use_owner_window_capabilities() {

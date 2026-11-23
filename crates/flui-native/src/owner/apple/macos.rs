@@ -13,7 +13,10 @@
 
 // `NSApplication.activateIgnoringOtherApps`, which the loop calls as the
 // application starts, is deprecated in favour of `activate`, a macOS 14 method.
-#![expect(deprecated)]
+#![expect(
+    deprecated,
+    reason = "`NSApplication.activateIgnoringOtherApps` is deprecated in favour of `activate`, which only exists from macOS 14"
+)]
 
 pub(crate) mod content_view;
 pub(crate) mod display_pass;

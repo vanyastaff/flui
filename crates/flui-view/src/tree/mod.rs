@@ -4,21 +4,21 @@
 //! - [`ElementTree`] - Slab-based storage for Elements
 //! - `reconcile_children_by_id` (in the crate-private `id_reconcile`
 //!   module) - O(N) linear child reconciliation over the slab-resident
-//!   element graph (the production reconciler after the E3 box→arena swap)
+//!   element graph
 //! - [`ReconcileEvent`] - structured trace stream for the keyed
-//!   reconciler (FR-035)
+//!   reconciler
 
 mod containment;
 mod context;
 mod element_tree;
 pub(crate) mod id_reconcile;
 pub mod reconcile_event;
-
-// `test_utils` carries the `ReconcileEventCollector` Layer fixture
-// (FR-035). Gated to `cfg(test)` for in-crate test use
-// and to `feature = "testing"` for downstream test crates that
-// install the collector to assert on the trace stream (the
-// 6-permutation corpus + GlobalKey reparenting tests).
+// `test_utils` carries the `ReconcileEventCollector` Layer fixture. Gated to
+// `cfg(test)` for in-crate test use and to
+// Gated to `cfg(test)` for in-crate test use and to
+// `feature = "testing"` for downstream test crates, which reach it through
+// `crate::testing` to install the collector and assert on the trace stream
+// (the 6-permutation corpus + GlobalKey reparenting tests).
 #[cfg(any(test, feature = "testing"))]
 pub mod test_utils;
 

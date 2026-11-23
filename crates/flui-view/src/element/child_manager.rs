@@ -31,7 +31,7 @@
 //! required because the registry maps `RenderId → Rc<RefCell<dyn ChildManager>>`
 //! without knowing the concrete manager type at registry time (the registry lives
 //! on `BuildOwner`; the concrete type lives on the adaptor element). This is the
-//! same FR-029 #6 rationale as `ErasedSliverLayoutContext`.
+//! same rationale as `ErasedSliverLayoutContext`.
 //!
 //! [`RenderSliverList`]: flui_objects::RenderSliverList
 
@@ -46,7 +46,7 @@ use crate::{ElementOwner, tree::ElementTree};
 /// Registry mapping a sliver's [`RenderId`] to its live [`ChildManager`].
 ///
 /// Type alias to satisfy `clippy::type_complexity`. Owned by
-/// [`BuildOwner`](crate::BuildOwner) and borrowed by [`ElementOwner`] as
+/// [`BuildOwner`](crate::owner::BuildOwner) and borrowed by [`ElementOwner`] as
 /// `&'a ChildManagerRegistry`.
 ///
 /// Each manager is its own `Rc<RefCell<…>>` so `service_child_requests` can
@@ -72,7 +72,7 @@ pub(crate) type ChildManagerRegistry = RefCell<FxHashMap<RenderId, Rc<RefCell<dy
 /// references; no associated types or generic methods. The registry is
 /// owner-local (`Rc<RefCell<…>>`), so the manager needs no `Send` bound.
 ///
-/// [`BuildOwner::service_child_requests`]: crate::BuildOwner::service_child_requests
+/// [`BuildOwner::service_child_requests`]: crate::owner::BuildOwner::service_child_requests
 pub(crate) trait ChildManager {
     /// Build any requested lazy children and evict those outside the retain band.
     ///

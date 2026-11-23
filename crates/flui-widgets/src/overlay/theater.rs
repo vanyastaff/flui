@@ -6,8 +6,8 @@
 
 use flui_objects::RenderTheater;
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::ViewSeq;
 use flui_view::element::ElementKind;
-use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, View};
 
 /// A `StackFit::Expand` stack whose first `skip_count` children are offstage.
@@ -82,7 +82,7 @@ impl flui_view::RenderView for Theater {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         self.children.for_each(|_index, child| visitor(child));
     }
 }

@@ -170,11 +170,7 @@ pub(super) fn accumulate_anchor_correction(
 /// Emitted whenever it is non-zero, in either scroll direction. The anchor
 /// (the first visible item) stays pixel-stationary only if the offset moves
 /// by exactly the growth above it in the same pass; deferring the correction
-/// on a backward scroll — what this used to do, after ADR-0003's consumer
-/// note — is itself the one-frame content jump it meant to prevent, and with
-/// requests serviced inside the frame every build re-runs layout at an
-/// unchanged offset anyway, so the deferral could only ever last one pass.
-/// The direction-independent rule is recorded in ADR-0051.
+/// would itself be a one-frame content jump.
 ///
 /// # Returns
 ///
@@ -251,6 +247,10 @@ fn calc_cache_offset(c: &SliverConstraints, from: f64, to: f64) -> f64 {
 ///   by any mid-pass `item_count` shrink via `NoChild`).  The caller forwards
 ///   these to `ctx.emit_retain_band(cache_first, cache_last)` so the element
 ///   tree can evict everything outside the band.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each argument is a distinct borrow of the caller's layout state or its context; bundling them would add a struct that exists only for this one call"
+)]
 pub(super) fn walk_virtualizer_band<'ctx, G>(
     virtualizer: &mut Virtualizer,
     logical_to_slot: &mut BTreeMap<usize, usize>,
@@ -351,7 +351,10 @@ where
             // the `#[non_exhaustive]` forward-compat wildcard on purpose — the
             // arm exists to document this variant's semantics, and merging it
             // into `_` would silently absorb future `ChildLayout` variants.
-            #[expect(clippy::match_same_arms)]
+            #[expect(
+                clippy::match_same_arms,
+                reason = "the empty `Scheduled` arm documents the variant and must not merge into the `#[non_exhaustive]` wildcard, which would absorb future variants"
+            )]
             match on_absent(logical_i, dense_count, box_constraints, ctx) {
                 ChildLayout::Scheduled => {
                     // Parked for the element tree to service between layout
@@ -510,18 +513,12 @@ where
     let scroll_extent = virtualizer.total_extent().value();
     let paint_extent = calc_paint_offset(constraints, 0.0, scroll_extent);
     let cache_extent = calc_cache_offset(constraints, 0.0, scroll_extent);
-    let geometry = SliverGeometry {
-        scroll_extent,
-        paint_extent,
-        layout_extent: paint_extent,
-        max_paint_extent: scroll_extent,
-        cache_extent,
-        hit_test_extent: paint_extent,
-        visible: paint_extent > 0.0,
-        has_visual_overflow: scroll_extent > constraints.remaining_paint_extent
-            || constraints.scroll_offset > 0.0,
-        ..SliverGeometry::ZERO
-    };
+    let geometry = SliverGeometry::new(scroll_extent, paint_extent, 0.0)
+        .with_max_paint_extent(scroll_extent)
+        .with_cache_extent(cache_extent)
+        .with_visual_overflow(
+            scroll_extent > constraints.remaining_paint_extent || constraints.scroll_offset > 0.0,
+        );
 
     // ── 9. Position in-band children ───────────────────────────────────────
     placed.clear();
@@ -549,11 +546,9 @@ where
     }
 
     // ── 10. Anchor correction ───────────────────────────────────────────────
-    let scroll_offset_correction = take_anchor_correction(pending_correction);
-
-    let geometry = SliverGeometry {
-        scroll_offset_correction,
-        ..geometry
+    let geometry = match take_anchor_correction(pending_correction) {
+        Some(correction) => geometry.with_scroll_offset_correction(correction),
+        None => geometry,
     };
     if geometry.validation_error().is_none() {
         *attached_child_count = dense_now;

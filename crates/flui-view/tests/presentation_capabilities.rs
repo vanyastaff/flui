@@ -9,13 +9,13 @@ use std::sync::Arc;
 
 use flui_objects::RenderSizedBox;
 use flui_platform::{Unsupported, UnsupportedReason};
+use flui_rendering::RenderUpdateImpact;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::storage::MemoryStorage;
+use flui_view::__runtime::{BuildOwner, CapabilitySource, ElementTree, PresentationCapabilities};
+use flui_view::RebuildReason;
 use flui_view::persist::{StorageCapability, StorageHandle};
 use flui_view::prelude::*;
-use flui_view::tree::ElementTree;
-use flui_view::{BuildOwner, RebuildReason};
-use flui_view::{CapabilitySource, PresentationCapabilities};
 
 /// What `init_state` found, one flag per capability.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -97,7 +97,8 @@ fn found_after(install: impl FnOnce(&mut PresentationCapabilities)) -> Present {
     let root = tree.mount_root(
         &Asker {
             found: Rc::clone(&found),
-        },
+        }
+        .boxed(),
         &mut owner.element_owner_mut(),
     );
     owner.schedule_build_for(root, 0, RebuildReason::InitialMount);

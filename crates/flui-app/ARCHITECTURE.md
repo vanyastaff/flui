@@ -173,17 +173,25 @@ the dispatch layer moves there too.
   closed windows, events, a client that stops reading, a bind failure and the
   exit; `reads_the_counter_and_taps_it_by_element_and_by_locator` the
   conversation over a real socket or pipe.
-  A native host's debug build also journals its backend for the agent's
-  recordings (ADR-0288 §11, `cfg(native_journal)`): the runner installs
-  `flui-native`'s line capture on the loop's thread before it starts the
-  platform (`current_host()` names the backend first), since a registry reports
-  only to the capture present when it was made, and ends it right after the
-  launch is read when no agent is served
-  (`a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it`). A
+  A debug build also journals its backend for the agent's recordings, a native
+  host's and a page's alike (ADR-0288 §11, ADR-0390, `cfg(native_journal)`,
+  which a `compile_error!` holds to the profile's debug assertions on every
+  system with a transport): the runner installs `flui-native`'s line capture on
+  the loop's thread before it starts the platform (`current_host()` names a
+  native backend first, a page's is `web`), since a registry reports only to
+  the capture present when it was made, and ends it right after the launch is
+  read when no agent is served
+  (`a_loop_nobody_serves_ends_its_native_journal_so_no_line_reaches_it`). Every
+  runner holds it in a `JournalStart` until then, which ends it when dropped
+  unsettled: the platform failed to start, another instance took the launch,
+  the runner unwound; a page starts through `start_journaled`
+  (`a_loop_keeps_its_journal_only_when_its_platform_starts_and_the_agent_is_served`,
+  `a_journal_whose_start_goes_unsettled_ends_and_one_handed_to_its_loop_stays`). A
   served loop keeps it, attaches its `NativeLines` to each UI runtime it hands
   the agent, and the hello lists `native`
-  (`the_hello_lists_the_native_layer_only_when_the_loop_journals`). A page
-  records the input layer only.
+  (`the_hello_lists_the_native_layer_only_when_the_loop_journals`); a page's
+  conversation carries the `record_native` lines to its script like any other
+  (`a_page_conversation_carries_the_native_layer_of_a_recording`).
   In a page the transport is `flui-native`'s page export: the global the launch
   names takes `connect(onLine)`, each connection's conversation is a task of
   the page's executor that hands the script's lines to its session, keeps the
@@ -779,10 +787,27 @@ public raw-platform capability. Root configurations can retain application-owned
 state while a new session creates fresh `ViewState`. See ADR-0073 for native
 attachment lifetime, panic containment and platform limits.
 
-### Android scene rendering discharges the plugin payload lifetime obligation
+### Every native host lets the scene plugin own a frame, through one seam
 
-The Android host calls unsafe `DevReloadHook::scene_frame` with only its
-synchronous callback that lends the scene to the window's slot (`RasterHost::render_lent`, ADR-0108, ADR-0305 §10). The engine walks
+Every native runner (Windows, macOS, Linux, iOS and Android) asks
+`ScenePlugin::own_frame` (`app/hot_reload.rs`) at the start of each
+presentation's frame, after the owner-inbox drain and before the dirty gate
+(ADR-0391). It answers `None` with no hook installed, while the presentation's
+frames are off, on a window whose executor turns on a raster thread (the
+Wayland desktop host: a lent scene is drawn within the call) and when the hook
+drew nothing or panicked; the widget frame then runs. Its `Some(PluginFrame)`
+is spent by `PluginFrame::finish` in place of the widget frame: the runtime's
+background pump consumes the frame request and serves commands, tasks and due
+input deadlines, then the window reports a panic of the lent render. The
+desktop also counts the frame as presented for its pacing fallback and its
+first reveal. Pinned by
+`a_desktop_window_draws_its_scene_plugins_frame_in_place_of_the_widget_frame`.
+
+### Scene rendering discharges the plugin payload lifetime obligation
+
+The host calls unsafe `DevReloadHook::scene_frame` with only its synchronous
+callback that lends the scene to the window's slot (`RasterSlot::render_lent`,
+`RasterHost::render_lent`, ADR-0108, ADR-0305 §10). The engine walks
 borrowed layers and ignores annotated-region payloads. Cached image bytes
 are concrete `Arc<Vec<u8>>`; glyph face admission copies source bytes into the
 host registry's concrete `Arc<[u8]>`. The callback therefore retains no

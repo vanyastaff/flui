@@ -15,7 +15,10 @@
 // Target-level lint relaxations — crate-level allows don't reach this
 // target. `unwrap` in bench code: a panic IS the failure report
 // (docs/PANIC-POLICY.md).
-#![expect(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "a panic in a benchmark is the failure report"
+)]
 // Benchmark harness functions are internal measurement scaffolding, not a
 // public API surface, so they are exempt from the crate's missing-docs lint.
 

@@ -117,7 +117,10 @@ impl PolynomialFit {
 /// a small bounded constant.
 // Math-style names (x, w, q, r, a, m, n, h, i, j) follow the standard
 // QR/Gram-Schmidt notation; renaming would hurt review against the algorithm.
-#[expect(clippy::many_single_char_names)]
+#[expect(
+    clippy::many_single_char_names,
+    reason = "names follow the QR/Gram-Schmidt notation"
+)]
 fn factorize(
     x: &[f64],
     w: &[f64],
@@ -194,7 +197,10 @@ fn factorize(
 /// factorization. Complexity: O(n·m).
 // Math-style names (x, y, w, q, r, m, n, h, i, j) follow the standard
 // back-substitution notation; renaming would hurt review against the algorithm.
-#[expect(clippy::many_single_char_names)]
+#[expect(
+    clippy::many_single_char_names,
+    reason = "names follow the back-substitution notation"
+)]
 fn solve_rhs(
     x: &[f64],
     y: &[f64],
@@ -303,7 +309,10 @@ fn solve_rhs(
 /// dominant O(n²·m) cost — is computed once and reused for both, halving the
 /// factorization work versus two independent solves.
 // Math-style names (x, w, q, r, m, n) follow the standard QR notation.
-#[expect(clippy::many_single_char_names)]
+#[expect(
+    clippy::many_single_char_names,
+    reason = "names follow the standard QR notation"
+)]
 pub(crate) fn solve_two(
     x: &[f64],
     w: &[f64],

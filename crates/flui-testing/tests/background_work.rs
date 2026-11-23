@@ -12,7 +12,7 @@ use std::time::Duration;
 use flui_platform::capability::{CapabilityRegistrar, ProviderContext};
 use flui_platform::executor::{ComputeJob, Executor, IoFuture, SpawnError};
 use flui_runtime::capability::CapabilityRegistry;
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_view::background::{Background, BackgroundCapability, BackgroundError};
 
 use crate::capability_seam::acquire_capability;

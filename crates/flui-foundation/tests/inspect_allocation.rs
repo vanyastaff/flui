@@ -39,7 +39,7 @@ struct CountingAllocator;
 // SAFETY: `alloc` and `dealloc` forward unchanged to `System`, so every pointer is freed by
 // the allocator that produced it. The default `realloc` and `alloc_zeroed` go through
 // `self.alloc`, so they are counted too.
-#[expect(unsafe_code)]
+#[expect(unsafe_code, reason = "a counting `GlobalAlloc` is an unsafe impl")]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         bump();

@@ -820,12 +820,21 @@ where
         application,
         move || {
             let host = flui_native::current_host().map_err(LaunchError::from_platform)?;
-            // Before the platform, whose registries report only to a capture already installed.
+            // Before the platform, whose registries report only to a capture already installed;
+            // ended if the platform fails to start or another instance takes the launch. The
+            // loop reads the launch and settles it.
+            // A build without the journal has no backend to name.
             #[cfg(native_journal)]
-            super::native_journal::begin(host.backend());
+            let backend = Some(host.backend());
+            #[cfg(not(native_journal))]
+            let backend = None;
+            let journal = super::journal_start::JournalStart::begin(backend);
             let placement = super::raster_host::desktop_placement(host);
-            start_host(host, app_id.as_ref(), one_instance)
-                .map(|started| started.map(|platform| (platform, placement)))
+            let started = start_host(host, app_id.as_ref(), one_instance)?;
+            if started.is_some() {
+                journal.release_to_loop();
+            }
+            Ok(started.map(|platform| (platform, placement)))
         },
         Rc::default(),
         RasterFactory::Gpu,
@@ -1266,7 +1275,8 @@ mod tests {
 
     use std::sync::atomic::AtomicUsize;
 
-    use flui_native::{HeadlessPlatform, Platform};
+    use flui_native::Platform;
+    use flui_native::testing::HeadlessPlatform;
     use flui_testing::window_commands::AdmitAndApply as _;
 
     use crate::app::runtime::ExitPolicy;
@@ -1461,7 +1471,7 @@ mod tests {
         use flui_platform::{Launch, OpenTarget, Opened};
         use flui_runtime::ui_runtime::UiRuntime;
 
-        flui_testing::disarm_interest_cache();
+        flui_testing::log_capture::disarm_interest_cache();
         let installs = Rc::new(Cell::new(0_u32));
         let reopens = Rc::new(Cell::new(0_u32));
         let _owner = OwnerHostClearGuard::arm();
@@ -1485,7 +1495,7 @@ mod tests {
         let counted = Rc::clone(&installs);
         let installs_seen = Rc::clone(&installs);
         let reopened = Rc::clone(&reopens);
-        let (ran, log) = flui_testing::capture(|| {
+        let (ran, log) = flui_testing::log_capture::capture(|| {
             Box::new(platform).run(crate::app::runner::opening_app_handler(
                 settings,
                 move |owner| {

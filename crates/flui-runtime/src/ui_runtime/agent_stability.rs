@@ -7,7 +7,7 @@
 //! the earlier call, or when the presentation has no work pending that could
 //! still move the element. Owner thread only.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use flui_protocol::{geometry::LogicalRect, tree::ElementRef};
 
@@ -23,7 +23,7 @@ struct Seen {
 /// The bounds of the elements the check read lately, bounded in size.
 #[derive(Debug, Default)]
 pub(crate) struct AgentStability {
-    seen: HashMap<ElementRef, Seen>,
+    seen: FxHashMap<ElementRef, Seen>,
 }
 
 impl AgentStability {

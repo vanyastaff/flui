@@ -7,7 +7,7 @@
 //! owner boundary only through [`RenderInvalidationHandle`], which is stamped for one
 //! exact render-node attachment interval.
 //!
-//! The owner drains the channel into its [`DirtySets`](super::DirtySets) at a defined point
+//! The owner drains the channel into its [`DirtySets`](super::dirty::DirtySets) at a defined point
 //! in each frame -- typically at the start of `run_layout` (and any other
 //! `run_*` phase) where the producer-side mark-dirty signals must be
 //! observed before that phase's work begins.

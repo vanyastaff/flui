@@ -8,8 +8,11 @@
 //! - `WorkerReload` (desktop and iOS): attaches the hook once per loop,
 //!   polls it at each UI runtime's frame boundary and applies a patch once to
 //!   every UI runtime;
-//! - `ScenePlugin` (Android): lets the hook's scene plugin own a frame. It
-//!   calls only `scene_frame`; the Android runner never attaches or polls.
+//! - `ScenePlugin` (every native runner: desktop, iOS and Android): lets the
+//!   hook's scene plugin own a presentation's frame (ADR-0391). Every native
+//!   runner asks it the same way, at the start of each presentation's frame,
+//!   and runs `PluginFrame::finish` in place of the widget frame when the
+//!   plugin drew. The Android runner never attaches or polls.
 //!
 //! With no hook installed every wrapper is inert: attaching starts nothing,
 //! polling never reloads, and no scene plugin claims a frame. The web runner
@@ -25,9 +28,10 @@
 //! panic too — and never called again; the frame that caught the panic
 //! continues, and the UI runtime is untouched.
 
+use rustc_hash::FxHashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::{collections::HashMap, fmt, sync::Arc};
+use std::{fmt, sync::Arc};
 
 use flui_view::dev_reload::DevReloadHook;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
@@ -38,9 +42,13 @@ use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::app::AppConfig;
-#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
+use crate::app::runner::raster_host::RasterSlot;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::app::ui_runtime::UiRuntime;
 use flui_foundation::UiRuntimeId;
+#[cfg(not(target_arch = "wasm32"))]
+use flui_foundation::panic::FirstPanic;
 use flui_runtime::reload::ReloadTier;
 
 /// A development reload driver installed on an [`AppConfig`].
@@ -77,7 +85,10 @@ struct Slot {
     patched_at: u64,
     patched_tier: Option<ReloadTier>,
     /// The epoch each UI runtime last caught up to. Cleared when the loop ends.
-    seen: HashMap<UiRuntimeId, u64>,
+    seen: FxHashMap<UiRuntimeId, u64>,
+    /// Whether the log said once that a host whose executor turns on a raster
+    /// thread asks the hook for no scene frame.
+    unlent_noted: bool,
 }
 
 impl DevReload {
@@ -89,7 +100,8 @@ impl DevReload {
             epoch: 0,
             patched_at: 0,
             patched_tier: None,
-            seen: HashMap::new(),
+            seen: FxHashMap::default(),
+            unlent_noted: false,
         })))
     }
 }
@@ -148,6 +160,21 @@ impl DevReload {
                 disable(what, hook);
                 Lent::Panicked
             }
+        }
+    }
+
+    /// A presentation's executor turns on a raster thread, which cannot draw
+    /// a lent scene within the call, so the hook is asked for no scene frame
+    /// there. Logged once per hook, with no lock held: a subscriber is not
+    /// ours.
+    fn note_unlent_host(&self) {
+        let first = !std::mem::replace(&mut self.0.lock().unlent_noted, true);
+        if first {
+            tracing::info!(
+                "development reload hook installed on a host whose raster executor turns on its \
+                 own thread; a scene plugin cannot draw there, so its windows draw their widget \
+                 trees"
+            );
         }
     }
 
@@ -222,6 +249,12 @@ impl WorkerReload {
             );
         }
         Self(config.dev_reload.clone())
+    }
+
+    /// The scene-plugin driver of the same hook, which the runner's frame
+    /// driver asks at the start of each presentation's frame.
+    pub(crate) fn scene_plugin(&self) -> ScenePlugin {
+        ScenePlugin(self.0.clone())
     }
 
     /// Attach the hook for this loop, handing it `wake` to request a frame
@@ -331,9 +364,15 @@ impl Drop for WorkerWatcherGuard {
     }
 }
 
-/// The Android scene-plugin driver: the configuration's hook, if any, may
-/// render a frame itself, bypassing the widget tree.
-#[cfg(target_os = "android")]
+/// The scene-plugin driver every native runner holds: the configuration's
+/// hook, if any, may draw a presentation's frame itself, in place of the
+/// widget tree (ADR-0391).
+///
+/// Each runner asks [`own_frame`](Self::own_frame) at the start of every
+/// presentation's frame on the owner thread, after the owner-inbox drain and
+/// before its dirty gate, and on a [`PluginFrame`] runs
+/// [`PluginFrame::finish`] instead of the widget pipeline.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub(crate) struct ScenePlugin(Option<DevReload>);
 
@@ -351,7 +390,8 @@ impl ScenePlugin {
         const SCENE_LIBRARY: &str = "libflui_scene.so";
         if config.dev_reload.is_some() {
             tracing::info!(
-                "development reload hook installed; the Android runner drives only its                  `scene_frame` (no attach, poll or detach)"
+                "development reload hook installed; the Android runner drives only its \
+                 `scene_frame` (no attach, poll or detach)"
             );
         } else {
             let pushed = internal_data_path
@@ -360,27 +400,47 @@ impl ScenePlugin {
             if pushed.exists() {
                 tracing::warn!(
                     path = %pushed.display(),
-                    "a scene plugin is on the device, but no DevReloadHook is installed on the                      AppConfig, so it will not be loaded; install                      `flui_hot_reload::ScenePluginHook` with `AppConfig::dev_reload`"
+                    "a scene plugin is on the device, but no DevReloadHook is installed on the \
+                     AppConfig, so it will not be loaded; install \
+                     `flui_hot_reload::ScenePluginHook` with `AppConfig::dev_reload`"
                 );
             }
         }
         Self(config.dev_reload.clone())
     }
+}
 
-    /// Let the hook's scene plugin own this frame, drawn at `width` by
-    /// `height` through `render` (the raster host's lent render, answering
-    /// whether the scene was shown). Returns `true` when it rendered, in which
-    /// case the caller must not run the widget pipeline for this frame.
-    pub(crate) fn try_render_frame(
+#[cfg(not(target_arch = "wasm32"))]
+impl ScenePlugin {
+    /// Let the hook's scene plugin own `ui_runtime`'s frame in `raster`'s
+    /// window, drawn at the window's physical size. Run inside the runtime's
+    /// entry, after its owner-inbox drain and before the frame's gate.
+    ///
+    /// `Some` when the plugin's scene was shown: the caller runs no widget
+    /// frame this wake and hands the answer to [`PluginFrame::finish`]. `None`
+    /// with no hook installed (one `Option` check), while the presentation's
+    /// frames are off (its window cannot be seen, so nothing is drawn), on a
+    /// host whose executor turns on a raster thread (which cannot draw a lent
+    /// scene within the call), and when the hook drew nothing, refused the
+    /// scene or panicked: the widget frame runs as without a hook.
+    pub(crate) fn own_frame(
         &self,
-        width: f64,
-        height: f64,
-        mut render: impl FnMut(&flui_layer::Scene, bool) -> bool,
-    ) -> bool {
-        let Some(reload) = &self.0 else {
-            return false;
-        };
+        ui_runtime: &UiRuntime,
+        raster: &RasterSlot,
+    ) -> Option<PluginFrame> {
+        let reload = self.0.as_ref()?;
+        if !ui_runtime.scheduler().frames_enabled() {
+            return None;
+        }
+        if !raster.lends_scenes() {
+            reload.note_unlent_host();
+            return None;
+        }
+        let (width, height) = raster.size;
         let rendered = reload.lend("scene_frame", |hook| {
+            let mut render = |scene: &flui_layer::Scene, reset_fonts: bool| {
+                raster.render_lent(scene, reset_fonts)
+            };
             // SAFETY: `render` lends the scene to the raster executor's
             // `render_lent`, which traverses it synchronously and keeps no
             // reference past the call. It ignores AnnotatedRegion payloads;
@@ -389,12 +449,38 @@ impl ScenePlugin {
             // Arc<[u8]>. Recorded GPU commands retain no plugin trait objects.
             // This callback retains no image-dependent payload, including
             // when rendering unwinds.
-            #[expect(unsafe_code)]
+            #[expect(unsafe_code, reason = "`scene_frame` is an `unsafe fn`")]
             unsafe {
-                hook.scene_frame(width, height, &mut render)
+                hook.scene_frame(f64::from(width), f64::from(height), &mut render)
             }
         });
-        matches!(rendered, Lent::Returned(true))
+        matches!(rendered, Lent::Returned(true)).then_some(PluginFrame(()))
+    }
+}
+
+/// A presentation's frame the scene plugin drew: what the frame accepted
+/// beside its visual pass is still owed.
+#[cfg(not(target_arch = "wasm32"))]
+#[must_use = "a frame the scene plugin drew still owes the runtime its background work"]
+pub(crate) struct PluginFrame(());
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PluginFrame {
+    /// After the runtime's entry, in place of the widget frame: the runtime's
+    /// background pump consumes the frame request and serves the work no
+    /// visual pass is needed for (owner commands, async tasks, due input
+    /// deadlines), so a request made while the plugin draws asks for the next
+    /// frame instead of finding the latch still set, and a due deadline does
+    /// not wake the loop again for a frame that never serves it. Then the
+    /// window reports what the lent render left of a panic. A panic of either
+    /// leaves the other to run and resumes once both have.
+    pub(crate) fn finish(self, ui_runtime: &mut UiRuntime, raster: &RasterSlot) {
+        // The frame is spent here, once.
+        let Self(()) = self;
+        let mut caught = FirstPanic::new();
+        let _served = caught.contain(|| ui_runtime.pump_background());
+        let _reported = caught.contain(|| raster.report_frame_panic(ui_runtime));
+        caught.resume();
     }
 }
 

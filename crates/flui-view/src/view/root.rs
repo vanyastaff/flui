@@ -12,7 +12,7 @@ use flui_rendering::{
 
 use crate::{
     element::{Lifecycle, RenderTreeRootElement},
-    view::{ElementBase, View},
+    view::{BoxedView, ElementBase, View},
 };
 
 // ============================================================================
@@ -25,28 +25,26 @@ use crate::{
 /// 1. Creates a `RenderViewObject` (the root RenderObject)
 /// 2. Sets it as the pipeline owner's root node
 /// 3. Renders child widgets into the RenderView
-#[derive(Clone)]
-pub struct RootRenderView<V: View + Clone> {
+///
+/// The child is held shared, as a [`BoxedView`]: the root hands it to the
+/// reconciler as it is, and the child's element keeps that very allocation.
+#[derive(Clone, Debug)]
+pub struct RootRenderView {
     /// The child widget to render
-    child: V,
+    child: BoxedView,
 }
 
-impl<V: View + Clone + std::fmt::Debug> std::fmt::Debug for RootRenderView<V> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RootRenderView")
-            .field("child", &self.child)
-            .finish()
+impl RootRenderView {
+    /// Create a new RootRenderView wrapping the given child. A [`BoxedView`]
+    /// is held as it is.
+    pub fn new<V: View>(child: V) -> Self {
+        Self {
+            child: BoxedView::new(child),
+        }
     }
 }
 
-impl<V: View + Clone> RootRenderView<V> {
-    /// Create a new RootRenderView wrapping the given child.
-    pub fn new(child: V) -> Self {
-        Self { child }
-    }
-}
-
-impl<V: View + Clone + 'static> View for RootRenderView<V> {
+impl View for RootRenderView {
     fn create_element(self: std::rc::Rc<Self>) -> crate::element::ElementKind {
         crate::element::ElementKind::Root(Box::new(RootRenderElement::new(self)))
     }
@@ -63,9 +61,9 @@ impl<V: View + Clone + 'static> View for RootRenderView<V> {
 /// 2. Creates RenderViewObject as the root RenderObject in RenderTree
 /// 3. Sets `pipelineOwner.root_id = render_id`
 /// 4. Builds child widgets
-pub struct RootRenderElement<V: View + Clone> {
+pub struct RootRenderElement {
     /// The View configuration, in the allocation it was offered in
-    view: std::rc::Rc<RootRenderView<V>>,
+    view: std::rc::Rc<RootRenderView>,
     /// The root RenderObject ID in RenderTree
     render_id: Option<RenderId>,
     /// [`PipelineCell`] handle to this render tree's `PipelineOwner`
@@ -76,7 +74,7 @@ pub struct RootRenderElement<V: View + Clone> {
     depth: usize,
     /// Whether this element needs a rebuild (its child reconcile must run).
     ///
-    /// E3 (atomic box→arena swap): the root's single child is a
+    /// The root's single child is a
     /// slab-resident node reconciled by `BuildOwner::build_scope`, which
     /// SKIPS any popped dirty entry whose `is_dirty()` is false (a clean
     /// element's empty build would otherwise make the reconcile wrongly
@@ -89,9 +87,9 @@ pub struct RootRenderElement<V: View + Clone> {
     needs_build: bool,
 }
 
-impl<V: View + Clone + 'static> RootRenderElement<V> {
+impl RootRenderElement {
     /// Create a new RootRenderElement.
-    pub fn new(view: std::rc::Rc<RootRenderView<V>>) -> Self {
+    pub fn new(view: std::rc::Rc<RootRenderView>) -> Self {
         Self {
             view,
             render_id: None,
@@ -121,7 +119,7 @@ impl<V: View + Clone + 'static> RootRenderElement<V> {
     }
 }
 
-impl<V: View + Clone + 'static> std::fmt::Debug for RootRenderElement<V> {
+impl std::fmt::Debug for RootRenderElement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RootRenderElement")
             .field("lifecycle", &self.lifecycle)
@@ -136,13 +134,13 @@ impl<V: View + Clone + 'static> std::fmt::Debug for RootRenderElement<V> {
 // ElementBase Implementation
 // ============================================================================
 
-impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
+impl ElementBase for RootRenderElement {
     fn view_type_id(&self) -> TypeId {
-        TypeId::of::<RootRenderView<V>>()
+        TypeId::of::<RootRenderView>()
     }
 
     fn view_type_name(&self) -> &'static str {
-        core::any::type_name::<RootRenderView<V>>()
+        core::any::type_name::<RootRenderView>()
     }
 
     fn debug_kind(&self) -> &'static str {
@@ -192,8 +190,8 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
             );
         }
 
-        // E3 (atomic box→arena swap): the child is NOT built here. It is a
-        // slab-resident node now — `build_into_views` returns the child
+        // The child is NOT built here. It is a
+        // slab-resident node: `build_into_views` returns the child
         // view and the slab id-reconciler in `BuildOwner::build_scope`
         // creates / updates it (and schedules it for its own build). The
         // RenderObject bootstrap above is the only mount-time work.
@@ -217,10 +215,10 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         }
         self.render_id = None;
 
-        // E3: the child is a slab-resident node; the
+        // The child is a slab-resident node; the
         // [`ElementTree`](crate::tree::ElementTree) unmounts it
         // deepest-first via `child_ids`, so the root does not recurse into
-        // a box child here.
+        // it here.
         self.lifecycle = Lifecycle::Defunct;
     }
 
@@ -245,7 +243,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
     }
 
     fn update(&mut self, new_view: &dyn View, _element_owner: &mut crate::ElementOwner<'_>) {
-        if let Some(v) = crate::view::shared_view_of::<RootRenderView<V>>(new_view) {
+        if let Some(v) = crate::view::shared_view_of::<RootRenderView>(new_view) {
             self.view = v;
             // The child config may have changed — re-reconcile next build.
             self.needs_build = true;
@@ -264,8 +262,8 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         &mut self,
         _element_owner: &mut crate::ElementOwner<'_>,
     ) -> crate::view::ChildViews {
-        // E3 (atomic box→arena swap): the root's single child is now a
-        // slab-resident node. Return the child view; the slab
+        // The root's single child is a slab-resident node. Return the child
+        // view; the slab
         // id-reconciler in `BuildOwner::build_scope` creates / updates the
         // child element under this root (propagating this element's
         // `PipelineOwner` + `render_id` via `ElementTree::insert`, so the
@@ -277,7 +275,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
         // returned child is always the one to reconcile; clear the flag now
         // that it has been handed off.
         self.needs_build = false;
-        crate::view::ChildViews::copy_of(&self.view.child)
+        crate::view::ChildViews::shared(&self.view.child)
     }
 
     fn pipeline_owner(&self) -> Option<PipelineCell> {
@@ -324,7 +322,7 @@ impl<V: View + Clone + 'static> ElementBase for RootRenderElement<V> {
 // RenderTreeRootElement Implementation
 // ============================================================================
 
-impl<V: View + Clone + 'static> RenderTreeRootElement for RootRenderElement<V> {
+impl RenderTreeRootElement for RootRenderElement {
     fn pipeline_owner(&self) -> Option<PipelineCell> {
         self.pipeline_owner.clone()
     }
@@ -336,10 +334,5 @@ impl<V: View + Clone + 'static> RenderTreeRootElement for RootRenderElement<V> {
     // Attach / detach to the PipelineOwner is handled inline in `mount()`
     // and `unmount()` above: mount inserts the `RenderView` into
     // the render tree (`PipelineOwner::insert_render_node`), calls `set_root_id`, and
-    // requests a visual update; unmount inverts that sequence. The
-    // pre-Mythos `attach_to_pipeline_owner` / `detach_from_pipeline_owner`
-    // trait stubs were removed during the framework spine repair because
-    // their bodies were panicking placeholders (Constitution Principle 6
-    // forbids panic in production paths) and they had zero callers in
-    // the workspace.
+    // requests a visual update; unmount inverts that sequence.
 }

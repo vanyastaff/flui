@@ -3,9 +3,9 @@
 // Separable Gaussian blur — one fragment shader parameterised by `direction`
 // covers both the horizontal (U-axis) and vertical (V-axis) sub-passes.
 //
-// ## Correctness contracts (PINNED #2)
+// ## Correctness contracts
 //
-// **PINNED #2 — Premultiplied-direct, sRGB-encoded, NO unpremultiply.**
+// **Premultiplied-direct, sRGB-encoded, NO unpremultiply.**
 // The source texture is premultiplied RGBA in sRGB-encoded space (as rendered by
 // the engine). Gaussian filtering in sRGB space with premultiplied values matches
 // Impeller `gaussian_blur_filter_contents.cc:935` (`apply_unpremultiply=false`).

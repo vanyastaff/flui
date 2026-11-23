@@ -60,7 +60,9 @@ mod source;
 
 pub(crate) use source::X11DragSource;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::time::Duration;
@@ -828,9 +830,9 @@ enum Read {
 #[derive(Debug, Default)]
 struct State {
     table: OfferTable,
-    windows: HashMap<xproto::Window, InputTarget>,
+    windows: FxHashMap<xproto::Window, InputTarget>,
     hover: Option<Hover>,
-    offers: HashMap<DataTransferId, Offer>,
+    offers: FxHashMap<DataTransferId, Offer>,
     /// The fetches converting, at most [`MAX_FETCHES`].
     fetches: Vec<Fetch>,
     /// Requests waiting for a fetch to end.
@@ -838,7 +840,7 @@ struct State {
     /// What the server answered for each atom a source offered, at most
     /// [`MAX_NAMES`]: its name, or `None` for one it cannot name or names
     /// past [`MAX_NAME_LEN`], so a source repeating it costs no lookup.
-    names: HashMap<xproto::Atom, Option<String>>,
+    names: FxHashMap<xproto::Atom, Option<String>>,
     /// The sources whose hover ended or whose offer retired since the
     /// loop's last turn ended: at its end, on the owner thread, where the
     /// table of peer windows is, the drag stops hearing each that neither

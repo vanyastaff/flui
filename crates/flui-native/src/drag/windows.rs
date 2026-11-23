@@ -40,7 +40,10 @@
 // the workspace lint `unsafe_code = "warn"` is opted out here, at the module
 // boundary, rather than for the whole crate (see `lib.rs`); every `unsafe`
 // block carries its own `// SAFETY:` comment. Its pure part forbids it.
-#![cfg_attr(windows, expect(unsafe_code))]
+#![cfg_attr(
+    windows,
+    expect(unsafe_code, reason = "OLE drag and drop is driven through COM")
+)]
 
 #[cfg(windows)]
 mod com;
@@ -515,10 +518,12 @@ mod crossing {
 #[cfg(windows)]
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
     rc::Rc,
     sync::{Arc, OnceLock},
 };
+
+#[cfg(windows)]
+use rustc_hash::FxHashMap;
 
 #[cfg(windows)]
 use flui_foundation::DataTransferId;
@@ -584,7 +589,7 @@ const START_DRAG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 21;
 struct Offers {
     table: OfferTable,
     /// The answer each live offer's target last cached.
-    feedback: HashMap<DataTransferId, DropFeedback>,
+    feedback: FxHashMap<DataTransferId, DropFeedback>,
 }
 
 /// One live offer's OS side: the drag's data object and the clipboard format
@@ -608,7 +613,7 @@ struct PendingStart {
 #[derive(Default)]
 #[cfg(windows)]
 struct OwnerDrag {
-    open: RefCell<HashMap<DataTransferId, OpenOffer>>,
+    open: RefCell<FxHashMap<DataTransferId, OpenOffer>>,
     /// A session [`OleTransfer::start`] accepted whose `DoDragDrop` has not run.
     pending: RefCell<Option<PendingStart>>,
     /// Whether `DoDragDrop` is running.

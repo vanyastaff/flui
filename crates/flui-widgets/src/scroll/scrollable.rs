@@ -22,7 +22,7 @@
 //! # Scrolling is a layout event, not a build event
 //!
 //! `RenderViewport` subscribes to the offset and marks itself needing layout
-//! (`crates/flui-objects/src/sliver/viewport.rs`), so a scroll re-lays out the
+//! (`crates/flui-objects/src/sliver/viewport/core.rs`), so a scroll re-lays out the
 //! viewport and rebuilds nothing. The one thing that needs the controller's
 //! notify is servicing an `animate_to`/`jump_to` command, a listener installed
 //! alongside the fling ones (`install_command_listener`).
@@ -490,8 +490,8 @@ impl StatefulView for Scrollable {
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         // Unbounded: pixel values from the ballistic simulation are never
         // clamped — the simulation's own `is_done` terminates the run.
-        // Unboundedness is a constructor fact (#1183), not a bound value —
-        // `without_ticker_bounds` now REJECTS a wide-open pair. No ticker:
+        // Unboundedness is a constructor fact, not a bound value:
+        // `without_ticker_bounds` rejects a wide-open pair. No ticker:
         // `Vsync` drives this controller once registered below.
         let owner = Rc::new(RefCell::new(None));
         let fling_controller = AnimationController::builder(Duration::from_millis(1))
@@ -931,7 +931,7 @@ impl ViewState<Scrollable> for ScrollableState {
 
         // The viewport re-lays itself out from the render side:
         // `RenderViewport` subscribes to the offset and marks needs-layout
-        // (`crates/flui-objects/src/sliver/viewport.rs`). So this build runs when the
+        // (`crates/flui-objects/src/sliver/viewport/core.rs`). So this build runs when the
         // *configuration* changes, never per scroll pixel — the
         // `AnimatedBuilder` that used to wrap it rebuilt the viewport and
         // every sliver view underneath on every offset write. What genuinely
@@ -1867,7 +1867,7 @@ fn scroll_semantics(
     let (axis, reversed) = (direction.axis(), direction.is_reversed());
     let mut semantics = Semantics::new()
         .container(true)
-        .role(crate::SemanticsRole::ScrollView)
+        .role(flui_semantics::SemanticsRole::ScrollView)
         .scroll_source(controller.position(), direction);
     if let Some(label) = label {
         semantics = semantics.label(label);
@@ -1876,7 +1876,7 @@ fn scroll_semantics(
     let adjustment = Semantics::new()
         .container(true)
         .explicit_child_nodes(true)
-        .role(crate::SemanticsRole::Slider)
+        .role(flui_semantics::SemanticsRole::Slider)
         .label(position_label)
         .scroll_source(controller.position(), direction);
     let reveal_controller = controller.clone();

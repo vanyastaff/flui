@@ -20,6 +20,27 @@ const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::geometry::PRECISION_ERRO
 /// - Where painting starts (`paint_origin`)
 /// - Cache extent for off-screen content
 ///
+/// # Construction
+///
+/// The fields are public to read, and the type is `#[non_exhaustive]`, so a
+/// struct literal does not compile outside this crate. Build it with
+/// [`new`](Self::new) or [`with_extents`](Self::with_extents), which derive
+/// `layout_extent`, `hit_test_extent`, `max_paint_extent`, `cache_extent` and
+/// `visible` from the paint extent, and the `with_*` builders for every value
+/// that differs. A struct-update literal over [`ZERO`](Self::ZERO) would
+/// instead set each field it omits to zero or `false`, a sliver that paints
+/// but takes no layout space, is never hit-tested and reports itself hidden.
+///
+/// ```
+/// use flui_rendering::constraints::SliverGeometry;
+///
+/// let geometry = SliverGeometry::new(400.0, 120.0, 0.0)
+///     .with_max_paint_extent(400.0)
+///     .with_visual_overflow(true);
+/// assert_eq!(geometry.layout_extent, 120.0);
+/// assert!(geometry.visible);
+/// ```
+///
 /// # Cache Support
 ///
 /// Implements `Hash` and `Eq` for caching layout results:
@@ -33,6 +54,7 @@ const PRECISION_ERROR_TOLERANCE: f64 = flui_foundation::geometry::PRECISION_ERRO
 /// assert_eq!(cache.get(&SliverGeometry::new(100.0, 50.0, 0.0)), Some(&"measured"));
 /// ```
 #[derive(Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct SliverGeometry {
     /// Total scrollable extent consumed by this sliver.
     pub scroll_extent: f64,
@@ -138,11 +160,7 @@ impl SliverGeometry {
     /// also narrows `cache_extent`; with a builder the two are independent, so
     /// [`with_layout_extent`](Self::with_layout_extent) does NOT drag
     /// `cache_extent` down with it. Narrow both when that is what you mean —
-    /// every persistent-header variant does. Prefer this plus
-    /// the `with_*` setters over a struct literal with `..ZERO` — the
-    /// struct-update form silently substitutes zero/false for every field it
-    /// omits, which is a *different* contract and has produced three separate
-    /// header bugs (`layout_extent`, `visible`, and `hit_test_extent`).
+    /// every persistent-header variant does.
     ///
     /// # Derived defaults
     ///
@@ -251,11 +269,28 @@ impl SliverGeometry {
         self
     }
 
-    /// Marks as having visual overflow.
+    /// Sets whether painting extends beyond layout bounds
+    /// ([`has_visual_overflow`](Self::has_visual_overflow)).
+    ///
+    /// [`new`](Self::new) and [`with_extents`](Self::with_extents) default it
+    /// to `false`.
     #[inline]
     #[must_use]
-    pub const fn with_visual_overflow(mut self) -> Self {
-        self.has_visual_overflow = true;
+    pub const fn with_visual_overflow(mut self, has_visual_overflow: bool) -> Self {
+        self.has_visual_overflow = has_visual_overflow;
+        self
+    }
+
+    /// Requests a scroll offset correction alongside the extents, for a
+    /// sliver that reports its layout and corrects the scroll position in one
+    /// pass.
+    ///
+    /// The [`scroll_offset_correction`](Self::scroll_offset_correction)
+    /// constructor is the form for a correction that carries no extents.
+    #[inline]
+    #[must_use]
+    pub const fn with_scroll_offset_correction(mut self, correction: f64) -> Self {
+        self.scroll_offset_correction = Some(correction);
         self
     }
 

@@ -295,7 +295,7 @@ fn round_snap_page(page: f64) -> f64 {
 /// `viewport_dimension`).
 ///
 /// Exists so a caller in a higher crate can build a physics-facing metrics
-/// value (e.g. `flui_widgets::scroll::ScrollMetrics`) without four separate
+/// value (e.g. `flui_widgets::ScrollMetrics`) without four separate
 /// mutex acquisitions — one per field — which could observe a torn read if
 /// another thread mutated the position between calls.
 #[non_exhaustive]
@@ -1028,7 +1028,7 @@ impl ViewportOffset for ScrollPosition {
 
     fn user_scroll_direction(&self) -> ScrollDirection {
         // The activity state IS the tracked direction — the render layer
-        // (`RenderViewport::layout_child_sequence` reading this through
+        // (`ViewportCore::layout_child_sequence` in flui-objects reading this through
         // `dyn ViewportOffset`) must see the same answer the widget layer
         // sees, or direction-dependent sliver behavior (a floating header's
         // reveal) runs on a permanently-Idle constraint.

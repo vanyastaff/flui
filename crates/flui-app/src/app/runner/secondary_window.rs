@@ -248,7 +248,7 @@ struct SecondaryWindowInstallConfig {
     close_request_handler: Option<CloseRequestHandler>,
     frame_failure_detail: FrameFailureDetail,
     pointer_resampling: flui_runtime::presentation::PointerResampling,
-    motion_override: flui_runtime::MotionOverride,
+    motion_override: flui_animation::MotionOverride,
     error_view_builder: Option<flui_view::ErrorViewBuilder>,
     input_tap: Option<flui_runtime::InputTapFactory>,
 }
@@ -1270,7 +1270,8 @@ mod tests {
     use super::super::owner_dispatch::{RuntimeTask, dispatch_platform_ui_runtime};
     use super::*;
     use crate::app::runner::window_routes::OwnerOpenRouted as _;
-    use flui_native::{HeadlessPlatform, Platform};
+    use flui_native::Platform;
+    use flui_native::testing::HeadlessPlatform;
     use flui_runtime::{owner::WindowObservation, ui_runtime::UiRuntime};
     use flui_testing::window_commands::AdmitAndApply as _;
     use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};

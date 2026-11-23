@@ -114,7 +114,8 @@ pub(crate) fn viewer_keeps_a_pinch_whose_focal_point_leaves_it() {
 
 /// Start/end belong to a source session, rather than to every scale packet.
 pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
-    use flui_widgets::{GestureEndReason, InteractiveViewer};
+    use flui_interaction::gesture::GestureEndReason;
+    use flui_widgets::InteractiveViewer;
     let log = Rc::new(RefCell::new(Vec::new()));
     let starts = log.clone();
     let updates = log.clone();
@@ -157,7 +158,8 @@ pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
 }
 
 pub(crate) fn viewer_repeated_native_start_retires_the_previous_generation() {
-    use flui_widgets::{GestureEndReason, InteractiveViewer, TransformationController};
+    use flui_interaction::gesture::GestureEndReason;
+    use flui_widgets::{InteractiveViewer, TransformationController};
     let controller = TransformationController::new();
     let reasons = Rc::new(RefCell::new(Vec::new()));
     let log = reasons.clone();
@@ -709,7 +711,7 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
         controller.value().transform_point(0.0, 0.0).0 > before,
         "the second fling coasts"
     );
-    let rest = flui_testing::TrackpadScript::new(
+    let rest = flui_testing::replay::TrackpadScript::new(
         "fingers rest",
         flui_foundation::geometry::Offset::new(100.0, 100.0),
     )

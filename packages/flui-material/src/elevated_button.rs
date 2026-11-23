@@ -17,7 +17,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use flui_sdk::geometry::{EdgeInsets, Size};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 

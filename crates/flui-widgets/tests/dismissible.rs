@@ -1155,7 +1155,7 @@ pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allo
     let fling = [116.0, 132.0, 148.0, 164.0, 180.0, 20.0, 4.0]
         .into_iter()
         .fold(
-            flui_testing::TouchScript::new("swing").down(1, Offset::new(100.0, 100.0)),
+            flui_testing::replay::TouchScript::new("swing").down(1, Offset::new(100.0, 100.0)),
             |script, x| {
                 script
                     .wait(Duration::from_millis(10))
@@ -1272,7 +1272,7 @@ pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allo
         let path = (1..=6).map(|step| Offset::new(6.0 + f64::from(step) * 10.0, 100.0));
         let script = if touch {
             path.fold(
-                flui_testing::TouchScript::new("edge").down(1, Offset::new(6.0, 100.0)),
+                flui_testing::replay::TouchScript::new("edge").down(1, Offset::new(6.0, 100.0)),
                 |script, point| script.wait(Duration::from_millis(16)).move_to(1, point),
             )
             .wait(Duration::from_millis(16))
@@ -1280,7 +1280,7 @@ pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allo
             .build()
         } else {
             path.fold(
-                flui_testing::MouseScript::new("edge").press(Offset::new(6.0, 100.0)),
+                flui_testing::replay::MouseScript::new("edge").press(Offset::new(6.0, 100.0)),
                 |script, point| script.wait(Duration::from_millis(16)).move_to(point),
             )
             .wait(Duration::from_millis(16))

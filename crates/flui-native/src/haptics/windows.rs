@@ -20,10 +20,10 @@
 //! controller call never leaves a burst of late feedback behind it. No user
 //! code runs on that thread.
 
-// This module calls the operating system directly, which has no safe wrapper:
-// the workspace lint `unsafe_code = "warn"` is opted out here, at the module
-// boundary, rather than for the whole crate (see `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "calls the operating system directly, which has no safe wrapper"
+)]
 
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -608,8 +608,7 @@ mod tests {
         let haptics = window.haptics().expect("a Win32 window has an actuator");
         assert_unavailable(haptics.as_ref(), super::NOT_NOW, "with no pen in range");
 
-        let win32 = window
-            .as_any()
+        let win32 = (&*window as &dyn std::any::Any)
             .downcast_ref::<WindowsWindow>()
             .expect("Win32 window");
         let this = WindowRef::new(win32.hwnd(), win32.identity);
@@ -654,8 +653,7 @@ mod tests {
         };
         let (first, second) = (open("flui haptics a"), open("flui haptics b"));
         let win32 = |window: &std::rc::Rc<dyn crate::host_window::HostWindow>| {
-            let window = window
-                .as_any()
+            let window = (&**window as &dyn std::any::Any)
                 .downcast_ref::<WindowsWindow>()
                 .expect("Win32 window");
             (window.hwnd(), window.identity)

@@ -102,7 +102,7 @@ fn a_clip_rect_layer_clips_its_content_and_its_absence_does_not() {
 }
 
 // ---------------------------------------------------------------------------
-// Per-mode edges (#848)
+// Per-mode edges
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -1536,8 +1536,8 @@ fn hard_clip_membership_scales_to_a_full_hd_frame() {
 // public painter intentionally does not expose device-domain limits.
 #[cfg(feature = "testing")]
 fn lazy_pipeline_admission_recovers() {
-    use crate::clip_mask::{ClipMaskPipeline, MaskMapping, MaskNode};
-    use crate::device_domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
+    use crate::device::domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
+    use crate::replay::clip_mask::{ClipMaskPipeline, MaskMapping, MaskNode};
     use crate::{EngineError, resources::GpuResources};
     use std::sync::Arc;
 
@@ -1558,7 +1558,7 @@ fn lazy_pipeline_admission_recovers() {
             },
         );
         let mut pipeline =
-            ClipMaskPipeline::new(crate::pipeline_device::PipelineDevice::uncached(&device));
+            ClipMaskPipeline::new(crate::pipelines::device::PipelineDevice::uncached(&device));
         let nodes = [MaskNode {
             bounds: [0.0, 0.0, 4.0, 4.0],
             radii_x: [1.0; 4],

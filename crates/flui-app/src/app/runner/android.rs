@@ -41,9 +41,11 @@ where
     // The application's development reload hook may own frames with a scene
     // plugin (`flui run --scene`); inert unless one is installed.
     let hot_reload = ScenePlugin::from_config(&config, app.internal_data_path().as_deref());
-    // Before the platform, whose registries report only to a capture already installed.
-    #[cfg(native_journal)]
-    super::native_journal::begin(flui_native::journal::codec::Backend::Android);
+    // Before the platform, whose registries report only to a capture already installed; ended
+    // if the platform fails to start or nobody serves the agent.
+    let journal = super::journal_start::JournalStart::begin(Some(
+        flui_protocol::native_recording::Backend::Android,
+    ));
     // The APK's assets (ADR-0384 §3), installed before any widget can ask.
     let apk_assets = flui_platform::assets::AssetBundle::new(Arc::new(
         flui_native::assets::ApkAssets::new(app.asset_manager()),
@@ -68,9 +70,9 @@ where
         &mut config,
         |key| platform.launch_value(key),
         &disconnect,
-        super::journals_native(),
+        journal.journals(),
     );
-    super::keep_native_journal(served);
+    journal.settle(served);
     // The loop takes the hooks and owns them until `run` returns. The window
     // is handed over once it is installed.
     super::dev_agents::start(&config);
@@ -485,7 +487,7 @@ impl AndroidFrameDriver {
         // The gate half of the wake runs inside one ui_runtime entry
         // and decides; the pump below enters the ui_runtime itself.
         let raster_deadline = raster.frame_deadline();
-        let (action, now, display_color) = ui_runtime.enter(|ui_runtime| {
+        let (action, now, display_color, plugin_frame) = ui_runtime.enter(|ui_runtime| {
             let now = web_time::Instant::now();
             // Owner-inbox drain: commands and worker results commit HERE,
             // at the frame boundary while the scheduler phase is Idle,
@@ -495,30 +497,11 @@ impl AndroidFrameDriver {
             // this frame takes.
             let inbox_redraw = ui_runtime.drain_owner_inbox();
 
-            // A live scene plugin owns this presentation's frame: its scene
-            // (not a ui_runtime-produced one) is lent to the window's slot
-            // for one render. Always `false` without an installed
-            // development reload hook.
-            // A presentation whose frames are off cannot be seen, and its
-            // slot draws nothing; one that can is shown before the scene is
-            // lent, so a window back from the background draws the plugin's
-            // scene first.
-            let (address, size) = (raster.address, raster.size);
-            let frames_enabled = ui_runtime.scheduler().frames_enabled();
-            let plugin_rendered = frames_enabled
-                && hot_reload.try_render_frame(
-                    f64::from(size.0),
-                    f64::from(size.1),
-                    |scene, reset_fonts| {
-                        raster.show(true);
-                        raster
-                            .host
-                            .try_with(|host| host.render_lent(address, size, scene, reset_fonts))
-                            .unwrap_or(false)
-                    },
-                );
-            if plugin_rendered {
-                return (WakeAction::Skip, now, None);
+            // A live scene plugin owns this presentation's frame
+            // (`ScenePlugin::own_frame`, the rule every native runner
+            // follows, ADR-0391).
+            if let Some(owned) = hot_reload.own_frame(ui_runtime, raster) {
+                return (WakeAction::Skip, now, None, Some(owned));
             }
 
             // The host's own deadlines (a lost device's next rebuild, a
@@ -549,11 +532,18 @@ impl AndroidFrameDriver {
                 ui_runtime
                     .window_display(presentation)
                     .and_then(|display| display.color),
+                None,
             )
         });
 
         if action != WakeAction::PumpBackground {
             self.background_pace.clear();
+        }
+        // The plugin drew the frame: the runtime's background work runs in
+        // place of the widget frame.
+        if let Some(owned) = plugin_frame {
+            owned.finish(ui_runtime, &self.raster);
+            return;
         }
         // A presentation whose frames are off cannot be seen: its slot is not
         // drawn, and draws in full when frames come back (ADR-0305).

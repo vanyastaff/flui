@@ -3,24 +3,19 @@
 //! Elements are stored in a Slab for O(1) access by ElementId; they form the
 //! retained tree.
 
-use std::any::TypeId;
 use std::cell::Cell;
 
 use std::rc::Rc;
 
-use flui_foundation::arena::{FrameArena, FrameVec};
 #[cfg(test)]
 use flui_foundation::generation::Generation;
 use flui_foundation::generation::{GenSlots, Release};
-use flui_foundation::panic::FirstPanic;
-use flui_foundation::{ElementId, RenderId, ViewKey};
-use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell};
+use flui_foundation::{ElementId, ViewKey};
 use slab::Slab;
-use smallvec::SmallVec;
 
 use crate::element::ElementKind;
 use crate::owner::LifecycleHook;
-use crate::view::{ElementBase, View};
+use crate::view::View;
 
 use super::containment::{ChildHookPanic, contain_window};
 
@@ -28,390 +23,17 @@ mod inherited_scope;
 pub(crate) use inherited_scope::InheritedScope;
 use inherited_scope::compute_inherited_scope;
 
-/// The render-parent edge the post-build reorder pass wants for one render
-/// node.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RenderEdge {
-    /// The nearest render ancestor in the element graph, or `None` for a
-    /// render root.
-    Parent(Option<RenderId>),
-    /// The first render node of a lazy sliver child: its edge and its place
-    /// in the sliver's list belong to the child manager and the sliver's
-    /// parent data, so the pass leaves both and settles only its children.
-    Sparse,
-}
+mod activation;
+mod element_node;
+mod global_key_retake;
+mod mounting;
+mod removal;
+mod render_children;
 
-fn append_sparse_sliver_children<A: std::alloc::Allocator + Copy>(
-    render_tree: &flui_rendering::storage::RenderTree,
-    parent_render: RenderId,
-    desired_children: &mut Vec<RenderId, A>,
-) {
-    // Lazy sliver children intentionally stay out of ElementNode::child_ids;
-    // their render order is recovered from SliverMultiBoxAdaptorParentData.
-    let Some(parent_node) = render_tree.get(parent_render) else {
-        return;
-    };
-
-    // A child the walk did not reach is a lazy sliver child when its parent
-    // data says so; most parents have none, so membership in the walk's own
-    // list is built only once the first such child turns up.
-    let mut desired_membership: Option<flui_foundation::SlotSet<RenderId>> = None;
-    let mut sparse_children: Vec<(usize, RenderId), A> = Vec::new_in(*desired_children.allocator());
-    for &child in parent_node.children() {
-        let Some(child_node) = render_tree.get(child) else {
-            continue;
-        };
-        if render_tree.parent(child) != Some(parent_render) {
-            continue;
-        }
-        let Some(index) = child_node
-            .parent_data()
-            .and_then(|data| data.downcast_ref::<SliverMultiBoxAdaptorParentData>())
-            .map(|data| data.index)
-        else {
-            continue;
-        };
-        let desired = desired_membership.get_or_insert_with(|| {
-            let mut desired = flui_foundation::SlotSet::new();
-            for &child in desired_children.iter() {
-                desired.insert(child);
-            }
-            desired
-        });
-        if !desired.contains(child) {
-            if sparse_children.capacity() == 0 {
-                // Reserved before the sparse list, so in an arena the sparse list frees last.
-                desired_children.reserve(parent_node.children().len());
-            }
-            sparse_children.push((index, child));
-        }
-    }
-
-    sparse_children.sort_unstable_by_key(|&(index, child)| (index, child));
-    desired_children.reserve(sparse_children.len());
-    for &(_, child) in &sparse_children {
-        desired_children.push(child);
-    }
-}
-
-/// A node in the Element tree.
-///
-/// Contains the Element plus metadata for tree traversal.
-pub struct ElementNode {
-    /// The actual Element.
-    ///
-    /// Normally `Some`. A `None` hole exists ONLY transiently inside
-    /// [`BuildOwner::build_scope`](crate::BuildOwner), between
-    /// [`ElementTree::take_element`] and [`ElementTree::put_element`], while
-    /// the element runs its own `build()` against a live read view of the
-    /// rest of the tree. By-value extraction is what lets the element be
-    /// `&mut`-borrowed AND hand the slab a `&` borrow at the same time
-    /// without aliasing. Outside that window every accessor assumes `Some`;
-    /// during it, ancestor walks read [`Self::element_opt`] (which returns
-    /// `None` for the hole rather than panicking).
-    pub(crate) kind: Option<ElementKind>,
-    /// Parent Element ID (None for root).
-    pub(crate) parent: Option<ElementId>,
-    /// Depth in the tree (root = 0). Private so every write goes through
-    /// [`Self::set_depth`], which also stamps the element.
-    depth: usize,
-    /// Slot index within parent's children.
-    pub(crate) slot: usize,
-    /// Cloned `View::key()` for the view this element currently holds,
-    /// or `None` when the view is keyless.
-    ///
-    /// FR-022. Populated at every `insert`/`mount_root_*`
-    /// call site (cloned via `ViewKey::clone_key`) and re-cloned at
-    /// every `update` boundary so the field stays in lock-step with
-    /// the view value the element actually holds. The keyed
-    /// reconciler reads this field directly via `key()` / `key_hash()`
-    /// — no `downcast::<V>()` needed.
-    ///
-    /// Coexists with `registered_global_key`, which narrows this to just
-    /// the keys that are `GlobalKey`s and were actually registered.
-    pub(crate) key: Option<Box<dyn ViewKey>>,
-    /// The `GlobalKey` registered for this element, if any.
-    ///
-    /// Set at mount time by `ElementTree::insert` /
-    /// `::mount_root_with_pipeline_owner` when the view's
-    /// `View::key()` returns a key whose `ViewKey::is_global_key()` is
-    /// `true`. Read at end-of-frame `BuildOwner::finalize_tree` to
-    /// unregister the entry from `BuildOwner::global_keys`.
-    ///
-    /// Stored by value rather than as a hash: the registry it unregisters
-    /// from resolves by key *identity* (`ViewKey::key_eq`), using the hash
-    /// only to pick a bucket, so a hash alone could unregister the wrong
-    /// entry whenever two distinct keys collide.
-    ///
-    /// Kept as a side channel on the node because the `View` value is owned by
-    /// `ElementCore` and not available at the dispatch boundary used for
-    /// finalization.
-    pub(crate) registered_global_key: Option<Box<dyn ViewKey>>,
-    /// This node's slab-id-based child list — the single, authoritative
-    /// element child graph (E3 — atomic box→arena swap).
-    ///
-    /// Written by the production id-based reconciler
-    /// [`reconcile_children_by_id`](super::id_reconcile::reconcile_children_by_id),
-    /// which `build_scope` drives once per dirty element; read by every
-    /// child traversal in the framework (build, mount, unmount,
-    /// dirty-collection). The old per-element `Box<dyn ElementBase>` child
-    /// storage is gone — elements no longer own children.
-    ///
-    /// Ordering is meaningful: entry `i` is the element occupying child
-    /// slot `i` after the most recent id-reconcile, matching the new
-    /// view order.
-    ///
-    /// Two ids sit inline, in the bytes a `Vec` header takes, so a leaf, a
-    /// single-child wrapper and a pair allocate no list.
-    pub(crate) child_ids: SmallVec<[ElementId; 2]>,
-    /// The set of [`InheritedView`](crate::view::InheritedView) providers in
-    /// scope at this node — `provider view TypeId → provider ElementId` — so
-    /// `BuildContext::depend_on_inherited` / `get_inherited` resolve the
-    /// nearest `P` provider in **O(1)** instead of an O(depth) ancestor walk.
-    /// (Only those two inherited lookups read this map; the `find_ancestor_*`
-    /// family still walks, as it matches arbitrary — not just inherited —
-    /// ancestor types.)
-    ///
-    /// Built top-down at [`insert`](ElementTree::insert) /
-    /// [`mount_root_with_pipeline_owner`](ElementTree::mount_root_with_pipeline_owner):
-    /// a non-provider aliases its parent's map by refcount (`Arc::clone`); a
-    /// provider stores
-    /// `parent_map + (view_type_id → self)` so nested same-type providers
-    /// shadow nearest-wins. Recomputed for a re-taken subtree on GlobalKey
-    /// reparent. Like `parent`/`depth`/`child_ids` it is a node field, so it
-    /// survives the `build_scope` take/put window and a building element can
-    /// read its own scope while its `element` slot is a hole.
-    ///
-    /// The map is keyed on the published `TypeId` and is a plain
-    /// `Arc<FxHashMap>` with copy-on-insert-at-providers rather than a persistent
-    /// HAMT — provider counts in a UI scope are tiny, so the per-provider
-    /// O(k) clone is effectively O(1) and avoids a new dependency. A node
-    /// outside every provider holds no map ([`InheritedScope::EMPTY`]).
-    pub(crate) inherited: InheritedScope,
-}
-
-impl ElementNode {
-    /// Create a new ElementNode.
-    ///
-    /// The `key` slot is initialised to `None`; callers that have the
-    /// originating `View::key()` in scope set it via the in-crate
-    /// `set_key` accessor immediately after construction. The two
-    /// production call sites (`ElementTree::mount_root_with_pipeline_owner`
-    /// and `ElementTree::insert`) thread the key in immediately
-    /// after `ElementNode::new` so the field is populated before
-    /// the element is returned.
-    pub fn new(kind: ElementKind, parent: Option<ElementId>, slot: usize) -> Self {
-        let mut node = Self {
-            kind: Some(kind),
-            parent,
-            depth: 0,
-            slot,
-            key: None,
-            registered_global_key: None,
-            child_ids: SmallVec::new(),
-            // Empty until the tree sets the real scope against the parent's
-            // map (insert / mount_root_*), mirroring how `key`/`depth` are
-            // finalised by the caller right after construction.
-            inherited: InheritedScope::EMPTY,
-        };
-        // Provisional; the tree stamps the real depth before mount.
-        node.set_depth(usize::from(parent.is_some()));
-        node
-    }
-
-    /// Set this node's depth in the tree and stamp it onto its element, so
-    /// [`ElementBase::depth`] and [`Self::depth`] never disagree.
-    ///
-    /// The only writer of the depth. A node is only `&`-borrowed while its
-    /// element is extracted for a build, so a write never meets that hole.
-    pub(crate) fn set_depth(&mut self, depth: usize) {
-        self.depth = depth;
-        debug_assert!(
-            self.kind.is_some(),
-            "BUG: ElementNode::set_depth during the build_scope take/put window"
-        );
-        if let Some(kind) = self.kind.as_mut() {
-            kind.set_depth(crate::view::ElementDepth::new(depth));
-        }
-    }
-
-    /// The nearest in-scope [`InheritedView`](crate::view::InheritedView)
-    /// provider whose view type is `type_id`, in O(1).
-    ///
-    /// This is the resolved scope at THIS node: for a non-provider it is the
-    /// parent's set; for a provider it also includes itself. Build-time
-    /// `depend_on` / `find_ancestor` read it via the node (which outlives the
-    /// `build_scope` element hole).
-    pub(crate) fn inherited_provider(&self, type_id: TypeId) -> Option<ElementId> {
-        self.inherited.get(type_id)
-    }
-
-    /// Message for the `expect` in the element accessors — the element is
-    /// absent only inside the `build_scope` take/put window.
-    const ELEMENT_PRESENT: &'static str =
-        "ElementNode::element accessed while extracted by build_scope (take/put window)";
-
-    /// Get the Element.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the element is currently extracted — the transient hole
-    /// `build_scope` opens between `take_element` and `put_element` while it
-    /// builds the node by value. Any lookup that can run *during* a build
-    /// (every `LiveBuildContext` ancestor walk) must go through [`Self::element_opt`]
-    /// instead, so reaching the in-flight node is a clean miss, not a panic.
-    pub fn element(&self) -> &dyn ElementBase {
-        self.kind.as_ref().expect(Self::ELEMENT_PRESENT).element()
-    }
-
-    /// Get the Element mutably.
-    ///
-    /// # Panics
-    ///
-    /// Panics on the same extracted-element hole as [`Self::element`] — see
-    /// its `# Panics` note.
-    pub fn element_mut(&mut self) -> &mut dyn ElementBase {
-        self.kind
-            .as_mut()
-            .expect(Self::ELEMENT_PRESENT)
-            .element_mut()
-    }
-
-    /// Get the Element, or `None` if it is currently extracted (the
-    /// transient `build_scope` hole — see [`Self::element`]).
-    ///
-    /// Build-time ancestor walks use this instead of [`Self::element`] so a
-    /// lookup that reaches the in-flight node returns a clean miss in every
-    /// build profile rather than panicking.
-    pub fn element_opt(&self) -> Option<&dyn ElementBase> {
-        self.kind.as_ref().map(ElementKind::element)
-    }
-
-    /// Get the parent ElementId.
-    pub fn parent(&self) -> Option<ElementId> {
-        self.parent
-    }
-
-    /// Get the depth in the tree.
-    pub fn depth(&self) -> usize {
-        self.depth
-    }
-
-    /// Get the slot index.
-    pub fn slot(&self) -> usize {
-        self.slot
-    }
-
-    /// Borrow the cloned `View::key()` this element was mounted with,
-    /// or `None` for a keyless element.
-    ///
-    /// The keyed reconciler reads this directly to build its
-    /// `old_keyed: FxHashMap<u64, ElementId>` index — no view-typed
-    /// `downcast::<V>()` needed. FR-022.
-    pub fn key(&self) -> Option<&dyn ViewKey> {
-        self.key.as_deref()
-    }
-
-    /// `View::key().map(ViewKey::key_hash)` for this element.
-    ///
-    /// Convenience over the two-step `key().map(ViewKey::key_hash)`.
-    /// Returns `None` for keyless elements ("no key, fall back to positional"
-    /// matching).
-    pub fn key_hash(&self) -> Option<u64> {
-        self.key.as_ref().map(|k| k.key_hash())
-    }
-
-    /// Replace the stored key.
-    ///
-    /// Called by `ElementTree` immediately after `ElementNode::new`
-    /// (mount path) and at every `update` boundary so the field tracks
-    /// the view value the element currently holds. The clone goes
-    /// through `ViewKey::clone_key` because `Box<dyn ViewKey>` is not
-    /// `Clone` directly.
-    pub(crate) fn set_key(&mut self, key: Option<Box<dyn ViewKey>>) {
-        self.key = key;
-    }
-
-    /// The `GlobalKey` registered for this element (if any).
-    pub fn registered_global_key(&self) -> Option<&dyn ViewKey> {
-        self.registered_global_key.as_deref()
-    }
-
-    /// Hash of the `GlobalKey` registered for this element (if any).
-    ///
-    /// A derived convenience over [`Self::registered_global_key`] for
-    /// tracing and tests. Never an identity: the registry that owns the
-    /// registration resolves by `ViewKey::key_eq`.
-    pub fn registered_global_key_hash(&self) -> Option<u64> {
-        self.registered_global_key.as_ref().map(|k| k.key_hash())
-    }
-
-    /// Borrow this node's parallel, id-based child list.
-    ///
-    /// The slice is ordered by child slot (entry `i` is slot `i`). It is
-    /// the read side of the id-based child model maintained by the id-based
-    /// reconciler (`super::id_reconcile::reconcile_children_by_id`); the
-    /// single element graph (E3 — atomic box→arena swap).
-    ///
-    /// Public because it is the only way to observe a parent's own view of
-    /// its children — [`Self::parent`] answers the child's side, and the two
-    /// disagreeing is exactly the dangling edge the duplicate-`GlobalKey`
-    /// repair exists to clear. Read-only: the write side stays crate-internal
-    /// to the reconciler.
-    pub fn child_ids(&self) -> &[ElementId] {
-        &self.child_ids
-    }
-
-    /// Replace this node's parallel, id-based child list.
-    ///
-    /// Called by [`reconcile_children_by_id`](super::id_reconcile::reconcile_children_by_id)
-    /// at the end of a reconcile pass with the freshly computed child
-    /// order (one id per new view, in new-view order). Overwrites any
-    /// previous list wholesale — the caller is responsible for having
-    /// already inserted / removed the corresponding slab nodes so the
-    /// stored ids all resolve.
-    ///
-    /// The list keeps its buffer, so a rebuild that keeps the child count
-    /// allocates nothing. A list that outgrows its buffer, or shrank to
-    /// under a quarter of it, gets a buffer of exactly its own size: growing
-    /// in place would round a one-child list up to four slots.
-    pub(crate) fn set_child_ids(&mut self, ids: &[ElementId]) {
-        let capacity = self.child_ids.capacity();
-        if capacity < ids.len() || capacity / 4 > ids.len() {
-            self.child_ids = SmallVec::from_slice(ids);
-        } else {
-            self.child_ids.clear();
-            self.child_ids.extend_from_slice(ids);
-        }
-    }
-
-    fn commit_child_replacement(
-        &mut self,
-        slot: usize,
-        expected_old: ElementId,
-        replacement: ElementId,
-    ) {
-        assert!(
-            self.child_ids.get(slot) == Some(&expected_old),
-            "BUG: a replacement slot must still contain its preflighted old child after mount",
-        );
-        self.child_ids[slot] = replacement;
-    }
-}
-
-impl std::fmt::Debug for ElementNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ElementNode")
-            .field("parent", &self.parent)
-            .field("depth", &self.depth)
-            .field("slot", &self.slot)
-            .field(
-                "lifecycle",
-                &self.kind.as_ref().map(|k| k.element().lifecycle()),
-            )
-            .finish_non_exhaustive()
-    }
-}
+pub use element_node::ElementNode;
+pub(crate) use mounting::{InsertedChild, ProvisionalOrder};
+pub(crate) use removal::SubtreeRemoval;
+pub(crate) use render_children::enclosing_sparse_child;
 
 /// Slab-based Element tree storage.
 ///
@@ -471,104 +93,6 @@ impl Drop for ReconcileGuard {
 impl Default for ElementTree {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// How [`ElementTree::remove_subtree`] treats a `GlobalKey`'d element it finds.
-///
-/// The two modes exist because "this subtree is going away" means two
-/// different things. A parent dropping a child is a within-frame event: a key
-/// may be declared again before the frame ends, so the element is deactivated
-/// and `finalize_tree` unmounts whatever no key claimed. Tearing a
-/// presentation down is not — there is no frame left to run a retake or a
-/// finalize, so a deactivated element would sit in the inactive queue with its
-/// `dispose` never run, and a later attach could retake stale state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SubtreeRemoval {
-    /// A keyed element is deactivated for a same-frame retake; the walk stops
-    /// there so the retake keeps its children.
-    DeactivateKeyed,
-    /// Everything goes, keys included. For permanent teardown, where nothing
-    /// will run `finalize_tree` afterwards.
-    Finalize,
-}
-
-/// What an insert did with the child it was asked to produce, reported
-/// *before* any user code runs so a caller that bounds mount panics knows
-/// what there is to undo.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum InsertedChild {
-    /// A fresh node entered the slab at this id. Until `mount` returns it is
-    /// announced nowhere — no `Mount` event, no `GlobalKey` registration, no
-    /// entry in the parent's `child_ids` — so this report is the only handle
-    /// to it.
-    Minted(ElementId),
-    /// An existing element was relocated here by a `GlobalKey` retake. It was
-    /// already announced (as a `Reparent`), carries user state, and its own
-    /// `update` — user `update_render_object` included — runs inside the
-    /// retake.
-    Retaken(ElementId),
-}
-
-/// The partial child order a reconcile has committed so far, which the
-/// `GlobalKey` retake preflight consults to decide whether a candidate can be
-/// relocated into this parent. Empty for an insert outside a reconcile.
-#[derive(Clone, Copy)]
-pub(crate) struct ProvisionalOrder<'a> {
-    reconciled_prefix: &'a [ElementId],
-    unclaimed_old_slots: &'a [Option<ElementId>],
-}
-
-impl<'a> ProvisionalOrder<'a> {
-    /// No order committed yet — a fresh insert with nothing to preflight.
-    pub(crate) const NONE: Self = Self {
-        reconciled_prefix: &[],
-        unclaimed_old_slots: &[],
-    };
-
-    /// The order committed so far by dense reconciliation.
-    pub(super) const fn during_reconcile(
-        reconciled_prefix: &'a [ElementId],
-        unclaimed_old_slots: &'a [Option<ElementId>],
-    ) -> Self {
-        Self {
-            reconciled_prefix,
-            unclaimed_old_slots,
-        }
-    }
-}
-
-/// The lazy sliver child `from` lives inside — the direct child of the nearest
-/// element that hosts sparse children.
-///
-/// **Not** the nearest ancestor carrying a `sliver_slot`: a component element
-/// passes its slot down to its own children, so several elements in one item
-/// carry the same value and the nearest is usually a descendant
-/// `SparseChildren` has never heard of. Nesting resolves correctly for the same
-/// reason — the *inner* list's host is found first.
-///
-/// Self-inclusive, because an item whose parent is the host is itself that
-/// child. Ancestors are read through `element_opt`, so a node extracted by
-/// `build_scope`'s take/put window is a clean miss rather than a panic — the
-/// contract for every walk reachable during a build.
-///
-/// Shared by the keep-alive capability (which resolves it when a lease is
-/// taken) and by band eviction (which re-resolves it for every live holder, so
-/// a holder grafted between slivers is re-targeted rather than pinning the row
-/// it left). Two copies of this rule would drift, and the drift would be a
-/// silent leak.
-pub(crate) fn enclosing_sparse_child(tree: &ElementTree, from: ElementId) -> Option<ElementId> {
-    let mut current_id = from;
-    loop {
-        let parent_id = tree.get(current_id)?.parent()?;
-        let hosts = tree
-            .get(parent_id)?
-            .element_opt()
-            .is_some_and(crate::view::ElementBase::hosts_sparse_children);
-        if hosts {
-            return Some(current_id);
-        }
-        current_id = parent_id;
     }
 }
 
@@ -685,939 +209,6 @@ impl ElementTree {
         self.nodes.len()
     }
 
-    /// Mount a View as the root of the tree.
-    ///
-    /// Returns the ElementId of the root element.
-    ///
-    /// Note: This method does NOT pass PipelineOwner to the element.
-    /// For RenderObjectElements that need PipelineOwner, use
-    /// `mount_root_with_pipeline_owner` instead.
-    pub fn mount_root(
-        &mut self,
-        view: &dyn View,
-        owner: &mut crate::ElementOwner<'_>,
-    ) -> ElementId {
-        self.mount_root_with_pipeline_owner(view, None, owner)
-    }
-
-    /// Mount a View as the element-tree slab root, optionally threading a
-    /// [`PipelineCell`] into the root element before `mount`.
-    ///
-    /// This is the **low-level element-tree attach** primitive. It does **not**
-    /// install [`PipelineOwner::root_id`](flui_rendering::PipelineOwner::root_id)
-    /// for an ordinary render-producing view — only
-    /// [`crate::RootRenderView`] / `RootRenderElement` owns that invariant.
-    /// The UI runtime therefore wraps the user view in
-    /// `RootRenderView` before calling this (`WidgetsBinding::attach_root_widget`).
-    ///
-    /// Callers that need a live render pipeline must use that
-    /// root-bootstrap APIs (or an equivalent `RootRenderView` wrap). Direct
-    /// use here remains appropriate for element-tree unit tests that never
-    /// drive layout/paint from `root_id`.
-    ///
-    /// # Arguments
-    ///
-    /// * `view` - The root View to mount
-    /// * `pipeline_owner` - Optional PipelineOwner for render tree management
-    /// * `owner` - Split-borrow handle into the `BuildOwner`
-    ///   ([`ElementOwner`](crate::ElementOwner)) threaded into the
-    ///   element's `mount` call so `GlobalKey` registration / dirty
-    ///   scheduling can take effect during initial mount.
-    ///
-    /// Returns the ElementId of the root element.
-    pub fn mount_root_with_pipeline_owner(
-        &mut self,
-        view: &dyn View,
-        pipeline_owner: Option<PipelineCell>,
-        owner: &mut crate::ElementOwner<'_>,
-    ) -> ElementId {
-        let mut element = crate::view::create_element_of(view);
-
-        // Pass the pipeline cell to the element BEFORE mounting.
-        // This is critical for RenderObjectElements to create their RenderObjects
-        if let Some(ref pipeline) = pipeline_owner {
-            element.element_mut().set_pipeline_owner(pipeline.clone());
-            tracing::debug!(
-                "ElementTree::mount_root_with_pipeline_owner: passed PipelineCell to root element"
-            );
-        }
-
-        let mut node = ElementNode::new(element, None, 0);
-        // FR-022: store the cloned `View::key()` on the
-        // node so the keyed reconciler can index by it without
-        // crossing the typed-`V` boundary.
-        node.set_key(view.key().map(ViewKey::clone_key));
-
-        let slab_index = self.nodes.insert(node);
-        // Mint the generational id from the slot's current generation
-        // (fresh slot → gen 1; reused slot → the bumped post-free value).
-        let id = self.alloc_id(slab_index);
-
-        // Stamp the element with its own ElementId BEFORE
-        // `mount` so the Variable-arity reconciler can read it back
-        // when emitting ReconcileEvent's `parent` field.
-        self.nodes[slab_index].element_mut().set_self_id(id);
-
-        // Root inherited scope: empty parent map, plus self if the root is
-        // itself a provider. Set before `mount` (see `insert`).
-        self.nodes[slab_index].inherited = {
-            let empty = InheritedScope::EMPTY;
-            let node = &self.nodes[slab_index];
-            compute_inherited_scope(&empty, node.element(), id)
-        };
-
-        // Mount the element (now it has PipelineOwner set)
-        self.nodes[slab_index].element_mut().mount(None, 0, owner);
-
-        // Register GlobalKey on mount. The root element's view is
-        // queried here because the dispatch boundary at `Element::mount`
-        // can't read the typed `View::key()` (V isn't bounded by View
-        // there). Doing the check here keeps the wiring at the level
-        // where both `view: &dyn View` and `id` are simultaneously in
-        // scope.
-        //
-        // No reservation is recorded here: a reservation names the PARENT
-        // that declared the key, and a root has none.
-        if let Some(key) = global_key_of(view) {
-            register_global_key_with_collision_check(owner, key, id);
-            self.nodes[slab_index].registered_global_key = Some(key.clone_key());
-        }
-
-        // ADR-0040: a fresh root was minted and mounted.
-        crate::owner::emit_observation(owner.tree_observer, |o| {
-            o.element_mounted(&flui_foundation::observe::ElementMounted::new(
-                id,
-                None,
-                0,
-                view.view_type_id(),
-            ));
-        });
-
-        self.root = Some(id);
-        id
-    }
-
-    /// Insert a new element as a child of the given parent.
-    ///
-    /// Returns the ElementId of the new element.
-    ///
-    /// The split-borrow `owner` handle is threaded into the new
-    /// element's `mount` call.
-    ///
-    /// # GlobalKey state migration
-    ///
-    /// If `view` carries a `GlobalKey` that is already registered
-    /// to an element AND that element is currently in the inactive
-    /// queue (from a prior soft-remove this frame), the inactive
-    /// element is pulled back to the new parent/slot instead of a
-    /// fresh element being created. Its `ElementId` and persistent
-    /// state survive.
-    pub fn insert(
-        &mut self,
-        view: &dyn View,
-        parent: ElementId,
-        slot: usize,
-        owner: &mut crate::ElementOwner<'_>,
-    ) -> ElementId {
-        self.try_insert_with_provisional_order(view, parent, slot, owner, ProvisionalOrder::NONE)
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic.payload))
-    }
-
-    /// Finalize one child subtree and mount a keyless replacement in its exact slot.
-    ///
-    /// Validation completes before mutation. The old parent-child
-    /// `GlobalKey` reservation is then withdrawn, the old subtree is finalized,
-    /// and the replacement is inserted through the unbounded insertion path.
-    /// Only after insertion succeeds is the parent's child-id slot committed,
-    /// render reordering armed and notified, and the replacement scheduled for
-    /// its initial build.
-    ///
-    /// A panic from replacement creation or mounting propagates after the old
-    /// subtree has been removed but before the child-id slot, render reorder, or
-    /// build schedule is committed. That failure is fatal and has no rollback;
-    /// callers must not continue using the partially advanced tree.
-    ///
-    /// # Panics
-    ///
-    /// Panics with a `BUG:` invariant failure before mutation if the replacement
-    /// is keyed, the parent or old child is missing, the slot does not exist, or
-    /// the old child's reverse parent/slot edge disagrees. Also propagates any
-    /// panic raised while creating or mounting the replacement, with the
-    /// post-removal failure state described above.
-    pub(crate) fn replace_child_with(
-        &mut self,
-        parent: ElementId,
-        slot: usize,
-        view: &dyn View,
-        owner: &mut crate::ElementOwner<'_>,
-    ) -> ElementId {
-        assert!(
-            view.key().is_none(),
-            "BUG: a failure replacement must be keyless",
-        );
-        let (old_child, parent_depth, render_notification) = {
-            let parent_node = self
-                .get(parent)
-                .expect("BUG: a failure replacement parent must remain live");
-            let old_child = *parent_node
-                .child_ids()
-                .get(slot)
-                .expect("BUG: a failure replacement slot must exist on its parent");
-            let parent_element = parent_node.element();
-            let render_notification = parent_element.render_id().map(|render_id| {
-                let pipeline = parent_element
-                    .pipeline_owner()
-                    .expect("BUG: an active render replacement parent must have a PipelineOwner");
-                (pipeline, render_id)
-            });
-            (old_child, parent_node.depth(), render_notification)
-        };
-        let old_node = self
-            .get(old_child)
-            .expect("BUG: a failure replacement slot must name a live child");
-        assert!(
-            old_node.parent() == Some(parent) && old_node.slot() == slot,
-            "BUG: a replacement child's reverse edge must match its containing parent and slot",
-        );
-
-        owner.forget_global_key_reservation(parent, old_child);
-        self.remove_subtree(old_child, owner, SubtreeRemoval::Finalize);
-        let replacement = self.insert(view, parent, slot, owner);
-        self.get_mut(parent)
-            .expect("BUG: a replacement parent must remain live through child mount")
-            .commit_child_replacement(slot, old_child, replacement);
-        self.mark_render_reorder_needed();
-        if let Some((pipeline, render_id)) = render_notification {
-            pipeline.with_mut(|owner| owner.note_render_children_reordered(render_id));
-        }
-        owner.schedule_build_for(
-            replacement,
-            parent_depth + 1,
-            crate::RebuildReason::InitialMount,
-        );
-        replacement
-    }
-
-    /// [`insert`](Self::insert)'s fallible core: a caught panic comes back as `Err` instead of
-    /// unwinding through this call, so a bounding caller ([`Self::mount_or_substitute`])
-    /// can undo whatever the containment window committed before deciding
-    /// what to do next.
-    ///
-    /// # The containment window
-    ///
-    /// A fresh mount's window runs from `View::create_element()` through the
-    /// end of `mount` — every call in between can reach user code
-    /// (`View::create_element`, `RenderView::create_render_object`).
-    /// `ViewState::init_state` is NOT inside this window: it runs later, in
-    /// the `build_scope` drain, not during `mount`. A `GlobalKey`
-    /// retake's window is reported by [`retake_inactive_global_key`] /
-    /// [`retake_active_global_key`] themselves, which run `activate_subtree`
-    /// and the retake's own `update` under their own catch and hand back a
-    /// `Result` here. Framework code before `create_element` (the retake
-    /// preflight below) and after `mount` returns (`GlobalKey` registration,
-    /// the `Mount` event, the observer, ancestor parent-data, the
-    /// render-reorder flag) stays outside every window and propagates
-    /// exactly as it always has — see [`ChildHookPanic`]'s doc for the full
-    /// rule.
-    pub(super) fn try_insert_with_provisional_order(
-        &mut self,
-        view: &dyn View,
-        parent: ElementId,
-        slot: usize,
-        owner: &mut crate::ElementOwner<'_>,
-        order: ProvisionalOrder<'_>,
-    ) -> Result<ElementId, ChildHookPanic> {
-        let ProvisionalOrder {
-            reconciled_prefix,
-            unclaimed_old_slots,
-        } = order;
-        // ADV-1 state migration. Before creating a fresh element,
-        // check whether `view` has a `GlobalKey` that points at an
-        // existing element. If it is inactive, pull it back; if it is still
-        // active under a different parent, forget it from that parent and move
-        // it here. In both cases the `ElementId` and state survive.
-        if let Some(key) = global_key_of(view) {
-            let destination = RetakeDestination {
-                parent,
-                slot,
-                reconciled_prefix,
-                unclaimed_old_slots,
-            };
-            match try_retake_global_key(self, owner, key, view, destination) {
-                GlobalKeyRetake::Absent => {}
-                GlobalKeyRetake::Retaken(retaken_id) => {
-                    // A parent declaring a keyed child has made a claim on
-                    // that key for this frame, whether the element was
-                    // grafted or freshly mounted. The frame boundary reads
-                    // the claims back to tell a legal reparent (one
-                    // claimant) from a duplicate (two).
-                    owner.reserve_global_key(parent, retaken_id, key);
-                    return Ok(retaken_id);
-                }
-                GlobalKeyRetake::RetakePanicked(panic) => {
-                    // The retake's own containment window already committed
-                    // the relocation and reported it — the caller undoes
-                    // THAT element, not a fresh mint this call never made.
-                    return Err(panic);
-                }
-                GlobalKeyRetake::Rejected => {
-                    // The candidate exists but could not be relocated (it is
-                    // not idle, has no render frontier to move, or lives in
-                    // another pipeline). Fall through to a fresh mount rather
-                    // than panicking here: a second live element for one key
-                    // is exactly the condition the reservation ledger below
-                    // records, and the frame boundary reports it with the
-                    // claimants named. Panicking at this point would turn a
-                    // reportable duplicate into a crash and would lose that
-                    // diagnostic entirely.
-                    tracing::debug!(
-                        key = ?key,
-                        ?parent,
-                        "GlobalKey candidate failed the relocation preflight; mounting fresh and \
-                         leaving the duplicate to the frame boundary"
-                    );
-                }
-            }
-        }
-
-        // Fresh mount. `inserted` is written the instant the node exists in
-        // the slab, before `mount` runs, so a panic anywhere in the window
-        // below still leaves the caller a report of what to undo — and it
-        // is a plain local, not an out-parameter: a write to it survives the
-        // unwind that follows, the same way the out-parameter it replaces
-        // always did.
-        let mut inserted: Option<InsertedChild> = None;
-        let mount_result = contain_window(|| -> ElementId {
-            let mut element = crate::view::create_element_of(view);
-
-            // Read the parent's render-tree propagation context in ONE fresh,
-            // immediately-dropped `&ElementTree` borrow, then apply it to the
-            // freshly-created child BEFORE mount.
-            //
-            // E3 (atomic box→arena swap): the old box graph propagated the
-            // `PipelineOwner` + parent `RenderId` to children inside
-            // `update_or_create_child(ren)`, *before* `mount_children`, because
-            // `RenderBehavior::on_mount` creates its `RenderObject` only when a
-            // `PipelineOwner` is already in scope. Children are now
-            // slab-resident, so that propagate-before-mount ordering moves
-            // here: read `pipeline_owner()` / `child_render_id()` off the
-            // parent node, hand them to the child, then mount.
-            let (
-                parent_depth,
-                parent_owner,
-                child_parent_render_id,
-                child_sliver_slot,
-                parent_inherited,
-            ) = match self.get(parent) {
-                Some(node) => (
-                    node.depth,
-                    node.element().pipeline_owner(),
-                    node.element().child_render_id(),
-                    node.element().child_sliver_slot(slot),
-                    node.inherited.clone(),
-                ),
-                None => (0, None, None, None, InheritedScope::EMPTY),
-            };
-
-            if let Some(pipeline_owner) = parent_owner {
-                element.element_mut().set_pipeline_owner(pipeline_owner);
-            }
-            element
-                .element_mut()
-                .set_parent_render_id(child_parent_render_id);
-            element.element_mut().set_sliver_slot(child_sliver_slot);
-
-            let mut node = ElementNode::new(element, Some(parent), slot);
-            node.set_depth(parent_depth + 1);
-            // FR-022.
-            node.set_key(view.key().map(ViewKey::clone_key));
-
-            let slab_index = self.nodes.insert(node);
-            let id = self.alloc_id(slab_index);
-
-            // Same self-id stamping as mount_root.
-            self.nodes[slab_index].element_mut().set_self_id(id);
-
-            // Report before `mount` — everything from here on can panic through
-            // user code (`View::create_render_object`), and this is the only
-            // handle to the node that would otherwise be stranded.
-            inserted = Some(InsertedChild::Minted(id));
-
-            // Resolve this child's inherited scope from the parent's now that the
-            // element knows whether it is itself a provider (`as_inherited`) and
-            // its `view_type_id`. Computed before `mount` so an
-            // `InheritedBehavior::on_mount` (or any mount-time lookup) already sees
-            // its own scope.
-            self.nodes[slab_index].inherited = {
-                let node = &self.nodes[slab_index];
-                compute_inherited_scope(&parent_inherited, node.element(), id)
-            };
-
-            // Mount the element (PipelineOwner + parent RenderId already set,
-            // so `RenderBehavior::on_mount` can create its RenderObject).
-            self.nodes[slab_index]
-                .element_mut()
-                .mount(Some(parent), slot, owner);
-
-            id
-        });
-
-        let id = match mount_result {
-            Ok(id) => id,
-            Err(payload) => {
-                return Err(ChildHookPanic {
-                    inserted,
-                    hook: LifecycleHook::Mount,
-                    staged: None,
-                    payload,
-                });
-            }
-        };
-
-        // Register the GlobalKey → id mapping, and record the declaration
-        // for the frame boundary's duplicate check.
-        if let Some(key) = global_key_of(view) {
-            register_global_key_with_collision_check(owner, key, id);
-            if let Some(node) = self.get_mut(id) {
-                node.registered_global_key = Some(key.clone_key());
-            }
-            owner.reserve_global_key(parent, id, key);
-        }
-
-        // A fresh child node appeared at (parent, slot). Emit `Mount` HERE —
-        // `insert` is the single site that mints child nodes, and the
-        // GlobalKey-retake path above already emitted `Reparent` and returned
-        // early, so the two dispositions can never double-fire for one
-        // new-side view (the reconciler must NOT also emit `Mount`).
-        super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent::mount(
-            parent,
-            slot,
-            view.view_type_id(),
-            view.key().map(ViewKey::key_hash),
-        ));
-
-        // ADR-0040: same single-mint funnel as the tracing Mount above — the
-        // GlobalKey-retake early-return can never reach this point, so a
-        // retake never double-fires as a mount.
-        crate::owner::emit_observation(owner.tree_observer, |o| {
-            o.element_mounted(&flui_foundation::observe::ElementMounted::new(
-                id,
-                Some(parent),
-                slot,
-                view.view_type_id(),
-            ));
-        });
-
-        // A freshly-attached render child reads the parent-data its nearest
-        // ancestor `ParentDataView` (`Expanded`, `Positioned`) contributes.
-        self.apply_ancestor_parent_data(id);
-
-        // A render-bearing child appended itself to its render parent in
-        // *attach* order, which only matches element-slot order when no
-        // component ancestor deferred its build. Flag a post-build reorder so
-        // the render children settle into slot order regardless.
-        if self
-            .get(id)
-            .is_some_and(|node| node.element().render_id().is_some())
-        {
-            self.needs_render_reorder = true;
-        }
-
-        Ok(id)
-    }
-
-    /// Install or update the nearest ancestor `ParentDataView`'s typed
-    /// configuration on `child_id`'s render node.
-    ///
-    /// No-op unless `child_id` owns a render node. Walks strictly upward from
-    /// the child, taking the *nearest* `parent_data_config()` and stopping the
-    /// search at the first ancestor render object (the render parent that reads
-    /// the data during layout). The nearest config wins.
-    /// Existing data is mutated through the typed hook so layout-owned fields
-    /// survive; its returned impact controls the render-parent dirty work.
-    ///
-    /// Before writing, the provider's parent-data [`TypeId`] is
-    /// checked against the render parent's
-    /// [`child_parent_data_type_id`](flui_rendering::RenderObject::child_parent_data_type_id).
-    /// A mismatch panics with a composition diagnostic (offending
-    /// `ParentDataView`, typical ancestor family, actual render parent, element
-    /// ancestry) — the same failure in debug and release — rather than reaching
-    /// layout's `RawBoxLayoutContext::from_erased` TypeId assert.
-    ///
-    /// Average case O(1) — for a plain render child the very first ancestor is
-    /// the render parent, so the walk stops in one hop and never touches the
-    /// pipeline owner. Worst case O(proxy-nesting depth) between the render
-    /// child and its render parent.
-    ///
-    /// The element tree and render tree are disjoint stores. The typed element
-    /// hook reads widget configuration while the pipeline checkout mutates only
-    /// the render node.
-    fn apply_ancestor_parent_data(&mut self, child_id: ElementId) {
-        let Some(child) = self.get(child_id) else {
-            return;
-        };
-        let Some(child_render_id) = child.element().render_id() else {
-            return;
-        };
-        let pipeline_owner = child.element().pipeline_owner();
-        let mut cursor = child.parent();
-
-        let mut nearest_parent_data_element: Option<ElementId> = None;
-        let mut parent_render_id: Option<flui_foundation::RenderId> = None;
-        while let Some(ancestor_id) = cursor {
-            let Some(node) = self.get(ancestor_id) else {
-                break;
-            };
-            if let Some(render_id) = node.element().render_id() {
-                parent_render_id = Some(render_id);
-                break;
-            }
-            if nearest_parent_data_element.is_none()
-                && node.element().parent_data_type_id().is_some()
-            {
-                nearest_parent_data_element = Some(ancestor_id);
-            }
-            cursor = node.parent();
-        }
-
-        // Nothing to apply unless a ParentDataView sits between this render
-        // child and its render parent.
-        let Some(parent_data_element_id) = nearest_parent_data_element else {
-            return;
-        };
-        let Some(pipeline_owner) = pipeline_owner else {
-            return;
-        };
-
-        let (provided_type_id, provider_name, typical_ancestor, provided_pd_name) = {
-            let element = self
-                .get(parent_data_element_id)
-                .expect("BUG: located ParentDataView element must remain live")
-                .element();
-            (
-                element
-                    .parent_data_type_id()
-                    .expect("BUG: located ParentDataView must report a parent-data TypeId"),
-                element
-                    .parent_data_debug_type_name()
-                    .unwrap_or("ParentDataView"),
-                element
-                    .parent_data_typical_ancestor_description()
-                    .unwrap_or("a render parent whose children use this parent-data type"),
-                element
-                    .parent_data_storage_type_name()
-                    .unwrap_or("unknown parent-data type"),
-            )
-        };
-
-        // The element-tree borrow and render-tree checkout are disjoint.
-        // Ancestry is formatted only inside the assert failure path — not on
-        // every successful ParentDataView attach/update.
-        pipeline_owner.with_mut(|owner| {
-            if let Some(parent_render_id) = parent_render_id
-                && let Some(parent_node) = owner.render_tree().get(parent_render_id)
-            {
-                assert!(
-                    provided_type_id == parent_node.child_parent_data_type_id(),
-                    "Incorrect use of ParentDataView `{provider_name}`: it contributes \
-                     `{provided_pd_name}` but its nearest render parent is `{}` \
-                     (incompatible child parent-data TypeId). `{provider_name}` must be \
-                     placed under {typical_ancestor}. Element ancestry \
-                     (child → … → root): {}",
-                    parent_node.kind(),
-                    self.format_element_ancestry(child_id),
-                );
-            }
-
-            let parent_data_element = self
-                .get(parent_data_element_id)
-                .expect("BUG: located ParentDataView element must remain live");
-            // The owner marks the child's render parent, the node that reads
-            // its parent data, with the impact the update reports.
-            let _ = owner.update_parent_data(child_render_id, |slot| {
-                if let Some(parent_data) = slot.get_mut() {
-                    parent_data_element
-                        .element()
-                        .apply_parent_data_config(parent_data)
-                } else {
-                    let config = parent_data_element
-                        .element()
-                        .parent_data_config()
-                        .expect("BUG: located ParentDataView must create parent data");
-                    slot.set(config);
-                    flui_rendering::RenderUpdateImpact::NONE
-                }
-            });
-        });
-    }
-
-    /// Child → … → root labels for parent-data mismatch diagnostics.
-    fn format_element_ancestry(&self, from: ElementId) -> String {
-        let mut parts = Vec::new();
-        let mut cursor = Some(from);
-        while let Some(id) = cursor {
-            let Some(node) = self.get(id) else {
-                break;
-            };
-            let label = node
-                .element()
-                .parent_data_debug_type_name()
-                .unwrap_or("Element");
-            parts.push(format!("{label}#{id}"));
-            cursor = node.parent();
-        }
-        parts.join(" → ")
-    }
-
-    fn reset_ancestor_parent_data(&mut self, child_id: ElementId) {
-        let Some(child) = self.get(child_id) else {
-            return;
-        };
-        let Some(render_id) = child.element().render_id() else {
-            return;
-        };
-        if let Some(pipeline) = child.element().pipeline_owner() {
-            pipeline.with_mut(|owner| {
-                let _ = owner.update_parent_data(render_id, |slot| {
-                    let _ = slot.clear();
-                    flui_rendering::RenderUpdateImpact::NONE
-                });
-            });
-        }
-        self.apply_ancestor_parent_data(child_id);
-    }
-
-    /// Reorder every render object's children to match element-slot order.
-    ///
-    /// A render child appends itself to its render parent during mount, so when
-    /// a component ancestor (a `StatelessView` / `ParentDataView`) builds its
-    /// render descendant in a *later* `build_scope` iteration than a render
-    /// sibling that already attached, the parent's children list ends up in
-    /// attach order, not slot order. This single post-build pass walks the
-    /// element tree depth-first in slot order, derives each render parent's
-    /// correct child sequence, and rewrites only those that drifted.
-    ///
-    /// No-op unless insertion or committed child reconciliation set
-    /// `needs_render_reorder`.
-    /// Average/worst case O(element-tree size) for the DFS, plus O(children) per
-    /// drifted render parent. The element walk completes before the pipeline
-    /// owner is locked; the lock guards only the render tree.
-    ///
-    /// # Exempt from [`adopt_child`](flui_rendering::storage::RenderTree::adopt_child)
-    ///
-    /// `adopt_child` is the single-edge primitive for attaching ONE freshly
-    /// mounted child under its parent. This pass is a different shape: a
-    /// bulk diff of a parent's WHOLE children list against the element-slot
-    /// order, so it writes the parent-pointer sync loop and the
-    /// children-list rewrite loop separately rather than one `adopt_child`
-    /// call per child — an `adopt_child`-per-child here would re-derive the
-    /// same target list one element at a time for no benefit, and would
-    /// still need the separate stale-child eviction the children-list loop
-    /// already does. The two loops are still required to leave both edge
-    /// directions consistent; a debug-only invariant check at the end of
-    /// this function proves that rather than trusting it silently (this is
-    /// exactly the invariant the root-hop parent-link defect violated: a
-    /// child recorded in its parent's children list while its own `parent`
-    /// link disagreed).
-    pub(crate) fn reorder_render_children_after_build(
-        &mut self,
-        registry: &crate::element::child_manager::ChildManagerRegistry,
-        arena: &mut FrameArena,
-    ) -> usize {
-        if !self.needs_render_reorder {
-            return 0;
-        }
-        self.needs_render_reorder = false;
-        // Reset after the walk: between frames the arena holds one chunk, not the chain that grew.
-        let reordered = self.synchronize_render_children(registry, arena);
-        arena.reset();
-        reordered
-    }
-
-    pub(super) fn mark_render_reorder_needed(&mut self) {
-        self.needs_render_reorder = true;
-    }
-
-    /// Synchronize only the destination's nearest render parent's direct
-    /// children for the provisional GlobalKey order.
-    ///
-    /// This must run before the moved element's update and observer callbacks,
-    /// but a global element-tree walk would make each retake O(tree size). The
-    /// walk therefore starts at the destination render element, follows only
-    /// its logical descendants, and stops at each first render boundary.
-    pub(super) fn synchronize_destination_render_children_for_relocation(
-        &mut self,
-        parent_id: ElementId,
-        provisional_children: &[ElementId],
-    ) -> usize {
-        let mut render_element_id = Some(parent_id);
-        let (render_element_id, render_parent_id, pipeline) = loop {
-            let Some(element_id) = render_element_id else {
-                return 0;
-            };
-            let Some(node) = self.get(element_id) else {
-                return 0;
-            };
-            if let Some(render_id) = node.element().render_id() {
-                let Some(pipeline) = node.element().pipeline_owner() else {
-                    return 0;
-                };
-                break (element_id, render_id, pipeline);
-            }
-            render_element_id = node.parent();
-        };
-
-        let root_children = if render_element_id == parent_id {
-            provisional_children
-        } else {
-            self.get(render_element_id)
-                .map_or(&[][..], ElementNode::child_ids)
-        };
-        let mut desired_children = Vec::new();
-        let mut visited = 1;
-        let mut stack: Vec<ElementId> = root_children.iter().rev().copied().collect();
-        while let Some(element_id) = stack.pop() {
-            visited += 1;
-            let Some(node) = self.get(element_id) else {
-                continue;
-            };
-            if let Some(render_id) = node.element().render_id() {
-                desired_children.push(render_id);
-                continue;
-            }
-            let children = if element_id == parent_id {
-                provisional_children
-            } else {
-                node.child_ids()
-            };
-            stack.extend(children.iter().rev().copied());
-        }
-
-        pipeline.with_mut(|owner| {
-            append_sparse_sliver_children(
-                owner.render_tree(),
-                render_parent_id,
-                &mut desired_children,
-            );
-            let _ = owner.set_render_children(render_parent_id, &desired_children);
-        });
-        visited
-    }
-
-    fn synchronize_render_children(
-        &mut self,
-        registry: &crate::element::child_manager::ChildManagerRegistry,
-        arena: &FrameArena,
-    ) -> usize {
-        // Depth-first in slot order, tracking each node's nearest render
-        // ancestor. A render node is appended to that ancestor's target order,
-        // then becomes the render ancestor for its own subtree.
-        //
-        // The walk also descends into a lazy sliver's resident children. They
-        // stay out of `child_ids`, and the sliver's own child list is ordered
-        // by its parent data (`append_sparse_sliver_children`), so the first
-        // render node of each such child keeps its edge to the sliver as the
-        // child manager left it; only the render parents inside it are
-        // synchronized. A row built in a sliver's layout-time build has the
-        // same component-deferred attach order as one built anywhere else.
-        //
-        // Each render parent's target order is the run of `(parent, child)` edges a stable sort
-        // by parent leaves together, in walk order: one list for the whole walk, not one per
-        // parent. Every list comes from the build owner's frame arena (ADR-0328).
-        let mut target: FrameVec<'_, (RenderId, RenderId)> = Vec::new_in(arena);
-        // Every render node with its desired render parent, in depth-first
-        // pre-order: a parent's own edge is settled before its children
-        // move under it, so no step of the sync closes a cycle.
-        let mut desired_parent: FrameVec<'_, (flui_foundation::RenderId, RenderEdge)> =
-            Vec::new_in(arena);
-        let mut pipeline_owner: Option<PipelineCell> = None;
-        let mut visited = 0;
-
-        // Children are pushed reversed so siblings pop in ascending slot order.
-        // The third field is `RenderEdge::Sparse` from a lazy child down to its
-        // first render node.
-        let mut stack: FrameVec<'_, (ElementId, Option<flui_foundation::RenderId>, RenderEdge)> =
-            Vec::new_in(arena);
-        stack.extend(
-            self.iter_nodes()
-                .filter(|(_, node)| node.parent.is_none())
-                .map(|(id, _)| (id, None, RenderEdge::Parent(None))),
-        );
-        stack.reverse();
-        while let Some((element_id, render_ancestor, edge)) = stack.pop() {
-            visited += 1;
-            let Some(node) = self.get(element_id) else {
-                continue;
-            };
-            let (child_ancestor, child_edge) = if let Some(render_id) = node.element().render_id() {
-                match edge {
-                    RenderEdge::Sparse => desired_parent.push((render_id, RenderEdge::Sparse)),
-                    RenderEdge::Parent(_) => {
-                        desired_parent.push((render_id, RenderEdge::Parent(render_ancestor)));
-                        if let Some(parent_render) = render_ancestor {
-                            target.push((parent_render, render_id));
-                        }
-                    }
-                }
-                if pipeline_owner.is_none() {
-                    pipeline_owner = node.element().pipeline_owner();
-                }
-                (Some(render_id), RenderEdge::Parent(Some(render_id)))
-            } else {
-                (render_ancestor, edge)
-            };
-            for child in self.sparse_children(element_id, registry).into_iter().rev() {
-                stack.push((child, child_ancestor, RenderEdge::Sparse));
-            }
-            let children = node.child_ids();
-            for &child in children.iter().rev() {
-                stack.push((child, child_ancestor, child_edge));
-            }
-        }
-
-        if desired_parent.is_empty() {
-            return visited;
-        }
-        let Some(pipeline_owner) = pipeline_owner else {
-            return visited;
-        };
-
-        drop(stack);
-        target.sort_by_key(|&(parent, _)| parent);
-        let mut desired_children: FrameVec<'_, RenderId> = Vec::new_in(arena);
-
-        // Tree borrows are dropped; the checkout guards only the render tree.
-        // The owner marks each parent the batch changed once it ends.
-        pipeline_owner.with_mut(|owner| {
-            owner.edit_render_children(|edit| {
-                for &(render_id, desired) in &desired_parent {
-                    if !edit.tree().contains(render_id) {
-                        continue;
-                    }
-                    // A render root in the element graph leaves the render
-                    // parent it still holds.
-                    if desired == RenderEdge::Parent(None)
-                        && let Some(current) = edit.tree().parent(render_id)
-                    {
-                        edit.detach_child(current, render_id);
-                    }
-
-                    // Every element-managed render node's child list follows
-                    // element slot order exactly. A node absent from `target`
-                    // is a render leaf in the element graph, so its desired
-                    // list holds only its sparse sliver children; anything
-                    // else it still lists becomes a root. A child arriving
-                    // from another render parent leaves that donor's list.
-                    desired_children.clear();
-                    let first = target.partition_point(|&(parent, _)| parent < render_id);
-                    desired_children.extend(
-                        target[first..]
-                            .iter()
-                            .take_while(|&&(parent, _)| parent == render_id)
-                            .map(|&(_, child)| child),
-                    );
-                    append_sparse_sliver_children(edit.tree(), render_id, &mut desired_children);
-                    let _ = edit.set_children(render_id, &desired_children);
-                }
-
-                #[cfg(debug_assertions)]
-                for &(render_id, desired) in &desired_parent {
-                    let RenderEdge::Parent(desired) = desired else {
-                        continue;
-                    };
-                    if !edit.tree().contains(render_id) {
-                        continue;
-                    }
-                    debug_assert_eq!(
-                        edit.tree().parent(render_id),
-                        desired,
-                        "reorder pass: render node {render_id:?}'s parent link disagrees with the \
-                         desired parent the DFS computed for it"
-                    );
-                }
-            });
-        });
-        visited
-    }
-
-    /// Recompute ancestry-derived metadata for the subtree rooted at
-    /// `root_id`, top-down against each node's current parent.
-    ///
-    /// Needed after a GlobalKey reparent ([`try_retake_global_key`]): the moved
-    /// subtree carries both inherited scopes and depths derived from its OLD
-    /// ancestor chain. Leaving either stale can resolve the wrong provider or
-    /// let the dirty heap rebuild a descendant before its moved parent.
-    ///
-    /// A node is processed only after its parent, so each child observes the
-    /// parent's already-updated scope and depth. Depth and inherited scope are
-    /// both refreshed while reactivating a subtree.
-    /// Average/worst case O(subtree size), paid only for a reparent.
-    /// Move a lazy sliver's resident child to a new logical index without
-    /// remounting it: the node's slot becomes `new_slot`, and the inherited
-    /// `sliver_slot` is re-derived down its composite chain (the same walk a
-    /// GlobalKey relocation runs). The caller re-stamps the render
-    /// descendants afterwards — `stamp_sliver_logical_index` reads the new
-    /// index, the walk cannot. Ordering is load-bearing: the ancestry walk
-    /// derives each child's `sliver_slot` from its parent's slot, so the
-    /// slot must be written first.
-    pub(crate) fn relocate_sparse_child(
-        &mut self,
-        id: ElementId,
-        new_slot: usize,
-        owner: &crate::ElementOwner<'_>,
-    ) {
-        if let Some(node) = self.get_mut(id) {
-            node.slot = new_slot;
-        }
-        self.recompute_subtree_ancestry(id, owner.child_manager_registry);
-    }
-
-    fn recompute_subtree_ancestry(
-        &mut self,
-        root_id: ElementId,
-        registry: &crate::element::child_manager::ChildManagerRegistry,
-    ) {
-        // A `visited` set bounds the walk to each node once. The element tree
-        // is acyclic by construction (`child_ids` come from the reconciler),
-        // so this never trips in practice — but it converts a malformed
-        // `child_ids` cycle from an unbounded hang into clean termination.
-        let mut visited = flui_foundation::SlotSet::new();
-        let mut stack = vec![root_id];
-        while let Some(id) = stack.pop() {
-            if !visited.insert(id) {
-                continue;
-            }
-            let Some(node) = self.get(id) else {
-                continue;
-            };
-            let node_slot = node.slot;
-            let (parent_map, depth, parent_render_id, sliver_slot) = match node.parent {
-                Some(parent_id) => self.get(parent_id).map_or_else(
-                    || (InheritedScope::EMPTY, 0, None, None),
-                    |parent| {
-                        (
-                            parent.inherited.clone(),
-                            parent.depth + 1,
-                            parent.element().child_render_id(),
-                            parent.element().child_sliver_slot(node_slot),
-                        )
-                    },
-                ),
-                None => (InheritedScope::EMPTY, 0, None, None),
-            };
-            let scope = {
-                let node = self.get(id).expect("id resolved at loop top");
-                compute_inherited_scope(&parent_map, node.element(), id)
-            };
-            let node = self.get_mut(id).expect("id resolved at loop top");
-            node.inherited = scope;
-            node.set_depth(depth);
-            node.element_mut().set_parent_render_id(parent_render_id);
-            node.element_mut().set_sliver_slot(sliver_slot);
-            stack.extend(self.owned_children(id, registry));
-        }
-    }
-
     /// Get an element node by ID.
     ///
     /// Returns `None` for a stale id (one that addressed a since-freed slot)
@@ -1646,7 +237,7 @@ impl ElementTree {
     /// `None` hole (see [`ElementNode::element`]).
     ///
     /// Companion to [`Self::put_element`]:
-    /// [`BuildOwner::build_scope`](crate::BuildOwner) takes the element out
+    /// [`BuildOwner::build_scope`](crate::owner::BuildOwner) takes the element out
     /// so it can run that element's own `build()` against a shared `&` view
     /// of the rest of the slab without aliasing, then puts it back in the
     /// same iteration. Returns `None` for a stale/absent id or an
@@ -1666,519 +257,6 @@ impl ElementTree {
         {
             node.kind = Some(kind);
         }
-    }
-
-    /// Remove `dependent` from the forward maps of the exact providers owned
-    /// by the reverse index.
-    fn release_inherited_providers(
-        &mut self,
-        dependent: ElementId,
-        providers: impl IntoIterator<Item = ElementId>,
-    ) {
-        for provider in providers {
-            if let Some(node) = self.get_mut(provider)
-                && let Some(accessor) = node.element_mut().as_inherited_mut()
-            {
-                accessor.remove_dependent(crate::context::CrateToken::new(), dependent);
-            }
-        }
-    }
-
-    /// Release active inherited edges at the start of a temporary detach.
-    fn deactivate_inherited_dependencies(
-        &mut self,
-        dependent: ElementId,
-        owner: &mut crate::ElementOwner<'_>,
-    ) {
-        let providers = owner.deactivate_inherited_dependent(dependent);
-        self.release_inherited_providers(dependent, providers);
-    }
-
-    /// Run the unmount hooks `id`'s state registered, right after its
-    /// `dispose`; the first panic among them is recorded as the element's
-    /// `dispose` failure.
-    fn run_unmount_hooks(&self, index: usize, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
-        let Some(payload) = owner.unmount_hooks.run(id) else {
-            return;
-        };
-        let node = &self.nodes[index];
-        let mut panic = crate::RecoveredPanic::from_payload(
-            crate::RecoveredAt::Element {
-                element: id,
-                parent: node.parent(),
-            },
-            node.element().view_type_id(),
-            crate::LifecycleHook::Dispose,
-            payload.as_ref(),
-            "running an unmount hook",
-        )
-        .with_site(node.element().creation_site());
-        // The element is freed right after its hooks run; read its path while it is a node.
-        panic.locate_in(self);
-        owner.push_recovered_panic(panic);
-        flui_foundation::panic::discard_payload(payload);
-    }
-    /// Release every inherited edge and lifecycle marker on permanent teardown.
-    fn unmount_inherited_dependencies(
-        &mut self,
-        dependent: ElementId,
-        owner: &mut crate::ElementOwner<'_>,
-    ) {
-        let providers = owner.unmount_inherited_dependent(dependent);
-        self.release_inherited_providers(dependent, providers);
-        owner.clear_pending_dependency_change(dependent);
-        owner.release_reactive(dependent);
-        // A keep-alive lease normally releases through its own `Drop` when the
-        // holder's state drops. An element can be torn down without that
-        // happening in the same step, and a stranded holder would keep
-        // resolving to whatever sparse child it last sat under, so the unmount
-        // seam clears it too. This is the liveness half of the lease.
-        //
-        // There is no matching "forget the held child" step: nothing records a
-        // held child any more. A hold is resolved from its holder when eviction
-        // asks, so an unmounted child simply stops being resolved to.
-        owner.keep_alive.forget_holder(dependent);
-    }
-
-    /// Snapshot the complete owned child graph without exposing sparse rows to
-    /// dense reconciliation. Internal manager guards end before lifecycle work.
-    pub(crate) fn owned_children(
-        &self,
-        id: ElementId,
-        registry: &crate::element::child_manager::ChildManagerRegistry,
-    ) -> Vec<ElementId> {
-        let Some(node) = self.get(id) else {
-            return Vec::new();
-        };
-        let mut children = node.child_ids().to_vec();
-        children.extend(self.sparse_children(id, registry));
-        children
-    }
-
-    /// The lazy children a child manager registered under `id`'s render
-    /// object holds, which stay out of `child_ids`. Only children whose
-    /// element parent is still `id` count: a child the manager has not yet
-    /// forgotten after a GlobalKey move belongs to its new parent.
-    fn sparse_children(
-        &self,
-        id: ElementId,
-        registry: &crate::element::child_manager::ChildManagerRegistry,
-    ) -> Vec<ElementId> {
-        let manager = self
-            .get(id)
-            .and_then(|node| node.element().render_id())
-            .and_then(|render_id| registry.borrow().get(&render_id).cloned());
-        let Some(manager) = manager else {
-            return Vec::new();
-        };
-        let sparse = manager.borrow().snapshot_children();
-        sparse
-            .into_iter()
-            .filter(|child| {
-                self.get(*child)
-                    .is_some_and(|node| node.parent() == Some(id))
-            })
-            .collect::<Vec<ElementId>>()
-    }
-
-    pub(crate) fn preflight_unmount(&self, ids: &[ElementId]) {
-        for &id in ids {
-            if let Some(index) = self.resolve_index(id) {
-                self.next_generation(index);
-            }
-        }
-    }
-
-    pub(crate) fn retire_sparse_children(
-        &self,
-        ids: &[ElementId],
-        registry: &crate::element::child_manager::ChildManagerRegistry,
-    ) {
-        for &id in ids {
-            let manager = self
-                .get(id)
-                .and_then(|node| node.element().render_id())
-                .and_then(|render_id| registry.borrow().get(&render_id).cloned());
-            if let Some(manager) = manager {
-                manager.borrow_mut().retire_children();
-            }
-        }
-    }
-
-    /// Reactivate a subtree and schedule dependency lifecycle work for every
-    /// node with an inherited read, including a lookup that found no provider.
-    fn activate_subtree(&mut self, root: ElementId, owner: &mut crate::ElementOwner<'_>) {
-        let mut stack = vec![root];
-        while let Some(id) = stack.pop() {
-            let Some(node) = self.get(id) else {
-                continue;
-            };
-            let depth = node.depth();
-            let children = self.owned_children(id, owner.child_manager_registry);
-
-            if let Some(node) = self.get_mut(id) {
-                node.element_mut().activate(owner);
-            }
-            if owner.activate_inherited_dependent(id) {
-                owner.note_dependency_change(id);
-                owner.schedule_build_for(id, depth, crate::RebuildReason::DependencyChange);
-            }
-
-            stack.extend(children.into_iter().rev());
-        }
-    }
-
-    /// Deactivate a subtree and synchronously release every inherited edge.
-    ///
-    /// Provider maps are clean before this returns, so a notification later in
-    /// the same frame cannot enqueue an inactive historical dependent.
-    fn deactivate_subtree(&mut self, root: ElementId, owner: &mut crate::ElementOwner<'_>) {
-        let mut stack = vec![root];
-        while let Some(id) = stack.pop() {
-            let children = self.owned_children(id, owner.child_manager_registry);
-            self.deactivate_inherited_dependencies(id, owner);
-            if let Some(node) = self.get_mut(id) {
-                node.element_mut().deactivate(owner);
-            }
-            stack.extend(children.into_iter().rev());
-        }
-    }
-
-    /// Remove an element from the tree.
-    ///
-    /// # Soft vs eager removal
-    ///
-    /// - **Soft (keyed):** If the element carries a `GlobalKey` (i.e.
-    ///   `ElementNode::registered_global_key` is `Some`), the
-    ///   element is deactivated and pushed onto
-    ///   `BuildOwner::inactive_elements` — the slab entry stays alive.
-    ///   This enables same-frame state migration: a subsequent
-    ///   `insert` with the same GlobalKey pulls the element back via
-    ///   `try_retake_global_key` (private). End-of-frame
-    ///   [`BuildOwner::finalize_tree`](crate::BuildOwner::finalize_tree) drains any stragglers via
-    ///   [`Self::remove_finalized`] (full slab-remove + unregister).
-    /// - **Eager (un-keyed):** Behaves as before — `Element::unmount`
-    ///   then slab-remove. No deferred queue entry.
-    ///
-    /// Only elements reachable by `GlobalKey` are deferred; ordinary
-    /// unmounts are processed inline.
-    ///
-    /// Does NOT automatically remove children — caller must handle that.
-    ///
-    /// Returns the `ElementNode` for an eager removal (so `BuildOwner`
-    /// gets back ownership) OR `None` for a soft removal (the node
-    /// still lives in the slab). Returns `None` if `id` doesn't exist.
-    ///
-    /// Threads the split-borrow `owner` handle.
-    ///
-    /// # Panics
-    ///
-    /// Eager removal refuses an exhausted slot generation before teardown.
-    /// The current occupant remains live; keyed soft removal does not free a slot.
-    pub fn remove(
-        &mut self,
-        id: ElementId,
-        owner: &mut crate::ElementOwner<'_>,
-    ) -> Option<ElementNode> {
-        // Staleness-checked: a stale id (slot already freed/reused) resolves
-        // to `None` here rather than touching the slot's new occupant.
-        let index = self.resolve_index(id)?;
-
-        // Soft-remove for keyed elements: push to inactive queue
-        // without slab-removing. State stays intact for same-frame
-        // remount.
-        if self.nodes[index].registered_global_key.is_some() {
-            let depth = self.nodes[index].depth;
-            let former_parent = self.nodes[index].parent;
-            let mut relocation = RenderRelocation {
-                pipeline: self.nodes[index].element().pipeline_owner(),
-                frontier: collect_render_frontier(self, id).unwrap_or_default(),
-                detached_render_subtrees: None,
-            };
-            if let Some(parent_id) = former_parent
-                && let Some(parent) = self.get_mut(parent_id)
-            {
-                parent.child_ids.retain(|child_id| *child_id != id);
-            }
-            detach_render_relocation(&mut relocation);
-            self.deactivate_subtree(id, owner);
-            if let Some(token) = relocation.detached_render_subtrees {
-                owner.push_inactive_with_detached_render_subtrees(id, depth, token);
-            } else {
-                owner.push_inactive(id, depth);
-            }
-            // Detach from active tree but keep the slot alive.
-            self.nodes[index].parent = None;
-
-            if self.root == Some(id) {
-                self.root = None;
-            }
-
-            tracing::debug!(
-                element_id = ?id,
-                key = ?self.nodes[index].registered_global_key,
-                "ElementTree::remove soft-removed keyed element into inactive queue"
-            );
-
-            // Soft-remove yields no owned node — the caller doesn't
-            // get the element back.
-            return None;
-        }
-
-        // Refuse an exhausted identity before lifecycle, dependency or slot changes.
-        let next_generation = self.next_generation(index);
-
-        // Eager path for un-keyed elements. Drop any stale
-        // `did_change_dependencies` flag — the dependent
-        // leaves the active tree before its rebuild ever runs.
-        self.unmount_inherited_dependencies(id, owner);
-        self.nodes[index].element_mut().unmount(owner);
-        self.run_unmount_hooks(index, id, owner);
-
-        // ADR-0040: `Element::unmount` ran and the slot is about to free —
-        // one of the two primitives every unmount path bottoms out in.
-        crate::owner::emit_observation(owner.tree_observer, |o| {
-            o.element_unmounted(&flui_foundation::observe::ElementUnmounted::new(id));
-        });
-
-        let node = self.nodes.remove(index);
-        // The nonfallible commit follows the preflight above.
-        self.generations.commit(next_generation);
-
-        if self.root == Some(id) {
-            self.root = None;
-        }
-
-        Some(node)
-    }
-
-    /// Remove `id` and its entire descendant subtree.
-    ///
-    /// Used by [`crate::element::sparse_children::SparseChildren::evict`] to
-    /// evict a lazy sliver child together with all of its own descendant
-    /// elements and render nodes (e.g. a `Container(Padding(Text))` child
-    /// produces three elements; a single-node `remove` would leak the inner
-    /// two). Also the removal path a rebuild takes for any un-keyed child
-    /// whose element type changed (`ElementTree::update`'s can't-reuse
-    /// branch) — e.g. `LaidOut::pump_widget`'s root-swap in the headless
-    /// harness.
-    ///
-    /// The algorithm mirrors `id_reconcile::remove_child` / `collect_subtree_preorder`:
-    ///
-    /// 1. Peek whether the root is keyed (`registered_global_key`),
-    ///    side-effect-free, before touching anything. A keyed root
-    ///    soft-removes via `remove` and returns immediately — descendants
-    ///    stay untouched, parked for `finalize_tree`'s deferred drain in
-    ///    case the root is reclaimed same-frame via `GlobalKey` — so the
-    ///    subtree snapshot below is never needed for this branch and would
-    ///    be pure wasted work if taken first.
-    /// 2. For an un-keyed root, snapshot the subtree in pre-order (parent
-    ///    before children) while all `child_ids` lists are intact. Check every
-    ///    slot that will be finalized before any detach or teardown occurs.
-    /// 3. Free descendants deepest-first via `remove_finalized` BEFORE the
-    ///    root's own removal (step 4). Each element's own `unmount` — e.g.
-    ///    `RenderView::did_unmount_render_object` for
-    ///    `MouseRegion`/`ClipPath`/`Listener`, which unregisters from the
-    ///    owner-local interaction lane — needs its OWN render object still
-    ///    reachable in the render tree to fire at all
-    ///    (`RenderBehavior::on_unmount` looks it up by id and silently skips
-    ///    the view-level hook when the lookup misses). Removing the root
-    ///    first would cascade-delete every descendant render node in one
-    ///    shot (`PipelineOwner::remove_render_object` recurses), so a
-    ///    descendant unmounted afterward would find its render object
-    ///    already gone and its own unmount hook would silently never run —
-    ///    orphaning its interaction-lane registration for the life of the
-    ///    owner. Processing descendants first makes each one's own render
-    ///    removal a no-op by the time the root's cascade reaches it.
-    /// 4. Remove the root: `remove` under `DeactivateKeyed` (so a keyed root
-    ///    soft-removes and stays retakeable), `remove_finalized` under
-    ///    `Finalize` (nothing survives, including a keyed root).
-    ///
-    /// Complexity: O(n) time + O(n) peak heap for the work-stack (n = subtree
-    /// size), O(h) call-stack for the constant-stack iterative walk — paid
-    /// only for an un-keyed root; a keyed root is O(1).
-    pub(crate) fn remove_subtree(
-        &mut self,
-        id: ElementId,
-        owner: &mut crate::ElementOwner<'_>,
-        mode: SubtreeRemoval,
-    ) {
-        // A keyed root soft-removes into the inactive queue instead of
-        // freeing outright (`remove`'s own branch, keyed on
-        // `registered_global_key`); descendants stay untouched. Check
-        // this FIRST: it needs no subtree walk, and a keyed root never uses
-        // the snapshot below, so paying for that walk before checking would
-        // be wasted work for every keyed-root removal.
-        let root_is_keyed = mode == SubtreeRemoval::DeactivateKeyed
-            && self
-                .get(id)
-                .is_some_and(|node| node.registered_global_key().is_some());
-
-        if root_is_keyed {
-            self.remove(id, owner);
-            return;
-        }
-
-        // Un-keyed root: snapshot the subtree pre-order (parent before
-        // children) before touching any node, while every `child_ids` list
-        // is still intact.
-        //
-        // The walk STOPS at a keyed descendant and collects it separately. A
-        // `GlobalKey` inside a removed unkeyed subtree can be retaken in the
-        // same frame, so that element and everything under it must survive
-        // into the inactive queue rather than being freed here — freeing it
-        // loses the state the key exists to preserve. Not descending is the
-        // other half: a retaken element keeps its own children, so hard-
-        // removing them deepest-first would hand the retake an empty subtree.
-        let mut subtree: Vec<ElementId> = Vec::new();
-        let mut keyed_descendants: Vec<ElementId> = Vec::new();
-        {
-            let mut work_stack: Vec<ElementId> = vec![id];
-            while let Some(node_id) = work_stack.pop() {
-                if mode == SubtreeRemoval::DeactivateKeyed
-                    && node_id != id
-                    && self
-                        .get(node_id)
-                        .is_some_and(|node| node.registered_global_key().is_some())
-                {
-                    keyed_descendants.push(node_id);
-                    continue;
-                }
-                subtree.push(node_id);
-                work_stack.extend(
-                    self.owned_children(node_id, owner.child_manager_registry)
-                        .into_iter()
-                        .rev(),
-                );
-            }
-        }
-
-        // Admit the whole finalized portion before any keyed detach or teardown.
-        // Per-node checks in remove_finalized are too late for a deepest-first
-        // walk: an exhausted ancestor would refuse after its children were freed.
-        // Keyed boundaries excluded above survive DeactivateKeyed and need no
-        // generation advance, including every node under those boundaries.
-        self.preflight_unmount(&subtree);
-
-        // Soft-remove the keyed descendants BEFORE their ancestors are freed,
-        // so `remove`'s unlink-from-parent and render detach run against a
-        // tree that is still intact. No keyed node here is an ancestor of
-        // another — the walk never descended past one — so the order among
-        // them does not matter.
-        for &keyed in &keyed_descendants {
-            self.remove(keyed, owner);
-        }
-        self.retire_sparse_children(&subtree, owner.child_manager_registry);
-
-        // Free descendants deepest-first -- `subtree[0]` is the root itself
-        // (removed below, last); iterating the rest in reverse visits each
-        // descendant after all of ITS OWN descendants, so a nested unmount
-        // hook (e.g. a `MouseRegion` two levels down) always still finds its
-        // own render object present.
-        for &descendant in subtree[1..].iter().rev() {
-            self.remove_finalized(descendant, owner);
-        }
-        // The root goes out by the same rule as the rest of the subtree.
-        // Under `Finalize` nothing survives — a keyed root soft-removed here
-        // would sit in the inactive queue with no frame coming to drain it,
-        // which is the leak this mode exists to prevent; and a root removed
-        // because its own update panicked must never be retakeable, or the
-        // half-configured render object resurfaces on the next retake.
-        match mode {
-            SubtreeRemoval::Finalize => {
-                self.remove_finalized(id, owner);
-            }
-            SubtreeRemoval::DeactivateKeyed => {
-                self.remove(id, owner);
-            }
-        }
-    }
-
-    /// Fully remove an element that has already been unmounted (e.g.
-    /// from `BuildOwner::finalize_tree`'s end-of-frame drain).
-    ///
-    /// This bypasses the soft-remove path even for keyed elements:
-    /// the slab entry is freed and the `GlobalKey` registration is
-    /// cleared via `ElementOwner::unregister_global_key`. The finalization
-    /// phase that drains the inactive queue doesn't push back into it.
-    ///
-    /// # Panics
-    ///
-    /// An exhausted slot generation refuses removal before teardown or key
-    /// unregistration, leaving the current occupant live.
-    pub fn remove_finalized(
-        &mut self,
-        id: ElementId,
-        owner: &mut crate::ElementOwner<'_>,
-    ) -> Option<ElementNode> {
-        self.remove_finalized_inner(id, owner, true)
-    }
-
-    /// Retire a node that `insert` minted but never finished mounting.
-    ///
-    /// Identical teardown to [`remove_finalized`](Self::remove_finalized) with
-    /// the unmount observation suppressed: `insert` emits its `Mount` only
-    /// *after* `mount` returns, so a node abandoned mid-mount was never
-    /// announced, and reporting an unmount for it would hand an observer an
-    /// id it never saw appear (ADR-0040's causal ordering).
-    ///
-    /// The inactive queue only ever holds an element whose `mount` already
-    /// returned, so a node abandoned mid-mount never reaches
-    /// `remove_finalized`. This teardown is asymmetric with it for that
-    /// reason —
-    /// `RenderView::did_unmount_render_object` still runs here on a render
-    /// object that WAS created and adopted moments earlier (a real seam,
-    /// bounded separately).
-    pub(crate) fn discard_unannounced(
-        &mut self,
-        id: ElementId,
-        owner: &mut crate::ElementOwner<'_>,
-    ) -> Option<ElementNode> {
-        self.remove_finalized_inner(id, owner, false)
-    }
-
-    fn remove_finalized_inner(
-        &mut self,
-        id: ElementId,
-        owner: &mut crate::ElementOwner<'_>,
-        announce: bool,
-    ) -> Option<ElementNode> {
-        // Staleness-checked entry (mirror of `remove`).
-        let index = self.resolve_index(id)?;
-
-        // Even keyed finalization must refuse before unregistering or unmounting.
-        let next_generation = self.next_generation(index);
-
-        // Unregister the GlobalKey if this element had one. We do it
-        // BEFORE `unmount` so the registry doesn't briefly resolve to
-        // a partially-unmounted element.
-        if let Some(key) = self.nodes[index].registered_global_key.take() {
-            owner.unregister_global_key(key.as_ref());
-        }
-
-        // Drop any stale `did_change_dependencies` flag —
-        // the dependent leaves the tree before its rebuild ever runs.
-        self.unmount_inherited_dependencies(id, owner);
-        self.nodes[index].element_mut().unmount(owner);
-        self.run_unmount_hooks(index, id, owner);
-
-        // ADR-0040: the second of the two unmount primitives (finalize
-        // drains, subtree evictions, root detach all bottom out here).
-        if announce {
-            crate::owner::emit_observation(owner.tree_observer, |o| {
-                o.element_unmounted(&flui_foundation::observe::ElementUnmounted::new(id));
-            });
-        }
-
-        let node = self.nodes.remove(index);
-        // The nonfallible commit follows the preflight above.
-        self.generations.commit(next_generation);
-
-        if self.root == Some(id) {
-            self.root = None;
-        }
-
-        Some(node)
     }
 
     /// Replay the live tree as synthetic `ElementMounted` events, in
@@ -2215,9 +293,9 @@ impl ElementTree {
     /// element. Threads the split-borrow owner handle into the
     /// update call.
     ///
-    /// FR-022: re-clones `View::key()` into the node so the
+    /// Re-clones `View::key()` into the node so the
     /// stored key tracks whatever the new view carries. `View::can_update`
-    /// (FR-028) already ensures the keys match on a successful
+    /// already ensures the keys match on a successful
     /// update — the re-clone preserves that invariant explicitly rather
     /// than relying on the caller having already filtered by it.
     ///
@@ -2277,24 +355,6 @@ impl ElementTree {
         }
     }
 
-    /// Deactivate an element (temporary removal).
-    pub fn deactivate(&mut self, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
-        self.deactivate_subtree(id, owner);
-    }
-
-    /// Activate an element (re-insertion after deactivation).
-    pub fn activate(&mut self, id: ElementId, owner: &mut crate::ElementOwner<'_>) {
-        let mut caught = FirstPanic::new();
-        caught.contain(|| self.activate_subtree(id, owner));
-        if caught.is_held() {
-            // Public activation has no substituting caller to consume the
-            // handoff. Clear it before resuming so a caught unwind cannot
-            // suppress an unrelated later recovery on this owner.
-            owner.take_staged_lifecycle_panic();
-            caught.resume();
-        }
-    }
-
     /// Iterate over all live element IDs.
     ///
     /// Each id is minted from the slot's *current* generation, so the yielded
@@ -2341,614 +401,6 @@ fn slab_index_to_u32(index: usize) -> u32 {
     )
 }
 
-// ============================================================================
-// GlobalKey helpers
-// ============================================================================
-
-/// Borrow a view's `GlobalKey`, if it has one. Returns `None` for
-/// un-keyed views and for keyed views whose `ViewKey::is_global_key()` is
-/// `false` (e.g. `ValueKey`, `UniqueKey`, `ObjectKey`).
-///
-/// Centralises the "is this a global key?" check so the mount /
-/// soft-remove / retake paths all read it the same way. The key is
-/// returned by reference rather than as a hash because every consumer
-/// resolves by identity — a hash would only be an index into a bucket.
-fn global_key_of(view: &dyn View) -> Option<&dyn ViewKey> {
-    let key = view.key()?;
-    key.is_global_key().then_some(key)
-}
-
-/// Register the `(key → id)` mapping on the owner.
-///
-/// Reaching this with the SAME key already registered to a DIFFERENT
-/// element means one key is live on two elements at once inside one tree —
-/// a real duplicate, not the hash accident the old hash-keyed registry
-/// could also produce here (two distinct keys that collide now hold two
-/// independent entries and never meet). Debug builds panic;
-/// release builds trace and fall through to
-/// last-write-wins so an application does not crash on it, and the frame
-/// boundary's reservation check reports the duplicate as data.
-fn register_global_key_with_collision_check(
-    owner: &mut crate::ElementOwner<'_>,
-    key: &dyn ViewKey,
-    id: ElementId,
-) {
-    if let Some(existing) = owner.element_for_global_key(key)
-        && existing != id
-    {
-        tracing::error!(
-            key = ?key,
-            existing = ?existing,
-            new = ?id,
-            "duplicate GlobalKey: replacing an existing registration in the same tree"
-        );
-        #[cfg(debug_assertions)]
-        {
-            panic!(
-                "duplicate GlobalKey: {key:?} is already registered to {existing:?} \
-                 but new mount wants {id:?}"
-            );
-        }
-    }
-    owner.register_global_key(key, id);
-}
-
-/// State-migration entry point. If `key` resolves to an existing element,
-/// reuse that element instead of mounting a fresh one:
-///
-/// - inactive candidate: pop it out of the inactive queue and re-attach;
-/// - active candidate under a different parent: forget it from that parent,
-///   deactivate/activate it, then attach it at the new `(parent, slot)`.
-///
-/// Returns the migrated `ElementId` on success (or the [`ChildHookPanic`]
-/// its own containment window caught), or `None` when no retakeable element
-/// exists (caller falls back to creating a fresh element).
-enum GlobalKeyRetake {
-    Absent,
-    Retaken(ElementId),
-    RetakePanicked(ChildHookPanic),
-    Rejected,
-}
-
-struct RetakeDestination<'a> {
-    parent: ElementId,
-    slot: usize,
-    reconciled_prefix: &'a [ElementId],
-    unclaimed_old_slots: &'a [Option<ElementId>],
-}
-
-fn try_retake_global_key(
-    tree: &mut ElementTree,
-    owner: &mut crate::ElementOwner<'_>,
-    key: &dyn ViewKey,
-    view: &dyn View,
-    destination: RetakeDestination<'_>,
-) -> GlobalKeyRetake {
-    let Some(candidate_id) = owner.element_for_global_key(key) else {
-        return GlobalKeyRetake::Absent;
-    };
-    if !can_retake_global_key_candidate(tree, candidate_id, view) {
-        return GlobalKeyRetake::Rejected;
-    }
-
-    let retaken = if owner.is_inactive(candidate_id) {
-        retake_inactive_global_key(tree, owner, key, view, candidate_id, destination)
-    } else {
-        retake_active_global_key(tree, owner, key, view, candidate_id, destination)
-    };
-    match retaken {
-        None => GlobalKeyRetake::Rejected,
-        Some(Ok(id)) => GlobalKeyRetake::Retaken(id),
-        Some(Err(panic)) => GlobalKeyRetake::RetakePanicked(panic),
-    }
-}
-
-fn can_retake_global_key_candidate(
-    tree: &ElementTree,
-    candidate_id: ElementId,
-    view: &dyn View,
-) -> bool {
-    let Some(node) = tree.get(candidate_id) else {
-        return false;
-    };
-    let element = node.element();
-    if element.view_type_id() != view.view_type_id() {
-        return false;
-    }
-    let Some(new_key) = view.key() else {
-        return false;
-    };
-    element
-        .current_key()
-        .is_some_and(|old_key| new_key.key_eq(old_key))
-}
-
-#[derive(Debug)]
-struct RenderRelocation {
-    pipeline: Option<PipelineCell>,
-    frontier: Vec<(ElementId, RenderId)>,
-    detached_render_subtrees: Option<flui_rendering::pipeline::DetachedRenderSubtrees>,
-}
-
-fn collect_render_frontier(
-    tree: &ElementTree,
-    candidate_id: ElementId,
-) -> Option<Vec<(ElementId, RenderId)>> {
-    let mut frontier = Vec::new();
-    let mut stack = vec![candidate_id];
-    while let Some(element_id) = stack.pop() {
-        let node = tree.get(element_id)?;
-        if let Some(render_id) = node.element().render_id() {
-            frontier.push((element_id, render_id));
-            continue;
-        }
-        stack.extend(node.child_ids().iter().rev().copied());
-    }
-    Some(frontier)
-}
-
-fn preflight_render_relocation(
-    tree: &ElementTree,
-    candidate_id: ElementId,
-    new_parent: ElementId,
-) -> Option<RenderRelocation> {
-    // The destination cannot be inside the candidate's own element subtree.
-    let mut cursor = Some(new_parent);
-    while let Some(element_id) = cursor {
-        if element_id == candidate_id {
-            return None;
-        }
-        cursor = tree.get(element_id).and_then(ElementNode::parent);
-    }
-
-    let candidate = tree.get(candidate_id)?;
-    let destination = tree.get(new_parent)?;
-    let candidate_pipeline = candidate.element().pipeline_owner();
-    let destination_pipeline = destination.element().pipeline_owner();
-    match (&candidate_pipeline, &destination_pipeline) {
-        (Some(candidate), Some(destination)) if !candidate.ptr_eq(destination) => return None,
-        (Some(_), None) | (None, Some(_)) => return None,
-        _ => {}
-    }
-
-    let frontier = collect_render_frontier(tree, candidate_id)?;
-
-    if let Some(pipeline) = &candidate_pipeline {
-        let destination_render_parent = destination.element().child_render_id();
-        let is_valid = pipeline.with(|owner| {
-            let render_tree = owner.render_tree();
-            let mut moved_render_nodes = flui_foundation::SlotSet::new();
-            let mut stack = Vec::new();
-            for &(_, render_root) in &frontier {
-                if !render_tree.contains(render_root) {
-                    return false;
-                }
-                stack.push(render_root);
-                while let Some(render_id) = stack.pop() {
-                    if !moved_render_nodes.insert(render_id)
-                        || destination_render_parent == Some(render_id)
-                    {
-                        return false;
-                    }
-                    let Some(node) = render_tree.get(render_id) else {
-                        return false;
-                    };
-                    stack.extend(node.children().iter().rev().copied());
-                }
-            }
-            true
-        });
-        if !is_valid {
-            return None;
-        }
-    } else if !frontier.is_empty() {
-        return None;
-    }
-
-    Some(RenderRelocation {
-        pipeline: candidate_pipeline,
-        frontier,
-        detached_render_subtrees: None,
-    })
-}
-
-fn detach_render_relocation(relocation: &mut RenderRelocation) {
-    if relocation.frontier.is_empty() {
-        return;
-    }
-    let Some(pipeline) = &relocation.pipeline else {
-        return;
-    };
-    let token = pipeline.with_mut(|owner| {
-        let roots: Vec<_> = relocation.frontier.iter().map(|&(_, root)| root).collect();
-        owner
-            .detach_render_subtrees(&roots)
-            .expect("BUG: render relocation preflight must guarantee a detachable disjoint batch")
-    });
-    relocation.detached_render_subtrees = Some(token);
-}
-
-fn attach_render_relocation(relocation: &mut RenderRelocation) {
-    if relocation.frontier.is_empty() {
-        return;
-    }
-    let Some(pipeline) = &relocation.pipeline else {
-        return;
-    };
-    let token = relocation
-        .detached_render_subtrees
-        .take()
-        .expect("BUG: a render relocation with a pipeline must own its detached-subtree token");
-    pipeline.with_mut(|owner| {
-        owner.attach_render_subtrees(token).expect(
-            "BUG: destination edge synchronization must preserve the detached render batch",
-        );
-    });
-}
-
-fn provisional_child_order(
-    reconciled_prefix: &[ElementId],
-    candidate_id: ElementId,
-    unclaimed_old_slots: &[Option<ElementId>],
-) -> Vec<ElementId> {
-    let mut order = Vec::with_capacity(reconciled_prefix.len() + unclaimed_old_slots.len() + 1);
-    let mut seen = flui_foundation::SlotSet::new();
-    for element_id in reconciled_prefix
-        .iter()
-        .copied()
-        .chain(std::iter::once(candidate_id))
-        .chain(unclaimed_old_slots.iter().flatten().copied())
-    {
-        if seen.insert(element_id) {
-            order.push(element_id);
-        }
-    }
-    order
-}
-
-fn retake_inactive_global_key(
-    tree: &mut ElementTree,
-    owner: &mut crate::ElementOwner<'_>,
-    key: &dyn ViewKey,
-    view: &dyn View,
-    candidate_id: ElementId,
-    destination: RetakeDestination<'_>,
-) -> Option<Result<ElementId, ChildHookPanic>> {
-    let new_parent = destination.parent;
-    let new_slot = destination.slot;
-    let mut relocation = preflight_render_relocation(tree, candidate_id, new_parent)?;
-    // A candidate with render nodes can only be reattached through the token
-    // its soft removal minted. Reject *before* dequeueing: `remove_inactive`
-    // is the point of no return, and bailing after it would strand the
-    // element — no finalization record, and its render subtree detached with
-    // nothing left holding the right to reattach or release it.
-    if !relocation.frontier.is_empty()
-        && relocation.pipeline.is_some()
-        && !owner.inactive_holds_detached_render_subtrees(candidate_id)
-    {
-        return None;
-    }
-    // Clone caller-controlled key data before dequeueing the inactive entry.
-    // `remove_inactive` is the first point of no return for this retake.
-    let stored_key = view.key().map(ViewKey::clone_key);
-    relocation.detached_render_subtrees = owner.remove_inactive(candidate_id);
-
-    let parent_depth = tree.get(new_parent).map_or(0, ElementNode::depth);
-    let child_parent_render_id = tree
-        .get(new_parent)
-        .and_then(|node| node.element().child_render_id());
-    let child_sliver_slot = tree
-        .get(new_parent)
-        .and_then(|node| node.element().child_sliver_slot(new_slot));
-
-    // Route through the staleness-checked accessor. The candidate came from the
-    // live GlobalKey registry and was soft-removed (slot kept, generation NOT
-    // bumped), so its generation still matches and this resolves.
-    {
-        let node = tree.get_mut(candidate_id)?;
-        node.parent = Some(new_parent);
-        node.slot = new_slot;
-        node.set_depth(parent_depth + 1);
-        node.element_mut()
-            .set_parent_render_id(child_parent_render_id);
-        node.element_mut().set_sliver_slot(child_sliver_slot);
-    }
-
-    // The relocation is committed; the element is live and parented here.
-    // Report it now — BEFORE either containment window below, which run
-    // `activate_subtree` and (separately) this retake's own `update`, both
-    // panic sites — so a caller bounding those windows (see
-    // `ChildHookPanic`'s doc) knows to remove THIS element rather than
-    // looking for a node this call never minted.
-    let inserted = InsertedChild::Retaken(candidate_id);
-    let provisional = provisional_child_order(
-        destination.reconciled_prefix,
-        candidate_id,
-        destination.unclaimed_old_slots,
-    );
-
-    // Containment window — Activate: reactivate the whole subtree alone. Deactivation released
-    // every inherited edge; the owner schedules `did_change_dependencies`
-    // for nodes that had dependencies so their next build registers
-    // against the new ancestry. A descendant's own `ViewState::activate`
-    // can panic here — a behavior that catches its own (see
-    // `StatefulBehavior::on_activate`) stages it under its own identity
-    // and re-raises, so this still observes the unwind.
-    owner.arm_lifecycle_panic_handoff();
-    if let Err(payload) = contain_window(|| tree.activate_subtree(candidate_id, owner)) {
-        let staged = owner.take_staged_lifecycle_panic();
-        return Some(Err(ChildHookPanic {
-            inserted: Some(inserted),
-            hook: LifecycleHook::Activate,
-            staged,
-            payload,
-        }));
-    }
-    owner.take_staged_lifecycle_panic();
-
-    // Framework code between the two windows, never user code — a `BUG:`
-    // here propagates uncontained (see `ChildHookPanic`'s doc). The
-    // subtree moved under a new parent, so its inherited scopes (built
-    // against the OLD ancestor chain) and descendant depths are stale.
-    // Recompute both top-down against `new_parent`.
-    tree.recompute_subtree_ancestry(candidate_id, owner.child_manager_registry);
-    tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
-    for &(element_id, _) in &relocation.frontier {
-        tree.reset_ancestor_parent_data(element_id);
-    }
-    attach_render_relocation(&mut relocation);
-
-    // Containment window — Update: the retake's own `update`.
-    let node = tree
-        .get_mut(candidate_id)
-        .expect("BUG: a retaken candidate must still be live for its own update");
-    let update_result = {
-        let element = node.element_mut();
-        contain_window(|| element.update(view, owner))
-    };
-
-    match update_result {
-        Ok(()) => {
-            node.set_key(stored_key);
-            tracing::debug!(
-                candidate = ?candidate_id,
-                new_parent = ?new_parent,
-                new_slot,
-                "ElementTree::insert retook inactive element for GlobalKey state migration"
-            );
-
-            // Emit ReconcileEvent::Reparent. The element
-            // came from the inactive queue (Lifecycle::Inactive → Active), so
-            // `from_parent: None` per ADV-1 branch case 1 — there is no prior
-            // *active* parent at the moment of reparent; the donor parent
-            // already cleared its slot when it pushed the element into the
-            // inactive queue.
-            super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent {
-                kind: super::reconcile_event::ReconcileEventKind::Reparent,
-                parent: new_parent,
-                child_key: Some(key.key_hash()),
-                slot: new_slot,
-                view_type_id: view.view_type_id(),
-                from_parent: None,
-            });
-
-            // ADR-0040: identity and state survived — a move, never a second mount.
-            crate::owner::emit_observation(owner.tree_observer, |o| {
-                o.element_moved(&flui_foundation::observe::ElementMoved::new(
-                    candidate_id,
-                    new_parent,
-                    new_slot,
-                ));
-            });
-
-            Some(Ok(candidate_id))
-        }
-        Err(payload) => Some(Err(ChildHookPanic {
-            inserted: Some(inserted),
-            hook: LifecycleHook::Update,
-            staged: None,
-            payload,
-        })),
-    }
-}
-
-fn retake_active_global_key(
-    tree: &mut ElementTree,
-    owner: &mut crate::ElementOwner<'_>,
-    key: &dyn ViewKey,
-    view: &dyn View,
-    candidate_id: ElementId,
-    destination: RetakeDestination<'_>,
-) -> Option<Result<ElementId, ChildHookPanic>> {
-    let new_parent = destination.parent;
-    let new_slot = destination.slot;
-    let from_parent = tree.get(candidate_id)?.parent()?;
-    if from_parent == new_parent {
-        tracing::error!(
-            key = ?key,
-            ?candidate_id,
-            ?new_parent,
-            "GlobalKey appears twice under the same active parent"
-        );
-        #[cfg(debug_assertions)]
-        {
-            panic!(
-                "GlobalKey {key:?} is already active under {new_parent:?}; \
-                 duplicate GlobalKey children are not allowed"
-            );
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            return None;
-        }
-    }
-
-    // Preflight BEFORE any mutation: a rejected relocation must leave the
-    // donor, the registry and the epoch exactly as it found them.
-    let mut relocation = preflight_render_relocation(tree, candidate_id, new_parent)?;
-
-    // Reconciliation is required only when this graft actually MOVES render
-    // nodes — that is the hazard this gate exists for. A keyed element with
-    // no render frontier carries nothing to relocate, and its graft is the
-    // ordinary cross-parent declaration whose ambiguity the reservation
-    // ledger already resolves: it records both claimants and the frame
-    // boundary reports a real duplicate. Refusing that case here would turn
-    // a reported duplicate into a silent fresh mount.
-    if !relocation.frontier.is_empty() && !tree.is_reconciling_parent(new_parent) {
-        return None;
-    }
-    // Clone caller-controlled key data before displacement bookkeeping or
-    // donor/render-tree mutation begins.
-    let stored_key = view.key().map(ViewKey::clone_key);
-
-    // Past the preflight the graft is going to happen. It pulls this child
-    // out from under a parent that is still live, which is a legitimate
-    // reparent only if `from_parent` goes on to rebuild without the child;
-    // if it never rebuilds, it ends the frame describing a child it no
-    // longer has. Record it so the frame boundary can tell the two apart —
-    // `note_parent_rebuild` drops this the moment `from_parent` rebuilds.
-    owner.displace_global_key(from_parent, candidate_id, key, new_parent);
-    // A lazy sliver that loses a child this way must forget it too, or its
-    // next band eviction / delegate refresh would reach into another
-    // parent's subtree.
-    if let Some(losing_render_id) = tree
-        .get(from_parent)
-        .and_then(|node| node.element().render_id())
-    {
-        owner.forget_sparse_child(losing_render_id, candidate_id);
-    }
-
-    // A candidate registered under a parent that no longer lists it is
-    // tolerated, not refused: the registry is the authority on where a
-    // GlobalKey lives, and the frame boundary reports a genuine duplicate
-    // through the reservation ledger. Refusing here would convert that
-    // report into a fresh mount and lose it.
-    if let Some(old_parent) = tree.get_mut(from_parent) {
-        if let Some(pos) = old_parent
-            .child_ids
-            .iter()
-            .position(|&child| child == candidate_id)
-        {
-            old_parent.child_ids.remove(pos);
-        } else {
-            tracing::warn!(
-                ?candidate_id,
-                ?from_parent,
-                "active GlobalKey candidate was registered under a parent that no longer lists it"
-            );
-        }
-    }
-    detach_render_relocation(&mut relocation);
-
-    let (parent_depth, child_parent_render_id, child_sliver_slot) =
-        tree.get(new_parent).map_or((0, None, None), |node| {
-            (
-                node.depth(),
-                node.element().child_render_id(),
-                node.element().child_sliver_slot(new_slot),
-            )
-        });
-
-    tree.deactivate_subtree(candidate_id, owner);
-    {
-        let node = tree.get_mut(candidate_id)?;
-        node.parent = Some(new_parent);
-        node.slot = new_slot;
-        node.set_depth(parent_depth + 1);
-        node.element_mut()
-            .set_parent_render_id(child_parent_render_id);
-        node.element_mut().set_sliver_slot(child_sliver_slot);
-    }
-
-    // The relocation is committed; the element is live and parented here.
-    // Report it now — BEFORE either containment window below, which run
-    // `activate_subtree` and (separately) this retake's own `update`, both
-    // panic sites — so a caller bounding those windows (see
-    // `ChildHookPanic`'s doc) knows to remove THIS element rather than
-    // looking for a node this call never minted.
-    let inserted = InsertedChild::Retaken(candidate_id);
-    let provisional = provisional_child_order(
-        destination.reconciled_prefix,
-        candidate_id,
-        destination.unclaimed_old_slots,
-    );
-
-    // Containment window — Activate: reactivate the whole subtree alone. A descendant's own
-    // `ViewState::activate` can panic here — a behavior that catches its
-    // own (see `StatefulBehavior::on_activate`) stages it under its own
-    // identity and re-raises, so this still observes the unwind.
-    owner.arm_lifecycle_panic_handoff();
-    if let Err(payload) = contain_window(|| tree.activate_subtree(candidate_id, owner)) {
-        let staged = owner.take_staged_lifecycle_panic();
-        return Some(Err(ChildHookPanic {
-            inserted: Some(inserted),
-            hook: LifecycleHook::Activate,
-            staged,
-            payload,
-        }));
-    }
-    owner.take_staged_lifecycle_panic();
-
-    // Framework code between the two windows, never user code — a `BUG:`
-    // here propagates uncontained (see `ChildHookPanic`'s doc).
-    // Deactivation above synchronously released dependency edges for the
-    // entire subtree. Repair both inherited scopes and recursive depths
-    // before the next dirty-heap drain.
-    tree.recompute_subtree_ancestry(candidate_id, owner.child_manager_registry);
-    tree.synchronize_destination_render_children_for_relocation(new_parent, &provisional);
-    for &(element_id, _) in &relocation.frontier {
-        tree.reset_ancestor_parent_data(element_id);
-    }
-    attach_render_relocation(&mut relocation);
-
-    // Containment window — Update: the retake's own `update`.
-    let node = tree
-        .get_mut(candidate_id)
-        .expect("BUG: a retaken candidate must still be live for its own update");
-    let update_result = {
-        let element = node.element_mut();
-        contain_window(|| element.update(view, owner))
-    };
-
-    match update_result {
-        Ok(()) => {
-            node.set_key(stored_key);
-            tracing::debug!(
-                candidate = ?candidate_id,
-                from_parent = ?from_parent,
-                new_parent = ?new_parent,
-                new_slot,
-                "ElementTree::insert moved active GlobalKey element to a new parent"
-            );
-
-            super::reconcile_event::emit(&super::reconcile_event::ReconcileEvent::reparent(
-                from_parent,
-                new_parent,
-                new_slot,
-                view.view_type_id(),
-                key.key_hash(),
-            ));
-
-            // ADR-0040: cross-parent move of a live element.
-            crate::owner::emit_observation(owner.tree_observer, |o| {
-                o.element_moved(&flui_foundation::observe::ElementMoved::new(
-                    candidate_id,
-                    new_parent,
-                    new_slot,
-                ));
-            });
-
-            Some(Ok(candidate_id))
-        }
-        Err(payload) => Some(Err(ChildHookPanic {
-            inserted: Some(inserted),
-            hook: LifecycleHook::Update,
-            staged: None,
-            payload,
-        })),
-    }
-}
-
 impl std::fmt::Debug for ElementTree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ElementTree")
@@ -2961,7 +413,9 @@ impl std::fmt::Debug for ElementTree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::view::{IntoView, ViewExt};
+    use crate::view::{BoxedView, IntoView, ViewExt};
+    use flui_rendering::{parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell};
+    use std::any::TypeId;
 
     #[path = "activation_recovery_tests.rs"]
     mod activation_recovery_tests;
@@ -2969,7 +423,7 @@ mod tests {
     #[path = "exhaustion_refusal_tests.rs"]
     mod exhaustion_refusal_tests;
 
-    use crate::{BuildContext, BuildOwner, GlobalKey, RenderView, StatelessView, View};
+    use crate::{BuildContext, GlobalKey, RenderView, StatelessView, View, owner::BuildOwner};
 
     #[derive(Clone)]
     struct UnitRenderHost;
@@ -3108,13 +562,15 @@ mod tests {
         let root = tree.mount_root(
             &TestView {
                 name: "root".into(),
-            },
+            }
+            .boxed(),
             &mut owner.element_owner_mut(),
         );
         let wrapper = tree.insert(
             &TestView {
                 name: "unkeyed-wrapper".into(),
-            },
+            }
+            .boxed(),
             root,
             0,
             &mut owner.element_owner_mut(),
@@ -3122,7 +578,8 @@ mod tests {
         let keyed = tree.insert(
             &KeyedTestView {
                 key: crate::key::GlobalKey::<()>::new(),
-            },
+            }
+            .boxed(),
             wrapper,
             0,
             &mut owner.element_owner_mut(),
@@ -3171,41 +628,56 @@ mod tests {
             flui_rendering::TextContextHandle::standalone(),
         ));
         let root = tree.mount_root_with_pipeline_owner(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             Some(pipeline.clone()),
             &mut owner.element_owner_mut(),
         );
-        let donor = tree.insert(&UnitRenderHost, root, 0, &mut owner.element_owner_mut());
-        let destination = tree.insert(&UnitRenderHost, root, 1, &mut owner.element_owner_mut());
+        let donor = tree.insert(
+            &UnitRenderHost.boxed(),
+            root,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let destination = tree.insert(
+            &UnitRenderHost.boxed(),
+            root,
+            1,
+            &mut owner.element_owner_mut(),
+        );
         let key = GlobalKey::<()>::new();
         let keyed = KeyedTransparentView { key };
-        let candidate = tree.insert(&keyed, donor, 0, &mut owner.element_owner_mut());
+        let candidate = tree.insert(
+            &keyed.clone().boxed(),
+            donor,
+            0,
+            &mut owner.element_owner_mut(),
+        );
         let first_boundary = tree.insert(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             candidate,
             0,
             &mut owner.element_owner_mut(),
         );
         let second_boundary = tree.insert(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             candidate,
             1,
             &mut owner.element_owner_mut(),
         );
         let nested = tree.insert(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             first_boundary,
             0,
             &mut owner.element_owner_mut(),
         );
         let prefix = tree.insert(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             destination,
             0,
             &mut owner.element_owner_mut(),
         );
         let suffix = tree.insert(
-            &UnitRenderHost,
+            &UnitRenderHost.boxed(),
             destination,
             2,
             &mut owner.element_owner_mut(),
@@ -3257,7 +729,7 @@ mod tests {
 
         let _guard = tree.begin_reconcile(destination);
         let moved = tree.mount_or_substitute(
-            &keyed,
+            &keyed.boxed(),
             destination,
             1,
             &mut owner.element_owner_mut(),
@@ -3307,21 +779,21 @@ mod tests {
         let root = TestView {
             name: "root".to_string(),
         };
-        let root_id = tree.mount_root(&root, &mut owner.element_owner_mut());
+        let root_id = tree.mount_root(&root.boxed(), &mut owner.element_owner_mut());
 
         // Insert child A, then eagerly remove it (un-keyed → slab slot freed,
         // generation bumped).
         let child_a = TestView {
             name: "a".to_string(),
         };
-        let id_a = tree.insert(&child_a, root_id, 0, &mut owner.element_owner_mut());
+        let id_a = tree.insert(&child_a.boxed(), root_id, 0, &mut owner.element_owner_mut());
         assert!(tree.remove(id_a, &mut owner.element_owner_mut()).is_some());
 
         // Insert child B — the slab hands back the slot A just vacated.
         let child_b = TestView {
             name: "b".to_string(),
         };
-        let id_b = tree.insert(&child_b, root_id, 0, &mut owner.element_owner_mut());
+        let id_b = tree.insert(&child_b.boxed(), root_id, 0, &mut owner.element_owner_mut());
 
         // Same slot, different generation → distinct ids.
         assert_eq!(
@@ -3346,7 +818,7 @@ mod tests {
     }
 
     // ========================================================================
-    // Inherited scope (PR-2): the per-node `inherited` map gives O(1)
+    // Inherited scope: the per-node `inherited` map gives O(1)
     // `depend_on` resolution. These exercise the map directly (it is
     // `pub(crate)`), independent of the build pipeline.
     // ========================================================================
@@ -3361,7 +833,7 @@ mod tests {
     #[derive(Clone)]
     struct Theme {
         data: ThemeData,
-        child: TestView,
+        child: BoxedView,
     }
 
     impl crate::view::InheritedView for Theme {
@@ -3371,7 +843,7 @@ mod tests {
             &self.data
         }
 
-        fn child(&self) -> &dyn View {
+        fn child(&self) -> &BoxedView {
             &self.child
         }
 
@@ -3391,7 +863,8 @@ mod tests {
             data: ThemeData { color },
             child: TestView {
                 name: "unused".to_string(),
-            },
+            }
+            .boxed(),
         }
     }
 
@@ -3405,9 +878,9 @@ mod tests {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
 
-        let outer = tree.mount_root(&theme(1), &mut owner.element_owner_mut());
-        let inner = tree.insert(&theme(2), outer, 0, &mut owner.element_owner_mut());
-        let leaf_id = tree.insert(&leaf("l"), inner, 0, &mut owner.element_owner_mut());
+        let outer = tree.mount_root(&theme(1).boxed(), &mut owner.element_owner_mut());
+        let inner = tree.insert(&theme(2).boxed(), outer, 0, &mut owner.element_owner_mut());
+        let leaf_id = tree.insert(&leaf("l").boxed(), inner, 0, &mut owner.element_owner_mut());
 
         let theme_ty = TypeId::of::<Theme>();
         // Nearest-wins: the leaf resolves the inner provider, not the outer.
@@ -3430,7 +903,7 @@ mod tests {
     #[derive(Clone)]
     struct Tier<const N: usize> {
         data: ThemeData,
-        child: TestView,
+        child: BoxedView,
     }
 
     impl<const N: usize> crate::view::InheritedView for Tier<N> {
@@ -3440,7 +913,7 @@ mod tests {
             &self.data
         }
 
-        fn child(&self) -> &dyn View {
+        fn child(&self) -> &BoxedView {
             &self.child
         }
 
@@ -3458,7 +931,7 @@ mod tests {
     fn tier<const N: usize>() -> Tier<N> {
         Tier {
             data: ThemeData { color: 0 },
-            child: leaf("unused"),
+            child: leaf("unused").boxed(),
         }
     }
 
@@ -3470,15 +943,50 @@ mod tests {
         let mut tree = ElementTree::new();
         let mut owner = BuildOwner::new();
 
-        let first = tree.mount_root(&tier::<0>(), &mut owner.element_owner_mut());
-        let second = tree.insert(&tier::<1>(), first, 0, &mut owner.element_owner_mut());
-        let branch = tree.insert(&leaf("branch"), second, 1, &mut owner.element_owner_mut());
-        let third = tree.insert(&tier::<2>(), second, 0, &mut owner.element_owner_mut());
-        let fourth = tree.insert(&tier::<3>(), third, 0, &mut owner.element_owner_mut());
-        let fifth = tree.insert(&tier::<4>(), fourth, 0, &mut owner.element_owner_mut());
-        let sixth = tree.insert(&tier::<5>(), fifth, 0, &mut owner.element_owner_mut());
-        let again = tree.insert(&tier::<0>(), sixth, 0, &mut owner.element_owner_mut());
-        let leaf_id = tree.insert(&leaf("l"), again, 0, &mut owner.element_owner_mut());
+        let first = tree.mount_root(&tier::<0>().boxed(), &mut owner.element_owner_mut());
+        let second = tree.insert(
+            &tier::<1>().boxed(),
+            first,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let branch = tree.insert(
+            &leaf("branch").boxed(),
+            second,
+            1,
+            &mut owner.element_owner_mut(),
+        );
+        let third = tree.insert(
+            &tier::<2>().boxed(),
+            second,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let fourth = tree.insert(
+            &tier::<3>().boxed(),
+            third,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let fifth = tree.insert(
+            &tier::<4>().boxed(),
+            fourth,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let sixth = tree.insert(
+            &tier::<5>().boxed(),
+            fifth,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let again = tree.insert(
+            &tier::<0>().boxed(),
+            sixth,
+            0,
+            &mut owner.element_owner_mut(),
+        );
+        let leaf_id = tree.insert(&leaf("l").boxed(), again, 0, &mut owner.element_owner_mut());
 
         let provider =
             |at: ElementId, type_id: TypeId| tree.get(at).unwrap().inherited_provider(type_id);

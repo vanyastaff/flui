@@ -147,7 +147,7 @@ pub(super) fn filtered_image_matrix_range() {
 }
 
 pub(super) fn filtered_image_preparation_failure_recovers() {
-    use crate::device_domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
+    use crate::device::domain::{DeviceDomain, PreparedCost, PreparedIrLimits};
     use flui_painting::paint::ColorFilter;
     let (device, queue) = test_device_and_queue();
     // Target bindings fit; the additional filter uniform cannot. This private
@@ -484,8 +484,8 @@ pub(super) fn feathered_src_transparency() {
 
 fn replay_canvas(painter: &mut WgpuPainter, canvas: flui_painting::Canvas) {
     let list = canvas.finish();
-    let mut dispatcher = crate::layer_dispatcher::LayerDispatcher::new(painter);
-    crate::dispatch::dispatch_commands(&list, &mut dispatcher);
+    let mut dispatcher = crate::layers::dispatcher::LayerDispatcher::new(painter);
+    crate::layers::dispatch::dispatch_commands(&list, &mut dispatcher);
 }
 fn striped() -> Image {
     Image::from_rgba8(

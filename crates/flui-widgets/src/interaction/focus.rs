@@ -1,20 +1,20 @@
-//! [`Focus`] and [`FocusScope`] â€” the widgets that put `flui-interaction`'s
+//! [`Focus`] and [`FocusScope`] — the widgets that put `flui-interaction`'s
 //! focus tree into the element tree.
 //!
 //! ADR-0026. The node/manager layer (`FocusManager`, `FocusNode`,
-//! `FocusScopeNode` â€” tracker H4) predates these widgets; what they add is the
+//! `FocusScopeNode` — tracker H4) predates these widgets; what they add is the
 //! lifecycle wiring: a widget-owned node attached under the nearest enclosing
 //! scope on mount, moved with [`FocusScopeNode::adopt_node`] when that scope
 //! changes, and detached on dispose.
 //!
 //! # Design notes (ADR-0026)
 //!
-//! * **Nodes parent to the nearest focus *node*** â€” scope or plain `Focus` â€”
+//! * **Nodes parent to the nearest focus *node*** — scope or plain `Focus` —
 //!   through one provider. (An earlier design flattened to the nearest scope;
 //!   key bubbling made the node tree's shape observable and superseded that
-//!   decision â€” ADR-0026, ADR-0023.)
+//!   decision — ADR-0026, ADR-0023.)
 //! * **Reparenting happens in `did_change_dependencies`**, not on every build
-//!   â€” the provider notifying is the only way the enclosing scope changes
+//!   — the provider notifying is the only way the enclosing scope changes
 //!   without a remount. Observable only through the parent node, which is not
 //!   exposed.
 //! * **Focus changes apply synchronously.** FLUI's `FocusManager` is
@@ -185,7 +185,7 @@ impl Focus {
     }
 
     /// Whether the subtree tells assistive technology it is focusable and
-    /// when it holds the focus â€” `true` by default.
+    /// when it holds the focus — `true` by default.
     /// Without it a screen reader cannot follow keyboard focus: Narrator
     /// read nothing when Tab moved to the counter's button on a live window.
     #[must_use]
@@ -289,7 +289,7 @@ impl Focus {
     }
 
     /// Key handler invoked during the leafâ†’root dispatch walk while this
-    /// node â€” or a descendant â€” holds the primary focus. Return
+    /// node — or a descendant — holds the primary focus. Return
     /// [`Handled`](flui_interaction::focus::KeyEventResult::Handled) to consume the
     /// event, [`Ignored`](flui_interaction::focus::KeyEventResult::Ignored) to let it
     /// bubble to the enclosing `Focus`, or
@@ -300,7 +300,7 @@ impl Focus {
     /// `&mut EventContext<'_>` and may write signals; it keeps its decision as the
     /// return value, so a write's `Result` is not reported for it: call
     /// [`report`](EventOutcome::report) on a write whose refusal should be
-    /// logged (ADR-0086 Â§6).
+    /// logged (ADR-0086 §6).
     #[must_use]
     pub fn on_key_event<F>(mut self, handler: F) -> Self
     where
@@ -331,7 +331,7 @@ impl Focus {
         Self::maybe_of(ctx).expect(
             "Focus::of() was called with a context that does not contain a Focus widget. \
              No Focus widget ancestor could be found starting from the context passed to \
-             Focus::of() â€” wrap the subtree in a Focus, or use Focus::maybe_of with a \
+             Focus::of() — wrap the subtree in a Focus, or use Focus::maybe_of with a \
              caller-chosen fallback.",
         )
     }
@@ -504,8 +504,8 @@ impl ViewState<Focus> for FocusState {
         // (a popup route makes everything under it unfocusable), and a
         // subtree whose wrapper appears and disappears is torn down and
         // mounted again, which cancels a gesture in flight under it. Only a
-        // node that can take focus annotates it. A node that cannot â€” the one
-        // a `Shortcuts` hosts its key handler on â€” leaves the configuration
+        // node that can take focus annotates it. A node that cannot — the one
+        // a `Shortcuts` hosts its key handler on — leaves the configuration
         // empty, which adds nothing to the semantics tree; setting even a
         // false flag would gather the subtree into one node.
         if self.sliver {
@@ -636,7 +636,7 @@ impl FocusScope {
         }
     }
 
-    /// Use `scope` instead of a widget-owned node â€” the caller keeps the
+    /// Use `scope` instead of a widget-owned node — the caller keeps the
     /// handle (`FocusScope.withExternalFocusNode`, `:826-834`).
     pub fn with_external_node(scope: Rc<FocusScopeNode>, child: impl IntoView) -> Self {
         Self {
@@ -657,7 +657,7 @@ impl FocusScope {
     /// [`FocusScope`], walked up to its scope: the unfiltered
     /// `nearest_focus_node` (not [`Focus::maybe_of`]'s scope-filtering
     /// wrapper), then its nearest scope
-    /// (itself if it already is a scope, else the nearest scope ancestor â€”
+    /// (itself if it already is a scope, else the nearest scope ancestor —
     /// [`FocusNode::as_scope`]/[`FocusNode::enclosing_scope`], the exact pair
     /// `FocusState::try_autofocus` already uses to find "the enclosing
     /// scope" for autofocus purposes).
@@ -793,8 +793,8 @@ impl ViewState<FocusScope> for FocusScopeState {
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.scope
             .set_text_direction(Directionality::maybe_of(ctx).unwrap_or_default());
-        // An enclosing provider changed: move this scope â€” subtree, focus and
-        // all â€” under the new parent (ADR-0026).
+        // An enclosing provider changed: move this scope — subtree, focus and
+        // all — under the new parent (ADR-0026).
         let parent = enclosing_focus_parent(ctx);
         if self
             .parent
@@ -853,7 +853,7 @@ impl ViewState<FocusScope> for FocusScopeState {
         match attachment.replace_node(replacement.as_focus_node()) {
             Ok(replacement_attachment) => self.attachment = Some(replacement_attachment),
             Err(error) => {
-                // Refused before anything changed â€” a focus listener is
+                // Refused before anything changed — a focus listener is
                 // running. Keep the current scope; the next update tries the
                 // replacement again.
                 tracing::warn!(

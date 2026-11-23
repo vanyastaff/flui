@@ -227,10 +227,10 @@ host.
   `APP_RUNTIME` trampoline contains it beside those host-only owners.
 - **Owner work is non-reentrant across UI runtimes.** A reentrant operation for any
   UI runtime appends to the same FIFO; only the outermost owner turn executes it.
-  Before ADR-0083 move 5a, `flui-app` rejected UI runtime B while UI runtime A was
-  checked out, which could lose B's UI close after its native window had
-  already closed. The app now provides the host-wide FIFO behavior that the
-  extraction must preserve. `flui-app` now executes at most 32 logical
+  `flui-app` never rejects UI runtime B while UI runtime A is checked out: a
+  rejection could lose B's UI close after its native window had already
+  closed. The app keeps one host-wide FIFO:
+  `flui-app` executes at most 32 logical
   operations per continuation callback, sharing the budget between fresh
   native roots and carried FIFO entries, counts stale entries against it, and
   requests one sequence-stamped continuation opportunity when work remains.
@@ -354,7 +354,7 @@ host.
   `allowed-dependents = ["flui-app", "flui-testing"]` makes the application
   host and the headless test driver the only crates allowed a normal edge.
   That rule is what keeps ADR-0047's
-  invariant true now that `ExecutionServices` is `pub`: only a host crate, one
+  invariant true while `ExecutionServices` is `pub`: only a host crate, one
   of the runtime's `allowed-dependents`, constructs the services, and no other
   workspace crate reaches the pools. `flui-testing` is the host of its own
   headless loop (ADR-0083 §4) and constructs no execution services. Dev edges
@@ -397,8 +397,8 @@ host.
   `PresentationState` and their methods are `pub` only where `flui-app`
   calls them; what only `flui-app`'s tests call is `pub` under
   `testing`; the rest is `pub(crate)`. `flui-app` re-exports none of
-  them, only `frame_failure`'s report types and `RenderingBinding`,
-  at their old `flui_app` paths. `flui-testing` hosts a UI runtime in its
+  them, only `frame_failure`'s report types, at the crate root of
+  `flui_app`. `flui-testing` hosts a UI runtime in its
   `HeadlessHost` and keeps it crate-private, so `flui::testing` does not
   reach it either.
 - **The frame sink is the host's, the verdict is the UI runtime's.** A host
@@ -425,9 +425,9 @@ host.
   `every_presentation_pipeline_holds_the_ui_runtimes_text_context`.
 - **Test hooks stay behind `testing`.** Items that exist for tests, or
   that have no production caller yet (`HeldPointerQueue::append`/`len`,
-  `SemanticsHost::ensure_semantics`, `outstanding_handles`,
-  `ExecutionServices::with_limits`/`owns_default_pools`/`default_pools_started` and
-  `platform_semantics_enabled`, the announce/event delivery, the UI runtime's
+  `SemanticsHost::ensure_semantics`,
+  `ExecutionServices::with_limits`/`owns_default_pools`/`default_pools_started`,
+  the announce/event delivery, the UI runtime's
   `for_test` constructors and `*_for_test` probes such as
   `text_context_for_test`, the `testing` doubles),
   compile only under `cfg(test)` or the `testing` feature, which only
@@ -1252,7 +1252,7 @@ in `agent_port_admission_matrix` exercise both public reads and actions, then
 verify that later calls answer `gone`. The windows hold the presentation's semantics handle strongly instead of the presentation, so the
 cost lasts exactly as long as the hook keeps a window: a hook that does not serve is handed none,
 and one that detaches or panics drops its windows, and collection stops on the next frame. `flui-app`'s runners
-and `flui_testing::HeadlessDevAgent` drive the hooks through `dev_agent::DevAgentHost`, one per
+and `flui_testing::host::HeadlessDevAgent` drive the hooks through `dev_agent::DevAgentHost`, one per
 loop; the conversation over it is `agent::Service`'s (ADR-0288), which `flui-app`'s driver agent
 (ADR-0239) drives over its endpoint. Pinned by
 `an_agent_for_a_closed_presentation_answers_gone`, `dev_agent_host_contains_its_hook` and
@@ -1505,8 +1505,7 @@ owner at delivery.
 
 **Rule:** `UiRuntime::drop` raises its first failure only once no field it still owns holds an
 application value. A failure raised from `Drop::drop` unwinds through the field drop glue that
-follows; a capture whose destructor panics there is a second panic in one unwind, and aborts
-(#1165).
+follows; a capture whose destructor panics there is a second panic in one unwind, and aborts.
 
 **Choice:** after the presentations and the owner-local frame work retire, the drop takes the
 queued commands (a cross-thread signal write carries the application's closure) and the

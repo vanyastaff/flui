@@ -5,8 +5,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use flui_app::app::{AppConfig, Application, ExitPolicy, WindowPolicy, open_secondary_window};
 use flui_app::testing::HeadlessRun;
+use flui_app::{AppConfig, Application, ExitPolicy, WindowPolicy, open_secondary_window};
 use flui_protocol::launch::ENDPOINT_ENV;
 
 /// The names of this process's threads, as the system reports them.

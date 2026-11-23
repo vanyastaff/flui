@@ -65,17 +65,19 @@
 //! 5. `max_scroll_obstruction_extent` must be reported on the Pinned /
 //!    FloatingPinned variants even though nothing inside this render object
 //!    consumes it: it feeds `RenderViewport::max_scroll_obstruction_extent_before`
-//!    (`crates/flui-objects/src/sliver/viewport.rs:190-200`), which
+//!    (`crates/flui-objects/src/sliver/viewport/viewport.rs`), which
 //!    `RenderViewport::offset_to_reveal`-style scroll-into-view machinery
 //!    would use. It does **not** feed the *next sibling's*
 //!    `SliverConstraints.overlap`: the viewport computes `overlap` from an
 //!    accumulated paint offset built from `paint_extent`
-//!    (`viewport.rs:410-411`), not from the obstruction extent. Its real
+//!    (`layout_child_sequence` in `viewport/core.rs`), not from the obstruction extent. Its real
 //!    consumer is `max_scroll_obstruction_extent_before`, used to compute the
 //!    offset to reveal a child.
-//! 6. The stretch-trigger signal is **edge-triggered** (`stretch_offset >=
-//!    trigger && last_stretch_offset <= trigger`), firing once per crossing,
-//!    not once per frame spent above the trigger.
+//! 6. The stretch trigger is **edge-triggered** (`stretch_offset >= trigger
+//!    && last_stretch_offset < trigger`), running once per crossing, not once
+//!    per frame spent at or above the trigger. Flutter compares the previous
+//!    stretch with `<=`, which runs it again on every layout that rests
+//!    exactly on the offset.
 //! 7. `layout_child`'s own
 //!    stretch-offset formula (used for the child's box constraints, gated on
 //!    `constraints.scroll_offset == 0.0`) is a **different formula** from
@@ -83,15 +85,7 @@
 //!    only on `stretch_configuration.is_some()`, no scroll-offset check).
 //!    Reusing one for the other silently changes stretch behavior.
 
-use std::{
-    fmt,
-    marker::PhantomData,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
+use std::{fmt, marker::PhantomData, rc::Rc, time::Duration};
 
 use flui_animation::{
     Animatable, Animation, AnimationController, CurvedAnimation, SharedCurve, Tween, curves,
@@ -114,40 +108,31 @@ use flui_rendering::{
 // Configuration types
 // =============================================================================
 
-/// Data-plane signal raised when a stretched header crosses its trigger offset.
+/// Told when a stretched header's over-scroll reaches
+/// [`stretch_trigger_offset`](OverScrollHeaderStretchConfiguration::stretch_trigger_offset):
+/// once per crossing, on the layout whose stretch first reaches the offset,
+/// and again only after a layout whose stretch fell below it.
 ///
-/// This is intentionally not a callback. `RenderSliverPersistentHeader` is a
-/// render object and must not store executable UI closures; owner/widget code can
-/// hold a clone, compare [`count`](Self::count), and invoke an owner-local
-/// callback from the UI runtime.
-#[derive(Clone, Default)]
-pub struct StretchTriggerSignal {
-    count: Arc<AtomicU64>,
-}
+/// It runs inside layout, so it records state and schedules work (a rebuild,
+/// an animation, a refresh); it does not change the tree.
+#[derive(Clone)]
+pub struct StretchTrigger(Rc<dyn Fn()>);
 
-impl StretchTriggerSignal {
-    /// Creates an untriggered signal.
+impl StretchTrigger {
+    /// A trigger that runs `on_stretch_trigger` at each crossing.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Number of edge-trigger crossings reported so far.
-    #[must_use]
-    pub fn count(&self) -> u64 {
-        self.count.load(Ordering::SeqCst)
+    pub fn new(on_stretch_trigger: impl Fn() + 'static) -> Self {
+        Self(Rc::new(on_stretch_trigger))
     }
 
     fn notify(&self) {
-        self.count.fetch_add(1, Ordering::SeqCst);
+        (self.0)();
     }
 }
 
-impl fmt::Debug for StretchTriggerSignal {
+impl fmt::Debug for StretchTrigger {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StretchTriggerSignal")
-            .field("count", &self.count())
-            .finish()
+        f.debug_struct("StretchTrigger").finish_non_exhaustive()
     }
 }
 
@@ -179,27 +164,30 @@ pub enum SnapAction {
     Stop,
 }
 
-/// Specifies how a stretched header reports overscroll trigger crossings.
+/// Specifies how a header stretches past its maximum extent when the scroll
+/// view over-scrolls at its start, and what it tells when the stretch gets
+/// far enough.
 ///
-/// The signal fires **edge-triggered** — exactly once per crossing of
-/// `stretch_trigger_offset` — see `PersistentHeaderCore::layout_child`.
-#[derive(Clone)]
+/// [`on_stretch_trigger`](Self::on_stretch_trigger) runs **edge-triggered**,
+/// once per crossing of `stretch_trigger_offset` — see
+/// `PersistentHeaderCore::layout_child`.
+#[derive(Clone, Debug)]
 pub struct OverScrollHeaderStretchConfiguration {
-    /// The overscroll extent required to notify [`stretch_trigger`](Self::stretch_trigger).
+    /// The over-scroll extent, in logical pixels, at which
+    /// [`on_stretch_trigger`](Self::on_stretch_trigger) runs.
     pub stretch_trigger_offset: f64,
-    /// Data-only notification raised once per crossing of
-    /// `stretch_trigger_offset`.
-    pub stretch_trigger: Option<StretchTriggerSignal>,
+    /// Run once each time the stretch reaches `stretch_trigger_offset`.
+    pub on_stretch_trigger: Option<StretchTrigger>,
 }
 
 impl OverScrollHeaderStretchConfiguration {
     /// Creates a stretch configuration with an explicit trigger offset and
-    /// optional data-plane signal.
+    /// an optional trigger.
     #[must_use]
-    pub fn new(stretch_trigger_offset: f64, stretch_trigger: Option<StretchTriggerSignal>) -> Self {
+    pub fn new(stretch_trigger_offset: f64, on_stretch_trigger: Option<StretchTrigger>) -> Self {
         Self {
             stretch_trigger_offset,
-            stretch_trigger,
+            on_stretch_trigger,
         }
     }
 }
@@ -208,17 +196,8 @@ impl Default for OverScrollHeaderStretchConfiguration {
     fn default() -> Self {
         Self {
             stretch_trigger_offset: 100.0,
-            stretch_trigger: None,
+            on_stretch_trigger: None,
         }
-    }
-}
-
-impl fmt::Debug for OverScrollHeaderStretchConfiguration {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OverScrollHeaderStretchConfiguration")
-            .field("stretch_trigger_offset", &self.stretch_trigger_offset)
-            .field("has_stretch_trigger", &self.stretch_trigger.is_some())
-            .finish()
     }
 }
 
@@ -263,9 +242,11 @@ impl Default for FloatingHeaderSnapConfiguration {
 #[derive(Debug)]
 struct PersistentHeaderCore {
     stretch_configuration: Option<OverScrollHeaderStretchConfiguration>,
-    /// Initialized to `0.0`, the natural "not yet triggered" value; this only
-    /// matters in the corner case of a first-ever layout whose overscroll
-    /// already exceeds the trigger threshold.
+    /// The stretch the previous layout gave the child, in logical pixels: the
+    /// trigger is armed while it is below `stretch_trigger_offset`. Starts at
+    /// `0.0`, no stretch, so a first layout already past a positive offset
+    /// runs the trigger; an offset of zero or below is reached by every
+    /// layout and so never crossed.
     last_stretch_offset: f64,
     /// Starts `true` — the very first `layout_child` call always
     /// invokes `update_child` regardless of shrink-offset/overlap history.
@@ -350,7 +331,7 @@ impl PersistentHeaderCore {
     /// - a stretch-offset formula gated on `constraints.scroll_offset ==
     ///   0.0` — **distinct** from [`Self::stretch_offset_for_geometry`]
     ///   (trap #7);
-    /// - the edge-triggered stretch trigger signal (trap #6).
+    /// - the edge-triggered stretch trigger (trap #6).
     ///
     /// Returns the child's post-layout main-axis extent (`0.0` if there is no
     /// child).
@@ -446,14 +427,17 @@ impl PersistentHeaderCore {
             0.0
         };
 
+        // The new stretch is recorded before the trigger runs, so a trigger
+        // that panics has still disarmed this crossing.
+        let previous_stretch_offset =
+            std::mem::replace(&mut self.last_stretch_offset, stretch_offset);
         if let Some(cfg) = self.stretch_configuration.as_ref()
-            && let Some(trigger) = cfg.stretch_trigger.as_ref()
+            && let Some(trigger) = cfg.on_stretch_trigger.as_ref()
             && stretch_offset >= cfg.stretch_trigger_offset
-            && self.last_stretch_offset <= cfg.stretch_trigger_offset
+            && previous_stretch_offset < cfg.stretch_trigger_offset
         {
             trigger.notify();
         }
-        self.last_stretch_offset = stretch_offset;
 
         Ok(child_extent)
     }
@@ -600,17 +584,12 @@ impl RenderSliverScrollingPersistentHeader {
         let raw_paint_extent = max_extent - constraints.scroll_offset;
         let cache_extent = self.calculate_cache_offset(constraints, 0.0, max_extent);
         let paint_extent = raw_paint_extent.clamp(0.0, constraints.remaining_paint_extent);
-        // Only scroll extent, paint origin, paint extent, max paint extent and
-        // cache extent are set, so every other field takes
-        // `SliverGeometry`'s constructor default. Going through `new` + `with_*` rather than
-        // a `..ZERO` struct literal is what makes those defaults apply: the
-        // struct-update form substitutes zero/false for whatever it omits,
-        // which is how `layout_extent`, `visible` and `hit_test_extent` were
-        // each silently dropped here in turn.
+        // `layout_extent`, `hit_test_extent` and `visible` follow the paint
+        // extent, as `new` derives them.
         let geometry = SliverGeometry::new(max_extent, paint_extent, constraints.overlap.min(0.0))
             .with_max_paint_extent(max_extent + stretch_offset)
             .with_cache_extent(cache_extent)
-            .with_visual_overflow();
+            .with_visual_overflow(true);
         let child_position = if stretch_offset > 0.0 {
             0.0
         } else {
@@ -756,7 +735,7 @@ impl RenderSliver for RenderSliverPinnedPersistentHeader {
             } else {
                 layout_extent
             })
-            .with_visual_overflow();
+            .with_visual_overflow(true);
 
         position_persistent_header_child(ctx, &constraints, &geometry, 0.0, child_extent);
         Ok(geometry)
@@ -877,7 +856,7 @@ impl FloatingHeaderMode for FloatingMode {
             .with_layout_extent(layout_extent)
             .with_max_paint_extent(max_extent + stretch_offset)
             .with_cache_extent(layout_extent)
-            .with_visual_overflow();
+            .with_visual_overflow(true);
         // Uses the RAW (pre-clamp) `paint_extent` local, not the clamped
         // `geometry.paint_extent`.
         let child_position = if stretch_offset > 0.0 {
@@ -923,7 +902,7 @@ impl FloatingHeaderMode for FloatingPinnedMode {
         .with_max_paint_extent(max_extent + stretch_offset)
         .with_max_scroll_obstruction(min_extent)
         .with_cache_extent(layout_extent)
-        .with_visual_overflow();
+        .with_visual_overflow(true);
         (geometry, 0.0)
     }
 }
@@ -1074,27 +1053,27 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     pub fn set_snap_controller(&mut self, controller: Option<AnimationController>) {
         let outgoing = std::mem::replace(&mut self.controller, controller);
         let listener = self.listener_id.take();
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        let mut failure = flui_foundation::panic::FirstPanic::new();
         if let Some(listener) = listener {
-            listener.close(&mut recovery);
+            listener.close(&mut failure);
         }
-        recovery.run(|| self.subscribe_snap_controller());
-        recovery.retire(outgoing);
-        recovery.finish();
+        failure.contain(|| self.subscribe_snap_controller());
+        failure.retire(outgoing);
+        failure.resume();
     }
 
     fn subscribe_snap_controller(&mut self) {
         if let (Some(controller), Some(handle)) =
             (self.controller.as_ref(), self.invalidation.clone())
         {
-            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            let mut failure = flui_foundation::panic::FirstPanic::new();
             self.listener_id = crate::subscription::RenderSubscription::subscribe(
                 || Some(std::rc::Rc::new(controller.clone())),
                 Some(&handle),
                 flui_rendering::RenderUpdateImpact::LAYOUT,
-                &mut recovery,
+                &mut failure,
             );
-            recovery.finish();
+            failure.resume();
         }
     }
 
@@ -1325,9 +1304,9 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
         // object. Stopping here would also race a fresh `attach` on a
         // remove+insert reparent.
         if let Some(subscription) = self.listener_id.take() {
-            let mut recovery = flui_foundation::panic::PanicRecovery::new();
-            subscription.close(&mut recovery);
-            recovery.finish();
+            let mut failure = flui_foundation::panic::FirstPanic::new();
+            subscription.close(&mut failure);
+            failure.resume();
         }
     }
 }

@@ -33,15 +33,25 @@ fn sample(pixels: &[u8], x: u32, y: u32) -> [u8; 4] {
 /// appears either.
 fn the_engine_does_not_shape() {
     let sources = [
-        ("glyph_atlas.rs", include_str!("glyph_atlas.rs")),
-        ("batches/text.rs", include_str!("batches/text.rs")),
-        ("layer_dispatcher.rs", include_str!("layer_dispatcher.rs")),
-        ("layer_render.rs", include_str!("layer_render.rs")),
-        ("command_renderer.rs", include_str!("command_renderer.rs")),
-        ("dispatch.rs", include_str!("dispatch.rs")),
+        (
+            "resources/glyph_atlas.rs",
+            include_str!("resources/glyph_atlas.rs"),
+        ),
+        (
+            "record/batches/text.rs",
+            include_str!("record/batches/text.rs"),
+        ),
+        ("layers/dispatcher.rs", include_str!("layers/dispatcher.rs")),
+        ("layers/render.rs", include_str!("layers/render.rs")),
+        (
+            "layers/command_renderer.rs",
+            include_str!("layers/command_renderer.rs"),
+        ),
+        ("layers/dispatch.rs", include_str!("layers/dispatch.rs")),
         ("painter/draw.rs", include_str!("painter/draw.rs")),
         ("painter/mod.rs", include_str!("painter/mod.rs")),
-        ("renderer.rs", include_str!("renderer.rs")),
+        ("surface/slot.rs", include_str!("surface/slot.rs")),
+        ("frame/protocol.rs", include_str!("frame/protocol.rs")),
         ("headless.rs", include_str!("headless.rs")),
     ];
     for (name, source) in sources {
@@ -106,7 +116,7 @@ fn paragraph_scene(
 /// reaches the target as that grey where the glyph fully covers a pixel.
 ///
 /// The engine draws in gamma space onto a `Unorm` target (see
-/// `surface_color::select_sdr`); a rasteriser that converted the
+/// `surface::color::select_sdr`); a rasteriser that converted the
 /// text colour to linear before writing — as the previous one did — turned
 /// `#808080` into `#373737` on every mid-tone label while black and white
 /// text, being fixed points of the transfer, looked right.
@@ -666,9 +676,7 @@ fn check_font_transition(renderer: &crate::headless::HeadlessRenderer, transitio
             capture.render_scene(&before).expect("ordinary frame");
         }
         FontTransition::ReloadedPlugin | FontTransition::PluginToOrdinary => {
-            capture
-                .render_plugin_scene(&before, true)
-                .expect("plugin frame");
+            capture.render_lent(&before, true).expect("plugin frame");
             // Consume unmanaged-frame damage promotion without changing source.
             capture
                 .render_plugin_frame(&before, false)

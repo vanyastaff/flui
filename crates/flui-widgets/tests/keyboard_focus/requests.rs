@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use flui_interaction::focus::{FocusNode, FocusRequestOutcome};
 use flui_view::prelude::*;
-use flui_widgets::interaction::Focus;
+use flui_widgets::Focus;
 use flui_widgets::{Row, SizedBox};
 
 use crate::common::harness::mount;

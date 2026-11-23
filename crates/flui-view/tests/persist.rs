@@ -14,6 +14,7 @@ use flui_foundation::Listenable;
 use flui_objects::RenderSizedBox;
 use flui_platform::StorageName;
 use flui_platform::{StorageError, UnsupportedReason};
+use flui_rendering::RenderUpdateImpact;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::storage::MemoryStorage;
 use flui_testing::widgets::{
@@ -126,7 +127,7 @@ impl View for Leaf {
 struct Opened {
     document: Persisted<Note>,
     guard: Option<CloseGuard>,
-    driver: Option<flui_view::AsyncDriver>,
+    driver: Option<flui_scheduler::AsyncDriver>,
 }
 
 /// Opens the document in `init_state` and hands it to the test.
@@ -1556,7 +1557,7 @@ fn a_listener_panic_leaves_later_changes_told() {
 /// left failed, so `retry` takes it up.
 #[test]
 fn a_frame_hook_panic_while_queueing_leaves_later_changes_told() {
-    let failing = |driver: &flui_view::AsyncDriver, step: &dyn Fn()| {
+    let failing = |driver: &flui_scheduler::AsyncDriver, step: &dyn Fn()| {
         driver.set_request_frame(|| panic!("frame hook failure"));
         let failure = catch_unwind(AssertUnwindSafe(step))
             .expect_err("the frame hook's panic reaches the caller");

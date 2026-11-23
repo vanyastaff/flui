@@ -235,7 +235,7 @@ impl InheritedView for TickerModeScope {
         &self.enabled
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

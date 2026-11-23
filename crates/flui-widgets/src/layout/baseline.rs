@@ -1,10 +1,11 @@
 //! [`Baseline`] — positions its child so a given text baseline sits at a fixed
 //! distance from the top.
 
+use flui_foundation::CreationSite;
 use flui_objects::RenderBaseline;
 use flui_painting::typography::TextBaseline;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Positions its child so the child's `baseline_type` baseline sits `baseline`
 /// device pixels below this box's top edge.

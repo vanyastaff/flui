@@ -10,7 +10,7 @@ pub use flui_painting::{
 };
 pub use flui_painting::{
     BlurSigma, Canvas, DisplayList, DrawCommand, DrawCommandBuf, DrawCommands, DrawOp,
-    ImageRegionPlacement, NestedRRects, Payload, PayloadId,
+    ImagePlacement, ImageRegionPlacement, NestedRRects, Payload, PayloadId,
 };
 /// Paint, style and text values: paths, shaders, colours, borders, decorations, text styles.
 pub use flui_painting::{paint, styling, typography};

@@ -44,9 +44,9 @@
 
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::geometry::Radius;
-use flui_sdk::painting::BorderRadius;
-use flui_sdk::painting::Clip;
-use flui_sdk::painting::Color;
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::painting::styling::BorderRadius;
+use flui_sdk::painting::styling::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::Padding;
 

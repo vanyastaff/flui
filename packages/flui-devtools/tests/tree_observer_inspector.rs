@@ -17,7 +17,8 @@ use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_sdk::foundation::observe::TreeObserver;
 use flui_sdk::foundation::{ElementId, ValueKey, ViewKey};
-use flui_sdk::view::{BuildOwner, ElementTree, RebuildReason, RenderView, View, ViewExt};
+use flui_sdk::view::{BoxedView, RebuildReason, RenderView, View, ViewExt};
+use flui_view::__runtime::{BuildOwner, ElementTree};
 
 #[derive(Clone)]
 struct KeyedLeafBox {
@@ -102,7 +103,7 @@ impl RenderView for MultiBox {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -127,7 +128,7 @@ fn live_children(tree: &ElementTree, parent: ElementId) -> Vec<ElementId> {
 
 fn mount_root_with_pipeline(
     tree: &mut ElementTree,
-    view: &dyn View,
+    view: &BoxedView,
     owner: &mut BuildOwner,
 ) -> ElementId {
     tree.mount_root_with_pipeline_owner(
@@ -151,7 +152,8 @@ fn inspector_counts_mounts_moves_rebuilds_and_unmounts_exactly() {
 
     // Mount the root; its three keyed children mount during the first
     // build_scope (phase-2 reconcile of the root's build output).
-    let root_id = mount_root_with_pipeline(&mut tree, &MultiBox::keyed(&[1, 2, 3]), &mut owner);
+    let root_id =
+        mount_root_with_pipeline(&mut tree, &MultiBox::keyed(&[1, 2, 3]).boxed(), &mut owner);
     let after_root = counters.snapshot();
     assert_eq!(
         after_root.mounts, 1,
@@ -253,7 +255,7 @@ fn panicking_observer_is_detached_and_the_tree_survives() {
 
     // The mount emission panics inside the observer; the emission helper
     // contains it, detaches the observer, and the mount itself completes.
-    let root_id = mount_root_with_pipeline(&mut tree, &MultiBox::keyed(&[1]), &mut owner);
+    let root_id = mount_root_with_pipeline(&mut tree, &MultiBox::keyed(&[1]).boxed(), &mut owner);
     assert!(tree.get(root_id).is_some(), "the mount itself must survive");
     assert!(
         owner.tree_observer().is_none(),

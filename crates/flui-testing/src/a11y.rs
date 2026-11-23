@@ -10,11 +10,11 @@
 //!
 //! Reach it through [`LaidOut::a11y_tree`](crate::widgets::LaidOut::a11y_tree)
 //! after [`LaidOut::enable_semantics`](crate::widgets::LaidOut::enable_semantics),
-//! or [`HeadlessHost::published_a11y_tree`](crate::HeadlessHost::published_a11y_tree)
+//! or [`HeadlessHost::published_a11y_tree`](crate::host::HeadlessHost::published_a11y_tree)
 //! — the semantics phase is a no-op until something asks for it, exactly as in
 //! production.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 use std::fmt::{self, Write as _};
 
 use accesskit::{Node, TreeUpdate};
@@ -74,7 +74,7 @@ pub struct A11yTree {
     /// Indices into `update.nodes`, pre-order from the root.
     order: Vec<usize>,
     /// Each reachable node's parent.
-    parents: HashMap<NodeId, NodeId>,
+    parents: FxHashMap<NodeId, NodeId>,
     /// The presentation's announcer nodes, which carry announcements rather
     /// than authored content and so are not queryable nodes.
     announcers: Vec<usize>,
@@ -84,7 +84,7 @@ impl A11yTree {
     /// Builds the queryable snapshot from a raw update.
     #[must_use]
     pub fn new(update: TreeUpdate) -> Self {
-        let index: HashMap<NodeId, usize> = update
+        let index: FxHashMap<NodeId, usize> = update
             .nodes
             .iter()
             .enumerate()
@@ -92,8 +92,10 @@ impl A11yTree {
             .collect();
 
         let mut order = Vec::with_capacity(update.nodes.len());
-        let mut seen: HashSet<NodeId> = HashSet::with_capacity(update.nodes.len());
-        let mut parents = HashMap::with_capacity(update.nodes.len());
+        let mut seen: FxHashSet<NodeId> =
+            FxHashSet::with_capacity_and_hasher(update.nodes.len(), FxBuildHasher);
+        let mut parents: FxHashMap<NodeId, NodeId> =
+            FxHashMap::with_capacity_and_hasher(update.nodes.len(), FxBuildHasher);
         let mut announcers = Vec::new();
 
         if let Some(tree) = update.tree.as_ref() {

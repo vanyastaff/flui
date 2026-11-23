@@ -1,11 +1,11 @@
-//! [`RefreshIndicator`] â€” pull to refresh, a participant of the nested scroll
+//! [`RefreshIndicator`] — pull to refresh, a participant of the nested scroll
 //! channel (ADR-0209).
 //!
 //! The indicator is not a second scroll path. It joins the chain of the
 //! scrollables beneath it as a [`NestedScrollConnection`] and takes what a
-//! scroll leaf leaves at its leading edge â€” the top of a vertical list, the
+//! scroll leaf leaves at its leading edge — the top of a vertical list, the
 //! reading start of a horizontal one (its left, or its right under
-//! right-to-left text) â€” while a contact drags it:
+//! right-to-left text) — while a contact drags it:
 //!
 //! - **Pull.** `post_scroll` takes the leaf's remainder toward its start
 //!   when the step is [`ScrollCause::UserInput`]: a drag. A fling
@@ -14,7 +14,7 @@
 //!   assistive steps are user input too, and a list at its top passes a
 //!   wheel or trackpad packet up its chain, but none of them is a contact
 //!   ([`ScrollStep::contact`]): only a dragging hand reveals the indicator. Taking the first
-//!   delta latches the contact here (ADR-0209 Â§5): `pre_scroll` gives a
+//!   delta latches the contact here (ADR-0209 §5): `pre_scroll` gives a
 //!   reversing finger its pull back first, and the list moves again on the
 //!   next contact. A leaf with bouncing physics keeps its own overscroll and
 //!   leaves nothing to pull with.
@@ -34,8 +34,8 @@
 //!
 //! The pull is a path gesture, so the indicator takes its
 //! [`GestureAlternatives`] in its constructor (ADR-0216): the first command
-//! performs [`RefreshIntent`] â€” [`RefreshIntent::command`] builds it with
-//! the platform's refresh keys â€” and assistive technology's custom action,
+//! performs [`RefreshIntent`] — [`RefreshIntent::command`] builds it with
+//! the platform's refresh keys — and assistive technology's custom action,
 //! the keys and the visible control or menu perform it as the pull does,
 //! through the same action.
 //!
@@ -55,19 +55,19 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, DrivenController, Vsync};
-use flui_foundation::InputSequenceId;
-use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Axis, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback};
+use flui_foundation::{InputSequenceId, TextDirection};
 #[cfg(test)]
 use flui_platform::TargetPlatform;
 use flui_platform::input::keyboard::NamedKey;
+use flui_scheduler::{AsyncDriver, BoxedTask, PostFrameHandle, TaskToken};
 use flui_view::prelude::StatefulView;
 use flui_view::{
-    AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventContext, InheritedView,
-    IntoView, LifecycleContext, PostFrameHandle, RebuildHandle, RebuildReason, TaskToken, View,
-    ViewExt, ViewState, WriterSource, impl_inherited_view,
+    BoxedView, BuildContext, BuildContextExt, EventContext, InheritedView, IntoView,
+    LifecycleContext, RebuildHandle, RebuildReason, ViewExt, ViewState, WriterSource,
+    impl_inherited_view,
 };
 
 use super::nested::{
@@ -125,7 +125,7 @@ pub(crate) fn refresh_keys(platform: TargetPlatform) -> Vec<SingleActivator> {
 }
 
 // ---------------------------------------------------------------------------
-// RefreshController â€” what the indicator shows, for the caller to observe
+// RefreshController — what the indicator shows, for the caller to observe
 // ---------------------------------------------------------------------------
 
 struct RefreshControllerInner {
@@ -225,7 +225,7 @@ impl RefreshController {
 }
 
 // ---------------------------------------------------------------------------
-// RefreshIndicatorStyle â€” the ambient indicator
+// RefreshIndicatorStyle — the ambient indicator
 // ---------------------------------------------------------------------------
 
 /// Where a pull-to-refresh gesture stands, for a [`RefreshIndicatorStyle`] builder.
@@ -302,7 +302,7 @@ impl InheritedView for RefreshIndicatorStyle {
         &self.builder
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 
@@ -414,7 +414,7 @@ impl RefreshIndicator {
 
     /// The axis it pulls along (default vertical): down from the top of a
     /// vertical scrollable, toward the reading end from the reading start
-    /// of a horizontal one â€” right from its left edge, or left from its
+    /// of a horizontal one — right from its left edge, or left from its
     /// right edge under the ambient right-to-left [`Directionality`].
     #[must_use]
     pub fn axis(mut self, axis: Axis) -> Self {
@@ -424,7 +424,7 @@ impl RefreshIndicator {
 }
 
 // ---------------------------------------------------------------------------
-// Refresher â€” the participant and the refresh it starts
+// Refresher — the participant and the refresh it starts
 // ---------------------------------------------------------------------------
 
 /// What the indicator keeps behind its connection: the pull of the contact

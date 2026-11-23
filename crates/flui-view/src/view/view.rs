@@ -5,10 +5,8 @@
 //! - **Short-lived**: Exist only for diffing, then dropped
 //! - **Composable**: Build trees of nested Views
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 
-use downcast_rs::{Downcast, impl_downcast};
-use dyn_clone::{DynClone, clone_trait_object};
 use flui_rendering::parent_data::SliverSlot;
 
 /// An element's depth in the element tree (root = 0), as stamped by
@@ -67,6 +65,15 @@ impl ElementDepth {
 /// This association is determined at compile time, avoiding runtime type
 /// checks.
 ///
+/// # Downcasting
+///
+/// `Any` is a supertrait, so a `&dyn View` upcasts to `&dyn Any` and
+/// downcasts from there (`let any: &dyn Any = view;`, then
+/// `any.downcast_ref::<V>()`); an `Rc<dyn View>` or `Box<dyn View>` upcasts the
+/// same way to `Rc<dyn Any>` or `Box<dyn Any>`. Upcast the trait object
+/// itself: `type_id()` called on a `&&dyn View` or a `&BoxedView` names the
+/// reference or the wrapper, not the view inside.
+///
 /// # Example
 ///
 /// ```rust,ignore
@@ -88,7 +95,7 @@ impl ElementDepth {
     note = "a view is normally declared with `#[derive(Clone, StatelessView)]` plus `impl StatelessView for {Self}` (or the `StatefulView` / `InheritedView` equivalents), which generates this impl",
     note = "implement `View` by hand only for a render-object-backed view"
 )]
-pub trait View: Downcast + DynClone + 'static {
+pub trait View: Any + 'static {
     /// Create a new Element for this View.
     ///
     /// Called once when this View first appears in the tree.
@@ -172,7 +179,7 @@ pub trait View: Downcast + DynClone + 'static {
     /// # Object-safety
     ///
     /// The `where Self: Sized` bound excludes this method from the `dyn View`
-    /// vtable, keeping `View` object-safe (Constitution C4).
+    /// vtable, keeping `View` object-safe.
     fn should_skip_rebuild(&self, prev: &Self) -> bool
     where
         Self: Sized,
@@ -224,65 +231,20 @@ pub trait View: Downcast + DynClone + 'static {
     }
 }
 
-impl_downcast!(View);
-clone_trait_object!(View);
-
 /// The child views one build of an element produced, in order.
 ///
+/// Every child is held as a [`BoxedView`](crate::BoxedView), shared with
+/// whoever else holds it: the reconciler mounts or updates an element with
+/// that very allocation, so no view is copied on the way to its element
+/// (ADR-0245), and a child the parent hands back unchanged keeps its identity.
 /// Most elements build exactly one child, and [`ChildViews::one`] holds it
-/// without a list of its own; [`ChildViews::none`] holds nothing,
-/// and a `Vec` of boxes converts for an element with several. A child
-/// given as a [`BoxedView`](crate::BoxedView) is held shared: the reconciler
-/// reads it where it is, so it costs no box of its own and keeps its
-/// identity.
+/// without a list of its own; [`ChildViews::none`] holds nothing, and a `Vec`
+/// of `BoxedView`s converts for an element with several.
 pub struct ChildViews(ChildViewsRepr);
 
 enum ChildViewsRepr {
-    One(ChildView),
-    Many(Vec<ChildView>),
-}
-
-/// One child view: shared with the parent that holds it, or owned.
-enum ChildView {
-    Shared(crate::BoxedView),
-    Owned(Box<dyn View>),
-}
-
-impl ChildView {
-    /// `view`, shared when it already is a `BoxedView`.
-    fn of<V: View>(view: V) -> Self {
-        let mut slot = Some(view);
-        // `Option<V>` is `Option<BoxedView>` only when `V` is `BoxedView`.
-        if let Some(shared) =
-            (&mut slot as &mut dyn std::any::Any).downcast_mut::<Option<crate::BoxedView>>()
-        {
-            return Self::Shared(
-                shared
-                    .take()
-                    .expect("BUG: the slot was filled one statement above"),
-            );
-        }
-        Self::Owned(Box::new(
-            slot.take()
-                .expect("BUG: the slot was filled one statement above"),
-        ))
-    }
-
-    /// A copy of `view`: the same shared view when it is a `BoxedView`,
-    /// otherwise a clone in a box of its own.
-    fn copy_of(view: &dyn View) -> Self {
-        match view.as_any().downcast_ref::<crate::BoxedView>() {
-            Some(shared) => Self::Shared(shared.clone()),
-            None => Self::Owned(dyn_clone::clone_box(view)),
-        }
-    }
-
-    fn view(&self) -> &dyn View {
-        match self {
-            Self::Shared(view) => view,
-            Self::Owned(view) => &**view,
-        }
-    }
+    One(crate::BoxedView),
+    Many(Vec<crate::BoxedView>),
 }
 
 impl ChildViews {
@@ -293,25 +255,21 @@ impl ChildViews {
     }
 
     /// Exactly one child view, taken by value: a [`BoxedView`](crate::BoxedView)
-    /// is held shared, with no box of its own; any other view is boxed.
+    /// is held as it is, shared; any other view is erased into one.
     #[must_use]
     pub fn one<V: View>(view: V) -> Self {
-        Self(ChildViewsRepr::One(ChildView::of(view)))
+        Self(ChildViewsRepr::One(crate::BoxedView::new(view)))
     }
 
-    /// Exactly one child view, a copy of `view` that shares it when it is a
-    /// `BoxedView`.
+    /// Exactly one child view, `view` shared with its holder.
     #[must_use]
-    pub(crate) fn copy_of(view: &dyn View) -> Self {
-        Self(ChildViewsRepr::One(ChildView::copy_of(view)))
+    pub(crate) fn shared(view: &crate::BoxedView) -> Self {
+        Self(ChildViewsRepr::One(view.clone()))
     }
 
-    /// Appends a copy of `view`, shared when it is a `BoxedView`.
-    pub(crate) fn push_copy_of(&mut self, view: &dyn View) {
-        self.push_child(ChildView::copy_of(view));
-    }
-
-    fn push_child(&mut self, view: ChildView) {
+    /// Appends `view`, shared with its holder.
+    pub(crate) fn push_shared(&mut self, view: &crate::BoxedView) {
+        let view = view.clone();
         let held = std::mem::replace(&mut self.0, ChildViewsRepr::Many(Vec::new()));
         self.0 = match held {
             ChildViewsRepr::Many(views) if views.is_empty() => ChildViewsRepr::One(view),
@@ -320,7 +278,7 @@ impl ChildViews {
                 ChildViewsRepr::Many(views)
             }
             ChildViewsRepr::One(first) => {
-                // The capacity a `Vec` of boxes starts with, so a third and
+                // The capacity a `Vec` of children starts with, so a third and
                 // fourth child grow nothing.
                 let mut views = Vec::with_capacity(4);
                 views.push(first);
@@ -347,22 +305,17 @@ impl ChildViews {
 
     /// The child view at `index`, if there is one.
     #[must_use]
-    pub fn get(&self, index: usize) -> Option<&dyn View> {
+    pub fn get(&self, index: usize) -> Option<&crate::BoxedView> {
         match &self.0 {
-            ChildViewsRepr::One(view) => (index == 0).then(|| view.view()),
-            ChildViewsRepr::Many(views) => views.get(index).map(ChildView::view),
+            ChildViewsRepr::One(view) => (index == 0).then_some(view),
+            ChildViewsRepr::Many(views) => views.get(index),
         }
     }
 }
 
-impl From<Vec<Box<dyn View>>> for ChildViews {
-    fn from(views: Vec<Box<dyn View>>) -> Self {
-        Self(ChildViewsRepr::Many(
-            views
-                .into_iter()
-                .map(ChildView::Owned)
-                .collect::<Vec<ChildView>>(),
-        ))
+impl From<Vec<crate::BoxedView>> for ChildViews {
+    fn from(views: Vec<crate::BoxedView>) -> Self {
+        Self(ChildViewsRepr::Many(views))
     }
 }
 
@@ -379,7 +332,7 @@ impl std::fmt::Debug for ChildViews {
 /// This is the object-safe version of Element for dynamic dispatch.
 /// Specific Element types (StatelessElement, StatefulElement, etc.)
 /// implement the full Element trait.
-pub trait ElementBase: Downcast + 'static {
+pub trait ElementBase: Any + 'static {
     // ========================================================================
     // Identity
     // ========================================================================
@@ -437,7 +390,7 @@ pub trait ElementBase: Downcast + 'static {
     /// `u64`. This accessor surfaces the underlying
     /// [`flui_foundation::ViewKey`] so the reconciler can call
     /// [`flui_foundation::ViewKey::key_eq`] on a hash hit and reject
-    /// silent collisions. FR-024 work item (c).
+    /// silent collisions.
     ///
     /// The default impl returns `None`; the unified `Element<V, A, B>`
     /// overrides it to forward to `core.view().key()`. The borrow is
@@ -515,7 +468,7 @@ pub trait ElementBase: Downcast + 'static {
     ///
     /// * `parent` - Parent `ElementId`, or `None` for the root element.
     /// * `slot` - Slot/depth position assigned by the parent.
-    /// * `owner` - Split-borrow handle into [`BuildOwner`](crate::BuildOwner)
+    /// * `owner` - Split-borrow handle into [`BuildOwner`](crate::owner::BuildOwner)
     ///   (see [`ElementOwner`](crate::ElementOwner)). Implementations
     ///   may use it to register `GlobalKey`s, schedule rebuilds, or
     ///   thread it into recursive child `mount` calls.
@@ -585,18 +538,15 @@ pub trait ElementBase: Downcast + 'static {
 
     /// Run this element's build half and return its OWNED child view(s).
     ///
-    /// E3 (atomic box→arena swap): this replaces the old
-    /// `perform_build(&mut self, owner)` that reconciled children against
-    /// box storage in place. The build seam is now cut so that
-    /// `build_into_views` runs the behavior's `build()` (today's
-    /// `build_or_recover` / `build_proxy_style` half) and returns the
-    /// owned child views WITHOUT touching any child storage — there is no
-    /// child storage on the element any more. The reconcile half is
-    /// hoisted out to [`BuildOwner::build_scope`](crate::BuildOwner),
+    /// The build seam is cut so that
+    /// `build_into_views` runs the behavior's `build()` and returns the
+    /// owned child views WITHOUT touching any child storage: the element
+    /// holds none. The reconcile half is run by
+    /// [`BuildOwner::build_scope`](crate::owner::BuildOwner),
     /// which feeds the returned views to `reconcile_children_by_id` against
     /// the slab-resident [`ElementTree`](crate::tree::ElementTree) with a
     /// fresh `&mut tree` borrow. No `&mut element` is ever live across a
-    /// `&mut tree` child mutation — see the E3 design.
+    /// `&mut tree` child mutation.
     ///
     /// Return contract by behavior:
     /// - Stateless / Stateful → `ChildViews::one(child_view)`.
@@ -609,7 +559,7 @@ pub trait ElementBase: Downcast + 'static {
     ///
     /// The split-borrow `owner` handle is threaded through so the build
     /// half can still register `GlobalKey`s or schedule downstream
-    /// rebuilds without re-borrowing the [`BuildOwner`](crate::BuildOwner).
+    /// rebuilds without re-borrowing the [`BuildOwner`](crate::owner::BuildOwner).
     fn build_into_views(&mut self, owner: &mut crate::ElementOwner<'_>) -> crate::view::ChildViews;
 
     // ========================================================================
@@ -635,9 +585,11 @@ pub trait ElementBase: Downcast + 'static {
     /// behavior-side hook to forward to the state.
     ///
     /// `owner` carries the split-borrow build handle so the typed hook can
-    /// resolve the same live tree-backed `BuildContext` the rebuild uses
-    /// (PR-K).
-    #[expect(unused_variables)]
+    /// resolve the same live tree-backed `BuildContext` the rebuild uses.
+    #[expect(
+        unused_variables,
+        reason = "the default body ignores its arguments; their names document the signature an override receives"
+    )]
     fn notify_dependency_change(&mut self, owner: &mut crate::ElementOwner<'_>) {}
 
     // ========================================================================
@@ -655,16 +607,12 @@ pub trait ElementBase: Downcast + 'static {
     // Child Management
     // ========================================================================
 
-    // E3 (atomic box→arena swap): `visit_children` is deleted. Elements
-    // no longer own a child graph — the slab-resident
+    // Elements do not own a child graph: the slab-resident
     // [`ElementTree`](crate::tree::ElementTree) is the single element
     // graph, and a node's children are its
     // [`ElementNode::child_ids`](crate::tree::ElementNode) list. All
     // child traversal goes through `tree.get(id).child_ids()`, where both
-    // the id and a `&ElementTree` are in scope. The old per-element
-    // `visit_children` was a no-op on every unified `Element<V, A, B>`
-    // anyway (children lived inside `ElementCore`, invisible to the slab
-    // walk), which is exactly why production `setState` was inert.
+    // the id and a `&ElementTree` are in scope.
 
     /// Deactivate a child Element.
     ///
@@ -708,9 +656,7 @@ pub trait ElementBase: Downcast + 'static {
     /// (a cheap `Rc` clone) so the slab `insert` path can propagate it to a
     /// freshly-inserted child BEFORE the child mounts.
     ///
-    /// E3 (atomic box→arena swap): in the old box graph the parent
-    /// propagated the owner to its children inside
-    /// `update_or_create_child(ren)`. Children are now slab-resident, so
+    /// Children are slab-resident, so
     /// [`ElementTree::insert`](crate::tree::ElementTree) reads this from
     /// the parent and threads it (plus [`Self::child_render_id`]) into the
     /// child's `set_pipeline_owner` / `set_parent_render_id` before
@@ -727,7 +673,7 @@ pub trait ElementBase: Downcast + 'static {
     /// The `RenderId` that this element's *children* should attach their
     /// `RenderObject`s under.
     ///
-    /// E3 propagation contract (companion to [`Self::pipeline_owner`]):
+    /// Propagation contract (companion to [`Self::pipeline_owner`]):
     /// for a `RenderObjectElement` this is its own `render_id` (children
     /// attach under it); for a component element it is the
     /// `parent_render_id` the element itself received (the nearest
@@ -958,12 +904,12 @@ pub trait ElementBase: Downcast + 'static {
     /// `type_id` is `TypeId::of::<N>()` for the static notification type
     /// `N` captured at the dispatch call-site. `notification` is the
     /// notification value coerced to `&dyn Any` so this method can stay
-    /// object-safe (Constitution Principle 4: single `dyn` boundary at
+    /// object-safe (single `dyn` boundary at
     /// dispatch — not `dyn`-everywhere). Implementations must:
     ///
     /// 1. Check `type_id` against the static `TypeId::of::<N>()` of the
     ///    notification type they care about — skip if mismatch.
-    /// 2. Downcast `notification` via `<dyn Any>::downcast_ref::<N>()`.
+    /// 2. Cast `notification` via `<dyn Any>::downcast_ref::<N>()`.
     /// 3. Invoke their typed handler (e.g. the typed
     ///    [`NotifiableElement<N>`](crate::element::NotifiableElement)
     ///    wrapper) and return its `bool`.
@@ -980,8 +926,6 @@ pub trait ElementBase: Downcast + 'static {
         false
     }
 }
-
-impl_downcast!(ElementBase);
 
 #[cfg(test)]
 mod tests {

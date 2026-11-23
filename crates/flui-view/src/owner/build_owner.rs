@@ -5,327 +5,58 @@
 //! - Processing rebuilds in depth-first order
 //! - Managing GlobalKey registry
 //! - Coordinating InheritedElement lookups
+//!
+//! The owner's behaviour is split by concept across the child modules: the
+//! build pass (`build_pass`), the dirty queue's layout-builder partition
+//! (`layout_scopes`), lazy-sliver child servicing (`child_requests`),
+//! inactive elements and finalize (`inactive_elements`), the `GlobalKey`
+//! registry (`global_keys`), installed presentation handles
+//! (`presentation_handles`) and the per-frame report (`build_report`).
 
 use rustc_hash::FxHashMap;
+use std::collections::BinaryHeap;
 use std::{
     cell::{Cell, RefCell},
-    cmp::Reverse,
-    collections::BinaryHeap,
     rc::Rc,
     sync::Arc,
 };
 
 use flui_foundation::panic::FirstPanic;
-use flui_foundation::{ElementId, RebuildReasons, RenderId, SlotSet, ViewKey};
+use flui_foundation::{ElementId, RebuildReasons, SlotSet};
 use flui_interaction::focus::FocusManager;
-use flui_rendering::pipeline::DetachedRenderSubtrees;
 
-use super::dirty_queue::{DirtyElement, DirtyQueue};
+use super::dirty_queue::DirtyQueue;
 use crate::{
-    element::child_manager::{ChildManager, ChildManagerRegistry},
+    element::child_manager::ChildManagerRegistry,
     owner::{
         DuplicateGlobalKey, GlobalKeyRegistry, GlobalKeyReservations, LifecyclePanicHandoff,
-        RebuildReason, RecoveredPanic, StagedRecoveredPanic, global_key_reservations,
-        global_key_scope,
+        RebuildReason, RecoveredPanic, global_key_scope,
         global_key_scope::{GlobalKeyScope, OwnerTag},
         inherited_dependencies::InheritedDependencies,
         layout_builder::LayoutBuilderRegistry,
     },
-    tree::ElementTree,
-    view::ChildViews,
 };
 
+use super::external_build_inbox::BuildPremise;
 pub(crate) use super::external_build_inbox::ExternalBuildInbox;
-use super::external_build_inbox::{BuildPremise, PendingBuilds};
 use super::presentation_capabilities::PresentationCapabilities;
 
-#[cfg(test)]
-thread_local! {
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static LAYOUT_SCOPE_CLASSIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static LAYOUT_SCOPE_HOPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
+mod build_pass;
+mod build_report;
+mod build_scope_guard;
+mod child_requests;
+mod external_scheduler;
+mod global_keys;
+mod inactive_elements;
+mod layout_scopes;
+mod presentation_handles;
 
-/// Upper bound on RE-ENTRY mid-drain absorbs per frame (issue #1180).
-///
-/// A "re-entry" is a `Vacant` landing for an id that already completed a
-/// build in this `build_scope` call — most often that same element
-/// rescheduling itself from inside its own `build`, but identically a child
-/// notifying its already-built parent, or one half of an A↔B ping-pong. The
-/// FIRST time any id lands in a frame is always free, however many
-/// independent elements do it (a page whose N unrelated parents each
-/// retarget an implicit animation in one frame performs N first-time
-/// absorbs, all legitimate) — see [`BuildOwner::built_this_frame`]. Only an
-/// id that keeps getting notified again after each of its own builds spends
-/// this budget, so 16 is already a pathological tree, not a realistic one:
-/// a downward notification (parent notifies a descendant below it) costs
-/// nothing beyond its own first-time absorb.
-const MAX_MID_DRAIN_ABSORBS: usize = 16;
-
-/// A cloneable, owned handle that lets a listener callback — an animation tick
-/// fired *outside* any frame, with no `&mut BuildOwner` in scope — enqueue an
-/// element for the next [`BuildOwner::build_scope`] drain and request a frame.
-///
-/// It carries a mark-dirty request from an element to the owner's build queue
-/// and the scheduler's frame request: an
-/// `AnimatedView`'s mark-dirty callback captures one of these at mount (via
-/// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler))
-/// and calls [`schedule`](Self::schedule) when the listenable changes. The
-/// pending ids accumulate in a shared inbox that `build_scope` absorbs onto
-/// its dirty heap at the top of every heap pop — not just once at frame
-/// start — so a schedule landing mid-drain (a build calling another
-/// element's [`RebuildHandle`](super::RebuildHandle) synchronously) joins
-/// the SAME drain instead of waiting for the next frame (issue #1180). The
-/// listener still never needs to touch the owner.
-///
-/// The inbox carries the element id and every cause accumulated since it was
-/// last absorbed. The dirty-heap ordering key (tree depth) is read from the
-/// node at absorb time, not captured here: a GlobalKey move between the
-/// schedule and the absorb can change it.
-#[derive(Clone)]
-pub(crate) struct ExternalBuildScheduler {
-    /// Shared inbox drained by `build_scope`; one accumulated cause set per
-    /// element.
-    inbox: Arc<ExternalBuildInbox>,
-    /// Frame-request hook (the binding's `on_build_scheduled`), so a tick
-    /// between frames asks the platform for a new frame. `None` in headless
-    /// tests, which drive `build_scope` directly.
-    request_frame: Option<Arc<dyn Fn() + Send + Sync>>,
-}
-
-impl ExternalBuildScheduler {
-    pub(crate) fn is_active(&self) -> bool {
-        !self.inbox.is_closed()
-    }
-    /// Enqueue `id` for the next `build_scope` drain and request a frame.
-    ///
-    /// Deduplicating: a repeat tick for an id already queued consumes no extra
-    /// inbox slot. With healthy delivery a burst still costs one frame request;
-    /// while that delivery is in flight or owed, a concurrent caller may race
-    /// or retry it so a failed wake cannot strand the batch. Thread-safe: the
-    /// inbox lock is held only for the insert and released before
-    /// `request_frame` runs (no lock across the platform wake).
-    pub(crate) fn schedule(&self, id: ElementId, reason: RebuildReason) {
-        self.schedule_many(std::iter::once(id), reason);
-    }
-
-    /// Enqueue a related set of ids as one durable batch, then request one
-    /// frame after every id is visible to the drain. A panicking wake can
-    /// therefore delay the batch, but cannot expose only a prefix of it.
-    pub(crate) fn schedule_many(
-        &self,
-        ids: impl IntoIterator<Item = ElementId>,
-        reason: RebuildReason,
-    ) {
-        // An iterator can run user code; collect before acquiring the inbox.
-        let ids: smallvec::SmallVec<[ElementId; 4]> = ids.into_iter().collect();
-        let any_newly_queued = self
-            .inbox
-            .admit_batch(&ids, RebuildReasons::from_reason(reason));
-        self.inbox
-            .request_frame_contained(any_newly_queued, self.request_frame.as_deref());
-    }
-
-    /// Build a scheduler from the shared inbox + frame-request handle. Used by
-    /// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler).
-    pub(crate) fn from_parts(
-        inbox: Arc<ExternalBuildInbox>,
-        request_frame: Option<Arc<dyn Fn() + Send + Sync>>,
-    ) -> Self {
-        Self {
-            inbox,
-            request_frame,
-        }
-    }
-}
-
-impl std::fmt::Debug for ExternalBuildScheduler {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `try_lock`, not `lock`: `parking_lot::Mutex` is non-reentrant, so a
-        // `{:?}` while the inbox is already held (e.g. instrumenting the drain)
-        // would otherwise deadlock silently.
-        f.debug_struct("ExternalBuildScheduler")
-            .field("pending", &self.inbox.try_len())
-            .field("has_request_frame", &self.request_frame.is_some())
-            .finish()
-    }
-}
-
-/// Which finalize step a lazy-sliver service pass ends with — see
-/// [`BuildOwner::service_child_requests_between_passes`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ServiceFinalize {
-    /// Unmount the evicted children and verify the frame's `GlobalKey`
-    /// reservations (the post-`run_frame` call).
-    Frame,
-    /// Unmount the evicted children only; the ledger keeps accumulating
-    /// until the frame's own finalize (a fixpoint pass).
-    UnmountOnly,
-}
-
-/// What a lazy-sliver service pass does with the child-build requests the
-/// last layout pass recorded — see
-/// [`BuildOwner::service_child_requests_evict_only`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ServiceRequests {
-    /// Build the requested children (and evict by the retain bands).
-    Build,
-    /// Evict by the retain bands only; the requests stay queued on the
-    /// pipeline for the frame's post-`run_frame` service to build.
-    Leave,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BuildScopeTarget {
-    /// Drain every dirty element. Used when no layout-builder scopes exist.
-    All,
-    /// Drain only elements outside every live layout-builder scope.
-    Global,
-    /// Drain the builder itself and descendants whose nearest live scope is it.
-    LayoutBuilder(ElementId),
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct BuildDrainResult {
-    pub(crate) any_rebuilt: bool,
-    pub(crate) target_rebuilt: bool,
-}
-
-/// Drain-scoped accumulator for ids [`BuildOwner::absorb_mid_drain_inbox`]
-/// capped this drain (see that method's doc for why this exists instead of
-/// putting each one straight back into the shared inbox). `Drop` — not a
-/// flush call placed after `drain_build_scope`'s loop — is what actually
-/// gets the accumulated ids back to `external_inbox`, because the loop's own
-/// per-element build and reconcile panics are caught, patched up, and
-/// RE-RAISED via `std::panic::resume_unwind` from several arms inside that
-/// loop: each one unwinds `drain_build_scope`'s stack frame immediately,
-/// skipping any code placed after the loop. Without this guard, an id
-/// already marked dirty on the tree and removed from `external_inbox` (by
-/// `absorb_mid_drain_inbox`'s `take_into`) but capped by the budget would
-/// end up in none of `dirty_elements`, `dirty_reasons`, or `external_inbox`
-/// the moment a LATER build in the same drain panics — a silently lost
-/// rebuild request. A `Drop` impl runs on every exit path, unwind included,
-/// so this is the house pattern for cleanup that must survive a panicking
-/// callback (see the reentrancy-depth guard around ticker callbacks for the
-/// same shape). Holds a cloned `Arc`, not a borrow of `BuildOwner`, so it can
-/// coexist with `&mut self` calls elsewhere in the loop.
-struct CappedLeftoverGuard {
-    inbox: Arc<ExternalBuildInbox>,
-    leftover: PendingBuilds,
-}
-
-impl CappedLeftoverGuard {
-    fn new(inbox: Arc<ExternalBuildInbox>) -> Self {
-        Self {
-            inbox,
-            leftover: PendingBuilds::default(),
-        }
-    }
-}
-
-impl Drop for CappedLeftoverGuard {
-    fn drop(&mut self) {
-        if self.leftover.is_empty() {
-            return;
-        }
-        let mut capped = Vec::new();
-        self.leftover.take_into(&mut capped);
-        let mut inbox = self.inbox.lock();
-        for (id, reasons) in capped {
-            inbox.merge(id, reasons);
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct BuildScopeQueues {
-    /// Dirty work currently outside every live layout-builder scope.
-    root: BinaryHeap<Reverse<DirtyElement>>,
-    /// Dirty work keyed by its current nearest live layout-builder scope.
-    isolated: FxHashMap<ElementId, BinaryHeap<Reverse<DirtyElement>>>,
-    /// Reused while rerouting after scope removal or tree reparenting.
-    scratch: Vec<DirtyElement>,
-    /// Nearest scope per element, reused by each repartition.
-    scope_memo: super::dirty_queue::ScopeMemo,
-}
-
-/// Per-cause rebuild counters for one `build_scope`, indexed by the
-/// `RebuildReason` discriminant (`#[repr(u8)]`), sized by `RebuildReason::COUNT`
-/// so a new variant grows the table with it.
-#[derive(Debug, Default)]
-struct FrameBuildCounts {
-    /// Which causes appeared this frame — the bitset is also the stable
-    /// iteration order for the report.
-    seen: Option<RebuildReasons>,
-    counts: [usize; RebuildReason::COUNT],
-    /// Every completed build this frame, re-entries included.
-    builds_run: usize,
-}
-
-impl FrameBuildCounts {
-    fn clear(&mut self) {
-        self.seen = None;
-        self.counts = [0; RebuildReason::COUNT];
-        self.builds_run = 0;
-    }
-
-    fn record(&mut self, reason: RebuildReason) {
-        let index = reason as u8 as usize;
-        debug_assert!(
-            index < self.counts.len(),
-            "BUG: RebuildReason outgrew the counter table"
-        );
-        if let Some(slot) = self.counts.get_mut(index) {
-            *slot += 1;
-        }
-        match &mut self.seen {
-            Some(seen) => seen.insert(reason),
-            None => self.seen = Some(RebuildReasons::from_reason(reason)),
-        }
-    }
-
-    fn by_reason(&self) -> Vec<(RebuildReason, usize)> {
-        self.seen
-            .into_iter()
-            .flat_map(RebuildReasons::iter)
-            .map(|reason| {
-                (
-                    reason,
-                    self.counts.get(reason as u8 as usize).copied().unwrap_or(0),
-                )
-            })
-            .collect()
-    }
-}
-
-/// Per-frame rebuild telemetry, see [`BuildOwner::last_frame_build_report`].
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-#[non_exhaustive]
-pub struct FrameBuildReport {
-    /// Distinct elements rebuilt in the most recent widget draw frame or
-    /// explicit `build_scope`.
-    pub elements_built: usize,
-    /// Every build run this frame, re-entries included.
-    ///
-    /// Equal to [`elements_built`](Self::elements_built) unless an element
-    /// built more than once in the frame — a self-rescheduling build or an
-    /// A↔B ping-pong, which the distinct count cannot show.
-    pub builds_run: usize,
-    /// Rebuilt-element count per cause, in stable diagnostic-name order.
-    pub by_reason: Vec<(RebuildReason, usize)>,
-}
-
-impl FrameBuildReport {
-    /// How many rebuilt elements carried `reason`.
-    #[must_use]
-    pub fn count(&self, reason: RebuildReason) -> usize {
-        self.by_reason
-            .iter()
-            .find(|(candidate, _)| *candidate == reason)
-            .map_or(0, |(_, count)| *count)
-    }
-}
+use build_pass::MAX_MID_DRAIN_ABSORBS;
+use build_report::FrameBuildCounts;
+pub use build_report::FrameBuildReport;
+pub(crate) use external_scheduler::ExternalBuildScheduler;
+pub(crate) use inactive_elements::InactiveElement;
+pub(crate) use layout_scopes::{BuildScopeQueues, BuildScopeTarget};
 
 /// Manages the build phase of the element lifecycle.
 ///
@@ -467,7 +198,7 @@ pub struct BuildOwner {
     /// distinct causes. Absorbed onto [`Self::dirty_elements`] (or a
     /// layout-builder scope bucket) at the top of every heap pop in
     /// [`Self::drain_build_scope`] — not only once at frame start — where
-    /// each id's tree depth is looked up (issue #1180). Shared (`Arc`) so
+    /// each id's tree depth is looked up. Shared (`Arc`) so
     /// the listener callbacks and the owner reference the same queue.
     pub(crate) external_inbox: Arc<ExternalBuildInbox>,
 
@@ -476,7 +207,7 @@ pub struct BuildOwner {
     landed_builds: Vec<(ElementId, RebuildReasons)>,
 
     /// Remaining RE-ENTRY mid-drain absorb budget for the current frame
-    /// (issue #1180, [`MAX_MID_DRAIN_ABSORBS`]). Reset at every
+    /// ([`MAX_MID_DRAIN_ABSORBS`]). Reset at every
     /// [`Self::build_scope`] entry and shared by every drain that frame
     /// runs — including the layout-builder fixpoint's own
     /// `drain_prepared_build_target` calls AND
@@ -518,7 +249,7 @@ pub struct BuildOwner {
     /// (`build_owner_tests::test_build_owner_memory_size` budgets this struct).
     frame_builds: Box<FrameBuildCounts>,
 
-    /// Registry of live lazy-sliver [`ChildManager`]s, one per live adaptor
+    /// Registry of live lazy-sliver [`ChildManager`](crate::element::child_manager::ChildManager)s, one per live adaptor
     /// element. Keyed by the sliver's `RenderId`; populated at mount and
     /// cleared at unmount by `SliverAdaptorBehavior` via the
     /// `ElementOwner::register_child_manager` / `unregister_child_manager`
@@ -623,67 +354,6 @@ pub struct BuildOwner {
     pub(crate) global_key_scope: Option<GlobalKeyScope>,
 }
 
-/// An element that has been deactivated and is pending unmount.
-///
-/// Made `pub(crate)` so [`ElementOwner`](super::ElementOwner) can hold a
-/// `&mut Vec<InactiveElement>` split-borrow reference. End-of-frame
-/// finalization (`BuildOwner::finalize_tree`) drains the queue
-/// deepest-first using the recorded `depth`.
-#[derive(Debug)]
-pub(crate) struct InactiveElement {
-    id: ElementId,
-    depth: usize,
-    detached_render_subtrees: Option<DetachedRenderSubtrees>,
-}
-
-impl InactiveElement {
-    /// Construct a new inactive-element record.
-    pub(crate) fn new(id: ElementId, depth: usize) -> Self {
-        Self {
-            id,
-            depth,
-            detached_render_subtrees: None,
-        }
-    }
-
-    /// Construct a record that also owns the element's render-relocation token.
-    pub(crate) fn with_detached_render_subtrees(
-        id: ElementId,
-        depth: usize,
-        detached_render_subtrees: DetachedRenderSubtrees,
-    ) -> Self {
-        Self {
-            id,
-            depth,
-            detached_render_subtrees: Some(detached_render_subtrees),
-        }
-    }
-
-    /// The element id queued for end-of-frame unmount.
-    pub(crate) fn id(&self) -> ElementId {
-        self.id
-    }
-
-    /// Depth used to order finalization (deepest first).
-    pub(crate) fn depth(&self) -> usize {
-        self.depth
-    }
-
-    /// Whether this record still owns a render-relocation token.
-    ///
-    /// Lets a retake reject *before* dequeueing: removing an entry it cannot
-    /// use would strand the element with no finalization record and no right
-    /// to reattach its detached render subtree.
-    pub(crate) fn holds_detached_render_subtrees(&self) -> bool {
-        self.detached_render_subtrees.is_some()
-    }
-
-    /// Take the record's render-relocation token, leaving the record behind.
-    pub(crate) fn take_detached_render_subtrees(&mut self) -> Option<DetachedRenderSubtrees> {
-        self.detached_render_subtrees.take()
-    }
-}
-
 impl Default for BuildOwner {
     fn default() -> Self {
         Self::new()
@@ -779,242 +449,6 @@ impl BuildOwner {
         owner
     }
 
-    #[doc(hidden)]
-    pub fn set_lifecycle_handle(&mut self, handle: crate::LifecycleHandle) {
-        self.lifecycle_handle = Some(handle);
-    }
-
-    /// Give the tree's elements the window they are presented in.
-    #[doc(hidden)]
-    pub fn set_window_handle(&mut self, handle: crate::WindowHandle) {
-        self.window_handle = Some(handle);
-    }
-
-    /// Weak window capability, absent for a bare owner or one without a window.
-    /// Test-support only: the borrowed `LiveBuildContext` reads it off its capabilities.
-    #[cfg(any(test, feature = "testing"))]
-    pub(crate) fn window_handle(&self) -> Option<crate::WindowHandle> {
-        self.window_handle.clone()
-    }
-
-    /// Weak presentation lifecycle capability, absent for a bare owner.
-    pub fn lifecycle_handle(&self) -> Option<crate::LifecycleHandle> {
-        self.lifecycle_handle.clone()
-    }
-
-    /// Return this element tree's focus manager.
-    ///
-    /// Acquire the manager from `ViewState::init_state` or
-    /// `did_change_dependencies` and retain the returned `Rc` for later focus
-    /// transitions. Imperative focus changes do not belong in `build`, layout,
-    /// paint, or compositing, which is why `LifecycleContext`, not
-    /// `BuildContext`, hands it out.
-    #[must_use]
-    pub fn focus_manager(&self) -> Rc<FocusManager> {
-        Rc::clone(&self.focus_manager)
-    }
-
-    /// Install the binding's async task driver.
-    ///
-    /// Called once, at wiring time, by `UiRuntime`. Must
-    /// be the same driver the binding's frame step polls.
-    pub fn set_async_driver(&mut self, driver: flui_scheduler::AsyncDriver) {
-        self.async_driver = Some(driver);
-    }
-
-    /// The binding's async task driver, if one was installed.
-    #[must_use]
-    pub fn async_driver(&self) -> Option<&flui_scheduler::AsyncDriver> {
-        self.async_driver.as_ref()
-    }
-
-    /// Install the binding's post-frame capability.
-    ///
-    /// Called once, at wiring time, by
-    /// `UiRuntime`'s own wiring. It must name **that binding's** scheduler — the
-    /// one whose `drive_frame` drains the queue. Each UI runtime, a headless
-    /// host's included, drives its own owned `UpdateScheduler`
-    /// (`UiRuntime.scheduler`) — there is no process-global scheduler singleton
-    /// any more.
-    pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
-        self.post_frame_handle = Some(handle);
-    }
-
-    /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
-    pub fn set_interaction_dispatch_handle(
-        &mut self,
-        handle: flui_interaction::pointer::InteractionDispatchHandle,
-    ) {
-        self.interaction_dispatch = Some(handle);
-    }
-
-    /// Install this presentation's fresh-hit-test capability.
-    ///
-    /// Called during presentation assembly with a handle pairing the UI runtime's
-    /// dispatch ticket with a probe over THIS presentation's pipeline.
-    /// A bare `BuildOwner` (an element-tree unit test's) has none, so its tests observe
-    /// `LifecycleContext::hit_test_handle() == None` honestly rather than reading
-    /// some other tree.
-    pub fn set_hit_test_handle(&mut self, handle: flui_interaction::pointer::HitTestHandle) {
-        self.hit_test_handle = Some(handle);
-    }
-
-    /// Install the UI runtime's shared `GlobalKey` uniqueness domain (ADR-0043).
-    ///
-    /// Called once, at presentation-assembly time, before this owner's tree
-    /// is mounted — the same post-construction wiring pattern as
-    /// [`Self::set_async_driver`] / [`Self::set_post_frame_handle`] /
-    /// [`Self::capabilities_mut`] / [`Self::set_interaction_dispatch_handle`].
-    /// Every owner sharing one [`GlobalKeyScope`] participates in one
-    /// cross-owner `GlobalKey` uniqueness domain: mounting a key that another
-    /// owner sharing the same scope already holds fails eagerly — traced,
-    /// then a panic naming both owners — rather than silently aliasing across
-    /// trees.
-    ///
-    /// An owner that never calls this self-owns a private scope lazily on
-    /// its first `GlobalKey` registration, so a standalone or test owner
-    /// keeps today's single-tenant behavior with no wiring required.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use flui_view::{BuildOwner, GlobalKeyScope};
-    ///
-    /// let scope = GlobalKeyScope::new();
-    /// let mut owner_a = BuildOwner::new();
-    /// let mut owner_b = BuildOwner::new();
-    /// owner_a.set_global_key_scope(scope.clone());
-    /// owner_b.set_global_key_scope(scope);
-    /// // `owner_a` and `owner_b` now share one cross-owner `GlobalKey`
-    /// // uniqueness domain.
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// The "called once, before mount" precondition is load-bearing, not
-    /// advisory: a call after this owner has already registered a
-    /// `GlobalKey` would silently discard those keys' claims — a lazily
-    /// self-owned private scope's claims, or a previously installed shared
-    /// scope's claims — while the owner's local map still lists them as
-    /// registered, letting a sibling owner mount the "same" key with no
-    /// conflict and no trace, and leaking the discarded scope's claims as
-    /// unreachable. This is a programming-error invariant, not a
-    /// caller-recoverable one, so the check runs and panics in every build,
-    /// release included — the cost is one cold-path emptiness test on a
-    /// setter called once at assembly time. A `tracing::error!` record
-    /// precedes the panic so an embedder catching it still has a structured
-    /// diagnostic.
-    pub fn set_global_key_scope(&mut self, scope: GlobalKeyScope) {
-        let already_wired = !self.global_keys.is_empty() || self.global_key_scope.is_some();
-        if already_wired {
-            tracing::error!(
-                "BuildOwner::set_global_key_scope called after this owner already registered \
-                 a GlobalKey or installed a scope — call it once, at presentation assembly, \
-                 before any element is mounted"
-            );
-            panic!(
-                "BUG: set_global_key_scope called after GlobalKey registration began (or \
-                 after a scope was installed) — claims would be silently discarded"
-            );
-        }
-        self.global_key_scope = Some(scope);
-    }
-
-    /// This owner's [`GlobalKeyScope`] claim tag.
-    ///
-    /// Crate-internal: production code never names an owner's tag directly
-    /// (conflicts and reclamation surface through tracing and panics, not
-    /// tag comparison). Exists for tests that construct an adversarial
-    /// multi-owner rig and need to drive `GlobalKeyScope::reclaim_owner`
-    /// directly, outside the normal drop path.
-    #[cfg(test)]
-    pub(crate) fn owner_tag(&self) -> OwnerTag {
-        self.owner_tag
-    }
-
-    /// The binding's post-frame capability, if one was installed.
-    #[must_use]
-    pub fn post_frame_handle(&self) -> Option<&flui_scheduler::PostFrameHandle> {
-        self.post_frame_handle.as_ref()
-    }
-
-    /// This owner's fresh-hit-test capability, if a presentation installed one.
-    ///
-    /// Stored per owner, not derived from the UI runtime-wide interaction dispatch
-    /// handle: a UI runtime may host several presentations, each with its own
-    /// `PipelineOwner`, and a hit test must read the tree of the presentation
-    /// that asked. A UI runtime-scoped probe would answer every one of them with
-    /// whichever tree was installed first.
-    #[must_use]
-    pub fn hit_test_handle(&self) -> Option<&flui_interaction::pointer::HitTestHandle> {
-        self.hit_test_handle.as_ref()
-    }
-
-    /// Set the callback for when a build is scheduled.
-    ///
-    /// This is called by `schedule_build_for` to notify the binding
-    /// that a visual update is needed.
-    ///
-    /// Set this BEFORE mounting any element. Each element captures a clone of
-    /// the current callback `Arc` into its `ExternalBuildScheduler` at mount
-    /// (for out-of-frame rebuild requests); replacing the callback afterwards
-    /// does not retroactively update already-mounted elements, which keep
-    /// firing the previous `Arc`. The binding wires this once at startup.
-    pub fn set_on_build_scheduled<F>(&mut self, callback: F)
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        self.on_build_scheduled = Some(Arc::new(callback));
-        self.reactive.set_scheduler(self.external_scheduler());
-    }
-
-    /// The UI runtime's reactive graph (ADR-0074): signals and the
-    /// reader registry that schedules exactly the elements that read a
-    /// written signal.
-    pub(crate) fn reactive(&self) -> &crate::reactive::Reactive {
-        &self.reactive
-    }
-
-    /// The write capability of this owner's graph, for host code that writes
-    /// a signal outside any widget: a cross-thread write delivered on the
-    /// owner thread, a test harness. Each [`WriterSource::write`] opens its
-    /// own [`EventContext`](crate::EventContext), and the build guard still refuses a
-    /// write made while an element of this owner is building.
-    ///
-    /// [`WriterSource::write`]: crate::WriterSource::write
-    #[must_use]
-    pub fn writer_source(&self) -> crate::WriterSource {
-        crate::WriterSource::new(self.reactive.clone())
-    }
-
-    /// [`writer_source`](Self::writer_source) when this owner's graph minted
-    /// `slot`, `None` otherwise: how a UI runtime with several presentations
-    /// finds the one a cross-thread write belongs to (ADR-0085 §1).
-    #[must_use]
-    pub fn writer_source_for(&self, slot: crate::SignalSlot) -> Option<crate::WriterSource> {
-        (slot.graph() == self.reactive.id()).then(|| self.writer_source())
-    }
-
-    /// The graph itself, for tests that mint signals outside an element (with
-    /// an explicit element owner where the test needs one) and inspect its
-    /// reader registry. It writes nothing: the graph is not a write target and
-    /// cannot mint a `WriterSource`, so a write still goes through
-    /// [`writer_source`](Self::writer_source). No build context reaches a
-    /// `BuildOwner`, so `build` reaches neither.
-    #[cfg(any(test, feature = "testing"))]
-    #[must_use]
-    pub fn signal_graph(&self) -> &crate::reactive::Reactive {
-        &self.reactive
-    }
-
-    /// The phase this owner's builds are published into: the UI runtime's
-    /// once [`set_build_in_progress`](Self::set_build_in_progress) joined it.
-    /// A host binds the registries it owns (a presentation's `Vsync`) to it.
-    #[must_use]
-    pub fn build_phase(&self) -> flui_foundation::BuildPhase {
-        self.reactive.build_phase()
-    }
-
     /// Schedule an element for rebuild.
     ///
     /// Elements are processed in depth order (shallowest first) so parent
@@ -1053,200 +487,6 @@ impl BuildOwner {
     #[must_use]
     pub fn accepts_build_premise(&self, saved: &BuildPremise) -> bool {
         self.external_inbox.accepts_premise(saved)
-    }
-
-    /// Re-key every queued dirty element to its authoritative TREE depth.
-    ///
-    /// The dirty heap orders by depth, but `schedule_build_for` is handed a
-    /// depth by its caller and trusts it. A caller that passes a stale or
-    /// wrong depth would let a deeply-nested rebuild sort as if it were
-    /// shallow, so a child could rebuild before its parent — violating
-    /// the shallowest-first contract. Rebuilding the heap keyed on each
-    /// node's current depth (`ElementNode::depth`, the same authority the
-    /// external-inbox drain uses) keeps the contract regardless of what
-    /// `schedule_build_for` was told. Each entry keeps its queue order.
-    fn rekey_dirty_depths(&mut self, tree: &ElementTree) {
-        self.dirty_elements
-            .rekey(|id| tree.get(id).map_or(0, crate::tree::ElementNode::depth));
-    }
-
-    /// Return the nearest mounted layout-builder scope containing `element`.
-    /// The search includes `element` itself: a scope root belongs to its own
-    /// scope.
-    fn live_layout_scope_ids(&self, tree: &ElementTree) -> SlotSet<ElementId> {
-        self.layout_builder_registry.with_entries(|entries| {
-            let mut live = SlotSet::new();
-            for entry in entries
-                .values()
-                .filter(|entry| tree.contains(entry.element))
-            {
-                live.insert(entry.element);
-            }
-            live
-        })
-    }
-
-    fn nearest_layout_builder_scope(
-        tree: &ElementTree,
-        element: ElementId,
-        live_scopes: &SlotSet<ElementId>,
-    ) -> Option<ElementId> {
-        #[cfg(test)]
-        LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
-        let mut cursor = Some(element);
-        while let Some(candidate) = cursor {
-            #[cfg(test)]
-            LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
-            if live_scopes.contains(candidate) && tree.contains(candidate) {
-                return Some(candidate);
-            }
-            cursor = tree
-                .get(candidate)
-                .and_then(crate::tree::ElementNode::parent);
-        }
-        None
-    }
-
-    fn defer_dirty_element(&mut self, scope: Option<ElementId>, dirty: DirtyElement) {
-        let queues = self
-            .build_scope_queues
-            .get_or_insert_with(|| Box::new(BuildScopeQueues::default()));
-        if let Some(scope) = scope {
-            queues
-                .isolated
-                .entry(scope)
-                .or_default()
-                .push(Reverse(dirty));
-        } else {
-            queues.root.push(Reverse(dirty));
-        }
-    }
-
-    fn collect_partitioned_dirty(&mut self) {
-        let mut scratch = self
-            .build_scope_queues
-            .as_mut()
-            .map_or_else(Vec::new, |queues| std::mem::take(&mut queues.scratch));
-        if let Some(queues) = self.build_scope_queues.as_mut() {
-            scratch.extend(
-                std::mem::take(&mut queues.root)
-                    .into_iter()
-                    .map(|Reverse(dirty)| dirty),
-            );
-            for bucket in std::mem::take(&mut queues.isolated).into_values() {
-                scratch.extend(bucket.into_iter().map(|Reverse(dirty)| dirty));
-            }
-        }
-        scratch.extend(self.dirty_elements.take_entries());
-        self.build_scope_queues
-            .get_or_insert_with(|| Box::new(BuildScopeQueues::default()))
-            .scratch = scratch;
-    }
-
-    pub(crate) fn repartition_dirty(
-        &mut self,
-        tree: &ElementTree,
-        live_scopes: &SlotSet<ElementId>,
-    ) {
-        self.collect_partitioned_dirty();
-        let mut memo = std::mem::take(
-            &mut self
-                .build_scope_queues
-                .as_mut()
-                .expect("BUG: repartition creates scoped queues")
-                .scope_memo,
-        );
-        memo.clear();
-        while let Some(mut dirty) = self
-            .build_scope_queues
-            .as_mut()
-            .expect("BUG: repartition creates scoped queues")
-            .scratch
-            .pop()
-        {
-            let depth = tree
-                .get(dirty.id())
-                .map_or(0, crate::tree::ElementNode::depth);
-            dirty = dirty.at_depth(depth);
-            #[cfg(test)]
-            LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(count.get() + 1));
-            let scope = memo.nearest(
-                dirty.id(),
-                |id| live_scopes.contains(id) && tree.contains(id),
-                |id| {
-                    #[cfg(test)]
-                    LAYOUT_SCOPE_HOPS.with(|count| count.set(count.get() + 1));
-                    tree.get(id).and_then(crate::tree::ElementNode::parent)
-                },
-            );
-            self.defer_dirty_element(scope, dirty);
-        }
-        if let Some(queues) = self.build_scope_queues.as_mut() {
-            queues.scope_memo = memo;
-        }
-    }
-
-    pub(crate) fn activate_build_target(&mut self, target: BuildScopeTarget) {
-        let Some(queues) = self.build_scope_queues.as_mut() else {
-            return;
-        };
-        let mut active = match target {
-            BuildScopeTarget::All => return,
-            BuildScopeTarget::Global => std::mem::take(&mut queues.root),
-            BuildScopeTarget::LayoutBuilder(scope) => {
-                queues.isolated.remove(&scope).unwrap_or_default()
-            }
-        };
-        self.dirty_elements.append(&mut active);
-    }
-
-    pub(crate) fn ready_layout_scopes(&self) -> Vec<ElementId> {
-        self.build_scope_queues
-            .as_ref()
-            .map_or_else(Vec::new, |queues| queues.isolated.keys().copied().collect())
-    }
-
-    pub(crate) fn has_pending_layout_scope(&self, scope: ElementId) -> bool {
-        self.build_scope_queues
-            .as_ref()
-            .is_some_and(|queues| queues.isolated.contains_key(&scope))
-    }
-
-    pub(crate) fn has_pending_global_builds(&self) -> bool {
-        self.build_scope_queues
-            .as_ref()
-            .is_some_and(|queues| !queues.root.is_empty())
-    }
-
-    pub(crate) fn has_partitioned_builds(&self) -> bool {
-        self.build_scope_queues.as_ref().is_some_and(|queues| {
-            !queues.root.is_empty() || queues.isolated.values().any(|bucket| !bucket.is_empty())
-        })
-    }
-
-    pub(crate) fn collapse_empty_build_scope_queues(&mut self) {
-        let is_empty = self.build_scope_queues.as_ref().is_some_and(|queues| {
-            queues.root.is_empty() && queues.isolated.is_empty() && queues.scratch.is_empty()
-        });
-        if is_empty {
-            self.build_scope_queues = None;
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn reset_layout_scope_classifications() {
-        LAYOUT_SCOPE_CLASSIFICATIONS.with(|count| count.set(0));
-    }
-
-    #[cfg(test)]
-    pub(crate) fn layout_scope_classifications() -> usize {
-        LAYOUT_SCOPE_CLASSIFICATIONS.with(std::cell::Cell::get)
-    }
-
-    /// Resets and returns the parent-link steps scope classification took.
-    #[cfg(test)]
-    pub(crate) fn take_layout_scope_hops() -> usize {
-        LAYOUT_SCOPE_HOPS.with(|count| count.replace(0))
     }
 
     /// Acquire an [`ElementOwner`](super::ElementOwner) split-borrow
@@ -1296,78 +536,6 @@ impl BuildOwner {
             reactive: &self.reactive,
             lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
         }
-    }
-
-    /// Install the UI runtime's tree observer, replacing any previous one
-    /// (ADR-0040). A replaced observer receives `detached()` first, and the
-    /// replacement is logged so competing tools discover each other.
-    ///
-    /// Install at UI runtime setup or via
-    /// `WidgetsBinding::install_tree_observer` — never from a frame phase.
-    pub fn set_tree_observer(&mut self, observer: Arc<dyn flui_foundation::observe::TreeObserver>) {
-        if let Some(previous) = self.tree_observer.replace(observer) {
-            notify_detached(previous);
-        }
-    }
-
-    /// Remove the observer (UI runtime teardown — install/clear symmetry).
-    /// Fires `detached()` on the outgoing observer. Idempotent.
-    pub fn clear_tree_observer(&mut self) {
-        if let Some(previous) = self.tree_observer.take() {
-            notify_detached(previous);
-        }
-    }
-
-    /// The installed observer, if any. Clones the `Arc` out — no reference
-    /// into private state, no guard.
-    #[must_use]
-    pub fn tree_observer(&self) -> Option<Arc<dyn flui_foundation::observe::TreeObserver>> {
-        self.tree_observer.clone()
-    }
-
-    /// Build an [`ExternalBuildScheduler`] over this owner's shared inbox and
-    /// frame-request hook.
-    ///
-    /// The single construction point for the out-of-frame rebuild channel:
-    /// [`ElementOwner::external_scheduler`](super::ElementOwner::external_scheduler)
-    /// and `testing::ElementBuildContext::rebuild_handle` both route through it,
-    /// so there is exactly one inbox and one frame-request path.
-    pub(crate) fn external_scheduler(&self) -> ExternalBuildScheduler {
-        ExternalBuildScheduler::from_parts(
-            Arc::clone(&self.external_inbox),
-            self.on_build_scheduled.clone(),
-        )
-    }
-
-    /// What the most recent widget draw frame or explicit `build_scope`
-    /// rebuilt: the number of distinct elements built this frame and, per
-    /// [`RebuildReason`], how many of them
-    /// carried that cause (an element scheduled for two reasons counts once in
-    /// `elements_built` and once under each reason). Reset at every
-    /// `build_scope` and every binding draw frame, including a clean one.
-    /// A pump that produces no draw frame leaves the previous report intact.
-    pub fn last_frame_build_report(&self) -> FrameBuildReport {
-        FrameBuildReport {
-            elements_built: self.built_this_frame.len(),
-            builds_run: self.frame_builds.builds_run,
-            by_reason: self.frame_builds.by_reason(),
-        }
-    }
-
-    /// Start a fresh telemetry report without routing or draining build work.
-    /// A clean binding frame still owns an empty report; lazy child service
-    /// later in that frame may add its builds to it.
-    pub(crate) fn clear_frame_build_report(&mut self) {
-        self.built_this_frame.clear();
-        self.frame_builds.clear();
-    }
-
-    /// Start a fresh telemetry report, for a test kit that reports one frame:
-    /// cleared before the frame, the report afterwards holds nothing the
-    /// frames before it built.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn clear_frame_build_report_for_test(&mut self) {
-        self.clear_frame_build_report();
     }
 
     /// Number of elements queued in the out-of-frame inbox, awaiting the next
@@ -1427,1496 +595,6 @@ impl BuildOwner {
         })
     }
 
-    /// Process all dirty elements outside layout-builder scopes.
-    ///
-    /// Rebuilds elements in depth order (shallowest first). This ensures
-    /// that when a parent rebuilds, any children that become dirty are
-    /// processed after the parent.
-    ///
-    /// # Arguments
-    ///
-    /// * `tree` - The element tree to rebuild
-    pub fn build_scope(&mut self, tree: &mut ElementTree) {
-        // Per-frame mid-drain absorb accounting: re-arm the exhaustion streak
-        // against how the PREVIOUS frame ended — BEFORE this frame's own
-        // reset overwrites `mid_drain_absorbs_left` — then reset the budget
-        // and the re-entry set for this frame. There is no frame-complete
-        // hook on `BuildOwner`, so this retroactive check at the NEXT entry
-        // is the only place "did the last frame end clean" can be answered.
-        //
-        // This reset must run exactly once per real frame, which is why it
-        // lives here rather than in `build_scope_impl`: `build_scope` is the
-        // frame-boundary entry point every production/headless binding calls
-        // once per pump, but `service_child_requests_impl`'s lazy-sliver
-        // service pass also needs to drain newly-built children's subtrees
-        // — possibly several times in the SAME frame, once per fixpoint pass
-        // — and calls `build_scope_impl` directly for that, so the budget it
-        // shares stays a genuine per-frame bound instead of resetting on
-        // every service pass.
-        if self.mid_drain_absorbs_left > 0 {
-            self.mid_drain_cap_streak = false;
-        }
-        self.mid_drain_absorbs_left = MAX_MID_DRAIN_ABSORBS;
-        self.clear_frame_build_report();
-
-        self.build_scope_impl(tree);
-    }
-
-    /// The reusable core of [`Self::build_scope`]: the build span, the
-    /// early-return when a mounted-but-clean layout builder has no work,
-    /// drain-target selection, the drain itself, and collapsing the scoped
-    /// queues when they empty out. Deliberately excludes the per-frame
-    /// mid-drain accounting reset that only [`Self::build_scope`] performs —
-    /// see that method's doc for why a mid-frame re-entrant caller (the
-    /// lazy-sliver service pass) must reach this directly instead.
-    fn build_scope_impl(&mut self, tree: &mut ElementTree) {
-        // The build phase's span, matching the `layout`/`paint`/`compositing`
-        // spans the pipeline already emits. Together the four are what a
-        // profiler subscribes to: `flui-devtools` is layer 9 and nothing in
-        // the framework may consume it, so tracing is the only seam by which
-        // frame timings can reach it. `absorbed_mid_drain` is recorded by
-        // `drain_build_scope` once the drain completes — declared empty here
-        // so the field exists on the span from the start.
-        let _span = tracing::debug_span!(
-            target: "flui.frame",
-            "build",
-            dirty_elements = self.dirty_count(),
-            absorbed_mid_drain = tracing::field::Empty,
-        )
-        .entered();
-
-        let has_partitioned_work = self
-            .build_scope_queues
-            .as_ref()
-            .is_some_and(|queues| !queues.root.is_empty() || !queues.isolated.is_empty());
-        if !self.layout_builder_registry.is_empty()
-            && !has_partitioned_work
-            && self.dirty_elements.is_empty()
-            && self.external_inbox.lock().is_empty()
-        {
-            // A mounted but clean layout builder must not turn the lazy scoped
-            // queues into a per-frame allocation. There is no work to route.
-            return;
-        }
-        let target = if self.layout_builder_registry.is_empty() && !has_partitioned_work {
-            // Preserve the pre-scope hot path exactly when the feature is inert.
-            BuildScopeTarget::All
-        } else {
-            BuildScopeTarget::Global
-        };
-        self.build_scope_target(tree, target);
-        self.collapse_empty_build_scope_queues();
-    }
-
-    pub(crate) fn build_scope_target(&mut self, tree: &mut ElementTree, target: BuildScopeTarget) {
-        let live_scopes = match target {
-            BuildScopeTarget::All => None,
-            BuildScopeTarget::Global | BuildScopeTarget::LayoutBuilder(_) => {
-                let live_scopes = self.live_layout_scope_ids(tree);
-                self.repartition_dirty(tree, &live_scopes);
-                self.activate_build_target(target);
-                Some(live_scopes)
-            }
-        };
-        let _ = self.drain_prepared_build_target(tree, target, live_scopes.as_ref());
-    }
-
-    /// Finish a parented lifecycle recovery once the panicking element is back in its slab slot.
-    ///
-    /// The configurable view factory is the last fallible step before the
-    /// destructive replacement transaction begins. A factory unwind retains
-    /// the original element and its dirty entry; the owned staged diagnostic
-    /// is then dropped without touching earlier committed records. Once
-    /// `replace_child_with` starts, its fatal no-rollback contract applies.
-    #[cold]
-    fn replace_failed_lifecycle_element(
-        &mut self,
-        tree: &mut ElementTree,
-        failed: ElementId,
-        replacement_location: (ElementId, usize),
-        dirty: DirtyElement,
-        mut staged: StagedRecoveredPanic,
-        caught: FirstPanic,
-    ) {
-        let (parent, slot) = replacement_location;
-        // The failed element is replaced below, after which the drain could not find it: read its
-        // path while it is a node.
-        staged.locate_in(tree);
-        let error = crate::view::FrameworkError::from_panic(
-            caught
-                .held()
-                .expect("BUG: a failed lifecycle element's panic is held"),
-            "running a lifecycle hook during rebuild",
-        );
-        // Classified, the hook's payload is destroyed under containment
-        // before the error-view factory, which is user code, runs.
-        drop(caught);
-        // A factory panic must not escape recovery half-done: the element
-        // keeps its dirty entry and the factory's panic is raised.
-        let mut factory = FirstPanic::new();
-        let Some(recovery_view) = factory.contain(|| {
-            crate::view::recovery_view_for(&error, self.capabilities.error_view_builder)
-        }) else {
-            self.dirty_elements.requeue(dirty);
-            raise(factory)
-        };
-
-        self.dirty_reasons.remove(&failed);
-        self.pending_dependency_changes.remove(failed);
-        let mut element_owner = self.element_owner_mut();
-        let substitute = crate::element::sparse_children::replace_failed_child(
-            parent,
-            slot,
-            failed,
-            &recovery_view,
-            tree,
-            &mut element_owner,
-        );
-        staged.substituted_by(substitute, parent, slot);
-        element_owner.commit_staged_lifecycle_panic(staged);
-    }
-
-    pub(crate) fn drain_prepared_build_target(
-        &mut self,
-        tree: &mut ElementTree,
-        target: BuildScopeTarget,
-        live_scopes: Option<&SlotSet<ElementId>>,
-    ) -> BuildDrainResult {
-        #[cfg(not(debug_assertions))]
-        if matches!(target, BuildScopeTarget::All) {
-            let result = self.drain_build_scope(tree, target, live_scopes);
-            self.request_owed_frame();
-            return result;
-        }
-
-        #[cfg(debug_assertions)]
-        {
-            assert!(!self.building, "build_scope called while already building");
-            self.building = true;
-            self.scope_depth += 1;
-        }
-
-        // The scoped drain restores build state before a panic propagates.
-        let mut caught = FirstPanic::new();
-        let outcome = caught.contain(|| self.drain_build_scope(tree, target, live_scopes));
-
-        if outcome.is_none() && !matches!(target, BuildScopeTarget::All) {
-            let live_scopes = live_scopes.expect("BUG: scoped drain owns a live-scope snapshot");
-            self.repartition_dirty(tree, live_scopes);
-        }
-
-        #[cfg(debug_assertions)]
-        {
-            self.building = false;
-            self.scope_depth -= 1;
-        }
-
-        match outcome {
-            Some(result) => {
-                self.request_owed_frame();
-                result
-            }
-            // The pass's own failure comes first; the owed wake stays
-            // pending for the next request to retry.
-            None => raise(caught),
-        }
-    }
-
-    /// Deliver the frame a build pass owes for the entries it scheduled
-    /// (see [`FrameWake::AfterPass`](super::element_owner::FrameWake)), once
-    /// every element is back in the tree. A failing wake reaches the caller
-    /// and stays owed, so the next request retries it.
-    fn request_owed_frame(&self) {
-        self.external_inbox
-            .request_frame_if_needed(false, self.on_build_scheduled.as_deref());
-    }
-
-    fn drain_build_scope(
-        &mut self,
-        tree: &mut ElementTree,
-        target: BuildScopeTarget,
-        live_scopes: Option<&SlotSet<ElementId>>,
-    ) -> BuildDrainResult {
-        let mut result = BuildDrainResult::default();
-        let mut absorbed_mid_drain = 0usize;
-        // Ids capped for the rest of THIS drain accumulate here instead of
-        // being put straight back into `self.external_inbox` — see
-        // `CappedLeftoverGuard`'s doc for why a guard, not a flush placed
-        // after the loop, and `Self::absorb_mid_drain_inbox`'s doc for the
-        // budget rules.
-        let mut capped_leftover = CappedLeftoverGuard::new(Arc::clone(&self.external_inbox));
-
-        // Re-key every element already on the heap to its current tree depth
-        // before draining. `schedule_build_for` trusts the depth its caller
-        // passes; a stale one (a subtree moved by a GlobalKey after the
-        // schedule) would let a deeply-nested rebuild sort as if it were
-        // shallow, so a child could build before its parent and violate
-        // the shallowest-first build contract, which keys on the element's
-        // real depth. Re-derive each id's depth from its node — the same authority
-        // `absorb_mid_drain_inbox` uses for a freshly-absorbed id.
-        self.rekey_dirty_depths(tree);
-
-        // Process dirty elements in depth order, extract-then-apply
-        // (E3 — atomic box→arena swap).
-        //
-        // The hard problem: the old loop held `&mut tree.get_mut(id).element`
-        // while calling `perform_build`, so `perform_build` could not also
-        // take `&mut ElementTree` to reconcile slab-resident children —
-        // the exact double-borrow that cost the render-tree PRs. The fix
-        // is the same extract-then-apply discipline E2.5 proves out, lifted
-        // to the build seam:
-        //
-        //   1. Take a `&mut element` borrowed FROM the tree, run the
-        //      behavior's build half (`build_into_views`), capture the
-        //      OWNED child views, and DROP the element borrow.
-        //   2. With a FRESH `&mut tree` borrow, feed those views to the
-        //      id-reconciler, which inserts / updates / removes the
-        //      slab-resident child nodes.
-        //
-        // No `&mut` into the slab is ever live across a second slab access.
-        //
-        // Absorb the out-of-frame inbox BEFORE every pop, not only once
-        // before the first one (issue #1180): a build below can call another
-        // element's `RebuildHandle::schedule` synchronously (the inbox is the
-        // only route a cross-thread or listener-driven rebuild has), and that
-        // schedule must join THIS drain rather than sit until the next
-        // `build_scope`; the heap is re-sorted every iteration. See
-        // `Self::absorb_mid_drain_inbox` for the Occupied/Vacant/budget rules.
-        //
-        // Each iteration pops one entry first so `pop()`'s mutation of
-        // `self.dirty_elements` (a field the split-borrow handle aliases)
-        // is released before the handle is reborrowed.
-        //
-        // `absorbed_mid_drain` only counts from the SECOND iteration onward:
-        // the very first absorb of this call is ordinary intake — whatever
-        // landed between the previous drain (or frame) and this one, before
-        // a single element here has built — not something that arrived
-        // "mid-drain" in the sense a profiler cares about. Only an absorb
-        // that runs after this call has already popped and built at least
-        // one entry observed something land while THIS drain was actively
-        // in progress, which is what the field name promises.
-        let mut first_pop = true;
-        // One buffer of dependency records serves every element this drain
-        // builds: each build fills it, the drain below empties it.
-        let mut dependent_records: Vec<crate::context::DependentRecord> = Vec::new();
-        // The providers a dependent read in its previous build, kept across
-        // builds and inline for eight, so the drain copies them without
-        // allocating.
-        let mut previous_providers: smallvec::SmallVec<[ElementId; 8]> = smallvec::SmallVec::new();
-        loop {
-            let absorbed_this_pop =
-                self.absorb_mid_drain_inbox(tree, &mut capped_leftover.leftover);
-            if !first_pop {
-                absorbed_mid_drain += absorbed_this_pop;
-            }
-            first_pop = false;
-            let Some(dirty) = self.dirty_elements.pop() else {
-                break;
-            };
-            let id = dirty.id();
-            let nearest_scope = match target {
-                BuildScopeTarget::All => None,
-                BuildScopeTarget::Global | BuildScopeTarget::LayoutBuilder(_) => {
-                    Self::nearest_layout_builder_scope(
-                        tree,
-                        id,
-                        live_scopes.expect("BUG: scoped drain owns a live-scope snapshot"),
-                    )
-                }
-            };
-            let target_accepts = match target {
-                BuildScopeTarget::All => true,
-                BuildScopeTarget::Global => nearest_scope.is_none(),
-                BuildScopeTarget::LayoutBuilder(scope) => nearest_scope == Some(scope),
-            };
-            if !target_accepts {
-                self.defer_dirty_element(nearest_scope, dirty);
-                continue;
-            }
-
-            let reasons_at_start = self
-                .dirty_reasons
-                .get(&id)
-                .copied()
-                .expect("BUG: every dirty heap entry must own rebuild reasons");
-
-            // If this dependent received an inherited-dependency change since its
-            // last build, fire `ViewState::did_change_dependencies` BEFORE
-            // the build. Consumed here so the typed hook runs exactly once
-            // per dependency-change-then-rebuild cycle.
-            let needs_did_change = self.pending_dependency_changes.contains(id);
-
-            // Guard (still holding only a brief `&mut node`): an
-            // inherited-dependency change marks an otherwise-clean dependent
-            // dirty so its build re-runs against the new value; then skip
-            // unless the element is both buildable (lifecycle) AND dirty. A
-            // clean element's build half returns an empty view list, and the
-            // phase-2 reconcile would then wrongly REMOVE all its children —
-            // so a clean entry must never reach reconcile.
-            {
-                let Some(node) = tree.get_mut(id) else {
-                    // Stale / removed id — nothing to build.
-                    self.dirty_reasons.remove(&id);
-                    self.pending_dependency_changes.remove(id);
-                    continue;
-                };
-                if needs_did_change {
-                    node.element_mut().mark_needs_build();
-                }
-                if !node.element().lifecycle().can_build() || !node.element().is_dirty() {
-                    self.dirty_reasons.remove(&id);
-                    self.pending_dependency_changes.remove(id);
-                    continue;
-                }
-            }
-
-            // This element is about to re-state, from scratch, which keyed
-            // children it declares — so everything the frame recorded about
-            // it up to now is superseded. Clearing here rather than after
-            // the reconcile is what makes the newest build authoritative:
-            // the reconcile below immediately re-reserves whatever this
-            // build still declares, and anything it has dropped simply does
-            // not come back.
-            self.global_key_reservations.note_parent_rebuild(id);
-
-            // A per-node span: TRACE, primitives only (the element's packed id, the reasons as a
-            // bitmask over the `RebuildReason` variants in declaration order).
-            let rebuild_span = tracing::trace_span!(
-                target: "flui.tree",
-                "element_rebuild",
-                element = id.as_u64(),
-                reasons = u64::from(reasons_at_start.bits()),
-            );
-            let _rebuild_entered = rebuild_span.enter();
-
-            // ── Phase 1: extract BY VALUE, build against a LIVE read view.
-            // Taking the element out of its slot frees the tree for a shared
-            // `&` borrow, so the element's `build()` can resolve InheritedView
-            // / ancestor lookups against the REAL tree (via the `LiveBuildContext`
-            // the behaviour builds from `ElementOwner::build_view`) — no empty
-            // dummy, and no deadlock against the `Arc<RwLock>` write lock the
-            // frame driver holds (the borrowed view sidesteps the lock).
-            // Inherited dependents are buffered (the tree is read-only here)
-            // and applied below once `&mut tree` is free again.
-            let Some(mut element) = tree.take_element(id) else {
-                continue;
-            };
-            let replacement_location = tree
-                .get(id)
-                .and_then(|node| node.parent().map(|parent| (parent, node.slot())));
-            let dep_sink: parking_lot::Mutex<Vec<crate::context::DependentRecord>> =
-                parking_lot::Mutex::new(std::mem::take(&mut dependent_records));
-
-            // Run the build half under `catch_unwind` so the extracted element
-            // is ALWAYS restored to its slot before this seam decides whether
-            // to substitute or propagate. User `build()` is already recovered
-            // one level down. The lifecycle calls reachable here (stateful hooks,
-            // `update_render_object`) catch only their literal user-hook expressions,
-            // stage only when this parented seam arms them, and rethrow into this
-            // guard. Any other unwind remains unrecorded and propagates after restoration.
-            // `AssertUnwindSafe` is sound because the sole cross-unwind
-            // invariant — the slot is whole again — is re-established by the
-            // unconditional `put_element` below.
-            // Set by `build_or_recover` if this element's build panics and is
-            // recovered (reset-on-build then keeps its masks).
-            let build_recovered = std::cell::Cell::new(false);
-            let partitioned_dirty_count = self.partitioned_dirty_count();
-            let mut caught = FirstPanic::new();
-            let build_outcome = caught.contain(|| {
-                let mut element_owner = super::ElementOwner {
-                    global_keys: &mut self.global_keys,
-                    global_key_reservations: &mut self.global_key_reservations,
-                    dirty_elements: &mut self.dirty_elements,
-                    partitioned_dirty_count,
-                    dirty_reasons: &mut self.dirty_reasons,
-                    inactive_elements: &mut self.inactive_elements,
-                    pending_dependency_changes: &mut self.pending_dependency_changes,
-                    inherited_dependencies: &mut self.inherited_dependencies,
-                    keep_alive: self.keep_alive.clone(),
-                    unmount_hooks: self.unmount_hooks.clone(),
-                    frame_wake: super::element_owner::FrameWake::AfterPass,
-                    external_inbox: &self.external_inbox,
-                    external_request_frame: self.on_build_scheduled.as_ref(),
-                    build_view: Some(super::BuildHandle {
-                        tree: &*tree,
-                        dep_sink: &dep_sink,
-                    }),
-                    child_manager_registry: &self.child_manager_registry,
-                    layout_builder_registry: &self.layout_builder_registry,
-                    focus_manager: &self.focus_manager,
-                    lifecycle_handle: &self.lifecycle_handle,
-                    window_handle: &self.window_handle,
-                    async_driver: &self.async_driver,
-                    post_frame_handle: &self.post_frame_handle,
-                    capabilities: &self.capabilities,
-                    flush_registry: &self.flush_registry,
-                    interaction_dispatch: &self.interaction_dispatch,
-                    collects_semantics: self.collects_semantics,
-                    hit_test_handle: &self.hit_test_handle,
-                    global_key_scope: &mut self.global_key_scope,
-                    owner_tag: self.owner_tag,
-                    tree_observer: &mut self.tree_observer,
-                    recovered_panics: &mut self.recovered_panics,
-                    build_recovered: Some(&build_recovered),
-                    reactive: &self.reactive,
-                    lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
-                };
-                if needs_did_change {
-                    if replacement_location.is_some() {
-                        element_owner.arm_lifecycle_panic_handoff();
-                    }
-                    element
-                        .element_mut()
-                        .notify_dependency_change(&mut element_owner);
-                    if replacement_location.is_some() {
-                        assert!(
-                            element_owner.take_staged_lifecycle_panic().is_none(),
-                            "a successful dependency hook must leave its own window unrecorded"
-                        );
-                    }
-                }
-                if replacement_location.is_some() {
-                    element_owner.arm_lifecycle_panic_handoff();
-                }
-                let views = element.element_mut().build_into_views(&mut element_owner);
-                if replacement_location.is_some() {
-                    assert!(
-                        element_owner.take_staged_lifecycle_panic().is_none(),
-                        "a successful initial-state/build call must leave its own window unrecorded"
-                    );
-                }
-                views
-            }); // `element_owner` + its `&*tree` borrow drop here.
-
-            // Restore the element BEFORE anything else — the slot must be whole
-            // whether the build returned or unwound. With `&mut tree` free
-            // again we then apply the dependents buffered during the read-only
-            // build onto their provider nodes; recording in the SAME iteration
-            // (before the next dirty pop) preserves the record-before-notify
-            // ordering.
-            tree.put_element(id, element);
-
-            let Some(new_views): Option<ChildViews> = build_outcome else {
-                let staged = self.lifecycle_panic_handoff.take().into_staged();
-                let Some((parent, slot)) = replacement_location else {
-                    self.dirty_elements.requeue(dirty);
-                    raise(caught)
-                };
-                let Some(staged) = staged else {
-                    self.dirty_elements.requeue(dirty);
-                    raise(caught)
-                };
-
-                self.replace_failed_lifecycle_element(
-                    tree,
-                    id,
-                    (parent, slot),
-                    dirty,
-                    staged,
-                    caught,
-                );
-                result.any_rebuilt = true;
-
-                if !matches!(target, BuildScopeTarget::All) {
-                    let fresh_live_scopes = self.live_layout_scope_ids(tree);
-                    self.repartition_dirty(tree, &fresh_live_scopes);
-                    self.activate_build_target(target);
-                }
-                continue;
-            };
-            debug_assert!(
-                self.lifecycle_panic_handoff.take().is_disarmed(),
-                "successful lifecycle windows must disarm their handoff immediately"
-            );
-
-            let reasons = self
-                .dirty_reasons
-                .remove(&id)
-                .expect("BUG: a completed rebuild must retain its rebuild reasons");
-            result.any_rebuilt = true;
-            result.target_rebuilt |=
-                matches!(target, BuildScopeTarget::LayoutBuilder(scope) if scope == id);
-            self.pending_dependency_changes.remove(id);
-            // A LATER mid-drain absorb of this same id is a re-entry, not a
-            // first-time absorb, whether it comes from this element
-            // rescheduling itself, a child notifying it back, or one half of
-            // an A↔B ping-pong — see `Self::absorb_mid_drain_inbox`.
-            self.built_this_frame.insert(id);
-            self.frame_builds.builds_run += 1;
-            for reason in reasons.iter() {
-                self.frame_builds.record(reason);
-            }
-
-            // ADR-0040: the build ran to completion (the resume_unwind branch
-            // can no longer take it) and the slot is restored — safe window
-            // for third-party observer code, and a parent's rebuilt event
-            // precedes the child mutations its build produced (phase 2).
-            if self.tree_observer.is_some() {
-                let view_type_id = tree.get(id).map(|node| node.element().view_type_id());
-                if let Some(view_type_id) = view_type_id {
-                    super::emit_observation(&mut self.tree_observer, |o| {
-                        o.element_rebuilt(&flui_foundation::observe::ElementRebuilt::new(
-                            id,
-                            view_type_id,
-                            reasons,
-                        ));
-                    });
-                }
-            }
-            // Reset-on-build (ADR-0074 §5.5; dependencies do not
-            // accumulate until unmount): the fields this
-            // element is recorded as reading at each of its providers go back
-            // to NONE, the build's own reads are re-applied from the sink, and a
-            // provider it no longer read drops the entry. A field read only in
-            // an earlier build therefore stops rebuilding this element.
-            //
-            // A build that panicked and was recovered (ErrorView substituted;
-            // `build_or_recover` sets the owner's `build_recovered` flag) may
-            // have stopped before reading its providers: the empty sink says nothing
-            // about what the element depends on, so its previous masks are kept
-            // (the sink's records are still added) and it keeps receiving the
-            // notifications that let a fixed condition rebuild it.
-            previous_providers.clear();
-            if !build_recovered.get() {
-                self.inherited_dependencies
-                    .copy_providers_into(id, &mut previous_providers);
-            }
-            for provider in &previous_providers {
-                if let Some(accessor) = tree
-                    .get_mut(*provider)
-                    .and_then(|node| node.element_mut().as_inherited_mut())
-                {
-                    accessor.reset_dependent_mask(crate::context::CrateToken::new(), id);
-                }
-            }
-            if !build_recovered.get() {
-                self.inherited_dependencies.reset_build_misses(id);
-            }
-            let mut recorded: Vec<crate::context::DependentRecord> = dep_sink.into_inner();
-            {
-                // The distinct (dependent, provider) edges the loop below
-                // registers, sorted so that each dependent's are adjacent: a
-                // sort of the build's reads, not a scan per read. Sixteen
-                // stay inline, so an ordinary build allocates nothing here.
-                let tree = &*tree;
-                let mut edges: smallvec::SmallVec<[(ElementId, ElementId); 16]> = recorded
-                    .iter()
-                    .filter_map(|record| {
-                        record.provider.map(|provider| (record.dependent, provider))
-                    })
-                    .filter(|&(_, provider)| {
-                        tree.get(provider)
-                            .is_some_and(|node| node.element().as_inherited().is_some())
-                    })
-                    .collect();
-                edges.sort_unstable();
-                edges.dedup();
-                for dependent_edges in edges.chunk_by(|a, b| a.0 == b.0) {
-                    self.inherited_dependencies.reserve(
-                        dependent_edges[0].0,
-                        dependent_edges.iter().map(|&(_, provider)| provider),
-                    );
-                }
-            }
-            for record in recorded.drain(..) {
-                let Some(provider) = record.provider else {
-                    self.inherited_dependencies
-                        .register_miss(record.dependent, record.lifecycle);
-                    continue;
-                };
-                let Some(node) = tree.get_mut(provider) else {
-                    continue;
-                };
-                let Some(accessor) = node.element_mut().as_inherited_mut() else {
-                    continue;
-                };
-                if record.lifecycle {
-                    accessor.record_lifecycle_dependent(
-                        crate::context::CrateToken::new(),
-                        record.dependent,
-                        record.depth,
-                        record.mask,
-                    );
-                } else {
-                    accessor.record_dependent(
-                        crate::context::CrateToken::new(),
-                        record.dependent,
-                        record.depth,
-                        record.mask,
-                    );
-                }
-                self.inherited_dependencies
-                    .register(record.dependent, provider);
-            }
-            dependent_records = recorded;
-            for &provider in &previous_providers {
-                let pruned = tree
-                    .get_mut(provider)
-                    .and_then(|node| node.element_mut().as_inherited_mut())
-                    .is_some_and(|accessor| {
-                        accessor.prune_unread_dependent(crate::context::CrateToken::new(), id)
-                    });
-                if pruned {
-                    self.inherited_dependencies.unregister(id, provider);
-                }
-            }
-
-            self.refresh_provided_scope(tree, id);
-
-            // ── Phase 2: reconcile the returned views against the node's
-            // slab-resident children with a fresh `&mut tree`. Newly inserted
-            // children are scheduled inside the reconciler so this same drain
-            // loop reaches them. The outer catch below is unwind hygiene, not
-            // containment: an unbounded framework panic still propagates, but
-            // the rebuilding parent regains its consumed reason and queue
-            // entry before the scoped-drain guard repartitions all work.
-            let partitioned_dirty_count = self.partitioned_dirty_count();
-            let mut caught = FirstPanic::new();
-            let reconcile_outcome = caught.contain(|| {
-                let mut element_owner = super::ElementOwner {
-                    global_keys: &mut self.global_keys,
-                    global_key_reservations: &mut self.global_key_reservations,
-                    dirty_elements: &mut self.dirty_elements,
-                    partitioned_dirty_count,
-                    dirty_reasons: &mut self.dirty_reasons,
-                    inactive_elements: &mut self.inactive_elements,
-                    pending_dependency_changes: &mut self.pending_dependency_changes,
-                    inherited_dependencies: &mut self.inherited_dependencies,
-                    keep_alive: self.keep_alive.clone(),
-                    unmount_hooks: self.unmount_hooks.clone(),
-                    frame_wake: super::element_owner::FrameWake::AfterPass,
-                    external_inbox: &self.external_inbox,
-                    external_request_frame: self.on_build_scheduled.as_ref(),
-                    build_view: None,
-                    child_manager_registry: &self.child_manager_registry,
-                    layout_builder_registry: &self.layout_builder_registry,
-                    focus_manager: &self.focus_manager,
-                    lifecycle_handle: &self.lifecycle_handle,
-                    window_handle: &self.window_handle,
-                    async_driver: &self.async_driver,
-                    post_frame_handle: &self.post_frame_handle,
-                    capabilities: &self.capabilities,
-                    flush_registry: &self.flush_registry,
-                    interaction_dispatch: &self.interaction_dispatch,
-                    collects_semantics: self.collects_semantics,
-                    hit_test_handle: &self.hit_test_handle,
-                    global_key_scope: &mut self.global_key_scope,
-                    owner_tag: self.owner_tag,
-                    tree_observer: &mut self.tree_observer,
-                    recovered_panics: &mut self.recovered_panics,
-                    build_recovered: None,
-                    reactive: &self.reactive,
-                    lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
-                };
-                crate::tree::id_reconcile::reconcile_children_by_id(
-                    tree,
-                    id,
-                    &new_views,
-                    &mut element_owner,
-                );
-            });
-            if reconcile_outcome.is_none() {
-                tree.mark_needs_build(id);
-                match self.dirty_reasons.entry(id) {
-                    std::collections::hash_map::Entry::Vacant(entry) => {
-                        entry.insert(reasons);
-                        self.dirty_elements.requeue(dirty);
-                    }
-                    std::collections::hash_map::Entry::Occupied(mut entry) => {
-                        entry.get_mut().merge(reasons);
-                    }
-                }
-                raise(caught);
-            }
-        }
-
-        // `capped_leftover`'s `Drop` flushes whatever this drain capped back into the real
-        // inbox here, on this normal-return path exactly like it would on an unwind through the
-        // loop above — see `CappedLeftoverGuard`'s doc.
-
-        // The build drained: every render child has attached. Settle each render parent's
-        // children into element-slot order (no-op unless an insert flagged a possible drift), so
-        // a render sibling attached before a component-deferred one does not invert their layout.
-        tree.reorder_render_children_after_build(
-            &self.child_manager_registry,
-            &mut self.frame_arena,
-        );
-
-        // Record onto whichever span is current — `build_scope`'s own "build"
-        // span and `service_layout_builders`'s `during_layout` "build" span
-        // both declare this field now, so a fixpoint pass's re-entries are
-        // captured exactly like a top-level drain's (a span that never
-        // declares a field silently drops a `record` for it, which is why
-        // both call sites must).
-        tracing::Span::current().record("absorbed_mid_drain", absorbed_mid_drain);
-
-        result
-    }
-
-    /// Absorb every id currently sitting in the out-of-frame inbox onto this
-    /// drain's dirty work, routed to whichever bucket `target` accepts.
-    /// Returns how many ids were absorbed (merged into existing work or
-    /// freshly scheduled) — never how many merely landed, since a capped
-    /// re-entry is held in `capped_leftover` (the caller's drain-scoped
-    /// accumulator), not absorbed.
-    ///
-    /// Called at the top of every [`Self::drain_build_scope`] pop, not once
-    /// at drain start (issue #1180): `BuildOwner`'s own
-    /// synchronous `schedule` — a build calling another element's
-    /// [`RebuildHandle`](super::RebuildHandle) on the owner thread — joins
-    /// THIS SAME drain instead of waiting for the next `build_scope` call,
-    /// collapsing the double-frame the issue describes into one. There is no
-    /// debug-mode assert that a mid-build
-    /// schedule targets a descendant of the element currently building (see
-    /// the `## Mapping decisions` entry in `crates/flui-view/ARCHITECTURE.md`
-    /// for why: the inbox is the only route a cross-thread or
-    /// listener-driven rebuild has, and a synchronous `schedule` call cannot
-    /// tell "during my own build" from "after it").
-    ///
-    /// # Occupied vs Vacant
-    ///
-    /// At the top of a pop nothing is "being served" as a distinct state:
-    /// `dirty_reasons` Occupied means the id is already on the heap or
-    /// sitting in a deferred layout-builder-scope bucket, and the landed
-    /// reasons simply merge into whichever bucket already holds it (a
-    /// deferred id stays in its bucket). Vacant means a fresh entry is
-    /// needed, keyed by the AUTHORITATIVE tree depth (never the depth
-    /// captured at `schedule` time — `ElementCore` does not know its own
-    /// tree depth), and pushed straight onto `self.dirty_elements` —
-    /// `Self::drain_build_scope`'s own pop already re-derives this id's
-    /// nearest layout-builder scope and runs `Self::defer_dirty_element` on
-    /// it if `target` doesn't accept it, so classifying scope again here
-    /// would only duplicate that pop-time routing, never change its
-    /// outcome (a Global id landing during a `LayoutBuilder(scope)` drain
-    /// still ends up deferred to the root bucket for the next Global drain,
-    /// and the mirror still lands a scope-local id in `isolated[scope]`
-    /// during a Global drain).
-    ///
-    /// # The re-entry budget
-    ///
-    /// A RE-ENTRY is a Vacant landing for an id that already completed a
-    /// build in this `build_scope` call — [`Self::built_this_frame`] is how
-    /// that is recognized. The common shape is an element rescheduling
-    /// itself from inside its own build, but a child notifying its
-    /// already-built parent, or one half of an A↔B ping-pong, land here
-    /// identically. Every other Vacant id is a first-time absorb this frame
-    /// and is free, however many independent listeners fire (each id can
-    /// only be a first-time absorb once, so the free case is finite). A
-    /// re-entry spends one [`Self::mid_drain_absorbs_left`]; at zero the id
-    /// is held in `capped_leftover` for the rest of this drain (the existing
-    /// `has_dirty_elements` gate already schedules the next `build_scope`
-    /// once it is flushed back — see `Self::drain_build_scope`) and a
-    /// `tracing::warn!` fires once per streak
-    /// ([`Self::mid_drain_cap_streak`]), naming every id this call turned
-    /// away.
-    ///
-    /// # Why `capped_leftover` is the caller's, not the inbox's
-    ///
-    /// Once the budget hits zero, every further re-entry for the rest of the
-    /// drain is capped too — a self-rescheduler that keeps re-entering re-hits
-    /// this every pop. Putting each one straight back into `self.external_inbox`
-    /// would mean every LATER pop's `drain()` pulls the same already-capped
-    /// ids back out, re-locks, and re-inserts them again, for no new
-    /// information. Accumulating them in `capped_leftover` — the
-    /// [`CappedLeftoverGuard`] [`Self::drain_build_scope`] owns, passed in
-    /// here by `&mut` to its `leftover` field — means a capped id is looked
-    /// at once, and `self.external_inbox` can go and stay empty for the
-    /// remainder of the drain (the common case once budget is exhausted), so
-    /// later pops hit this function's early return instead of a full
-    /// lock-and-move cycle.
-    ///
-    /// # Locking
-    ///
-    /// The inbox lock is held only for the `take_into` that moves its requests
-    /// into the kept `landed_builds` buffer, released before anything else runs. It is never held
-    /// across a build — `parking_lot::Mutex` is non-reentrant, and a build
-    /// may call `schedule` synchronously. `capped_leftover` itself is a
-    /// plain, unlocked map; `CappedLeftoverGuard::drop` re-locks the inbox
-    /// exactly once, when the guard goes out of scope — on the drain's
-    /// normal return OR on an unwind through the loop, so a capped id
-    /// survives a later build's panic in the same drain instead of vanishing
-    /// with the guard's stack frame.
-    fn absorb_mid_drain_inbox(
-        &mut self,
-        tree: &mut ElementTree,
-        capped_leftover: &mut PendingBuilds,
-    ) -> usize {
-        // The kept buffer leaves its field for the loop; a panic below drops
-        // it, and the next absorb grows a new one.
-        let mut landed = std::mem::take(&mut self.landed_builds);
-        {
-            let mut inbox = self.external_inbox.lock();
-            if inbox.is_empty() {
-                self.landed_builds = landed;
-                return 0;
-            }
-            inbox.take_into(&mut landed);
-        }
-
-        let mut absorbed = 0usize;
-        let mut newly_capped_ids: Vec<ElementId> = Vec::new();
-        for (id, reasons) in landed.drain(..) {
-            // Mark dirty unconditionally, Occupied or Vacant — matching the
-            // pre-#1180 drain's own unconditional call. A `RebuildHandle`
-            // carries no reference to the element's dirty flag (a plain
-            // `(inbox, ElementId)` pair), so this is the one place that both
-            // knows the id and holds `&mut tree`. A node since unmounted is a
-            // no-op lookup.
-            tree.mark_needs_build(id);
-            if let Some(existing) = self.dirty_reasons.get_mut(&id) {
-                existing.merge(reasons);
-                absorbed += 1;
-                continue;
-            }
-            if self.built_this_frame.contains(id) {
-                let Some(remaining) = self.mid_drain_absorbs_left.checked_sub(1) else {
-                    newly_capped_ids.push(id);
-                    capped_leftover.merge(id, reasons);
-                    continue;
-                };
-                self.mid_drain_absorbs_left = remaining;
-            }
-            self.dirty_reasons.insert(id, reasons);
-            let depth = tree.get(id).map_or(0, crate::tree::ElementNode::depth);
-            // Push straight onto the heap: `drain_build_scope`'s pop already
-            // re-derives this id's scope and defers non-accepted ids, so
-            // classifying scope here too would only duplicate that work.
-            self.dirty_elements.push(id, depth);
-            absorbed += 1;
-        }
-
-        if !newly_capped_ids.is_empty() && !self.mid_drain_cap_streak {
-            tracing::warn!(
-                ids = ?newly_capped_ids,
-                budget = MAX_MID_DRAIN_ABSORBS,
-                "mid-drain absorb budget exhausted this frame; deferring the \
-                 remaining re-entered id(s) to the next build_scope"
-            );
-            self.mid_drain_cap_streak = true;
-        }
-
-        self.landed_builds = landed;
-        absorbed
-    }
-
-    // ========================================================================
-    // Lazy-sliver child manager service
-    // ========================================================================
-
-    /// Drive lazy-sliver child managers post-layout.
-    ///
-    /// Called by the layout↔build fixpoint and `WidgetsBinding::service_child_requests`
-    /// immediately **after** `PipelineOwner::run_frame` and the pipeline lock
-    /// is released, so the render tree is quiescent and no node of it is
-    /// entered.
-    ///
-    /// # Ordering
-    ///
-    /// 1. Drain `PipelineOwner`'s `pending_child_requests` and
-    ///    `pending_retain_bands` accumulated during the most recent layout pass.
-    /// 2. Group by `RenderId`.
-    /// 3. Clone each affected manager `Arc` out of the registry (releases the
-    ///    registry lock before the service calls).
-    /// 4. For each manager, call `ChildManager::service` with an inline
-    ///    `ElementOwner` split-borrow — mirrors the pattern in `build_scope`'s
-    ///    `catch_unwind` closure.
-    /// 5. A second `build_scope` expands the newly-built children's subtrees
-    ///    (the items' own views — e.g. `Padding(Text)` — need their own build
-    ///    pass since `SparseChildren::ensure` only mounts the top-level node).
-    /// 6. Mark each affected sliver as needing layout so the next frame
-    ///    re-measures with the newly-present render nodes.
-    /// 7. `finalize_tree` cleans up any evicted children pushed to inactive by
-    ///    `retain_band` or `on_unmount`.
-    ///
-    /// # Every frame path
-    ///
-    /// `UiRuntime::draw_frame` reaches it through
-    /// `WidgetsBinding::service_child_requests` after each `run_frame` drops
-    /// the pipeline write-lock, on a platform runner and a headless host alike.
-    ///
-    /// Returns `true` iff a manager built or evicted a child — the sliver was
-    /// then marked `needs_layout`, and the caller (the layout↔build fixpoint
-    /// in `run_frame_with_layout_builders`) must run another layout pass so
-    /// the change is laid out and painted in this same frame.
-    pub fn service_child_requests(
-        &mut self,
-        tree: &mut ElementTree,
-        pipeline: &flui_rendering::pipeline::PipelineCell,
-    ) -> bool {
-        self.service_child_requests_impl(
-            tree,
-            pipeline,
-            ServiceFinalize::Frame,
-            ServiceRequests::Build,
-        )
-    }
-
-    /// [`Self::service_child_requests`] as run between two layout passes of
-    /// the same frame's fixpoint.
-    ///
-    /// Identical servicing, but the finalize step only unmounts the evicted
-    /// children — it does **not** verify (and so does not clear) the
-    /// `GlobalKey` reservation ledger. Verification is a per-*frame* verdict
-    /// (ADR-0050): two lazy slivers that both declare one key in the same
-    /// frame must be seen by one verification, and the fixpoint may service
-    /// them in different passes. The frame's post-`run_frame` call keeps
-    /// the full finalize.
-    pub(crate) fn service_child_requests_between_passes(
-        &mut self,
-        tree: &mut ElementTree,
-        pipeline: &flui_rendering::pipeline::PipelineCell,
-    ) -> bool {
-        self.service_child_requests_impl(
-            tree,
-            pipeline,
-            ServiceFinalize::UnmountOnly,
-            ServiceRequests::Build,
-        )
-    }
-
-    /// Apply the retain bands the last layout pass recorded and leave its
-    /// build requests queued: the evict-before-paint step of a frame whose
-    /// lazy band did not settle within its pass budget.
-    ///
-    /// The fixpoint stops servicing when the budget trips, so the residents
-    /// the last pass's band no longer covers would otherwise stay attached
-    /// through the frame's final layout and paint — positioned nowhere by
-    /// that layout (the walk positions in-band children only) yet painted,
-    /// hit-tested, and assembled into semantics at whatever offset they
-    /// last had. Evicting them here, and marking their sliver for the
-    /// final layout, means nothing outside the committed band exists when
-    /// the frame paints. The requests are not touched: they stay queued
-    /// for the post-frame service, which builds them for the next frame —
-    /// the deferral the budget asked for, without the stale residents.
-    /// (Taking them here would cost that band a frame: a sliver the
-    /// eviction left clean is not laid out again before the frame ends,
-    /// so nothing would re-record them.)
-    pub(crate) fn service_child_requests_evict_only(
-        &mut self,
-        tree: &mut ElementTree,
-        pipeline: &flui_rendering::pipeline::PipelineCell,
-    ) -> bool {
-        self.service_child_requests_impl(
-            tree,
-            pipeline,
-            ServiceFinalize::UnmountOnly,
-            ServiceRequests::Leave,
-        )
-    }
-
-    fn service_child_requests_impl(
-        &mut self,
-        tree: &mut ElementTree,
-        pipeline: &flui_rendering::pipeline::PipelineCell,
-        finalize: ServiceFinalize,
-        requests: ServiceRequests,
-    ) -> bool {
-        let finalize = |owner: &mut Self, tree: &mut ElementTree| match finalize {
-            ServiceFinalize::Frame => owner.finalize_tree(tree),
-            ServiceFinalize::UnmountOnly => owner.unmount_inactive_elements(tree),
-        };
-        // 1. Drain pending buffers from the pipeline (a brief checkout).
-        let (pending_requests, retain_bands) = pipeline.with_mut(|guard| {
-            let requests = match requests {
-                ServiceRequests::Build => guard.take_pending_child_requests(),
-                ServiceRequests::Leave => Vec::new(),
-            };
-            let bands = guard.take_pending_retain_bands();
-            (requests, bands)
-        });
-
-        // Finalize BEFORE the early-return: `build_scope` does not call
-        // `finalize_tree`, so sparse children pushed to `inactive_elements` by
-        // `SliverAdaptorBehavior::on_unmount` (F3) — during a reconcile that
-        // removed their host — must be cleaned up here. Without this, those
-        // elements and their render nodes are leaked until the next
-        // `service_child_requests` call that has pending layout requests.
-        if !self.inactive_elements.is_empty() {
-            finalize(self, tree);
-        }
-
-        if pending_requests.is_empty() && retain_bands.is_empty() {
-            return false;
-        }
-
-        tracing::debug!(
-            requests = pending_requests.len(),
-            bands = retain_bands.len(),
-            "service_child_requests: draining lazy-sliver pending buffers"
-        );
-
-        // 2. Group requests and retain-bands by sliver RenderId.
-        let mut requests_by_sliver: FxHashMap<RenderId, Vec<usize>> = FxHashMap::default();
-        for (sliver_id, logical_index) in pending_requests {
-            requests_by_sliver
-                .entry(sliver_id)
-                .or_default()
-                .push(logical_index);
-        }
-        let mut bands_by_sliver: FxHashMap<RenderId, (usize, usize)> = FxHashMap::default();
-        for (sliver_id, first, last) in retain_bands {
-            bands_by_sliver.insert(sliver_id, (first, last));
-        }
-
-        // Collect all affected sliver ids (may have requests, bands, or both).
-        let affected_ids: Vec<RenderId> = {
-            let mut ids: SlotSet<RenderId> = SlotSet::new();
-            for &id in requests_by_sliver.keys().chain(bands_by_sliver.keys()) {
-                ids.insert(id);
-            }
-            ids.as_slice().to_vec()
-        };
-
-        // 3. Clone manager Rcs out of the registry before any service call.
-        //    This releases the registry borrow so that service calls that call
-        //    `register_child_manager` / `unregister_child_manager` through an
-        //    `ElementOwner` can re-enter the registry without re-borrowing.
-        let manager_rcs: Vec<(RenderId, Rc<RefCell<dyn ChildManager>>)> = {
-            let registry = self.child_manager_registry.borrow();
-            affected_ids
-                .iter()
-                .filter_map(|&id| registry.get(&id).map(|m| (id, Rc::clone(m))))
-                .collect()
-        };
-
-        if manager_rcs.is_empty() {
-            tracing::debug!("service_child_requests: no registered managers for affected slivers");
-            return false;
-        }
-
-        // 4. Call service on each manager. Each iteration builds an inline
-        //    ElementOwner split-borrow, calls service (which may call
-        //    `ensure`/`evict` and mutate the tree + dirty heap), then drops
-        //    the inline owner — the borrow ends before the next iteration.
-        //
-        //    Track whether any manager did real work (built or evicted a child).
-        //    When all managers return `false` (settled state — band unchanged,
-        //    no new requests in-band) we skip `mark_needs_layout` so the sliver
-        //    stays clean and the frame quiesces rather than looping forever.
-        let mut any_service_did_work = false;
-        for (sliver_id, manager_rc) in &manager_rcs {
-            let requested = requests_by_sliver
-                .get(sliver_id)
-                .map_or(&[][..], Vec::as_slice);
-            let (retain_first, retain_last) = bands_by_sliver
-                .get(sliver_id)
-                .copied()
-                .unwrap_or((0, usize::MAX));
-
-            // Inline split-borrow (same pattern as `build_scope` catch_unwind).
-            let partitioned_dirty_count = self.partitioned_dirty_count();
-            let mut inline_owner = super::ElementOwner {
-                global_keys: &mut self.global_keys,
-                global_key_reservations: &mut self.global_key_reservations,
-                dirty_elements: &mut self.dirty_elements,
-                partitioned_dirty_count,
-                dirty_reasons: &mut self.dirty_reasons,
-                inactive_elements: &mut self.inactive_elements,
-                pending_dependency_changes: &mut self.pending_dependency_changes,
-                inherited_dependencies: &mut self.inherited_dependencies,
-                keep_alive: self.keep_alive.clone(),
-                unmount_hooks: self.unmount_hooks.clone(),
-                frame_wake: super::element_owner::FrameWake::AfterPass,
-                external_inbox: &self.external_inbox,
-                external_request_frame: self.on_build_scheduled.as_ref(),
-                build_view: None,
-                child_manager_registry: &self.child_manager_registry,
-                layout_builder_registry: &self.layout_builder_registry,
-                focus_manager: &self.focus_manager,
-                lifecycle_handle: &self.lifecycle_handle,
-                window_handle: &self.window_handle,
-                async_driver: &self.async_driver,
-                post_frame_handle: &self.post_frame_handle,
-                capabilities: &self.capabilities,
-                flush_registry: &self.flush_registry,
-                interaction_dispatch: &self.interaction_dispatch,
-                collects_semantics: self.collects_semantics,
-                hit_test_handle: &self.hit_test_handle,
-                global_key_scope: &mut self.global_key_scope,
-                owner_tag: self.owner_tag,
-                tree_observer: &mut self.tree_observer,
-                recovered_panics: &mut self.recovered_panics,
-                build_recovered: None,
-                reactive: &self.reactive,
-                lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
-            };
-
-            let did_work = manager_rc.borrow_mut().service(
-                requested,
-                retain_first,
-                retain_last,
-                tree,
-                &mut inline_owner,
-                pipeline,
-            );
-            if did_work {
-                any_service_did_work = true;
-            }
-        } // `inline_owner` drops here — all `&mut` borrows released.
-
-        // 5. Second build_scope: expand newly-built children's subtrees.
-        //    `SparseChildren::ensure` mounts the top-level lazy-child node and
-        //    pushes it onto the dirty heap (F1), but the child's own sub-views
-        //    (e.g. a Padding wrapping a Text) need a dedicated build pass.
-        //    `build_scope_impl`, not `build_scope`: this can run more than
-        //    once per frame (once per fixpoint pass), and must NOT reset the
-        //    mid-drain absorb budget each time — that reset is exactly once
-        //    per frame, in `build_scope` itself.
-        self.build_scope_impl(tree);
-
-        // 6. Mark each serviced sliver as needing re-layout ONLY if service
-        //    did real work (built or evicted children). When all service calls
-        //    returned `false`, the list has settled: the viewport, band, and
-        //    built-child set are all unchanged. Skipping `mark_needs_layout`
-        //    keeps the sliver clean so `flush_layout` skips it, `perform_layout`
-        //    does not run, no new `emit_retain_band` fires, and
-        //    `service_child_requests` early-returns on the next frame.
-        //    This breaks the unconditional dirty-loop that prevented quiescence.
-        if any_service_did_work {
-            pipeline.with_mut(|guard| {
-                for (sliver_id, _) in &manager_rcs {
-                    guard.mark_needs_layout(*sliver_id);
-                }
-            });
-        } else {
-            tracing::debug!(
-                "service_child_requests: no work done, skipping mark_needs_layout \
-                 (frame quiesces)"
-            );
-        }
-
-        // 7. Finalize: unmount evicted children (pushed to inactive by
-        //    `retain_band` → `evict` → `tree.remove_subtree`) and the lazy
-        //    children pushed by `on_unmount` (F3).
-        finalize(self, tree);
-        any_service_did_work
-    }
-
-    // ========================================================================
-    // Inactive Elements (for finalization)
-    // ========================================================================
-
-    /// Add an element to the inactive list.
-    ///
-    /// Called when an element is deactivated (e.g., its parent rebuilds without
-    /// it). The element will be unmounted in `finalize_tree()`.
-    pub fn add_to_inactive(&mut self, id: ElementId, depth: usize) {
-        self.inactive_elements.push(InactiveElement::new(id, depth));
-    }
-
-    /// Remove an element from the inactive list and return its relocation token.
-    ///
-    /// Called when an element is reactivated (e.g., moved via GlobalKey).
-    /// A returned token must be reattached or released for finalization.
-    #[must_use]
-    pub fn remove_from_inactive(&mut self, id: ElementId) -> Option<DetachedRenderSubtrees> {
-        let index = self
-            .inactive_elements
-            .iter()
-            .position(|inactive| inactive.id() == id)?;
-        self.inactive_elements
-            .remove(index)
-            .take_detached_render_subtrees()
-    }
-
-    /// Check if there are inactive elements pending unmount.
-    pub fn has_inactive_elements(&self) -> bool {
-        !self.inactive_elements.is_empty()
-    }
-
-    /// Complete the element build pass by unmounting inactive elements.
-    ///
-    /// This is called by `WidgetsBinding.draw_frame()` after `build_scope()`
-    /// and `super.draw_frame()` (layout/paint).
-    ///
-    /// Elements are unmounted in reverse depth order (deepest first) to ensure
-    /// children are unmounted before parents.
-    pub fn finalize_tree(&mut self, tree: &mut ElementTree) {
-        self.unmount_inactive_elements(tree);
-        self.verify_global_key_reservations(tree);
-    }
-
-    /// Verify this frame's `GlobalKey` declarations, then clear them.
-    ///
-    /// Runs at the very end of [`Self::finalize_tree`], AFTER the inactive
-    /// sweep, so a key whose only remaining claimant was unmounted this
-    /// frame is not reported.
-    ///
-    /// Reports are appended to the diagnostic drain rather than raised, and
-    /// each one has already had its losing parent's dangling child edge
-    /// repaired — see [`super::global_key_reservations`].
-    fn verify_global_key_reservations(&mut self, tree: &mut ElementTree) {
-        if self.global_key_reservations.is_empty() {
-            return;
-        }
-        let reports = global_key_reservations::verify(&mut self.global_key_reservations, tree);
-        self.global_key_diagnostics.extend(reports);
-    }
-
-    /// The inactive-element unmount sweep — [`Self::finalize_tree`]'s first
-    /// half, split out so the reservation verification after it runs on
-    /// every frame, including the frames with nothing to unmount.
-    fn unmount_inactive_elements(&mut self, tree: &mut ElementTree) {
-        if self.inactive_elements.is_empty() {
-            return;
-        }
-
-        tracing::debug!(
-            count = self.inactive_elements.len(),
-            "Finalizing tree - unmounting inactive elements"
-        );
-
-        // Sort by depth (deepest first for unmounting)
-        self.inactive_elements
-            .sort_by_key(|entry| std::cmp::Reverse(entry.depth()));
-
-        let mut elements_to_unmount = Vec::new();
-        for inactive in &self.inactive_elements {
-            self.collect_elements_to_unmount(tree, inactive.id(), &mut elements_to_unmount);
-        }
-        tree.preflight_unmount(&elements_to_unmount);
-
-        // Take ownership of inactive elements to avoid borrow conflicts.
-        // `mem::take` snapshots the queue before the unmount sweep so
-        // mid-iteration `ElementOwner::push_inactive` calls (e.g. children
-        // deactivating as a parent unmounts) land in the *next* frame's
-        // queue rather than re-entering this drain — same snapshot-then-fire
-        // discipline as `ChangeNotifier::notify_listeners` (foundation
-        // notifier.rs:158-163).
-        let inactive_elements: Vec<_> = std::mem::take(&mut self.inactive_elements);
-        let mut inactive_elements = inactive_elements;
-
-        // Consume every linear relocation token before ordinary unmount begins.
-        // This authorizes finalization without deleting render nodes or firing
-        // callbacks; the existing deepest-first unmount below remains the sole
-        // lifecycle and render-disposal path.
-        for inactive in &mut inactive_elements {
-            let Some(token) = inactive.take_detached_render_subtrees() else {
-                continue;
-            };
-            let pipeline = tree
-                .get(inactive.id())
-                .and_then(|node| node.element().pipeline_owner())
-                .expect(
-                    "BUG: an inactive element with a detached render token must retain its pipeline owner",
-                );
-            pipeline.with_mut(|pipeline_owner| {
-                pipeline_owner
-                    .release_detached_render_subtrees_for_finalization(token)
-                    .expect(
-                        "BUG: an inactive element's detached render token must remain valid until finalization",
-                    );
-            });
-        }
-
-        tree.retire_sparse_children(&elements_to_unmount, &self.child_manager_registry);
-
-        // Build the split-borrow handle once for the entire unmount sweep.
-        // The handle survives `tree.get_mut` borrows because it points into
-        // disjoint `BuildOwner` fields. No live build runs here, so the
-        // build-time tree handle is absent.
-        let partitioned_dirty_count = self.partitioned_dirty_count();
-        let mut element_owner = super::ElementOwner {
-            global_keys: &mut self.global_keys,
-            global_key_reservations: &mut self.global_key_reservations,
-            dirty_elements: &mut self.dirty_elements,
-            partitioned_dirty_count,
-            dirty_reasons: &mut self.dirty_reasons,
-            inactive_elements: &mut self.inactive_elements,
-            pending_dependency_changes: &mut self.pending_dependency_changes,
-            inherited_dependencies: &mut self.inherited_dependencies,
-            keep_alive: self.keep_alive.clone(),
-            unmount_hooks: self.unmount_hooks.clone(),
-            frame_wake: super::element_owner::FrameWake::Now(self.on_build_scheduled.as_deref()),
-            external_inbox: &self.external_inbox,
-            external_request_frame: self.on_build_scheduled.as_ref(),
-            build_view: None,
-            child_manager_registry: &self.child_manager_registry,
-            layout_builder_registry: &self.layout_builder_registry,
-            focus_manager: &self.focus_manager,
-            lifecycle_handle: &self.lifecycle_handle,
-            window_handle: &self.window_handle,
-            async_driver: &self.async_driver,
-            post_frame_handle: &self.post_frame_handle,
-            capabilities: &self.capabilities,
-            flush_registry: &self.flush_registry,
-            interaction_dispatch: &self.interaction_dispatch,
-            collects_semantics: self.collects_semantics,
-            hit_test_handle: &self.hit_test_handle,
-            global_key_scope: &mut self.global_key_scope,
-            owner_tag: self.owner_tag,
-            tree_observer: &mut self.tree_observer,
-            recovered_panics: &mut self.recovered_panics,
-            build_recovered: None,
-            reactive: &self.reactive,
-            lifecycle_panic_handoff: &self.lifecycle_panic_handoff,
-        };
-
-        // Finalize all elements (deepest first - already sorted by collect order).
-        //
-        // `remove_finalized` bypasses the soft-remove
-        // path that `remove` takes for keyed elements. At this point
-        // we've already given mid-frame state migration its chance —
-        // anything still in the inactive queue is genuinely going away,
-        // so we slab-remove + unregister the GlobalKey directly.
-        for id in elements_to_unmount.iter().rev() {
-            tree.remove_finalized(*id, &mut element_owner);
-        }
-
-        tracing::debug!("Inactive-element sweep complete");
-    }
-
-    /// Iteratively collect all element IDs to unmount, parent before
-    /// children (pre-order DFS, children in
-    /// [`ElementNode::child_ids`](crate::tree::ElementNode) slot order).
-    ///
-    /// E3: children come from the slab-resident `child_ids` list — the
-    /// single element graph. `finalize_tree` reverses the collected order
-    /// so `remove_finalized` runs deepest-first; pre-order guarantees a
-    /// parent always precedes every one of its descendants, so the
-    /// reversed sweep never frees a parent slot before its children.
-    ///
-    /// The walk is driven by an explicit `Vec` work-stack instead of
-    /// recursion: the element tree nests several times deeper than the
-    /// render tree, and a recursive shape overflowed the 1 MiB Windows
-    /// main-thread stack on deep chains (the failure class PR #177
-    /// closed for the render-tree walks). To preserve the recursive
-    /// shape's visit order on a LIFO stack, children are pushed in
-    /// reverse slot order so the leftmost child is popped next — same
-    /// discipline as `WidgetsBinding::collect_all_elements`.
-    ///
-    /// Complexity: O(n) time over the n reachable nodes, average and
-    /// worst case (each node pushed/popped exactly once); the work-stack
-    /// peaks at O(n) heap in the degenerate all-siblings case and O(tree
-    /// height) for a chain. Call-stack usage is constant.
-    fn collect_elements_to_unmount(
-        &self,
-        tree: &ElementTree,
-        id: ElementId,
-        result: &mut Vec<ElementId>,
-    ) {
-        let mut stack: Vec<ElementId> = vec![id];
-        while let Some(id) = stack.pop() {
-            result.push(id);
-            // The `tree.get` shared borrow ends with the statement; the
-            // extend writes only into the local stack, never the slab.
-            stack.extend(
-                tree.owned_children(id, &self.child_manager_registry)
-                    .into_iter()
-                    .rev(),
-            );
-        }
-    }
-
-    /// Lock the build scope (for debugging).
-    ///
-    /// Returns a guard that unlocks when dropped.
-    #[cfg(debug_assertions)]
-    pub fn lock_build_scope(&mut self) -> BuildScopeGuard<'_> {
-        assert!(!self.building, "Already in build scope");
-        self.building = true;
-        BuildScopeGuard { owner: self }
-    }
-
-    // ========================================================================
-    // GlobalKey Registry
-    // ========================================================================
-
-    /// Register a GlobalKey for an element.
-    ///
-    /// GlobalKeys allow elements to be found and reparented across the tree.
-    /// If a [`GlobalKeyScope`] is installed (or, absent that, this owner's
-    /// lazily self-owned private one — see [`Self::set_global_key_scope`]),
-    /// this first claims `key` in that scope: a different owner already
-    /// holding the same hash there is a cross-owner collision, traced then
-    /// panicked (ADR-0043) rather than silently recorded here.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `key` is already claimed, in the installed
-    /// [`GlobalKeyScope`], by a *different* owner (see
-    /// [`GlobalKeyScope`]'s contract). Re-registering a key this same owner
-    /// already holds never panics. This panic is fatal, not recoverable: it
-    /// fires from a post-mount registration site, the same timing the
-    /// pre-existing intra-tree duplicate-key panic already has, so this
-    /// owner's tree is left with an incomplete mount. A host must not catch
-    /// it and keep using this owner's tree.
-    pub fn register_global_key(&mut self, key: &dyn ViewKey, element: ElementId) {
-        global_key_scope::claim_and_register(
-            &mut self.global_key_scope,
-            self.owner_tag,
-            key,
-            element,
-            &mut self.global_keys,
-        );
-    }
-
-    /// Unregister a GlobalKey.
-    ///
-    /// Also releases this owner's scope claim on `key`, if one is
-    /// installed — tag-checked, so this is a no-op against a claim a
-    /// different owner has since taken (ADR-0043).
-    pub fn unregister_global_key(&mut self, key: &dyn ViewKey) {
-        global_key_scope::release_and_unregister(
-            self.global_key_scope.as_ref(),
-            self.owner_tag,
-            key,
-            &mut self.global_keys,
-        );
-    }
-
-    /// Look up an element by GlobalKey.
-    ///
-    /// Resolution is by key identity — a different key that merely hashes
-    /// alike never answers this lookup.
-    pub fn element_for_global_key(&self, key: &dyn ViewKey) -> Option<ElementId> {
-        self.global_keys.get(key)
-    }
-
-    /// Atomically remove and return the element registered under
-    /// `key` for a reparent operation.
-    ///
-    /// Closes the race window that a
-    /// two-call sequence (`element_for_global_key` followed by
-    /// `unregister_global_key`) would leave open if any other code
-    /// path mutates the registry between the two calls — a real
-    /// risk in Phase 2 testing infrastructure where multiple
-    /// parents may rebuild concurrently in test fixtures.
-    ///
-    /// The caller (the keyed reconciler's middle-walk) consults
-    /// this method on an unmatched-by-position keyed view whose
-    /// `is_global_key()` is true; on `Some`, it claims the element
-    /// for the new parent. Returning `Some` AND removing the entry
-    /// in one operation guarantees a second concurrent claim of
-    /// the same key sees `None`, not a stale id.
-    ///
-    /// Re-registering at the new parent is the caller's
-    /// responsibility — typically through the standard
-    /// [`Self::register_global_key`] path after the element is
-    /// re-attached to its new slot.
-    pub fn take_global_key_for_reparent(&mut self, key: &dyn ViewKey) -> Option<ElementId> {
-        self.global_keys.remove(key)
-    }
-
-    /// Drain the duplicate-`GlobalKey` reports the frame boundaries since
-    /// the last drain produced.
-    ///
-    /// A duplicate `GlobalKey` is caller-controlled input, so
-    /// [`Self::finalize_tree`] reports it as data rather than panicking:
-    /// the offending frame still completes, with the losing parent's
-    /// dangling child edge already repaired. Hosts that want a hard failure
-    /// can drain this and escalate; tests assert on it directly. The verdict
-    /// is reached in every build profile.
-    pub fn take_global_key_diagnostics(&mut self) -> Vec<DuplicateGlobalKey> {
-        std::mem::take(&mut self.global_key_diagnostics)
-    }
-
-    /// The duplicate-`GlobalKey` reports currently pending, without
-    /// draining them.
-    pub fn global_key_diagnostics(&self) -> &[DuplicateGlobalKey] {
-        &self.global_key_diagnostics
-    }
-
     /// Drain this frame's recovered panics — every lifecycle-hook panic a
     /// per-child containment seam caught and recovered from since the last
     /// drain.
@@ -2931,7 +609,7 @@ impl BuildOwner {
     /// # Examples
     ///
     /// ```
-    /// use flui_view::BuildOwner;
+    /// use flui_view::__runtime::BuildOwner;
     ///
     /// let mut owner = BuildOwner::new();
     /// let recovered = owner.take_recovered_panics();
@@ -2951,16 +629,6 @@ impl BuildOwner {
         let discarded = self.recovered_panics.len();
         self.recovered_panics.clear();
         discarded
-    }
-
-    /// Number of `GlobalKey`s currently registered.
-    ///
-    /// Test surface — production code reads
-    /// [`BuildOwner::element_for_global_key`] on a single key rather
-    /// than scanning size. Tests use this to confirm the registry
-    /// stays at the expected size across mount / unmount cycles.
-    pub fn global_keys_len(&self) -> usize {
-        self.global_keys.len()
     }
 
     /// Check if we're currently building.
@@ -3012,20 +680,6 @@ impl std::fmt::Debug for BuildOwner {
     }
 }
 
-/// Guard for build scope (debug only).
-#[cfg(debug_assertions)]
-#[derive(Debug)]
-pub struct BuildScopeGuard<'a> {
-    owner: &'a mut BuildOwner,
-}
-
-#[cfg(debug_assertions)]
-impl Drop for BuildScopeGuard<'_> {
-    fn drop(&mut self) {
-        self.owner.building = false;
-    }
-}
-
 /// `detached()` runs third-party observer code from UI runtime setup/teardown —
 /// the same containment that guards event emission applies here: a panic is
 /// caught and logged, never unwound through the owner.
@@ -3053,6 +707,7 @@ fn raise(caught: FirstPanic) -> ! {
 
 #[cfg(test)]
 mod tests {
+    use flui_foundation::RenderId;
     use std::any::TypeId;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -3066,7 +721,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        BoxedView, ErrorView, LifecycleHook, RecoveredAt, View, ViewExt, element::LayoutBuilder,
+        BoxedView, ErrorView, View, ViewExt,
+        element::LayoutBuilder,
+        owner::{LifecycleHook, RecoveredAt},
         tree::ElementTree,
     };
 
@@ -3301,7 +958,12 @@ mod tests {
         parent: ElementId,
         slot: usize,
     ) -> ElementId {
-        tree.insert(&TestView, parent, slot, &mut owner.element_owner_mut())
+        tree.insert(
+            &TestView.boxed(),
+            parent,
+            slot,
+            &mut owner.element_owner_mut(),
+        )
     }
 
     fn settle_initial_builds(tree: &mut ElementTree, owner: &mut BuildOwner) {
@@ -3311,7 +973,7 @@ mod tests {
     fn nested_scope_quarantines_work_until_its_own_drain() {
         let mut owner = BuildOwner::new();
         let mut tree = ElementTree::new();
-        let root = tree.mount_root(&TestView, &mut owner.element_owner_mut());
+        let root = tree.mount_root(&TestView.boxed(), &mut owner.element_owner_mut());
         settle_initial_builds(&mut tree, &mut owner);
         let outer = insert_child(&mut tree, &mut owner, root, 0);
         settle_initial_builds(&mut tree, &mut owner);
@@ -3421,7 +1083,7 @@ mod tests {
             true
         }
 
-        fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+        fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
             for child in &self.children {
                 visitor(child);
             }
@@ -3441,7 +1103,7 @@ mod tests {
             flui_rendering::TextContextHandle::standalone(),
         ));
         let root = tree.mount_root_with_pipeline_owner(
-            &TestView,
+            &TestView.boxed(),
             Some(pipeline),
             &mut owner.element_owner_mut(),
         );
@@ -3459,7 +1121,12 @@ mod tests {
             build_calls: Arc::clone(&build_calls),
             dependency_calls: Arc::clone(&dependency_calls),
         };
-        let moved = tree.insert(&keyed, scope_a, 0, &mut owner.element_owner_mut());
+        let moved = tree.insert(
+            &keyed.clone().boxed(),
+            scope_a,
+            0,
+            &mut owner.element_owner_mut(),
+        );
         // Its first build creates the state the dependency change reaches.
         owner.schedule_build_for(moved, 2, RebuildReason::InitialMount);
         owner.build_scope_target(&mut tree, BuildScopeTarget::LayoutBuilder(scope_a));
@@ -3473,7 +1140,12 @@ mod tests {
         assert!(owner.pending_rebuild_reasons(moved).is_some());
 
         tree.remove(moved, &mut owner.element_owner_mut());
-        let migrated = tree.insert(&keyed, scope_b, 0, &mut owner.element_owner_mut());
+        let migrated = tree.insert(
+            &keyed.clone().boxed(),
+            scope_b,
+            0,
+            &mut owner.element_owner_mut(),
+        );
         assert_eq!(migrated, moved, "GlobalKey reparent preserves identity");
         assert_eq!(
             tree.get(moved).and_then(crate::tree::ElementNode::parent),
@@ -3500,7 +1172,7 @@ mod tests {
         assert!(owner.pending_rebuild_reasons(moved).is_some());
 
         tree.remove(moved, &mut owner.element_owner_mut());
-        let migrated_global = tree.insert(&keyed, root, 2, &mut owner.element_owner_mut());
+        let migrated_global = tree.insert(&keyed.boxed(), root, 2, &mut owner.element_owner_mut());
         assert_eq!(migrated_global, moved);
         assert_eq!(
             tree.get(moved).and_then(crate::tree::ElementNode::parent),
@@ -3548,7 +1220,7 @@ mod tests {
         let mut tree_a = ElementTree::new();
         let mut owner_a = BuildOwner::new();
         owner_a.set_global_key_scope(scope.clone());
-        let root_a = tree_a.mount_root(&keyed, &mut owner_a.element_owner_mut());
+        let root_a = tree_a.mount_root(&keyed.clone().boxed(), &mut owner_a.element_owner_mut());
         assert_eq!(tree_a.len(), 1);
         let tag_a = owner_a.owner_tag();
 
@@ -3558,7 +1230,7 @@ mod tests {
         let tag_b = owner_b.owner_tag();
 
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tree_b.mount_root(&keyed, &mut owner_b.element_owner_mut());
+            tree_b.mount_root(&keyed.clone().boxed(), &mut owner_b.element_owner_mut());
         }));
         let payload = outcome.expect_err("b must not silently alias a's live GlobalKey");
         let message = panic_message(&*payload);
@@ -3593,8 +1265,13 @@ mod tests {
         let mut tree_a = ElementTree::new();
         let mut owner_a = BuildOwner::new();
         owner_a.set_global_key_scope(scope.clone());
-        let root_a = tree_a.mount_root(&TestView, &mut owner_a.element_owner_mut());
-        let child_a = tree_a.insert(&keyed, root_a, 0, &mut owner_a.element_owner_mut());
+        let root_a = tree_a.mount_root(&TestView.boxed(), &mut owner_a.element_owner_mut());
+        let child_a = tree_a.insert(
+            &keyed.clone().boxed(),
+            root_a,
+            0,
+            &mut owner_a.element_owner_mut(),
+        );
 
         // Full release: finalize runs inside a's own segment, exactly the
         // discipline the scope's claim-lifetime contract assumes.
@@ -3611,13 +1288,13 @@ mod tests {
         owner_b.set_global_key_scope(scope);
 
         assert_eq!(owner_b.element_for_global_key(&key), None);
-        let root_b = tree_b.mount_root(&keyed, &mut owner_b.element_owner_mut());
+        let root_b = tree_b.mount_root(&keyed.boxed(), &mut owner_b.element_owner_mut());
         assert_eq!(tree_b.len(), 1);
         assert_eq!(owner_b.element_for_global_key(&key), Some(root_b));
     }
 
     // ========================================================================
-    // Issue #1180: mid-drain external-build absorption
+    // Mid-drain external-build absorption
     // ========================================================================
 
     /// A render-family leaf, identical to `TestView` in every other respect,
@@ -3627,7 +1304,7 @@ mod tests {
     /// skip, a parent rebuilding and re-declaring the same leaf every time
     /// would reschedule that hidden leaf too (and re-fire `on_build_scheduled`)
     /// on every one of the PARENT's own rebuilds — noise unrelated to
-    /// whatever a #1180 test is actually driving. Scoped to this dedicated
+    /// whatever an absorption test is actually driving. Scoped to this dedicated
     /// type, rather than added to `TestView` itself, because `TestView` is
     /// also the leaf ~50 pre-existing tests elsewhere in this module mount:
     /// putting the override there would silently change what code path those
@@ -3806,7 +1483,8 @@ mod tests {
         let root = tree.mount_root(
             &MidDrainRootPanic {
                 trigger_panic: Arc::clone(&trigger_panic),
-            },
+            }
+            .boxed(),
             &mut owner.element_owner_mut(),
         );
         // The state `did_change_dependencies` reaches is created by a first build.
@@ -3867,7 +1545,8 @@ mod tests {
                 build_calls: Arc::clone(&build_calls),
                 should_reschedule: Arc::clone(&should_reschedule),
                 handle_slot: Arc::clone(&handle_slot),
-            },
+            }
+            .boxed(),
             &mut owner.element_owner_mut(),
         );
         owner.schedule_build_for(root, 0, RebuildReason::InitialMount);

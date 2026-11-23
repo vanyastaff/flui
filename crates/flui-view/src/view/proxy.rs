@@ -3,7 +3,7 @@
 //! ProxyViews are Views that have exactly one child and typically add
 //! some behavior or configuration without creating a RenderObject.
 
-use super::view::View;
+use super::into_view::BoxedView;
 
 /// A View that wraps a single child without creating a RenderObject.
 ///
@@ -17,23 +17,23 @@ use super::view::View;
 /// # Example
 ///
 /// ```rust,ignore
-/// use flui_view::{ProxyView, BuildContext, View};
+/// use flui_view::{BoxedView, ProxyView};
 /// use std::rc::Rc;
 ///
 /// struct GestureDetector {
 ///     on_tap: Option<Rc<dyn Fn()>>,
-///     child: Box<dyn View>,
+///     child: BoxedView,
 /// }
 ///
 /// impl ProxyView for GestureDetector {
-///     fn child(&self) -> &dyn View {
-///         &*self.child
+///     fn child(&self) -> &BoxedView {
+///         &self.child
 ///     }
 /// }
 /// ```
 pub trait ProxyView: Clone + 'static + Sized {
     /// Get the child View.
-    fn child(&self) -> &dyn View;
+    fn child(&self) -> &BoxedView;
 }
 
 /// Implement View for a ProxyView type.
@@ -42,7 +42,7 @@ pub trait ProxyView: Clone + 'static + Sized {
 ///
 /// ```rust,ignore
 /// impl ProxyView for MyGestureDetector {
-///     fn child(&self) -> &dyn View { &*self.child }
+///     fn child(&self) -> &BoxedView { &self.child }
 /// }
 /// impl_proxy_view!(MyGestureDetector);
 /// ```

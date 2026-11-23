@@ -82,7 +82,7 @@ mod gpu_tests {
     use flui_painting::paint::Paint;
     use flui_painting::styling::Color;
 
-    use crate::{painter::WgpuPainter, render_target::RenderTarget};
+    use crate::{frame::render_target::RenderTarget, painter::WgpuPainter};
 
     use super::{analytic_coverage, inside_rotated_rect};
 

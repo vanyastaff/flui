@@ -8,16 +8,16 @@
 //!   conditional list, or a list past the tuple path's 16
 //!   children).
 //!
-//! Per-child `dyn`-dispatch cost is the same as the tuple path's
-//! `&dyn View` callback boundary — both pay one `dyn`-call per
-//! child. The tuple path's monomorphism advantage
-//! is per-*position* (inlined callback bodies, no nested arity
+//! A `Vec<BoxedView>` hands each child on shared (cloning a `BoxedView`
+//! shares its allocation); a `Vec` of another view type erases each child
+//! into a `BoxedView` of its own clone, as the tuple path does. The tuple
+//! path's monomorphism advantage is per-*position* (no nested arity
 //! discriminant), not per-child.
 
 use super::ViewSeq;
 use crate::view::{BoxedView, View, ViewExt};
 
-impl<V: View> ViewSeq for Vec<V> {
+impl<V: View + Clone> ViewSeq for Vec<V> {
     #[inline]
     fn len(&self) -> usize {
         Vec::len(self)
@@ -29,9 +29,9 @@ impl<V: View> ViewSeq for Vec<V> {
     }
 
     #[inline]
-    fn for_each<F: FnMut(usize, &dyn View)>(&self, mut f: F) {
+    fn for_each<F: FnMut(usize, &BoxedView)>(&self, mut f: F) {
         for (i, v) in self.iter().enumerate() {
-            f(i, v);
+            f(i, &BoxedView::new(v.clone()));
         }
     }
 
@@ -43,9 +43,8 @@ impl<V: View> ViewSeq for Vec<V> {
 
 // `Vec<BoxedView>` is covered by the `impl<V: View> ViewSeq for Vec<V>`
 // blanket above (`BoxedView: View`). No standalone impl is needed —
-// FR-015 lists `Vec<BoxedView>` explicitly because it is the
-// canonical heterogeneous-dynamic shape (every catalog scrollable
-// widget sits on it), but the trait machinery treats it as a
+// `Vec<BoxedView>` is the canonical heterogeneous-dynamic shape (every
+// catalog scrollable widget sits on it), but the trait machinery treats it as a
 // special case of the blanket. The `into_boxed_vec` path is the
 // less-efficient general path (one round-trip per element via
 // `ViewExt::boxed()` returning a fresh `BoxedView` per item) rather
@@ -55,7 +54,7 @@ impl<V: View> ViewSeq for Vec<V> {
 // without breaking authoring code.
 
 /// A fixed list of children of one type: `Column::new([a, b, c])`.
-impl<V: View, const N: usize> ViewSeq for [V; N] {
+impl<V: View + Clone, const N: usize> ViewSeq for [V; N] {
     #[inline]
     fn len(&self) -> usize {
         N
@@ -67,9 +66,9 @@ impl<V: View, const N: usize> ViewSeq for [V; N] {
     }
 
     #[inline]
-    fn for_each<F: FnMut(usize, &dyn View)>(&self, mut f: F) {
+    fn for_each<F: FnMut(usize, &BoxedView)>(&self, mut f: F) {
         for (i, v) in self.iter().enumerate() {
-            f(i, v);
+            f(i, &BoxedView::new(v.clone()));
         }
     }
 

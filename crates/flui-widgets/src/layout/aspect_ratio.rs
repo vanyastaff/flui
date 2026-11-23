@@ -1,8 +1,9 @@
 //! [`AspectRatio`] — sizes its child to a given width:height ratio.
 
+use flui_foundation::CreationSite;
 use flui_objects::{AspectRatioFactor, RenderAspectRatio};
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{Child, CreationSite, IntoView, RenderView, impl_render_view};
+use flui_view::{Child, IntoView, RenderView, impl_render_view};
 
 /// Sizes its child to a given `width / height` aspect ratio, fitting within the
 /// incoming constraints.

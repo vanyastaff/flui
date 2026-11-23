@@ -22,18 +22,18 @@
 //! technically sound, but `TextField`'s meaning then depended on whether the
 //! `material` feature happened to be on, which is a feature-additivity
 //! violation (enabling a Cargo feature is supposed to only ADD symbols, not
-//! change what an existing name resolves to). See `ARCHITECTURE.md`'s
-//! `## Mapping decisions` entry for the record of both the original
-//! shadowing decision and this rename that superseded it.
+//! change what an existing name resolves to). See `ARCHITECTURE.md`,
+//! "`RawTextField` and `RawTextFormField`, not `TextField` and
+//! `TextFormField`".
 
 use std::rc::Rc;
 
+use flui_foundation::CreationSite;
 use flui_foundation::geometry::EdgeInsets;
 use flui_interaction::focus::FocusNode;
 use flui_painting::styling::Color;
 use flui_painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration};
 use flui_platform::text::store::TextInputOptions;
-use flui_view::CreationSite;
 use flui_view::prelude::*;
 
 use crate::interaction::Listener;

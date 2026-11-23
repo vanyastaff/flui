@@ -5,9 +5,12 @@
 // which has no safe wrapper: the workspace lint `unsafe_code = "warn"` is
 // opted out here, at the module boundary, rather than for the whole crate (see
 // `lib.rs`).
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "subclassing `NSObject` and handing the subclass to the session has no safe wrapper"
+)]
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use flui_platform::http::{
@@ -201,10 +204,10 @@ impl Abort for Cancel {
 
 /// The tasks a session's delegate routes events to, by task identifier.
 #[derive(Default)]
-struct Tasks(Mutex<HashMap<usize, Arc<Transfer>>>);
+struct Tasks(Mutex<FxHashMap<usize, Arc<Transfer>>>);
 
 impl Tasks {
-    fn lock(&self) -> MutexGuard<'_, HashMap<usize, Arc<Transfer>>> {
+    fn lock(&self) -> MutexGuard<'_, FxHashMap<usize, Arc<Transfer>>> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 

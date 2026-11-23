@@ -15,7 +15,7 @@
 use std::cell::Cell;
 use std::rc::{Rc, Weak};
 
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::FirstPanic;
 use flui_interaction::gesture::{
     GestureArena, GestureArenaMember, GestureContest, GestureDeadlineRegistration,
     GestureDeadlineUpdate, ScrollLatchEnd,
@@ -106,9 +106,9 @@ impl GestureArenaMember for Lapse {
         let Some(sequence) = self.sequence.upgrade() else {
             return;
         };
-        let mut recovery = PanicRecovery::new();
-        sequence.lapse(&mut recovery);
-        recovery.finish();
+        let mut failure = FirstPanic::new();
+        sequence.lapse(&mut failure);
+        failure.resume();
     }
 }
 
@@ -118,11 +118,11 @@ pub(super) fn follow_latch(
     sequence: &Rc<ScrollSequence>,
     arena: &GestureArena,
     end: ScrollLatchEnd,
-    recovery: &mut PanicRecovery,
+    failure: &mut FirstPanic,
 ) {
     match end {
         ScrollLatchEnd::IdleAt(due) => sequence.lapse_at(arena, due),
-        ScrollLatchEnd::WithThisPacket => sequence.lapse(recovery),
+        ScrollLatchEnd::WithThisPacket => sequence.lapse(failure),
         // A future kind of end the channel does not know waits for the
         // next sequence.
         _ => {}

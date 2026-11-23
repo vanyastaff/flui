@@ -179,7 +179,7 @@ private ancestor check behind `add_child`), and `RenderTree::insert`.
 `flui-localizations` (on its own in ADR-0041's layer table) was removed on 2026-09-26. It held no
 translated strings: every string forwarded to `DefaultWidgetsLocalizations`, so nothing went to
 the packages. Its RTL table and `GlobalWidgetsLocalizationsDelegate` moved to
-`flui_widgets::localization`, the design systems' exemption set became `flui-app` and the
+`flui-widgets`' `localization` module, the design systems' exemption set became `flui-app` and the
 facade ([ADR-0028](ADR-0028-design-system-decoupling-contract.md)), and the
 facade has no `localizations` feature. ADR-0041's "Localization
 direction is locked" paragraph has nothing left to govern.

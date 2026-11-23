@@ -6,17 +6,17 @@ use flui_painting::paint::{BlendMode, ImageFilter, ImageSampling, ImageTransform
 
 use super::WgpuPainter;
 use crate::{
-    clip_chain::ClipOp,
-    clip_geometry::{ValidatedAffine, ValidatedClip},
-    command_ir::{BackdropEffect, BackdropOp, DrawItem, DrawSegment, RecordError},
-    device_domain::PreparedCost,
+    device::domain::PreparedCost,
     error::{EngineError, EngineResult, GeometryError},
-    pipeline_set::PipelineSet,
-    render_target::RenderTarget,
+    filters::resample::{ResampleFilter, mapped_bounds},
+    frame::render_target::RenderTarget,
+    pipelines::set::PipelineSet,
+    record::clip_chain::ClipOp,
+    record::clip_geometry::{ValidatedAffine, ValidatedClip},
+    record::command_ir::{BackdropEffect, BackdropOp, DrawItem, DrawSegment, RecordError},
     replay::GpuReplay,
-    resample::{ResampleFilter, mapped_bounds},
     resources::GpuResources,
-    texture_pool::PooledTexture,
+    resources::texture_pool::PooledTexture,
 };
 
 impl WgpuPainter {
@@ -190,7 +190,7 @@ fn resample_effect(
     let filter = ResampleFilter::of(sampling).ok_or(EngineError::UnsupportedBackdropFilter {
         reason: "a backdrop transform has no lowering for this sampling",
     })?;
-    let map = crate::resample::device_map(transform, matrix)?;
+    let map = crate::filters::resample::device_map(transform, matrix)?;
     Ok(BackdropEffect::Resample { map, filter })
 }
 
@@ -200,7 +200,10 @@ fn axis_roundoff(off_axis: f64, on_axis: f64) -> bool {
 }
 
 impl GpuReplay {
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "device, queue, pipelines, resources and encoder are independent borrows of the frame's GPU state that the caller holds as separate locals"
+    )]
     pub(crate) fn replay_backdrop(
         &mut self,
         op: BackdropOp,
@@ -531,7 +534,7 @@ impl GpuReplay {
         // shows it texel for texel over the output.
         let (filtered, origin, size) = match op.effect {
             BackdropEffect::Blur(sigma) => (
-                crate::blur::apply_blur(
+                crate::filters::blur::apply_blur(
                     sigma[0],
                     sigma[1],
                     &source,
@@ -558,7 +561,7 @@ impl GpuReplay {
                     * map
                     * glam::DAffine2::from_translation(out_origin);
                 (
-                    crate::resample::apply_resample(
+                    crate::filters::resample::apply_resample(
                         texel_map,
                         filter.filter_mode(),
                         &source,

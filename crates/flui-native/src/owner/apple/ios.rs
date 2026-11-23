@@ -39,15 +39,17 @@
 //! while the scene is suspended or detached. Process owner signals remain
 //! independent; no OS background execution entitlement is implied.
 
+mod lifecycle_generation;
 mod scene;
 mod scene_error;
 
 pub(crate) use super::NativeOwner;
+pub(crate) use lifecycle_generation::{LifecycleGeneration, LifecycleGenerations};
 pub use scene::{IOSSceneAttachmentId, IOSSceneSessionId};
 pub(crate) use scene::{SceneConsumer, SceneInstallation};
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -64,6 +66,7 @@ use objc2_ui_kit::{
     UISceneActivationState, UISceneConfiguration, UISceneConnectionOptions, UISceneDelegate,
     UISceneSession, UIWindowScene,
 };
+use rustc_hash::FxHashSet;
 
 use crate::error::PlatformError;
 use crate::host;
@@ -307,7 +310,7 @@ pub(crate) trait SceneWindow: HostWindow {
     /// The window's lifecycle generation, which moves on at every background,
     /// foreground and detach: a step that waited compares it to learn whether
     /// the window moved on meanwhile.
-    fn resource_generation(&self) -> u64;
+    fn resource_generation(&self) -> LifecycleGeneration;
 
     /// Whether the window's current attachment is `attachment`.
     fn attachment_matches(
@@ -411,7 +414,7 @@ struct SessionRecord {
 struct PendingSceneInstallation {
     origin: SceneOrigin,
     scene: Retained<UIWindowScene>,
-    resource_generation: u64,
+    resource_generation: LifecycleGeneration,
     completion: Box<dyn SceneInstallation>,
 }
 
@@ -441,7 +444,7 @@ enum SceneAction {
     Open(SceneOrigin, Vec<String>, flui_platform::Launch),
 }
 struct SceneState {
-    terminal_sessions: HashSet<IOSSceneSessionId>,
+    terminal_sessions: FxHashSet<IOSSceneSessionId>,
     session: Option<SessionRecord>,
     handler: Option<Box<dyn SceneConsumer>>,
     registered: bool,
@@ -567,7 +570,7 @@ impl IOSLoop {
             running: Cell::new(true),
             scenes: NativeOwner::new(
                 RefCell::new(SceneState {
-                    terminal_sessions: HashSet::new(),
+                    terminal_sessions: FxHashSet::default(),
                     session: None,
                     handler: None,
                     registered: false,

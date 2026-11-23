@@ -3,8 +3,12 @@
 //! Pure geometry — no wgpu, no lyon; depends only on `flui_foundation::geometry`.
 //!
 //! The CPU statement of the shape the GPU evaluates as a signed distance
-//! field. Nothing in a shipped build calls it — see the module declaration in
-//! `lib.rs` for why it is `cfg(test)` and what it is for.
+//! field. It is compiled only under `cfg(test)`: a squircle clip is an SDF
+//! evaluated per fragment, so no shipped build asks for the path. What the
+//! generator is for is the oracle of that SDF: `common/clip.wgsl`'s
+//! `sdRoundedSuperellipse` evaluates the same `n = 4` parametric form, and
+//! `the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary` holds
+//! the two to each other pixel by pixel.
 
 use flui_foundation::geometry::{Point, RSuperellipse};
 use flui_painting::paint::Path;

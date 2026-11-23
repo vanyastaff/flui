@@ -135,7 +135,6 @@ document.
   build-tools (`aapt2`, `zipalign`, `apksigner`, debug keystore); a
   `platforms/android/gradlew` switches to Gradle. `flui run` installs with
   `adb install -r`, starts the `NativeActivity` and follows `logcat --pid`.
-  See `crates/flui-cli/CHANGELOG.md`.
 - **`TextEditingController::clear()`/`set_text()`** (`flui-widgets`).
   `set_text` replaces the whole buffer, collapses the caret to the end (a
   deliberate divergence from Flutter's `TextEditingController.text` setter,

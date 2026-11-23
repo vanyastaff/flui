@@ -199,6 +199,8 @@
 // first on every target.
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
+// Ids the process or the OS mints hash with `rustc_hash`; std tables keyed by application values say so.
+#![warn(clippy::disallowed_types)]
 
 pub(crate) mod accessibility;
 pub mod assets;
@@ -207,25 +209,32 @@ mod display;
 mod display_connection;
 pub(crate) mod drag;
 pub mod error;
-// Reachable for the backend conformance suite, which reads every backend's
-// haptics degradation table (`tests/backend_conformance.rs`); not API.
+// The executor is named at the root (`NativeExecutor`).
 #[cfg(not(target_arch = "wasm32"))]
-pub mod executor;
+mod executor;
 pub mod fonts;
+// The haptics models of every host. The backend conformance suite reads every
+// backend's degradation table through this path (`tests/backend_conformance.rs`).
+// Hidden, not API: the hosts of every target and that suite are its only users,
+// and a private module would leave the tables other targets read unused here.
 #[doc(hidden)]
 pub mod haptics;
 pub mod http;
-// Reachable so a crate outside can show that a table missing a position does
-// not compile (`tests/ui/host_table_names_every_position.rs`); not an embedding
-// API: nothing outside the crate can build a `HostPlatform`.
+// The host table (ADR-0151 §10): `HostPlatform<H>` is bounded by its `Host`, so
+// the trait and its position traits are named by a public signature. Hidden, not
+// an embedding API: nothing outside the crate can build a `HostPlatform`, and
+// `tests/ui/host_table_names_every_position.rs` names the table to show that one
+// missing a position does not compile.
 #[doc(hidden)]
 pub mod host;
 mod host_window;
 mod hosts;
-// Reachable for the backend conformance table and the native recordings in
-// `tests/`, which decode through the pointer assembly and the key rules, and
-// for the allocation test, its own binary; not an embedding API. The event
-// timeline, which the composition root stamps frames on, is named at the root.
+// The input models of every host: the pointer assembly and the key rules that
+// the backend conformance table and the native recordings in `tests/` decode
+// through, the availability constants they assert, and the allocation test's own
+// binary. Hidden, not API: only the hosts and those tests use it, and a private
+// module would leave the models of other targets unused here. The event timeline,
+// which the composition root stamps frames on, is named at the root.
 #[doc(hidden)]
 pub mod input;
 pub use input::event_timestamp_ns;
@@ -234,9 +243,10 @@ pub use input::event_timestamp_ns;
 #[cfg(not(target_arch = "wasm32"))]
 use flui_foundation::AppId;
 
-// The native input journal (ADR-0215 §4): reachable for the native
-// recordings in `tests/`, which read, write and replay recordings through its
-// codec and capture sessions with its recorder; not an embedding API.
+// The native input journal (ADR-0215 §4): the recording codec, recorder and
+// line capture that `flui-app` journals a served application's native layer
+// with (`native_journal`), and the native recordings in `tests/` replay through.
+// Hidden because its types are the recording format's, not an embedding API.
 #[doc(hidden)]
 pub mod journal;
 mod lifecycle;
@@ -260,12 +270,17 @@ mod process;
 pub mod storage;
 #[cfg(test)]
 mod table_test;
-#[cfg(any(test, feature = "testing"))]
+// The headless host's doubles and controls with `scripted`; the kit of the
+// hosts' own tests with `testing` (ADR-0243).
+#[cfg(any(test, feature = "scripted"))]
 pub mod testing;
 #[cfg(wayland_host)]
 mod transfer;
-// Reachable for the text position's trait, which bounds a host's table; not
-// an embedding API.
+// The text input models of every host. `host::Host` bounds its text position
+// with `text::TextInput`, so a public signature names the trait, and the native
+// recordings and the backend conformance table in `tests/` replay through the
+// conformance models (`text::conformance`). Hidden, not an embedding API. The
+// text sizing a window captures is named at the root.
 #[doc(hidden)]
 pub mod text;
 pub use text::sizing::{
@@ -288,10 +303,8 @@ pub use host::{ExpiredClear, ExpiredEntry, NativeClipboard, NativePrimarySelecti
 #[cfg(not(target_arch = "wasm32"))]
 pub use executor::NativeExecutor;
 // Each host's platform: the one implementation of `Platform` over its table.
-// The headless host's is named only with `scripted`: without it the host runs
-// (`FLUI_HEADLESS`, `headless_platform`) as a `dyn Platform`.
-#[cfg(feature = "scripted")]
-pub use hosts::HeadlessPlatform;
+// The headless host runs as a `dyn Platform` (`FLUI_HEADLESS`, `headless_platform`);
+// a test names its `HeadlessPlatform` through `testing`.
 #[cfg(target_os = "ios")]
 pub use hosts::IOSPlatform;
 #[cfg(target_os = "macos")]
@@ -308,33 +321,6 @@ pub use hosts::WaylandPlatform;
 pub use hosts::WindowsPlatform;
 #[cfg(x11_host)]
 pub use hosts::X11Platform;
-// The headless host's test controls and doubles, each its feature's: a test's
-// surface, so only with `scripted`: the release API opens no double.
-#[cfg(feature = "scripted")]
-pub use accessibility::headless::FakeAccessibility;
-#[cfg(feature = "scripted")]
-pub use display::headless::{
-    DisplayChange, DisplayChangeError, DisplaySpec, HeadlessDisplayControls,
-};
-#[cfg(feature = "scripted")]
-pub use drag::headless::HeadlessDragAndDrop;
-#[cfg(feature = "scripted")]
-pub use input::headless::HeadlessInputDevices;
-#[cfg(feature = "scripted")]
-pub use lifecycle::headless::HeadlessHostEvents;
-#[cfg(feature = "scripted")]
-pub use owner::headless::{
-    HeadlessDeferredWindowOpens, HeadlessExitReevaluation, HeadlessOwnerTurns,
-};
-#[cfg(feature = "scripted")]
-pub use preferences::headless::HeadlessPreferences;
-#[cfg(feature = "scripted")]
-pub use text::headless::FakeTextInput;
-#[cfg(feature = "scripted")]
-pub use window::headless::{
-    HeadlessHostWindow, HeadlessOpenWindows, HeadlessWindowPolicy, HeadlessWindowSystem,
-    UnknownDisplay,
-};
 // What a UIKit scene tells the composition root.
 #[cfg(target_os = "ios")]
 pub use owner::apple::ios::{IOSSceneAttachmentId, IOSSceneSessionId};

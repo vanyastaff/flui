@@ -4,9 +4,9 @@ use std::fmt;
 use std::rc::Rc;
 
 use flui_rendering::view::ScrollPosition;
+use flui_view::ViewSeq;
 use flui_view::element::StaticChildren;
 use flui_view::prelude::StatelessView;
-use flui_view::seq::ViewSeq;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;

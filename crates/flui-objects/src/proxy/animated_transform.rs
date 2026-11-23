@@ -1,4 +1,4 @@
-//! `RenderAnimatedTransform` â€” a transform that follows an animation without
+//! `RenderAnimatedTransform` — a transform that follows an animation without
 //! rebuilding the element tree.
 //!
 //! # One cached sample
@@ -14,7 +14,7 @@
 //!
 //! A tick classifies the matrix the new sample produces as *identity*,
 //! *layered* (finite, invertible and not the identity) or *degenerate*
-//! (singular â€” a scale of 0 â€” or non-finite). Crossing between classes
+//! (singular — a scale of 0 — or non-finite). Crossing between classes
 //! adds or removes the transform layer, so it marks paint; a tick that stays
 //! layered marks only a composited-layer update, which patches the existing
 //! `TransformLayer` in the enclosing repaint boundary's retained capture
@@ -55,7 +55,7 @@ use std::rc::{Rc, Weak};
 use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::{Matrix4, Offset, Size};
-use flui_foundation::{Single, panic::PanicRecovery};
+use flui_foundation::{Single, panic::FirstPanic};
 use flui_rendering::{
     RenderUpdateImpact,
     context::{BoxHitTestContext, BoxLayoutContext, PaintContext},
@@ -75,8 +75,8 @@ use crate::subscription::RenderSubscription;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum TransformMotion {
-    /// Translation by a fraction of the node's own size: `(dxÂ·width,
-    /// dyÂ·height)` logical pixels. Under [`TextDirection::Rtl`] `dx` is
+    /// Translation by a fraction of the node's own size: `(dx·width,
+    /// dy·height)` logical pixels. Under [`TextDirection::Rtl`] `dx` is
     /// mirrored, so a positive value moves toward the reading-direction start.
     Slide {
         /// The fractional offset.
@@ -247,7 +247,7 @@ fn classify_matrix(m: &Matrix4) -> Class {
     }
 }
 
-/// A finite reading of the animation, or `None` for NaN/Â±âˆž.
+/// A finite reading of the animation, or `None` for NaN/±∞.
 fn finite(sample: (f64, f64)) -> Option<(f64, f64)> {
     (sample.0.is_finite() && sample.1.is_finite()).then_some(sample)
 }
@@ -287,7 +287,7 @@ impl Source {
         cell: &Rc<SampleCell>,
         kind: Kind,
         handle: &LocalRenderInvalidationHandle,
-        recovery: &mut PanicRecovery,
+        failure: &mut FirstPanic,
     ) -> Option<RenderSubscription> {
         fn listen<T>(
             proxy: &Rc<ProxyAnimation<T>>,
@@ -295,7 +295,7 @@ impl Source {
             cell: &Rc<SampleCell>,
             kind: Kind,
             handle: &LocalRenderInvalidationHandle,
-            recovery: &mut PanicRecovery,
+            failure: &mut FirstPanic,
         ) -> Option<RenderSubscription>
         where
             T: Clone + std::fmt::Debug + 'static,
@@ -316,13 +316,13 @@ impl Source {
                         commit(&cell, kind, generation, value, &handle);
                     }
                 }),
-                recovery,
+                failure,
             )
         }
         match self {
-            Self::Fraction(proxy) => listen(proxy, fraction_sample, cell, kind, handle, recovery),
-            Self::Scalar(proxy) => listen(proxy, scalar_sample, cell, kind, handle, recovery),
-            Self::Pixels(proxy) => listen(proxy, offset_sample, cell, kind, handle, recovery),
+            Self::Fraction(proxy) => listen(proxy, fraction_sample, cell, kind, handle, failure),
+            Self::Scalar(proxy) => listen(proxy, scalar_sample, cell, kind, handle, failure),
+            Self::Pixels(proxy) => listen(proxy, offset_sample, cell, kind, handle, failure),
         }
     }
 }
@@ -611,11 +611,11 @@ impl RenderBox for RenderAnimatedTransform {
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.detach();
-        let mut recovery = PanicRecovery::new();
+        let mut failure = FirstPanic::new();
         self.listener_id = self
             .source
-            .subscribe(&self.cell, self.kind, &handle, &mut recovery);
-        recovery.finish();
+            .subscribe(&self.cell, self.kind, &handle, &mut failure);
+        failure.resume();
         // Catch up with a change made while nothing listened (a reattach).
         // Its ticket is taken before the read like a listener's, so a
         // listener delivery that read later wins over this reading.
@@ -631,9 +631,9 @@ impl RenderBox for RenderAnimatedTransform {
 
     fn detach(&mut self) {
         if let Some(subscription) = self.listener_id.take() {
-            let mut recovery = PanicRecovery::new();
-            subscription.close(&mut recovery);
-            recovery.finish();
+            let mut failure = FirstPanic::new();
+            subscription.close(&mut failure);
+            failure.resume();
         }
     }
 }

@@ -492,6 +492,7 @@ impl AndroidViewAnswers {
         if self.answered.load(Ordering::Acquire) != posted {
             return AndroidFeedbackCall::Busy;
         }
+        // Wraps with `answered`, never more than one ahead of it: only their equality is read.
         self.posted.store(posted.wrapping_add(1), Ordering::Relaxed);
         AndroidFeedbackCall::Post(if self.declined.load(Ordering::Acquire) {
             HapticOutcome::Suppressed

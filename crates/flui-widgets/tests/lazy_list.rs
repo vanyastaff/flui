@@ -268,7 +268,7 @@ fn pathological_extents_defer(nesting: usize) {
             }),
         );
         Viewport::new(
-            flui_widgets::ScrollPosition::fixed(ENTRY as f64 * SEED),
+            flui_rendering::view::ScrollPosition::fixed(ENTRY as f64 * SEED),
             (rows,),
         )
         .boxed()
@@ -560,12 +560,12 @@ pub(crate) fn lazy_list_view_builder_callback_panics_are_contained_with_their_pa
 /// drop it.
 #[derive(Clone, StatefulView)]
 struct PinnedRow {
-    lease: Rc<RefCell<Option<flui_view::owner::KeepAliveLease>>>,
+    lease: Rc<RefCell<Option<flui_view::KeepAliveLease>>>,
     disposed: Rc<Cell<bool>>,
 }
 
 struct PinnedRowState {
-    lease: Rc<RefCell<Option<flui_view::owner::KeepAliveLease>>>,
+    lease: Rc<RefCell<Option<flui_view::KeepAliveLease>>>,
     disposed: Rc<Cell<bool>>,
 }
 

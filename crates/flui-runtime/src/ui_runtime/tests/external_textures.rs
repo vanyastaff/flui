@@ -197,7 +197,7 @@ struct Fixture {
 
 fn mounted(placement: Placement) -> Fixture {
     let window: Rc<dyn flui_platform::PlatformWindow> = Rc::new(
-        flui_testing::MockWindow::new()
+        flui_platform::testing::MockWindow::new()
             .focused(true)
             .with_size(f64::from(SURFACE.0), f64::from(SURFACE.1)),
     );
@@ -208,7 +208,7 @@ fn mounted(placement: Placement) -> Fixture {
     let shown = graph.signal(1_u32);
     let writer = ui_runtime
         .presentation_widgets_for_test(ui_runtime.presentation_id())
-        .with_build_owner(flui_view::BuildOwner::writer_source);
+        .with_build_owner(flui_view::__runtime::BuildOwner::writer_source);
     let shared = Shared::default();
     ui_runtime
         .attach_root_widget(&Toggle {

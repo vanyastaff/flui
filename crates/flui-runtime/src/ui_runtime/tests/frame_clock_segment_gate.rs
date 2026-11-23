@@ -525,18 +525,14 @@ pub(crate) fn segment_runs_iff_woken_or_has_pending_work_over_the_full_table() {
 /// flui-scheduler's own unit test for that, at the bare-clock
 /// level). A produce (throttle lifted) must re-arm it.
 ///
-/// Drives `render_frame`, not the bare `draw_frame_entered`
-/// this test used before: the continuation-wake check now runs
-/// AFTER `mark_rendered()`, inside `render_frame`, not
-/// inside `draw_frame_entered`'s vsync loop — see that
-/// method's own comment for why the move was necessary: raising
-/// the wake before `mark_rendered()` let the SAME callback silently
-/// clobber it). One consequence, pinned here rather than left
-/// implicit: the callback that lifts the throttle and produces ALSO
-/// re-arms and wakes again in that SAME callback now (the check
-/// runs after `poll()` already reset the latch), not on a
-/// SEPARATE, later callback the way it did when the check ran
-/// before `poll()`.
+/// Drives `render_frame`, not the bare `draw_frame_entered`: the
+/// continuation-wake check runs AFTER `mark_rendered()`, inside
+/// `render_frame`, not inside `draw_frame_entered`'s vsync loop, because
+/// raising the wake before `mark_rendered()` would let the SAME callback
+/// silently clobber it. One consequence, pinned here: the callback that
+/// lifts the throttle and produces ALSO re-arms and wakes again in that
+/// SAME callback (the check runs after `poll()` already reset the latch),
+/// not on a SEPARATE, later callback.
 pub(crate) fn n_ticks_under_backpressure_wake_the_platform_exactly_once_then_rearm() {
     use std::time::Duration;
 
@@ -630,7 +626,7 @@ pub(crate) fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_
     // This ALSO fires the render pipeline's own pre-existing wake
     // wire (`PipelineOwner::set_on_need_visual_update` -> the
     // scheduler's `ensure_visual_update` -> the `on_frame_scheduled`
-    // hook, the ui_runtime's `wake` -- unrelated to this slice's FrameClock
+    // hook, the ui_runtime's `wake` -- unrelated to the FrameClock
     // gate) exactly once for this clean->dirty transition -- expected,
     // not the property under test. What IS under test is the DELTA at
     // unhide below: one MORE wake beyond whatever this mark already
@@ -708,9 +704,9 @@ pub(crate) fn occlude_then_dirty_then_unocclude_wakes_exactly_once_and_produces_
 // directly could not).
 // ------------------------------------------------------------------
 
-/// Finding: on `SurfaceLost`, `record_submit_telemetry` used to
+/// Finding: on `SurfaceLost`, `record_submit_telemetry` must not
 /// unconditionally DRAIN this presentation's pending input epochs
-/// into the failed attempt's own `Errored` snapshot — but
+/// into the failed attempt's own `Errored` snapshot, because
 /// `render_frame` arms a retry for exactly this outcome
 /// (`retry_needed = true` -> `wake_frame()`), so the frame that
 /// eventually reaches the screen would find the epoch buffer

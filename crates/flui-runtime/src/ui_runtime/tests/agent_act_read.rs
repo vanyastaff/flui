@@ -5,6 +5,7 @@
 use std::rc::Rc;
 use std::sync::atomic::AtomicU32;
 
+use flui_foundation::RenderId;
 use flui_protocol::method;
 use flui_protocol::{
     act::ActOutcome, act::EffectKind, input::InputPath, snapshot::ChangedField, snapshot::Snapshot,

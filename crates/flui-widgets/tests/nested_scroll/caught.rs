@@ -9,7 +9,7 @@ use std::time::Duration;
 use flui_animation::Vsync;
 use flui_foundation::geometry::Vec2;
 use flui_interaction::gesture::{GestureSettingsSource, RemainderHandoff};
-use flui_testing::TouchScript;
+use flui_testing::replay::TouchScript;
 use flui_view::environment::VsyncScope;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{

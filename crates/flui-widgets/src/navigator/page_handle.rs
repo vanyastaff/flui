@@ -280,8 +280,8 @@ impl InheritedView for PageScope {
         &self.page
     }
 
-    fn child(&self) -> &dyn View {
-        &*self.child
+    fn child(&self) -> &BoxedView {
+        &self.child
     }
 
     fn update_should_notify(&self, old: &Self) -> bool {

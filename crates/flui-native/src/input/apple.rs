@@ -61,7 +61,10 @@ pub mod keys {
     /// the keycode itself is layout-independent. Raw `u16` (the width of
     /// `NSEvent.keyCode`) rather than a binding crate's type so this module
     /// compiles on every host.
-    #[expect(missing_docs)]
+    #[expect(
+        missing_docs,
+        reason = "each constant is a `kVK_*` code named by Carbon's `HIToolbox/Events.h`, so the name is its documentation"
+    )]
     pub mod kvk {
         pub const ANSI_A: u16 = 0x00;
         pub const ANSI_S: u16 = 0x01;
@@ -1498,23 +1501,35 @@ pub(crate) mod macos {
     }
 
     impl ViewInputs {
-        /// How the view reads the press `event`, every value read from AppKit
-        /// before the regions are borrowed: no borrow is held across a
-        /// message.
-        fn press_reading(view: &ContentView<'_>, event: &NSEvent) -> title_bar::PressReading {
+        /// How the view reads `event` if it is a press, of any button, every
+        /// value read from AppKit before the regions are borrowed: no borrow
+        /// is held across a message. `None` for any other event: the view
+        /// hears every mouse event through here, the tracking area's
+        /// `mouseEntered:` and `mouseExited:` too, and AppKit raises
+        /// `NSInternalInconsistencyException` for `clickCount` on those.
+        fn press_reading(
+            view: &ContentView<'_>,
+            event: &NSEvent,
+        ) -> Option<title_bar::PressReading> {
+            if !is_press(event) {
+                return None;
+            }
             let location = event.locationInWindow();
-            title_bar::PressReading {
+            Some(title_bar::PressReading {
                 left: event.r#type() == NSEventType::LeftMouseDown,
                 x: location.x,
                 y: view.height() - location.y,
                 click_count: event.clickCount(),
-            }
+            })
         }
 
-        /// What the press `event` does: a left press on a move area of a title
-        /// bar the application draws moves the window, and reaches nobody.
+        /// What `event` does: a left press on a move area of a title bar the
+        /// application draws moves the window, and reaches nobody. Any other
+        /// event reaches the application.
         fn title_bar_press(&self, view: &ContentView<'_>, event: &NSEvent) -> Press {
-            let reading = Self::press_reading(view, event);
+            let Some(reading) = Self::press_reading(view, event) else {
+                return Press::App;
+            };
             let chrome = self.chrome.borrow();
             title_bar::press_of(chrome.projected.sent(), chrome.scale.get(), reading)
         }
@@ -1557,7 +1572,10 @@ pub(crate) mod macos {
         }
 
         fn accepts_first_mouse(&self, view: &ContentView<'_>, event: &NSEvent) -> bool {
-            let reading = Self::press_reading(view, event);
+            // AppKit asks about presses; anything else only activates.
+            let Some(reading) = Self::press_reading(view, event) else {
+                return false;
+            };
             let answer = {
                 let chrome = self.chrome.borrow();
                 title_bar::first_mouse(chrome.projected.sent(), chrome.scale.get(), reading)
@@ -2308,7 +2326,10 @@ pub(crate) mod ios {
 
     // A gesture recognizer's state is read through an Objective-C message,
     // which has no safe wrapper.
-    #![expect(unsafe_code)]
+    #![expect(
+        unsafe_code,
+        reason = "a gesture recognizer's state is read through an Objective-C message, which has no safe wrapper"
+    )]
 
     use std::num::NonZeroU64;
     use std::time::Duration;

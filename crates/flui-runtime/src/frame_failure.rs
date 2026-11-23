@@ -16,10 +16,9 @@
 //! report synchronously on the UI thread. The types here are re-exported at
 //! the root of `flui_app`, which is where an application names them.
 //!
-//! The report deliberately carries the presentation's own
-//! [`PresentationAddress`] — ownership identity, per issue #561's
-//! diagnostics criterion — so a multi-window embedder can tell *which*
-//! window produced the report and decide its own response. A transient drop
+//! The report carries the presentation's own [`PresentationAddress`], its
+//! ownership identity, so a multi-window embedder can tell *which* window
+//! produced the report and decide its own response. A transient drop
 //! arms the framework retry; rejected text input retains work until a layout
 //! invalidation, and a contained recovery needs no retry. Repeated
 //! deterministic recoveries produce one report per occurrence and frame, so
@@ -31,7 +30,8 @@ use std::fmt;
 use flui_foundation::panic::{is_internal_invariant, payload_text};
 use flui_foundation::{PresentationAddress, TreeContext};
 use flui_rendering::RenderError;
-use flui_view::{LifecycleHook, RecoveredAt, RecoveredPanic as ViewRecoveredPanic};
+use flui_view::__runtime::RecoveredPanic as ViewRecoveredPanic;
+use flui_view::__runtime::{LifecycleHook, RecoveredAt};
 
 /// Panic text made safe for the application's selected diagnostics policy.
 ///

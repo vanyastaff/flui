@@ -57,8 +57,8 @@ fn thread_boundary_ui() {
     } else {
         cases.compile_fail(HOST_WINDOW);
     }
-    // The core host's test doubles are named only with its `scripted` feature,
-    // which no facade feature turns on.
+    // The core host's test doubles are named at `flui_native::testing`, which exists
+    // only with its `scripted` feature, which no facade feature turns on.
     cases.compile_fail("tests/ui/native/headless_doubles_need_scripted.rs");
     // A capability crate is reachable through `flui::services` exactly with
     // its facade feature (ADR-0154 §8).

@@ -4,9 +4,8 @@ use flui_rendering::{
     pipeline::{PipelineCell, PipelineOwner},
     protocol::BoxProtocol,
 };
-use flui_view::{
-    BuildOwner, ElementTree, ErrorView, LifecycleHook, RebuildReason, RenderView, View, ViewExt,
-};
+use flui_view::__runtime::{BuildOwner, ElementTree, LifecycleHook};
+use flui_view::{ErrorView, RebuildReason, RenderView, View, ViewExt};
 use std::{
     any::TypeId,
     cell::Cell,
@@ -69,7 +68,7 @@ impl View for Subject {
         flui_view::element::ElementKind::render_variable(self)
     }
 }
-fn failing_factory(_: &flui_view::FrameworkError) -> Box<dyn View> {
+fn failing_factory(_: &flui_view::FrameworkError) -> flui_view::BoxedView {
     panic!("child recovery factory failed")
 }
 struct FailedTelemetry {
@@ -119,7 +118,7 @@ pub(crate) fn dispatch_child(kind: &str) {
     let mut tree = ElementTree::new();
     let mut owner = BuildOwner::new();
     let parent = tree.mount_root_with_pipeline_owner(
-        &row,
+        &row.boxed(),
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),
@@ -193,7 +192,7 @@ pub(crate) fn dispatch_child(kind: &str) {
         assert_eq!(records[0].view_type_id, TypeId::of::<Subject>());
         assert_eq!(records[0].payload_text, None);
         assert!(
-            matches!(records[0].at, flui_view::RecoveredAt::Substituted { substitute: id, parent: p, slot: 1, .. } if id == substitute && p == parent)
+            matches!(records[0].at, flui_view::__runtime::RecoveredAt::Substituted { substitute: id, parent: p, slot: 1, .. } if id == substitute && p == parent)
         );
         if let Some(old) = old_failed {
             assert!(!tree.contains(old));

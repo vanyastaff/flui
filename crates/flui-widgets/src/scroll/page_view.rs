@@ -42,8 +42,8 @@
 //!   bubbling yet. The controller's listener records a change when
 //!   `round(page)` moves; the callback runs on the local post-frame lane with
 //!   the `EventContext` its writes need, one frame after the change, every recorded
-//!   page in order (ADR-0086; mapping decision 37 in
-//!   `crates/flui-widgets/ARCHITECTURE.md`).
+//!   page in order (ADR-0086; `ARCHITECTURE.md`, "`PageView` reports page changes
+//!   after the frame, in order").
 //! - **Non-snapping mode, `reverse`, end padding, implicit scrolling, page
 //!   storage restoration, and `viewport_fraction > 1.0` centering** are not
 //!   modeled — [`PageSnap`] is always applied (page snapping is the
@@ -67,11 +67,12 @@ use flui_foundation::geometry::Axis;
 use flui_foundation::{ChangeNotifier, Listenable};
 use flui_platform::input::capabilities::PointerKindSet;
 use flui_rendering::view::{CacheExtentStyle, DimensionChangePolicy, ScrollPosition};
+use flui_scheduler::PostFrameHandle;
+use flui_view::ViewSeq;
 use flui_view::prelude::StatefulView;
-use flui_view::seq::ViewSeq;
 use flui_view::{
-    BoxedView, BuildContext, EventContext, EventOutcome, IntoView, LifecycleContext,
-    PostFrameHandle, RebuildHandle, RebuildReason, ViewExt, ViewState, WriterSource,
+    BoxedView, BuildContext, EventContext, EventOutcome, IntoView, LifecycleContext, RebuildHandle,
+    RebuildReason, ViewExt, ViewState, WriterSource,
 };
 
 use crate::localization::{

@@ -45,7 +45,7 @@ pub use sliver_persistent_header::{
     OverScrollHeaderStretchConfiguration, RenderSliverFloatingHeaderBase,
     RenderSliverFloatingPersistentHeader, RenderSliverFloatingPinnedPersistentHeader,
     RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader, SnapAction,
-    SnapCommand, StretchTriggerSignal,
+    SnapCommand, StretchTrigger,
 };
 pub use sliver_semantics::RenderSliverSemanticsAnnotations;
 pub use sliver_to_box_adapter::*;

@@ -999,9 +999,9 @@ impl PostFrameHandle {
                 Err(PostFrameScheduleError::Closed)
             }
             Err((callback, None)) => {
-                let mut recovery = flui_foundation::panic::PanicRecovery::new();
-                recovery.retire(callback);
-                recovery.finish();
+                let mut failure = flui_foundation::panic::FirstPanic::new();
+                failure.retire(callback);
+                failure.resume();
                 Err(PostFrameScheduleError::Closed)
             }
         }

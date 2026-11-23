@@ -10,7 +10,10 @@
 // claims rest on the page having one thread, which `owner::web` enforces
 // by refusing a `+atomics` build. The workspace lint `unsafe_code = "warn"` is
 // opted out here, at the module boundary, rather than for the whole crate.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "`wasm-bindgen` JS interop requires `unsafe`, and the window's `Send`/`Sync` claims rest on the page having one thread"
+)]
 
 use std::{
     cell::{Cell, RefCell},

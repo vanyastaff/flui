@@ -64,7 +64,7 @@ struct CountingAllocator;
 // `self.dealloc`: still `System`, and still counted through `alloc` (an
 // in-place `System::realloc` growth would count as an allocation — never a
 // miss).
-#[expect(unsafe_code)]
+#[expect(unsafe_code, reason = "a counting `GlobalAlloc` is an unsafe impl")]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         bump(&ALLOC_COUNT, 1);

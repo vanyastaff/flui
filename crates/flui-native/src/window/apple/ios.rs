@@ -15,10 +15,16 @@
 //! layer is created here — the same shape macOS uses with `NSView`.
 
 // Some screen and geometry APIs the window reads remain deprecated in SDK 26.2.
-#![expect(deprecated)]
+#![expect(
+    deprecated,
+    reason = "some screen and geometry APIs the window reads remain deprecated in SDK 26.2"
+)]
 // Direct UIKit Objective-C calls have no safe wrapper: the window is one of the
 // crate's `unsafe` FFI islands, opted out at its module boundary.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "direct UIKit Objective-C calls have no safe wrapper"
+)]
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -57,8 +63,9 @@ use crate::owner::apple::ios::{
     HostDisplays, NativeOwner, ScreenIdentity, TouchPhase, TrackpadGesture, ViewRef, ViewTouches,
 };
 use crate::owner::apple::ios::{
-    IOSSceneAttachmentId, IOSSceneSessionId, LifecycleObservation, SceneConsumer, SceneDelivery,
-    SceneInstallation, SceneWindow, SceneWindows,
+    IOSSceneAttachmentId, IOSSceneSessionId, LifecycleGeneration, LifecycleGenerations,
+    LifecycleObservation, SceneConsumer, SceneDelivery, SceneInstallation, SceneWindow,
+    SceneWindows,
 };
 use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
 use crate::owner::signal::OwnerSignal;
@@ -1231,8 +1238,12 @@ impl FluiView {
 struct IOSLifecycle {
     focused: bool,
     visible: bool,
-    generation: u64,
-    pending: VecDeque<(LifecycleObservation, u64)>,
+    /// Exhausted, it moves the generation on no more: an edge that gets none
+    /// is refused and never queued, so no stale observation shares a
+    /// generation with a later one.
+    generations: LifecycleGenerations,
+    generation: LifecycleGeneration,
+    pending: VecDeque<(LifecycleObservation, LifecycleGeneration)>,
     dispatching: bool,
 }
 
@@ -1480,13 +1491,26 @@ impl IOSWindow {
                 execution: Cell::new(WindowExecutionState::Detached),
             }),
             refusing_safe_area: Cell::new(false),
-            lifecycle: RefCell::new(IOSLifecycle {
-                focused: false,
-                visible: false,
-                generation: 0,
-                pending: VecDeque::new(),
-                dispatching: false,
-            }),
+            lifecycle: RefCell::new(IOSLifecycle::new()),
+        }
+    }
+}
+
+impl IOSLifecycle {
+    /// A window's lifecycle before its scene said anything, at its first
+    /// generation.
+    fn new() -> Self {
+        let generations = LifecycleGenerations::default();
+        let generation = generations
+            .next()
+            .expect("BUG: a fresh mint issues its first generation");
+        Self {
+            focused: false,
+            visible: false,
+            generations,
+            generation,
+            pending: VecDeque::new(),
+            dispatching: false,
         }
     }
 }
@@ -1552,7 +1576,7 @@ impl SceneWindow for IOSWindow {
         }
     }
 
-    fn resource_generation(&self) -> u64 {
+    fn resource_generation(&self) -> LifecycleGeneration {
         self.lifecycle.borrow().generation
     }
 
@@ -1595,7 +1619,13 @@ impl SceneWindow for IOSWindow {
         {
             let mut state = self.lifecycle.borrow_mut();
             if matches!(observation, Background | Foreground | Detached) {
-                state.generation = state.generation.wrapping_add(1);
+                // An edge past the last generation is refused before it is
+                // queued: the queue and the drain stay as they were, and the
+                // window keeps the state its last applied edge gave it.
+                let Ok(next) = state.generations.next() else {
+                    return;
+                };
+                state.generation = next;
             }
             let generation = state.generation;
             state.pending.push_back((observation, generation));
@@ -1888,7 +1918,7 @@ impl IOSWindow {
         self.locks.withdraw(self.id, marker);
     }
 
-    fn apply_lifecycle(&self, observation: LifecycleObservation, generation: u64) {
+    fn apply_lifecycle(&self, observation: LifecycleObservation, generation: LifecycleGeneration) {
         use LifecycleObservation::{Active, Background, Detached, Foreground, Inactive};
         {
             let execution = &self.admission.execution;

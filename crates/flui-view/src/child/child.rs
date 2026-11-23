@@ -64,9 +64,9 @@ impl Child {
         self.inner.is_none()
     }
 
-    /// Get a reference to the child View if present.
-    pub fn as_ref(&self) -> Option<&dyn View> {
-        self.inner.as_ref().map(|b| b as &dyn View)
+    /// The child view if present, shared as the `BoxedView` this holds.
+    pub fn as_ref(&self) -> Option<&BoxedView> {
+        self.inner.as_ref()
     }
 
     /// Get the inner BoxedView if present.

@@ -464,7 +464,8 @@ containment, the owner hearing committed text) stand. `InMemoryTextStore` moves 
 
 ### 8. The escape hatch is published, typed and cannot panic
 
-- `as_any` moves from `PlatformWindow` to the sealed `HostWindow`.
+- The downcast moves from `PlatformWindow` to the sealed `HostWindow`: `Any` is its supertrait,
+  and a `&dyn HostWindow` upcasts to `&dyn Any`.
 - The facade publishes the OS extension modules as `flui::native::<os>` behind `cfg(<os>)` and the
   feature `native`, kind Evolving, so the escape hatch is discoverable and its churn is not Stable.
   Their methods take and return FLUI types only (progress on the taskbar, background material,
@@ -545,7 +546,7 @@ crates/flui-native/
     error.rs                the core host's error types
     platform.rs             Platform (sealed), AppHandler; HostPlatform<H: Host>, the one
                             implementation of Platform, and the AppHandler wiring
-    host_window.rs          HostWindow (sealed), as_any
+    host_window.rs          HostWindow (sealed, Any supertrait)
     hosts/                  one table per host and its constructor, nothing else:
                             windows.rs apple.rs android.rs web.rs linux.rs (Wayland and X11) headless.rs
     owner/                  the owner thread and each platform's loop (std's sys/pal): OwnerPlatform,
@@ -763,9 +764,9 @@ secrets in diagnostics) are decided by the records the table cites.
   permission's answer, so a driver scenario answers it without the OS; `flui-app`'s `driver`
   feature does not turn it on, since nothing in `flui-app` reads it. The
   window double is one: `flui_platform::testing::MockWindow`, the double of the contract crate's
-  own trait (ADR-0243), which `flui-testing` re-exports as `flui_testing::MockWindow`; no crate
+  own trait (ADR-0243), which `flui-testing` no longer re-exports; no crate
   outside the core host and the kits implements `PlatformWindow`. The core host's doubles and
-  the headless host's controls are named at its root only with its own `scripted` feature.
+  the headless host's controls are named at `flui_native::testing` only with its own `scripted` feature.
 
 These are properties of areas already on the closed list (displays, input, text, lifecycle, data
 directories). They add no area to it.

@@ -6,4 +6,4 @@
   application again. Writes queued in the host's flush registry run on the I/O pool.
 - **`HeadlessHost::request_close` and `HeadlessHost::end_session`** carry out a close or a
   session end through the presentations' guards and the flush registry, within
-  `flui_testing::SESSION_END_BUDGET` (3 s).
+  `flui_testing::host::SESSION_END_BUDGET` (3 s).

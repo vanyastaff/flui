@@ -264,7 +264,7 @@ impl InheritedView for ScrollObserverScope {
         &self.observer
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

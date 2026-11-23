@@ -2,17 +2,16 @@
 //! (ADR-0018).
 //!
 //! Both builders publish an [`AsyncSnapshot`] from a spawned task and read it
-//! back during `build`. The channel is the same shape as ADR-0017's
-//! `LayoutConstraintsCell`: an `Arc<Mutex<…>>` the task writes and the element
-//! reads, plus the bookkeeping needed to reject a write from a subscription that
-//! has since been replaced.
+//! back during `build`. The channel is an `Rc<RefCell<…>>` on the owner
+//! thread (the task is a local task of the binding's driver): the task writes
+//! it and the element reads it, with the bookkeeping that rejects a write from a
+//! subscription that has since been replaced.
 
-use std::{rc::Rc, sync::Arc};
+use std::{cell::RefCell, rc::Rc};
 
 use super::{AsyncSnapshot, ConnectionState};
 use crate::RebuildHandle;
 use flui_foundation::panic::FirstPanic;
-use parking_lot::Mutex;
 
 use crate::BoxedView;
 use crate::context::BuildContext;
@@ -39,7 +38,7 @@ pub(crate) struct Slot<T, E> {
     ///
     /// Dropping the `TaskToken` already cancels the task, so this is defence in
     /// depth for the window where a task produced a value but its writer has not
-    /// yet taken the lock.
+    /// yet written the slot.
     pub(crate) generation: u64,
 
     /// True only while `AsyncDriver::spawn_local_eager`'s inline poll runs.
@@ -69,7 +68,7 @@ impl<T, E> Slot<T, E> {
 }
 
 /// Shared handle to the snapshot.
-pub(crate) type SharedSlot<T, E> = Arc<Mutex<Slot<T, E>>>;
+pub(crate) type SharedSlot<T, E> = Rc<RefCell<Slot<T, E>>>;
 
 /// Closed updates used by the builders: replacement or payload-preserving state.
 pub(crate) enum SnapshotUpdate<T, E> {
@@ -78,7 +77,7 @@ pub(crate) enum SnapshotUpdate<T, E> {
 }
 
 /// Publish under the subscription fence, then retire and request a rebuild
-/// outside the slot lock. Returns whether the subscription accepted the update.
+/// outside the slot borrow. Returns whether the subscription accepted the update.
 pub(crate) fn apply_update<T, E>(
     slot: &SharedSlot<T, E>,
     generation: u64,
@@ -86,7 +85,7 @@ pub(crate) fn apply_update<T, E>(
     handle: &RebuildHandle,
 ) -> bool {
     let (accepted, rebuild, retired) = {
-        let mut slot = slot.lock();
+        let mut slot = slot.borrow_mut();
         if slot.generation == generation {
             let previous = match update {
                 SnapshotUpdate::Replace(snapshot) => {

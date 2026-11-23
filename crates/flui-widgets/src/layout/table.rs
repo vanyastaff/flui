@@ -1,11 +1,16 @@
 //! [`Table`], [`TableRow`], and [`TableCell`] — grid layout over `RenderTable`.
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "`RenderTable` takes its column widths as a std map, keyed by the column indexes the application chose"
+)]
 use std::collections::HashMap;
 
 use flui_foundation::ViewKey;
 use flui_objects::RenderTable;
 
 use crate::{Directionality, SizedBox};
+use flui_foundation::CreationSite;
 use flui_objects::TableColumnWidth;
 use flui_painting::styling::{BoxDecoration, TableBorder};
 use flui_painting::typography::TextBaseline;
@@ -14,7 +19,7 @@ use flui_rendering::parent_data::TableCellVerticalAlignment;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::StatelessView;
 use flui_view::{
-    BoxedView, BuildContext, CreationSite, IntoView, ParentDataView, RenderView, View, ViewExt,
+    BoxedView, BuildContext, IntoView, ParentDataView, RenderView, View, ViewExt,
     impl_parent_data_view, impl_render_view,
 };
 
@@ -218,12 +223,17 @@ impl StatelessView for KeyedCell {
 /// Column 0 sits against the start edge of the ambient [`Directionality`]:
 /// the left edge in LTR, the right edge in RTL.
 #[derive(Clone, Debug)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "the column widths are a std map because `RenderTable` takes one"
+)]
 pub struct Table {
     rows: Vec<TableRow>,
-    /// `rows`' cells in row-major order, each carrying its row's identity.
+    /// `rows`' cells in row-major order, each a `KeyedCell` carrying its row's
+    /// identity, held shared so the reconciler takes each one as it is.
     /// Built once with the table rather than per visit, so a rebuild costs
     /// no more cloning than the rows themselves already do.
-    cells: Vec<KeyedCell>,
+    cells: Vec<BoxedView>,
     column_widths: HashMap<usize, TableColumnWidth>,
     default_column_width: TableColumnWidth,
     default_vertical_alignment: TableCellVerticalAlignment,
@@ -232,6 +242,10 @@ pub struct Table {
     site: CreationSite,
 }
 
+#[expect(
+    clippy::disallowed_types,
+    reason = "the column widths are a std map because `RenderTable` takes one"
+)]
 impl Table {
     /// A table of `rows`, with the default column width, alignment, no
     /// border, and no explicit text baseline.
@@ -250,10 +264,16 @@ impl Table {
         }
     }
 
-    /// Builder: set per-column width overrides.
+    /// Builder: set per-column width overrides from `(column, width)` pairs; a
+    /// column named twice keeps its last width.
     #[must_use]
-    pub fn column_widths(mut self, column_widths: HashMap<usize, TableColumnWidth>) -> Self {
-        self.column_widths = column_widths;
+    pub fn column_widths(
+        mut self,
+        widths: impl IntoIterator<Item = (usize, TableColumnWidth)>,
+    ) -> Self {
+        self.column_widths = widths
+            .into_iter()
+            .collect::<HashMap<usize, TableColumnWidth>>();
         self
     }
 
@@ -344,7 +364,7 @@ fn square_up(mut rows: Vec<TableRow>) -> Vec<TableRow> {
     rows
 }
 
-fn identified_cells(rows: &[TableRow]) -> Vec<KeyedCell> {
+fn identified_cells(rows: &[TableRow]) -> Vec<BoxedView> {
     let mut unkeyed_ordinal = 0usize;
     let mut cells = Vec::new();
     for row in rows {
@@ -363,13 +383,16 @@ fn identified_cells(rows: &[TableRow]) -> Vec<KeyedCell> {
             let cell_part = cell.key().map_or(KeyPart::Position(column), |key| {
                 KeyPart::Keyed(key.clone_key())
             });
-            cells.push(KeyedCell::new(
-                CellKey {
-                    row: row_part.clone(),
-                    cell: cell_part,
-                },
-                cell.clone(),
-            ));
+            cells.push(
+                KeyedCell::new(
+                    CellKey {
+                        row: row_part.clone(),
+                        cell: cell_part,
+                    },
+                    cell.clone(),
+                )
+                .boxed(),
+            );
         }
     }
     cells
@@ -419,7 +442,7 @@ impl RenderView for Table {
         self.rows.iter().any(|row| !row.cells.is_empty())
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         // Row-major, the exact order `RenderTable`'s flat child list expects
         // (`row = index / column_count`, `col = index % column_count`), each
         // cell carrying its row's identity so the flat reconcile preserves
@@ -457,7 +480,7 @@ impl TableCell {
 impl ParentDataView for TableCell {
     type ParentData = TableCellParentData;
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

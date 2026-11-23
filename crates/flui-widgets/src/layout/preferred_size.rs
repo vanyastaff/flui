@@ -1,6 +1,7 @@
 //! [`PreferredSizeView`] and [`PreferredSize`] — a view that can advertise the
 //! size it would prefer if it were otherwise unconstrained.
 
+use flui_foundation::CreationSite;
 use flui_foundation::geometry::Size;
 use flui_view::prelude::*;
 
@@ -42,7 +43,7 @@ pub trait PreferredSizeView: View {
 ///
 /// ```rust
 /// use flui_foundation::geometry::Size;
-/// use flui_widgets::layout::PreferredSize;
+/// use flui_widgets::PreferredSize;
 /// use flui_widgets::SizedBox;
 ///
 /// let _bar = PreferredSize::new(Size::new((f64::INFINITY), 80.0), SizedBox::shrink());

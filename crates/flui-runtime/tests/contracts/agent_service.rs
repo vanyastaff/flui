@@ -20,7 +20,7 @@ use flui_protocol::{
 };
 use flui_runtime::agent::{Limits, Refused, Service, ServiceConfig, Session, Status};
 use flui_runtime::ui_runtime::{NativeForms, NativeLines};
-use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::CloseReason;
 use serde_json::{Value, json};
 use web_time::Instant;

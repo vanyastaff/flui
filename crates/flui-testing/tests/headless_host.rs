@@ -14,8 +14,8 @@ use flui_foundation::geometry::Size;
 use flui_rendering::{
     BoxLayoutContext, PaintContext, parent_data::BoxParentData, traits::RenderBox,
 };
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_testing::widgets::{lay_out, tight};
-use flui_testing::{HeadlessHost, HeadlessWindow};
 use flui_view::{
     AppLifecycleState, BuildContext, CloseReason, IntoView, LifecycleContext, RenderView,
     StatefulView, View, ViewState,
@@ -1085,7 +1085,7 @@ fn a_panicking_cancel_in_the_window_losing_focus_does_not_fail_opening_another()
     let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
     host.attach(
         &flui_widgets::Listener::new()
-            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .behavior(flui_interaction::pointer::HitTestBehavior::Opaque)
             .child(
                 flui_widgets::Focus::new(flui_widgets::SizedBox::new(100.0, 100.0))
                     .focus_node(Rc::clone(&node))
@@ -1257,7 +1257,7 @@ fn closing_the_focused_window_moves_the_focus_to_a_survivor() {
 /// as a submit.
 #[test]
 fn an_unshown_frame_is_recovered_as_its_reason_says() {
-    use flui_testing::UnshownFrame;
+    use flui_testing::host::UnshownFrame;
 
     // (reason, retried by itself, raised by the pump as a dropped frame)
     for (how, retried, dropped) in [

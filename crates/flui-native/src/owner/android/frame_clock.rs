@@ -16,7 +16,13 @@
 //! the state it records into, which the callback releases; one still posted
 //! when the loop exits is leaked with that state.
 
-#![cfg_attr(target_os = "android", expect(unsafe_code))]
+#![cfg_attr(
+    target_os = "android",
+    expect(
+        unsafe_code,
+        reason = "the frame callback is registered through the NDK Choreographer FFI"
+    )
+)]
 
 use std::time::Duration;
 

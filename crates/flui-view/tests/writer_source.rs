@@ -7,7 +7,9 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
+use flui_foundation::ElementId;
 use flui_objects::RenderSizedBox;
+use flui_rendering::RenderUpdateImpact;
 use flui_rendering::protocol::BoxProtocol;
 use flui_testing::widgets::{LaidOut, lay_out, tight};
 use flui_view::SignalError;

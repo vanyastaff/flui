@@ -45,10 +45,9 @@
 //! synchronous, and added only because the contract demanded it.
 
 // `TransitionRoute` is private and reached only through `ModalRoute` and,
-// above it, the public `PageRoute` / `PopupRoute`. Exporting those removed
-// this file's `#![allow(dead_code)]`: everything left is either reachable from a
-// public route or re-exported to the integration tests by `crate::__test_access`
-// (ADR-0083 §4).
+// above it, the public `PageRoute` / `PopupRoute`. Every item is reachable from
+// a public route, or is built only for tests and re-exported to the integration
+// tests by `crate::__test_access` (ADR-0083 §4).
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -185,8 +184,8 @@ impl TransitionInner {
         let Some(mut owner) = outgoing else {
             return;
         };
-        let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        recovery.run(|| {
+        let mut failure = flui_foundation::panic::FirstPanic::new();
+        failure.contain(|| {
             if let Err(error) = owner.rebind(vsync) {
                 tracing::error!(%error, "route animation has no frame clock");
             }
@@ -194,9 +193,9 @@ impl TransitionInner {
         if !self.disposed.get() && self.controller.borrow().is_none() {
             *self.controller.borrow_mut() = Some(owner);
         } else {
-            recovery.run(|| drop(owner));
+            failure.retire(owner);
         }
-        recovery.finish();
+        failure.resume();
     }
 
     /// Whether the route is still active (not yet popped).
@@ -359,6 +358,7 @@ impl<T> TransitionRoute<T> {
 
     /// Whether this route may coordinate with the route above; default `true`. No
     /// public route sets it: `PageRoute`'s family restriction is a [`TransitionGroup`], not a bool.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn can_transition_to(mut self, allow: bool) -> Self {
         self.can_transition_to = allow;
@@ -595,18 +595,21 @@ impl TransitionHandle {
     }
 
     /// Whether the pop has already been finalized.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn is_pop_finalized(&self) -> bool {
         self.inner.pop_finalized.get()
     }
 
     /// How many times the status listener raised `finalize()`.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn finalize_calls(&self) -> usize {
         self.inner.finalize_calls.get()
     }
 
     /// Whether the secondary proxy rests at zero without a coordinated route above.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn secondary_is_resting(&self) -> bool {
         matches!(
@@ -616,6 +619,7 @@ impl TransitionHandle {
     }
 
     /// Whether the secondary proxy is mid-hop (an `AnimationSwitch` is installed).
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn secondary_is_hopping(&self) -> bool {
         matches!(

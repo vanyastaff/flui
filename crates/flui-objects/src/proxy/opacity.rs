@@ -23,10 +23,11 @@ use flui_rendering::{
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use flui_objects::RenderOpacity;
+///
 /// let opacity = RenderOpacity::new(0.5); // 50% transparent
-/// // Use with PipelineOwner and RenderTree for actual rendering
-/// // Add a child, then layout with constraints
+/// assert_eq!(opacity.opacity(), 0.5);
 /// ```
 #[derive(Debug, Clone)]
 pub struct RenderOpacity {

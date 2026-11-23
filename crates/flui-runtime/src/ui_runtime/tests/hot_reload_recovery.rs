@@ -115,7 +115,7 @@ pub(crate) fn a_hot_reload_renews_every_scene_lineage() {
     ui_runtime
         .attach_root_widget_to_for_test(ui_runtime.presentation_id(), &SizedBox::square(20.0))
         .expect("root");
-    let window: Rc<dyn PlatformWindow> = Rc::new(flui_testing::MockWindow::new());
+    let window: Rc<dyn PlatformWindow> = Rc::new(flui_platform::testing::MockWindow::new());
     let assembled = ui_runtime.assemble_presentation(Rc::clone(&window));
     let secondary = ui_runtime.install_presentation(assembled);
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));

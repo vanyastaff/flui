@@ -8,10 +8,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::thread::{self, ThreadId};
 
-use flui_native::{
-    HeadlessHostWindow, HeadlessOwnerTurns, HeadlessPlatform, HostWindow, OwnerPlatform,
-    Platform as _,
-};
+use flui_native::testing::{HeadlessHostWindow, HeadlessOwnerTurns, HeadlessPlatform};
+use flui_native::{HostWindow, OwnerPlatform, Platform as _};
 use flui_platform::{EventTime, FramePresented, WindowOptions};
 use flui_testing::window_conformance::fixture_frame as frame;
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
@@ -98,9 +96,7 @@ fn reporting_window(platform: &HeadlessPlatform) -> crate::Opened {
 
 /// The headless window behind `opened`.
 fn headless(opened: &crate::Opened) -> &HeadlessHostWindow {
-    opened
-        .window
-        .as_any()
+    (&*opened.window as &dyn std::any::Any)
         .downcast_ref::<HeadlessHostWindow>()
         .expect("the headless platform opens headless windows")
 }

@@ -51,16 +51,17 @@ use std::time::Duration;
 
 use flui_sdk::animation::{Animation, AnimationController, Curve, curves};
 use flui_sdk::foundation::Listenable;
-use flui_sdk::painting::Clip;
+use flui_sdk::painting::paint::Clip;
+use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, AnimatedBuilder, ClipRect, DefaultTextStyle, Expanded, MouseRegion, Padding, Row,
-    SafeArea, Semantics, SemanticsRole, WidgetStateProperty,
+    SafeArea, Semantics, WidgetStateProperty,
 };
 use flui_sdk::{
     geometry::EdgeInsets,
-    painting::{Alignment, Color},
+    painting::{Alignment, styling::Color},
 };
 
 use crate::button_style::ButtonStyle;
@@ -389,9 +390,9 @@ impl HoverLease {
 
 impl Drop for HoverLease {
     fn drop(&mut self) {
-        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
-        recovery.run(|| self.retire());
-        recovery.finish();
+        let mut failure = flui_sdk::foundation::panic::FirstPanic::new();
+        failure.contain(|| self.retire());
+        failure.resume();
     }
 }
 
@@ -431,10 +432,10 @@ impl ViewState<SnackBarPresenter> for SnackBarPresenterState {
             state: Cell::new(HoverState::Idle),
         });
         let outgoing = std::mem::replace(&mut self.hover, next);
-        let mut recovery = flui_sdk::foundation::panic::PanicRecovery::new();
-        recovery.run(|| self.hover.set(hovered));
-        recovery.retire(outgoing);
-        recovery.finish();
+        let mut failure = flui_sdk::foundation::panic::FirstPanic::new();
+        failure.contain(|| self.hover.set(hovered));
+        failure.retire(outgoing);
+        failure.resume();
     }
 
     fn dispose(&mut self) {

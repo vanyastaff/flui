@@ -1,10 +1,10 @@
-//! `GpuReplay` segment-flush machinery, split out of `replay.rs` for the C1 cap.
+//! `GpuReplay` segment-flush machinery: the ordered `flush_segment` and its helpers.
 //!
-//! Holds ordered `flush_segment` and every
-//! typed-arena replay helper it drives (instanced batches, gradients, tessellated
-//! geometry, cached/external images, and the texture-batch blend variants). The
-//! dispatch core (`new` / `submit` /
-//! `reintegrate_offscreen_content`) stays in the parent `replay` module.
+//! Holds ordered `flush_segment` and every typed-arena replay helper it
+//! drives (instanced batches, gradients, tessellated geometry, cached and
+//! external images, and the texture-batch blend variants). The dispatch core
+//! (`new` / `submit` / `reintegrate_offscreen_content`) stays in the parent
+//! `replay` module.
 //!
 //! These are inherent `impl GpuReplay` methods on a descendant module of
 //! `replay`, so they retain access to `GpuReplay`'s private fields.
@@ -13,10 +13,10 @@ use std::sync::Arc;
 
 use super::GpuReplay;
 use crate::{
-    command_ir::{DrawRun, DrawSegment, ScissorRect},
-    effects_pipeline::GradientKind,
-    pipeline_cache::PipelineKey,
-    pipeline_set::PipelineSet,
+    pipelines::effects::GradientKind,
+    pipelines::set::PipelineSet,
+    pipelines::variants::PipelineKey,
+    record::command_ir::{DrawRun, DrawSegment, ScissorRect},
     resources::GpuResources,
 };
 
@@ -139,7 +139,10 @@ fn set_clamped_scissor(
 // GPU rendering routinely converts between numeric types for pixel coordinates,
 // color channels, buffer indices, and instance counts; flush methods also carry
 // many GPU-handle parameters.
-#[expect(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the flush methods take device, queue, pipelines, resources and encoder as independent borrows of the frame's GPU state that the caller holds as separate locals"
+)]
 impl GpuReplay {
     // =========================================================================
     // Segment-flush entry point
@@ -156,9 +159,9 @@ impl GpuReplay {
             return Ok(None);
         }
 
-        resources.reserve_prepared(crate::device_domain::PreparedCost {
+        resources.reserve_prepared(crate::device::domain::PreparedCost {
             gpu_bytes: segment.tess_batches.len()
-                * std::mem::size_of::<crate::command_ir::ClipUniform>(),
+                * std::mem::size_of::<crate::record::command_ir::ClipUniform>(),
             cpu_bytes: segment.tess_batches.len() * std::mem::size_of::<wgpu::BindGroup>(),
             objects: segment.tess_batches.len() * 2,
         })?;
@@ -174,7 +177,7 @@ impl GpuReplay {
             .tess_batches
             .iter()
             .map(|batch| {
-                let uniform = crate::command_ir::ClipUniform::from_resolved(batch.clip);
+                let uniform = crate::record::command_ir::ClipUniform::from_resolved(batch.clip);
                 let buffer = resources
                     .uniform_pool_mut()
                     .alloc(bytemuck::bytes_of(&uniform));
@@ -206,7 +209,10 @@ impl GpuReplay {
         }))
     }
 
-    #[expect(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "device, pipelines and encoder are independent borrows of the frame's GPU state that the caller holds as separate locals"
+    )]
     fn flush_tessellated_geometry(
         &mut self,
         segment: &DrawSegment,
@@ -311,7 +317,7 @@ impl GpuReplay {
     }
 
     // =========================================================================
-    // Phase 4: segment-cached images
+    // Segment-cached images
     // =========================================================================
 
     /// Flush all texture-cache image draws recorded in the segment.
@@ -337,7 +343,7 @@ impl GpuReplay {
             return Ok(());
         }
 
-        let mut active_texture_id: Option<crate::texture_cache::TextureKey> = None;
+        let mut active_texture_id: Option<crate::resources::texture_cache::TextureKey> = None;
         let mut active_texture_view: Option<wgpu::TextureView> = None;
         // Scissor of the most-recently buffered instance — forwarded when a
         // texture-change forces an early flush.
@@ -346,7 +352,7 @@ impl GpuReplay {
         let mut active_filter = None;
 
         for draw in pending_images {
-            let crate::command_ir::CachedImageDraw {
+            let crate::record::command_ir::CachedImageDraw {
                 key: texture_id,
                 instance,
                 scissor,
@@ -421,7 +427,7 @@ impl GpuReplay {
     }
 
     // =========================================================================
-    // Phase 5: external (registered) textures
+    // External (registered) textures
     // =========================================================================
 
     /// Replay captured allocations in order. Bindings are cached per frame by
@@ -447,10 +453,10 @@ impl GpuReplay {
                 resources.retain_external_lease(lease.clone())?;
                 let requested = std::mem::size_of::<(
                     super::CapturedExternalBinding,
-                    (usize, crate::external_texture_registry::ExternalSampling),
+                    (usize, crate::resources::external_textures::ExternalSampling),
                 )>();
                 let charge =
-                    resources.reserve_external_binding(crate::device_domain::PreparedCost {
+                    resources.reserve_external_binding(crate::device::domain::PreparedCost {
                         gpu_bytes: 0,
                         cpu_bytes: requested,
                         objects: 1,
@@ -462,10 +468,10 @@ impl GpuReplay {
                     }
                 })?;
                 let sampler = match sampling {
-                    crate::external_texture_registry::ExternalSampling::Nearest => {
+                    crate::resources::external_textures::ExternalSampling::Nearest => {
                         &self.nearest_sampler
                     }
-                    crate::external_texture_registry::ExternalSampling::Linear => {
+                    crate::resources::external_textures::ExternalSampling::Linear => {
                         &self.external_linear_sampler
                     }
                 };
@@ -519,7 +525,7 @@ impl GpuReplay {
                 *scissor,
                 matches!(
                     lease.descriptor().alpha,
-                    crate::external_texture_registry::ExternalAlpha::Premultiplied
+                    crate::resources::external_textures::ExternalAlpha::Premultiplied
                 ) || instance.filters_straight_as_premultiplied(),
                 Some(&binding),
             );
@@ -717,7 +723,7 @@ impl GpuReplay {
     fn flush_cached_texture_batch(
         &mut self,
         mode: flui_painting::paint::BlendMode,
-        filter: Option<crate::image_source_filter::ImageSourceFilter>,
+        filter: Option<crate::filters::image_source::ImageSourceFilter>,
         device: &Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
         pipelines: &mut PipelineSet,

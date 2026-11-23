@@ -3,9 +3,10 @@
 //! system whose transport is built (a local socket: a pipe on Windows, a Unix
 //! socket elsewhere, Android's abstract one included; a page export on
 //! wasm32). The sites that compile the agent name this one cfg instead of
-//! spelling the condition again. `cfg(native_journal)` is the debug build of a
-//! native host among them, the one that journals its backend for the agent's
-//! `native` recording layer (ADR-0288 §11).
+//! spelling the condition again. `cfg(native_journal)` is the debug build
+//! among them, the one that journals its backend for the agent's `native`
+//! recording layer: a native host's and a page's alike (ADR-0288 §11,
+//! ADR-0390).
 //!
 //! Read from what Cargo tells a build script about the target: it sets
 //! `CARGO_CFG_DEBUG_ASSERTIONS` exactly when the profile has debug assertions,
@@ -25,8 +26,9 @@ fn main() {
     let built = set("CARGO_CFG_DEBUG_ASSERTIONS") || set("CARGO_FEATURE_DRIVER");
     if built && (local_socket || page) {
         println!("cargo::rustc-cfg=driver_agent");
-        // The native journal the agent records (ADR-0288 §11): a debug build of a native host.
-        if set("CARGO_CFG_DEBUG_ASSERTIONS") && local_socket {
+        // The native journal the agent records (ADR-0288 §11, ADR-0390): a debug build, on a
+        // native host or in a page.
+        if set("CARGO_CFG_DEBUG_ASSERTIONS") {
             println!("cargo::rustc-cfg=native_journal");
         }
     }

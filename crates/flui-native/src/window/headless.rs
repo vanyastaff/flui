@@ -1,5 +1,5 @@
 //! The headless window: [`HeadlessHostWindow`], the native window every
-//! [`HeadlessPlatform`](crate::HeadlessPlatform) opens, its system chrome
+//! [`HeadlessPlatform`](crate::testing::HeadlessPlatform) opens, its system chrome
 //! ([`HeadlessSystemChrome`]), what the headless "operating system" refuses or
 //! clamps ([`HeadlessWindowPolicy`]), so a test can see a window snapshot
 //! report the outcome rather than the request, and [`HeadlessWindows`], the
@@ -76,7 +76,7 @@ impl HeadlessWindowPolicy {
 }
 
 /// The ids of the headless windows of every
-/// [`HeadlessPlatform`](crate::HeadlessPlatform) in the process.
+/// [`HeadlessPlatform`](crate::testing::HeadlessPlatform) in the process.
 ///
 /// A headless test builds several independent platforms whose windows later
 /// meet in one application registry, which keys them by id: a mint per
@@ -120,13 +120,13 @@ struct Tracked {
     /// The open windows, in the order they opened: the last is topmost.
     windows: Vec<HeadlessHostWindow>,
     /// Whether the windows sit on one desktop and answer
-    /// [`PlatformWindow::window_at`] ([`HeadlessPlatform::with_window_placement`](crate::HeadlessPlatform::with_window_placement)).
+    /// [`PlatformWindow::window_at`] ([`HeadlessPlatform::with_window_placement`](crate::testing::HeadlessPlatform::with_window_placement)).
     placement: bool,
     /// What every window opened from now on honours
-    /// ([`HeadlessPlatform::with_window_capabilities`](crate::HeadlessPlatform::with_window_capabilities)).
+    /// ([`HeadlessPlatform::with_window_capabilities`](crate::testing::HeadlessPlatform::with_window_capabilities)).
     capabilities: WindowCapabilities,
     /// What the host clamps or declines for every window opened from now on
-    /// ([`HeadlessPlatform::with_window_policy`](crate::HeadlessPlatform::with_window_policy)).
+    /// ([`HeadlessPlatform::with_window_policy`](crate::testing::HeadlessPlatform::with_window_policy)).
     policy: HeadlessWindowPolicy,
 }
 
@@ -166,7 +166,7 @@ impl TrackedWindows for HeadlessWindows {
     /// Builds a fresh headless window under an already-locked `state`, threading
     /// it through the same register/activate bookkeeping for the synchronous
     /// `Platform::open_window` and the deferred-open resolution
-    /// ([`HeadlessDeferredWindowOpens::resolve_next`](crate::HeadlessDeferredWindowOpens::resolve_next)),
+    /// ([`HeadlessDeferredWindowOpens::resolve_next`](crate::testing::HeadlessDeferredWindowOpens::resolve_next)),
     /// so the two stay byte-for-byte consistent.
     fn open(
         self: Arc<Self>,
@@ -318,7 +318,7 @@ impl<H: Host<Loop = HeadlessLoop, Window = HeadlessHostWindow>> HostPlatform<H> 
 }
 
 /// The windows a headless platform holds open
-/// ([`HeadlessPlatform::open_windows`](crate::HeadlessPlatform::open_windows)).
+/// ([`HeadlessPlatform::open_windows`](crate::testing::HeadlessPlatform::open_windows)).
 /// Empty once the platform is gone.
 #[derive(Clone, Debug)]
 #[cfg(feature = "scripted")]
@@ -418,7 +418,7 @@ pub struct HeadlessWindowSystem {
     pub occluded: bool,
     /// The input regions the simulated system honours for the window, as
     /// the platform's input availability says
-    /// ([`HeadlessPlatform::with_input_availability`](crate::HeadlessPlatform::with_input_availability)).
+    /// ([`HeadlessPlatform::with_input_availability`](crate::testing::HeadlessPlatform::with_input_availability)).
     pub input_capabilities: flui_platform::input::capabilities::InputCapabilities,
     /// The material the simulated system draws behind the window: the last
     /// [`WindowCommand::SetMaterial`] it applied, `Opaque` before any.
@@ -440,10 +440,10 @@ pub struct HeadlessWindowSystem {
 
 /// The native window of the headless host.
 ///
-/// Every window [`HeadlessPlatform`](crate::HeadlessPlatform) opens is a `HeadlessHostWindow`:
+/// Every window [`HeadlessPlatform`](crate::testing::HeadlessPlatform) opens is a `HeadlessHostWindow`:
 /// the [`HostWindow`] a runner drives, a fully functional [`PlatformWindow`] that needs no
 /// display server, owned by the headless owner loop as an OS window is owned by its backend's.
-/// It is not `flui_testing::HeadlessWindow`, the window a `HeadlessHost` presents a UI runtime
+/// It is not `flui_testing::host::HeadlessWindow`, the window a `HeadlessHost` presents a UI runtime
 /// into with no host at all. Beyond the trait surface it offers what a test harness needs to
 /// drive a window from the outside:
 ///
@@ -458,8 +458,9 @@ pub struct HeadlessWindowSystem {
 ///   handler method a real platform would.
 ///
 /// There is no public constructor: obtain one by opening a window on a
-/// [`HeadlessPlatform`](crate::HeadlessPlatform) and downcasting the returned
-/// `Rc<dyn PlatformWindow>` via its `as_any()` to `&HeadlessHostWindow`.
+/// [`HeadlessPlatform`](crate::testing::HeadlessPlatform), upcasting the window the
+/// returned `Rc<dyn HostWindow>` holds (not the `Rc`) to `&dyn Any`, and
+/// downcasting that to `&HeadlessHostWindow`.
 #[derive(Clone)]
 pub struct HeadlessHostWindow {
     id: WindowId,

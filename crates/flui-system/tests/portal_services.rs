@@ -25,7 +25,7 @@ use flui_system::shortcuts::{
 };
 use flui_system::taskbar::{Fraction, Progress, TaskbarCapability};
 use flui_system::user_dirs::{UserDir, UserDirCapability};
-use flui_testing::{HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use zbus::{MatchRule, MessageStream, OwnedVariant, Variant};
 
 use crate::portal::{Call, PrivateBus, Results, StandIn, pump_until, settle, uris};
@@ -36,7 +36,10 @@ use crate::{acquire, acquire_in, acquire_on, acquire_twice_on, outcome_slot, tur
 fn exported_host(
     portal: &StandIn,
     handle: &str,
-) -> (HeadlessHost, flui_testing::HeadlessPortalExports) {
+) -> (
+    HeadlessHost,
+    flui_testing::portal_exports::HeadlessPortalExports,
+) {
     let window = HeadlessWindow::new(10, 10).with_portal_export(handle);
     let exports = window
         .portal_exports()

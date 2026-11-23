@@ -60,7 +60,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll, Waker};
 
-pub use flui_platform::executor::{ComputeJob, IoFuture, Lane, RoomFuture, SpawnError};
+use flui_platform::executor::Lane;
+pub use flui_platform::executor::{ComputeJob, IoFuture, RoomFuture, SpawnError};
 
 /// Host-provided worker pool for the **asynchronous compute** work class.
 ///

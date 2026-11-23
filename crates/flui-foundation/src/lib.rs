@@ -164,7 +164,7 @@ mod app_id;
 pub mod arena;
 // Compile-time child-count markers the render protocol attaches to nodes.
 mod arity;
-// Whether a build is running, for controllers below the signal graph (ADR-0086 §7).
+// Whether a build is running, for controllers below the signal graph (ADR-0074 §5.2).
 mod build_phase;
 // Generic at-most-once request/reply primitive (ADR-0039 §3): the
 // owner lanes' claim-slot reply protocol composes this; its state-machine

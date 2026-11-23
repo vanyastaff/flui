@@ -42,7 +42,10 @@ pub struct DoubleTapDetails {
 }
 
 #[derive(Default)]
-#[expect(clippy::struct_field_names)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "the fields are named after the callbacks they hold, so each keeps its `on_*` name"
+)]
 struct DoubleTapCallbacks {
     on_double_tap: Option<DoubleTapCallback>,
     on_double_tap_down: Option<DoubleTapCallback>,

@@ -2,7 +2,7 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 
 use flui::animation::{Animation, AnimationController, AnimationStatus, Vsync};
 use flui::foundation::ChangeNotifier;
-use flui::view::{FrameWaker, PostFrameHandle};
+use flui::scheduler::{FrameWaker, PostFrameHandle};
 use flui::widgets::SizedBox;
 use flui_testing::widgets::{lay_out, tight};
 

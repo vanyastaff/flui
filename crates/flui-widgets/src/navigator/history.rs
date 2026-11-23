@@ -110,6 +110,7 @@ pub(crate) enum ReplaceTarget {
     /// Whatever is present on top when the flush runs. The unnamed
     /// `push_replacement` front doors: nothing can run between their call and
     /// that flush, so "now" and "at the call" are the same route.
+    #[cfg(any(test, feature = "testing"))]
     CurrentTop,
     /// One specific route, captured before anything could run. The named front
     /// doors, whose resolution invokes a user factory.
@@ -145,12 +146,9 @@ impl RouteEntry {
         debug_assert!(
             matches!(
                 initial_state,
-                RouteLifecycle::Add
-                    | RouteLifecycle::Push
-                    | RouteLifecycle::PushReplace
-                    | RouteLifecycle::Replace
+                RouteLifecycle::Add | RouteLifecycle::Push | RouteLifecycle::PushReplace
             ),
-            "BUG: a route entry may only start in add/push/pushReplace/replace \
+            "BUG: a route entry may only start in add/push/pushReplace \
              (navigator.dart:3184-3191)"
         );
         Self {
@@ -262,7 +260,7 @@ impl RouteEntry {
         let previous_state = self.state;
         debug_assert!(matches!(
             previous_state,
-            RouteLifecycle::Push | RouteLifecycle::PushReplace | RouteLifecycle::Replace
+            RouteLifecycle::Push | RouteLifecycle::PushReplace
         ));
 
         self.route.install();
@@ -288,10 +286,7 @@ impl RouteEntry {
             self.route.did_change_next(None);
         }
 
-        let observation = if matches!(
-            previous_state,
-            RouteLifecycle::Replace | RouteLifecycle::PushReplace
-        ) {
+        let observation = if matches!(previous_state, RouteLifecycle::PushReplace) {
             Observation::Replace {
                 new_route: Some(self.id()),
                 old_route: previous_present,
@@ -489,12 +484,12 @@ impl FlushOutcome {
     /// Must run **after** the observers have been notified (the pop observation
     /// precedes disposal) and after the caller has removed each route's
     /// overlay entries. A panicking `dispose` does not keep the remaining
-    /// routes from being disposed: `recovery` holds the first failure.
-    pub(crate) fn dispose_routes(&mut self, recovery: &mut flui_foundation::panic::PanicRecovery) {
+    /// routes from being disposed: `failure` holds the first failure.
+    pub(crate) fn dispose_routes(&mut self, failure: &mut flui_foundation::panic::FirstPanic) {
         for mut entry in self.dying.drain(..) {
-            recovery.run(|| entry.route.dispose());
+            failure.contain(|| entry.route.dispose());
             entry.state = RouteLifecycle::Disposed;
-            recovery.retire(entry);
+            failure.retire(entry);
         }
     }
 }
@@ -910,6 +905,7 @@ impl RouteHistory {
         // `CurrentTop` filtered, so the two disagreed about what counts as live.
         let target_index = match target {
             None => None,
+            #[cfg(any(test, feature = "testing"))]
             Some(ReplaceTarget::CurrentTop) => self.last_present_index(),
             Some(ReplaceTarget::Route(id)) => self
                 .entries
@@ -950,6 +946,7 @@ impl RouteHistory {
     /// bottom, exactly as they stood immediately before the push.
     /// [`complete_removed_and_flush`](Self::complete_removed_and_flush)
     /// is the second half, run under a second, separate borrow.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn push_for_remove_until_with_id<R: Route>(
         &mut self,
         id: RouteId,
@@ -968,6 +965,7 @@ impl RouteHistory {
     /// The removal half of `push_and_remove_until`: complete every present
     /// entry named in `remove_ids`, then flush **once**, so the push and every
     /// removal the caller's `keep` decided on land in a single flush.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn complete_removed_and_flush(&mut self, remove_ids: &[RouteId]) {
         let mut displaced = Vec::new();
         for &target in remove_ids {
@@ -1196,7 +1194,10 @@ impl RouteHistory {
         self.flush_inner(rearrange_overlay)
     }
 
-    #[expect(clippy::too_many_lines)] // A 1:1 transcription; splitting it would scramble the mapping.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a 1:1 transcription of the reference flush algorithm; splitting it would scramble the mapping"
+    )]
     fn flush_inner(&mut self, rearrange_overlay: bool) -> FlushOutcome {
         let mut index: isize = self.entries.len() as isize - 1;
         let mut next: Option<RouteId> = None;
@@ -1229,16 +1230,12 @@ impl RouteHistory {
                     }
                 }
 
-                RouteLifecycle::Push | RouteLifecycle::PushReplace | RouteLifecycle::Replace => {
+                RouteLifecycle::Push | RouteLifecycle::PushReplace => {
                     let previous = (index > 0).then(|| self.entries[position - 1].id());
                     let previous_present = self.route_before(index - 1, RouteLifecycle::is_present);
                     // `PushReplace` reports the route its own completion targeted;
-                    // the other two keep the positional answer, which is right for
-                    // them — see `RouteEntry::replacing`. `Push` means "the route
-                    // below", which is positional by definition and replaces
-                    // nothing; `Replace` (the generic mid-stack swap) resolves its
-                    // target positionally in the first place, so position *is* its
-                    // single source of truth.
+                    // `Push` keeps the positional answer, "the route below", which
+                    // replaces nothing — see `RouteEntry::replacing`.
                     let replaced = match state {
                         RouteLifecycle::PushReplace => self.entries[position].replacing,
                         _ => previous_present,

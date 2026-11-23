@@ -741,7 +741,8 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
         );
         if device == Device::Touch {
             sheet.jump_to(Stop::Closed).expect("an anchor");
-            let mut script = flui_testing::TouchScript::new("cancelled").down(1, at(150.0, 20.0));
+            let mut script =
+                flui_testing::replay::TouchScript::new("cancelled").down(1, at(150.0, 20.0));
             for point in crate::nested_scroll::line(at(150.0, 20.0), at(150.0, 110.0), 6) {
                 script = script.wait(Duration::from_millis(16)).move_to(1, point);
             }
@@ -786,7 +787,7 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
     laid.tick();
     // A notch up over the sheet: room for the list to go back, and for the
     // sheet to move down, were it a scroll view.
-    let wheel = flui_testing::MouseScript::new("wheel")
+    let wheel = flui_testing::replay::MouseScript::new("wheel")
         .move_to(at(150.0, 100.0))
         .wheel(-1.0)
         .wait(Duration::from_millis(300))

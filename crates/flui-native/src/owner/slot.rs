@@ -14,9 +14,9 @@
 //! made there). The table leaks rather than drops what it still holds when the
 //! thread exits.
 
+use rustc_hash::FxHashMap;
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
@@ -36,7 +36,7 @@ thread_local! {
 /// left behind is leaked, as it would have been without the table.
 #[derive(Default)]
 struct OwnerValues {
-    values: HashMap<u64, Box<dyn Any>>,
+    values: FxHashMap<u64, Box<dyn Any>>,
     /// The keys of slots dropped on other threads, whose values this thread
     /// drops at its next use of the table ([`bury_orphans`]).
     orphans: Orphans,
@@ -46,7 +46,7 @@ struct OwnerValues {
 type Orphans = std::sync::Arc<parking_lot::Mutex<Vec<u64>>>;
 
 impl std::ops::Deref for OwnerValues {
-    type Target = HashMap<u64, Box<dyn Any>>;
+    type Target = FxHashMap<u64, Box<dyn Any>>;
 
     fn deref(&self) -> &Self::Target {
         &self.values
@@ -298,10 +298,10 @@ impl<T: 'static> std::fmt::Debug for OwnerCell<T> {
 }
 
 /// A map of a `Send + Sync` host structure that only its owner thread
-/// reaches: an [`OwnerCell`] of a `HashMap`, for a host's table of open
+/// reaches: an [`OwnerCell`] of an `FxHashMap`, for a host's table of open
 /// windows. Off the owner thread it is empty and takes nothing.
 pub(crate) struct OwnerMap<K: 'static, V: 'static> {
-    cell: OwnerCell<HashMap<K, V>>,
+    cell: OwnerCell<FxHashMap<K, V>>,
 }
 
 impl<K: std::hash::Hash + Eq + Copy + 'static, V: Clone + 'static> OwnerMap<K, V> {

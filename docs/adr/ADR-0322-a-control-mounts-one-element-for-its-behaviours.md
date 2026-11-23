@@ -89,7 +89,7 @@ state); here the collapse reaches the element and the render object.
 ### §1 The node is private to the catalogs
 
 ```rust
-// flui_widgets::interaction::node: #[doc(hidden)], in no prelude, not re-exported by the facade
+// flui_widgets::__private::node: #[doc(hidden)], in no prelude, not re-exported by the facade
 #[derive(Clone)]
 pub struct InteractiveNode { /* child, enabled, one Option per behaviour */ }
 ```

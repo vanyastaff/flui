@@ -21,11 +21,9 @@ use super::{CodecStep, Document, PersistError, ReadOnlyReason, Revision, SaveSta
 use super::{StorageCapability, StorageHandle};
 use crate::context::CrateToken;
 use crate::flush_registry::{FlushPublisher, FlushRegistry, FlushState};
-use crate::{
-    AppLifecycleState, AsyncDriver, CloseGuard, CloseHold, LifecycleSubscription, TaskToken,
-    TimerHandle,
-};
+use crate::{AppLifecycleState, CloseGuard, CloseHold, LifecycleSubscription};
 use crate::{LifecycleContext, LifecycleContextExt, UnmountHook};
+use flui_scheduler::{AsyncDriver, TaskToken, TimerHandle};
 
 /// The first word of a stored document's header line.
 const HEADER_MAGIC: &str = "flui-document";
@@ -104,8 +102,9 @@ struct OpenDocument<D> {
 /// Where one document stands; see [`Persisted::status`].
 struct DocumentState<D> {
     status: SaveStatus,
-    /// The number of the latest load; an earlier load's result is not
-    /// applied.
+    /// The number of the latest load or edit; an earlier load's result is not
+    /// applied. Bumped once per load or edit, so a `u64` outlasts any process
+    /// (one bump a nanosecond takes 584 years to overflow).
     generation: u64,
     /// The value the last applied load produced, and every value set since.
     loaded: Option<Loaded<D>>,
@@ -429,7 +428,7 @@ impl<D: Document> Persisted<D> {
         commit(&document.state, |state, out| {
             // A load still in flight read the file before this edit: its
             // result is not applied over it.
-            state.generation = state.generation.wrapping_add(1);
+            state.generation += 1;
             let loaded = state
                 .loaded
                 .as_mut()
@@ -562,7 +561,7 @@ impl<D: Document> Persisted<D> {
                 return;
             };
             // A load still in flight is not applied over the fresh start.
-            state.generation = state.generation.wrapping_add(1);
+            state.generation += 1;
             state.restart = Some(Restart::Copying(base));
             state.status = SaveStatus::Saving;
         }
@@ -629,7 +628,7 @@ impl<D: Document> OpenDocument<D> {
             .storage
             .as_ref()
             .map_err(|refusal| PersistError::Storage(StorageError::Unsupported(*refusal)))?;
-        state.generation = state.generation.wrapping_add(1);
+        state.generation += 1;
         let generation = state.generation;
         drop(state);
         // Taken before the read is issued, so a write confirmed after it is

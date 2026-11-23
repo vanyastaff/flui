@@ -87,18 +87,17 @@ and edits its row.
 | Need | Use | Not |
 |------|-----|-----|
 | An owner changes its state, then runs code it does not own | `flui_foundation::panic::commit` / `commit_into` and `Outbox` (ADR-0287) | calling the listener, waker or `Drop` with the borrow or guard still held |
-| Keep the first of several caught panics and resume it after cleanup | `FirstPanic`; a payload nobody resumes goes to `discard_payload` (ADR-0281) | a crate-local first-failure fold, `PanicRecovery` outside `flui-foundation`, retaining or `mem::forget`ting a payload |
+| Keep the first of several caught panics and resume it after cleanup | `FirstPanic`; a payload nobody resumes goes to `discard_payload` (ADR-0281); a delivery a seam lends (`RecoveryScope` through a notifier, `commit_into`) keeps `PanicRecovery` (ADR-0287 §3) | a crate-local first-failure fold, `PanicRecovery` as a local fold that lends its scope to no seam, retaining or `mem::forget`ting a payload |
 | State only the owner thread touches | `Rc` with `Cell`/`RefCell`; a re-entry that finds it busy gets a typed outcome (ADR-0323 §1) | `Arc<Mutex<_>>`, atomics, `try_lock` as a re-entrancy detector, `Send + Sync` on a callback that never leaves the thread |
 | A list of listeners | `Notifier<Arg>`, `ChangeNotifier`; a listener's owned handle is a `Subscription` from its channel's `listen` or `subscribe` | a hand-rolled `Vec` of callbacks guarded by a `notifying: bool` |
 | A hash table keyed by ids or fingerprints the process mints | `rustc_hash::FxHashMap`/`FxHashSet`; a per-frame set over tree ids is `flui_foundation::SlotSet`/`SlotIndex`; a crate holds it with `#![warn(clippy::disallowed_types)]` ([gaps](docs/gaps.md#most-crates-still-hash-ids-with-siphash)) | std `HashMap`/`HashSet` with its SipHash seed; a table keyed by values an application or its content supplies (view-key hashes, authored sizes, font names and paths) keeps std with `#[expect(clippy::disallowed_types, reason = "…")]` |
 | A new identity | `IdMint<I>` and `IdExhausted` (`flui_foundation::sequence`), its `AtomicIdMint` where two threads mint one id domain, or a generational key whose slot generations `GenSlots` carries (ADR-0313) | `wrapping_add`, a `pub` integer field, an ID derived from an OS handle or pointer |
 | A state's signals and capability handles | created in `StatefulView::create_state(&self, ctx)`, so the state is born bound | an `Option` field that `init_state` fills with `Some(ctx.…)` |
 | An element holds the view it was built from | the shared `Rc<V>` that `View::create_element(self: Rc<Self>)` receives; a `BoxedView` hands its `Rc` on, so an element never copies its view (ADR-0245) | a clone of the view kept beside the parent's `BoxedView`, a `Weak` back to the source to compare identity |
-| An application's test or a scenario that runs on every target | `flui_testing::Tester` (`flui::testing`) with `find` locators, acting through the window's agent | coordinates computed by hand, a `PointerScript` aimed at a node's bounds, root scopes (`MediaQuery`, `GestureArenaScope`, `FocusTreeRoot`) wrapped by the test |
+| An application's test or a scenario that runs on every target | `flui_testing::tester::Tester` (`flui::testing`) with `find` locators, acting through the window's agent | coordinates computed by hand, a `PointerScript` aimed at a node's bounds, root scopes (`MediaQuery`, `GestureArenaScope`, `FocusTreeRoot`) wrapped by the test |
 | A widget navigates, opens a dialog or pops its page | `Router::<R>::of(ctx)` and `PageHandle::of(ctx)` resolved in `build`, the handle moved into the callback; a dialog or menu is a `PopupRoute` pushed with `PageHandle::push_popup` (ADR-0330) | a navigator handle: `Navigator`, `NavigatorHandle` and `WidgetsApp::navigator` left the public API (ADR-0330 §4), and inside `flui-widgets` only the navigator, the Router and the menus' popup placement reach `NavigatorHandle` |
-| A test that drives an application's frames | `flui_testing::HeadlessHost` over `UiRuntime::pump` and its manual clock; presentations at independent cadences are separate hosts | a frame loop over raw owners (ADR-0083 §4 deleted `HeadlessBinding` and its `pump_frame`) |
+| A test that drives an application's frames | `flui_testing::host::HeadlessHost` over `UiRuntime::pump` and its manual clock; presentations at independent cadences are separate hosts | a frame loop over raw owners (ADR-0083 §4 deleted `HeadlessBinding` and its `pump_frame`) |
 | The platform whose conventions a widget follows (chords, handles, menus, transitions) | `flui_view::environment::PlatformConvention::of`, installed by the runtime above every root; a test names its platform with `HeadlessWindow::with_platform` or a `PlatformConvention` wrapper (ADR-0028) | `TargetPlatform::current()` outside the app runner, a theme's platform field, a `Default` that reads the build host |
-| A trait object its owner downcasts to the concrete type | `Any` as a supertrait, upcast `&dyn Trait` to `&dyn Any` (trait upcasting) | a required `fn as_any(&self) -> &dyn Any` every implementor writes by hand |
 | A platform's status, a version floor, an open gap | `crates/flui-native/platform-parity.toml` (rendered into `docs/platform-parity.md`), `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md`; a hand edit of `docs/platform-parity.md` |
 
 ## Codebase map
@@ -209,9 +208,11 @@ are checked by `cargo heli nextest run` of the crates that own them.
 | Signals are read in `build`, never written or created there | run-time guard in `flui-view::reactive` (ADR-0074) |
 | **ID offset** — plain slab-backed IDs (`ViewId`, `LayerId`, `SemanticsId`) are 1-based `NonZeroUsize` (`slab_index + 1`); generational keys (`ElementId`, `RenderId`, `UiRuntimeId`) are minted with `new_gen(slab_index, generation)` and read with `.index()` | ID newtypes |
 | Logical and device geometry don't mix (ADR-0098) | trybuild `crates/flui-painting/tests/compile_fail/` |
+| A sliver's geometry is built by `SliverGeometry::new` or `with_extents` and the `with_*` builders, which derive `layout_extent`, `hit_test_extent` and `visible` from the paint extent; outside `flui-rendering` a struct literal does not compile | `#[non_exhaustive]` on `SliverGeometry` |
 | No bare `unwrap()` in production: `expect("BUG: <invariant>")`, `thiserror` in libraries, `anyhow` in apps ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)) | clippy |
 | A public enum is `#[non_exhaustive]` unless its closure is a decision, stated by `#[expect(clippy::exhaustive_enums, reason = "…")]` on it | clippy `exhaustive_enums` (ADR-0329) |
 | A caught panic payload nobody resumes goes to `discard_payload`; `mem::forget` is a deliberate leak with its reason at the call | clippy `mem_forget` |
+| A lint exception says why it is right at its site: `#[expect(lint, reason = "…")]`, or `#[allow]` with its reason where the lint fires only under some configuration | clippy `allow_attributes_without_reason` (workspace lints) |
 | `docs/platform-parity.md` is the render of `crates/flui-native/platform-parity.toml` (`FLUI_OVERWRITE=1` restates it), and a row of a position a host fills with `Absent` claims no support there | flui-native's `parity_document_matches_its_source` and `absent_positions_claim_no_support` (ADR-0303 §2) |
 | Every `tests/*.rs` file of a crate that sets `autotests = false` is a test target or a module of one: a file that is neither never compiles | a step of CI's `checks` job (ADR-0383 §9) |
 | No two records in `docs/adr/` share a number | a step of CI's `checks` job (ADR-0383 §9) |
@@ -422,8 +423,8 @@ embarrassed by, with the better shape. What this repository keeps getting wrong:
   about the change instead of the code ("Code for the next reader");
 - the "Recurring defects" above, checked at each failure point alone, two in competition, and
   the next operation after containment ([matrix](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/signal-unwind-contract.ru.md));
-- `SliverGeometry { ..SliverGeometry::ZERO }` (drops `layout_extent`, `visible`), geometry from a
-  stand-in value (ADR-0054), intrinsics, baselines or hit-testing left at defaults;
+- geometry from a stand-in value (ADR-0054), intrinsics, baselines or hit-testing left at
+  defaults;
 - a pixel claim whose readback samples don't distinguish fixed from broken; a `wgpu::Instance`
   created apart from its surface;
 - state owned by the process instead of a UI runtime; event translation tested only

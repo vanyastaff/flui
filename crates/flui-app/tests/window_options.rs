@@ -3,8 +3,8 @@
 //! makes before any runner refuses it with the error that names the option
 //! and its numbers, and nothing starts (no window opens).
 
-use flui_app::app::{AppConfig, Application, LaunchError};
 use flui_app::testing::HeadlessRun;
+use flui_app::{AppConfig, Application, LaunchError};
 use flui_platform::{InvalidGeometry, WindowExtent, WindowOption};
 use flui_widgets::SizedBox;
 

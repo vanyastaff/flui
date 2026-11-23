@@ -120,7 +120,8 @@ pub fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
 /// Neither drops a state its role does not carry (the harness fails a frame
 /// that does).
 pub fn a_selectable_tile_is_an_option_whether_or_not_selected() {
-    use flui_sdk::widgets::{Semantics, SemanticsRole};
+    use flui_sdk::semantics::SemanticsRole;
+    use flui_sdk::widgets::Semantics;
 
     for (selectable, selected, role, announced) in [
         (true, true, Role::ListBoxOption, Some(true)),
@@ -171,7 +172,8 @@ pub fn a_selectable_tile_is_an_option_whether_or_not_selected() {
 /// `ListTile`'s `enabled` ignored), and the enabled tile without a handler
 /// is disabled.
 pub fn a_tile_is_disabled_only_when_it_says_so_and_operable_with_a_handler() {
-    use flui_sdk::widgets::{Semantics, SemanticsRole};
+    use flui_sdk::semantics::SemanticsRole;
+    use flui_sdk::widgets::Semantics;
     use flui_testing::a11y::Action;
 
     for (enabled, handler) in [(true, true), (true, false), (false, true), (false, false)] {

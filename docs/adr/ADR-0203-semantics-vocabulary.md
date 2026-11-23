@@ -59,7 +59,7 @@ Pre-1.0, the owner chose to break this vocabulary now (spec D3).
    `semantics_action_request_for` decodes a platform request into one and refuses a missing or
    mismatched payload with `ActionDecodeError` before any handler runs. One handler type per
    configuration, rather than one slot type per action, keeps the per-node ticket the widget
-   layer advertises every action through (`flui-widgets` ARCHITECTURE §17); the widget
+   layer advertises every action through (`flui-widgets` `ARCHITECTURE.md`, [`Semantics` action handlers are owner-local `EventContext` callbacks](../../crates/flui-widgets/ARCHITECTURE.md#semantics-action-handlers-are-owner-local-eventcontext-callbacks-behind-one-send--sync-ticket-handler-per-node)); the widget
    builders are where the per-action argument types live.
 4. **Names.** Each role and action keeps a `name()` in this vocabulary; the list of names is
    pinned by a test. The agent's wire `Role` stays a separate vocabulary that folds roles to

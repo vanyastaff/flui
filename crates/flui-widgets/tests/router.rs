@@ -18,11 +18,12 @@ use flui_animation::Vsync;
 use flui_foundation::Listenable;
 use flui_painting::styling::Color;
 use flui_view::environment::VsyncScope;
+use flui_view::navigation::RouteParseError;
 use flui_widgets::__test_access::{Navigator, NavigatorHandle, NavigatorObserver, SimpleRoute};
 use flui_widgets::prelude::*;
 use flui_widgets::{
     ColoredBox, GestureDetector, PageError, PageHandle, PopupRoute, RouteAnimation, RouteId,
-    RouteParseError, RouteResultError, RouterError, Text,
+    RouteResultError, RouterError, Text,
 };
 
 const FRAME: Duration = Duration::from_millis(50);
@@ -1359,8 +1360,9 @@ fn terminal_mounted_router_retires_accepted_values() {
     );
 }
 
-/// Divergence (ARCHITECTURE.md mapping decision 23): a Router never pops its
-/// last page, through its own handle or through the navigator facade.
+/// Divergence (`ARCHITECTURE.md`, "A Router never pops or removes its last
+/// page"): a Router never pops its last page, through its own handle or through
+/// the navigator facade.
 pub(crate) fn router_never_pops_its_last_page() {
     let (mut laid, home) = two_screen_app();
     let router = home.handle();
@@ -2097,7 +2099,7 @@ pub(crate) fn a_popup_pushed_from_a_page_resolves_to_its_value() {
 /// without one, once that entrance settles; the added page then covers Home.
 /// The add lands in the very frame the entrance settles in: the navigator
 /// settles the push in that frame's animation tick, not in a later `build`,
-/// where ADR-0086 §7 refuses controller mutation.
+/// where ADR-0074 §5.2 refuses controller mutation.
 pub(crate) fn a_deep_link_adds_its_lower_page_in_the_frame_its_top_settles() {
     const TICK: Duration = Duration::from_millis(16);
     let frame = Rc::new(Cell::new(0_usize));
@@ -2164,7 +2166,7 @@ pub(crate) fn a_named_page_is_announced_when_pushed_and_when_uncovered() {
     let polite = |laid: &LaidOut| {
         laid.a11y_tree()
             .expect("semantics enabled")
-            .announcement(flui_widgets::Urgency::Polite)
+            .announcement(flui_semantics::Urgency::Polite)
             .map(str::to_owned)
     };
     assert_eq!(polite(&laid), None, "the first page is not announced");

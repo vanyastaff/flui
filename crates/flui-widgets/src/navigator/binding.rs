@@ -373,12 +373,12 @@ impl RouteRegistries {
     /// Take the overlay entries of `routes` out of the registry, then remove
     /// each from its overlay with the registry's lock released: an entry's
     /// builder may own captures whose `Drop` is user code. Each removal runs,
-    /// and each entry retires, through `recovery`, which holds the first
+    /// and each entry retires, through `failure`, which holds the first
     /// failure.
     pub(crate) fn retire_entries(
         &self,
         routes: &[RouteId],
-        recovery: &mut flui_foundation::panic::PanicRecovery,
+        failure: &mut flui_foundation::panic::FirstPanic,
     ) {
         let removed: Vec<OverlayEntry> = {
             let mut entries = self.entries.borrow_mut();
@@ -386,9 +386,9 @@ impl RouteRegistries {
         };
         for entry in removed {
             if entry.is_attached() {
-                recovery.run(|| entry.remove());
+                failure.contain(|| entry.remove());
             }
-            recovery.retire(entry);
+            failure.retire(entry);
         }
     }
 
@@ -561,9 +561,6 @@ impl RouteBinding {
     ///
     /// Reached only through `ModalRoute::changed_internal_state`, whose caller is
     /// `ModalHandle::set_offstage` — the `HeroController` seam.
-    ///
-    /// `dead_code` because that consumer is itself dead until the `Hero` widget
-    /// gives it a production caller; see `hero_controller.rs`.
     pub(crate) fn mark_entry_needs_build(&self) {
         if let Some(entry) = self.entry() {
             entry.mark_needs_build();

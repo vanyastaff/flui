@@ -148,8 +148,8 @@ fn a_window_whose_question_panics_refuses_and_a_failing_report_costs_nothing() {
     for report_fails in [false, true] {
         let router = Rc::new(CloseRequestRouter::new());
         let windows: [Rc<dyn PlatformWindow>; 2] = [
-            Rc::new(flui_testing::MockWindow::new()),
-            Rc::new(flui_testing::MockWindow::new()),
+            Rc::new(flui_platform::testing::MockWindow::new()),
+            Rc::new(flui_platform::testing::MockWindow::new()),
         ];
         let (panics, asked_after) = (address(1), address(2));
         let own_router = Rc::downgrade(&router);

@@ -1,8 +1,7 @@
 //! [`Text`] — displays a run of styled text.
 
-use flui_foundation::TextDirection;
+use flui_foundation::{CreationSite, TextDirection};
 use flui_painting::typography::{TextAlign, TextSpan, TextStyle};
-use flui_view::CreationSite;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 

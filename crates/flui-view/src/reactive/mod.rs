@@ -81,15 +81,17 @@ use rustc_hash::FxHashMap;
 use std::any::{Any, type_name};
 use std::cell::RefCell;
 use std::fmt;
+use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use flui_foundation::generation::GenSlots;
 use flui_foundation::panic::FirstPanic;
 pub use flui_foundation::read_scope::{
     ReadGraph, ReadScope, ReaderSink, ScopeRef, Signal, SignalError, SignalSender, SignalSlot,
 };
-use flui_foundation::{BuildPhase, BuildPhaseGuard, ElementId, RebuildReason};
+use flui_foundation::{
+    AtomicIdMint, BuildPhase, BuildPhaseGuard, ElementId, IdExhausted, RebuildReason,
+};
 use smallvec::SmallVec;
 
 #[cfg(test)]
@@ -105,21 +107,17 @@ pub use writer::{
     callback, callback_ref, callback_with,
 };
 
-/// Process-wide counter that gives every [`Reactive`] graph a distinct id, so
-/// a [`SignalSlot`] is meaningful only against the graph that minted it. Id 0
-/// ([`SignalSlot::NO_GRAPH`]) is never handed out.
-static NEXT_GRAPH_ID: AtomicU32 = AtomicU32::new(1);
+/// The process-wide mint that gives every [`Reactive`] graph a distinct id, so
+/// a [`SignalSlot`] is meaningful only against the graph that minted it. Ids
+/// start at 1, so [`SignalSlot::NO_GRAPH`] is never handed out, and stop at
+/// `u32::MAX`, the width a slot carries.
+static GRAPH_IDS: AtomicIdMint<NonZeroU32> = AtomicIdMint::new();
 
-/// Takes the next graph id from `counter`. The space is never reused: a wrapped
+/// Takes the next graph id from `mint`. The space is never reused: a reissued
 /// id would let a stale [`SignalSlot`] of a dropped graph validate against a
-/// live one, so the counter parks at the no-graph id after the last and every
-/// later graph is refused.
-fn next_graph_id(counter: &AtomicU32) -> u32 {
-    counter
-        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            (current != SignalSlot::NO_GRAPH).then(|| current.wrapping_add(1))
-        })
-        .expect("BUG: reactive graph id space exhausted")
+/// live one, so once the last id is issued every later graph is refused.
+fn next_graph_id(mint: &AtomicIdMint<NonZeroU32>) -> Result<u32, IdExhausted> {
+    mint.next().map(NonZeroU32::get)
 }
 
 struct Node {
@@ -144,7 +142,7 @@ struct ActiveBuild {
 /// Every presentation has its own [`Reactive`] graph, so a graph's own
 /// `building` cannot see another window's build. The UI runtime hands one
 /// `BuildInProgress` to every `BuildOwner` it assembles
-/// ([`BuildOwner::set_build_in_progress`](crate::BuildOwner::set_build_in_progress));
+/// ([`BuildOwner::set_build_in_progress`](crate::owner::BuildOwner::set_build_in_progress));
 /// each graph publishes its builds there and consults it before accepting a
 /// write or a slot creation, so a write that reaches window A's graph (through
 /// the runtime's `Writer` routing) while window B builds is refused with
@@ -292,7 +290,7 @@ impl Reactive {
     /// frame-request callback changes).
     #[must_use]
     pub fn new() -> Self {
-        let id = next_graph_id(&NEXT_GRAPH_ID);
+        let id = next_graph_id(&GRAPH_IDS).expect("BUG: reactive graph id space exhausted");
         Self {
             id,
             inner: Rc::new(RefCell::new(Inner::default())),
@@ -1705,11 +1703,20 @@ mod tests {
 
     #[test]
     fn graph_ids_are_refused_after_the_last_instead_of_wrapping() {
-        let counter = std::sync::atomic::AtomicU32::new(u32::MAX);
-        assert_eq!(super::next_graph_id(&counter), u32::MAX);
+        let mint = AtomicIdMint::<NonZeroU32>::starting_after(u64::from(u32::MAX) - 1);
+        assert_eq!(super::next_graph_id(&mint), Ok(u32::MAX));
         for _ in 0..2 {
-            let refused = std::panic::catch_unwind(|| super::next_graph_id(&counter));
-            assert!(refused.is_err(), "an exhausted id space stays exhausted");
+            assert_eq!(
+                super::next_graph_id(&mint),
+                Err(IdExhausted),
+                "an exhausted id space stays exhausted"
+            );
         }
+        let fresh = AtomicIdMint::<NonZeroU32>::new();
+        assert_eq!(
+            super::next_graph_id(&fresh),
+            Ok(1),
+            "no graph is given NO_GRAPH"
+        );
     }
 }

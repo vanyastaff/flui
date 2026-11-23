@@ -1,14 +1,9 @@
-//! Shared GPU scaffolding for the `testing` suites.
-//!
-//! Before this module existed, every GPU test file carried its own copy of the
-//! same four rituals — adapter/device acquisition, render-target creation, a
-//! clear pass, and the padded-row staging readback — under six different names
-//! (`acquire_test_device_and_queue`, `test_device_and_queue`, `device_queue`,
-//! …). The copies drifted only in labels and expect-message wording, and every
-//! wgpu API migration (most recently wgpu 30's `apply_limit_buckets` and
-//! fallible `get_mapped_range`) had to be applied to each copy by hand. This
-//! module is the single home for those rituals; per-file oracles, painters,
-//! and scene builders stay local to their suites.
+//! Shared GPU scaffolding for the readback suites: adapter/device
+//! acquisition, render-target creation, a clear pass, and the padded-row
+//! staging readback. One home for these means a wgpu API migration is applied
+//! once; per-file oracles, painters, and scene builders stay local to their
+//! suites. Compiled under `cfg(test)` alone, not the `testing` feature, so the
+//! suites that do not need the feature can call it.
 //!
 //! Two device flavours exist on purpose:
 //! - [`test_device_and_queue`] panics when no adapter is present — for
@@ -27,7 +22,7 @@ use std::sync::Arc;
 /// `apply_limit_buckets: false` — wgpu 30's anti-fingerprinting knob is for
 /// embedders exposing a GPU to untrusted content; tests want the adapter's
 /// real limits. Same answer as the production sites in
-/// [`crate::adapter::trusted_adapter_options`].
+/// [`crate::device::adapter::trusted_adapter_options`].
 #[cfg(feature = "testing")]
 fn request_test_adapter() -> Result<wgpu::Adapter, wgpu::RequestAdapterError> {
     let instance =

@@ -107,13 +107,19 @@ Pinned by `a_plugin_pipeline_measures_through_the_context_it_is_given`
 
 ### The plugin root lays out at each frame's surface size
 
-`PluginPipeline::draw_frame(width, height)` sets tight root constraints to the
-size the host passes to that `flui_app_build` call before it runs the frame, as
-the host UI runtime does at its window's size every frame. The pipeline laid nothing
-out without root constraints, and constraints set once at mount would keep the
-first size after the host's surface is resized. Pinned by
+`PluginPipeline::draw_frame(size)` sets tight root constraints to the size the
+host passes to that `flui_app_build` call before it runs the frame, as the host
+UI runtime does at its window's size every frame. Constraints set once at mount
+would keep the first size after the host's surface is resized. Pinned by
 `a_plugin_pipeline_lays_out_at_the_size_of_each_frame`
 (`tests/plugin_pipeline_layout.rs`, under `app-plugin`).
+
+A size that is not finite or is negative crosses the ABI as two `f64`s, so
+`draw_frame` refuses it with `PluginFrameError::InvalidSize` before anything is
+built, and `flui_app_build` hands the host an empty scene with the reason
+reported. Pinned by
+`a_frame_at_an_invalid_size_is_refused_before_anything_is_built`
+(`crates/flui-sdk/src/hooks/plugin_pipeline.rs`).
 
 ### Polling an image does not construct a scene
 

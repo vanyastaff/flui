@@ -23,7 +23,7 @@ use flui_rendering::pipeline::PipelineCell;
 use flui_scheduler::AppLifecycleState;
 #[cfg(any(test, feature = "testing"))]
 use flui_scheduler::ClockSource;
-use flui_view::{BuildInProgress, GlobalKeyScope};
+use flui_view::__runtime::{BuildInProgress, GlobalKeyScope};
 use std::cell::{Cell, RefCell};
 use std::marker::PhantomData;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -109,11 +109,9 @@ impl UiRuntime {
     /// Assembles this UI runtime's INITIAL presentation via
     /// [`PresentationState::new`], which installs the scope, the UI runtime's
     /// shared dispatch handles, and this presentation's own focus/IME
-    /// before anything attaches or mounts (ADR-0043 §1). Production
-    /// topology is no longer limited to this one presentation:
-    /// `PresentationForest`'s former `len()<=1` ratchet is lifted (issue
-    /// #555's addressed-routing slice) — [`Self::install_presentation`]
-    /// (paired with [`Self::assemble_presentation`]) is how a UI runtime grows
+    /// before anything attaches or mounts (ADR-0043 §1). A UI runtime holds any
+    /// number of presentations: [`Self::install_presentation`]
+    /// (paired with [`Self::assemble_presentation`]) is how it grows
     /// PAST this initial presentation, once the UI runtime itself already
     /// exists.
     pub(super) fn construct(

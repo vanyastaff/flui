@@ -83,16 +83,19 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use flui_sdk::foundation::TextDirection;
 use flui_sdk::geometry::EdgeInsets;
+use flui_sdk::painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::painting::{Alignment, AlignmentDirectional};
-use flui_sdk::painting::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
-use flui_sdk::painting::{TextDirection, TextStyle};
 use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::rendering::TableCellVerticalAlignment;
+use flui_sdk::rendering::objects::TableColumnWidth;
+use flui_sdk::semantics::SemanticsRole;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Center, Container, DefaultTextStyle, Directionality, Padding, Semantics, SemanticsRole,
-    SizedBox, Table, TableCell, TableCellVerticalAlignment, TableColumnWidth, TableRow,
-    WidgetState, WidgetStateProperty, WidgetStates,
+    Center, Container, DefaultTextStyle, Directionality, Padding, Semantics, SizedBox, Table,
+    TableCell, TableRow, WidgetState, WidgetStateProperty, WidgetStates,
 };
 
 use crate::checkbox::{CHECKBOX_EDGE_SIZE, Checkbox};
@@ -856,7 +859,10 @@ fn header_cell(
 /// start-aligned otherwise, at the resolved data text style and row height
 /// range, wrapped in an [`InkWell`] when the cell or its row is tappable
 /// (edit-icon/placeholder omitted — see the module docs).
-#[expect(clippy::too_many_arguments)] // per-cell parameter list; a patch struct would only relocate this
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the per-cell parameters are independent resolved values; a patch struct would only relocate the list"
+)]
 fn data_cell(
     cell: &DataCell,
     numeric: bool,

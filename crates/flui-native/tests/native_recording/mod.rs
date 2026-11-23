@@ -5,7 +5,8 @@
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 pub mod capture;
 pub use flui_native::journal::codec;
-mod families;
+// The family replays the conformance table's recording rows run on (`backend_conformance`).
+pub(crate) mod families;
 
 use std::fmt::Write as _;
 

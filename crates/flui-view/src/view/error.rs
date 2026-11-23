@@ -27,7 +27,7 @@ use super::view::View;
 /// Factory function type for creating custom error widgets.
 ///
 /// This allows applications to customize how errors are displayed.
-pub type ErrorViewBuilder = fn(&FrameworkError) -> Box<dyn View>;
+pub type ErrorViewBuilder = fn(&FrameworkError) -> BoxedView;
 
 /// Error details for framework errors.
 #[derive(Debug, Clone)]
@@ -159,13 +159,10 @@ impl ErrorView {
 
     /// Build an error view with `custom` when one is configured, else the
     /// default [`ErrorView`].
-    pub fn build_error_view(
-        error: &FrameworkError,
-        custom: Option<ErrorViewBuilder>,
-    ) -> Box<dyn View> {
+    pub fn build_error_view(error: &FrameworkError, custom: Option<ErrorViewBuilder>) -> BoxedView {
         match custom {
             Some(builder) => builder(error),
-            None => Box::new(Self::from_error(error)),
+            None => BoxedView::new(Self::from_error(error)),
         }
     }
 }
@@ -226,11 +223,9 @@ pub(crate) fn recovery_view_for(
 ) -> BoxedView {
     let recovered = ErrorView::build_error_view(error, custom);
     if recovered.key().is_some() {
-        BoxedView::new(UnkeyedRecovery {
-            inner: BoxedView::from(recovered),
-        })
+        BoxedView::new(UnkeyedRecovery { inner: recovered })
     } else {
-        BoxedView::from(recovered)
+        recovered
     }
 }
 

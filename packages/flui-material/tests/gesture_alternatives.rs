@@ -17,9 +17,11 @@ use flui_sdk::widgets::{
     Alternative, Column, CompanionGap, CompanionSpec, Expanded, GestureCommand, SizedBox,
 };
 use flui_testing::a11y::{Action, ActionData, ActionRequest, Role, TreeId};
+use flui_testing::gesture_alternatives::{
+    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
+};
 use flui_testing::log_capture::capture;
 use flui_testing::replay::TouchScript;
-use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 
 const SIZE: f64 = 400.0;
 

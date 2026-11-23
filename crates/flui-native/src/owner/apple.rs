@@ -19,7 +19,10 @@
 // safe wrapper. The workspace lint `unsafe_code = "warn"` is opted out here, at
 // the module boundary, rather than for the whole crate (see `lib.rs`). On
 // another host only the pure rule is compiled, for its tests.
-#![cfg_attr(any(target_os = "macos", target_os = "ios"), expect(unsafe_code))]
+#![cfg_attr(
+    any(target_os = "macos", target_os = "ios"),
+    expect(unsafe_code, reason = "the run loop is driven through Objective-C FFI")
+)]
 
 #[cfg(target_os = "ios")]
 pub(crate) mod ios;

@@ -1,7 +1,8 @@
 //! Public observer callbacks run in children; payloads and failed captures are destroyed.
 use flui_foundation::observe::{ElementMounted, ElementRebuilt, TreeObserver};
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
-use flui_view::{BuildOwner, ElementTree, RebuildReason};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::{RebuildReason, ViewExt};
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -103,7 +104,7 @@ fn run_child(kind: &str) {
     }));
     let root = tracing::subscriber::with_default(subscriber, || {
         let root = tree.mount_root_with_pipeline_owner(
-            &super::PlainLeaf,
+            &super::PlainLeaf.boxed(),
             Some(PipelineCell::new(PipelineOwner::new(
                 flui_rendering::TextContextHandle::standalone(),
             ))),

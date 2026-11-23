@@ -2195,15 +2195,15 @@ fn proxy_listener_removal_joins_its_enclosing_cleanup() {
         parent.set_value(0.25).expect("no build is running");
         assert_eq!(calls.get(), 1);
         let outcome = catch_unwind(AssertUnwindSafe(|| {
-            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            let mut failure = flui_foundation::panic::FirstPanic::new();
             if case != "healthy" {
-                recovery.run(|| panic!("first cleanup failure"));
+                failure.contain(|| panic!("first cleanup failure"));
             }
             // The withdrawal joins the enclosing cleanup: its capture
-            // retirement runs under this recovery, so a destructor panic
+            // retirement runs contained in `failure`, so a destructor panic
             // there cannot override the first failure.
-            recovery.run(|| drop(listening));
-            recovery.finish();
+            failure.contain(|| drop(listening));
+            failure.resume();
         }));
         if case == "healthy" {
             outcome.expect("healthy cleanup supports capture reentry");

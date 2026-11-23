@@ -12,7 +12,7 @@ use flui_layer::SceneVersionId;
 use flui_painting::styling::Color;
 use flui_runtime::sink::{FrameSettlement, FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::UiRuntime;
-use flui_testing::UnshownFrame;
+use flui_testing::host::UnshownFrame;
 use flui_testing::widgets::{lay_out, tight};
 use flui_widgets::{ColoredBox, SizedBox};
 

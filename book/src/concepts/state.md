@@ -55,7 +55,7 @@ decides whether dependents rebuild when the data changes:
 
 ```rust
 use flui::prelude::*;
-use flui::view::{BoxedView, InheritedView, View, impl_inherited_view};
+use flui::view::{BoxedView, InheritedView, impl_inherited_view};
 
 #[derive(Clone)]
 struct Accent {
@@ -70,7 +70,7 @@ impl InheritedView for Accent {
         &self.color
     }
 
-    fn child(&self) -> &dyn View {
+    fn child(&self) -> &BoxedView {
         &self.child
     }
 

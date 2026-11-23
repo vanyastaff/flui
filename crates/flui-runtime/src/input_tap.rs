@@ -38,7 +38,7 @@ use crate::input_record::{InputRecord, InputRow, RecordedSequence, RecordingStar
 use crate::owner::InputOutcome;
 
 /// The tracing target every contained tap failure is reported on.
-pub const INPUT_TAP_TARGET: &str = "flui_runtime::input_tap";
+pub(crate) const INPUT_TAP_TARGET: &str = "flui_runtime::input_tap";
 
 /// Observes the records a runtime emits, on its owner thread, in the order
 /// the runtime applied them.

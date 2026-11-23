@@ -43,11 +43,10 @@
 //! that will read it has not happened yet. `after_subscribe` then leaves an
 //! already-`Done` snapshot alone rather than dragging it back to `Waiting`.
 
-use std::{future::Future, pin::Pin, rc::Rc, sync::Arc};
+use std::{cell::RefCell, future::Future, pin::Pin, rc::Rc};
 
 use super::{AsyncSnapshot, ConnectionState};
 use flui_scheduler::{AsyncDriver, TaskToken};
-use parking_lot::Mutex;
 
 use super::async_slot::{
     InitialDataFactory, SharedSlot, Slot, SnapshotBuilder, SnapshotUpdate, apply_update,
@@ -167,7 +166,7 @@ where
         // the configuration the first subscription needs is copied here. Later
         // rebuilds reach the fresh view through `did_update_view` / `build`.
         FutureBuilderState {
-            slot: Arc::new(Mutex::new(Slot::new(AsyncSnapshot::nothing()))),
+            slot: Rc::new(RefCell::new(Slot::new(AsyncSnapshot::nothing()))),
             handle: ctx.rebuild_handle(),
             driver: ctx.async_driver(),
             token: None,
@@ -226,7 +225,7 @@ where
     K: std::fmt::Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let slot = self.slot.lock();
+        let slot = self.slot.borrow();
         f.debug_struct("FutureBuilderState")
             .field("key", &self.key)
             .field("connection_state", &slot.snapshot.connection_state())
@@ -249,7 +248,7 @@ where
     fn unsubscribe(&mut self) {
         self.token = None; // Drop cancels.
         self.key = None;
-        self.slot.lock().generation += 1;
+        self.slot.borrow_mut().generation += 1;
     }
 
     /// Start a subscription for `key` using `make`.
@@ -269,14 +268,14 @@ where
         let handle = self.handle.clone();
 
         let generation = {
-            let mut slot = self.slot.lock();
+            let mut slot = self.slot.borrow_mut();
             slot.generation += 1;
             slot.inline_window = true;
             slot.generation
         };
 
         let future = make();
-        let slot_for_task = Arc::clone(&self.slot);
+        let slot_for_task = Rc::clone(&self.slot);
 
         let token = driver.spawn_local_eager(Box::pin(async move {
             let result = future.await;
@@ -284,7 +283,7 @@ where
         }));
 
         {
-            let mut slot = self.slot.lock();
+            let mut slot = self.slot.borrow_mut();
             slot.inline_window = false;
             if slot.snapshot.connection_state() != ConnectionState::Done {
                 slot.set_connection_state(ConnectionState::Waiting);
@@ -309,7 +308,7 @@ where
             Some(initial_data) => AsyncSnapshot::with_data(ConnectionState::None, initial_data()),
             None => AsyncSnapshot::nothing(),
         };
-        let previous = core::mem::replace(&mut self.slot.lock().snapshot, initial);
+        let previous = core::mem::replace(&mut self.slot.borrow_mut().snapshot, initial);
         drop(previous);
 
         // An absent key means no future: no subscription, snapshot stays
@@ -321,7 +320,7 @@ where
     }
 
     fn build(&self, view: &FutureBuilder<K, T, E>, ctx: &dyn BuildContext) -> impl IntoView {
-        let slot = self.slot.lock();
+        let slot = self.slot.borrow();
         (view.builder)(ctx, &slot.snapshot)
     }
 
@@ -340,7 +339,9 @@ where
 
         if self.token.is_some() || self.key.is_some() {
             self.unsubscribe();
-            self.slot.lock().set_connection_state(ConnectionState::None);
+            self.slot
+                .borrow_mut()
+                .set_connection_state(ConnectionState::None);
         }
 
         if let Some(key) = new_view.key.clone() {
@@ -363,7 +364,7 @@ mod tests {
     use flui_scheduler::{OwnerFrame, UpdateScheduler};
 
     use crate::view::{ErrorView, ViewExt};
-    use crate::{BuildOwner, tree::ElementTree};
+    use crate::{owner::BuildOwner, tree::ElementTree};
 
     /// Deliberately neither `Clone` nor `Copy`, to prove the surface needs neither.
     #[derive(Debug, PartialEq)]
@@ -383,19 +384,19 @@ mod tests {
 
     /// A future the test completes by hand.
     struct Controlled {
-        result: Arc<Mutex<Option<Result<Payload, Boom>>>>,
-        waker: Arc<Mutex<Option<Waker>>>,
+        result: Rc<RefCell<Option<Result<Payload, Boom>>>>,
+        waker: Rc<RefCell<Option<Waker>>>,
     }
 
     impl Future for Controlled {
         type Output = Result<Payload, Boom>;
 
         fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
-            let result = self.result.lock().take();
+            let result = self.result.borrow_mut().take();
             if let Some(result) = result {
                 Poll::Ready(result)
             } else {
-                let _prev = self.waker.lock().replace(ctx.waker().clone());
+                let _prev = self.waker.borrow_mut().replace(ctx.waker().clone());
                 Poll::Pending
             }
         }
@@ -404,42 +405,42 @@ mod tests {
     /// Handle to complete a `Controlled` future from the test.
     #[derive(Clone)]
     struct Completer {
-        result: Arc<Mutex<Option<Result<Payload, Boom>>>>,
-        waker: Arc<Mutex<Option<Waker>>>,
+        result: Rc<RefCell<Option<Result<Payload, Boom>>>>,
+        waker: Rc<RefCell<Option<Waker>>>,
     }
 
     impl Completer {
         fn new() -> Self {
             Self {
-                result: Arc::new(Mutex::new(None)),
-                waker: Arc::new(Mutex::new(None)),
+                result: Rc::new(RefCell::new(None)),
+                waker: Rc::new(RefCell::new(None)),
             }
         }
 
         fn factory(&self) -> FutureFactory<Payload, Boom> {
-            let result = Arc::clone(&self.result);
-            let waker = Arc::clone(&self.waker);
+            let result = Rc::clone(&self.result);
+            let waker = Rc::clone(&self.waker);
             Rc::new(move || {
                 Box::pin(Controlled {
-                    result: Arc::clone(&result),
-                    waker: Arc::clone(&waker),
+                    result: Rc::clone(&result),
+                    waker: Rc::clone(&waker),
                 })
             })
         }
 
         /// Complete from outside a frame, as a real async completion would.
         fn complete(&self, result: Result<Payload, Boom>) {
-            *self.result.lock() = Some(result);
-            if let Some(waker) = self.waker.lock().as_ref() {
+            *self.result.borrow_mut() = Some(result);
+            if let Some(waker) = self.waker.borrow_mut().as_ref() {
                 waker.wake_by_ref();
             }
         }
     }
 
     /// Records every snapshot the builder was handed.
-    fn recording_builder(log: Arc<Mutex<Vec<Seen>>>) -> SnapshotBuilder<Payload, Boom> {
+    fn recording_builder(log: Rc<RefCell<Vec<Seen>>>) -> SnapshotBuilder<Payload, Boom> {
         Rc::new(move |_ctx, snapshot| {
-            log.lock().push(Seen {
+            log.borrow_mut().push(Seen {
                 state: snapshot.connection_state(),
                 data: snapshot.data().map(|payload| payload.0),
                 error: snapshot.error().map(|boom| boom.0),
@@ -473,7 +474,10 @@ mod tests {
             owner.set_async_driver(owner_frame.async_driver());
             let mut tree = ElementTree::new();
 
-            let root = tree.mount_root(view, &mut owner.element_owner_mut());
+            let root = tree.mount_root(
+                &crate::BoxedView::new(view.clone()),
+                &mut owner.element_owner_mut(),
+            );
             owner.schedule_build_for(root, 0, crate::RebuildReason::InitialMount);
             // The mount build: `init_state` runs here.
             owner.build_scope(&mut tree);
@@ -496,12 +500,12 @@ mod tests {
         }
     }
 
-    fn seen(log: &Arc<Mutex<Vec<Seen>>>) -> Vec<Seen> {
-        log.lock().clone()
+    fn seen(log: &Rc<RefCell<Vec<Seen>>>) -> Vec<Seen> {
+        log.borrow().clone()
     }
 
-    fn last(log: &Arc<Mutex<Vec<Seen>>>) -> Seen {
-        *log.lock().last().expect("at least one build")
+    fn last(log: &Rc<RefCell<Vec<Seen>>>) -> Seen {
+        *log.borrow().last().expect("at least one build")
     }
 
     // ── absent future ───────────────────────────────────────────────────────
@@ -511,12 +515,12 @@ mod tests {
     /// `'tracks life-cycle of Future to success'`: `Waiting` → `Done + data`,
     /// observed through the normal frame path.
     fn future_builder_pending_future_waits_then_completes_with_data() {
-        let log = Arc::new(Mutex::new(Vec::new()));
+        let log = Rc::new(RefCell::new(Vec::new()));
         let completer = Completer::new();
         let view = FutureBuilder::keyed(
             Some(1_u32),
             completer.factory(),
-            recording_builder(Arc::clone(&log)),
+            recording_builder(Rc::clone(&log)),
         );
 
         let mut harness = Harness::mount(&view);
@@ -555,12 +559,12 @@ mod tests {
     /// unreachable through the widget precisely because cancellation gets there
     /// first. `apply_completion_*` below tests the guard directly.
     fn future_builder_dispose_cancels_and_never_rebuilds() {
-        let log = Arc::new(Mutex::new(Vec::new()));
+        let log = Rc::new(RefCell::new(Vec::new()));
         let completer = Completer::new();
         let view = FutureBuilder::keyed(
             Some(1_u32),
             completer.factory(),
-            recording_builder(Arc::clone(&log)),
+            recording_builder(Rc::clone(&log)),
         );
         let mut harness = Harness::mount(&view);
         let builds_before = seen(&log).len();

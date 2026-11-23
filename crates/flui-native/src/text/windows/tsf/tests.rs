@@ -947,8 +947,7 @@ fn a_window_offers_its_text_services_as_its_host() {
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
-    let win32 = window
-        .as_any()
+    let win32 = (&*window as &dyn std::any::Any)
         .downcast_ref::<crate::window::windows::WindowsWindow>()
         .expect("Win32 window");
     let hwnd = win32.hwnd();
@@ -1055,8 +1054,7 @@ fn a_moved_window_tells_tsf_its_layout_changed() {
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
-    let win32 = window
-        .as_any()
+    let win32 = (&*window as &dyn std::any::Any)
         .downcast_ref::<crate::window::windows::WindowsWindow>()
         .expect("Win32 window");
     let hwnd = win32.hwnd();
@@ -1175,8 +1173,7 @@ fn a_rescaled_window_answers_layout_at_its_new_scale() {
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
-    let hwnd = window
-        .as_any()
+    let hwnd = (&*window as &dyn std::any::Any)
         .downcast_ref::<crate::window::windows::WindowsWindow>()
         .expect("Win32 window")
         .hwnd();
@@ -1221,8 +1218,7 @@ fn the_text_services_answer_a_completion_for_its_store() {
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
-    let hwnd = window
-        .as_any()
+    let hwnd = (&*window as &dyn std::any::Any)
         .downcast_ref::<crate::window::windows::WindowsWindow>()
         .expect("Win32 window")
         .hwnd();
@@ -1493,8 +1489,7 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
     });
     match opened {
         Ok(Ok(window)) => {
-            let hwnd = window
-                .as_any()
+            let hwnd = (&*window as &dyn std::any::Any)
                 .downcast_ref::<crate::window::windows::WindowsWindow>()
                 .expect("Win32 window")
                 .hwnd();
@@ -1586,8 +1581,7 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
             flui_testing::window_handler::RecordingWindowHandler::new(),
         )
         .expect("window");
-    let hwnd = window
-        .as_any()
+    let hwnd = (&*window as &dyn std::any::Any)
         .downcast_ref::<crate::window::windows::WindowsWindow>()
         .expect("Win32 window")
         .hwnd();

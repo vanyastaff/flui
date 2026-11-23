@@ -1,7 +1,5 @@
 //! `Table` widget smoke coverage over `RenderTable`.
 
-use std::collections::HashMap;
-
 use crate::common::{lay_out, offset, size, tight};
 use flui_objects::TableColumnWidth;
 use flui_view::ViewExt;
@@ -21,7 +19,7 @@ pub(crate) fn table_mounts_render_table_and_lays_out_a_grid_row_major() {
                 SizedBox::new(1.0, 15.0).boxed(),
             ]),
         ])
-        .column_widths(HashMap::from([(0, TableColumnWidth::Fixed(30.0))])),
+        .column_widths([(0, TableColumnWidth::Fixed(30.0))]),
         tight(100.0, 200.0),
     );
 

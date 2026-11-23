@@ -1,12 +1,18 @@
 //! Cached intermediate-to-surface presentation blit.
 //! Layer masks and backdrops use ordered painter IR, not this helper.
-use crate::device_domain::{DeviceDomain, PreparedCost};
+use crate::device::domain::{DeviceDomain, PreparedCost};
 use crate::error::EngineResult;
 use std::sync::Arc;
 mod blit;
 mod transform_blit;
 /// Cached presentation resources for intermediate-to-surface copies.
-#[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        unreachable_pub,
+        reason = "the crate root re-exports it only under `testing`, for the benches"
+    )
+)]
 pub struct OffscreenRenderer {
     domain: Arc<DeviceDomain>,
     device: Arc<wgpu::Device>,

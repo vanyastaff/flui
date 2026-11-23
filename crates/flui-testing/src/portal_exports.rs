@@ -1,5 +1,5 @@
 //! A headless window's simulated `xdg-foreign` exports
-//! ([`HeadlessWindow::with_portal_export`](crate::HeadlessWindow::with_portal_export)).
+//! ([`HeadlessWindow::with_portal_export`](crate::host::HeadlessWindow::with_portal_export)).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
@@ -13,6 +13,7 @@ use parking_lot::Mutex;
 pub struct HeadlessPortalExports {
     handle: Arc<str>,
     /// Each export a request may still hold; one released is `true`.
+    // `Arc` and atomics: `PortalParent::wayland` takes an `Any + Send` export.
     exports: Arc<Mutex<Vec<Weak<AtomicBool>>>>,
 }
 

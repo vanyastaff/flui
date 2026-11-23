@@ -3,10 +3,11 @@
 `flui-cli` owns command parsing, project template selection, generation of
 consumer dependency declarations, platform scaffolding and build
 orchestration (`src/build/`), and the dev-loop source watcher
-(`src/watch.rs`). It links no FLUI crate: the runtime half of hot reload
-lives in `flui-hot-reload`, which the *app* links, and the only contract
-between the two is a pair of environment-variable names pinned by a
-dev-dependency test.
+(`src/watch.rs`). It links no framework runtime crate (its FLUI dependencies
+are the contract crate `flui-protocol` and `flui-driver`'s trace writer): the
+runtime half of hot reload lives in `flui-hot-reload`, which the *app* links,
+and the only contract between the two is a pair of environment-variable names
+pinned by a dev-dependency test.
 
 ## One output policy, no logging framework
 
@@ -14,7 +15,7 @@ Everything the CLI prints goes through `ui::`. Human narration is styled
 text on stderr; `--json` is NDJSON on stdout; warnings and errors survive
 `--quiet`; diagnostics (the commands run, the probes made, the paths skipped)
 are `ui::debug` lines shown under `-v` only. There is no `tracing`
-subscriber and no `RUST_LOG`: with no framework crate in the graph, a log
+subscriber and no `RUST_LOG`: with no framework runtime crate in the graph, a log
 filter would have nothing to select but the CLI's own lines, and a second
 voice on stderr would compete with the narration. `flui-log` is the
 application's logging backend, not the CLI's.
@@ -45,9 +46,11 @@ in `the_apk_meets_the_store_levels`). A failed build with hot reload disabled ex
 there is no watcher that could repair it. `android_run_builds_the_selected_device_native_abi`
 pins the target argument, missing-target admission and bounded failure through the CLI process.
 
-Both SDK-tools APK packaging and generated Gradle projects require API 23,
-matching the platform's [View.getRootWindowInsets](https://developer.android.com/reference/android/view/View#getRootWindowInsets()) safe-area capture boundary.
-`apk_link_requires_supported_window_insets_api` pins the aapt2 invocation;
+Both SDK-tools APK packaging and generated Gradle projects take the Android
+floor from `platform-support.toml` (`ANDROID_MIN_SDK` in
+`build/platform_floor.rs`), the level the application's safe-area capture
+needs. `the_link_declares_the_floor_and_the_pinned_target` pins the aapt2
+invocation;
 `scaffolded_platforms_ignore_and_clean_what_builds_write` checks the generated
 application configuration through the CLI.
 
@@ -307,22 +310,23 @@ UTF-8 Cargo manifest are errors rather than silently altered filenames.
 Hot-reload host, worker, and types crates use that same source; their sibling
 dependencies remain relative within the generated workspace.
 
-This follows [Cargo path dependency semantics](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-path-dependencies)
-and [Clap's optional-value support](https://docs.rs/clap/latest/clap/struct.Arg.html#method.default_missing_value),
-consulted on 2026-09-19. It replaces fixed `../../crates` paths, which coupled
-consumer location to the framework checkout. A compiled-in developer path or
-implicit global SDK discovery would make an installed CLI depend on hidden
-machine state. Explicit local paths are predictable for developers and agents.
+The paths are absolute Cargo path dependencies, so the generated application
+can sit anywhere; fixed `../../crates` paths coupled its location to the
+framework checkout. A compiled-in developer path or implicit global SDK
+discovery would make an installed CLI depend on hidden machine state, and an
+explicit local path is predictable for developers and agents.
 
 The tradeoff is deliberate: moving the generated application is supported,
 while moving the source checkout requires updating the dependency paths.
-Registry generation remains the distribution path for published versions.
+Without `--local` the dependency is the git tag of the CLI's own release, until
+the framework is on crates.io and the registry version replaces it
+(`FRAMEWORK_ON_CRATES_IO` in `templates/source.rs`).
 CLI integration tests cover external destinations and compile all three template
 shapes; source-validation failures must leave no partially created application.
 
 ### Applications depend on the facade
 
-Basic and counter templates declare only `flui` as a framework dependency.
+Every application template declares only `flui` as a framework dependency.
 Generated imports use its public prelude and modules. A local facade
 dependency points at the checkout root; internal crate directories stay an
 implementation detail. The root package and required source manifests are still
@@ -347,30 +351,28 @@ host/worker split is the reload itself, so the template has no build without
 the package; an ordinary template never names it.
 The generated worker uses the hygienic `hot_reload_worker!` macro.
 
-This follows the application-facing entry points demonstrated by
-[Iced's widget module](https://docs.rs/iced/latest/iced/widget/) and
-[Dioxus's prelude](https://docs.rs/dioxus/latest/dioxus/prelude/), consulted on
-2026-09-19. Template integration tests assert exact framework dependency names,
-local root paths and reload feature selection, then compile every shape outside
-the repository.
-
+Template integration tests assert exact framework dependency names, local root
+paths and reload feature selection, then compile every shape outside the
+repository.
 
 ### Default counter state and interaction
 
-The counter template uses a stateless application shell with a stateful counter
-beneath a Material theme. The element owns `Rc<Cell<usize>>`; `init_state`
-acquires its rebuild handle. The button callback changes the value and schedules
-a state rebuild, while `build` only describes the current view. This follows
-[Iced's owned-state, event, and state-derived-view counter example](https://book.iced.rs/first-steps.html)
-(consulted 2026-09-19) through FLUI's retained element lifecycle rather than
-introducing a message architecture.
+The counter template's root is `CounterView`, a `StatefulView` whose
+`create_state` creates the count as a signal (`ctx.signal(0)`), so the state is
+born bound to its element. The Increment button's `on_pressed` callback updates
+the signal, which rebuilds the element that read it in `build`; `build` only
+describes the current count, and there is no message type.
 
-The generated test dispatches real pointer down/up events to the Increment label
-and advances only scheduled work with `tick`, checking rendered text from 0 to 1
-to 2. A parent rebuild preserves 2; a separate app starts at 0. The external CLI
-regression executes that named generated test and checks a normal build whose
-dependency graph excludes `flui-testing`. The sole framework dependency remains
-`flui`; its `testing` feature is enabled only in development dependencies.
+The generated tests (`GENERATED_COUNTER_TESTS` in `tests/cli_create.rs`) mount
+the view with `flui::testing::Tester` and locate widgets with `find`:
+`counter_increments` taps `find::button("Increment")` and checks the text from
+0 to 1 to 2, `each_app_owns_its_state` checks that a second mount starts at 0,
+and `counter_content_is_centred` measures the content on a 480 by 320 surface.
+The external CLI regression runs `cargo test --lib` in the generated project and
+requires each named test to pass and the passed count to equal that list. The
+sole framework dependency remains `flui`; its `testing` feature is enabled only
+in `[dev-dependencies]`, and a normal build's dependency graph excludes
+`flui-testing`.
 
 
 ### Run admission uses Cargo package identity
@@ -385,7 +387,6 @@ needs an application package directory, except for the existing configured
 worker hot-reload path. Metadata is declaration evidence; Cargo's subsequent
 run still determines whether the selected application builds and executes.
 
-This follows [Cargo's metadata contract](https://doc.rust-lang.org/cargo/commands/cargo-metadata.html).
 Integration fixtures use real Cargo metadata and marker-printing binaries with
 minimal local dependency identities. They verify admission and execution without
 opening a window; they do not substitute for the generated application's own
@@ -395,9 +396,8 @@ interaction regression or live platform verification.
 
 The commands meet at the app's driver agent (ADR-0239) through a small
 credentials file, `target/flui-agent.json` (`CARGO_TARGET_DIR` honoured), and
-the contract crate `flui-protocol`, the CLI's one FLUI dependency: the launch
-variables and the shortest token (`launch`), the hello, the method names and
-each method's parameter type.
+the contract crate `flui-protocol`: the launch variables and the shortest token
+(`launch`), the hello, the method names and each method's parameter type.
 
 - **Launch.** `flui run --agent` is admitted on this desktop, on an Android
   device and in a browser with a remote protocol of its own. A debug
@@ -442,7 +442,7 @@ each method's parameter type.
   belongs to the next document. `flui mcp` does not change. The WebSocket is
   `tungstenite`'s handshake and framing over a loopback `TcpStream`, no TLS.
   Safari is refused ([The driver agent cannot reach a page in Safari](../../docs/gaps.md#the-driver-agent-cannot-reach-a-page-in-safari)).
-- **Serve.** `flui mcp` speaks MCP over stdio (hand-written JSON-RPC: four
+- **Serve.** `flui mcp` speaks MCP over stdio (hand-written JSON-RPC: six
   tools, no SDK, so the CLI's graph does not grow) and forwards each call as
   one protocol method, its parameters checked against the method's parameter
   type before anything is sent. It connects on the first call and reconnects
@@ -503,7 +503,7 @@ SDK-required build-pipeline tests (`src/build/tests/`) verify actual application
 
 ### One output policy, two audiences
 
-Every command narrates through `src/ui.rs`, never through `cliclack` directly.
+Every command narrates through `src/ui.rs`, never by printing directly.
 Human text goes to **stderr**; stdout is reserved for payloads a user would
 pipe (completion scripts) and, under `--json`, for one NDJSON object per line
 with an `event` discriminator (`doctor.check`, `device`, `run.app.log`, …).
@@ -511,8 +511,7 @@ with an `event` discriminator (`doctor.check`, `device`, `run.app.log`, …).
 is a process-global `OnceLock` because a CLI has exactly one terminal.
 
 Every listing and the dev loop emit JSON, not only a daemon, and JSON mode
-never mixes human text into stdout (Dioxus's `--json-output` is the closest
-prior art).
+never mixes human text into stdout.
 The alternative — a `Context` parameter threaded through every helper — was
 rejected as pure noise for commands that are free functions.
 
@@ -527,9 +526,10 @@ A CI job that forgot the project name gets a one-line fix, not a hung runner.
 ### Exit codes are a contract
 
 `CliError::exit_code` maps every variant to a documented table (0 success,
-2 usage, 3 environment, 4 build/test failed, 5 device not found, 6 not a FLUI
-project, 7 needs a terminal, 130 interrupted). Scripts branch on the code;
-the text is for people. `dx` and `tauri` document no such table.
+1 any other failure, 2 usage or unsupported target, 3 environment, 4
+build/test/lint/format failure, 5 device not found, 6 not a FLUI project, 7
+needs a terminal, 130 interrupted). Scripts branch on the code; the text is for
+people.
 
 ### External tools run with a deadline
 
@@ -538,18 +538,21 @@ on macOS because `Safari -v` launches Safari rather than printing a version;
 browser versions are now read from `Info.plist` and every probe is killed at
 its deadline and reported as a timeout. A `Problem` row, not an error, is the
 result of a missing or hung tool: discovery never fails the command. The
-builders' own probes (`cargo ndk --version`, `rustc --print target-libdir`,
-`rustc -vV`) run through the same deadline (`build/util/environment.rs`).
+builders' own probes run through the same deadline (`PROBE_TIMEOUT`):
+`rustc --print target-libdir` and `rustc -vV` in `build/util/environment.rs`,
+`cargo ndk --version` in `build/android.rs`.
 
 ### The dev loop multiplexes four sources
 
-`flui run` drives one `dev_loop` over a `ReloadStrategy` (process restart, or
-worker host for the host/worker layout). The loop polls, in priority order:
-the Ctrl-C flag (set by a `tokio::signal` listener on its own thread), hot-keys
-from a `console::Term::read_key_raw` thread (`r`/`R`/`c`/`h`/`q`), the child's
-exit status, and the debounced source watcher. The child never shares stdin
-(the key reader owns the terminal), and in `--json` mode its stdout is piped
-and forwarded as `run.app.log` so the machine stream stays pure. The child is
+`flui run` drives one `dev_loop` over a `ReloadStrategy` (process restart, a
+browser session, an Android session, or the worker host for the host/worker
+layout). The loop polls, in priority order: the Ctrl-C flag (set by a
+`tokio::signal` listener on its own thread), hot-keys from the `KeyReader`
+thread, which reads raw bytes from a Unix terminal (`r`/`R`/`c`/`h`/`q`; there
+are none elsewhere), the child's exit status, and the debounced source watcher.
+The child never shares stdin (it is null, and the key reader owns the
+terminal), and in `--json` mode its stdout and stderr are piped and forwarded as
+`run.app.log` so the machine stream stays pure. The child is
 stopped on every exit path, including errors, so a failed `flui run` never
 leaves an orphaned app; a real SIGINT with nobody at the keyboard exits 130.
 

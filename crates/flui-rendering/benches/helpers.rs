@@ -6,7 +6,10 @@
 
 // Shared across the `layout`, `paint`, and `intrinsic_parent_data` benches via `mod helpers;`; each bench
 // uses only the subset it needs, so unused-in-this-unit helpers are expected.
-#![expect(dead_code)]
+#![expect(
+    dead_code,
+    reason = "each bench that includes this module uses only a subset of it"
+)]
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Size;

@@ -107,7 +107,7 @@
 //! | `RenderConstraintsTransformBox` | `harness_constraints_transform_box_*` | yes | — | yes | yes | intrinsics |
 //! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | paint transform |
 //! | `RenderAnimatedSize` | `harness_render_animated_size_*` | yes | — | yes | yes | state machine |
-//! | `RenderSliverScrollingPersistentHeader` | `harness_sliver_persistent_header_scrolling_*` | yes | — | — | — | — |
+//! | `RenderSliverScrollingPersistentHeader` | `harness_sliver_persistent_header_scrolling_*` | yes | — | — | — | stretch trigger |
 //! | `RenderSliverPinnedPersistentHeader` | `harness_sliver_persistent_header_pinned_*` | yes | — | — | — | viewport wiring |
 //! | `RenderSliverFloatingPersistentHeader` | `harness_sliver_persistent_header_floating_*` | yes | — | — | — | state machine |
 //! | `RenderSliverFloatingPinnedPersistentHeader` | `harness_sliver_persistent_header_floating_pinned_*` | yes | — | — | — | state machine |
@@ -121,7 +121,10 @@
 )]
 // Row functions are plain `fn`s run by the family tables below, so clippy no
 // longer treats them as `#[test]` bodies where `unwrap` is allowed.
-#![allow(clippy::unwrap_used)]
+#![expect(
+    clippy::unwrap_used,
+    reason = "row functions are plain `fn`s, which clippy does not treat as `#[test]` bodies where `unwrap` is allowed"
+)]
 
 // Single-binary consolidation (`autotests = false` in `Cargo.toml`): the
 // snapshot dogfood suite compiles as a module of this target instead of
@@ -10636,16 +10639,11 @@ impl flui_rendering::traits::RenderSliver for PanicAfterNLayouts {
         );
         let constraints = *ctx.constraints();
         let paint_extent = self.calculate_paint_offset(&constraints, 0.0, self.extent);
-        Ok(flui_rendering::constraints::SliverGeometry {
-            scroll_extent: self.extent,
-            paint_extent,
-            layout_extent: paint_extent,
-            max_paint_extent: self.extent,
-            cache_extent: self.calculate_cache_offset(&constraints, 0.0, self.extent),
-            hit_test_extent: paint_extent,
-            visible: paint_extent > 0.0,
-            ..flui_rendering::constraints::SliverGeometry::ZERO
-        })
+        Ok(
+            flui_rendering::constraints::SliverGeometry::new(self.extent, paint_extent, 0.0)
+                .with_max_paint_extent(self.extent)
+                .with_cache_extent(self.calculate_cache_offset(&constraints, 0.0, self.extent)),
+        )
     }
 }
 
@@ -12905,9 +12903,11 @@ fn harness_render_animated_size_retries_a_resize_whose_curve_panicked() {
 // RenderSliverPersistentHeader family
 // ============================================================================
 //
-// These rows read `paint_extent`, `effective_scroll_offset` and
-// `max_scroll_obstruction_extent`, none of which depend on
-// `constraints.overlap` at the offsets used here.
+// The shrink and float rows read `paint_extent`, `effective_scroll_offset`
+// and `max_scroll_obstruction_extent`, none of which depend on
+// `constraints.overlap` at the offsets used here. The stretch row scrolls the
+// viewport to a negative offset, whose over-scroll reaches the header as
+// `overlap`.
 
 struct ObservedViewportOffset {
     position: flui_rendering::view::FixedViewportOffset,
@@ -13179,6 +13179,78 @@ fn harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off() {
         0.0,
         "past max_extent: fully scrolled off, paint_extent clamps to 0",
     );
+}
+
+/// A header stretched by an over-scrolled viewport runs its trigger once per
+/// crossing of the offset. A stretch that lands exactly on the offset reaches
+/// it, and the next layout past it is not a second crossing (Flutter compares
+/// the previous stretch with `<=` and runs it again there); falling below
+/// the offset re-arms it.
+fn harness_sliver_persistent_header_scrolling_stretch_trigger_runs_once_per_crossing() {
+    const TRIGGER_OFFSET: f64 = 40.0;
+    let calls = Rc::new(Cell::new(0_u32));
+    let counted = Rc::clone(&calls);
+    let header = RenderSliverScrollingPersistentHeader::new(40.0, 120.0)
+        .with_stretch_configuration(OverScrollHeaderStretchConfiguration::new(
+            TRIGGER_OFFSET,
+            Some(StretchTrigger::new(move || counted.set(counted.get() + 1))),
+        ));
+    // A position its writer moves past the start: a fixed one is clamped
+    // into its extents by layout.
+    let (position, writer) = ScrollPosition::with_writer(0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            position,
+        ))
+        .label("viewport")
+        .child(
+            sliver_node(header)
+                .label("header")
+                .child(box_node(RenderColoredBox::red(300.0, 1000.0)).label("child")),
+        )
+        .child(filler_sliver()),
+    )
+    .with_size(Size::new(300.0, 400.0))
+    .run_layout();
+    let vp_id = run.id("viewport");
+    let child_id = run.id("child");
+
+    // (over-scroll in logical pixels, calls after its layout, what it pins)
+    let steps = [
+        (20.0, 0, "below the offset"),
+        (
+            TRIGGER_OFFSET,
+            1,
+            "landing exactly on the offset crosses it",
+        ),
+        (
+            45.0,
+            1,
+            "past the offset after resting on it is no new crossing",
+        ),
+        (10.0, 1, "falling below runs nothing"),
+        (
+            TRIGGER_OFFSET,
+            2,
+            "the next reach of the offset crosses again",
+        ),
+    ];
+    assert_eq!(calls.get(), 0, "no over-scroll, no stretch, no call");
+    for (stretch, expected, why) in steps {
+        writer.set_pixels(-stretch, flui_rendering::view::OffsetWriteCause::UserInput);
+        // The layout-only run does not lay out again on an offset write by
+        // itself: mark the viewport.
+        run.update::<RenderViewport<ScrollPosition>>(vp_id, |_| {});
+        run.relayout();
+        assert_eq!(
+            run.box_geometry(child_id).height,
+            120.0 + stretch,
+            "premise: the over-scroll stretches the child by {stretch}",
+        );
+        assert_eq!(calls.get(), expected, "{why}");
+    }
 }
 
 fn harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_obstruction_extent()
@@ -15537,6 +15609,7 @@ fn family_persistent_header() {
     run_family("persistent_header", &[
         ("swapping_the_snap_controller_moves_the_layout_listener", harness_swapping_the_snap_controller_moves_the_layout_listener),
         ("sliver_persistent_header_scrolling_shrinks_then_scrolls_off", harness_sliver_persistent_header_scrolling_shrinks_then_scrolls_off),
+        ("sliver_persistent_header_scrolling_stretch_trigger_runs_once_per_crossing", harness_sliver_persistent_header_scrolling_stretch_trigger_runs_once_per_crossing),
         ("sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_obstruction_extent", harness_sliver_persistent_header_pinned_stays_at_zero_and_reports_max_scroll_obstruction_extent),
         ("sliver_persistent_header_floating_reveals_on_reverse_scroll_and_pointer_scroll_start_direction_permits_reveal", harness_sliver_persistent_header_floating_reveals_on_reverse_scroll_and_pointer_scroll_start_direction_permits_reveal),
         ("sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_clamps_paint_extent_and_stays_pinned", harness_sliver_persistent_header_floating_pinned_shares_reveal_sequence_but_clamps_paint_extent_and_stays_pinned),

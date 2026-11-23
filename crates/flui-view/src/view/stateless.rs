@@ -40,7 +40,7 @@ use crate::context::BuildContext;
 /// `StatelessView` **non-object-safe** — no `dyn StatelessView` use
 /// exists or is needed. The `View` trait
 /// (super::view::View) is the object-safe boundary;
-/// `StatelessView` is implementation-side (FR-007).
+/// `StatelessView` is implementation-side.
 ///
 /// # Note
 ///
@@ -66,7 +66,7 @@ pub trait StatelessView: Clone + 'static {
     /// The framework normalizes the opaque return via
     /// [`IntoView::into_view`] *inside* the build call site (see
     /// `element/behavior.rs`), boxing the concrete `'static` value
-    /// into `Box<dyn View>` before crossing closure / catch-unwind
+    /// into a `BoxedView` before crossing closure / catch-unwind
     /// boundaries. The default Rust 2024 RPITIT capture (Self +
     /// elided lifetimes of `&self` / `&dyn BuildContext`) is fine
     /// because the opaque value is consumed inside the closure body

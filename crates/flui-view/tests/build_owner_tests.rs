@@ -6,9 +6,8 @@
 use flui_foundation::observe::TreeObserver;
 use flui_objects::RenderSizedBox;
 use flui_rendering::protocol::BoxProtocol;
-use flui_view::{
-    BuildOwner, ElementTree, FrameBuildReport, RebuildReason, RenderView, View, WidgetsBinding,
-};
+use flui_view::__runtime::{BuildOwner, ElementTree, FrameBuildReport, WidgetsBinding};
+use flui_view::{RebuildReason, RenderView, View, ViewExt};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -77,10 +76,15 @@ pub(crate) fn test_build_scope_processes_in_depth_order() {
     let child_view = TestView { id: 1 };
     let grandchild_view = TestView { id: 2 };
 
-    let root_id = tree.mount_root(&root_view, &mut owner.element_owner_mut());
-    let child_id = tree.insert(&child_view, root_id, 0, &mut owner.element_owner_mut());
+    let root_id = tree.mount_root(&root_view.boxed(), &mut owner.element_owner_mut());
+    let child_id = tree.insert(
+        &child_view.boxed(),
+        root_id,
+        0,
+        &mut owner.element_owner_mut(),
+    );
     let grandchild_id = tree.insert(
-        &grandchild_view,
+        &grandchild_view.boxed(),
         child_id,
         0,
         &mut owner.element_owner_mut(),

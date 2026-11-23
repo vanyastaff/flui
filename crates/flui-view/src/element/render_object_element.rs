@@ -19,11 +19,7 @@
 ///
 /// Attach / detach to the pipeline owner is implemented inline in
 /// `mount()` / `unmount()` on the concrete root element (see
-/// `RootRenderElement::mount` in `view/root.rs`). The pre-Mythos
-/// `attach_to_pipeline_owner` / `detach_from_pipeline_owner` trait
-/// methods were removed during the framework spine repair: their bodies
-/// were panicking placeholders and they had no callers (Constitution
-/// Principle 6: no panic in production paths).
+/// `RootRenderElement::mount` in `view/root.rs`).
 pub trait RenderTreeRootElement {
     /// Get the [`PipelineCell`](flui_rendering::pipeline::PipelineCell) for
     /// this render tree.

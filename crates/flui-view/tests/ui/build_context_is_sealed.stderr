@@ -8,32 +8,32 @@ error[E0046]: not all trait items implemented, missing: `element_id`, `depth`, `
    = help: implement the missing item: `fn depth(&self) -> usize { todo!() }`
    = help: implement the missing item: `fn mounted(&self) -> bool { todo!() }`
    = help: implement the missing item: `fn is_building(&self) -> bool { todo!() }`
-   = help: implement the missing item: `fn graph(&self, _: context::build_context::sealed::CrateToken) -> &Reactive { todo!() }`
+   = help: implement the missing item: `fn graph(&self, _: flui_view::context::build_context::sealed::CrateToken) -> &Reactive { todo!() }`
    = help: implement the missing item: `fn depend_on_inherited(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
-   = help: implement the missing item: `fn depend_on_inherited_fields(&self, _: context::build_context::sealed::CrateToken, _: TypeId, _: FieldSet, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
+   = help: implement the missing item: `fn depend_on_inherited_fields(&self, _: flui_view::context::build_context::sealed::CrateToken, _: TypeId, _: FieldSet, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
    = help: implement the missing item: `fn get_inherited(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
    = help: implement the missing item: `fn find_ancestor_element(&self, _: TypeId) -> Option<ElementId> { todo!() }`
    = help: implement the missing item: `fn find_ancestor_view(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
    = help: implement the missing item: `fn find_ancestor_state(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
    = help: implement the missing item: `fn find_root_ancestor_state(&self, _: TypeId, _: &mut dyn for<'a> FnMut(&'a (dyn Any + 'static))) -> bool { todo!() }`
-   = help: implement the missing item: `fn find_render_object(&self) -> Option<flui_foundation::id::GenId<flui_foundation::id::markers::Render>> { todo!() }`
+   = help: implement the missing item: `fn find_render_object(&self) -> Option<GenId<flui_foundation::markers::Render>> { todo!() }`
    = help: implement the missing item: `fn visit_ancestor_elements(&self, _: &mut dyn FnMut(ElementId) -> bool) { todo!() }`
    = help: implement the missing item: `fn visit_child_elements(&self, _: &mut dyn FnMut(ElementId)) { todo!() }`
    = help: implement the missing item: `fn mark_needs_build(&self) { todo!() }`
    = help: implement the missing item: `fn dispatch_notification(&self, _: &(dyn flui_view::Notification + 'static)) { todo!() }`
 
-error[E0277]: the trait bound `Mine: context::build_context::sealed::Sealed` is not satisfied
+error[E0277]: the trait bound `Mine: flui_view::context::build_context::sealed::Sealed` is not satisfied
   --> tests/ui/build_context_is_sealed.rs:13:34
    |
 13 | impl flui_view::BuildContext for Mine {}
    |                                  ^^^^ unsatisfied trait bound
    |
-help: the trait `context::build_context::sealed::Sealed` is not implemented for `Mine`
+help: the trait `flui_view::context::build_context::sealed::Sealed` is not implemented for `Mine`
   --> tests/ui/build_context_is_sealed.rs:5:1
    |
  5 | struct Mine;
    | ^^^^^^^^^^^
-help: the trait `context::build_context::sealed::Sealed` is implemented for `ElementBuildContext`
+help: the trait `flui_view::context::build_context::sealed::Sealed` is implemented for `ElementBuildContext`
   --> src/testing.rs
    |
    | impl crate::context::build_context::sealed::Sealed for ElementBuildContext {}

@@ -28,9 +28,9 @@ use flui_foundation::{ElementId, ValueKey, ViewKey};
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::protocol::BoxProtocol;
+use flui_view::__runtime::{BuildOwner, ElementTree};
 use flui_view::{
-    BoxedView, BuildOwner, ElementTree, ErrorView, GlobalKey, ObjectKey, RenderView, View, ViewExt,
-    tree::ReconcileEventKind,
+    BoxedView, ErrorView, GlobalKey, ObjectKey, ReconcileEventKind, RenderView, View, ViewExt,
 };
 use serial_test::serial;
 
@@ -117,7 +117,7 @@ impl RenderView for GlobalBox {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -172,7 +172,7 @@ impl RenderView for MultiBox {
         !self.children.is_empty()
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -223,7 +223,7 @@ pub(crate) fn active_global_key_move_through_build_scope_updates_render_parent_l
         ],
     );
     let root_id = tree.mount_root_with_pipeline_owner(
-        &root_v1,
+        &root_v1.boxed(),
         Some(pipeline_owner.clone()),
         &mut owner.element_owner_mut(),
     );
@@ -423,7 +423,7 @@ fn expected_destination_mounts() -> Vec<(ReconcileEventKind, u64, String)> {
 }
 
 fn assert_destination_emits_only_final_mounts(
-    events: &[flui_view::tree::test_utils::CollectedEvent],
+    events: &[flui_view::testing::CollectedEvent],
     destination: ElementId,
     failed_view_type_id: TypeId,
 ) {
@@ -476,8 +476,11 @@ pub(crate) fn failed_dense_mount_production_reconcile_emits_only_final_slots() {
         0,
         dense_stream_children(DensePanicsOnCreate::ordinary().boxed()),
     );
-    let root_id =
-        tree.mount_root_with_pipeline_owner(&root, Some(pipeline), &mut owner.element_owner_mut());
+    let root_id = tree.mount_root_with_pipeline_owner(
+        &root.boxed(),
+        Some(pipeline),
+        &mut owner.element_owner_mut(),
+    );
     owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
 
     let events = capture(|| owner.build_scope(&mut tree));
@@ -514,8 +517,11 @@ pub(crate) fn object_keys_follow_retained_allocations_through_reorder() {
             .boxed(),
         ],
     );
-    let root_id =
-        tree.mount_root_with_pipeline_owner(&root, Some(pipeline), &mut owner.element_owner_mut());
+    let root_id = tree.mount_root_with_pipeline_owner(
+        &root.boxed(),
+        Some(pipeline),
+        &mut owner.element_owner_mut(),
+    );
     owner.schedule_build_for(root_id, 0, flui_view::RebuildReason::InitialMount);
     owner.build_scope(&mut tree);
     let before = direct_children_in_slot_order(&tree, root_id);

@@ -56,7 +56,7 @@ struct CountingAllocator;
 // so the post-loop read observes every bump of the measured region.
 // `System` itself upholds `GlobalAlloc`'s contract; this wrapper adds no new
 // invariant for the caller to uphold.
-#[expect(unsafe_code)]
+#[expect(unsafe_code, reason = "`GlobalAlloc` is an unsafe trait")]
 unsafe impl GlobalAlloc for CountingAllocator {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         bump(&ALLOC_COUNT, 1);

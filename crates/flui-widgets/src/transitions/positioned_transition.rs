@@ -12,8 +12,7 @@ use flui_rendering::RenderUpdateImpact;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{
-    BoxedView, IntoView, RenderObjectContext, RenderView, View, ViewExt, ViewState,
-    impl_render_view,
+    BoxedView, IntoView, RenderObjectContext, RenderView, ViewExt, ViewState, impl_render_view,
 };
 
 use super::proxy_slot::ProxySlot;
@@ -152,7 +151,7 @@ impl RenderView for AnimatedInsetView {
         true
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         visitor(&self.child);
     }
 }

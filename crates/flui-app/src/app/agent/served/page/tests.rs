@@ -15,7 +15,7 @@ use flui_foundation::testing::CountingWaker;
 use flui_protocol::session::AppDescription;
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_runtime::agent::{Limits, Service, ServiceConfig};
-use flui_testing::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
+use flui_testing::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 use flui_widgets::Text;
 use serde_json::{Value, json};
@@ -156,10 +156,15 @@ impl Connection {
 
 /// A service that counts its driver's goings, under `limits`.
 fn service(limits: Limits) -> (Service, Arc<AtomicUsize>) {
+    service_recording(limits, false)
+}
+
+/// [`service`], whose recordings hold the `native` layer when `records_native`.
+fn service_recording(limits: Limits, records_native: bool) -> (Service, Arc<AtomicUsize>) {
     let gone = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&gone);
     let service = Service::new(ServiceConfig {
-        records_native: false,
+        records_native,
         token: TOKEN.to_owned(),
         app: AppDescription::new("page", "web"),
         limits,
@@ -333,4 +338,70 @@ fn a_stopped_service_ends_its_page_conversations_without_the_driver_going() {
     connection.conversation.peer_closed();
     assert!(connection.poll(), "the conversation ended");
     assert_eq!(gone.load(Ordering::SeqCst), 0);
+}
+
+/// A page journals its backend as a native host does (ADR-0390): its hello lists the `native`
+/// layer, and a recording of the input and native layers carries each stream's lines to the
+/// script as `record_native` events, the stream's header naming the `web` backend and its setup
+/// first, then each row as it is journaled.
+#[cfg(native_journal)]
+#[test]
+fn a_page_conversation_carries_the_native_layer_of_a_recording() {
+    use flui_native::input::assembly::{ContactRegistry, NativeClock, NativeDevice};
+    use flui_native::journal::codec::Backend;
+    use flui_platform::EventTime;
+    use flui_platform::input::pointer::PointerKind;
+
+    let (service, _gone) = service_recording(Limits::default(), true);
+    let (mut host, _agent) = page(&service);
+    let lines = host.attach_native_journal();
+    // The page's journal, installed as the web runner installs it, and a registry made under
+    // it, as the page's window's is: a device it announces is setup a later recording begins
+    // with.
+    let capture = crate::app::runner::native_journal::capture_into(Backend::Web, &lines);
+    let mut registry = ContactRegistry::new(NativeClock::epoch_only());
+    let _ = registry.add_device(
+        NativeDevice(1),
+        PointerKind::Mouse,
+        EventTime::from_nanos(1_000_000),
+    );
+
+    let mut connection = Connection::accept(&service);
+    let welcome = connection.greet(&mut host);
+    assert_eq!(
+        welcome["hello"]["capabilities"]["record"],
+        json!(["input", "native"]),
+        "{welcome}"
+    );
+    connection.send(&json!({
+        "id": 1, "method": "record.start", "params": { "layers": ["input", "native"] }
+    }));
+    let started = connection.line_where(&mut host, |line| line["id"] == 1, "the start's answer");
+    assert_eq!(started["result"]["recording"], 1, "{started}");
+    let native_row = |kind: &'static str| {
+        move |line: &Value| {
+            line["event"] == "record_native" && line["params"]["line"]["row"]["row"] == kind
+        }
+    };
+    let header = connection.line_where(
+        &mut host,
+        |line| line["event"] == "record_native" && line["params"]["line"]["header"].is_object(),
+        "the stream's header",
+    );
+    assert_eq!(
+        header["params"]["line"]["header"]["backend"], "web",
+        "{header}"
+    );
+    connection.line_where(&mut host, native_row("add_device"), "the stream's setup");
+    let _ = registry.remove_device(NativeDevice(1), EventTime::from_nanos(2_000_000));
+    let removed = connection.line_where(
+        &mut host,
+        native_row("remove_device"),
+        "a row journaled while the recording runs",
+    );
+    assert_eq!(
+        removed["params"]["stream"], header["params"]["stream"],
+        "{removed}"
+    );
+    drop(capture);
 }

@@ -849,7 +849,7 @@ impl UiRuntime {
                 }
                 // Lifecycle notification runs contained so the other steps run.
                 self.contain_step_of(&mut first_panic, &mut siblings, presentation, || {
-                    presentation.widgets().notify_committed_lifecycle(step);
+                    presentation.widgets().notify_committed_lifecycle();
                 });
             }
         }
@@ -1154,7 +1154,7 @@ mod tests {
         };
 
         let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
-            std::sync::Arc::new(flui_native::FakeTextInput::new());
+            std::sync::Arc::new(flui_native::testing::FakeTextInput::new());
         let mut ui_runtime = UiRuntime::for_test_with_text_input(Some(text_input));
         let id = ui_runtime.presentation_id();
         let gone = ui_runtime.install_second_presentation_for_test();
@@ -1197,11 +1197,11 @@ mod tests {
     }
 
     /// A close whose composition commit fails holds that failure: the
-    /// presentation's observers, scoped and legacy, hear no Detached after it
+    /// presentation's lifecycle subscribers hear no Detached after it
     /// (ADR-0123), and the close resumes the commit's failure.
     ///
-    /// Red-check: drop the preserving check after the commit — the legacy
-    /// observer hears Detached.
+    /// Red-check: drop the preserving check after the commit — a lifecycle
+    /// subscriber hears Detached.
     fn a_failed_close_commit_withholds_the_detached_notice() {
         use flui_interaction::testing::InMemoryTextStore;
         use flui_platform::text::store::{
@@ -1209,17 +1209,8 @@ mod tests {
             utf16::{Utf16Offset, Utf16Range},
         };
 
-        #[derive(Default)]
-        struct Heard(parking_lot::Mutex<Vec<AppLifecycleState>>);
-
-        impl flui_view::WidgetsBindingObserver for Heard {
-            fn did_change_app_lifecycle_state(&self, state: AppLifecycleState) {
-                self.0.lock().push(state);
-            }
-        }
-
         let text_input: std::sync::Arc<dyn flui_platform::PlatformTextInput> =
-            std::sync::Arc::new(flui_native::FakeTextInput::new());
+            std::sync::Arc::new(flui_native::testing::FakeTextInput::new());
         let mut ui_runtime = UiRuntime::for_test_with_text_input(Some(text_input));
         let id = ui_runtime.presentation_id();
         let _sibling = ui_runtime.install_second_presentation_for_test();
@@ -1246,11 +1237,14 @@ mod tests {
             Ok(LockOutcome::Granted)
         );
         store.set_owner_listener(Some(Rc::new(|| panic!("the field's on_changed failed"))));
-        let heard = std::sync::Arc::new(Heard::default());
-        ui_runtime
+        let heard = Rc::new(RefCell::new(Vec::<AppLifecycleState>::new()));
+        let heard_by_subscriber = Rc::clone(&heard);
+        let (_, _subscription) = ui_runtime
             .presentation_widgets_for_test(id)
-            .add_observer(std::sync::Arc::clone(&heard)
-                as std::sync::Arc<dyn flui_view::WidgetsBindingObserver>);
+            .with_build_owner(flui_view::__runtime::BuildOwner::lifecycle_handle)
+            .expect("presentation lifecycle handle")
+            .subscribe(move |state| heard_by_subscriber.borrow_mut().push(state))
+            .expect("lifecycle subscription while open");
 
         let closed = catch_unwind(AssertUnwindSafe(|| {
             ui_runtime.close_presentation_entered(id)
@@ -1261,9 +1255,9 @@ mod tests {
             Some("the field's on_changed failed")
         );
         assert!(
-            !heard.0.lock().contains(&AppLifecycleState::Detached),
+            !heard.borrow().contains(&AppLifecycleState::Detached),
             "no Detached after the failed commit: {:?}",
-            heard.0.lock()
+            heard.borrow()
         );
     }
 

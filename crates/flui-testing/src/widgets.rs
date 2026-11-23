@@ -5,7 +5,7 @@
 //! It mounts a root [`View`] (a widget tree) as the render-tree root, runs a
 //! build pass (reconciling and mounting the whole subtree's render objects),
 //! then drives a real headless frame and exposes the resulting render-node
-//! geometry. The tree is the root of a [`HeadlessHost`](crate::HeadlessHost):
+//! geometry. The tree is the root of a [`HeadlessHost`](crate::host::HeadlessHost):
 //! every frame is the UI runtime's own `UiRuntime::pump` on a manual clock, under
 //! the UI runtime's root scopes (`GestureArenaScope`, `VsyncScope`, `FocusTreeRoot`,
 //! `MediaQuery`) and `flui_widgets::app_root`, exactly as a runner drives it on
@@ -28,9 +28,9 @@ pub use shared_signal::SharedSignal;
 pub use signal_probe::{ProbeRoot, ProbeRootState, ProbeSignals, SignalProbe};
 pub use state_creations::{StateCreations, StateCreationsState};
 
+use rustc_hash::FxHashSet;
 use std::any::TypeId;
 use std::cell::Cell;
-use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -70,7 +70,7 @@ use flui_widgets::{Align, ConstrainedBox, UnconstrainedBox};
 use self::host::WidgetHost;
 use crate::host::{HeadlessWindow, KitStorage};
 
-/// A laid-out widget tree, mounted in a [`HeadlessHost`](crate::HeadlessHost)
+/// A laid-out widget tree, mounted in a [`HeadlessHost`](crate::host::HeadlessHost)
 /// so geometry can be queried after layout, and re-driven with
 /// [`LaidOut::pump`] / [`LaidOut::tick`] / [`LaidOut::pump_for`]. Every frame
 /// is the UI runtime's own `UiRuntime::pump`.
@@ -558,12 +558,12 @@ impl LaidOut {
             .ui_runtime()
             .ui_runtime()
             .widgets()
-            .with_build_owner(flui_view::BuildOwner::focus_manager)
+            .with_build_owner(flui_view::__runtime::BuildOwner::focus_manager)
     }
 
     /// The clipboard this tree's widgets acquire through
     /// `ctx.capability::<ClipboardCapability>()`.
-    pub fn clipboard(&self) -> crate::ScriptedClipboard {
+    pub fn clipboard(&self) -> crate::clipboard::ScriptedClipboard {
         self.host.ui_runtime().clipboard()
     }
 
@@ -571,7 +571,7 @@ impl LaidOut {
     /// `ctx.capability::<PrimarySelectionCapability>()`, on a window whose
     /// platform has one (Linux, through [`lay_out_on`]); elsewhere they are
     /// refused it.
-    pub fn primary_selection(&self) -> crate::ScriptedPrimarySelection {
+    pub fn primary_selection(&self) -> crate::primary_selection::ScriptedPrimarySelection {
         self.host.ui_runtime().primary_selection()
     }
 
@@ -602,25 +602,25 @@ impl LaidOut {
     }
 
     /// Apply `values` as the host's next system-preference revision; see
-    /// [`HeadlessHost::set_system_preferences`](crate::HeadlessHost::set_system_preferences).
+    /// [`HeadlessHost::set_system_preferences`](crate::host::HeadlessHost::set_system_preferences).
     pub fn set_system_preferences(&self, values: flui_platform::SystemPreferences) {
         self.host.ui_runtime().set_system_preferences(values);
     }
 
     /// Report the window focused or not; see
-    /// [`HeadlessHost::set_window_focused`](crate::HeadlessHost::set_window_focused).
+    /// [`HeadlessHost::set_window_focused`](crate::host::HeadlessHost::set_window_focused).
     pub fn set_window_focused(&self, focused: bool) {
         self.host.ui_runtime().set_window_focused(focused);
     }
 
     /// Report the window shown or hidden; see
-    /// [`HeadlessHost::set_window_visible`](crate::HeadlessHost::set_window_visible).
+    /// [`HeadlessHost::set_window_visible`](crate::host::HeadlessHost::set_window_visible).
     pub fn set_window_visible(&self, visible: bool) {
         self.host.ui_runtime().set_window_visible(visible);
     }
 
     /// Ask to close the tree's window for `reason`, as its platform does
-    /// ([`HeadlessHost::request_close`](crate::HeadlessHost::request_close)).
+    /// ([`HeadlessHost::request_close`](crate::host::HeadlessHost::request_close)).
     /// The window's close guard is asked first: a close it refuses is
     /// recorded and nothing changes, and the pump after its last hold is
     /// released carries the close out. Otherwise the window closes now: its
@@ -646,7 +646,7 @@ impl LaidOut {
 
     /// End the session the tree runs in, as the operating system does at log
     /// off or shut down once the session is ending, through the steps a
-    /// runner answers it with ([`HeadlessHost::end_session`](crate::HeadlessHost::end_session)):
+    /// runner answers it with ([`HeadlessHost::end_session`](crate::host::HeadlessHost::end_session)):
     /// the session-ended notice, then the presentation hears `Detached`, what
     /// the documents published is written, and the window closes past every
     /// hold ([`CloseReason::SessionEnd`](flui_view::CloseReason::SessionEnd)
@@ -656,7 +656,7 @@ impl LaidOut {
     ///
     /// # Panics
     ///
-    /// As [`HeadlessHost::end_session`](crate::HeadlessHost::end_session).
+    /// As [`HeadlessHost::end_session`](crate::host::HeadlessHost::end_session).
     pub fn end_session(&mut self) {
         let _answer = self
             .host
@@ -675,13 +675,13 @@ impl LaidOut {
     ///
     /// # Errors
     ///
-    /// See [`InvokeActionError`](crate::InvokeActionError): a malformed node
+    /// See [`InvokeActionError`](crate::a11y::InvokeActionError): a malformed node
     /// identity, a platform action FLUI does not route, or a request the
     /// semantics tree does not resolve.
     pub fn invoke_semantics_action(
         &self,
-        request: crate::ActionRequest,
-    ) -> Result<(), crate::InvokeActionError> {
+        request: crate::a11y::ActionRequest,
+    ) -> Result<(), crate::a11y::InvokeActionError> {
         let pipeline = self.pipeline_owner();
         self.host
             .ui_runtime()
@@ -708,12 +708,12 @@ impl LaidOut {
 
     /// The window the tree presents into, for what it recorded (the cursor, the input
     /// regions handed to the OS).
-    pub fn window(&self) -> &crate::HeadlessWindow {
+    pub fn window(&self) -> &crate::host::HeadlessWindow {
         self.host.ui_runtime().window()
     }
 
     /// Move the window to a monitor of scale `scale_factor` and run a frame at it; see
-    /// [`HeadlessHost::set_scale_factor`](crate::HeadlessHost::set_scale_factor).
+    /// [`HeadlessHost::set_scale_factor`](crate::host::HeadlessHost::set_scale_factor).
     ///
     /// # Panics
     ///
@@ -728,7 +728,7 @@ impl LaidOut {
 
     /// [`set_scale_factor`](Self::set_scale_factor) for a scale that may make
     /// no metrics; see
-    /// [`HeadlessHost::try_set_scale_factor`](crate::HeadlessHost::try_set_scale_factor).
+    /// [`HeadlessHost::try_set_scale_factor`](crate::host::HeadlessHost::try_set_scale_factor).
     /// A frame runs only when the window changed.
     ///
     /// # Errors
@@ -747,7 +747,7 @@ impl LaidOut {
     }
 
     /// Move the window to `display` at its current scale; see
-    /// [`HeadlessHost::move_to_display`](crate::HeadlessHost::move_to_display). No frame
+    /// [`HeadlessHost::move_to_display`](crate::host::HeadlessHost::move_to_display). No frame
     /// runs.
     pub fn move_to_display(&mut self, display: Option<flui_platform::DisplayId>) {
         let host = self.host.ui_runtime_mut();
@@ -757,7 +757,7 @@ impl LaidOut {
 
     /// The listener the UI runtime registered on its window for actions assistive
     /// technology requests; see
-    /// [`HeadlessHost::accessibility_action_listener`](crate::HeadlessHost::accessibility_action_listener).
+    /// [`HeadlessHost::accessibility_action_listener`](crate::host::HeadlessHost::accessibility_action_listener).
     pub fn accessibility_action_listener(
         &self,
     ) -> Option<flui_semantics::platform::AccessibilityActionListener> {
@@ -987,8 +987,8 @@ impl LaidOut {
     /// Move the screen reader's cursor to `node` of the published tree, or
     /// off it for `None`, as VoiceOver or TalkBack reports it; the subtrees it
     /// left and entered hear of it at the next [`pump`](Self::pump)
-    /// ([`HeadlessHost::move_assistive_focus`](crate::HeadlessHost::move_assistive_focus)).
-    pub fn move_assistive_focus(&mut self, node: Option<crate::NodeId>) {
+    /// ([`HeadlessHost::move_assistive_focus`](crate::host::HeadlessHost::move_assistive_focus)).
+    pub fn move_assistive_focus(&mut self, node: Option<crate::a11y::NodeId>) {
         self.host.ui_runtime().move_assistive_focus(node);
     }
 
@@ -1000,7 +1000,7 @@ impl LaidOut {
     /// sliver parity cases that record a "no semantics-tree assertion
     /// capability here" gap are describing its absence.
     #[must_use]
-    pub fn a11y_tree(&self) -> Option<crate::A11yTree> {
+    pub fn a11y_tree(&self) -> Option<crate::a11y::A11yTree> {
         a11y_tree(&self.pipeline_owner)
     }
 
@@ -1063,25 +1063,25 @@ impl LaidOut {
     }
 
     /// Stop frames running background work; see
-    /// [`HeadlessHost::hold_background`](crate::HeadlessHost::hold_background).
+    /// [`HeadlessHost::hold_background`](crate::host::HeadlessHost::hold_background).
     pub fn hold_background(&mut self) {
         self.host.ui_runtime_mut().hold_background();
     }
 
     /// Let frames run background work again; see
-    /// [`HeadlessHost::release_background`](crate::HeadlessHost::release_background).
+    /// [`HeadlessHost::release_background`](crate::host::HeadlessHost::release_background).
     pub fn release_background(&mut self) {
         self.host.ui_runtime_mut().release_background();
     }
 
     /// Run queued background work now; see
-    /// [`HeadlessHost::run_background`](crate::HeadlessHost::run_background).
+    /// [`HeadlessHost::run_background`](crate::host::HeadlessHost::run_background).
     pub fn run_background(&mut self) -> usize {
         self.host.ui_runtime_mut().run_background()
     }
 
     /// Background work queued and not yet finished; see
-    /// [`HeadlessHost::pending_background`](crate::HeadlessHost::pending_background).
+    /// [`HeadlessHost::pending_background`](crate::host::HeadlessHost::pending_background).
     #[must_use]
     pub fn pending_background(&self) -> usize {
         self.host.ui_runtime().pending_background()
@@ -1144,7 +1144,9 @@ impl LaidOut {
         // earlier frame built: empty when no build pass ran. When a focus move
         // rebuilds within the frame, a second pass that builds replaces the
         // first pass's report (`WidgetsBinding::rebuild_within_frame`).
-        self.with_build_owner_mut(flui_view::BuildOwner::clear_frame_build_report_for_test);
+        self.with_build_owner_mut(
+            flui_view::__runtime::BuildOwner::clear_frame_build_report_for_test,
+        );
         self.pump_for(dt);
         let pipeline_after = self
             .pipeline_owner
@@ -1191,7 +1193,7 @@ impl LaidOut {
     /// closure, not a borrow.
     pub fn with_build_owner_mut<R>(
         &mut self,
-        f: impl FnOnce(&mut flui_view::BuildOwner) -> R,
+        f: impl FnOnce(&mut flui_view::__runtime::BuildOwner) -> R,
     ) -> R {
         self.host
             .ui_runtime()
@@ -1607,7 +1609,7 @@ impl LaidOut {
         let logical_root = self.current_root();
         self.pipeline_owner.with(|owner| {
             let render_tree = owner.render_tree();
-            let mut logical_ids = HashSet::new();
+            let mut logical_ids = FxHashSet::default();
             let mut pending = vec![logical_root];
             while let Some(id) = pending.pop() {
                 logical_ids.insert(id);
@@ -1727,15 +1729,15 @@ impl LaidOut {
     }
 
     /// The window's frame sink: the version the last presented frame showed
-    /// and the texture frames it took ([`crate::HeadlessSink::textures`]).
+    /// and the texture frames it took ([`crate::host::HeadlessSink::textures`]).
     #[must_use]
-    pub fn sink(&self) -> &crate::HeadlessSink {
+    pub fn sink(&self) -> &crate::host::HeadlessSink {
         self.host.ui_runtime().sink()
     }
 
     /// Leave the next `frames` frames unshown for the reason `how` names; see
-    /// [`HeadlessHost::leave_unshown`](crate::HeadlessHost::leave_unshown).
-    pub fn leave_unshown(&mut self, frames: u32, how: crate::UnshownFrame) {
+    /// [`HeadlessHost::leave_unshown`](crate::host::HeadlessHost::leave_unshown).
+    pub fn leave_unshown(&mut self, frames: u32, how: crate::host::UnshownFrame) {
         self.host.ui_runtime_mut().leave_unshown(frames, how);
     }
 
@@ -2173,13 +2175,13 @@ fn base_type_name(type_name: &str) -> &str {
 
 /// The accessibility tree the pipeline last assembled, translated as a
 /// platform adapter receives it; `None` until semantics is on and a frame ran.
-fn a11y_tree(pipeline: &PipelineCell) -> Option<crate::A11yTree> {
+fn a11y_tree(pipeline: &PipelineCell) -> Option<crate::a11y::A11yTree> {
     let update = pipeline.with(|owner| {
         owner
             .semantics_owner()
             .and_then(|semantics| semantics.to_accesskit_tree_update(None))
     })?;
-    Some(crate::A11yTree::new(update))
+    Some(crate::a11y::A11yTree::new(update))
 }
 
 /// `color` as a render node's colour field reads back, so a test compares typed values:

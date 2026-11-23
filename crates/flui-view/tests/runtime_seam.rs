@@ -10,10 +10,11 @@ use std::{
 use flui_foundation::ElementId;
 use flui_objects::RenderSizedBox;
 use flui_rendering::{RenderUpdateImpact, protocol::BoxProtocol};
+use flui_view::__runtime::WidgetsBinding;
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker, GlobalKeyRegistryComposite},
     AppLifecycleState, BuildContext, GlobalKey, IntoView, KeyLookup, LifecycleClosed,
-    RenderObjectContext, RenderView, StatelessView, View, WidgetsBinding,
+    RenderObjectContext, RenderView, StatelessView, View,
     element::ElementKind,
 };
 
@@ -84,7 +85,7 @@ fn terminal_lifecycle_ladder_runs_through_the_seam() {
         .commit_terminal(Detached)
         .expect("terminal commit after begin_close");
     assert_eq!(binding.lifecycle_source().current(), Some(Detached));
-    binding.notify_committed_lifecycle(Detached);
+    binding.notify_committed_lifecycle();
     assert_eq!(seen.get(), Some(Detached));
 
     binding.lifecycle_source().finish_close();

@@ -22,7 +22,7 @@ use flui_sdk::widgets::SizedBox;
 /// enabled-default and (per `resolve_elevation`'s doc comment) the disabled
 /// tier of the elevation state chain.
 pub fn fab_theme_slot_reaches_the_mounted_materials_color_and_elevation() {
-    let themed_background = flui_sdk::painting::Color::rgb(70, 80, 90);
+    let themed_background = flui_sdk::painting::styling::Color::rgb(70, 80, 90);
     let theme = ThemeData::light().copy_with(ThemeDataOverrides {
         floating_action_button_theme: Some(FabThemeData {
             background_color: Some(themed_background),

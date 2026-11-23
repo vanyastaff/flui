@@ -11,9 +11,7 @@
 //! `RenderShaderMask` has none). The
 //! shared shape — single-child proxy, draws nothing of its own, wraps
 //! `paint_child()` in one closure-scoped effect — is about four lines,
-//! not worth a generic parameter (see the
-//! [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md),
-//! §3).
+//! not worth a generic parameter.
 //!
 //! # Diagnostics
 //!
@@ -198,10 +196,9 @@ impl RenderBox for RenderShaderMask {
 
     flui_rendering::forward_single_child_box_queries!();
 
-    // Compositing is needed iff there is a child: data-dependent (not an
-    // unconditional `true`). This trait default
-    // (`false`) is live, consumed infrastructure in this pipeline (see
-    // design research plan §2.7), so the override matters.
+    // Compositing is needed iff there is a child: data-dependent, not an
+    // unconditional `true`. The trait default is `false`, so the override
+    // matters.
     fn always_needs_compositing(&self) -> bool {
         self.has_child
     }
@@ -209,7 +206,10 @@ impl RenderBox for RenderShaderMask {
     // Closure is load-bearing: `PaintContext::paint_child` is ambiguous as a method path
     // (Single's zero-arg overload vs the indexed variant on other arities), so the
     // closure cannot be replaced by a method reference.
-    #[expect(clippy::redundant_closure_for_method_calls)]
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "paint_child` is ambiguous as a method path across `PaintContext` arities (E0034), so the lint's rewrite does not compile"
+    )]
     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
         // No child means nothing at all is drawn (not even an empty mask
         // layer).
@@ -219,8 +219,7 @@ impl RenderBox for RenderShaderMask {
         // LOCAL rect (origin zero) — the shader callback
         // must see LOCAL coordinates, and so must the scope's recorded
         // `bounds`; the composer applies the origin shift for us (see
-        // `PaintContext::with_shader_mask`'s doc and the design research
-        // plan's trap §4.3).
+        // `PaintContext::with_shader_mask`'s doc).
         let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
         let shader = self.resolve_shader(bounds);
         ctx.with_shader_mask(shader, self.blend_mode, |ctx| ctx.paint_child());

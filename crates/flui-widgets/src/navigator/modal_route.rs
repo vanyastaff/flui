@@ -61,6 +61,10 @@
 // particular has no public caller until `Hero` drives it.
 
 use std::cell::Cell;
+#[expect(
+    clippy::disallowed_types,
+    reason = "keys are hero tags, supplied by the application"
+)]
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
@@ -94,9 +98,11 @@ use super::transition_route::{
 };
 use flui_interaction::focus::FocusScopeNode;
 
+use flui_objects::StackFit;
+
 use crate::{
     AbsorbPointer, AnimatedBuilder, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox,
-    Stack, StackFit,
+    Stack,
 };
 
 /// The curve the barrier's colour fades in along (Flutter's
@@ -918,6 +924,7 @@ impl<T: 'static> ModalRoute<T> {
     }
 
     /// The transition handle, for driving the animation by hand.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn transition_handle(&self) -> super::transition_route::TransitionHandle {
         self.transition.handle()
@@ -953,9 +960,6 @@ impl fmt::Debug for ModalHandle {
     }
 }
 
-/// `dead_code` in the lib target: `HeroController` is this handle's only production
-/// caller, and it is itself dead until the `Hero` widget uses it. See `hero_controller.rs`.
-#[expect(dead_code)]
 impl ModalHandle {
     /// Deliver the pop-invoked callback (`did_pop`, …) to every `PopScope`
     /// registered in this route's page. Called by
@@ -999,17 +1003,17 @@ impl ModalHandle {
     /// the flush's own consequence: the rebuild it requests joins the frame
     /// the pop happened in, while the callbacks wait for that frame to end.
     /// Called by `NavigatorShared::apply` with **no borrow held** (ADR-0025);
-    /// each step is contained in `recovery` on its own.
+    /// each step is contained in `failure` on its own.
     pub(crate) fn drain_local_history(
         &self,
         post_frame: Option<&flui_scheduler::PostFrameHandle>,
-        recovery: &mut flui_foundation::panic::PanicRecovery,
+        failure: &mut flui_foundation::panic::FirstPanic,
     ) {
         let (callbacks, emptied) = self.inner.local_history.take_owed();
         if emptied {
-            recovery.run(|| changed_internal_state(&self.inner));
+            failure.contain(|| changed_internal_state(&self.inner));
         }
-        super::local_history::deliver_on_remove(post_frame, callbacks, recovery);
+        super::local_history::deliver_on_remove(post_frame, callbacks, failure);
     }
 
     /// Force the route offstage (or back), whole: the early return on an
@@ -1028,6 +1032,7 @@ impl ModalHandle {
     }
 
     /// Whether the route is forced offstage.
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn offstage(&self) -> bool {
         self.inner.offstage.get()
@@ -1038,12 +1043,6 @@ impl ModalHandle {
     pub(crate) fn primary_animation(&self) -> RouteAnimation {
         Rc::clone(&self.inner.primary) as RouteAnimation
     }
-
-    /// The route's secondary animation — `0.0`/dismissed while offstage.
-    pub(crate) fn secondary_animation(&self) -> RouteAnimation {
-        Rc::clone(&self.inner.secondary) as RouteAnimation
-    }
-
     /// The heroes mounted in this route's page, as a registry rather than an
     /// element walk.
     #[must_use]
@@ -1055,6 +1054,10 @@ impl ModalHandle {
     /// plus — recursively — whatever each nested `Navigator` mounted inside it
     /// publishes for its own current top `PageRoute`.
     #[must_use]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "keys are hero tags, supplied by the application"
+    )]
     pub fn all_heroes(&self) -> HashMap<HeroTag, HeroHandle> {
         self.inner.heroes.all_heroes()
     }
@@ -1070,6 +1073,7 @@ impl ModalHandle {
 
     /// Set `maintain_state` and republish it through `changed_internal_state`.
     /// The value sits in a cell, which is what lets a test observe the republish.
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_maintain_state(&self, maintain_state: bool) {
         if self.inner.maintain_state.replace(maintain_state) == maintain_state {
             return;

@@ -9,12 +9,14 @@ use flui_material::{CarouselView, CarouselViewThemeData, Theme, ThemeData, Theme
 use flui_sdk::animation::Vsync;
 use flui_sdk::foundation::inspect::Rgba;
 use flui_sdk::geometry::Offset;
-use flui_sdk::painting::{Alignment, Color};
+use flui_sdk::painting::Alignment;
+use flui_sdk::painting::styling::Color;
+use flui_sdk::rendering::objects::CarouselLayout;
 use flui_sdk::view::ViewExt;
 use flui_sdk::view::environment::VsyncScope;
-use flui_sdk::widgets::{CarouselItemScope, CarouselLayout, ColoredBox, KeylineSnap};
-use flui_testing::TouchScript;
+use flui_sdk::widgets::{CarouselItemScope, ColoredBox, KeylineSnap};
 use flui_testing::a11y::Role;
+use flui_testing::replay::TouchScript;
 
 use crate::common::{LaidOut, lay_out_animated, rgba, tight};
 

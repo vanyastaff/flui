@@ -505,7 +505,7 @@ cursor-icon = "1.2"
 
 # UTILITIES - Used by multiple crates
 bitflags = "2.10"
-# Percent-encoding of route path segments (`flui_widgets::RoutePath`): the
+# Percent-encoding of route path segments (`flui_view::navigation::RoutePath`): the
 # servo/rust-url implementation of the URL path-segment set. Already in the
 # graph through `url`.
 percent-encoding = "2"
@@ -537,7 +537,6 @@ parley = { version = "0.11.1", default-features = false, features = ["std"] }
 # marks its clusters with, so no second one, and no dictionary or LSTM data.
 icu_segmenter = { version = "2.1.2", default-features = false, features = ["compiled_data"] }
 dyn-clone = "1.0"
-downcast-rs = "2.0.2"
 static_assertions = "1.1"
 # Compile-fail suites (flui-painting, flui-view, flui-engine, flui-rendering):
 # each drives `tests/<dir>/*.rs` fixtures and pins the diagnostic text a
@@ -628,6 +627,8 @@ undocumented_unsafe_blocks = "warn"
 # AGENTS.md's stated exception) carry a per-site
 # `#[expect(clippy::unimplemented, reason = "...")]` instead of a blanket
 # allow, so a *new* one anywhere else still fails CI.
+# A lint exception says why: `#[expect(lint, reason = "…")]` (AGENTS.md, "Rules are types").
+allow_attributes_without_reason = "warn"
 dbg_macro = "warn"
 todo = "warn"
 unimplemented = "warn"
@@ -801,6 +802,7 @@ flui-rendering = { workspace = true }
 flui-semantics = { workspace = true }
 flui-objects = { workspace = true }
 flui-interaction = { workspace = true }
+flui-scheduler = { workspace = true }
 flui-testing = { workspace = true, optional = true }
 flui-material = { workspace = true, optional = true }
 flui-cupertino = { workspace = true, optional = true }

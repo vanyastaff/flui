@@ -9,7 +9,7 @@ impl UiRuntime {
     /// Attach a root widget.
     ///
     /// This creates the root element and schedules the first build. Forwards
-    /// to [`flui_view::WidgetsBinding::attach_root_widget`] — the single
+    /// to [`flui_view::__runtime::WidgetsBinding::attach_root_widget`] — the single
     /// root-bootstrap path; every runner entry point calls it, not a separate
     /// hand-rolled wiring.
     ///
@@ -28,16 +28,19 @@ impl UiRuntime {
     ///
     /// # Errors
     ///
-    /// Forwards every [`flui_view::AttachError`] the underlying
-    /// [`flui_view::WidgetsBinding::attach_root_widget`] returns.
-    pub fn attach_root_widget<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
+    /// Forwards every [`flui_view::__runtime::AttachError`] the underlying
+    /// [`flui_view::__runtime::WidgetsBinding::attach_root_widget`] returns.
+    pub fn attach_root_widget<V>(&self, view: &V) -> Result<(), flui_view::__runtime::AttachError>
     where
         V: flui_view::View + Clone + 'static,
     {
         self.enter(|ui_runtime| ui_runtime.attach_root_widget_entered(view))
     }
 
-    fn attach_root_widget_entered<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
+    fn attach_root_widget_entered<V>(
+        &self,
+        view: &V,
+    ) -> Result<(), flui_view::__runtime::AttachError>
     where
         V: flui_view::View + Clone + 'static,
     {
@@ -53,7 +56,7 @@ impl UiRuntime {
         // wrapper republishes.
         let with_media_query = crate::media_query_root::MediaQueryRoot::new(
             std::rc::Rc::clone(self.media_query()),
-            flui_view::view::ViewExt::boxed(view.clone()),
+            flui_view::ViewExt::boxed(view.clone()),
         );
         let focused = FocusTreeRoot::new(PlatformConvention::new(
             self.presentations.primary().platform,
@@ -90,7 +93,7 @@ impl UiRuntime {
         &self,
         id: PresentationId,
         view: &V,
-    ) -> Result<(), flui_view::AttachError>
+    ) -> Result<(), flui_view::__runtime::AttachError>
     where
         V: flui_view::View + Clone + 'static,
     {
@@ -120,8 +123,8 @@ impl UiRuntime {
     ///
     /// # Errors
     ///
-    /// Forwards every [`flui_view::AttachError`] from
-    /// [`flui_view::WidgetsBinding::attach_root_widget`].
+    /// Forwards every [`flui_view::__runtime::AttachError`] from
+    /// [`flui_view::__runtime::WidgetsBinding::attach_root_widget`].
     ///
     /// # Panics
     ///
@@ -132,7 +135,7 @@ impl UiRuntime {
         &self,
         id: PresentationId,
         view: &V,
-    ) -> Result<(), flui_view::AttachError>
+    ) -> Result<(), flui_view::__runtime::AttachError>
     where
         V: flui_view::View + Clone + 'static,
     {
@@ -143,7 +146,7 @@ impl UiRuntime {
             );
             let with_media_query = crate::media_query_root::MediaQueryRoot::new(
                 std::rc::Rc::clone(&presentation.media_query),
-                flui_view::view::ViewExt::boxed(view.clone()),
+                flui_view::ViewExt::boxed(view.clone()),
             );
             let focused = FocusTreeRoot::new(PlatformConvention::new(
                 presentation.platform,

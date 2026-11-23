@@ -20,11 +20,10 @@ use flui_painting::Alignment;
 use flui_painting::Canvas;
 use flui_painting::paint::Paint;
 use flui_painting::styling::Color;
+use flui_scheduler::PostFrameHandle;
 use flui_view::element::{CarouselSliverConfig, SliverCarousel};
 use flui_view::prelude::*;
-use flui_view::{
-    LifecycleSubscription, PostFrameHandle, RebuildHandle, RebuildReason, WriterSource,
-};
+use flui_view::{LifecycleSubscription, RebuildHandle, RebuildReason, WriterSource};
 
 use super::autoplay::CarouselAutoplay;
 use super::controller::{Attachment, CarouselController};
@@ -37,9 +36,10 @@ use crate::scroll::ScrollView;
 use crate::scroll::scroll_owner::SharedSnapPolicy;
 use crate::scroll::{ScrollController, Scrollable, Viewport};
 use crate::{
-    Align, Column, CustomPaint, CustomPainter, Directionality, Expanded, Focus, Listener,
-    MouseRegion, RawButton, Semantics, SizedBox, TickerMode,
+    Align, Column, CustomPaint, Directionality, Expanded, Focus, Listener, MouseRegion, RawButton,
+    Semantics, SizedBox, TickerMode,
 };
+use flui_rendering::delegates::CustomPainter;
 use flui_view::environment::MediaQuery;
 use flui_view::environment::VsyncScope;
 

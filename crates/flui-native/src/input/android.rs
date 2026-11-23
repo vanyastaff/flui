@@ -236,7 +236,7 @@ pub(crate) mod motion {
 
     #![forbid(unsafe_code)]
 
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap;
     use std::time::Duration;
 
     use flui_foundation::geometry::DevicePixelRatio;
@@ -539,12 +539,12 @@ pub(crate) mod motion {
     #[derive(Debug)]
     pub struct AndroidMotion {
         contacts: ContactRegistry,
-        devices: HashMap<i32, DeviceCapabilities>,
+        devices: FxHashMap<i32, DeviceCapabilities>,
         batch: MoveBatch,
         last_time: Option<EventTime>,
         pending_exit: Option<PendingExit>,
-        gestures: HashMap<i32, TouchpadGesture>,
-        cursors: HashMap<i32, Cursor>,
+        gestures: FxHashMap<i32, TouchpadGesture>,
+        cursors: FxHashMap<i32, Cursor>,
         scrolling: ScrollPhases,
     }
 
@@ -594,12 +594,12 @@ pub(crate) mod motion {
         pub fn with_registry(contacts: ContactRegistry) -> Self {
             Self {
                 contacts,
-                devices: HashMap::new(),
+                devices: FxHashMap::default(),
                 batch: MoveBatch::new(),
                 last_time: None,
                 pending_exit: None,
-                gestures: HashMap::new(),
-                cursors: HashMap::new(),
+                gestures: FxHashMap::default(),
+                cursors: FxHashMap::default(),
                 scrolling: ScrollPhases::default(),
             }
         }
@@ -1433,10 +1433,12 @@ pub(crate) mod scroll {
 
 #[cfg(target_os = "android")]
 use std::{
-    collections::HashMap,
     sync::Arc,
     sync::atomic::{AtomicBool, Ordering},
 };
+
+#[cfg(target_os = "android")]
+use rustc_hash::FxHashMap;
 
 #[cfg(target_os = "android")]
 use android_activity::input::{Axis, KeyAction, MotionAction as NdkAction, ToolType};
@@ -1734,7 +1736,7 @@ impl crate::host::Input<AndroidLoop> for AndroidLoop {
 #[cfg(target_os = "android")]
 struct AndroidInputState {
     motion: AndroidMotion,
-    devices: HashMap<i32, CachedDevice>,
+    devices: FxHashMap<i32, CachedDevice>,
 }
 
 #[cfg(target_os = "android")]

@@ -59,7 +59,10 @@ use super::route::RouteId;
 /// They are route-internal — they drive secondary animations, which no observer
 /// surface exposes — so an observer sees a strictly more settled stack, never a
 /// different one.
-#[expect(unused_variables)]
+#[expect(
+    unused_variables,
+    reason = "every callback has a no-op default body that ignores its arguments; their names document the signature an override receives"
+)]
 pub trait NavigatorObserver {
     /// This observer was registered on a navigator that is now mounted.
     ///
@@ -193,16 +196,16 @@ impl Notification {
 /// the whole point: an observer holds a `NavigatorHandle` and would otherwise
 /// panic on a second `RefCell` borrow the moment it read the stack it was told about.
 ///
-/// An observer that panics does not keep the others from hearing: `recovery`
+/// An observer that panics does not keep the others from hearing: `failure`
 /// holds the first failure.
 pub(crate) fn deliver(
     notifications: &[Notification],
     observers: &[Rc<dyn NavigatorObserver>],
-    recovery: &mut flui_foundation::panic::PanicRecovery,
+    failure: &mut flui_foundation::panic::FirstPanic,
 ) {
     for notification in notifications {
         for observer in observers {
-            recovery.run(|| notification.notify(observer.as_ref()));
+            failure.contain(|| notification.notify(observer.as_ref()));
         }
     }
 }

@@ -62,7 +62,7 @@ live?
   mechanism;
 - owner-thread state is `Rc`/`RefCell`, and a `Send` bound appears only where a value leaves the
   thread (ADR-0323);
-- `build` describes the tree and drives nothing (ADR-0086 §7);
+- `build` describes the tree and drives nothing (ADR-0074 §5.2);
 - a UI runtime hosts several presentations (ADR-0043), so a navigation is addressed to one;
 - the runtime and the agent protocol name no widget-catalog type (ADR-0083), and the cross-thread
   vocabulary stays closed (ADR-0027 §9).
@@ -224,7 +224,7 @@ fn build(&self, _view: &NoteList, ctx: &dyn BuildContext) -> impl IntoView {
   way in `did_change_dependencies`. There is no second, lifecycle-only door.
 - **`build` drives nothing.** A `RouterHandle` or `PageHandle` mutation made while its UI runtime
   builds is refused with `RouterError::DuringBuild` or `PageError::DuringBuild` (`maybe_pop`
-  answers `false`) and reported, as ADR-0086 §7 refuses a controller mutation from `build`; the
+  answers `false`) and reported, as ADR-0074 §5.2 refuses a controller mutation from `build`; the
   stack is unchanged.
 - **Edits are synchronous.** `push`, `replace`, `pop` and `go` on the handle edit the stack and go
   through the pure-data history flush of ADR-0019 §1 at once; the pages they add build on the next
@@ -448,7 +448,7 @@ ADR-0027 §9's vocabulary closed: no second channel without a producer.
   `Navigator`, `NavigatorHandle` or
   named-route item, and `cargo xtask send-positions` holds the navigator's rows at zero.
 - §5: in `crates/flui-widgets/tests/url_owner.rs`, rows of the `router_and_widgets_app` table
-  driven through `flui_testing::HeadlessHost::navigate`:
+  driven through `flui_testing::host::HeadlessHost::navigate`:
   `an_intent_reaches_only_the_router_of_its_window` (two presentations of one UI runtime, a push,
   a `go` and a `Pop` to `NothingToPop`), `a_window_without_a_router_has_no_url_owner`
   (`NoUrlOwner`, and `NoPresentation` after the window closes),

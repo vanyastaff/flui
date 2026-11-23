@@ -16,10 +16,13 @@ use flui_interaction::gesture::GestureProfiles;
 use flui_painting::styling::Color;
 use flui_platform::TargetPlatform;
 use flui_platform::input::keyboard::NamedKey;
+use flui_semantics::SemanticsAnchor;
 use flui_testing::a11y::{Action, Role};
+use flui_testing::gesture_alternatives::{
+    AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives,
+};
 use flui_testing::replay::{MouseScript, PointerScript, TouchScript};
 use flui_testing::widgets::SharedSignal;
-use flui_testing::{AlternativesSubject, GestureAlternativesCheck, assert_gesture_alternatives};
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 use flui_widgets::{
@@ -27,8 +30,8 @@ use flui_widgets::{
     CompanionRegistration, CompanionSpec, ControlPlacement, ControlSpec, Directionality,
     DismissDirection, Dismissible, Expanded, GestureAlternatives, GestureAlternativesError,
     GestureCommand, Intent, MenuRequest, MenuSpec, PageController, PageIntent, PageView, RawButton,
-    Row, Semantics, SemanticsAnchor, SingleActivator, SizedBox, SwipeAction, SwipeActions,
-    SwipeAlternative, SwipeEdge, Text, ViewportFraction,
+    Row, Semantics, SingleActivator, SizedBox, SwipeAction, SwipeActions, SwipeAlternative,
+    SwipeEdge, Text, ViewportFraction,
 };
 
 use crate::common::{lay_out, tight};
@@ -905,9 +908,9 @@ pub(crate) fn the_revealed_menu_control_follows_focus_and_reading_direction() {
                     .nodes()
                     .find(|node| node.supports_action(Action::ShowContextMenu))
                     .unwrap_or_else(|| panic!("{case}: the row\n{}", tree.describe()));
-                laid.invoke_semantics_action(flui_testing::ActionRequest {
+                laid.invoke_semantics_action(flui_testing::a11y::ActionRequest {
                     action: Action::Focus,
-                    target_tree: flui_testing::TreeId::ROOT,
+                    target_tree: flui_testing::a11y::TreeId::ROOT,
                     target_node: row.id(),
                     data: None,
                 })
@@ -1298,7 +1301,7 @@ pub(crate) fn the_revealed_menu_control_draws_its_glyph_on_its_own_surface() {
     )))
     .expect("one labelled command");
     // A ring in colours nothing else paints, to find its bands among the ops.
-    let ring = flui_widgets::FocusRingStyle {
+    let ring = flui_objects::FocusRingStyle {
         outer: Color::rgb(200, 0, 0),
         inner: Color::rgb(0, 200, 0),
         outer_width: 2.0,

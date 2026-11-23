@@ -7,7 +7,8 @@ use std::time::Duration;
 use flui_material::{InkWell, RippleConfiguration, RippleScope, StateLayerAlpha, Theme, ThemeData};
 use flui_sdk::animation::MotionOverride;
 use flui_sdk::geometry::{Point, Rect};
-use flui_sdk::painting::{Alignment, Color, DrawOp};
+use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::{Alignment, DrawOp};
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{

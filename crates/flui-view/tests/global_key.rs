@@ -15,9 +15,11 @@ use flui_view::LifecycleContext;
 // The duplicate-key fixture runs only where the debug check panics.
 #[cfg(debug_assertions)]
 use flui_rendering::{PipelineCell, pipeline::PipelineOwner, protocol::BoxProtocol};
+use flui_view::__runtime::{BuildOwner, ElementTree};
+use flui_view::element::StatefulElement;
 use flui_view::{
-    BuildContext, BuildOwner, ElementBase, ElementTree, GlobalKey, IntoView, KeyLookup,
-    StatefulElement, StatefulView, StatelessView, View, ViewExt, ViewState,
+    BoxedView, BuildContext, GlobalKey, IntoView, KeyLookup, StatefulView, StatelessView, View,
+    ViewExt, ViewState,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -120,7 +122,7 @@ impl flui_view::RenderView for DuplicateHost {
         true
     }
 
-    fn visit_child_views(&self, visitor: &mut dyn FnMut(&dyn View)) {
+    fn visit_child_views(&self, visitor: &mut dyn FnMut(&BoxedView)) {
         for child in &self.children {
             visitor(child);
         }
@@ -161,7 +163,7 @@ fn set_sentinel(
     };
     let element = node.element_mut();
     let downcast: &mut StatefulElement<KeyedCounter> =
-        match (element as &mut dyn ElementBase).downcast_mut::<StatefulElement<KeyedCounter>>() {
+        match (element as &mut dyn std::any::Any).downcast_mut::<StatefulElement<KeyedCounter>>() {
             Some(e) => e,
             None => return false,
         };
@@ -188,16 +190,15 @@ fn set_sentinel(
 ///
 /// The previously-keyed element is pulled out of the inactive queue and
 /// re-mounted under the new parent.
-#[serial_test::serial(global_key_registry)]
 pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
     let (tree, owner) = fresh_tree();
 
     // Two distinct parents to migrate between.
     let parent_a = tree
         .borrow_mut()
-        .mount_root(&Spacer, &mut owner.borrow_mut().element_owner_mut());
+        .mount_root(&Spacer.boxed(), &mut owner.borrow_mut().element_owner_mut());
     let parent_b = tree.borrow_mut().insert(
-        &Spacer,
+        &Spacer.boxed(),
         parent_a,
         0,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -211,7 +212,7 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
 
     // Mount under parent A.
     let original_id = tree.borrow_mut().insert(
-        &counter,
+        &counter.clone().boxed(),
         parent_a,
         1,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -223,7 +224,7 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
         .schedule_build_for(original_id, 2, flui_view::RebuildReason::InitialMount);
     owner.borrow_mut().build_scope(&mut tree.borrow_mut());
     // Make state mutation observable via sentinel.
-    flui_view::test_only_set_global_key_registry(&tree, &owner);
+    let _registry = flui_view::testing::activate_global_key_registry(&tree, &owner);
     assert!(set_sentinel(&tree, &key, 0xCAFE_BABE));
 
     // Soft-remove from parent A — should push to inactive,
@@ -235,7 +236,7 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
     // element must be pulled back from the inactive queue instead of a
     // fresh element being created.
     let migrated_id = tree.borrow_mut().insert(
-        &counter,
+        &counter.boxed(),
         parent_b,
         0,
         &mut owner.borrow_mut().element_owner_mut(),
@@ -259,8 +260,6 @@ pub(crate) fn global_key_state_migrates_to_new_parent_slot() {
         Some(0xCAFE_BABE),
         "sentinel mutation written before migration must survive"
     );
-
-    flui_view::test_only_clear_global_key_registry();
 }
 
 // ============================================================================
@@ -294,7 +293,8 @@ fn duplicate_global_key_panics_in_debug() {
     let root_id = tree.borrow_mut().mount_root_with_pipeline_owner(
         &DuplicateHost {
             children: vec![counter_a.boxed(), counter_b.boxed()],
-        },
+        }
+        .boxed(),
         Some(PipelineCell::new(PipelineOwner::new(
             flui_rendering::TextContextHandle::standalone(),
         ))),

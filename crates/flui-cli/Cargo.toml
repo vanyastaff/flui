@@ -11,7 +11,8 @@ description = "Command-line interface for FLUI - Project creation, building, and
 keywords = ["cli", "flui", "ui", "cross-platform", "build-tool"]
 categories = ["command-line-utilities", "development-tools", "gui"]
 # ARCHITECTURE.md records design decisions for people working on the crate;
-# the published archive carries the README and CHANGELOG a user reads.
+# the published archive carries the README a user reads; changes are in the
+# root CHANGELOG.md.
 exclude = ["ARCHITECTURE.md"]
 # Single-binary integration-test consolidation: every root test file is a
 # module of `tests/main.rs` (one link of the full dep stack instead of 5

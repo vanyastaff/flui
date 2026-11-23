@@ -32,8 +32,8 @@ impl ViewState<RebuildProbe> for RebuildProbeState {
 /// A probe on its own bare owner, built by hand: its wake hook is the
 /// owner's `on_build_scheduled`, the seam a fanout delivery reaches.
 struct MountedProbe {
-    owner: flui_sdk::view::BuildOwner,
-    tree: flui_sdk::view::tree::ElementTree,
+    owner: flui_view::__runtime::BuildOwner,
+    tree: flui_view::__runtime::ElementTree,
     handle: RebuildHandle,
     builds: Rc<Cell<usize>>,
 }
@@ -45,10 +45,10 @@ impl MountedProbe {
             handle: Rc::clone(&handle),
             builds: Rc::clone(&builds),
         };
-        let mut owner = flui_sdk::view::BuildOwner::new();
+        let mut owner = flui_view::__runtime::BuildOwner::new();
         owner.set_on_build_scheduled(wake);
-        let mut tree = flui_sdk::view::tree::ElementTree::new();
-        let root = tree.mount_root(&view, &mut owner.element_owner_mut());
+        let mut tree = flui_view::__runtime::ElementTree::new();
+        let root = tree.mount_root(&view.boxed(), &mut owner.element_owner_mut());
         owner.schedule_build_for(root, 0, flui_sdk::view::RebuildReason::InitialMount);
         owner.build_scope(&mut tree);
         let handle = handle

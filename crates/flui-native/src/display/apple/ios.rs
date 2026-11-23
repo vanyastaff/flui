@@ -27,10 +27,16 @@
 // Some screen APIs remain deprecated in SDK 26.2. Scene ownership is
 // implemented; this allowance does not exempt new code from scene lifetime
 // rules.
-#![expect(deprecated)]
+#![expect(
+    deprecated,
+    reason = "some UIKit screen APIs remain deprecated in SDK 26.2"
+)]
 // UIKit's notification center is reached through Objective-C calls that have
 // no safe wrapper; each block states the invariant it relies on.
-#![expect(unsafe_code)]
+#![expect(
+    unsafe_code,
+    reason = "UIKit's notification center is reached through Objective-C calls that have no safe wrapper"
+)]
 
 use std::ptr::NonNull;
 use std::sync::{

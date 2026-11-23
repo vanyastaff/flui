@@ -13,21 +13,28 @@ use std::sync::Arc;
 use flui_foundation::memory::MemoryPressureLevel;
 
 use crate::{
-    command_ir::{DrawItem, DrawSegment},
-    glyph_atlas::{GlyphAtlas, TextAtlas},
-    layer_compositor::LayerCompositor,
-    pipeline_set::PipelineLibrary,
+    layers::compositor::LayerCompositor,
+    pipelines::set::PipelineLibrary,
+    record::command_ir::{DrawItem, DrawSegment},
+    record::state_stack::GpuStateStack,
     replay::GpuReplay,
     resources::GpuResources,
-    state_stack::GpuStateStack,
+    resources::glyph_atlas::{GlyphAtlas, TextAtlas},
 };
 
 /// GPU painter for wgpu-based rendering.
 ///
 /// Manages instanced batching, tessellation, text rendering, and offscreen compositing.
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        unreachable_pub,
+        reason = "the crate root re-exports `WgpuPainter` only under `testing`, for the benches"
+    )
+)]
 pub struct WgpuPainter {
-    domain: Arc<crate::device_domain::DeviceDomain>,
-    frame_scope: Option<crate::device_domain::FrameSubmissionScope>,
+    domain: Arc<crate::device::domain::DeviceDomain>,
+    frame_scope: Option<crate::device::domain::FrameSubmissionScope>,
     // ===== GPU State =====
     /// wgpu device (Arc for sharing with text renderer)
     device: Arc<wgpu::Device>,
@@ -67,13 +74,16 @@ pub struct WgpuPainter {
     ///
     /// Separated from the flush-side fields so the borrow checker can split
     /// `&mut batcher` from `&mut current_segment`, `&mut draw_order`, and
-    /// `&state` in the same call.  See `batches.rs` for the borrow seam contract.
-    batcher: crate::batches::DrawBatcher,
+    /// `&state` in the same call.  See `record/batches/mod.rs` for the borrow seam contract.
+    batcher: crate::record::batches::DrawBatcher,
 
     // ===== Text =====
     /// The rasterised-glyph cache paragraphs are recorded against and the
     /// glyph pipeline samples. One per painter whatever formats it draws to.
     glyph_atlas: TextAtlas,
+    /// The namespace of font blob ids the atlas's rasterizer serves
+    /// ([`Self::select_font_source`]).
+    font_source: crate::frame::protocol::FontSource,
 
     // ===== GPU Draw-State Stack =====
     /// Owns the four parallel transform/scissor/SDF-clip stacks and their
@@ -103,7 +113,7 @@ pub struct WgpuPainter {
     /// The chunks' recordings kept past their frame. Beside the glyph atlas
     /// and the image cache whose texels they name: a new painter (device
     /// recovery, a torn painter replaced) starts with none.
-    recording_cache: crate::recording_cache::RecordingCache,
+    recording_cache: crate::record::cache::RecordingCache,
     /// Whether the chunk being recorded is to be captured for the cache: its
     /// glyphs are then recorded whole, unculled by the scissor it is entered
     /// under, since the recording is spliced under other scissors and culled
@@ -118,6 +128,10 @@ pub struct WgpuPainter {
 }
 
 /// What [`WgpuPainter::begin_chunk`] did with a chunk.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a short-lived per-frame value dominated by one variant; boxing it would add an allocation on the frame path"
+)]
 pub(crate) enum ChunkStart {
     /// Its kept recording was spliced into the segment: nothing to record.
     Replayed,
@@ -129,21 +143,28 @@ pub(crate) enum ChunkStart {
 /// A chunk being recorded for the cache: its key and where its recording
 /// began.
 pub(crate) struct ChunkEntry {
-    key: crate::recording_cache::RecordingKey,
-    mark: crate::recording_cache::SegmentMark,
+    key: crate::record::cache::RecordingKey,
+    mark: crate::record::cache::SegmentMark,
     items: usize,
     layer_depth: usize,
-    clip: crate::state_stack::ResolvedClip,
-    origin: crate::pixel_shift::PixelOrigin,
+    clip: crate::record::state_stack::ResolvedClip,
+    origin: crate::record::pixel_shift::PixelOrigin,
 }
 
 // GPU rendering routinely converts between numeric types for pixel coordinates,
 // color channels, buffer indices, and instance counts.
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        unreachable_pub,
+        reason = "the crate root re-exports `WgpuPainter` only under `testing`, for the benches"
+    )
+)]
 impl WgpuPainter {
-    /// Start an embedder-owned frame before recording any drawing commands.
+    /// Start a caller-owned frame before recording any drawing commands.
     ///
     /// After success, record draws, encode them with [`Self::render_to_view`],
-    /// submit with [`Self::submit_encoder`], then call [`Self::finish_frame`].
+    /// submit with `submit_encoder`, then call [`Self::finish_frame`].
     /// Intermediate flushes and submissions share the same cumulative frame quota.
     /// If encoding or submission fails, discard any unsubmitted encoders and
     /// still finish the frame. A failed begin does not start a frame; do not finish
@@ -151,6 +172,7 @@ impl WgpuPainter {
     /// # Errors
     /// Rejects a nested frame, pending-work backpressure, a device-progress
     /// failure, or a closing/lost device domain.
+    #[cfg(feature = "testing")]
     pub fn begin_frame(&mut self) -> crate::error::EngineResult<()> {
         let scope = self.domain.begin_frame_scope()?;
         self.frame_scope = Some(scope);
@@ -171,7 +193,7 @@ impl WgpuPainter {
         self.region_pass = pass;
     }
 
-    /// Finish an embedder-owned frame after submitting its final encoder.
+    /// Finish a caller-owned frame after submitting its final encoder.
     ///
     /// Call once, including when rendering failed and the encoder was discarded.
     /// Advances resource reclamation and releases frame-local uniform allocations.
@@ -191,26 +213,11 @@ impl WgpuPainter {
         self.frame_scope = None;
         self.region_pass = 0;
     }
-    /// Create a new GPU painter
-    ///
-    /// # Arguments
-    /// * `device` - wgpu device
-    /// * `queue` - wgpu queue
-    /// * `surface_format` - Surface texture format
-    /// * `size` - Initial viewport size (width, height)
-    pub fn new(
-        device: wgpu::Device,
-        queue: wgpu::Queue,
-        surface_format: wgpu::TextureFormat,
-        size: (u32, u32),
-    ) -> Self {
-        Self::with_shared_device(Arc::new(device), Arc::new(queue), surface_format, size)
-    }
-
     /// Create a WgpuPainter with shared device and queue.
     ///
     /// Use this when the device/queue are already wrapped in Arc
-    /// (e.g., shared with Renderer).
+    /// (e.g., shared with another painter on the same device).
+    #[cfg(feature = "testing")]
     pub fn with_shared_device(
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
@@ -218,46 +225,33 @@ impl WgpuPainter {
         size: (u32, u32),
     ) -> Self {
         Self::with_domain(
-            crate::device_domain::DeviceDomain::new(device, queue),
+            crate::device::domain::DeviceDomain::new(device, queue),
             surface_format,
             size,
         )
     }
 
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn with_domain(
-        domain: Arc<crate::device_domain::DeviceDomain>,
+        domain: Arc<crate::device::domain::DeviceDomain>,
         surface_format: wgpu::TextureFormat,
         size: (u32, u32),
     ) -> Self {
-        Self::with_domain_and_font_source(
-            domain,
-            surface_format,
-            size,
-            crate::frame_protocol::FontSource::Ordinary,
-        )
-    }
-
-    pub(crate) fn with_domain_and_font_source(
-        domain: Arc<crate::device_domain::DeviceDomain>,
-        surface_format: wgpu::TextureFormat,
-        size: (u32, u32),
-        source: crate::frame_protocol::FontSource,
-    ) -> Self {
-        // `PipelineSet::new` creates the viewport bind-group layout internally
-        // and exposes it via `viewport_bind_group_layout()`.
         // A painter of its own keeps no pipeline cache: only a `GpuContext`
         // saves one between runs.
         let pipelines = PipelineLibrary::new(
-            crate::pipeline_device::PipelineDevice::uncached(domain.device()),
+            crate::pipelines::device::PipelineDevice::uncached(domain.device()),
             surface_format,
         );
-        Self::with_pipelines(domain, &mut Some(pipelines), size, source)
+        Self::with_pipelines(domain, &mut Some(pipelines), size)
     }
 
     /// A painter over the library in `pipelines`, one an earlier painter on
     /// the same device built, drawing into targets of the library's selected
     /// format. Everything else (the glyph atlas, the image and path caches,
-    /// the scratch pools) starts empty.
+    /// the scratch pools) starts empty, the atlas serving
+    /// [`FontSource::Ordinary`](crate::frame::protocol::FontSource::Ordinary)
+    /// until [`Self::select_font_source`] names another.
     ///
     /// The library is taken out of `pipelines` only once everything that can
     /// fail is built, so a panic here (a tracing subscriber, wgpu's error
@@ -268,10 +262,9 @@ impl WgpuPainter {
     /// # Panics
     /// When `pipelines` holds no library.
     pub(crate) fn with_pipelines(
-        domain: Arc<crate::device_domain::DeviceDomain>,
+        domain: Arc<crate::device::domain::DeviceDomain>,
         pipelines: &mut Option<PipelineLibrary>,
         size: (u32, u32),
-        source: crate::frame_protocol::FontSource,
     ) -> Self {
         let device = Arc::clone(domain.device());
         let queue = Arc::clone(domain.queue());
@@ -296,11 +289,12 @@ impl WgpuPainter {
         // Glyph bitmaps come from swash over the faces each paragraph's
         // runs carry (ADR-0092 §5): the atlas owns its rasterizer and the
         // registry of faces it has drawn, and shares no font state.
+        let font_source = crate::frame::protocol::FontSource::Ordinary;
         let glyph_atlas = GlyphAtlas::new(
             Arc::clone(&device),
             Arc::clone(&queue),
             &library.current().glyph_atlas_bind_group_layout,
-            source.rasterizer(),
+            font_source.rasterizer(),
         );
 
         // ===== Resource managers =====
@@ -319,30 +313,48 @@ impl WgpuPainter {
             resources,
             pipelines,
             replay,
-            batcher: crate::batches::DrawBatcher::new(),
+            batcher: crate::record::batches::DrawBatcher::new(),
             glyph_atlas,
+            font_source,
             state: GpuStateStack::new(),
             compositor: LayerCompositor::new(),
             suppressed_layer_depth: 0,
             region_pass: 0,
             current_segment: DrawSegment::new(),
             draw_order: Vec::new(),
-            recording_cache: crate::recording_cache::RecordingCache::new(),
+            recording_cache: crate::record::cache::RecordingCache::new(),
             capturing: false,
             splice_glyph_counts: Vec::new(),
         }
     }
 
-    /// Replaces font faces and cached glyph bitmaps between scene sources.
-    /// Called before recording a frame, after the previous frame's commands
-    /// have been submitted or discarded. Submitted GPU work owns its resources.
-    pub(crate) fn reset_scene_fonts(&mut self, source: crate::frame_protocol::FontSource) {
+    /// Serve scenes whose font blob ids belong to `source` from now on: when
+    /// the atlas serves another namespace, or `reset_fonts` retires the
+    /// faces an earlier scene of the same one registered, the font faces and
+    /// cached glyph bitmaps are replaced. Called before recording a frame,
+    /// after the previous frame's commands have been submitted or discarded;
+    /// submitted GPU work owns its resources.
+    ///
+    /// The painter holds the namespace because every window of a
+    /// `GpuContext` draws through one painter, and a rebuilt painter starts
+    /// on [`FontSource::Ordinary`](crate::frame::protocol::FontSource::Ordinary):
+    /// a window's record of the source its last frame used says nothing of
+    /// the atlas another window or a rebuild left.
+    pub(crate) fn select_font_source(
+        &mut self,
+        source: crate::frame::protocol::FontSource,
+        reset_fonts: bool,
+    ) {
+        if self.font_source == source && !reset_fonts {
+            return;
+        }
         self.glyph_atlas = GlyphAtlas::new(
             Arc::clone(&self.device),
             Arc::clone(&self.queue),
             &self.pipelines.current().glyph_atlas_bind_group_layout,
             source.rasterizer(),
         );
+        self.font_source = source;
         // A new atlas packs from its first texel: a kept recording names
         // texels of the old one.
         self.recording_cache.advance_epoch();
@@ -391,7 +403,7 @@ impl WgpuPainter {
         if level == MemoryPressureLevel::Moderate {
             self.resources
                 .buffer_pool_mut()
-                .evict_over_budget(crate::buffer_pool::DEFAULT_BUDGET_BYTES / 2);
+                .evict_over_budget(crate::resources::buffer_pool::DEFAULT_BUDGET_BYTES / 2);
         } else {
             self.resources.buffer_pool_mut().evict_over_budget(0);
             self.glyph_atlas.reset();
@@ -426,20 +438,16 @@ impl WgpuPainter {
 
     /// Returns a reference to the wgpu device.
     #[must_use]
-    pub fn device(&self) -> &Arc<wgpu::Device> {
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn device(&self) -> &Arc<wgpu::Device> {
         &self.device
     }
 
     /// Returns a reference to the wgpu queue.
     #[must_use]
-    pub fn queue(&self) -> &Arc<wgpu::Queue> {
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn queue(&self) -> &Arc<wgpu::Queue> {
         &self.queue
-    }
-
-    /// Returns the surface texture format.
-    #[must_use]
-    pub fn surface_format(&self) -> wgpu::TextureFormat {
-        self.surface_format
     }
 
     // ===== Frame Lifecycle =====
@@ -494,7 +502,7 @@ impl WgpuPainter {
     #[must_use = "errors must be propagated or handled"]
     pub(crate) fn render(
         &mut self,
-        target: crate::render_target::RenderTarget<'_>,
+        target: crate::frame::render_target::RenderTarget<'_>,
         encoder: &mut wgpu::CommandEncoder,
     ) -> crate::error::EngineResult<()> {
         self.current_segment.recording_result()?;
@@ -541,10 +549,10 @@ impl WgpuPainter {
 
         // NOTE: texture-cache maintenance is intentionally NOT done here.
         // `render` runs multiple times per frame — each backdrop-filter flush
-        // (backend.rs / renderer.rs) plus the final flush — on the SAME cache.
+        // plus the final flush — on the SAME cache.
         // Resetting use-counters here would mis-classify textures used in an
-        // earlier pass as unused and evict / atlas-reset them mid-frame.  The
-        // Renderer calls `end_frame_maintenance` exactly once per frame instead.
+        // earlier pass as unused and evict / atlas-reset them mid-frame.
+        // `finish_frame` calls `end_frame_maintenance` exactly once per frame instead.
 
         Ok(())
     }
@@ -554,7 +562,7 @@ impl WgpuPainter {
     ///
     /// This encodes work; it neither submits nor finishes the frame. Begin with
     /// [`Self::begin_frame`] before recording, submit every encoder containing
-    /// prepared draws through [`Self::submit_encoder`], then finish with
+    /// prepared draws through `submit_encoder`, then finish with
     /// [`Self::finish_frame`]. Multiple flushes may share one encoder. On error,
     /// discard that encoder and finish the frame; do not submit its partial work.
     /// Direct queue submission bypasses the painter's submission admission and
@@ -564,12 +572,16 @@ impl WgpuPainter {
     /// `wgpu::Texture` to supply. Call [`Self::render_to_texture`] when the
     /// backing texture is available, so blend passes can read its destination.
     #[must_use = "errors must be propagated or handled"]
+    #[cfg(feature = "testing")]
     pub fn render_to_view(
         &mut self,
         view: &wgpu::TextureView,
         encoder: &mut wgpu::CommandEncoder,
     ) -> crate::error::EngineResult<()> {
-        self.render(crate::render_target::RenderTarget::view_only(view), encoder)
+        self.render(
+            crate::frame::render_target::RenderTarget::view_only(view),
+            encoder,
+        )
     }
 
     /// Encode into a texture whose previous contents can be read for blending.
@@ -578,7 +590,7 @@ impl WgpuPainter {
     /// single-sample 2D attachment, and permit `RENDER_ATTACHMENT | COPY_SRC`.
     /// The texture and encoder must belong to this painter's device. Only mip
     /// level zero is rendered. Validation precedes encoding. The managed lifecycle
-    /// is the same as [`Self::render_to_view`].
+    /// is the same as `render_to_view`.
     #[must_use = "errors must be propagated or handled"]
     pub fn render_to_texture(
         &mut self,
@@ -611,7 +623,7 @@ impl WgpuPainter {
             ..Default::default()
         });
         self.render(
-            crate::render_target::RenderTarget::sampleable(&view, texture),
+            crate::frame::render_target::RenderTarget::sampleable(&view, texture),
             encoder,
         )
     }
@@ -647,7 +659,7 @@ impl WgpuPainter {
         // `BufferPool::evict_over_budget`.
         self.resources
             .buffer_pool_mut()
-            .evict_over_budget(crate::buffer_pool::DEFAULT_BUDGET_BYTES);
+            .evict_over_budget(crate::resources::buffer_pool::DEFAULT_BUDGET_BYTES);
 
         let maint = self.resources.texture_cache_mut().end_frame_maintenance();
         if maint.evicted > 0 || maint.atlas_reset {
@@ -665,16 +677,10 @@ impl WgpuPainter {
         self.recording_cache.end_frame();
     }
 
-    /// Returns the current viewport size as `(width, height)`.
-    #[must_use]
-    pub fn size(&self) -> (u32, u32) {
-        self.size
-    }
-
     /// Resize the viewport.
     ///
     /// Call this when the window is resized.
-    pub fn resize(&mut self, width: u32, height: u32) {
+    pub(crate) fn resize(&mut self, width: u32, height: u32) {
         self.size = (width, height);
         self.replay.update_viewport(width, height);
         // Delegate the GPU uniform-buffer write to GpuReplay, which owns the
@@ -688,9 +694,10 @@ impl WgpuPainter {
     /// Imports remain a trusted same-device raw wgpu contract; the registry
     /// cannot prove foreign-device provenance. Recorded draws hold allocation
     /// leases, so update/unregister cannot replace already recorded work.
-    pub fn external_texture_registry(
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn external_texture_registry(
         &self,
-    ) -> &crate::external_texture_registry::ExternalTextureRegistry {
+    ) -> &crate::resources::external_textures::ExternalTextureRegistry {
         self.resources.external_texture_registry()
     }
 
@@ -699,9 +706,10 @@ impl WgpuPainter {
     /// Update preserves descriptor and dimensions. Use unregister/register to
     /// change policy. Writes into the same allocation stay visible to recorded
     /// draws; allocation ownership does not copy texel contents.
+    #[cfg(any(test, feature = "testing"))]
     pub fn external_texture_registry_mut(
         &mut self,
-    ) -> &mut crate::external_texture_registry::ExternalTextureRegistry {
+    ) -> &mut crate::resources::external_textures::ExternalTextureRegistry {
         self.resources.external_texture_registry_mut()
     }
 
@@ -718,7 +726,8 @@ impl WgpuPainter {
     /// The first frame refused: an empty image, one past the device's texture
     /// limit, or one the registry rejects;
     /// every other frame and every retirement is still applied.
-    pub fn apply_texture_updates(
+    #[cfg(test)]
+    pub(crate) fn apply_texture_updates(
         &mut self,
         updates: flui_layer::TextureUpdates,
     ) -> crate::error::EngineResult<()> {
@@ -732,7 +741,7 @@ impl WgpuPainter {
     /// the length of its frame, and takes them back after.
     pub(crate) fn swap_external_textures(
         &mut self,
-        textures: &mut crate::external_texture_registry::ExternalTextureRegistry,
+        textures: &mut crate::resources::external_textures::ExternalTextureRegistry,
     ) {
         std::mem::swap(self.resources.external_texture_registry_mut(), textures);
     }
@@ -760,7 +769,7 @@ impl WgpuPainter {
     /// Forwards to `DrawBatcher::finish_current_segment`.  Called explicitly
     /// by the flush path to finalize the last segment before GPU submission.
     fn finish_current_segment(&mut self) {
-        crate::batches::DrawBatcher::finish_current_segment(
+        crate::record::batches::DrawBatcher::finish_current_segment(
             &mut self.current_segment,
             &mut self.draw_order,
         );
@@ -780,11 +789,11 @@ impl WgpuPainter {
     /// Whether a paragraph recorded now leaves out the glyphs outside the
     /// active scissor: not while a chunk is captured, whose recording holds
     /// every glyph and is culled at each splice (ADR-0306 §2).
-    pub(crate) fn glyph_cull(&self) -> crate::batches::GlyphCull {
+    pub(crate) fn glyph_cull(&self) -> crate::record::batches::GlyphCull {
         if self.capturing {
-            crate::batches::GlyphCull::None
+            crate::record::batches::GlyphCull::None
         } else {
-            crate::batches::GlyphCull::Scissor
+            crate::record::batches::GlyphCull::Scissor
         }
     }
 
@@ -797,13 +806,13 @@ impl WgpuPainter {
     /// scissor and SDF clip it is entered under are not in the key: a
     /// recording takes the entry's at the splice (ADR-0306 §2).
     ///
-    /// [`Admission`]: crate::recording_cache::Admission
+    /// [`Admission`]: crate::record::cache::Admission
     pub(crate) fn begin_chunk(
         &mut self,
         chunk: &flui_layer::Chunk,
-        reads: crate::recording_cache::CacheReads,
+        reads: crate::record::cache::CacheReads,
     ) -> ChunkStart {
-        use crate::recording_cache::{Admission, AmbientKey, CacheReads, RasterKey, RecordingKey};
+        use crate::record::cache::{Admission, AmbientKey, CacheReads, RasterKey, RecordingKey};
         self.capturing = false;
         if reads == CacheReads::Off
             || !chunk.textures().is_empty()
@@ -831,7 +840,7 @@ impl WgpuPainter {
                 let chain = self.state.clip_chain();
                 self.current_segment.splice(
                     recording,
-                    &crate::recording_cache::SpliceAmbient {
+                    &crate::record::cache::SpliceAmbient {
                         scissor: self.state.current_scissor(),
                         clip: self.state.active_clip(),
                         chain: &chain,
@@ -904,7 +913,7 @@ impl WgpuPainter {
     /// Drops the kept recordings of `lineage`'s content, which no target
     /// draws any more ([`DrawnLineages`]).
     ///
-    /// [`DrawnLineages`]: crate::recording_cache::DrawnLineages
+    /// [`DrawnLineages`]: crate::record::cache::DrawnLineages
     pub(crate) fn drop_recordings_of(&mut self, lineage: flui_layer::Lineage) {
         self.recording_cache.drop_lineage(lineage);
     }
@@ -951,11 +960,10 @@ impl WgpuPainter {
     }
 }
 
-// ===== Submodule declarations (C1 LOC-cap split) =====
-// The inherent `impl WgpuPainter` blocks for the public drawing API,
-// transform/clip state, and save-layer/filter composition were
-// moved out of this file to restore the C1 <1500-LOC cap. They are descendant
-// modules of `painter`, so they retain access to WgpuPainter's private fields.
+// ===== Submodule declarations =====
+// The inherent `impl WgpuPainter` blocks for the drawing API, transform/clip
+// state, and save-layer/filter composition live in descendant modules of
+// `painter`, so they retain access to WgpuPainter's private fields.
 mod backdrop;
 pub(crate) use backdrop::BackdropSnapshots;
 mod draw;

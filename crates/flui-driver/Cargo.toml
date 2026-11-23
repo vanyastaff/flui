@@ -20,7 +20,7 @@ exclude = ["/ARCHITECTURE.md"]
 default = []
 # The headless target: the app's view hosted in process by `flui-testing`'s headless host on a
 # virtual clock, its agent served without a socket (ADR-0238 §8).
-headless = ["dep:flui-testing", "dep:flui-view", "dep:web-time"]
+headless = ["dep:flui-platform", "dep:flui-testing", "dep:flui-view", "dep:web-time"]
 # Test support: a scripted OS lane and its activity guard, and a scripted agent served over a
 # local socket, for tests of the driver itself and of front ends built on it (ADR-0243).
 testing = []
@@ -47,6 +47,8 @@ tracing = { workspace = true }
 getrandom = { workspace = true }
 flui-testing = { workspace = true, optional = true }
 flui-view = { workspace = true, optional = true }
+# What covers the headless window (its safe area, a keyboard), as a native host reports it.
+flui-platform = { workspace = true, optional = true }
 # The containment of a panic out of the headless host, which ends the app, and out of a lane's
 # code on its worker (ADR-0287).
 flui-foundation = { workspace = true }

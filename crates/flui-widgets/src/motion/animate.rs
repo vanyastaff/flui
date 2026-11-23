@@ -129,7 +129,7 @@ impl Choreography {
 ///
 /// ```
 /// use flui_widgets::prelude::*;
-/// use flui_widgets::motion::{Animate, AnimateExt, Effects, Trigger};
+/// use flui_widgets::{Animate, AnimateExt, Effects, Trigger};
 ///
 /// let entrance = Effects::new().fade_in().slide_y(0.2).then().scale(0.9);
 /// let card = SizedBox::new(80.0, 40.0).animate(entrance.clone());
