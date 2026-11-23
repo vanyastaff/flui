@@ -69,8 +69,9 @@ Application overrides apply before runners mount their first root and seed later
 presentations in the same runtime.
 
 Controllers default to Normal, including unbounded controllers. Physical scroll
-and viewer inertia, snackbar display timers and press-delay timers explicitly
-use Preserve. Loading indicators use Normal and visible static feedback under
+and viewer inertia and press-delay timers explicitly use Preserve; a snackbar's
+display timer is a sleep on the UI runtime's clock, which motion policy does not
+reach. Loading indicators use Normal and visible static feedback under
 Reduce, as specified by ADR-0192. Cupertino route composition reads the inherited
 policy and returns its static child under Reduce.
 

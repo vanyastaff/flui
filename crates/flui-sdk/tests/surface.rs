@@ -183,7 +183,8 @@ mod measured {
         SingleChildLayoutDelegate as _, TableCellVerticalAlignment as _,
     };
     use flui_sdk::scheduler::{
-        AsyncDriver as _, FrameWaker as _, PostFrameHandle as _, TaskToken as _,
+        AsyncDriver as _, FrameWaker as _, Instant as _, PostFrameHandle as _, TaskToken as _,
+        TimerHandle as _,
     };
     use flui_sdk::semantics::{
         AutoComplete as _, CellPosition as _, Current as _, HasPopup as _, HeadingLevel as _,
@@ -767,8 +768,10 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_scheduler::AsyncDriver;",
         "pub use flui_scheduler::FrameSnapshot;",
         "pub use flui_scheduler::FrameWaker;",
+        "pub use flui_scheduler::Instant;",
         "pub use flui_scheduler::PostFrameHandle;",
         "pub use flui_scheduler::TaskToken;",
+        "pub use flui_scheduler::TimerHandle;",
         "pub use flui_semantics::AutoComplete;",
         "pub use flui_semantics::CellPosition;",
         "pub use flui_semantics::Current;",

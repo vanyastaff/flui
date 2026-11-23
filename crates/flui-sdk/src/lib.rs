@@ -86,13 +86,16 @@ pub mod view {
 }
 
 /// The frame scheduler's handles packages hold, at the facade's path: the
-/// asynchronous driver and the token of a task it runs, the post-frame handle,
+/// asynchronous driver and the token of a task it runs, the timer a task sleeps
+/// on and the instant its clock reads, the post-frame handle,
 /// and the waker that requests a frame.
 pub mod scheduler {
     pub use flui_scheduler::AsyncDriver;
     pub use flui_scheduler::FrameWaker;
+    pub use flui_scheduler::Instant;
     pub use flui_scheduler::PostFrameHandle;
     pub use flui_scheduler::TaskToken;
+    pub use flui_scheduler::TimerHandle;
 }
 
 /// Platform values: brightness, locale, a clipboard read's answer and a write, haptic
