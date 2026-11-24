@@ -590,6 +590,8 @@ pub(crate) struct DevAgentSlot {
     issued: Rc<RefCell<IssuedHandles>>,
     /// The input the window was delivered since the slot was made.
     pub(super) journal: super::agent_journal::InputJournal,
+    /// The frame samples a `perf.start` keeps until its `perf.stop`.
+    pub(super) perf: super::agent_perf::PerfSampling,
 }
 
 /// The development seam's port: a [`flui_view::dev_agent::AgentWindow`]
@@ -722,6 +724,12 @@ impl AgentPort for DevAgentPort {
 impl DevAgentSlot {
     pub(crate) fn withdraw(&self) {
         self.port.close();
+    }
+
+    /// The semantics handle every window handle vended since the last time none was alive
+    /// shares: dead once they are all dropped, and replaced by the next vend.
+    pub(super) fn window_handles(&self) -> Weak<SemanticsHandle> {
+        Weak::clone(&self.collecting)
     }
 
     /// How many leases the window's handles have let go that the owner has not released yet.
@@ -859,7 +867,7 @@ impl PendingActRead {
 }
 
 /// How `state` places its semantics on the wire: its device pixel ratio, and `window`.
-fn placement_of(state: &PresentationState, window: WindowId) -> Placement {
+pub(super) fn placement_of(state: &PresentationState, window: WindowId) -> Placement {
     state
         .pipeline()
         .with(|pipeline| Placement::new(pipeline.device_pixel_ratio(), window))
@@ -1054,6 +1062,7 @@ impl UiRuntime {
                     collecting: Weak::new(),
                     issued: Rc::default(),
                     journal: super::agent_journal::InputJournal::default(),
+                    perf: super::agent_perf::PerfSampling::default(),
                 }
             });
             let kept = slot.collecting.upgrade();

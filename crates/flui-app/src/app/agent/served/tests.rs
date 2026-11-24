@@ -876,7 +876,8 @@ fn malformed_unknown_and_unserved_requests() {
             driver_side["error"]["capability"], "session.launch",
             "{driver_side}"
         );
-        let not_yet = client.call("perf.start", json!({}));
+        // A capture is a renderer host's to take; this app's windows do not answer it.
+        let not_yet = client.call("capture.rendered", json!({}));
         assert_eq!(not_yet["error"]["code"], "not_supported", "{not_yet}");
         let malformed = client.call("semantics.read", json!({ "window": 3 }));
         assert_eq!(

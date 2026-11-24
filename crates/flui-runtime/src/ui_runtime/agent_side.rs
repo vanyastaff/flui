@@ -192,6 +192,8 @@ impl AgentSide for AgentOwnerSide {
     }
 
     fn after_frame(&self, ui_runtime: &UiRuntime) {
+        // No user code runs in sampling: it goes before the replies below, whose wakers do.
+        ui_runtime.sample_agent_perf();
         for presentation in ui_runtime.presentations.iter() {
             UiRuntime::complete_agent_reads(presentation);
         }

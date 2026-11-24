@@ -109,10 +109,12 @@ const DEFAULT_COMMAND_CAPACITY: usize = 256;
 const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 
 mod agent;
+mod agent_audit;
 mod agent_events;
 mod agent_input;
 mod agent_inspect;
 mod agent_journal;
+mod agent_perf;
 mod agent_record;
 mod agent_serve;
 mod agent_side;
