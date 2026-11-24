@@ -155,14 +155,19 @@ style's family is resolved by one rule (decision 8).
 Beneath the painters' caches the context keeps laid-out paragraphs
 (`parley_text/shape_cache.rs`), as Skia's `ParagraphCache` does beneath
 Flutter's: a spec laid out a second time is kept, keyed by every field of its
-`ParagraphSpec`, and a later layout of the same spec shares its layout through
-an `Arc`, with no shaping and no line breaking. A paragraph lays out into a
-layout of its own and moves into an `Arc` only when it is kept, and a spec seen
-once is remembered by its hash alone, so a counter or the rows of a scrolled
-list allocate nothing for the cache. It holds at most 128 paragraphs and an
-estimate of 512 KiB of their buffers, least recently used out; a registration
-(the collection's generation) and `reclaim` drop it. `shape_cache_contract`
-holds the key, the admission and both resets.
+`ParagraphSpec`, and a later layout of the same spec shares its shaping (the
+layout, its text, span records and run colours) through an `Arc`, with no
+shaping, no line breaking and no copy. The first painting of a kept shaping is
+kept with it, so a later painter of the paragraph paints that
+`ShapedParagraph` instead of collecting its glyphs again; a painter that
+recolours its runs builds its own. A paragraph lays out into a shaping of its
+own and moves into an `Arc` only when it is kept, and a spec seen once is
+remembered by its hash alone, so a counter or the rows of a scrolled list
+allocate nothing for the cache. It holds at most 128 paragraphs and an
+estimate of 512 KiB of their buffers and paintings, least recently used out;
+a registration (the collection's generation) and `reclaim` drop it.
+`shape_cache_contract` holds the key, the admission, the shared painting and
+both resets.
 
 `TextPainter::paint` records `DrawOp::Paragraph { paragraph, offset, color }`
 with the very `Arc<ShapedParagraph>` its cache holds (ADR-0065, ADR-0092 §4):
