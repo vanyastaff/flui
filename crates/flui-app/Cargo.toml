@@ -77,6 +77,11 @@ testing = ["flui-engine/testing", "flui-native/scripted"]
 # `driver` feature forwards here.
 driver = []
 
+# The release ceiling (ADR-0398 §1): no `trace!` or `debug!` call site in a
+# build without debug assertions. The facade's `release-max-level-info`
+# forwards here, and `flui-log` owns it.
+release-max-level-info = ["flui-log/release-max-level-info"]
+
 [dependencies]
 flui-platform = { workspace = true }
 # Core FLUI crates

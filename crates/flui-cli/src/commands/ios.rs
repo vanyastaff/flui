@@ -208,11 +208,7 @@ pub(super) fn run(udid: &str, release: bool, profile: Option<&str>) -> CliResult
             targets: vec![simulator.triple.clone()],
         })
         .target(BuildUnit::DefaultBinary)
-        .profile(if release || profile == Some("release") {
-            Profile::Release
-        } else {
-            Profile::Debug
-        });
+        .profile(Profile::of_run(release, profile));
     if let Some(bundle) = bundle {
         context = context.bundle(bundle);
     }

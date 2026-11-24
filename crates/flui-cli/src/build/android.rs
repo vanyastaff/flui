@@ -211,8 +211,17 @@ fn no_library() -> BuildError {
     )
 }
 
+/// The package an Android build compiles the library of, and the dependency
+/// through which it reaches FLUI's build switches.
+struct ApplicationLibrary {
+    package: String,
+    framework: crate::build::framework::FrameworkDependency,
+}
+
 /// The `cargo ndk` arguments that build the library of `package` for `abi`
-/// against `api_level` and copy it into `out_dir` as `<abi>/lib<name>.so`.
+/// against `api_level`, in the build mode `mode` gives
+/// ([`BuilderContext::mode_args`]), and copy it into `out_dir` as
+/// `<abi>/lib<name>.so`.
 ///
 /// The library is compiled as a `cdylib`, the form `NativeActivity` loads,
 /// with the `android_main` its `#[flui::main]` function writes. The crate
@@ -225,8 +234,7 @@ fn app_build_args<'a>(
     abi: &'a str,
     api_level: &'a str,
     out_dir: &'a str,
-    profile_flag: Option<&'a str>,
-    features: &'a [String],
+    mode: &'a [String],
 ) -> Vec<&'a str> {
     let mut args = vec![
         "-t",
@@ -242,10 +250,7 @@ fn app_build_args<'a>(
         "--crate-type",
         "cdylib",
     ];
-    args.extend(profile_flag);
-    for feature in features {
-        args.extend(["--features", feature.as_str()]);
-    }
+    args.extend(mode.iter().map(String::as_str));
     args
 }
 
@@ -436,14 +441,8 @@ impl AndroidBuilder {
         for target in targets {
             crate::ui::debug(format!("Building for Android target: {target}"));
 
-            let args = app_build_args(
-                &package,
-                target,
-                &platform,
-                jni_libs_str,
-                ctx.profile.cargo_flag(),
-                &ctx.features,
-            );
+            let mode = ctx.mode_args(&package.framework);
+            let args = app_build_args(&package.package, target, &platform, jni_libs_str, &mode);
 
             process::run(
                 self.cargo_ndk()
@@ -652,17 +651,21 @@ fn gradle_apk(apk_dir: &Path, profile: Profile) -> BuildResult<PathBuf> {
 impl AndroidBuilder {
     /// The package whose library the Android build compiles: the one whose
     /// manifest is in the project's directory, refused when it has no
-    /// library. `cargo rustc` compiles exactly one target, so the build names
+    /// library, with the dependency through which it reaches FLUI's build
+    /// switches. `cargo rustc` compiles exactly one target, so the build names
     /// it, by name, which is how cargo-ndk looks up the manifest whose
     /// artifacts it copies (it panics on a package id). A dependency that
     /// shares the application's name makes that name ambiguous to cargo,
     /// which then refuses the build and names both.
-    fn application_package(&self) -> BuildResult<String> {
+    fn application_package(&self) -> BuildResult<ApplicationLibrary> {
         let project = super::util::cargo::cargo_project(&self.workspace_root)?;
         let (Some(package), Some(_)) = (project.package, project.library) else {
             return Err(no_library());
         };
-        Ok(package)
+        Ok(ApplicationLibrary {
+            package,
+            framework: project.framework,
+        })
     }
 
     /// What the crates linked for the ABIs built, with the features the build
@@ -679,8 +682,8 @@ impl AndroidBuilder {
         let triples: Vec<&str> = targets.iter().map(|abi| rust_target(abi)).collect();
         crate::declarations::Declarations::collect(
             crate::declarations::Build::at(&self.workspace_root)
-                .selecting(crate::declarations::Selection::Package(&package))
-                .features(&ctx.features),
+                .selecting(crate::declarations::Selection::Package(&package.package))
+                .features(ctx.agent_driver.as_slice()),
             &triples,
         )
     }
@@ -834,16 +837,13 @@ mod tests {
     /// named, since `cargo rustc` compiles exactly one target.
     #[test]
     fn the_application_library_is_compiled_as_the_cdylib_android_loads() {
-        let features = ["driver".to_owned()];
+        let mode = [
+            "--release".to_owned(),
+            "--features".to_owned(),
+            "driver".to_owned(),
+        ];
         assert_eq!(
-            app_build_args(
-                "my-app",
-                "arm64-v8a",
-                "26",
-                "jniLibs",
-                Some("--release"),
-                &features
-            ),
+            app_build_args("my-app", "arm64-v8a", "26", "jniLibs", &mode),
             [
                 "-t",
                 "arm64-v8a",
@@ -863,7 +863,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            app_build_args("my-app", "x86_64", "26", "jniLibs", None, &[]),
+            app_build_args("my-app", "x86_64", "26", "jniLibs", &[]),
             [
                 "-t",
                 "x86_64",
