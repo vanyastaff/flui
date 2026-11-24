@@ -1234,15 +1234,22 @@ ends when the list names no cause, and it hands the list to `UiRuntime::answer_s
 a scheduled frame, work a frame takes (tree work, due work, pointer motion) and each
 presentation's running animation (`Ticker`, painted or not) are the next turn's while frames are
 on, listed at a dropped frame's retry while one is armed and not due, and not listed with frames
-off; every deadline it wakes for is a `Timer` at its instant, read from the one enumeration
-`next_wake_owing_floors` also reads (`visit_armed_deadlines`), so the two cannot disagree. A frame
-a covered window owes its surface is the host's half. Whether a host composes a half is fixed at
-construction (`RuntimeHostServices::composes_host_half`): a runtime whose host does not answers
-its settled waits itself at the end of each turn from its own half (`HostHalf::Absent`), with
-`SettleScope::RuntimeOnly`, and never idle. On a complete half a false wait ends `idle` when every
+off (a runtime that sees no window runs no frame for them). A redraw, a scheduled frame, tree work
+and motion carry the window of each presentation with work for a frame, and no window when none
+has any; due work carries none. Every deadline it wakes for is a `Timer` at its instant, read
+from the one enumeration `next_wake_owing_floors` also reads (`visit_armed_deadlines`), so the two
+cannot disagree. A frame a covered window owes its surface is the host's half. Whether a host
+composes a half is fixed at construction (`RuntimeHostServices::composes_host_half`): a runtime
+whose host does not answers its settled waits itself from its own half (`HostHalf::Absent`), with
+`SettleScope::RuntimeOnly` and never idle, wherever its outermost turn ends: the end of an owner
+dispatch (`RuntimeWork::run`, which holds the turn open around a runner's every entry), a turn its
+host ran outside one (`finish_owner_activity`), and a frame's settlement outside any turn
+(`settle_frame`); while a turn is open it answers nothing, and each answer pass runs contained
+behind the failure of the work before it. On a complete half a false wait ends `idle` when every
 cause listed, in any window, is one only the test discharges, none at all included; `wait.settled`
-on a window counts that window's causes and the application's. A wait answered 10 000 times at one
-instant (`TURNS_AT_ONE_INSTANT`) ends `unsatisfied`, naming the causes due then. Image loads are
+on a window counts that window's causes and the application's, not another window's. A wait
+answered 10 000 times at one instant (`TURNS_AT_ONE_INSTANT`) ends `unsatisfied`, naming the
+causes due then; a pass at a later instant counts from one again. Image loads are
 not among the runtime's causes: the runtime sits below the layer that loads images. A running
 ticker carries its window but no owner or site: the registry that knows it runs does not expose
 where its controller was made.
