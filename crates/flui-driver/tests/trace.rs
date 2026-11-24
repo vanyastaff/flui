@@ -9,6 +9,7 @@ use flui_driver::protocol::input::{ActionSequence, InputSource};
 use flui_driver::protocol::input_recording::REDACTED;
 use flui_driver::protocol::report::Report;
 use flui_driver::protocol::verdict::Verdict;
+use flui_driver::protocol::version::ProtocolVersion;
 use flui_driver::testing::ScriptedLane;
 use flui_driver::trace::{
     self, CodegenOptions, GapReason, Positions, Privacy, Row, Trace, TraceMode, TraceOptions,
@@ -612,6 +613,41 @@ fn a_replay_leaves_out_frames_and_compares_positions_only_at_exact_fidelity() {
         order.divergence, None,
         "frames never compare, and positions not at order fidelity"
     );
+}
+
+#[test]
+fn a_trace_of_another_protocol_is_refused_before_any_command() {
+    let root = tempfile::tempdir().expect("a temporary directory");
+    let dir = trace_dir(&root, "older");
+    record(&mut counter(), &dir, TraceOptions::new(&dir), tap_once);
+    rewrite(&dir, |row| {
+        if row.get("flui_trace").is_some() {
+            row["protocol"] = "0.30".into();
+        }
+    });
+    let probe = Probe::default();
+    let held = probe.clone();
+    let mut app = Driver::launch(Launch::headless(move || Counter {
+        probe: held.clone(),
+    }))
+    .expect("the headless app starts");
+    let speaks = app.protocol();
+    let refused = trace::replay(&Trace::open(&dir).expect("it reads"), &mut app)
+        .expect_err("a trace of another wire is not replayed");
+    let Error::Version {
+        app: answered,
+        client,
+        ..
+    } = &refused
+    else {
+        panic!("a version refusal: {refused:?}");
+    };
+    assert_eq!(
+        (*answered, *client),
+        (Some(speaks), Some(ProtocolVersion::new(0, 30))),
+        "{refused}"
+    );
+    assert_eq!(probe.presses(), 0, "nothing of the trace was sent");
 }
 
 #[test]

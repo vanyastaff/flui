@@ -7,6 +7,7 @@ use std::time::Duration;
 use flui_driver::protocol::input::{ActionSequence, InputSource};
 use flui_driver::protocol::native_recording::{MAX_LINE_BYTES, MAX_RECORDING_BYTES, MAX_ROWS};
 use flui_driver::protocol::report::Report;
+use flui_driver::protocol::version::PROTOCOL_VERSION;
 use flui_driver::trace::{self, GapReason, Row, Trace, TraceOptions, native};
 use flui_driver::{Driver, Error, Launch, Locator};
 
@@ -410,7 +411,9 @@ fn a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction() {
     // anything is sent, so the trace need not have come from this app.
     let dir = root.path().join("written.flui-trace");
     std::fs::create_dir_all(&dir).expect("the directory");
-    let header = r#"{"flui_trace":1,"protocol":"0.28","target":{"kind":"headless","os":"any"},"isolation":"in_process","fidelity":{"positions":"exact"},"started_unix_ms":0,"privacy":"redact"}"#;
+    let header = format!(
+        r#"{{"flui_trace":1,"protocol":"{PROTOCOL_VERSION}","target":{{"kind":"headless","os":"any"}},"isolation":"in_process","fidelity":{{"positions":"exact"}},"started_unix_ms":0,"privacy":"redact"}}"#
+    );
     let perform = serde_json::json!({ "command": { "seq": 1, "t_ms": 0, "method": "input.perform", "params": {
         "actions": { "sources": [
             { "type": "pointer", "id": "p", "device": "mouse", "actions": [{ "type": "pause", "duration_ms": 1 }] },
@@ -714,7 +717,9 @@ mod scripted {
         let root = tempfile::tempdir().expect("a temporary directory");
         let dir = root.path().join("handles.flui-trace");
         std::fs::create_dir_all(&dir).expect("the directory");
-        let header = r#"{"flui_trace":1,"protocol":"0.28","target":{"kind":"attached","os":"any"},"isolation":"shared","fidelity":{"positions":"exact"},"started_unix_ms":0,"privacy":"keep_text"}"#;
+        let header = format!(
+            r#"{{"flui_trace":1,"protocol":"{PROTOCOL_VERSION}","target":{{"kind":"attached","os":"any"}},"isolation":"shared","fidelity":{{"positions":"exact"}},"started_unix_ms":0,"privacy":"keep_text"}}"#
+        );
         let found = |element: &str, id: &str| {
             json!({ "matches": [{ "element": element, "revision": 1, "node": {
                 "id": id, "role": "button", "native_role": "Button",
@@ -725,7 +730,7 @@ mod scripted {
             "actions": [{ "type": "pause", "duration_ms": 1 }],
         }] } });
         let rows = [
-            header.to_owned(),
+            header.clone(),
             json!({ "command": { "seq": 1, "t_ms": 0, "method": "windows.list", "params": {} } })
                 .to_string(),
             json!({ "result": { "seq": 1, "t_ms": 0, "ok": { "windows": ["w1"] } } }).to_string(),

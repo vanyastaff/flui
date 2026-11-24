@@ -203,12 +203,13 @@ pub enum Error {
         /// Whether the same call can succeed later.
         retry: Retry,
     },
-    /// The driver and the app share no protocol version.
+    /// The driver and the app share no protocol version, or a trace being replayed was recorded at
+    /// another than the app speaks.
     #[error("no shared protocol: {message}")]
     Version {
         /// The schema the app speaks.
         app: Option<ProtocolVersion>,
-        /// The schema the driver asked for.
+        /// The schema the driver asked for, or the one the replayed trace was recorded at.
         client: Option<ProtocolVersion>,
         /// For people.
         message: String,
