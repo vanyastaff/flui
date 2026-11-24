@@ -673,7 +673,7 @@ impl Mcp {
             .unwrap_or_else(|error| panic!("waiting for {what} failed: {error}"));
         let outcome: Value = serde_json::from_str(&text).expect("the outcome is JSON");
         assert_eq!(
-            outcome["satisfied"], true,
+            outcome["end"], "satisfied",
             "no {what} within {SETTLE:?}: {text}"
         );
     }

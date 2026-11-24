@@ -135,6 +135,7 @@ pub use crate::runtime_services::RuntimeHostServices;
 pub(crate) use agent::AgentError;
 pub(crate) use agent::{DevAgentSlot, PendingActRead};
 pub(crate) use agent_events::EventHub;
+pub(crate) use agent_input::injected_pointers;
 pub(crate) use agent_input::{Abandoned as AbandonedInput, AgentInput};
 pub(crate) use agent_inspect::{PendingLayerRead, StagedLayerRead, deliver_each};
 pub use agent_record::{NativeForms, NativeLines};

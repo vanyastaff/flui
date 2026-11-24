@@ -26,7 +26,7 @@ use flui_driver::protocol::session::{Isolation, Placement};
 use flui_driver::protocol::tree::WindowId;
 use flui_driver::steps::OsEvent;
 use flui_driver::testing::{Responder, ScriptedAdb};
-use flui_driver::{Endpoint, Error};
+use flui_driver::{Awaited, Endpoint, Error};
 
 pub(crate) const PACKAGE: &str = "dev.flui.scenario";
 pub(crate) const USAGE: &str = include_str!("android/input_usage.txt");
@@ -1287,7 +1287,16 @@ fn a_timed_out_press_is_held_and_cancelled() {
         &tap(PointerDevice::Touch, DevicePoint::new(300, 600)),
     )
     .expect_err("the press timed out");
-    assert!(matches!(failed, Error::Timeout { .. }), "{failed}");
+    assert!(
+        matches!(
+            failed,
+            Error::Timeout {
+                awaited: Awaited::Host,
+                ..
+            }
+        ),
+        "{failed}"
+    );
     assert_eq!(
         adb.commands("shell input touchscreen motionevent CANCEL"),
         vec!["shell input touchscreen motionevent CANCEL 300 600"]

@@ -1054,7 +1054,7 @@ fn a_wait_without_a_timeout_is_answered_by_the_window() {
             json!({ "window": window, "condition": condition }),
         );
         assert_eq!(
-            reply["result"]["satisfied"], false,
+            reply["result"]["end"], "unsatisfied",
             "the window answers its own timeout: {reply}"
         );
     });

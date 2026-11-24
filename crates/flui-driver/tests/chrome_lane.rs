@@ -589,6 +589,41 @@ fn an_open_composition_is_cancelled_by_the_release() {
     );
 }
 
+/// A press the browser never answers, released after, is the browser's timeout: a tool on the
+/// host that hung, never the app's agent leaving a call unanswered.
+#[test]
+fn a_press_the_browser_does_not_answer_is_the_hosts_timeout() {
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|method, params| match method {
+            "input.performActions"
+                if params["actions"][0]["actions"][0]["type"] == "pointerDown" =>
+            {
+                BrowserReply::Silent
+            }
+            _ => BrowserReply::Played,
+        }),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&browser);
+    let timed_out = driver
+        .window(window())
+        .perform(press(LogicalPoint::new(10.0, 10.0)))
+        .expect_err("the press had no answer");
+    assert!(
+        matches!(
+            timed_out,
+            Error::Timeout {
+                awaited: flui_driver::Awaited::Host,
+                ..
+            }
+        ),
+        "{timed_out:?}"
+    );
+    assert!(timed_out.may_have_run(), "{timed_out:?}");
+}
+
 /// A press the browser never answers may have gone down: it is named as possibly held, and the
 /// release still runs.
 #[test]
@@ -1025,9 +1060,9 @@ fn an_unanswered_text_is_released_and_named_as_possibly_held() {
 fn a_failed_release_keeps_the_verdict_and_effect_of_what_stopped_the_input() {
     use flui_driver::coordinates::DevicePoint;
     use flui_driver::lane::send_guarded;
-    use flui_driver::report::Check;
+    use flui_driver::protocol::report::Check;
+    use flui_driver::protocol::{report::Outcome, verdict::Verdict};
     use flui_driver::testing::ScriptedLane;
-    use flui_driver::{Outcome, Verdict};
 
     let (lane, _log) = ScriptedLane::new(Isolation::Xvfb);
     let mut lane = lane
@@ -1166,7 +1201,7 @@ fn closing_the_pages_connection_is_bounded_when_the_browser_stops_answering() {
 /// trace through any other lane does.
 #[test]
 fn a_trace_of_a_page_session_names_the_chrome_lane_and_holds_its_input() {
-    use flui_driver::Report;
+    use flui_driver::protocol::report::Report;
     use flui_driver::trace::{Positions, Trace, TraceOptions};
 
     let browser = ScriptedBrowser::start(
@@ -1213,9 +1248,9 @@ fn a_trace_of_a_page_session_names_the_chrome_lane_and_holds_its_input() {
 /// displays, each stream's header naming the `web` backend.
 #[test]
 fn a_trace_of_a_page_session_holds_the_pages_native_layer() {
-    use flui_driver::Report;
     use flui_driver::protocol::native_recording::{Backend, Row as NativeRow, Stream};
     use flui_driver::protocol::record::RecordLayer;
+    use flui_driver::protocol::report::Report;
     use flui_driver::protocol::session::Capabilities;
     use flui_driver::testing::AfterLines;
     use flui_driver::trace::{Trace, TraceOptions};

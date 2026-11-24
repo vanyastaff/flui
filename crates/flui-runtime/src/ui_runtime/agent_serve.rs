@@ -32,12 +32,12 @@ use flui_protocol::method::{self, Method, MethodEffect, WindowMethod};
 use flui_protocol::{
     act::ActOutcome, act::ActParams, act::ActionRequest, act::ActionabilityParams,
     build::BuildReportParams, events::AnnouncementJournal, events::AnnouncementsParams,
-    geometry::LogicalSize, input::InputParams, input::InputPath, input::Journal,
-    input::JournalParams, input::Released, inspect::InspectParams, inspect::InspectReading,
-    locator::LocateParams, locator::Locator, locator::Matches, locator::Pick, locator::Target,
-    motion::MotionParams, motion::MotionState, session::Empty, session::Placement,
-    session::WindowParams, tree::ReadParams, tree::Tree, tree::WindowId, wait::WaitOutcome,
-    wait::WaitParams,
+    geometry::LogicalInsets, geometry::LogicalSize, input::InputParams, input::InputPath,
+    input::Journal, input::JournalParams, input::Released, inspect::InspectParams,
+    inspect::InspectReading, locator::LocateParams, locator::Locator, locator::Matches,
+    locator::Pick, locator::Target, motion::MotionParams, motion::MotionState, session::Empty,
+    session::Placement, session::Platform, session::WindowParams, tree::ReadParams, tree::Tree,
+    tree::WindowId, wait::WaitOutcome, wait::WaitParams,
 };
 use flui_view::__runtime::{LeaseId, Reply, WindowCall};
 
@@ -383,6 +383,17 @@ not_answered!(
     AuditA11y,
     CapturePresented,
     CaptureRendered,
+    ElementDoubleTap,
+    ElementDragTo,
+    ElementFling,
+    ElementLongPress,
+    ElementPinch,
+    ElementPressKeys,
+    ElementScrollIntoView,
+    ElementScrollUntil,
+    ElementSwipe,
+    ElementTap,
+    ElementTypeText,
     PerfStart,
     PerfStop,
     WaitFrames,
@@ -390,21 +401,45 @@ not_answered!(
 );
 
 impl Serve for method::WindowPlacement {
-    /// The surface's logical size and scale as the presentation's root media query holds them,
-    /// and whether the window is shown and focused as the host last reported. Where the surface
+    /// The surface's logical size, scale and safe area as the presentation's root media query
+    /// holds them, the platform whose conventions the runtime installs above its root, and
+    /// whether the window is shown and focused as the host last reported. Where the surface
     /// sits on screen is the platform's to say, which this runtime is not told, so `position` is
     /// left out: an OS lane locates the window itself.
     fn serve(ctx: &mut ServeContext<'_, Placement>, _: WindowParams) -> Answer<Placement> {
         let media = ctx.state.media_query.snapshot();
         let size = LogicalSize::new(media.size.width, media.size.height);
-        Answer::Now(Ok(Placement::new(
-            ctx.window,
-            size,
-            media.device_pixel_ratio,
-        )
-        .visible(ctx.state.window_visible.get())
-        .focused(ctx.state.window_focused.get())))
+        let safe = media.view_padding;
+        let placement = Placement::new(ctx.window, size, media.device_pixel_ratio)
+            .visible(ctx.state.window_visible.get())
+            .focused(ctx.state.window_focused.get())
+            .safe_area(LogicalInsets::new(
+                safe.top,
+                safe.right,
+                safe.bottom,
+                safe.left,
+            ));
+        Answer::Now(Ok(match wire_platform(ctx.state.platform) {
+            Some(platform) => placement.platform(platform),
+            None => placement,
+        }))
     }
+}
+
+/// The wire's name for the platform whose conventions a presentation follows; `None` for one a
+/// later contract adds that the wire does not name yet.
+fn wire_platform(platform: flui_platform::TargetPlatform) -> Option<Platform> {
+    use flui_platform::TargetPlatform;
+    Some(match platform {
+        TargetPlatform::Android => Platform::Android,
+        TargetPlatform::iOS => Platform::Ios,
+        TargetPlatform::Linux => Platform::Linux,
+        TargetPlatform::MacOS => Platform::Macos,
+        TargetPlatform::Windows => Platform::Windows,
+        TargetPlatform::Fuchsia => Platform::Fuchsia,
+        TargetPlatform::Unknown => Platform::Neutral,
+        _ => return None,
+    })
 }
 
 impl Serve for method::SemanticsRead {

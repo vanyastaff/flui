@@ -7,6 +7,13 @@
 //! file are all read from it, so none of the front ends can know a method the others do not.
 //! [`Method`] is sealed: a method exists only by being declared here.
 //!
+//! A gesture (`element.*` but the actionability read) is the agent's row on the synthetic and
+//! semantic paths, which a window serving it holds until its target is actionable or the act's
+//! timeout passes (ADR-0400 §2). No app's agent serves one yet: each answers `not_supported` and
+//! lists none in its hello, so the driver composes every gesture from the agent's methods, and on
+//! the `os` path from its lane (ADR-0238 §5). `element.scroll_until` is declared only: no side
+//! answers it yet.
+//!
 //! The rest of the design's table joins as its tasks land: the OS lanes (`os.*`,
 //! `input.os`, `capture.os`), pixel baselines, recording and traces, layout facts, the other
 //! audits, review and reports, devices and exploration.
@@ -154,8 +161,16 @@ pub trait Addressed {
     /// only window.
     fn window(&self) -> Option<WindowId>;
 
+    /// Name `window` where they name none: a locator's window, or a key press's window when it
+    /// has no target. Parameters that name a window keep it, so afterwards [`Self::window`] is
+    /// `Some`, `window` or the one they already named.
+    fn address(&mut self, window: WindowId);
+
     /// How long the window may hold the request before it answers, past the time it takes to
-    /// serve: a wait's timeout. A server bounding the reply adds it.
+    /// serve: a wait's timeout, an injection's ticks and span ([`ActionSequence::plays_within`]),
+    /// a gesture's act timeout. A server bounding the reply adds it.
+    ///
+    /// [`ActionSequence::plays_within`]: crate::input::ActionSequence::plays_within
     fn holds_for(&self) -> Duration {
         Duration::ZERO
     }
@@ -167,6 +182,8 @@ macro_rules! addressed_by_window_field {
             fn window(&self) -> Option<WindowId> {
                 Some(self.window)
             }
+
+            fn address(&mut self, _: WindowId) {}
         }
     )+};
 }
@@ -191,9 +208,11 @@ impl Addressed for crate::input::InputParams {
         Some(self.window)
     }
 
-    /// The input plays over its span before the answer.
+    fn address(&mut self, _: WindowId) {}
+
+    /// The input plays its ticks, one frame each at least, and its span before the answer.
     fn holds_for(&self) -> Duration {
-        self.actions.span()
+        self.actions.plays_within()
     }
 }
 
@@ -201,15 +220,104 @@ impl Addressed for crate::act::ActionabilityParams {
     fn window(&self) -> Option<WindowId> {
         Some(self.element.window)
     }
+
+    fn address(&mut self, _: WindowId) {}
 }
 
 impl Addressed for crate::act::ActParams {
     fn window(&self) -> Option<WindowId> {
-        match &self.target {
-            Target::Element(element) => Some(element.window),
-            Target::Locator(locator) => locator.window,
-            Target::Point { window, .. } => Some(*window),
+        target_window(&self.target)
+    }
+
+    fn address(&mut self, window: WindowId) {
+        address_target(&mut self.target, window);
+    }
+}
+
+/// The window a gesture's target names: an element's or a point's, or the window a locator names.
+fn target_window(target: &Target) -> Option<WindowId> {
+    match target {
+        Target::Element(element) => Some(element.window),
+        Target::Locator(locator) => locator.window,
+        Target::Point { window, .. } => Some(*window),
+    }
+}
+
+/// Name `window` on a target's locator that names none; an element and a point name theirs.
+fn address_target(target: &mut Target, window: WindowId) {
+    if let Target::Locator(locator) = target {
+        locator.window.get_or_insert(window);
+    }
+}
+
+/// A gesture's act timeout, which the window may hold the act for (ADR-0400 §2).
+fn act_timeout(options: &crate::input::GestureOptions) -> Duration {
+    Duration::from_millis(options.effective_timeout_ms())
+}
+
+macro_rules! addressed_by_gesture_target {
+    ($($params:ty),+ $(,)?) => {$(
+        impl Addressed for $params {
+            fn window(&self) -> Option<WindowId> {
+                target_window(&self.target)
+            }
+
+            fn address(&mut self, window: WindowId) {
+                address_target(&mut self.target, window);
+            }
+
+            /// The act holds out for actionability until its timeout.
+            fn holds_for(&self) -> Duration {
+                act_timeout(&self.options)
+            }
         }
+    )+};
+}
+
+addressed_by_gesture_target!(
+    crate::input::DragParams,
+    crate::input::PinchParams,
+    crate::input::ScrollIntoViewParams,
+    crate::input::ScrollUntilParams,
+    crate::input::SwipeParams,
+    crate::input::TapParams,
+    crate::input::TypeTextParams,
+);
+
+impl Addressed for crate::input::LongPressParams {
+    fn window(&self) -> Option<WindowId> {
+        target_window(&self.target)
+    }
+
+    fn address(&mut self, window: WindowId) {
+        address_target(&mut self.target, window);
+    }
+
+    /// The act holds out for actionability until its timeout, then holds the press as long as
+    /// it names.
+    fn holds_for(&self) -> Duration {
+        act_timeout(&self.options)
+            .saturating_add(Duration::from_millis(self.duration_ms.unwrap_or(0)))
+    }
+}
+
+impl Addressed for crate::input::PressKeysParams {
+    /// The target's window, or the window named when there is no target.
+    fn window(&self) -> Option<WindowId> {
+        self.target.as_ref().map_or(self.window, target_window)
+    }
+
+    fn address(&mut self, window: WindowId) {
+        match &mut self.target {
+            Some(target) => address_target(target, window),
+            None => {
+                self.window.get_or_insert(window);
+            }
+        }
+    }
+
+    fn holds_for(&self) -> Duration {
+        act_timeout(&self.options)
     }
 }
 
@@ -217,12 +325,18 @@ impl Addressed for crate::locator::LocateParams {
     fn window(&self) -> Option<WindowId> {
         self.locator.window
     }
+
+    fn address(&mut self, window: WindowId) {
+        self.locator.window.get_or_insert(window);
+    }
 }
 
 impl Addressed for crate::wait::WaitParams {
     fn window(&self) -> Option<WindowId> {
         Some(self.window)
     }
+
+    fn address(&mut self, _: WindowId) {}
 
     fn holds_for(&self) -> Duration {
         Duration::from_millis(self.effective_timeout_ms())
@@ -378,34 +492,37 @@ macro_rules! __method_table {
             ElementActionability = "element.actionability", Agent(window), ReadOnly, Input,
                 $crate::act::ActionabilityParams => $crate::act::Actionability;
             /// Two taps, close enough to count as one double tap.
-            ElementDoubleTap = "element.double_tap", Driver, Acts, Input,
+            ElementDoubleTap = "element.double_tap", Agent(window), Acts, Input,
                 $crate::input::TapParams => $crate::act::ActOutcome;
             /// Press on one target, move to another, release.
-            ElementDragTo = "element.drag_to", Driver, Acts, Input,
+            ElementDragTo = "element.drag_to", Agent(window), Acts, Input,
                 $crate::input::DragParams => $crate::act::ActOutcome;
             /// A stroke that ends above the fling velocity.
-            ElementFling = "element.fling", Driver, Acts, Input,
+            ElementFling = "element.fling", Agent(window), Acts, Input,
                 $crate::input::SwipeParams => $crate::act::ActOutcome;
             /// Press and hold.
-            ElementLongPress = "element.long_press", Driver, Acts, Input,
+            ElementLongPress = "element.long_press", Agent(window), Acts, Input,
                 $crate::input::LongPressParams => $crate::act::ActOutcome;
             /// Two contacts spreading or closing.
-            ElementPinch = "element.pinch", Driver, Acts, Input,
+            ElementPinch = "element.pinch", Agent(window), Acts, Input,
                 $crate::input::PinchParams => $crate::act::ActOutcome;
             /// Key chords, in turn.
-            ElementPressKeys = "element.press_keys", Driver, Acts, Core,
+            ElementPressKeys = "element.press_keys", Agent(window), Acts, Core,
                 $crate::input::PressKeysParams => $crate::act::ActOutcome;
             /// Scroll until the element is visible.
-            ElementScrollIntoView = "element.scroll_into_view", Driver, Acts, Core,
+            ElementScrollIntoView = "element.scroll_into_view", Agent(window), Acts, Core,
                 $crate::input::ScrollIntoViewParams => $crate::act::ActOutcome;
+            /// Scroll a scrollable a viewport at a time until a locator resolves inside it.
+            ElementScrollUntil = "element.scroll_until", Agent(window), Acts, Input,
+                $crate::input::ScrollUntilParams => $crate::act::ActOutcome;
             /// A stroke that ends below the fling velocity.
-            ElementSwipe = "element.swipe", Driver, Acts, Input,
+            ElementSwipe = "element.swipe", Agent(window), Acts, Input,
                 $crate::input::SwipeParams => $crate::act::ActOutcome;
             /// Locate, check actionability, tap, observe.
-            ElementTap = "element.tap", Driver, Acts, Core,
+            ElementTap = "element.tap", Agent(window), Acts, Core,
                 $crate::input::TapParams => $crate::act::ActOutcome;
             /// Focus the element and commit text into it.
-            ElementTypeText = "element.type_text", Driver, Acts, Core,
+            ElementTypeText = "element.type_text", Agent(window), Acts, Core,
                 $crate::input::TypeTextParams => $crate::act::ActOutcome;
             /// Stream events.
             EventsSubscribe = "events.subscribe", Agent, ReadOnly, Record,

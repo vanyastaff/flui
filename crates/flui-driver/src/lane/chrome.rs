@@ -318,6 +318,7 @@ impl ChromeLane {
 fn acting(failure: Failure, method: &str) -> Error {
     match failure {
         Failure::Timeout => Error::Timeout {
+            awaited: crate::error::Awaited::Host,
             effect: Some(Effect::new(EffectKind::MayHaveRun).detail(format!(
                 "the browser did not answer `{method}` in time; it may have taken the input"
             ))),

@@ -1,5 +1,6 @@
-//! The driver's methods (`ServedBy::Driver`), composed from the agent's: locate, check
-//! actionability, perform by the chosen input path, observe (ADR-0238 §5, §6).
+//! The methods the driver composes from the agent's (ADR-0238 §5, §6): its own (`ServedBy::Driver`),
+//! and every gesture on the `os` path or for an app whose agent does not answer it (ADR-0400 §2):
+//! locate, check actionability, perform by the chosen input path, observe.
 //!
 //! - **Locate.** A locator is resolved at the moment of the action, never cached (ADR-0238 §4):
 //!   strict with several matches is [`Error::Ambiguous`] with the first ten as outline lines;
@@ -31,11 +32,11 @@ use flui_protocol::input::{
     SwipeParams, TapParams, TypeTextParams,
 };
 use flui_protocol::locator::{LocateParams, Locator, Matches, Pick, Target};
-use flui_protocol::method::{self, Method};
+use flui_protocol::method::{self, Addressed as _, Method};
 use flui_protocol::session::{Empty, Isolation, Placement, WindowParams};
 use flui_protocol::snapshot::Snapshot;
 use flui_protocol::tree::{ElementRef, WindowId};
-use flui_protocol::wait::{Condition, WaitOutcome, WaitParams};
+use flui_protocol::wait::{Condition, WaitEnd, WaitOutcome, WaitParams};
 use flui_protocol::wire::ActionName;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -86,6 +87,20 @@ const COMPOSED: &[&str] = &[
 /// Whether the driver composes the method `name`.
 pub(crate) fn composes(name: &str) -> bool {
     COMPOSED.contains(&name)
+}
+
+/// Whether the app's agent answers the gesture `name` asked with `params` (ADR-0400 §2): it
+/// serves the method, and the path the call names, or the session's, is not `os`, which the
+/// driver composes with its lane. A gesture the app's agent does not list in its hello is composed
+/// here.
+pub(crate) fn agent_answers(driver: &Driver, name: &str, params: &Value) -> bool {
+    if !driver.serves(name) {
+        return false;
+    }
+    let requested = params
+        .get("via")
+        .and_then(|via| serde_json::from_value::<InputPolicy>(via.clone()).ok());
+    requested.unwrap_or_else(|| driver.input_policy()).prefer != InputPath::Os
 }
 
 /// Run the driver's method `name` with `params`.
@@ -177,7 +192,7 @@ fn resolve_locator(
                 };
                 let outcome =
                     wait_until(driver, window, Condition::Appears(locator.clone()), timeout)?;
-                if !outcome.satisfied {
+                if outcome.end != WaitEnd::Satisfied {
                     return Err(not_found(locator));
                 }
             }
@@ -285,7 +300,8 @@ fn actionable(
         }
         let left = deadline.saturating_sub(driver.clock());
         let presented = !left.is_zero()
-            && wait_until(driver, element.window, Condition::Frames(1), left)?.satisfied;
+            && wait_until(driver, element.window, Condition::Frames(1), left)?.end
+                == WaitEnd::Satisfied;
         // Past the deadline, or no frame to wait for: the next reading is the last.
         expired = !presented || driver.clock() >= deadline;
     }
@@ -321,9 +337,11 @@ fn aim(driver: &mut Driver, target: &Target, options: &GestureOptions) -> Result
     })
 }
 
-fn timeout_of(driver: &Driver, options: &GestureOptions) -> Duration {
+/// How long a composed act locates and checks: the timeout it names, as
+/// [`GestureOptions::named_timeout_ms`] bounds it, or the session's.
+pub(crate) fn timeout_of(driver: &Driver, options: &GestureOptions) -> Duration {
     options
-        .timeout_ms
+        .named_timeout_ms()
         .map_or(driver.timeout, Duration::from_millis)
 }
 
@@ -406,7 +424,7 @@ fn inject(
 ) -> Result<ActOutcome> {
     let mut params = InputParams::new(window, sequence);
     params.snapshot = snapshot;
-    let holds = params.actions.span();
+    let holds = params.holds_for();
     driver.agent::<method::InputInject>(params, holds)
 }
 
@@ -429,8 +447,10 @@ fn perform_os(
             )
         })
         .ok_or_else(no_lane)?;
-    // A composition the lane cannot send is refused before the desktop is locked or the run
-    // announced, as `send_guarded` refuses it again before any event.
+    // What no lane sends, and a composition this lane cannot send, are refused before the desktop
+    // is locked, the window located or the run announced, as `send_guarded` refuses a
+    // composition again before any event.
+    let admitted = steps::admit(&sequence)?;
     let composition = sequence
         .sources
         .iter()
@@ -446,12 +466,12 @@ fn perform_os(
     let placement: Placement =
         driver.agent::<method::WindowPlacement>(WindowParams::new(window), Duration::ZERO)?;
     let geometry = lane_run(driver, move |lane| lane.locate_window(&placement))??;
-    let events = steps::os_events(&sequence, &geometry)?;
+    let events = steps::events_of(&admitted, &geometry)?;
     let announcement = match driver.scenario() {
         Some(scenario) if !scenario.devices().is_empty() => {
             Announcement::new(scenario.devices().to_vec(), scenario.duration(), isolation)
         }
-        _ => Announcement::new(devices_of(&events), sequence.span(), isolation),
+        _ => Announcement::new(devices_of(&events), played(&events), isolation),
     };
     driver.announce_once(|| announcement.to_string());
     let before = journal(driver, window, None)?;
@@ -517,6 +537,17 @@ fn observed(events: &[OsEvent], journal: &Journal) -> ActOutcome {
         to: span.to,
     });
     outcome
+}
+
+/// How long sending `events` takes: the sum of their pauses, which end at the plan's end.
+fn played(events: &[OsEvent]) -> Duration {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            OsEvent::Pause(pause) => Some(*pause),
+            _ => None,
+        })
+        .fold(Duration::ZERO, Duration::saturating_add)
 }
 
 fn devices_of(events: &[OsEvent]) -> Vec<OsDevice> {

@@ -2,7 +2,7 @@
 //! to an app, what the target can do, and its windows (ADR-0238 §2, §5).
 
 use crate::capture::CaptureSource;
-use crate::geometry::{LogicalPoint, LogicalSize};
+use crate::geometry::{LogicalInsets, LogicalPoint, LogicalSize};
 use crate::input::{InputPath, InputPolicy, PointerDevice};
 use crate::method::MethodEffect;
 use crate::tree::WindowId;
@@ -410,6 +410,34 @@ impl WindowList {
     }
 }
 
+vocabulary! {
+    /// The platform whose conventions a window's widgets follow (ADR-0028): its chords, handles,
+    /// menus and transitions, whichever host runs it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(
+        feature = "serde",
+        derive(serde::Serialize, serde::Deserialize),
+        serde(rename_all = "snake_case")
+    )]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum Platform {
+        /// Android's.
+        Android => "android",
+        /// iOS's.
+        Ios => "ios",
+        /// Linux's.
+        Linux => "linux",
+        /// macOS's.
+        Macos => "macos",
+        /// Windows's.
+        Windows => "windows",
+        /// Fuchsia's.
+        Fuchsia => "fuchsia",
+        /// No platform's: the platform-neutral conventions a tree follows when it names none.
+        Neutral => "neutral",
+    }
+}
+
 /// What `window.placement` answers.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -438,11 +466,24 @@ pub struct Placement {
     pub visible: bool,
     /// Whether it has keyboard focus.
     pub focused: bool,
+    /// The platform whose conventions its widgets follow, where the app says.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub platform: Option<Platform>,
+    /// The safe-area insets the platform reserves on its surface (a notch, a status bar, a home
+    /// indicator), whether or not other system UI covers them, where the app says.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub safe_area: Option<LogicalInsets>,
 }
 
 impl Placement {
-    /// `window`'s surface of `size` at `scale`: untitled, its position unknown, neither shown nor
-    /// focused.
+    /// `window`'s surface of `size` at `scale`: untitled, its position, platform and safe area
+    /// unknown, neither shown nor focused.
     #[must_use]
     pub const fn new(window: WindowId, size: LogicalSize, scale: f64) -> Self {
         Self {
@@ -453,6 +494,8 @@ impl Placement {
             position: None,
             visible: false,
             focused: false,
+            platform: None,
+            safe_area: None,
         }
     }
 
@@ -467,6 +510,20 @@ impl Placement {
     #[must_use]
     pub const fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
+        self
+    }
+
+    /// Following `platform`'s conventions.
+    #[must_use]
+    pub const fn platform(mut self, platform: Platform) -> Self {
+        self.platform = Some(platform);
+        self
+    }
+
+    /// With `safe_area` reserved on its surface.
+    #[must_use]
+    pub const fn safe_area(mut self, safe_area: LogicalInsets) -> Self {
+        self.safe_area = Some(safe_area);
         self
     }
 }

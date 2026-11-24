@@ -36,8 +36,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use flui_protocol::act::{Effect, EffectKind};
 use flui_protocol::envelope::{Greeting, Request, ServerLine};
-use flui_protocol::error::ErrorObject;
+use flui_protocol::error::{ErrorObject, Retry};
 use flui_protocol::framing::LineReader;
 use flui_protocol::input::PointerDevice;
 use flui_protocol::session::{AppDescription, Capabilities, HelloReply, Isolation, Placement};
@@ -131,6 +132,8 @@ pub struct ScriptedLane {
     refuses: Option<String>,
     /// How many of its next releases fail, as an OS that refuses them does.
     failing_releases: usize,
+    /// Whether its sends time out, as a tool on the host that stops answering does.
+    hanging_sends: bool,
     /// Whether its releases panic, as a lane's code or a log subscriber can.
     panicking_releases: bool,
     /// What its captures show; it captures nothing without one.
@@ -162,6 +165,7 @@ impl ScriptedLane {
                 refuses: None,
                 failing_releases: 0,
                 panicking_releases: false,
+                hanging_sends: false,
                 screen: None,
             },
             log,
@@ -189,6 +193,14 @@ impl ScriptedLane {
     #[must_use]
     pub fn failing_releases(mut self, count: usize) -> Self {
         self.failing_releases = count;
+        self
+    }
+
+    /// Whose every send times out, as a tool on the host that stops answering does: the event
+    /// may have reached the OS.
+    #[must_use]
+    pub fn hanging_sends(mut self) -> Self {
+        self.hanging_sends = true;
         self
     }
 
@@ -268,6 +280,14 @@ impl Lane for ScriptedLane {
         // A scripted lane composes nothing, as `capabilities` says.
         if matches!(event, OsEvent::Composition(_)) {
             return Err(crate::lane::no_composition(self.name()));
+        }
+        if self.hanging_sends {
+            return Err(Error::Timeout {
+                awaited: crate::error::Awaited::Host,
+                effect: Some(Effect::new(EffectKind::MayHaveRun)),
+                message: "the scripted OS did not answer the send".into(),
+                retry: Retry::Never,
+            });
         }
         self.log
             .sent

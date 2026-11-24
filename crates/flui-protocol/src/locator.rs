@@ -225,6 +225,12 @@ pub struct Locator {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub window: Option<WindowId>,
+    /// Only a window's root element, the node its published tree starts at.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "std::ops::Not::not")
+    )]
+    pub root: bool,
     /// The role.
     #[cfg_attr(
         feature = "serde",
@@ -282,6 +288,15 @@ pub struct Locator {
 }
 
 impl Locator {
+    /// The root element of each window, or of the window [`Self::in_window`] names.
+    #[must_use]
+    pub fn root() -> Self {
+        Self {
+            root: true,
+            ..Self::default()
+        }
+    }
+
     /// Elements of `role`.
     #[must_use]
     pub fn role(role: Role) -> Self {

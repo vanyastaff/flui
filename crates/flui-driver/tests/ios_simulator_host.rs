@@ -8,10 +8,10 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use flui_driver::Error;
 use flui_driver::lane::ios_simulator::device::Udid;
 use flui_driver::lane::ios_simulator::xcrun::{HostXcrun, Xcrun, XcrunCommand};
 use flui_driver::testing::host_xcrun_with;
+use flui_driver::{Awaited, Error};
 
 use crate::android_lane::png_of;
 use crate::ios_simulator_lane::{BUNDLE, UDID};
@@ -157,7 +157,16 @@ fn output_past_its_bound_and_a_command_past_its_deadline_are_ended() {
     let error = xcrun
         .run(&terminate, 1000, Duration::from_millis(200))
         .expect_err("past its deadline");
-    assert!(matches!(error, Error::Timeout { .. }), "{error:?}");
+    assert!(
+        matches!(
+            error,
+            Error::Timeout {
+                awaited: Awaited::Host,
+                ..
+            }
+        ),
+        "{error:?}"
+    );
     assert_eq!(
         error.effect().map(|effect| effect.kind),
         Some(flui_driver::protocol::act::EffectKind::MayHaveRun),

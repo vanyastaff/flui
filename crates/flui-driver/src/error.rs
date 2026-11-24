@@ -12,6 +12,21 @@ use flui_protocol::version::ProtocolVersion;
 /// A driver call's result.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// What a [`Error::Timeout`] waited on.
+///
+/// The two are answered differently: a call the app's agent left unanswered may have run in the
+/// app, and the input it held is released there; a tool on the host that hung (an accessibility
+/// provider, `adb`, `xcrun`, a browser session, a capture) is the lane's failure, kept with its
+/// message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Awaited {
+    /// The app's agent: its reply did not come within the call's budget, or it answered `timeout`.
+    Agent,
+    /// A tool on the host that the lane, a capture or a scripted double drives.
+    Host,
+}
+
 /// Why a driver call failed.
 ///
 /// The variants up to [`Error::Platform`] are the app's answers, one per wire code, each with the
@@ -131,6 +146,8 @@ pub enum Error {
     /// the tree for its effect.
     #[error("timeout: {message}")]
     Timeout {
+        /// What did not answer: the app's agent or a tool on the host.
+        awaited: Awaited,
         /// How much of an acting call may have reached the app.
         effect: Option<Effect>,
         /// For people.
@@ -186,12 +203,13 @@ pub enum Error {
         /// Whether the same call can succeed later.
         retry: Retry,
     },
-    /// The driver and the app share no protocol version.
+    /// The driver and the app share no protocol version, or a trace being replayed was recorded at
+    /// another than the app speaks.
     #[error("no shared protocol: {message}")]
     Version {
         /// The schema the app speaks.
         app: Option<ProtocolVersion>,
-        /// The schema the driver asked for.
+        /// The schema the driver asked for, or the one the replayed trace was recorded at.
         client: Option<ProtocolVersion>,
         /// For people.
         message: String,
@@ -342,6 +360,7 @@ impl Error {
             ErrorCode::FocusElsewhere => Self::FocusElsewhere { message, retry },
             ErrorCode::OutsideTarget => Self::OutsideTarget { message, retry },
             ErrorCode::Timeout => Self::Timeout {
+                awaited: Awaited::Agent,
                 effect,
                 message,
                 retry,
@@ -378,6 +397,78 @@ impl Error {
                 retry,
             },
         }
+    }
+
+    /// The error as the wire states it: the inverse of [`Self::from_wire`] for the app's answers.
+    /// A failure only the driver sees takes the code a caller branches on the same way:
+    /// `not_supported` with the missing capability when the check could not be made
+    /// ([`Self::is_cannot_verify`]), `platform` otherwise, its message the whole failure.
+    #[must_use]
+    pub fn to_wire(&self) -> ErrorObject {
+        let code = self.code().unwrap_or(if self.is_cannot_verify() {
+            ErrorCode::NotSupported
+        } else {
+            ErrorCode::Platform
+        });
+        let message = match self {
+            Self::InvalidArgument { message, .. }
+            | Self::NotSupported { message, .. }
+            | Self::Busy { message, .. }
+            | Self::NotFound { message, .. }
+            | Self::UnknownHandle { message, .. }
+            | Self::Gone { message, .. }
+            | Self::Disabled { message, .. }
+            | Self::ActionUnsupported { message, .. }
+            | Self::NotForeground { message, .. }
+            | Self::FocusElsewhere { message, .. }
+            | Self::OutsideTarget { message, .. }
+            | Self::Timeout { message, .. }
+            | Self::InputHeld { message, .. }
+            | Self::ShuttingDown { message, .. }
+            | Self::Ambiguous { message, .. }
+            | Self::NotActionable { message, .. }
+            | Self::Stale { message, .. }
+            | Self::Version { message, .. }
+            | Self::NotDriver { message, .. }
+            | Self::Platform { message, .. } => message.clone(),
+            _ => self.to_string(),
+        };
+        let mut object = ErrorObject::new(code, message);
+        object.retry = self.retry();
+        object.effect = self.effect().cloned();
+        match self {
+            Self::NotSupported { capability, .. } => object.capability.clone_from(capability),
+            Self::NotFound { candidates, .. } | Self::Ambiguous { candidates, .. } => {
+                object.candidates.clone_from(candidates);
+            }
+            Self::UnknownHandle { kind, handle, .. } => {
+                object.kind = *kind;
+                object.handle.clone_from(handle);
+            }
+            Self::Gone {
+                kind, handle, exit, ..
+            } => {
+                object.kind = *kind;
+                object.handle.clone_from(handle);
+                object.exit = *exit;
+            }
+            Self::Stale { handle, .. } => object.handle.clone_from(handle),
+            Self::NotActionable {
+                failed, covered_by, ..
+            } => {
+                object.failed = *failed;
+                object.covered_by.clone_from(covered_by);
+            }
+            Self::Version { app, client, .. } => {
+                object.app = *app;
+                object.client = *client;
+            }
+            _ => {}
+        }
+        if self.code().is_none() && code == ErrorCode::NotSupported {
+            object.capability = self.missing_capability();
+        }
+        object
     }
 
     /// The driver refuses a parameter or a rule the call broke.
@@ -594,5 +685,16 @@ impl Error {
             } => Some(format!("{lane}_lane")),
             _ => None,
         }
+    }
+}
+
+/// A check whose attempt failed with a driver error is cannot-verify exactly when the error is.
+impl flui_protocol::report::CheckFailure for Error {
+    fn is_cannot_verify(&self) -> bool {
+        Self::is_cannot_verify(self)
+    }
+
+    fn missing_capability(&self) -> Option<String> {
+        Self::missing_capability(self)
     }
 }

@@ -282,6 +282,7 @@ mod agent_act_read;
 mod agent_events;
 mod agent_inspect;
 mod agent_locate;
+mod agent_placement;
 mod agent_semantics;
 mod agent_stability;
 mod agent_wait;
