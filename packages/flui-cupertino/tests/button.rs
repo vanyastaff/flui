@@ -513,9 +513,11 @@ pub fn a_plain_button_paints_its_resolved_colour_with_its_own_alpha() {
     use flui_sdk::platform::Brightness;
 
     for (brightness, alpha) in [(Brightness::Light, 73), (Brightness::Dark, 153)] {
+        let mut theme = CupertinoThemeData::default();
+        theme.brightness = Some(brightness);
         let laid = lay_out(
             CupertinoTheme::new(
-                CupertinoThemeData::default().with_brightness(brightness),
+                theme,
                 CupertinoButton::new(SizedBox::new(40.0, 20.0))
                     .color(CupertinoColors::SEPARATOR)
                     .on_pressed(|_ctx| {}),

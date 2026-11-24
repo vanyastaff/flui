@@ -47,9 +47,11 @@ pub fn static_color_resolves_to_itself_through_a_real_context() {
     let sentinel = Color::rgba(11, 22, 33, 200);
     let captured: Arc<Mutex<Option<Color>>> = Arc::new(Mutex::new(None));
 
+    let mut theme = CupertinoThemeData::default();
+    theme.brightness = Some(Brightness::Dark);
     let _laid = lay_out(
         CupertinoTheme::new(
-            CupertinoThemeData::default().with_brightness(Brightness::Dark),
+            theme,
             StaticResolveCapture {
                 sentinel,
                 captured: Arc::clone(&captured),
@@ -68,7 +70,7 @@ pub fn static_color_resolves_to_itself_through_a_real_context() {
 /// Suppresses parent-driven rebuilds: only inherited dependencies can reach
 /// the mounted resolver when the outer provider changes.
 #[derive(Clone)]
-struct RetainedChild(BoxedView);
+pub(crate) struct RetainedChild(pub(crate) BoxedView);
 
 impl View for RetainedChild {
     fn create_element(self: std::rc::Rc<Self>) -> flui_sdk::view::element::ElementKind {
@@ -115,9 +117,7 @@ pub fn retained_colors_follow_contrast_and_explicit_brightness() {
     for explicit in [None, Some(Brightness::Light), Some(Brightness::Dark)] {
         let seen = Rc::new(RefCell::new(Vec::new()));
         let mut theme = CupertinoThemeData::default();
-        if let Some(brightness) = explicit {
-            theme = theme.with_brightness(brightness);
-        }
+        theme.brightness = explicit;
         let child = RetainedChild(
             CupertinoTheme::new(
                 theme,

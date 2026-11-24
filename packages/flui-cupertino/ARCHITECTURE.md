@@ -42,17 +42,46 @@ UIKit font identity, optical sizing or native execution.
 
 ### Palette resolution shares brightness precedence and contrast dependencies
 
-Standalone dynamic colors, theme materialization and text roles use one private
-color resolver. A theme's explicit brightness wins even before that theme is
-installed as an ancestor; contrast follows the nearest `MediaQuery`. Static
-colors remain authored values. Dynamic colors subscribe only to relevant media
-fields, so unrelated window size changes do not rerun their resolution.
+Standalone dynamic colors, theme resolution and text roles pick a variant
+through one private color resolver, from the effective brightness and the
+contrast preference. A theme's explicit brightness wins even before that theme
+is installed as an ancestor; contrast follows the nearest `MediaQuery`. Static
+colors remain authored values. A standalone dynamic color subscribes only to
+the media fields it varies along, so unrelated window size changes do not rerun
+its resolution; a theme reads brightness, contrast and the system accent once
+for all its colors.
 
 `retained_colors_follow_contrast_and_explicit_brightness` and
 `authored_and_nested_colors_ignore_outer_contrast` pin retained-tree behavior.
-`explicit_app_brightness_applies_to_live_contrast_colors` checks the app's
-published palette and text roles during live contrast changes. Elevation
+`explicit_app_brightness_applies_to_live_contrast_colors` checks the palette and
+text roles an app's descendants read during live contrast changes. Elevation
 variants remain stored but unresolved; no interface-level source is implemented.
+
+### A theme is resolved once per set of inputs and read by field
+
+`CupertinoThemeData` is what an author writes, each `None` the iOS default;
+`ResolvedCupertinoTheme` is what widgets read, its colors concrete and its nine
+text roles built. They are two types because a concrete color is a different
+type from a dynamic one: a resolved theme cannot be resolved again or compared
+with its source by mistake.
+
+`CupertinoTheme` keeps the resolutions its readers asked for in a cache its
+view value owns, so a clone of the view shares it. The key is every input
+resolution reads: the effective brightness, the contrast preference and the
+system accent when it applies. Resolution under a key reads nothing else from
+the context, so the key is complete by construction. The cache holds four
+entries and evicts the oldest. Readers under the same inputs share one `Rc`;
+`CupertinoTheme::of` without an ancestor theme resolves the default afresh.
+The default roles share one process-wide copy of their family names, which is
+immutable data.
+
+`CupertinoApp` publishes the authored data, not a resolution of it, so a nested
+`MediaQuery` that changes brightness or contrast changes the theme below it.
+
+`readers_under_one_context_share_one_resolution`,
+`a_nested_media_query_resolves_the_app_theme_below_it` and
+`every_text_role_set_on_the_theme_reaches_a_reader` pin the sharing, the nested
+resolution and the nine settable roles.
 
 ### Event callbacks borrow the originating dispatch's write context
 

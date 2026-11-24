@@ -1,19 +1,11 @@
-//! Integration tests for [`CupertinoTheme::of`]/brightness resolution —
-//! proving the resolve chain actually reaches through a mounted
-//! [`BuildContext`], not just the pure data-model unit tests in
-//! `src/theme.rs`/`src/colors.rs`.
+//! Integration tests for [`CupertinoTheme::of`] and brightness resolution
+//! through a mounted [`BuildContext`]: what the authored data turns into for
+//! a reader, which roles an author can set, and when readers share one
+//! resolution.
 //!
-//! Every test captures [`CupertinoTheme::of`]'s result **without** an extra
-//! `.resolve(ctx)` call on top — asserting the captured
-//! [`CupertinoColor`](flui_cupertino::CupertinoColor) is *already*
-//! `Static(expected)`. Calling `.resolve(ctx)` again in the test would mask
-//! two distinct mutants: `CupertinoTheme::of` returning the ancestor's data
-//! without calling `resolve_from` at all (still `Dynamic(...)`, but a
-//! same-context re-resolve would silently fix it up to the right color
-//! anyway), and `CupertinoThemeData::resolve_from` returning `self`
-//! unchanged (ditto). Asserting the *unresolved-looking* enum variant
-//! (`Static`, not `Dynamic`) — not just the final color — is what makes both
-//! mutants observable.
+//! A reader gets a [`ResolvedCupertinoTheme`], whose colours are concrete
+//! `Color`s by type, so a capture asserts the colour itself; no further
+//! `.resolve(ctx)` runs on top of it.
 
 #![expect(
     clippy::unwrap_used,
@@ -22,11 +14,17 @@
 
 use crate::common;
 
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use common::{lay_out, loose};
-use flui_cupertino::{CupertinoColor, CupertinoTheme, CupertinoThemeData};
+use flui_cupertino::{
+    CupertinoColors, CupertinoTextThemeData, CupertinoTheme, CupertinoThemeData,
+    ResolvedCupertinoTextTheme, ResolvedCupertinoTheme,
+};
 use flui_sdk::painting::styling::Color;
+use flui_sdk::painting::typography::TextStyle;
 use flui_sdk::platform::Brightness;
 use flui_sdk::view::environment::{MediaQuery, MediaQueryData};
 use flui_sdk::view::prelude::*;
@@ -39,14 +37,17 @@ impl StatelessView for PaintedCupertinoRoles {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         use flui_sdk::widgets::{Column, Text};
 
-        let theme = CupertinoTheme::of(ctx).text_theme();
+        let theme = CupertinoTheme::of(ctx);
+        let roles = &theme.text_theme;
         Column::new(vec![
-            Text::new("content role").style(theme.text_style()).boxed(),
+            Text::new("content role")
+                .style(roles.text_style.clone())
+                .boxed(),
             Text::new("navigation role")
-                .style(theme.nav_title_text_style())
+                .style(roles.nav_title_text_style.clone())
                 .boxed(),
             Text::new("small action role")
-                .style(theme.action_small_text_style())
+                .style(roles.action_small_text_style.clone())
                 .boxed(),
         ])
     }
@@ -145,25 +146,22 @@ pub fn mounted_text_roles_paint_distinct_numeric_sizing_answers() {
     }
 }
 
-/// Captures `CupertinoTheme::of(ctx).primary_color()` — with no further
-/// resolution — during `build()`.
+/// Captures `CupertinoTheme::of(ctx).primary_color` during `build()`.
 #[derive(Clone, Debug, StatelessView)]
 struct PrimaryColorCapture {
-    captured: Arc<Mutex<Option<CupertinoColor>>>,
+    captured: Arc<Mutex<Option<Color>>>,
 }
 
 impl StatelessView for PrimaryColorCapture {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let primary_color = CupertinoTheme::of(ctx).primary_color();
+        let primary_color = CupertinoTheme::of(ctx).primary_color;
         *self.captured.lock().unwrap() = Some(primary_color);
         SizedBox::shrink()
     }
 }
 
-fn mount_and_capture(
-    root_builder: impl FnOnce(PrimaryColorCapture) -> BoxedView,
-) -> CupertinoColor {
-    let captured: Arc<Mutex<Option<CupertinoColor>>> = Arc::new(Mutex::new(None));
+fn mount_and_capture(root_builder: impl FnOnce(PrimaryColorCapture) -> BoxedView) -> Color {
+    let captured: Arc<Mutex<Option<Color>>> = Arc::new(Mutex::new(None));
     let capture = PrimaryColorCapture {
         captured: Arc::clone(&captured),
     };
@@ -189,10 +187,9 @@ pub fn an_unset_primary_follows_the_system_accent() {
         (None, Color::rgb(255, 45, 85)),
         (Some(Color::rgb(10, 20, 30)), Color::rgb(10, 20, 30)),
     ] {
-        let captured: Arc<Mutex<Option<CupertinoColor>>> = Arc::new(Mutex::new(None));
-        let theme = authored.map_or_else(CupertinoThemeData::default, |color| {
-            CupertinoThemeData::default().with_primary_color(color)
-        });
+        let captured: Arc<Mutex<Option<Color>>> = Arc::new(Mutex::new(None));
+        let mut theme = CupertinoThemeData::default();
+        theme.primary_color = authored.map(Into::into);
         let mut laid = lay_out(
             CupertinoTheme::new(
                 theme,
@@ -204,64 +201,74 @@ pub fn an_unset_primary_follows_the_system_accent() {
         );
         let primary = || captured.lock().unwrap().expect("the capture built");
         let without_accent = authored.unwrap_or(SYSTEM_BLUE);
-        assert_eq!(
-            primary(),
-            CupertinoColor::Static(without_accent),
-            "no accent"
-        );
+        assert_eq!(primary(), without_accent, "no accent");
         laid.set_system_preferences(accented.clone());
         laid.pump();
-        assert_eq!(
-            primary(),
-            CupertinoColor::Static(with_accent),
-            "{authored:?}"
-        );
+        assert_eq!(primary(), with_accent, "{authored:?}");
         laid.set_system_preferences(SystemPreferences::default());
         laid.pump();
-        assert_eq!(
-            primary(),
-            CupertinoColor::Static(without_accent),
-            "the accent withdrawn"
-        );
+        assert_eq!(primary(), without_accent, "the accent withdrawn");
     }
 }
 
-/// Captures the whole resolved `CupertinoTheme::of(ctx)` during `build()`.
+/// Captures every resolved `CupertinoTheme::of(ctx)`, one per `build()`.
 #[derive(Clone, Debug, StatelessView)]
 struct ThemeCapture {
-    captured: std::rc::Rc<std::cell::RefCell<Option<CupertinoThemeData>>>,
+    captured: Rc<RefCell<Vec<Rc<ResolvedCupertinoTheme>>>>,
+}
+
+impl ThemeCapture {
+    fn new() -> Self {
+        Self {
+            captured: Rc::default(),
+        }
+    }
+
+    fn last(&self) -> Rc<ResolvedCupertinoTheme> {
+        let captured = self.captured.borrow();
+        Rc::clone(captured.last().expect("the capture built"))
+    }
+
+    fn builds(&self) -> usize {
+        self.captured.borrow().len()
+    }
 }
 
 impl StatelessView for ThemeCapture {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        *self.captured.borrow_mut() = Some(CupertinoTheme::of(ctx));
+        self.captured.borrow_mut().push(CupertinoTheme::of(ctx));
         SizedBox::shrink()
     }
 }
 
+/// The resolution a reader under `theme` gets on the headless (light)
+/// platform.
+fn resolved(theme: CupertinoThemeData) -> ResolvedCupertinoTheme {
+    let capture = ThemeCapture::new();
+    let _laid = lay_out(CupertinoTheme::new(theme, capture.clone()), loose(100.0));
+    (*capture.last()).clone()
+}
+
 /// The resolved theme of `theme` on the headless (light) platform, once the
 /// host reports `accent`.
-fn resolved_under_accent(theme: CupertinoThemeData, accent: Color) -> CupertinoThemeData {
+fn resolved_under_accent(theme: CupertinoThemeData, accent: Color) -> ResolvedCupertinoTheme {
     use flui_sdk::platform::{SrgbColor, SystemPreferences};
 
-    let captured = std::rc::Rc::default();
-    let mut laid = lay_out(
-        CupertinoTheme::new(
-            theme,
-            ThemeCapture {
-                captured: std::rc::Rc::clone(&captured),
-            },
-        ),
-        loose(100.0),
-    );
+    let capture = ThemeCapture::new();
+    let mut laid = lay_out(CupertinoTheme::new(theme, capture.clone()), loose(100.0));
     let [red, green, blue, alpha] = accent.to_rgba8();
     laid.set_system_preferences(
         SystemPreferences::default()
             .with_accent_color(Some(SrgbColor::from_rgba8(red, green, blue, alpha))),
     );
     laid.pump();
-    let resolved = captured.borrow().clone();
-    resolved.expect("the capture built")
+    (*capture.last()).clone()
+}
+
+fn brightness_forced(brightness: Brightness) -> CupertinoThemeData {
+    let mut theme = CupertinoThemeData::default();
+    theme.brightness = Some(brightness);
+    theme
 }
 
 /// The host reports the accent resolved for the platform's appearance, so a
@@ -271,22 +278,15 @@ fn resolved_under_accent(theme: CupertinoThemeData, accent: Color) -> CupertinoT
 /// brightness, or keep white on every accent.
 pub fn a_forced_brightness_or_a_light_accent_keeps_the_theme_legible() {
     let pink = Color::rgb(255, 45, 85);
-    let dark = resolved_under_accent(
-        CupertinoThemeData::default().with_brightness(Brightness::Dark),
-        pink,
-    );
+    let dark = resolved_under_accent(brightness_forced(Brightness::Dark), pink);
     assert_eq!(
-        dark.primary_color(),
-        CupertinoColor::Static(Color::rgb(10, 132, 255)),
+        dark.primary_color,
+        Color::rgb(10, 132, 255),
         "a dark theme on a light platform keeps system blue's dark variant"
     );
-    let light = resolved_under_accent(
-        CupertinoThemeData::default().with_brightness(Brightness::Light),
-        pink,
-    );
+    let light = resolved_under_accent(brightness_forced(Brightness::Light), pink);
     assert_eq!(
-        light.primary_color(),
-        CupertinoColor::Static(pink),
+        light.primary_color, pink,
         "a theme of the platform's brightness takes the accent"
     );
     for (accent, contrasting) in [
@@ -294,19 +294,16 @@ pub fn a_forced_brightness_or_a_light_accent_keeps_the_theme_legible() {
         (Color::rgb(0, 0, 128), Color::WHITE),
     ] {
         assert_eq!(
-            resolved_under_accent(CupertinoThemeData::default(), accent)
-                .primary_contrasting_color(),
-            CupertinoColor::Static(contrasting),
+            resolved_under_accent(CupertinoThemeData::default(), accent).primary_contrasting_color,
+            contrasting,
             "{accent:?}"
         );
     }
+    let mut authored = CupertinoThemeData::default();
+    authored.primary_contrasting_color = Some(Color::WHITE.into());
     assert_eq!(
-        resolved_under_accent(
-            CupertinoThemeData::default().with_primary_contrasting_color(Color::WHITE),
-            Color::rgb(255, 185, 0),
-        )
-        .primary_contrasting_color(),
-        CupertinoColor::Static(Color::WHITE),
+        resolved_under_accent(authored, Color::rgb(255, 185, 0)).primary_contrasting_color,
+        Color::WHITE,
         "an authored contrasting colour stays"
     );
 }
@@ -322,17 +319,158 @@ pub fn explicit_theme_brightness_overrides_media_query() {
                 platform_brightness: Brightness::Dark,
                 ..MediaQueryData::default()
             },
-            CupertinoTheme::new(
-                CupertinoThemeData::default().with_brightness(Brightness::Light),
-                capture,
-            ),
+            CupertinoTheme::new(brightness_forced(Brightness::Light), capture),
         )
         .boxed()
     });
     // Light, not dark — the theme's explicit brightness won, not the
     // (conflicting) ambient MediaQuery.
+    assert_eq!(primary_color, Color::rgb(0, 122, 255));
+}
+
+/// One text role: its authored slot and its resolved style.
+type TextRole = (
+    &'static str,
+    fn(&mut CupertinoTextThemeData) -> &mut Option<TextStyle>,
+    fn(&ResolvedCupertinoTextTheme) -> &TextStyle,
+);
+
+const TEXT_ROLES: [TextRole; 9] = [
+    ("text", |t| &mut t.text_style, |r| &r.text_style),
+    (
+        "action",
+        |t| &mut t.action_text_style,
+        |r| &r.action_text_style,
+    ),
+    (
+        "action small",
+        |t| &mut t.action_small_text_style,
+        |r| &r.action_small_text_style,
+    ),
+    (
+        "tab label",
+        |t| &mut t.tab_label_text_style,
+        |r| &r.tab_label_text_style,
+    ),
+    (
+        "nav title",
+        |t| &mut t.nav_title_text_style,
+        |r| &r.nav_title_text_style,
+    ),
+    (
+        "nav large title",
+        |t| &mut t.nav_large_title_text_style,
+        |r| &r.nav_large_title_text_style,
+    ),
+    (
+        "nav action",
+        |t| &mut t.nav_action_text_style,
+        |r| &r.nav_action_text_style,
+    ),
+    (
+        "picker",
+        |t| &mut t.picker_text_style,
+        |r| &r.picker_text_style,
+    ),
+    (
+        "date time picker",
+        |t| &mut t.date_time_picker_text_style,
+        |r| &r.date_time_picker_text_style,
+    ),
+];
+
+/// Each of the nine text roles set through `CupertinoThemeData::text_theme`
+/// reaches a mounted reader as written, and only that role: every other one
+/// keeps its default. The text theme's own primary colour recolours the
+/// default action roles only. Red-check: resolve one role from another's
+/// slot, or drop a set role for its default.
+pub fn every_text_role_set_on_the_theme_reaches_a_reader() {
+    let defaults = resolved(CupertinoThemeData::default()).text_theme;
+    for (index, (name, slot, _)) in TEXT_ROLES.iter().enumerate() {
+        let authored = TextStyle {
+            font_size: Some(100.0 + f64::from(u8::try_from(index).unwrap())),
+            color: Some(Color::rgb(1, 2, 3)),
+            ..TextStyle::default()
+        };
+        let mut theme = CupertinoThemeData::default();
+        *slot(&mut theme.text_theme) = Some(authored.clone());
+        let roles = resolved(theme).text_theme;
+        for (other, (other_name, _, read)) in TEXT_ROLES.iter().enumerate() {
+            let expected = if other == index {
+                &authored
+            } else {
+                read(&defaults)
+            };
+            assert_eq!(read(&roles), expected, "{other_name} with {name} set");
+        }
+    }
+
+    let mut theme = CupertinoThemeData::default();
+    theme.text_theme.primary_color = Some(CupertinoColors::SYSTEM_RED.into());
+    let resolved = resolved(theme);
+    let red = Some(Color::rgb(255, 59, 48));
+    for (name, _, read) in &TEXT_ROLES {
+        let expected = if name.contains("action") {
+            red
+        } else {
+            read(&defaults).color
+        };
+        assert_eq!(read(&resolved.text_theme).color, expected, "{name}");
+    }
     assert_eq!(
-        primary_color,
-        CupertinoColor::Static(Color::rgb(0, 122, 255))
+        resolved.primary_color,
+        Color::rgb(0, 122, 255),
+        "the text theme's primary does not change the theme's"
     );
+}
+
+/// Readers under one theme and one context share one resolution, and a
+/// contrast or brightness change through `MediaQuery` rebuilds them with
+/// another; flipping back reuses the first. Red-check: resolve afresh on
+/// every `CupertinoTheme::of`.
+pub fn readers_under_one_context_share_one_resolution() {
+    use flui_sdk::widgets::Column;
+
+    let (first, second) = (ThemeCapture::new(), ThemeCapture::new());
+    let child = crate::colors::RetainedChild(
+        CupertinoTheme::new(
+            CupertinoThemeData::default(),
+            Column::new(vec![first.clone().boxed(), second.clone().boxed()]),
+        )
+        .boxed(),
+    );
+    let mut data = MediaQueryData::default();
+    let mut tree = lay_out(MediaQuery::new(data.clone(), child.clone()), loose(400.0));
+    let light = first.last();
+    assert!(
+        Rc::ptr_eq(&light, &second.last()),
+        "two readers under one context share the resolution"
+    );
+
+    data.high_contrast = true;
+    let builds = first.builds();
+    tree.pump_widget(MediaQuery::new(data.clone(), child.clone()));
+    assert_eq!(first.builds(), builds + 1, "a contrast change rebuilds");
+    let contrast = first.last();
+    assert!(!Rc::ptr_eq(&light, &contrast), "contrast resolves anew");
+    assert_eq!(contrast.primary_color, Color::rgb(0, 64, 221));
+    assert!(Rc::ptr_eq(&contrast, &second.last()));
+
+    data.high_contrast = false;
+    tree.pump_widget(MediaQuery::new(data.clone(), child.clone()));
+    assert!(
+        Rc::ptr_eq(&light, &first.last()),
+        "the light resolution is reused when contrast flips back"
+    );
+
+    data.platform_brightness = Brightness::Dark;
+    let builds = first.builds();
+    tree.pump_widget(MediaQuery::new(data, child));
+    assert_eq!(first.builds(), builds + 1, "a brightness change rebuilds");
+    let dark = first.last();
+    assert_eq!(
+        (dark.brightness, dark.primary_color),
+        (Brightness::Dark, Color::rgb(10, 132, 255))
+    );
+    assert!(Rc::ptr_eq(&dark, &second.last()));
 }

@@ -113,10 +113,10 @@ impl std::fmt::Debug for CupertinoPageScaffold {
 
 impl StatelessView for CupertinoPageScaffold {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let background = self
-            .background_color
-            .unwrap_or_else(|| CupertinoTheme::of(ctx).scaffold_background_color())
-            .resolve(ctx);
+        let background = self.background_color.map_or_else(
+            || CupertinoTheme::of(ctx).scaffold_background_color,
+            |color| color.resolve(ctx),
+        );
         let media = MediaQuery::maybe_of(ctx).unwrap_or_default();
 
         let padded_content = if self.navigation_bar.is_some() {
