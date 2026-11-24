@@ -38,7 +38,7 @@ use flui_protocol::audit::{AuditFinding, AuditParams, AuditReport, AuditRule};
 use flui_protocol::method;
 use flui_protocol::tree::{ElementId, ElementRef, WindowId};
 use flui_rendering::audit::{ContrastOutcome, ContrastReading, TextContrast};
-use flui_semantics::{AccessibilityNodeId, MinimumTarget, WireReadError};
+use flui_semantics::{AccessibilityNodeId, MinimumTarget, SemanticsOwner, WireReadError};
 
 use super::agent::{IssuedHandles, placement_of};
 use super::agent_serve::{Answer, Serve, ServeContext};
@@ -111,26 +111,12 @@ fn audit(state: &PresentationState, window: WindowId, rules: &[AuditRule]) -> Au
 /// Runs `rule` over `state`'s window.
 fn run(state: &PresentationState, window: WindowId, rule: AuditRule) -> RuleOutcome {
     let placement = placement_of(state, window);
-    let semantics = |read: &dyn Fn(
-        &flui_semantics::SemanticsOwner,
-    ) -> Result<Vec<AuditFinding>, WireReadError>| {
-        state
-            .pipeline()
-            .with(|pipeline| match pipeline.semantics_owner() {
-                None => RuleOutcome::NotChecked(NO_TREE.to_owned()),
-                Some(owner) => match read(owner) {
-                    Ok(found) => RuleOutcome::Checked(found),
-                    Err(WireReadError::NoTree) => RuleOutcome::NotChecked(NO_TREE.to_owned()),
-                    Err(_) => RuleOutcome::NotChecked(
-                        "the published semantics tree is malformed".to_owned(),
-                    ),
-                },
-            })
-    };
     match rule {
-        AuditRule::Unnamed => semantics(&|owner| owner.audit_unnamed(placement)),
+        AuditRule::Unnamed => semantics_rule(state, |owner| owner.audit_unnamed(placement)),
         AuditRule::TargetSize => match minimum_target(state) {
-            Some(minimum) => semantics(&|owner| owner.audit_target_size(minimum, placement)),
+            Some(minimum) => {
+                semantics_rule(state, |owner| owner.audit_target_size(minimum, placement))
+            }
             None => RuleOutcome::NotChecked(
                 "the platform's minimum target is not a finite positive size".to_owned(),
             ),
@@ -138,6 +124,22 @@ fn run(state: &PresentationState, window: WindowId, rule: AuditRule) -> RuleOutc
         AuditRule::TextContrast => text_contrast(state, window),
         _ => RuleOutcome::NotChecked("this app's agent does not run this rule".to_owned()),
     }
+}
+
+/// A rule of `flui-semantics`, `read` over `state`'s committed tree.
+fn semantics_rule(
+    state: &PresentationState,
+    read: impl FnOnce(&SemanticsOwner) -> Result<Vec<AuditFinding>, WireReadError>,
+) -> RuleOutcome {
+    state
+        .pipeline()
+        .with(|pipeline| match pipeline.semantics_owner().map(read) {
+            None | Some(Err(WireReadError::NoTree)) => RuleOutcome::NotChecked(NO_TREE.to_owned()),
+            Some(Ok(found)) => RuleOutcome::Checked(found),
+            Some(Err(_)) => {
+                RuleOutcome::NotChecked("the published semantics tree is malformed".to_owned())
+            }
+        })
 }
 
 /// Why a semantics rule did not run before the first committed tree.
