@@ -10,4 +10,5 @@ mod capture_sinks;
 mod frame_snapshots;
 mod gesture_inspector;
 mod profiler;
+mod timeline;
 mod tree_observer_inspector;

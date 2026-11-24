@@ -40,7 +40,7 @@ use flui_sdk::interaction::{
 };
 
 /// How many contests an inspector keeps unless told otherwise.
-pub const DEFAULT_CONTEST_CAPACITY: usize = 256;
+pub const DEFAULT_MAX_CONTESTS: usize = 256;
 
 /// Watches one gesture arena and keeps a report of its most recent contests.
 ///
@@ -52,7 +52,7 @@ pub struct GestureInspector {
 }
 
 impl GestureInspector {
-    /// Inspect `arena`, keeping the last [`DEFAULT_CONTEST_CAPACITY`]
+    /// Inspect `arena`, keeping the last [`DEFAULT_MAX_CONTESTS`]
     /// contests.
     ///
     /// # Errors
@@ -60,20 +60,20 @@ impl GestureInspector {
     /// [`IdExhausted`] when the arena has issued its last observer
     /// registration.
     pub fn attach(arena: &GestureArena) -> Result<Self, IdExhausted> {
-        Self::with_capacity(arena, DEFAULT_CONTEST_CAPACITY)
+        Self::attach_bounded(arena, DEFAULT_MAX_CONTESTS)
     }
 
-    /// Inspect `arena`, keeping the last `capacity` contests: the oldest is
+    /// Inspect `arena`, keeping the last `max_contests` contests: the oldest is
     /// dropped when a new one would exceed it.
     ///
     /// # Errors
     ///
     /// As [`attach`](Self::attach).
-    pub fn with_capacity(arena: &GestureArena, capacity: usize) -> Result<Self, IdExhausted> {
-        Self::observing(arena, capacity, None)
+    pub fn attach_bounded(arena: &GestureArena, max_contests: usize) -> Result<Self, IdExhausted> {
+        Self::observing(arena, max_contests, None)
     }
 
-    /// As [`with_capacity`](Self::with_capacity), calling `changed` after each
+    /// As [`attach_bounded`](Self::attach_bounded), calling `changed` after each
     /// observation is folded in, with the model released.
     pub(crate) fn observing(
         arena: &GestureArena,

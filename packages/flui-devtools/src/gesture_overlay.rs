@@ -43,9 +43,7 @@ use flui_sdk::widgets::{
 };
 use rustc_hash::FxHashSet;
 
-use crate::gesture_inspector::{
-    ContestReport, DEFAULT_CONTEST_CAPACITY, GestureInspector, Verdict,
-};
+use crate::gesture_inspector::{ContestReport, DEFAULT_MAX_CONTESTS, GestureInspector, Verdict};
 
 /// How long a settled contest stays on screen, fading out.
 pub const CONTEST_FADE: Duration = Duration::from_millis(1500);
@@ -199,12 +197,12 @@ impl ViewState<GestureInspectorOverlay> for GestureInspectorOverlayState {
                 {
                     let mut positions = positions.borrow_mut();
                     // Ordered like the inspector's contests, which keeps the
-                    // newest `DEFAULT_CONTEST_CAPACITY`: the position dropped
+                    // newest `DEFAULT_MAX_CONTESTS`: the position dropped
                     // is the one whose contest the inspector dropped, and a
                     // burst of downs between builds cannot outgrow it.
                     positions.retain(|(known, _)| *known != pointer);
                     positions.push_back((pointer, at));
-                    if positions.len() > DEFAULT_CONTEST_CAPACITY {
+                    if positions.len() > DEFAULT_MAX_CONTESTS {
                         positions.pop_front();
                     }
                 }
@@ -259,8 +257,7 @@ impl Live {
                     live.keep_fading();
                 }
             });
-            match GestureInspector::observing(&self.arena, DEFAULT_CONTEST_CAPACITY, Some(changed))
-            {
+            match GestureInspector::observing(&self.arena, DEFAULT_MAX_CONTESTS, Some(changed)) {
                 Ok(inspector) => {
                     *self.inspector.borrow_mut() = Some(inspector);
                     let observing = &self.controller.borrow().inner.observing;
