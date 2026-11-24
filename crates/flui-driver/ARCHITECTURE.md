@@ -110,13 +110,17 @@ app's trees, frames and input, and this crate composes that with what only the O
   picked) and removed by that port at its end once `adb` made it or may have.
 - **The Android lane finds the app's nodes by matching, never by guessing.** `accesskit_android`
   sets no `viewIdResourceName`, so `Lane::read_tree` is handed the app's own tree and
-  `lane::android::tree` matches the dump to it: a node fits an app node by structure, the class
-  `lane::android::roles` gives its AccessKit role, its content description, its checked and
-  enabled state and its bounds at the surface's origin; two candidates alike are
-  `Error::Ambiguous`, and bounds off the display place a node nowhere. Only a matched node carries
-  the app's role and identifier. No dump runs while a screen reader does
-  (`safety::check_dump`): the dump suspends the accessibility services. `invoke` is refused,
-  since UI Automator performs no accessibility action.
+  `lane::android::tree` matches the dump to it: the root is the child of the decor view that fits
+  the app's root, where `FluiView.install` puts it, and a node fits an app node by structure and
+  the order the adapter adds children in (those `accesskit_consumer`'s filter keeps), the class
+  `lane::android::roles` gives its AccessKit role, its content description, its toggled state
+  (a radio button's selection included) and enabled state, and its bounds at the surface's
+  origin; two candidates the order does not tell apart are `Error::Ambiguous`, and bounds off the
+  display place a node nowhere. Only a matched node carries the app's role and identifier; what a
+  dump cannot show (`tree::Unobservable`) projects as the app published it. No dump runs while
+  any accessibility service does (`safety::check_dump`): the dump suspends every one. The OS tree
+  and the app's are of one revision (`Window::compare_projection`). `invoke` is refused, since
+  UI Automator performs no accessibility action.
 - **The iOS Simulator lane sends no input** until a supported channel exists (the flui-driver
   spec's rule; `lane::ios_simulator::xcode` has the evidence): `Lane::check` refuses every input
   event as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything

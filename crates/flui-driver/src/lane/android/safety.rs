@@ -17,14 +17,14 @@
 //!
 //! Before every press, key and text the app's window must hold the input focus
 //! ([`check_focus`]): a press with the shade, the lock screen or another app in front lands
-//! there. Before every `uiautomator dump`, no screen reader may run ([`check_dump`]): the dump
-//! suspends the accessibility services while it runs, TalkBack among them.
+//! there. Before every `uiautomator dump`, no accessibility service may run ([`check_dump`]): the
+//! dump suspends every service while it runs, TalkBack, Voice Access and Switch Access among them.
 
 use flui_protocol::error::{ErrorCode, HandleKind};
 use flui_protocol::session::Isolation;
 
 use super::LANE;
-use super::device::{ScreenReader, parse_screen_reader};
+use super::device::{EnabledServices, parse_enabled_services};
 use super::keys::{self, Keycode};
 use crate::coordinates::DevicePoint;
 use crate::error::Error;
@@ -106,13 +106,13 @@ pub enum Refusal {
         /// The mode.
         isolation: Isolation,
     },
-    /// A screen reader runs, which `uiautomator dump` would suspend while it dumps.
-    ScreenReaderOn {
+    /// An accessibility service runs, which `uiautomator dump` would suspend while it dumps.
+    ServicesOn {
         /// What is on.
-        reader: ScreenReader,
+        services: EnabledServices,
     },
     /// The accessibility settings printed no reply the lane reads, so it cannot tell whether a
-    /// screen reader runs.
+    /// service runs.
     SettingsUnread {
         /// What is wrong with the reply.
         why: String,
@@ -209,19 +209,19 @@ impl Refusal {
                 "{} is no isolation mode of an Android device: it is an emulator or a device",
                 isolation.name()
             )),
-            Self::ScreenReaderOn { reader } => Error::not_supported(
+            Self::ServicesOn { services } => Error::not_supported(
                 WINDOW_DUMP,
                 format!(
-                    "{} is on, and `uiautomator dump` suspends the accessibility services while it \
-                     dumps: the lane neither locates the window nor reads the tree while a screen \
-                     reader reads; locate the window before the screen reader is turned on",
-                    reader.describe()
+                    "{} is on, and `uiautomator dump` suspends every accessibility service while \
+                     it dumps: the lane neither locates the window nor reads the tree while one \
+                     runs; locate the window before the service is turned on",
+                    services.describe()
                 ),
             ),
             Self::SettingsUnread { why } => Error::not_supported(
                 WINDOW_DUMP,
                 format!(
-                    "{why}, so the lane cannot tell whether a screen reader runs, and \
+                    "{why}, so the lane cannot tell whether an accessibility service runs, and \
                      `uiautomator dump` would suspend one: no dump is sent"
                 ),
             ),
@@ -229,16 +229,16 @@ impl Refusal {
     }
 }
 
-/// Whether the lane may dump the window: no screen reader runs, as `settings` printed it.
+/// Whether the lane may dump the window: no accessibility service runs, as `settings` printed it.
 ///
 /// # Errors
 ///
-/// [`Refusal::ScreenReaderOn`] naming the screen reader, [`Refusal::SettingsUnread`] for a reply
-/// that shows neither way.
+/// [`Refusal::ServicesOn`] naming every service on, [`Refusal::SettingsUnread`] for a reply that
+/// shows neither way.
 pub fn check_dump(settings: &str) -> Result<(), Refusal> {
-    match parse_screen_reader(settings) {
-        Ok(Some(reader)) => Err(Refusal::ScreenReaderOn { reader }),
-        Ok(None) => Ok(()),
+    match parse_enabled_services(settings) {
+        Ok(services) if services.is_empty() => Ok(()),
+        Ok(services) => Err(Refusal::ServicesOn { services }),
         Err(why) => Err(Refusal::SettingsUnread { why }),
     }
 }

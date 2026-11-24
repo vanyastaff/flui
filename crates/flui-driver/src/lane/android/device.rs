@@ -1,6 +1,6 @@
 //! What the lane reads of the device, as pure parsers over what `adb` printed: the devices the adb
 //! server lists and which one a run takes, whether it is an emulator, its display, the commands
-//! its `input` has, the window that holds the input focus, and whether a screen reader runs.
+//! its `input` has, the window that holds the input focus, and which accessibility services run.
 //!
 //! Everything here is the device's output, so each parser reads it as untrusted: a line it cannot
 //! read is skipped or answers `None`, never a panic, and what it collects is bounded.
@@ -228,51 +228,51 @@ pub const ACCESSIBILITY_SETTINGS: &str = "settings get secure enabled_accessibil
 /// of services it scans.
 pub const MAX_ACCESSIBILITY_SETTINGS: usize = 16 * 1024;
 
-/// The packages of the screen readers the lane knows by name: Google's TalkBack, and the TalkBack
-/// Samsung ships in its place. Another screen reader is told by touch exploration, which a
-/// spoken-feedback reader turns on; a service that does not (a braille-only reader, Switch
-/// Access, Select to Speak) is not told, and the dump suspends it.
-pub const SCREEN_READERS: &[&str] = &[
-    "com.google.android.marvin.talkback",
-    "com.samsung.android.accessibility.talkback",
-];
-
-/// A screen reader the device runs, as its settings show it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The accessibility services the device runs, as its settings show them: what a
+/// `uiautomator dump` suspends while it runs. Every service counts, not only a screen reader:
+/// Voice Access, Switch Access, Samsung's Universal Switch and Select to Speak turn on no touch
+/// exploration and are suspended all the same.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
-pub enum ScreenReader {
-    /// A service of [`SCREEN_READERS`] is on: its component, `package/class`.
-    Service(String),
-    /// Touch exploration is on, which a screen reader asks for.
-    TouchExploration,
+pub struct EnabledServices {
+    /// The services the user turned on, each as Android lists it (`package/class`), in its order.
+    pub services: Vec<String>,
+    /// Whether touch exploration is on, which a screen reader asks for.
+    pub touch_exploration: bool,
 }
 
-impl ScreenReader {
+impl EnabledServices {
+    /// Whether nothing would be suspended: no service on and no touch exploration.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.services.is_empty() && !self.touch_exploration
+    }
+
     /// What is on, for people.
     #[must_use]
     pub fn describe(&self) -> String {
-        match self {
-            Self::Service(component) => format!("the screen reader {component}"),
-            Self::TouchExploration => {
-                "touch exploration, which a screen reader turns on,".to_owned()
-            }
+        match (self.services.as_slice(), self.touch_exploration) {
+            ([], true) => "touch exploration, which a screen reader turns on,".to_owned(),
+            ([], false) => "no accessibility service".to_owned(),
+            ([service], _) => format!("the accessibility service {service}"),
+            (services, _) => format!("the accessibility services {}", services.join(", ")),
         }
     }
 }
 
-/// The screen reader the [`ACCESSIBILITY_SETTINGS`] line's `printed` shows on, if any: a service
-/// of a known screen reader in the colon-separated list (`null` when the user turned none on), or
-/// touch exploration turned on (`1`).
+/// The accessibility services the [`ACCESSIBILITY_SETTINGS`] line's `printed` shows on: the
+/// colon-separated list of `enabled_accessibility_services`, and touch exploration.
 ///
-/// `settings get` prints a value for every key, `null` for one never set, so a reply is exactly
-/// two lines: a non-empty service list and `0`, `1` or `null`. The shell reports only the second
-/// command's status, so a first command that failed shows only in the reply's shape.
+/// `settings get` prints a line for every key: `null` for one never set, and an empty line for a
+/// list emptied when its last service was turned off, so a reply is exactly two lines, the list
+/// (`null`, empty, or components) and `0`, `1` or `null`. The shell reports only the second
+/// command's status, so a first command that failed shows only in the reply's shape: it prints
+/// no line.
 ///
 /// # Errors
 ///
-/// What is wrong with a reply of any other shape: the lane cannot tell whether a screen reader
-/// runs.
-pub fn parse_screen_reader(printed: &str) -> std::result::Result<Option<ScreenReader>, String> {
+/// What is wrong with a reply of any other shape: the lane cannot tell whether a service runs.
+pub fn parse_enabled_services(printed: &str) -> std::result::Result<EnabledServices, String> {
     let lines: Vec<&str> = printed.lines().map(str::trim).collect();
     let [services, touch_exploration] = lines.as_slice() else {
         return Err(format!(
@@ -280,9 +280,6 @@ pub fn parse_screen_reader(printed: &str) -> std::result::Result<Option<ScreenRe
             lines.len()
         ));
     };
-    if services.is_empty() {
-        return Err("`settings` printed no accessibility services, not even `null`".to_owned());
-    }
     let touch_exploration = match *touch_exploration {
         "1" => true,
         "0" | "null" => false,
@@ -292,14 +289,18 @@ pub fn parse_screen_reader(printed: &str) -> std::result::Result<Option<ScreenRe
             ));
         }
     };
-    let service = services.split(':').map(str::trim).find(|component| {
-        component
-            .split_once('/')
-            .is_some_and(|(package, _)| SCREEN_READERS.contains(&package))
-    });
-    Ok(match service {
-        Some(component) => Some(ScreenReader::Service(component.to_owned())),
-        None => touch_exploration.then_some(ScreenReader::TouchExploration),
+    let services = match *services {
+        "null" => Vec::new(),
+        list => list
+            .split(':')
+            .map(str::trim)
+            .filter(|component| !component.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    };
+    Ok(EnabledServices {
+        services,
+        touch_exploration,
     })
 }
 

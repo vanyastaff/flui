@@ -46,7 +46,7 @@ use flui_platform::{TargetPlatform, WindowInsets};
 use flui_view::environment::PlatformConvention;
 
 use crate::android_lane;
-use crate::apps::{Controls, Insets, Notes, Roles, role_label};
+use crate::apps::{Controls, Insets, Notes, Roles, role_identifier, role_label};
 
 /// The window every scenario app opens.
 pub const WINDOW: (u32, u32) = (800, 600);
@@ -265,16 +265,9 @@ pub fn roles(driver: &mut Driver, report: &mut Report) -> Result<()> {
                 .map(|row| (row.role, row.atspi.native_name()))
                 .collect::<Vec<(SemanticsRole, String)>>(),
         ),
-        // A role whose label reaches Android nowhere has no name to find its node by
-        // (`android_tree::talkback_reads_no_label_of_these_roles`).
-        AccessibilityApi::UiAutomator => (
-            "UI Automator",
-            android_roles::ROLES
-                .iter()
-                .filter(|row| row.named)
-                .map(|row| (row.role, row.class.to_owned()))
-                .collect::<Vec<(SemanticsRole, String)>>(),
-        ),
+        // Android's tree names no identifier: its nodes are found by the lane's match, which is
+        // what the rows check.
+        AccessibilityApi::UiAutomator => return matched_roles(driver, report),
         other => {
             let _ = report.check("the OS reads each role", || -> Result<()> {
                 Err(Error::Expectation {
@@ -332,6 +325,35 @@ fn os_roles(
                 found => Err(Error::Expectation {
                     expected: format!("{label:?} as a {native}"),
                     actual: format!("{:?}", found.map(|node| &node.native_role)),
+                }),
+            },
+        );
+    }
+    Ok(())
+}
+
+/// Each role read back through UI Automator, the lane matching Android's nodes to the app's: the
+/// node the lane matched to the row's node, found by the identifier the match carries over, has
+/// the class `accesskit_android` gives the role, and the row's label as its name, or no name for
+/// a role whose label reaches Android nowhere
+/// (`android_tree::talkback_reads_no_label_of_these_roles`).
+fn matched_roles(driver: &mut Driver, report: &mut Report) -> Result<()> {
+    let os = driver.main_window()?.os_tree()?;
+    for row in android_roles::ROLES {
+        let label = role_label(row.role);
+        let name = row.named.then_some(label.as_str());
+        let _ = report.check(
+            format!("UI Automator reads {} as {}", row.role.name(), row.class),
+            || match find(&os.roots, &role_identifier(row.role)) {
+                Some(node) if node.native_role == row.class && node.name.as_deref() == name => {
+                    Ok(())
+                }
+                found => Err(Error::Expectation {
+                    expected: format!(
+                        "the node matched to {label:?}, a {} named {name:?}",
+                        row.class
+                    ),
+                    actual: format!("{:?}", found.map(|node| (&node.native_role, &node.name))),
                 }),
             },
         );
@@ -852,21 +874,29 @@ fn the_android_input_scenario_passes_on_the_headless_target_but_its_touchpad_row
     }
 }
 
+/// The roles page of the headless scenario app as `accesskit_android` serves it, written out by
+/// hand from the adapter's source: the class of each row's AccessKit role, its label as the
+/// content description (none for the seven roles whose label FLUI publishes as the description),
+/// its bounds, edge to edge in an 800 by 600 window.
+const ROLES_WINDOW: &str = include_str!("android/roles_window.xml");
+
+/// The controls of the headless scenario app after one like, as `accesskit_android` serves them,
+/// written out by hand likewise.
+const CONTROLS_WINDOW: &str = include_str!("android/controls_window.xml");
+
 /// `driver`, a headless app, driven through the Android lane on a scripted emulator whose window
-/// is `app` as `accesskit_android` serves it (`android_tree::served`), its surface 60 pixels below
-/// the top of a 1080 by 2400 display.
-fn through_android(driver: Driver, app: &flui_driver::protocol::tree::Tree) -> Driver {
-    let dump = crate::android_tree::served(app, android_lane::PACKAGE, (0, 60), (1080, 2400));
-    let adb = android_lane::scripted_showing(true, None, &dump).refuse_stream("shell uinput -");
+/// `uiautomator dump` answers with `window`.
+fn through_android(driver: Driver, window: &str) -> Driver {
+    let adb = android_lane::scripted_showing(true, None, window).refuse_stream("shell uinput -");
     let lane =
         AndroidLane::connect(adb.device(), android_lane::PACKAGE).expect("the lane connects");
     driver.with_lane(lane).expect("the lane starts")
 }
 
 /// The headless half of the Android roles scenario: each role publishes the AccessKit role the
-/// Android table composes with `accesskit_android`'s class, and the scenario passes through the
-/// Android lane reading the dump the adapter would serve for the app's tree. On a device or an
-/// emulator it reads the dump UI Automator takes
+/// Android table composes with `accesskit_android`'s class, and through the Android lane, reading
+/// the roles page as the adapter serves it, the lane matches every row's node and reads it as the
+/// table's class. On a device or an emulator it reads the dump UI Automator takes
 /// (`android_device::the_android_roles_scenario_runs_through_the_os_lane`).
 #[test]
 fn the_android_roles_scenario_passes_through_the_lane_on_the_headless_app() {
@@ -875,52 +905,58 @@ fn the_android_roles_scenario_passes_through_the_lane_on_the_headless_app() {
         .main_window()
         .and_then(|mut window| window.read())
         .expect("the app's tree");
-    let mut nodes = Vec::new();
-    collect_nodes(&app.roots, &mut nodes);
     for row in android_roles::ROLES {
-        let label = role_label(row.role);
-        let node = nodes
-            .iter()
-            .find(|node| {
-                node.name.as_deref() == Some(&label) || node.description.as_deref() == Some(&label)
-            })
-            .unwrap_or_else(|| panic!("{label:?} is published"));
-        assert_eq!(node.native_role, row.accesskit, "{label}");
+        let node = find(&app.roots, &role_identifier(row.role))
+            .unwrap_or_else(|| panic!("{} is published", row.role.name()));
+        assert_eq!(node.native_role, row.accesskit, "{}", row.role.name());
     }
-    let report = run("android-roles", through_android(driver, &app), roles);
+    let report = run(
+        "android-roles",
+        through_android(driver, ROLES_WINDOW),
+        roles,
+    );
     passed(&report);
     assert_eq!(report.lane(), Some(android::LANE));
+    let rows = report
+        .checks()
+        .iter()
+        .filter(|check| check.name.starts_with("UI Automator reads "))
+        .count();
+    assert_eq!(rows, android_roles::ROLES.len(), "{:#?}", report.checks());
+}
+
+/// The rows of the roles scenario through the Android lane check the lane's match, not a lookup
+/// by name: a row the lane cannot match fails though its node, named, is in the dump.
+#[test]
+fn an_android_role_row_fails_when_the_lane_cannot_match_its_node() {
+    let moved = ROLES_WINDOW.replace("bounds=\"[380,0][420,4]\"", "bounds=\"[380,0][420,9]\"");
+    assert_ne!(moved, ROLES_WINDOW);
+    let report = run(
+        "android-roles",
+        through_android(headless(|| Roles), &moved),
+        roles,
+    );
+    let failed: Vec<&str> = report
+        .checks()
+        .iter()
+        .filter(|check| check.outcome != Outcome::Passed)
+        .map(|check| check.name.as_str())
+        .collect();
     assert!(
-        report
-            .checks()
-            .iter()
-            .any(|check| check.name == "UI Automator reads button as android.widget.Button"),
-        "{:#?}",
-        report.checks()
+        failed.contains(&"UI Automator reads button as android.widget.Button"),
+        "{failed:?}"
     );
 }
 
 /// The headless half of the Android accessibility scenario: through the Android lane, reading the
-/// dump the adapter would serve, the OS tree shows the button with the app's identifier and
+/// controls as the adapter serves them, the OS tree shows the button with the app's identifier and
 /// projects to what the app published; the activation through the accessibility API is
 /// `cannot_verify`, naming `os_invoke`, since the lane performs no accessibility action.
 #[test]
 fn the_android_accessibility_scenario_passes_through_the_lane_but_its_activation() {
-    // The window as the scenario reads it: after one like through the semantic path.
-    let mut shown = headless(|| Controls);
-    let app = (|| -> Result<flui_driver::protocol::tree::Tree> {
-        let mut window = shown.main_window()?;
-        window
-            .locate(Locator::identifier("like"))
-            .require(InputPath::Semantic)
-            .tap()?;
-        expect(window.locate(Locator::identifier("likes"))).to_have_name("Likes: 1")?;
-        window.read()
-    })()
-    .expect("the app's tree after one like");
     let report = run(
         "android-a11y",
-        through_android(headless(|| Controls), &app),
+        through_android(headless(|| Controls), CONTROLS_WINDOW),
         accessibility,
     );
     let (activation, rest): (Vec<&Check>, Vec<&Check>) = report
