@@ -260,15 +260,14 @@ fn the_release_ceiling_reaches_tracing_only_through_its_feature() {
             String::from_utf8_lossy(&output.stderr)
         );
         let graph = String::from_utf8_lossy(&output.stdout);
-        let tracing_features: Vec<&str> = graph
-            .lines()
-            .find_map(|line| {
-                line.starts_with("tracing v")
-                    .then(|| line.split_once('|'))
-                    .flatten()
-            })
-            .map(|(_, features)| features.split(',').collect())
-            .unwrap_or_else(|| panic!("`tracing` in the normal graph:\n{graph}"));
+        let Some((_, features_of_tracing)) = graph.lines().find_map(|line| {
+            line.starts_with("tracing v")
+                .then(|| line.split_once('|'))
+                .flatten()
+        }) else {
+            panic!("no `tracing` in the normal graph:\n{graph}");
+        };
+        let tracing_features: Vec<&str> = features_of_tracing.split(',').collect();
         assert_eq!(
             tracing_features.contains(&"release_max_level_info"),
             ceiling,
