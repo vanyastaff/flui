@@ -1032,8 +1032,17 @@ impl UiRuntime {
         let state = self.presentations.get(presentation)?;
         // The one place that names the agent's owner side: from here on the runtime's drain,
         // frames and closes serve it (ADR-0402).
-        self.agent_side.set(Some(&super::agent_side::SERVED));
-        state.agent_side.set(Some(&super::agent_side::SERVED));
+        self.agent_side
+            .set(Some(&super::agent_side::AGENT_OWNER_SIDE));
+        if state
+            .agent_side
+            .replace(Some(&super::agent_side::AGENT_OWNER_SIDE))
+            .is_none()
+        {
+            // No frame reported to an agent before now: the hub starts at the frames and the
+            // tree already shown, so a subscriber hears only what follows it.
+            state.begin_agent_events();
+        }
         let window = window_of(presentation);
         let (port, collecting, fresh) = {
             let mut slot = state.dev_agent.borrow_mut();

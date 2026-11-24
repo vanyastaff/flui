@@ -286,6 +286,28 @@ impl PresentationState {
         wake_readers(woken);
     }
 
+    /// The presentation's first agent window is vended: its hub counts as having reported the
+    /// frames already presented or skipped and the tree already published, which no frame
+    /// reported while no agent served it (ADR-0402).
+    pub(crate) fn begin_agent_events(&self) {
+        let frames = (self.frames_rendered(), self.frames_dropped());
+        let revision = self.published_revision();
+        let mut hub = self.agent_events.borrow_mut();
+        hub.frames = frames;
+        hub.revision = revision;
+    }
+
+    /// The tree revision the semantics owner last published; revision 0 is an owner that has
+    /// published nothing yet, not a tree to report.
+    fn published_revision(&self) -> Option<flui_protocol::tree::TreeRevision> {
+        self.pipeline().with(|pipeline| {
+            pipeline
+                .semantics_owner()
+                .map(flui_semantics::SemanticsOwner::revision)
+                .filter(|revision| *revision != flui_protocol::tree::TreeRevision::ZERO)
+        })
+    }
+
     /// Emits what a frame left to report: the frames presented or skipped since the last report,
     /// and the tree revision when it changed.
     pub(crate) fn publish_frame_events(&self) {
@@ -307,14 +329,7 @@ impl PresentationState {
                 self.emit_agent_event(Event::Frame(FrameEvent::new(window, number, presented)));
             }
         }
-        // Revision 0 is an owner that has published nothing yet: not a tree to report.
-        let revision = self.pipeline().with(|pipeline| {
-            pipeline
-                .semantics_owner()
-                .map(flui_semantics::SemanticsOwner::revision)
-                .filter(|revision| *revision != flui_protocol::tree::TreeRevision::ZERO)
-        });
-        if let Some(revision) = revision {
+        if let Some(revision) = self.published_revision() {
             let changed = {
                 let mut hub = self.agent_events.borrow_mut();
                 hub.revision.replace(revision) != Some(revision)

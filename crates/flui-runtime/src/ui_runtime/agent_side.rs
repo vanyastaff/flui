@@ -2,13 +2,18 @@
 //! (ADR-0402).
 //!
 //! Every path a UI runtime runs whether or not an agent serves it (the command drain, a frame's
-//! end, an owner turn, platform input, a scene's settlement, a presentation's close) reaches the
-//! agent through [`AgentSide`], a reference the runtime holds only once
-//! [`UiRuntime::dev_agent_window`] has vended a window. That method is the one place that names
-//! [`SERVED`], so a binary that never vends a window (a release build with no hook installed)
-//! links none of the agent's owner side: its window methods, the protocol's answers, the
-//! semantics reads and the recordings' wire forms. Agent state exists only after a window was
-//! vended, so a runtime without the reference has nothing of the agent's to serve or abandon.
+//! end, an owner turn, platform input, a scene's settlement, a presentation's close and the
+//! runtime's own drop) reaches the agent through [`AgentSide`], a reference the runtime holds
+//! only once [`UiRuntime::dev_agent_window`] has vended a window. That method is the one place
+//! that names [`AGENT_OWNER_SIDE`], so a binary that never vends a window (a release build with no
+//! hook installed) links none of the agent's owner side: its window methods, the protocol's
+//! answers, the semantics reads and the recordings' wire forms. Agent state exists only after a
+//! window was vended, so a runtime without the reference has nothing of the agent's to serve or
+//! abandon; what such a binary keeps is the drop glue of the agent's state fields.
+//!
+//! Until a presentation's first window is vended no frame reports to its agent, so vending it
+//! first brings its event hub up to the frames and the tree already shown: a subscriber hears
+//! only what comes after it.
 
 use web_time::Instant;
 
@@ -26,9 +31,9 @@ use crate::presentation::PresentationState;
 
 /// What the UI runtime asks of the development agent at each point its own paths reach it.
 ///
-/// One implementation, [`SERVED`]; the trait is the seam that keeps it out of a binary that
-/// never vends a window, not a point of extension.
-pub(crate) trait AgentSide: Sync {
+/// One implementation, [`AGENT_OWNER_SIDE`]; the trait is the seam that keeps it out of a binary
+/// that never vends a window, not a point of extension.
+pub(crate) trait AgentSide {
     /// The leases each window's agent let go since the last drain, counted before the drain
     /// reads its commands.
     fn count_released_leases(&self, ui_runtime: &UiRuntime) -> Vec<(PresentationId, usize)>;
@@ -114,17 +119,24 @@ pub(crate) trait AgentSide: Sync {
         shown: bool,
     ) -> FirstPanic;
 
-    /// `presentation` closes: every job an agent parked on it is answered.
-    fn abandon_jobs(&self, presentation: &PresentationState);
+    /// `presentation` closes: its window handles stop admitting calls.
+    fn withdraw_window(&self, presentation: &PresentationState);
+
+    /// `presentation` closes: every job an agent parked on it is answered, each delivery
+    /// contained; the first panic of one is returned for the close to hold.
+    fn abandon_jobs(&self, presentation: &PresentationState) -> FirstPanic;
+
+    /// The runtime goes: every recording of it ends with its `end` row.
+    fn end_all_recordings(&self, ui_runtime: &UiRuntime) -> FirstPanic;
 }
 
 /// The development agent's owner side; named only by [`UiRuntime::dev_agent_window`].
-pub(super) static SERVED: Served = Served;
+pub(super) static AGENT_OWNER_SIDE: AgentOwnerSide = AgentOwnerSide;
 
 /// See [`AgentSide`].
-pub(super) struct Served;
+pub(super) struct AgentOwnerSide;
 
-impl AgentSide for Served {
+impl AgentSide for AgentOwnerSide {
     fn count_released_leases(&self, ui_runtime: &UiRuntime) -> Vec<(PresentationId, usize)> {
         ui_runtime.count_released_leases()
     }
@@ -229,7 +241,17 @@ impl AgentSide for Served {
         producer.settle_agent_layer_reads(staged, shown)
     }
 
-    fn abandon_jobs(&self, presentation: &PresentationState) {
-        presentation.abandon_agent_jobs();
+    fn withdraw_window(&self, presentation: &PresentationState) {
+        if let Some(slot) = &*presentation.dev_agent.borrow() {
+            slot.withdraw();
+        }
+    }
+
+    fn abandon_jobs(&self, presentation: &PresentationState) -> FirstPanic {
+        presentation.abandon_agent_jobs()
+    }
+
+    fn end_all_recordings(&self, ui_runtime: &UiRuntime) -> FirstPanic {
+        ui_runtime.agent_recordings.end_all()
     }
 }

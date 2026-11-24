@@ -1,3 +1,8 @@
+### Added
+
+- **`flui_runtime::dev_agent::AgentWindowSource`**: what a `DevAgentHost` vends its windows
+  through; `AgentWindowSource::dev_agent()` where a host installs a hook (ADR-0402).
+
 ### Changed
 
 - **A release application that installs no development-agent hook links none of the agent**
@@ -5,5 +10,10 @@
   and only `AppConfig::dev_agent` (and the driver agent's own installation) names the vending.
   About 0.58 MB of a generated counter's Linux x86_64 release binary and 0.65 MB of its wasm32
   module. An application that installs its own hook keeps a working agent in every build.
-- **`flui_runtime::dev_agent::DevAgentHost::attach` takes a `AgentWindowSource`** beside the hooks:
-  `AgentWindowSource::dev_agent()` where a host installs a hook.
+- **`flui_runtime::dev_agent::DevAgentHost::attach` takes an `AgentWindowSource`** before the
+  hooks.
+
+### Fixed
+
+- **A presentation's close holds the panic of an agent reply it delivers** like every other
+  step's, so the rest of the close still runs and an earlier failure stays the one resumed.

@@ -1290,12 +1290,14 @@ extensions are the VM's. Pinned by `dev_agent_host_contains_its_hook` (`src/dev_
 ### The runtime reaches the agent only through the side a vended window installs
 
 **Rule.** The UI runtime's own paths (the command drain, a frame's end, an owner turn, the next
-wake, platform input, a presentation leaving, a scene's settlement, a presentation's close) call
-the development agent only through `ui_runtime::agent_side::AgentSide`, the reference
-`UiRuntime::dev_agent_window` installs on the runtime and on the presentation it vends for, never
-cleared. `DevAgentHost::attach` takes a `dev_agent::AgentWindowSource` beside the hooks, and only
-`AgentWindowSource::dev_agent` names `dev_agent_window`. A direct call from those paths into an
-agent module is the defect this rule exists to catch (ADR-0402).
+wake, platform input, a presentation leaving, a scene's settlement, a presentation's close, the
+runtime's own drop) call the development agent only through `ui_runtime::agent_side::AgentSide`,
+the reference `UiRuntime::dev_agent_window` installs on the runtime and on the presentation it
+vends for, never cleared. Installing it on a presentation brings the presentation's event hub up
+to the frames and the tree already shown, which no frame reported before, so a subscriber hears
+no replay. `DevAgentHost::attach` takes a `dev_agent::AgentWindowSource` before the hooks, and
+only `AgentWindowSource::dev_agent` names `dev_agent_window`. A direct call from those paths into
+an agent module is the defect this rule exists to catch (ADR-0402).
 
 **Why here.** Linking follows reachability: a binary in which no code installs a hook names
 neither `AgentWindowSource::dev_agent` nor `dev_agent_window`, so it links none of the agent's owner

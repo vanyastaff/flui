@@ -690,7 +690,8 @@ impl UiRuntime {
                 }
                 // Only a window `dev_agent_window` vended sends these, and vending one installs
                 // the agent's side: a command without it was not sent through this runtime's
-                // ports, and dropping it drops its reply, which its caller reads as gone.
+                // ports. Dropping it drops its reply, whose caller reads `shutting_down`, the
+                // answer of an owner that went without answering.
                 UiCommand::Agent {
                     presentation_id,
                     call,

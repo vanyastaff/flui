@@ -160,7 +160,7 @@ a thread: stopping stops the service at once, and at the page's next turn the gl
 every connection ends.
 
 §7. **The loop owns the hooks.** `DevAgentHost` is a value the event loop owns, with no
-`Arc<Mutex>`: `DevAgentHost::attach(hooks)` attaches the hooks the loop took from its
+`Arc<Mutex>`: `DevAgentHost::attach(windows, hooks)` attaches the hooks the loop took from its
 configuration, every call that runs a hook takes `&mut self`, so a hook cannot reach the host and
 nothing re-enters it, and dropping the host detaches each hook, then drops it, each contained. A
 configuration holds each hook until the first loop that starts with it takes it. `flui-app` keeps

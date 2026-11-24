@@ -1,6 +1,6 @@
 # ADR-0402: A binary links the development agent only where a hook is installed
 
-- **Status:** Accepted (2026-11-24)
+- **Status:** Implemented (2026-11-24)
 - **Date:** 2026-11-24
 - **Supersedes:** [ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md) §1's last
   sentence only ("An app that never starts an agent creates no `Service`, so it pays for the code
@@ -60,12 +60,21 @@ in every build mode, with nothing for the build to agree on.
 `flui-runtime`'s `ui_runtime::agent_side::AgentSide` is the one seam between the UI runtime's
 own paths and the agent: the drain (leases counted and released, window calls, subscriptions,
 recordings, the recordings swept), a frame's end, an owner turn, the next wait deadline, platform
-input's journal, a presentation leaving the runtime, a scene's layer reads, and a presentation's
-close. `UiRuntime` and each `PresentationState` hold an `Option<&'static dyn AgentSide>`, set by
-`UiRuntime::dev_agent_window` (the only constructor of an `AgentWindow`) and never cleared, so the
-jobs an agent left on a presentation are answered after its agent slot goes. Every path calls the
-agent only through it. An agent command that reaches a runtime with no side was not sent through
-its ports: it is dropped as stale, and its reply with it, which the caller reads as gone.
+input's journal, a presentation leaving the runtime, a scene's layer reads, a presentation's
+close (its window handles withdrawn, its parked jobs answered) and the runtime's own drop (every
+recording ended). `UiRuntime` and each `PresentationState` hold an
+`Option<&'static dyn AgentSide>`, set by `UiRuntime::dev_agent_window` (the only constructor of
+an `AgentWindow`) and never cleared, so the jobs an agent left on a presentation are answered
+after its agent slot goes. Every path calls the agent only through it; what a binary without an
+agent keeps is the drop glue of the agent's state fields.
+
+No frame reports to a presentation's agent before its first window is vended, so vending that
+window first brings the presentation's event hub up to the frames and the tree already shown: a
+subscriber hears only what follows its registration, never a replay.
+
+An agent command that reaches a runtime with no side was not sent through its ports: it is
+dropped as stale, and its reply with it, which the caller reads as `shutting_down`, the answer
+of an owner that went without answering.
 
 ### §2. Only the code that installs a hook names the vending
 
@@ -85,8 +94,10 @@ installs a hook names neither, and the linker drops the agent's owner side.
 - Good, because no lower crate has a feature or a `cfg` for the agent, so no two crates can
   disagree about whether it is built.
 - Bad, because the rule is held by reachability, not by the compiler: a new direct call from the
-  runtime's paths into an agent module links the agent again, and only the `size` job sees it
-  (on `main`). The module documentation of `agent_side` states the rule for the reader.
+  runtime's paths into an agent module links the agent again. The `size` job (on `main`) sees it
+  only when the call links back more than 2% of a binary, about two thirds of the saving on
+  Linux, so a call that relinks less is caught by its reader alone. The module documentation of
+  `agent_side` states the rule for that reader.
 - Bad, because each of the runtime's paths reads one more `Cell` and calls through a vtable where
   an agent is served; on the frame path that is a handful of reads per frame.
 - Neutral, because `UiCommand::Agent` and the agent's state fields stay in every build; their
@@ -95,14 +106,17 @@ installs a hook names neither, and the linker drops the agent's owner side.
 ### Confirmation
 
 - `counter_release_bytes`, `counter_wasm_bytes` and `hot_reload_host_release_bytes` in
-  `perf/size.toml` are measured with this change; a path that links the agent again moves them
-  past the `size` job's 2%.
+  `perf/size.toml` were measured with this change by the `size` job's own commands, run locally;
+  a change that links most of the agent again moves them past the job's 2%.
+- A reader of a change to `flui-runtime`'s `ui_runtime` checks that a call into an agent module
+  goes through `AgentSide` (§1): this is what holds a call that relinks less.
 - Every test of the agent (`flui-runtime`'s agent and dev-agent suites, `flui-app`'s
   `a_loop_takes_every_installed_hook_once_and_one_that_panics_is_dropped_alone`,
   `flui-testing`'s and `flui-driver`'s headless runs) vends its windows through
-  `dev_agent_window`, so a window that installed no side fails them all.
-- A reader of a change to `flui-runtime`'s `ui_runtime` checks that a call into an agent module
-  goes through `AgentSide` (§1).
+  `dev_agent_window`, so a window that installed no side fails them.
+- `frames_drawn_before_the_first_window_is_vended_are_not_replayed` holds the hub's start (§1);
+  `a_runtime_that_vended_no_window_drops_agent_commands_unanswered` holds the command a runtime
+  without a side drops.
 
 ## Pros and cons of the options
 
