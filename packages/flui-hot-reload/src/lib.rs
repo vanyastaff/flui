@@ -115,35 +115,14 @@
 //!
 //! let config = flui::app::AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
 //! ```
-
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
-#![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
-// After the `warn(clippy::all)` above, which would otherwise turn the lint back on in tests.
 #![cfg_attr(
     test,
     allow(
         clippy::disallowed_methods,
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
-)]
-#![expect(
-    clippy::module_name_repetitions,
-    reason = "`worker::WorkerPlugin`, `driver::HotReloadDriver` and `dynlib::DynLib` repeat their module name, and those are the names callers import"
-)]
-// The crate-level `warn(clippy::pedantic)` above re-enables the pedantic
-// lints the workspace allows; these five are re-suppressed. `allow`, not
-// `expect`: which of them fire depends on the enabled features and target
-// (the wasm32 subset), so no expectation holds
-// in every configuration `cargo hack --each-feature` and the facade combos
-// compile.
-#![allow(
-    clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
-    clippy::doc_markdown,
-    clippy::missing_errors_doc,
-    clippy::missing_panics_doc,
-    reason = "feature- and target-dependent after the crate-level pedantic re-enable"
 )]
 
 pub mod strategy;
