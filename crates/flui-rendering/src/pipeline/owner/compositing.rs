@@ -42,11 +42,11 @@ impl PipelineOwner {
     /// fight the recursive borrows: the recursion reads
     /// `&self.render_tree` (shared) and accumulates actions, then
     /// we apply them under `&mut self`.
-    pub(super) fn flush_compositing_bits(&mut self) -> crate::error::RenderResult<()> {
+    pub(super) fn flush_compositing_bits(&mut self) {
         // Empty fast-path: no allocation, no logging churn for the
         // common "nothing changed" frame.
         if !self.scheduler.has_compositing_work() {
-            return Ok(());
+            return;
         }
         let _span = tracing::debug_span!(
             target: "flui.frame",
@@ -121,10 +121,9 @@ impl PipelineOwner {
         if paint_queued {
             self.scheduler.notify_visual_update();
         }
-        Ok(())
     }
 
-    /// Recursive helper for [`Self::run_compositing`] — see that method's
+    /// Recursive helper for [`Self::flush_compositing_bits`] — see that method's
     /// doc for the algorithm. Operates on shared `&self.render_tree` via
     /// interior-mutability flag accessors; paint-queue side effects are
     /// staged via `actions` for post-walk application.
@@ -230,7 +229,7 @@ impl PipelineOwner {
 /// `&self` (interior-mutability flag access only). Paint-queue
 /// mutations (remove-from / push-to `dirty.needs_paint`) can't
 /// happen mid-recursion without re-borrowing `&mut self`, so they
-/// are recorded here and replayed by [`PipelineOwner::run_compositing`]
+/// are recorded here and replayed by [`FramePass::run_compositing`](super::FramePass::run_compositing)
 /// post-walk.
 #[derive(Default)]
 struct CompositingWalkActions {

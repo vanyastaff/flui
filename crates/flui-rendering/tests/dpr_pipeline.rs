@@ -26,11 +26,7 @@ pub(crate) fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
 
     owner.layout_pass().run_layout().expect("layout");
-    owner
-        .layout_pass()
-        .into_compositing()
-        .run_compositing()
-        .expect("compositing");
+    owner.layout_pass().into_compositing().run_compositing();
     let mut scene = SceneHost::new();
     let (painted, tree) = scene.drive(&mut owner, |owner, writer| {
         owner

@@ -55,10 +55,7 @@ fn lay_out_and_composite(owner: &mut PipelineOwner) {
     layout
         .run_layout()
         .expect("run_layout must succeed for a well-formed test tree");
-    layout
-        .into_compositing()
-        .run_compositing()
-        .expect("run_compositing must succeed for a well-formed test tree");
+    layout.into_compositing().run_compositing();
 }
 
 /// Paints `owner`, already laid out and composited, into `writer`.

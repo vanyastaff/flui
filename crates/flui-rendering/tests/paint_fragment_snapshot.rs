@@ -37,11 +37,7 @@ use crate::common::BoxedRenderObject;
 /// tree.
 fn paint_frame(mut owner: PipelineOwner) -> (LayerTree, flui_rendering::pipeline::PipelineOwner) {
     owner.layout_pass().run_layout().expect("layout succeeds");
-    owner
-        .layout_pass()
-        .into_compositing()
-        .run_compositing()
-        .expect("compositing succeeds");
+    owner.layout_pass().into_compositing().run_compositing();
     let mut scene = SceneHost::new();
     let (painted, tree) = scene.drive(&mut owner, |owner, writer| {
         owner

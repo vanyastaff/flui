@@ -186,8 +186,6 @@ fn outline(tree: &SnapshotNode) -> String {
 /// [`box_geometry`](Probe::box_geometry); Sliver trees read
 /// [`sliver_geometry`](Probe::sliver_geometry); everything else is common.
 pub trait Probe {
-    /// The pipeline phase the implementor holds its owner in.
-
     /// The live pipeline owner backing the inspection.
     fn pipeline(&self) -> &PipelineOwner;
 

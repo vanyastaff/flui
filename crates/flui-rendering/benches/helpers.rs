@@ -122,10 +122,7 @@ fn advance_to_paint(mut owner: PipelineOwner) -> PipelineOwner {
     layout
         .run_layout()
         .expect("run_layout must succeed: tree was built with valid root constraints");
-    layout
-        .into_compositing()
-        .run_compositing()
-        .expect("run_compositing must succeed: all nodes were freshly inserted");
+    layout.into_compositing().run_compositing();
     owner
 }
 

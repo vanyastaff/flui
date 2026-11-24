@@ -34,11 +34,10 @@ fn mount(root: TreeNode) -> (PipelineOwner, tree::RenderLabelRegistry) {
 }
 
 fn frame(scene: &mut SceneHost, owner: &mut PipelineOwner) -> LayerTree {
-    let result = scene.run_frame(owner);
-    let tree = result
+    scene
+        .run_frame(owner)
         .expect("frame")
-        .expect("the frame produces a layer tree");
-    tree
+        .expect("the frame produces a layer tree")
 }
 
 fn leaf() -> TreeNode {

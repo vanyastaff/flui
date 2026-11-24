@@ -72,7 +72,7 @@ impl SceneHost {
         &mut self,
         pipeline: &mut PipelineOwner,
     ) -> Result<Option<LayerTree>, TreeError<RenderError>> {
-        let (result, tree) = self.drive(pipeline, |pipeline, writer| pipeline.run_frame(writer));
+        let (result, tree) = self.drive(pipeline, PipelineOwner::run_frame);
         result.map(|painted| painted.then_some(tree).flatten())
     }
 

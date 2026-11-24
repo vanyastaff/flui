@@ -26,8 +26,6 @@ use super::harness::{FrameRun, LayoutRun};
 /// protocol mismatches, or other query failures — the same contract as other
 /// harness inspection helpers.
 pub trait BoxQueryRun {
-    /// Pipeline phase held by the run.
-
     /// Mutable access to the backing owner (used by default method bodies).
     fn pipeline_mut(&mut self) -> &mut PipelineOwner;
 

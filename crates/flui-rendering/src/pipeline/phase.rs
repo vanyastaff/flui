@@ -63,7 +63,7 @@
 //! let mut layout = owner.layout_pass();
 //! layout.run_layout().unwrap();
 //! let mut compositing = layout.into_compositing();
-//! compositing.run_compositing().unwrap();
+//! compositing.run_compositing();
 //! let mut paint = compositing.into_paint();
 //! paint.run_paint(&mut scene.writer()).unwrap();
 //! let mut semantics = paint.into_semantics();

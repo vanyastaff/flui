@@ -6,7 +6,7 @@ fn main() {
     let mut layout = owner.layout_pass();
     layout.run_layout().expect("layout");
     let mut compositing = layout.into_compositing();
-    compositing.run_compositing().expect("compositing");
+    compositing.run_compositing();
     let (painted, _tree) = scene.drive(&mut owner, |owner, writer| {
         owner.layout_pass().into_compositing().into_paint().run_paint(writer)
     });

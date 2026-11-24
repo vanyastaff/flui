@@ -536,37 +536,27 @@ fn a_frame_that_unwinds_leaves_the_pipeline_its_owner() {
     ]);
 }
 
-/// A pass that ends before its frame does, dropped or forgotten, leaves the owner as its last
-/// finished phase left it (ADR-0399 §1): the next frame paints what the abandoned one still
-/// owed, and the frame after it owes nothing. No pass has a `Drop` the owner depends on.
+/// A pass that ends before its frame does leaves the owner as its last finished phase left it
+/// (ADR-0399 §1): the next frame paints what the abandoned one still owed, and the frame after
+/// it owes nothing. A pass has no `Drop` (`FramePass` asserts it), so forgetting one is this
+/// same drop.
 #[test]
 fn a_pass_ended_early_leaves_the_next_frame_whole() {
-    for forget in [false, true] {
-        let mut owner = PipelineOwner::new(TextContextHandle::standalone());
-        owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
-        owner.set_root_constraints(Some(tight(100.0)));
-        let mut layout = owner.layout_pass();
-        layout.run_layout().expect("the first layout runs");
-        let compositing = layout.into_compositing();
-        if forget {
-            #[expect(
-                clippy::mem_forget,
-                reason = "a forgotten pass is the case under test: it holds only a borrow"
-            )]
-            std::mem::forget(compositing);
-        } else {
-            drop(compositing);
-        }
-        let mut scene = SceneHost::new();
-        assert!(
-            matches!(scene.run_frame(&mut owner), Ok(Some(_))),
-            "the next frame paints what the abandoned one owed (forgotten: {forget})"
-        );
-        assert!(
-            matches!(scene.run_frame(&mut owner), Ok(None)),
-            "the frame after it owes nothing (forgotten: {forget})"
-        );
-    }
+    let mut owner = PipelineOwner::new(TextContextHandle::standalone());
+    owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
+    owner.set_root_constraints(Some(tight(100.0)));
+    let mut layout = owner.layout_pass();
+    layout.run_layout().expect("the first layout runs");
+    drop(layout.into_compositing());
+    let mut scene = SceneHost::new();
+    assert!(
+        matches!(scene.run_frame(&mut owner), Ok(Some(_))),
+        "the next frame paints what the abandoned one owed"
+    );
+    assert!(
+        matches!(scene.run_frame(&mut owner), Ok(None)),
+        "the frame after it owes nothing"
+    );
 }
 
 /// Lays its child out loose within its own size, then fails while armed, with an error that

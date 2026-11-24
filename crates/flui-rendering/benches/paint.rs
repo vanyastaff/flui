@@ -1,6 +1,6 @@
 //! U1b — paint and compositing pipeline benchmarks.
 //!
-//! Measures `|owner, writer| owner.layout_pass().into_compositing().into_paint().run_paint(writer)` and `run_compositing` over flat and
+//! Measures `run_paint` and `run_compositing` over flat and
 //! deep tree shapes. Setup runs layout (and layout+compositing for paint
 //! benches) so each timed iteration measures only the phase under test.
 //!
@@ -40,11 +40,7 @@ fn bench_flat_run_compositing(c: &mut Criterion) {
             b.iter_batched(
                 || helpers::build_flat_compositing_ready(n),
                 |mut owner| {
-                    owner
-                        .layout_pass()
-                        .into_compositing()
-                        .run_compositing()
-                        .expect("run_compositing must succeed on a freshly laid-out flat tree");
+                    owner.layout_pass().into_compositing().run_compositing();
                     black_box(owner)
                 },
                 criterion::BatchSize::SmallInput,

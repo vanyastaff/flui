@@ -85,11 +85,7 @@ pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
     owner.set_root_constraints(Some(constraints()));
     owner.set_semantics_enabled(true);
     owner.layout_pass().run_layout().expect("layout");
-    owner
-        .layout_pass()
-        .into_compositing()
-        .run_compositing()
-        .expect("compositing");
+    owner.layout_pass().into_compositing().run_compositing();
     let mut scene = SceneHost::new();
     let (painted, _) = scene.drive(&mut owner, |owner, writer| {
         owner

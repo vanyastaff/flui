@@ -164,9 +164,7 @@ impl PipelineOwner {
         layout.run_layout().map_err(|error| layout.in_tree(error))?;
 
         let mut compositing = layout.into_compositing();
-        compositing
-            .run_compositing()
-            .map_err(|error| compositing.in_tree(error))?;
+        compositing.run_compositing();
 
         let mut paint = compositing.into_paint();
         paint

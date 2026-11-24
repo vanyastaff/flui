@@ -33,6 +33,10 @@ pub struct FramePass<'o, P: PipelinePhase> {
     phase: PhantomData<P>,
 }
 
+// A pass owes nothing when it ends, so nothing may run when it does: a pass
+// that is forgotten instead of dropped leaves the owner the same way.
+const _: () = assert!(!std::mem::needs_drop::<FramePass<'static, Layout>>());
+
 impl<'o, P: PipelinePhase> FramePass<'o, P> {
     fn new(owner: &'o mut PipelineOwner) -> Self {
         Self {
@@ -104,13 +108,11 @@ impl<'o> FramePass<'o, Layout> {
 }
 
 impl<'o> FramePass<'o, Compositing> {
-    /// Recomputes the compositing bits of every node that asked for it.
-    ///
-    /// # Errors
-    ///
-    /// The first error of the walk.
-    pub fn run_compositing(&mut self) -> RenderResult<()> {
-        self.owner.flush_compositing_bits()
+    /// Recomputes the compositing bits of every node that asked for it. The
+    /// walk cannot fail: a hook that panics leaves its node's old bits and
+    /// unwinds out of the pass.
+    pub fn run_compositing(&mut self) {
+        self.owner.flush_compositing_bits();
     }
 
     /// Hands the owner on to the paint phase.
