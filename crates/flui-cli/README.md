@@ -249,7 +249,7 @@ navigation's commit is refused with the version the link needs), Chrome,
 Chromium, Edge, Brave and Opera through the DevTools protocol, neither needing a
 driver of its own. A reload ends the page's connections and `flui mcp` connects
 again. It refuses Safari, which has neither protocol without `safaridriver`, and
-the iOS Simulator. With `--json` it emits `run.agent.ready {endpoint, session}`,
+the iOS Simulator. With `--json` it emits `run.agent.ready {endpoint, session, run?}`,
 with `forwarded` (the port's address) on Android and `relayed` (the endpoint
 this command serves) in a browser; the token stays out of the stream.
 
@@ -274,6 +274,15 @@ runs. Tools:
 | `flui_act` | Perform an action a node advertises (`invoke`, `toggle`, `set_value`, …). |
 | `flui_wait` | Hold out until an element appears, goes or matches, the window settles or frames present (`timeout_ms`). |
 | `flui_motion` | Read, pause or step the animation clock. |
+| `flui_reload` | Rebuild the app and apply the build (`at_least`: `reassemble`, `restart`, `process_restart`); answers the outcome with the compiler's errors when the build failed, and `elapsed_ms`. |
+
+`flui_reload` is answered by the `flui run --agent` that started the app, not
+by the app: a run that rebuilds on each save serves it at a run endpoint of its
+own, private as the app's and admitting the same token, and names it `run` in
+the session file (ADR-0401) before `run.agent.ready`. A run that does not rebuild on saves
+(`--no-hot-reload`, `--release`) names none, and
+`flui_reload` answers `not_supported` there. No mechanism restarts the app in its
+process yet, so `restart` is applied as `process_restart`.
 
 `window` may be left out when the app has one. Failures carry the wire's
 error object (`code`, `message`, `retry`, `effect`). The token keeps out other
@@ -426,9 +435,9 @@ object with an `event` field; human text, if any, goes to stderr.
 | `device`, `devices.summary` | `devices` |
 | `emulator`, `emulators.summary`, `emulator.launch` | `emulators` |
 | `create.start`, `create.file`, `create.done` | `create` (also with `--dry-run`) |
-| `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.watch {paths}`, `run.change`, `run.reload`, `run.app.stop`, `run.stop` | `run` |
-| `run.web.serve {url, dir}`, `run.web.open {browser, url, agent?}`, `run.reload {kind: "page"}` | `run --device browser:…` |
-| `run.agent.ready {endpoint, session, forwarded?, relayed?}` | `run --agent` (`forwarded` on Android, `relayed` in a browser) |
+| `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.watch {paths}`, `run.change`, `run.reload {outcome, elapsed_ms}` (the report `flui_reload` answers with: `{"applied": {"tier": …}}` or `{"failed": {"diagnostics": […], "omitted": n}}`), `run.app.stop`, `run.stop` | `run` |
+| `run.web.serve {url, dir}`, `run.web.open {browser, url, agent?}` | `run --device browser:…` |
+| `run.agent.ready {endpoint, session, forwarded?, relayed?, run?}` | `run --agent` (`forwarded` on Android, `relayed` in a browser, `run` where it serves reloads) |
 | `build.start`, `build.phase`, `build.done` | `build` |
 | `test.start`, `test.done`, `analyze.done`, `format.done` | `test`, `analyze`, `format` |
 | `clean.removed`, `clean.done` | `clean` |

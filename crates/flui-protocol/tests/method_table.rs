@@ -104,13 +104,14 @@ fn a_methods_row_is_what_its_type_declares() {
 }
 
 #[test]
-fn only_session_close_is_destructive_and_reads_never_act() {
+fn what_ends_the_app_is_destructive_and_reads_never_act() {
     let destructive: Vec<&str> = METHODS
         .iter()
         .filter(|row| row.effect == MethodEffect::Destructive)
         .map(|row| row.name)
         .collect();
-    assert_eq!(destructive, ["session.close"]);
+    // A reload may replace the process, losing its state, as closing the session ends it.
+    assert_eq!(destructive, ["run.reload", "session.close"]);
     for row in METHODS {
         let reads = [
             "read",

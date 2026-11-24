@@ -212,6 +212,7 @@ mod conversation_tests {
             endpoint: Endpoint::Local(socket.to_str().expect("a UTF-8 path").to_owned()),
             token: TOKEN.into(),
             pid: 0,
+            run: None,
         }
     }
 

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use flui_protocol::build::{BuildState, Diagnostics};
+use flui_protocol::reload::{ReloadTier, Reloaded};
 
 use super::{
     AppChild, DesktopBuild, ReloadStrategy, announce_started, reap_exited, spawn_app,
@@ -42,11 +43,14 @@ impl ReloadStrategy for ProcessRestart {
         ]
     }
 
-    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
-        if self.build().is_ok() {
-            self.spawn(child)?;
+    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<Reloaded> {
+        match self.build() {
+            Ok(()) => {
+                self.spawn(child)?;
+                Ok(Reloaded::applied(ReloadTier::ProcessRestart))
+            }
+            Err(errors) => Ok(Reloaded::Failed(errors)),
         }
-        Ok(())
     }
 
     /// Rebuild while the app keeps running, and replace it only with a build
@@ -60,40 +64,39 @@ impl ReloadStrategy for ProcessRestart {
     /// runs, then where it failed. A build that succeeded is reported too
     /// before the app is replaced, so a report still on its way lands on a
     /// state that shows nothing, whichever app it reaches.
-    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
+    fn on_change(
+        &mut self,
+        _paths: &[PathBuf],
+        child: &mut Option<AppChild>,
+    ) -> CliResult<Reloaded> {
         if cfg!(windows) {
             stop_and_report(child);
         }
         ui::step("Rebuilding...")?;
         self.show(BuildState::Building);
-        let built = self.build();
-        match &built {
+        let reloaded = match self.build() {
             Ok(()) => {
                 self.show(BuildState::Succeeded);
                 stop_and_report(child);
                 self.spawn(child)?;
+                return Ok(Reloaded::applied(ReloadTier::ProcessRestart));
             }
-            Err(errors) => self.show(BuildState::Failed(errors.clone())),
-        }
-        ui::emit(
-            "run.reload",
-            &serde_json::json!({ "kind": "restart", "ok": built.is_ok() }),
-        );
-        if built.is_err() {
-            // The app was not polled while the build ran.
-            reap_exited(child);
-            if self.is_running(child.as_ref()) {
-                ui::warning(
-                    "Build failed. The application keeps running its previous build... \
-                     (fix errors and save to retry)",
-                )?;
-            } else {
-                ui::warning(
-                    "Build failed. Watching for changes... (fix errors and save to retry)",
-                )?;
+            Err(errors) => {
+                self.show(BuildState::Failed(errors.clone()));
+                Reloaded::Failed(errors)
             }
+        };
+        // The app was not polled while the build ran.
+        reap_exited(child);
+        if self.is_running(child.as_ref()) {
+            ui::warning(
+                "Build failed. The application keeps running its previous build... \
+                 (fix errors and save to retry)",
+            )?;
+        } else {
+            ui::warning("Build failed. Watching for changes... (fix errors and save to retry)")?;
         }
-        Ok(())
+        Ok(reloaded)
     }
 
     fn reload_label(&self) -> &'static str {

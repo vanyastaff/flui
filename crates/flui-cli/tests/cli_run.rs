@@ -508,7 +508,10 @@ fn serve_agent() {
         named("run.reload"),
         Duration::from_secs(300),
     );
-    assert_eq!(reload["ok"], false, "the broken build failed: {seen:?}");
+    assert!(
+        reload["outcome"]["failed"]["diagnostics"][0]["message"].is_string(),
+        "the broken build failed with its error: {seen:?}"
+    );
     assert_eq!(
         names(&seen[mark..]),
         Vec::<String>::new(),
@@ -536,7 +539,11 @@ fn serve_agent() {
         named("run.reload"),
         Duration::from_secs(300),
     );
-    assert_eq!(reload["ok"], true, "the fixed build succeeded: {seen:?}");
+    assert_eq!(
+        reload["outcome"],
+        serde_json::json!({ "applied": { "tier": "process_restart" } }),
+        "the fixed build succeeded: {seen:?}"
+    );
     wait_for(
         &events,
         &mut seen,
@@ -575,7 +582,7 @@ fn serve_agent() {
         named("run.reload"),
         Duration::from_secs(300),
     );
-    assert_eq!(reload["ok"], true, "{seen:?}");
+    assert!(reload["outcome"]["applied"].is_object(), "{seen:?}");
     let reported = names(&seen[mark..]);
     assert_eq!(
         reported.first().map(String::as_str),

@@ -195,6 +195,177 @@ fn an_optimized_agent_build_turns_on_the_driver_feature_and_a_debug_one_needs_no
     }
 }
 
+/// `flui_reload` reaches the `flui run --agent` that started the app, at the run endpoint its
+/// session file names (ADR-0401): a reload the run places restarts the app's process, and one
+/// of a broken build answers the compiler's errors. The answer is the report the run writes as
+/// its `run.reload` event.
+#[cfg(unix)]
+#[test]
+fn an_agent_reloads_the_app_through_the_run_that_started_it() {
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    let tmp = TempDir::new().unwrap();
+    let app = fixture(tmp.path(), "flui");
+    let target = tmp.path().join("target");
+    let mut run = flui()
+        .current_dir(&app)
+        .env("CARGO_TARGET_DIR", &target)
+        .env("CARGO_NET_OFFLINE", "true")
+        .args(["--json", "run", "--agent", "--no-build-overlay"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = run.stdout.take().unwrap();
+    let (sender, events) = mpsc::channel::<serde_json::Value>();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Ok(event) = serde_json::from_str::<serde_json::Value>(&line)
+                && sender.send(event).is_err()
+            {
+                break;
+            }
+        }
+    });
+    let next = |name: &str| -> serde_json::Value {
+        let deadline = Instant::now() + Duration::from_secs(300);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let event = events
+                .recv_timeout(left)
+                .unwrap_or_else(|_| panic!("no `{name}` in time"));
+            if event["event"] == name {
+                return event;
+            }
+        }
+    };
+    let ready = next("run.agent.ready");
+    next("run.watch");
+    let session = std::path::PathBuf::from(ready["session"].as_str().unwrap());
+    let listed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&session).unwrap()).unwrap();
+    assert!(
+        listed["run"].is_string(),
+        "the session file names the run endpoint: {listed}"
+    );
+    assert_eq!(
+        ready["run"], listed["run"],
+        "`run.agent.ready` reports the run endpoint the file names"
+    );
+
+    let mut mcp = flui()
+        .current_dir(&app)
+        .env("CARGO_TARGET_DIR", &target)
+        .env_remove("FLUI_AGENT_ENDPOINT")
+        .env_remove("FLUI_AGENT_TOKEN")
+        .arg("mcp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = mcp.stdin.take().unwrap();
+    let mut replies = BufReader::new(mcp.stdout.take().unwrap()).lines();
+    let mut tool =
+        |id: u64, name: &str, arguments: serde_json::Value| -> (bool, serde_json::Value) {
+            let call = serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": { "name": name, "arguments": arguments } });
+            writeln!(stdin, "{call}").unwrap();
+            let reply: serde_json::Value =
+                serde_json::from_str(&replies.next().expect("a reply").unwrap()).unwrap();
+            let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+            (
+                reply["result"]["isError"] == true,
+                serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!(text)),
+            )
+        };
+
+    // The app's connection opens before the reload, so the call after the restart has a dead
+    // one to replace.
+    let (failed, windows) = tool(1, "flui_windows", serde_json::json!({}));
+    assert!(!failed, "{windows}");
+    // The run idles before it is asked: a report counts from the call, not from the last event.
+    std::thread::sleep(Duration::from_millis(1500));
+    let asked = Instant::now();
+    let (failed, report) = tool(2, "flui_reload", serde_json::json!({}));
+    let took = u64::try_from(asked.elapsed().as_millis()).unwrap();
+    assert!(!failed, "{report}");
+    assert!(
+        report["elapsed_ms"].as_u64().is_some_and(|ms| ms <= took),
+        "the reload took at most the {took} ms of its call: {report}"
+    );
+    assert_eq!(
+        report["outcome"],
+        serde_json::json!({ "applied": { "tier": "process_restart" } }),
+        "{report}"
+    );
+    let reported = next("run.reload");
+    assert_eq!(reported["outcome"], report["outcome"], "{reported}");
+    assert_eq!(reported["elapsed_ms"], report["elapsed_ms"], "{reported}");
+
+    // The restarted app is up before the edit: `cargo run` checks the sources again as it
+    // starts the binary, and would fail on the broken ones.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let event = events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("the restarted app");
+        if event["event"] == "run.app.log"
+            && event["line"]
+                .as_str()
+                .is_some_and(|line| line.starts_with("FIXTURE_DRIVER"))
+        {
+            break;
+        }
+    }
+    // A call that acts, which is never sent twice, reaches the restarted app, not the dead
+    // connection to the one the reload stopped: the fixture answers `motion.set` with its own
+    // error. A named window keeps the call from reading the windows first.
+    let (_, motion) = tool(3, "flui_motion", serde_json::json!({ "window": "w1" }));
+    assert_eq!(
+        motion["error"]["code"], "invalid_argument",
+        "the restarted app answers: {motion}"
+    );
+    std::fs::write(app.join("src/main.rs"), "fn main() { this is not rust }\n").unwrap();
+    let (failed, report) = tool(
+        4,
+        "flui_reload",
+        serde_json::json!({ "at_least": "restart" }),
+    );
+    assert!(
+        !failed,
+        "a failed build is an outcome, not an error: {report}"
+    );
+    let errors = &report["outcome"]["failed"]["diagnostics"];
+    assert!(
+        errors[0]["message"].as_str().is_some_and(|m| !m.is_empty()),
+        "the compiler's error comes back: {report}"
+    );
+    // A restart stops the app before it builds, as `R` does; the rebuild a save starts keeps
+    // it running through a failed build.
+    let mut stopped = false;
+    loop {
+        let event = events
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the restart's report");
+        stopped |= event["event"] == "run.app.stop";
+        if event["event"] == "run.reload" && event["elapsed_ms"] == report["elapsed_ms"] {
+            break;
+        }
+    }
+    assert!(stopped, "the restart stopped the app first");
+
+    let (failed, refused) = tool(5, "flui_reload", serde_json::json!({ "at_least": "hot" }));
+    assert!(failed, "an unknown tier is refused: {refused}");
+    assert_eq!(refused["error"]["code"], "invalid_argument", "{refused}");
+
+    drop(stdin);
+    mcp.wait().unwrap();
+    run.kill().unwrap();
+    run.wait().unwrap();
+}
+
 #[test]
 fn mcp_without_a_running_app_says_how_to_start_one() {
     let tmp = TempDir::new().unwrap();
@@ -257,6 +428,9 @@ fn an_agent_reads_and_taps_the_app_run_with_agent_through_mcp() {
     let ready = ready.expect("run.agent.ready");
     let session = std::path::PathBuf::from(ready["session"].as_str().unwrap());
     let session_text = std::fs::read_to_string(&session).unwrap();
+    // A run that does not rebuild on saves serves no reload, and names no run endpoint.
+    assert!(ready.get("run").is_none(), "{ready}");
+    assert!(!session_text.contains("\"run\""), "{session_text}");
     assert!(
         !ready.to_string().contains(
             session_text
