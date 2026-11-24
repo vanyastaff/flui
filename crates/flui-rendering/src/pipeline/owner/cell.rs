@@ -14,6 +14,7 @@ use std::{
     rc::Rc,
 };
 
+use flui_foundation::RenderId;
 use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
 
 use flui_layer::LayerLink;
@@ -200,6 +201,36 @@ impl PipelineCell {
         // cell's watches, so a watch made before keeps hearing its frames.
         if !Rc::ptr_eq(&owner.leader_watches, &self.0.leader_watches) {
             owner.leader_watches = Rc::clone(&self.0.leader_watches);
+        }
+        result
+    }
+
+    /// Runs `f`, during which every
+    /// [`remove_render_object`](PipelineOwner::remove_render_object) of a
+    /// child of `parent` on this owner removes its subtree but leaves the
+    /// stale id in `parent`'s child list; when `f` returns, that list is
+    /// compacted once and `parent` marked. A reconcile that drops `k` of a
+    /// parent's `n` children pays `O(n + k)` for the list instead of `O(k·n)`.
+    /// A removal under any other parent writes its list at once.
+    ///
+    /// Until `f` returns `parent`'s list may name a removed node, which a
+    /// walk of the list must skip (`RenderTree::get` misses it). A batch for
+    /// the same parent nests, and the outermost compacts; one for another
+    /// parent while a batch is open, or one opened while the owner is checked
+    /// out (a build during layout), runs `f` unbatched. If `f` unwinds, the
+    /// batch stays open and the next
+    /// [`layout_pass`](PipelineOwner::layout_pass) closes it first, so no
+    /// frame lays out a list that names a removed node: correctness needs no
+    /// destructor.
+    pub fn with_batched_removals<R>(&self, parent: RenderId, f: impl FnOnce() -> R) -> R {
+        let opened = self
+            .0
+            .owner
+            .try_borrow_mut()
+            .is_ok_and(|mut owner| owner.begin_removal_batch(parent));
+        let result = f();
+        if opened {
+            self.with_mut(PipelineOwner::end_removal_batch);
         }
         result
     }

@@ -58,11 +58,11 @@ mod uikit {
     use crate::apple::bookmark::AppleGrants;
     use crate::apple::main_thread;
     use crate::apple::os::AppleOs;
-    use crate::apple::queue::WorkQueue;
     use crate::apple::user_dirs::AppleUserDirs;
     use crate::apple::version::{OnIOS, RunningVersion};
     use crate::dialog::{FileDialogCapability, FileDialogs, MessageBoxCapability, MessageBoxes};
     use crate::grant::Grants;
+    use crate::off_owner::OffOwner;
     use crate::os::{Os, OsCapability};
     use crate::providers::{Providers, Provision};
     use crate::share::{Share, ShareCapability};
@@ -82,7 +82,7 @@ mod uikit {
                     super::dialogs::IOSDialogs::new(
                         mtm,
                         ctx.runtime_local::<RunningVersion<OnIOS>>().0,
-                        ctx.runtime_local::<WorkQueue>(),
+                        OffOwner::of(ctx),
                         ctx.completions().clone(),
                     ),
                     ctx,
@@ -95,24 +95,17 @@ mod uikit {
             share: Provision::provided(|ctx: &ProviderContext<'_>| {
                 let mtm = main_thread::<ShareCapability>()?;
                 Share::try_new(
-                    super::share::IOSShare::new(
-                        mtm,
-                        ctx.runtime_local::<WorkQueue>(),
-                        ctx.completions().clone(),
-                    ),
+                    super::share::IOSShare::new(mtm, OffOwner::of(ctx), ctx.completions().clone()),
                     ctx,
                 )
             }),
             user_dirs: Provision::provided(|ctx: &ProviderContext<'_>| {
-                Ok::<_, Unsupported>(UserDirs::new(
-                    AppleUserDirs::new(ctx.runtime_local::<WorkQueue>()),
-                    ctx,
-                ))
+                Ok::<_, Unsupported>(UserDirs::new(AppleUserDirs::new(OffOwner::of(ctx)), ctx))
             }),
             grants: Provision::provided(|ctx: &ProviderContext<'_>| {
                 Ok::<_, Unsupported>(Grants::new(
                     AppleGrants::new(
-                        ctx.runtime_local::<WorkQueue>(),
+                        OffOwner::of(ctx),
                         crate::sandbox::ios_app(&|name| std::env::var_os(name)),
                     ),
                     ctx,

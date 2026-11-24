@@ -14,6 +14,15 @@ the crate is a field, so no platform compiles until it says how it answers it, a
 `SystemPlugin::register` registers the platform's literal and decides nothing. `PortalOnBus`
 registers the Linux literal over another bus, refusals included.
 
+Work off the owner thread (ADR-0360 §2) is bounded once per UI runtime, on every platform: each
+piece (an Apple dispatch work item, an Android or Windows thread, a portal request that reads the
+file system or waits on the portal, a save's write) takes one of `off_owner::MAX_IN_FLIGHT` places
+in the runtime's `OffOwner` before it starts and gives it back on every exit, a panic included,
+and a request past the bound is refused at once with `Unavailable`, never queued. A request whose
+number something else bounds (a window's one dialog, a shortcut binding's watch, the launcher
+entry's one sender) takes none. On Windows the count is the shell threads', which may also reclaim
+the place of a request past its deadline; on Linux it is the portal's.
+
 ## Handles and backends
 
 | Service | Handle | Backend | Answer |
@@ -106,8 +115,8 @@ Threads and apartments:
   `DialogError::Busy` rather than come up under a window the old one re-enables.
 - **The shell's other work runs a request per thread** (`ShellThreads`): the launcher, autostart,
   the jump list, the user's folders, the share sheet's file check and its file resolution, each
-  inside the apartment its calls ask for, at most `threads::MAX_IN_FLIGHT` per runtime in one count
-  (`ShellPool`); a request past that answers `Unavailable`, and a thread that unwinds gives back its
+  inside the apartment its calls ask for, each holding one of the runtime's off-owner places
+  (`ShellPool` over `off_owner`); a request past that answers `Unavailable`, and a thread that unwinds gives back its
   place and drops its resolver. A request still running `ShellThreads::ABANDON_AFTER` after it
   started is abandoned when the owner next needs a place: its place is reclaimed, its caller
   answered with the request's refusal, the abandonment logged, and its late answer discarded (the
@@ -207,8 +216,8 @@ Threads:
   `MainThreadMarker`, and a runtime whose owner thread is not the main thread (the headless host)
   is refused them with `NotYetOnThisHost` before AppKit is touched.
 - **Work that touches the file system or waits on a daemon runs on a global dispatch queue**
-  (`apple::queue::WorkQueue`): the launcher, the share picker's file check, the login item and the
-  user's folders, at most `WorkQueue::MAX_IN_FLIGHT` per runtime; a request past that answers its
+  (`apple::queue`, holding one of the runtime's off-owner places): the launcher, the share picker's file check, the login item and the
+  user's folders; a request past the bound answers its
   refusal with `Unavailable`, and a work item gives its place back on every exit. No file system
   call runs on the main thread (ADR-0360 §2).
 
@@ -335,7 +344,7 @@ parity rows.
 Threads, as on macOS: UIKit runs on the main thread, and a runtime whose owner thread is another
 one is refused the launcher, the dialogs, the message box, the share sheet and the system
 information with `NotYetOnThisHost`; judging and reading a picked document, writing the file a
-save exports, checking a shared file and naming a folder run on `apple::queue::WorkQueue`. Every
+save exports, checking a shared file and naming a folder run on `apple::queue`. Every
 block, delegate method and work item is one call of `os_entry`, and the picker's delegate keeps
 its ivars in `ContainedIvars`.
 
@@ -510,7 +519,7 @@ Threads:
   once. The host answers `TooMuchPosted` only once a place has freed and `HandOffFailed` at its
   deadline, so the retry never spins the owner.
 - **Whatever reads a content provider or the file system runs on a thread of its own**
-  (`android::workers`), at most `Workers::MAX_IN_FLIGHT` per runtime; a request past that answers
+  holding one of the runtime's off-owner places; a request past that answers
   `Unavailable`, and a worker gives its place back on every exit. A provider answers when it will
   and may ignore a cancellation, so a worker can stay inside a call.
 

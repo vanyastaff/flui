@@ -15,7 +15,7 @@
 //! only then is that final path handed on. A path is handed to Foundation
 //! as the file system's bytes, so a name that is not UTF-8 names its file.
 //! Every request runs as a work item off the main thread
-//! (`apple::queue::WorkQueue`), since each touches the file system or asks Launch
+//! (`apple::queue`, bounded by `off_owner`), since each touches the file system or asks Launch
 //! Services, which may wait on a volume; a volume that stops answering
 //! holds the request's place until it does.
 
@@ -155,8 +155,8 @@ mod appkit {
 
     use super::{OpenedKind, OpenedType, judge, open_for_judging, path_error};
     use crate::apple::ErrorCode;
-    use crate::apple::queue::WorkQueue;
     use crate::apple::{PATH_MAX, error_code, file_url};
+    use crate::off_owner::OffOwner;
 
     /// What a request answers when the runtime has no place for it, or when
     /// Launch Services declined a handler it has.
@@ -168,11 +168,11 @@ mod appkit {
 
     /// [`LauncherBackend`] over Launch Services and the Finder.
     pub(crate) struct MacLauncher {
-        queue: Rc<WorkQueue>,
+        queue: Rc<OffOwner>,
     }
 
     impl MacLauncher {
-        pub(crate) fn new(queue: Rc<WorkQueue>) -> Self {
+        pub(crate) fn new(queue: Rc<OffOwner>) -> Self {
             Self { queue }
         }
     }
@@ -274,7 +274,7 @@ mod appkit {
 
     impl LauncherBackend for MacLauncher {
         fn open_uri(&self, uri: ExternalUri, answer: Resolver<LaunchResult>) {
-            self.queue.run(answer, Err(not_now()), move || {
+            self.queue.dispatch(answer, Err(not_now()), move || {
                 let url = NSURL::URLWithString(&NSString::from_str(uri.as_str()))
                     .ok_or(LaunchError::NoHandler)?;
                 hand_on(&url)
@@ -283,16 +283,17 @@ mod appkit {
 
         fn open_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
             self.queue
-                .run(answer, Err(not_now()), move || open_document(&path));
+                .dispatch(answer, Err(not_now()), move || open_document(&path));
         }
 
         fn reveal_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
             self.queue
-                .run(answer, Err(not_now()), move || reveal(&path));
+                .dispatch(answer, Err(not_now()), move || reveal(&path));
         }
 
         fn trash_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
-            self.queue.run(answer, Err(not_now()), move || trash(&path));
+            self.queue
+                .dispatch(answer, Err(not_now()), move || trash(&path));
         }
     }
 }

@@ -514,14 +514,20 @@ impl RenderTree {
     /// Returns the removed node, or None if it didn't exist. Descendants
     /// are orphaned in the slab; use [`Self::remove_recursive`] for full
     /// cascade.
+    #[cfg(any(test, feature = "testing"))]
     pub(crate) fn remove_shallow(&mut self, id: RenderId) -> Option<RenderNode> {
-        // Update root if removing root
+        self.take_node(id, ParentEdge::Detach)
+    }
+
+    /// Takes one node out of the slab; `edge` says whether its parent's child
+    /// list loses the id now or the caller compacts that list afterwards.
+    fn take_node(&mut self, id: RenderId, edge: ParentEdge) -> Option<RenderNode> {
         if self.root == Some(id) {
             self.root = None;
         }
 
-        // Get parent and remove from parent's children
-        if let Some(parent_id) = self.parent(id)
+        if edge == ParentEdge::Detach
+            && let Some(parent_id) = self.parent(id)
             && let Some(parent) = self.get_mut(parent_id)
         {
             parent.remove_child(id);
@@ -533,16 +539,38 @@ impl RenderTree {
         self.nodes.remove(id)
     }
 
+    /// Drops from `parent_id`'s child list every id that no longer names a
+    /// node of this tree, in one pass that keeps the order of the rest: the
+    /// compaction [`ParentEdge::Compact`] leaves to its caller. A stale
+    /// `parent_id` is a no-op.
+    pub(crate) fn drop_removed_children(&mut self, parent_id: RenderId) {
+        let Some(parent) = self.get_mut(parent_id) else {
+            return;
+        };
+        let mut children = parent.links_mut().take_children();
+        children.retain(|&child| self.nodes.contains(child));
+        self.get_mut(parent_id)
+            .expect("BUG: the parent read above is still in the tree")
+            .links_mut()
+            .restore_children(children);
+    }
+
     /// Takes the nodes of `subtree` out of the tree, children before their parent, and appends
     /// them to `nodes` for the caller to drop after its own bookkeeping. Every id of the subtree
     /// is stale when this returns, and no render object's destructor has run. Returns the
     /// subtree's buffers, emptied, for the next [`Self::collect_subtree`].
+    ///
+    /// Only the subtree's root has a parent outside it, so only the root's edge is written:
+    /// under [`ParentEdge::Detach`] its parent's child list loses it here, and under
+    /// [`ParentEdge::Compact`] the list keeps the stale id until the caller's
+    /// [`Self::drop_removed_children`] on that parent. A descendant's parent leaves with it.
     ///
     /// Only [`Self::collect_subtree`] makes a [`SubtreeIds`], so the order this relies on is the
     /// walk's, never a caller's; taking it by value spends it, so a stale list cannot be reused.
     pub(crate) fn take_subtree(
         &mut self,
         subtree: SubtreeIds,
+        root_edge: ParentEdge,
         nodes: &mut Vec<RenderNode>,
     ) -> SubtreeBuffers {
         let SubtreeIds {
@@ -558,8 +586,11 @@ impl RenderTree {
         // 1 MiB Windows main-thread stack on deep chains (the same
         // crash class the pipeline walks hit at ~1000 levels).
         nodes.reserve(order.len());
-        for &node_id in order.iter().rev() {
-            nodes.extend(self.remove_shallow(node_id));
+        if let Some((&root, descendants)) = order.split_first() {
+            for &node_id in descendants.iter().rev() {
+                nodes.extend(self.take_node(node_id, ParentEdge::Compact));
+            }
+            nodes.extend(self.take_node(root, root_edge));
         }
         order.clear();
         members.clear();
@@ -581,6 +612,7 @@ impl RenderTree {
         let mut nodes = Vec::new();
         self.take_subtree(
             self.collect_subtree(id, SubtreeBuffers::default()),
+            ParentEdge::Detach,
             &mut nodes,
         );
         let count = nodes.len();
@@ -830,6 +862,20 @@ impl RenderTree {
 // non-derivation does the right thing.
 //
 // See `crates/flui-rendering/ARCHITECTURE.md` for the rationale.
+
+/// What a removal does to the child list of the removed node's parent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ParentEdge {
+    /// The parent's list loses the id at once: a scan and a shift of the
+    /// list, so `k` removals from one parent of `n` children cost `O(k·n)`.
+    Detach,
+    /// The parent's list keeps the stale id until
+    /// [`RenderTree::drop_removed_children`] compacts it, once for any number
+    /// of removals. Until then the list names a removed node, so a walk of
+    /// it in between must skip every id the tree no longer holds, as
+    /// `collect_subtree` does.
+    Compact,
+}
 
 /// The emptied buffers of a [`SubtreeIds`], which [`RenderTree::take_subtree`] hands back so
 /// the next [`RenderTree::collect_subtree`] reuses their capacity.

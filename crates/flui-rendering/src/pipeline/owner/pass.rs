@@ -71,7 +71,11 @@ impl PipelineOwner {
     /// Lends this owner to the layout phase of a frame, the first of its
     /// passes. [`run_frame`](Self::run_frame) drives every phase; a caller
     /// that drives them by hand starts here.
+    ///
+    /// A removal batch left open by a scope that unwound is closed first, so
+    /// the frame never walks a child list that names a removed node.
     pub fn layout_pass(&mut self) -> FramePass<'_, Layout> {
+        self.close_removal_batch();
         FramePass::new(self)
     }
 }

@@ -26,8 +26,8 @@ use flui_platform::launch::{LaunchError, LaunchResult, LauncherCapability, runs_
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 use super::opened::Held;
-use super::workers::NotRun;
 use super::{StartAnswer, TOO_MANY_OFFERED, UNNAMED_FAILURE};
+use crate::off_owner::NotRun;
 
 /// `ENOENT`, `EACCES`, `ENOTDIR` and `EPERM`, on Linux and so on Android.
 const ENOENT: i32 = 2;
@@ -135,8 +135,8 @@ mod provider {
     use flui_platform::launch::{ExternalUri, LaunchResult, LauncherBackend};
 
     use super::super::java::{Java, Started, view};
-    use super::super::workers::Workers;
     use super::{not_on_android, not_run, open_document, start_result, unavailable};
+    use crate::off_owner::OffOwner;
 
     /// Answer `answer` with what `started` did: a start the host did not
     /// run on Java's main thread never reached Android.
@@ -161,7 +161,7 @@ mod provider {
     pub(crate) struct AndroidLauncher {
         activity: Activity,
         java: Arc<Java>,
-        workers: Rc<Workers>,
+        workers: Rc<OffOwner>,
         completions: CompletionSource,
     }
 
@@ -169,7 +169,7 @@ mod provider {
         pub(crate) fn new(
             activity: Activity,
             java: Arc<Java>,
-            workers: Rc<Workers>,
+            workers: Rc<OffOwner>,
             completions: CompletionSource,
         ) -> Self {
             Self {
@@ -237,8 +237,8 @@ mod tests {
     use flui_platform::{SystemFailure, UnsupportedReason};
 
     use super::super::StartAnswer;
-    use super::super::workers::NotRun;
     use super::{Held, installs_when_viewed, judge, not_run, open_error, start_result};
+    use crate::off_owner::NotRun;
 
     fn refused(error: &LaunchError) -> Option<UnsupportedReason> {
         error.unsupported().map(|unsupported| unsupported.reason)

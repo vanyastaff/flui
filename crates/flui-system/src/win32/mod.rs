@@ -10,7 +10,7 @@
 //!   dismissal window when its caller lets it go or its window closes.
 //! - The launcher, autostart, the jump list and the user's folders run each
 //!   request on a short-lived apartment thread, at most
-//!   [`threads::MAX_IN_FLIGHT`] at once per UI runtime ([`threads`]).
+//!   [`crate::off_owner::MAX_IN_FLIGHT`] at once per UI runtime ([`threads`]).
 //! - The share sheet, the global shortcuts, the taskbar entry and the
 //!   system information run on the owner thread, whose apartment the host
 //!   entered: they call the window's own thread's objects and read no file

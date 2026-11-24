@@ -48,19 +48,20 @@ impl GrantBackend for PortalGrants {
     /// portal that cannot start answers none, as its resolves would, and so
     /// does a description that could not be read this time.
     fn sandbox(&self, answer: Resolver<Sandbox>) {
-        if self.portal.start().is_err() {
+        let Ok(reservation) = self.portal.reserve() else {
             return;
-        }
-        self.portal.spawn(move |_| async move {
-            let sandbox = zruntime::unblock(|| {
-                of_description(read_flatpak_info(), &user_database_home, &named_folder)
-            })
-            .await;
-            if let Some(sandbox) = sandbox {
-                // The owner retiring first leaves nothing waiting.
-                let _ = answer.resolve(sandbox);
-            }
-        });
+        };
+        self.portal
+            .spawn_reserved(reservation, move |_| async move {
+                let sandbox = zruntime::unblock(|| {
+                    of_description(read_flatpak_info(), &user_database_home, &named_folder)
+                })
+                .await;
+                if let Some(sandbox) = sandbox {
+                    // The owner retiring first leaves nothing waiting.
+                    let _ = answer.resolve(sandbox);
+                }
+            });
     }
 
     fn resolve(&self, grant: Grant, _max_bytes: u64, answer: Resolver<GrantResult>) -> ResolveHold {
@@ -72,34 +73,35 @@ impl GrantBackend for PortalGrants {
                 return ResolveHold::new(());
             }
         };
-        if self.portal.start().is_err() {
+        let Ok(reservation) = self.portal.reserve() else {
             let _ = answer.resolve(Err(GrantError::Unsupported(Unsupported::of::<
                 GrantCapability,
             >(
                 UnsupportedReason::Unavailable,
             ))));
             return ResolveHold::new(());
-        }
+        };
         let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR");
-        self.portal.spawn(move |_| async move {
-            let in_portal = file.path().is_some_and(|path| {
-                in_document_portal(path, runtime_dir.as_deref().map(Path::new))
+        self.portal
+            .spawn_reserved(reservation, move |_| async move {
+                let in_portal = file.path().is_some_and(|path| {
+                    in_document_portal(path, runtime_dir.as_deref().map(Path::new))
+                });
+                let granter = if in_portal {
+                    Granter::DocumentPortal
+                } else {
+                    Granter::User
+                };
+                let resolved = zruntime::unblock(move || {
+                    let looked = file
+                        .path()
+                        .map_or(Ok(()), |path| std::fs::metadata(path).map(drop));
+                    reacquired(file, looked, granter)
+                })
+                .await;
+                // The owner retiring first leaves nothing waiting.
+                let _ = answer.resolve(resolved);
             });
-            let granter = if in_portal {
-                Granter::DocumentPortal
-            } else {
-                Granter::User
-            };
-            let resolved = zruntime::unblock(move || {
-                let looked = file
-                    .path()
-                    .map_or(Ok(()), |path| std::fs::metadata(path).map(drop));
-                reacquired(file, looked, granter)
-            })
-            .await;
-            // The owner retiring first leaves nothing waiting.
-            let _ = answer.resolve(resolved);
-        });
         // A metadata call cannot be called back; its answer is dropped
         // when nobody waits for it.
         ResolveHold::new(())
