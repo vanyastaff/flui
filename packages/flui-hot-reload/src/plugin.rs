@@ -241,25 +241,22 @@ macro_rules! hot_reload_worker {
 /// # Unload semantics
 ///
 /// The mounted `PluginPipeline` is **leaked, never dropped** — on thread
-/// exit, on hot-reload, and on process exit alike. This is not new: the
-/// pipeline was previously behind a plain `static`, and Rust never runs drop
-/// glue for `static` items either, so "leak on unload" was always this
-/// macro's actual contract (the "hot restart: state lost" line above). What
-/// changed is *how* that's now guaranteed: the pipeline lives in a
-/// `thread_local!`, and a thread-local wrapping a type that needs dropping
-/// registers a TLS destructor — one that lives in this plugin's own image.
-/// `dlclose`-ing a DSO with a live TLS destructor registration is unsafe to
-/// varying degrees across runtimes (a deferred-unmap runtime can silently
-/// keep serving the OLD code on a same-path reload; a non-deferring one can
-/// run the destructor after the image is already unmapped). The pipeline is
-/// therefore stored as `ManuallyDrop<PluginPipeline>`, which is
-/// unconditionally drop-glue-free, so no TLS destructor is ever registered
-/// for it — deliberately trading "run `PluginPipeline::drop`" for "never put
-/// this image's unload behavior at the mercy of pending TLS destructors".
-/// Thread affinity is identified by a drop-free, per-thread monotonic token
-/// in the same TLS payload. Calling `std::thread::current` from the cdylib is
-/// deliberately avoided: Rust's private std copy can otherwise register a
-/// pthread-key destructor whose callback also lives in the unloadable image.
+/// exit, on hot-reload, and on process exit alike, which is the "hot restart:
+/// state lost" contract above. The pipeline lives in a `thread_local!`, and a
+/// thread-local wrapping a type that needs dropping registers a TLS
+/// destructor that lives in this plugin's own image. `dlclose`-ing a DSO with
+/// a live TLS destructor registration is unsafe to varying degrees across
+/// runtimes (a deferred-unmap runtime can silently keep serving the OLD code
+/// on a same-path reload; a non-deferring one can run the destructor after
+/// the image is already unmapped). The pipeline is therefore stored as
+/// `ManuallyDrop<PluginPipeline>`, which is unconditionally drop-glue-free,
+/// so no TLS destructor is ever registered for it: `PluginPipeline::drop`
+/// never runs, and the image's unload never waits on a pending TLS
+/// destructor. Thread affinity is identified by a drop-free, per-thread
+/// monotonic token in the same TLS payload. Calling `std::thread::current`
+/// from the cdylib is deliberately avoided: Rust's private std copy can
+/// otherwise register a pthread-key destructor whose callback also lives in
+/// the unloadable image.
 ///
 /// # Generated Symbols
 ///
@@ -353,13 +350,8 @@ macro_rules! app_plugin {
             /// `mem::needs_drop` false for this slot unconditionally (see the
             /// `const` assertion right below), so the standard library never
             /// registers a destructor for it at all — no deferred unload, no
-            /// UAF, on any runtime. This is not a NEW leak: a plain `static`
-            /// (the previous `OnceLock<Mutex<PluginPipeline>>`) was never
-            /// destructed either — Rust runs no automatic drop glue for
-            /// `static` items — so "leak the pipeline, don't run its Drop"
-            /// was already the contract `app_plugin!` shipped ("hot restart:
-            /// state lost"). This preserves that byte-for-byte; it does not
-            /// introduce it.
+            /// UAF, on any runtime. The leaked pipeline is the macro's "hot
+            /// restart: state lost" contract (see "Unload semantics" above).
             static __FLUI_APP_STATE: __FluiAppThreadState = const {
                 __FluiAppThreadState {
                     token: ::std::cell::Cell::new(0),

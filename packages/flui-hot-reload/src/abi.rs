@@ -2,11 +2,10 @@
 //!
 //! `Scene` is `repr(Rust)` and crosses the dlopen boundary by raw pointer, so
 //! the ONLY thing that makes the transfer sound is that the host and the
-//! plugin are the same compiler's view of the same source. That premise used
-//! to be assumed; now it is checked: every plugin macro exports an
-//! `flui_*_abi_token` symbol returning [`abi_token`] as computed inside the
-//! plugin's compilation, and each loader compares it against the host's own
-//! value before accepting the library.
+//! plugin are the same compiler's view of the same source. The loaders check
+//! it: every plugin macro exports an `flui_*_abi_token` symbol returning
+//! [`abi_token`] as computed inside the plugin's compilation, and each loader
+//! compares it against the host's own value before accepting the library.
 //!
 //! The token folds in:
 //!
