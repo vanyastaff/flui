@@ -22,7 +22,7 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (interned transforms, ops, payloads and cached bounds), `DrawCommand` (the transform and op the reader yields, which resolves the op's payload ids), `DrawCommandBuf` (an owned command with its payloads), `DrawOp` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` and `DrawOp::ParagraphShadow` carry, decision 18), `BlurSigma` (a text shadow's bounded blur) |
 | Text | `text_layout/{host,fallback_chain,fallback_tables,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; `HostFonts` (the one host font scan a collection is fed from), the per-platform fallback lists and the order a fed collection falls back in, family resolution |
 | Per-UI runtime text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection), `HostFontFeed` (the host's faces, added off the owner thread) and `TextContext` (one UI runtime's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per UI runtime; every `TextPainter` measurement shapes on it |
-| Parley shaping | `parley_text/{shape,caret}.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines, whose `to_shaped()` is the paragraph paint records, and whose caret, hit-test, selection, line and word queries `TextPainter` answers from (decision 15) |
+| Parley shaping | `parley_text/{shape,shape_cache,caret}.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines, whose `to_shaped()` is the paragraph paint records, and whose caret, hit-test, selection, line and word queries `TextPainter` answers from (decision 15) |
 | Text boundaries | `text_boundaries.rs` | Grapheme and word boundaries over ICU4X, the segmenters Parley clusters with: what hit-testing snaps to and word selection picks from, and what `flui-widgets`' editor steps through (ADR-0092 §6); each query segments from the start of its line |
 | Raster side | `glyphs/{mod,key,registry,swash}.rs` | `GlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer` (the engine's atlas draws through it), `GlyphRasterizer`, `PlacedGlyph`, `GlyphImage` |
 | Paint values | `paint/{style,path,shader,effects,image,clipping,blend_mode,canvas}.rs` | `Paint`, `Path` (with its shape hint), shaders, filters, images, clip and blend modes: the vocabulary the recorder records. `BlendMode::coverage_class` is the one classification coverage, compositing and damage route on; it and every blend predicate derived from it, `ColorFilter::modifies_transparent_black` and `Color::blend` name every mode with no wildcard arm |
@@ -151,6 +151,18 @@ because subtracting equal infinities produces NaN. The app's collection is fed
 from one scan of the host's fonts (`HostFonts`): its faces, the generics the bundled
 faces leave unbound, and FLUI's fallback lists for the host (decision 17); a
 style's family is resolved by one rule (decision 8).
+
+Beneath the painters' caches the context keeps laid-out paragraphs
+(`parley_text/shape_cache.rs`), as Skia's `ParagraphCache` does beneath
+Flutter's: a spec laid out a second time is kept, keyed by every field of its
+`ParagraphSpec`, and a later layout of the same spec shares its layout through
+an `Arc`, with no shaping and no line breaking. A paragraph lays out into a
+layout of its own and moves into an `Arc` only when it is kept, and a spec seen
+once is remembered by its hash alone, so a counter or the rows of a scrolled
+list allocate nothing for the cache. It holds at most 128 paragraphs and an
+estimate of 512 KiB of their buffers, least recently used out; a registration
+(the collection's generation) and `reclaim` drop it. `shape_cache_contract`
+holds the key, the admission and both resets.
 
 `TextPainter::paint` records `DrawOp::Paragraph { paragraph, offset, color }`
 with the very `Arc<ShapedParagraph>` its cache holds (ADR-0065, ADR-0092 §4):

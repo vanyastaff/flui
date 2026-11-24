@@ -196,6 +196,8 @@ mod path_geometry;
 mod recording;
 #[path = "rich_text_example.rs"]
 mod rich_text_example;
+#[path = "shape_cache.rs"]
+mod shape_cache;
 #[path = "shapes_contract.rs"]
 mod shapes_contract;
 #[path = "text_boundaries.rs"]
@@ -1044,6 +1046,47 @@ fn image_decode_contract() {
             (
                 "arbitrary_bytes_decode_or_fail_typed",
                 image_decode::arbitrary_bytes_decode_or_fail_typed,
+            ),
+        ],
+    );
+}
+
+/// A text context keeps a paragraph laid out a second time, by every field of
+/// its spec, and a third layout shares the kept layout instead of shaping;
+/// registrations and memory pressure drop what it keeps.
+#[test]
+fn shape_cache_contract() {
+    use shape_cache as sc;
+    run_cases(
+        "shape_cache",
+        &[
+            (
+                "a_paragraph_laid_out_a_third_time_is_not_shaped",
+                sc::a_paragraph_laid_out_a_third_time_is_not_shaped,
+            ),
+            (
+                "a_paragraph_seen_once_is_not_kept",
+                sc::a_paragraph_seen_once_is_not_kept,
+            ),
+            (
+                "every_field_of_the_spec_keys_a_kept_paragraph",
+                sc::every_field_of_the_spec_keys_a_kept_paragraph,
+            ),
+            (
+                "a_registered_face_drops_the_kept_paragraphs",
+                sc::a_registered_face_drops_the_kept_paragraphs,
+            ),
+            (
+                "reclaim_drops_the_kept_paragraphs",
+                sc::reclaim_drops_the_kept_paragraphs,
+            ),
+            (
+                "a_long_paragraph_is_not_kept",
+                sc::a_long_paragraph_is_not_kept,
+            ),
+            (
+                "the_least_recently_used_paragraph_leaves_first",
+                sc::the_least_recently_used_paragraph_leaves_first,
             ),
         ],
     );
