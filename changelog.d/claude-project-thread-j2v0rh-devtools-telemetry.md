@@ -1,6 +1,7 @@
 ### Added
 
 - **`flui-devtools`**: a `Capture` records each frame a presentation produced as a `ProducedFrame` (runtime, presentation, frame number, outcome, segment and phase times, produce-to-present, input count and largest input latency, and the GPU time once it arrives), read from the runtime's `flui.frame` `frame_telemetry` and `frame_gpu_time` events; `Capture::produced_frames` and `produced_frames_of` return them. A timeline over the capture shows each as a `TimelineEventKind::ProducedFrame` event, on a `Produced frames` track of its runtime's process in the Chrome export. The capture's filter admits those two `TRACE` events and the runtime's `enabled!` gate for them, and no other event.
+- **`flui-app`**: `AppConfig::dev_tree_observer(factory)`, a development hook beside `dev_reload` and `dev_agent`. For every UI runtime it builds for a window (desktop, iOS, Android, web, and a secondary window's isolated runtime), the runner calls the `Fn(UiRuntimeId) -> Arc<dyn TreeObserver>` factory once before the first root mounts and installs the observer through the seeded install; the runtime's retirement ends its stream with `detached()`. A factory that panics is logged and its runtime runs without an observer. `flui-devtools`' `InspectorCounters` installs this way.
 
 ### Changed
 

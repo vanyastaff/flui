@@ -7,6 +7,7 @@
     reason = "test code catches a panic to assert on it (ADR-0303 §5)"
 )]
 mod capture_sinks;
+mod dev_tree_observer;
 mod gesture_inspector;
 mod produced_frames;
 mod profiler;

@@ -115,6 +115,11 @@ flui-log = { workspace = true }
 # The observer-overhead bench.
 criterion = { workspace = true }
 
+# The inspector test that installs the counters through `AppConfig::dev_tree_observer` and runs
+# the application on the headless platform (`flui_app::testing`, a desktop-only kit).
+[target.'cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))'.dev-dependencies]
+flui-app = { workspace = true, features = ["testing"] }
+
 # The integration tests, as modules of one binary (tests/main.rs).
 [[test]]
 name = "devtools_it"

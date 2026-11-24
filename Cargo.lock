@@ -1976,6 +1976,7 @@ name = "flui-devtools"
 version = "0.2.0-dev"
 dependencies = [
  "criterion",
+ "flui-app",
  "flui-log",
  "flui-objects",
  "flui-platform",

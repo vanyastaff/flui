@@ -2,11 +2,11 @@
 //! observation seam.
 //!
 //! Proves the dependency-inverted observation seam end to end through
-//! `flui_sdk::foundation::observe`, with no tree access in its surface:
-//! install an [`InspectorCounters`] via
-//! `WidgetsBinding::install_tree_observer` and it tallies mounts, moves,
-//! rebuilds (with per-cause counts), and unmounts as the tree mutates. No
-//! locks in the public surface.
+//! `flui_sdk::foundation::observe`, with no tree access in its surface. An
+//! application installs an [`InspectorCounters`] with `flui-app`'s
+//! `AppConfig::dev_tree_observer`, whose factory each UI runtime asks once
+//! for its observer, and it tallies mounts, moves, rebuilds (with per-cause
+//! counts), and unmounts as the tree mutates. No locks in the public surface.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -17,7 +17,12 @@ use flui_sdk::foundation::observe::{
 
 /// Counting/logging [`TreeObserver`].
 ///
-/// Interior state is private atomics; nothing here exposes a lock.
+/// The runtime's owner thread counts, and the application reads a
+/// [`snapshot`](Self::snapshot) from any thread that holds the counters: the
+/// development hook's factory is `Send + Sync`, so counters it captures to
+/// hand out are shared across threads, and the seam holds its observer in an
+/// `Arc`. Interior state is therefore private atomics; nothing here exposes a
+/// lock.
 /// Counter updates use `Relaxed` (bare tallies; the observation contract
 /// serializes emissions per UI runtime), while the end-of-stream flag is
 /// Release/Acquire so a snapshot that observes the stream end also

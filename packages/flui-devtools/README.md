@@ -145,21 +145,37 @@ virtual (a headless host's).
 ```rust
 use std::sync::Arc;
 
+use flui::app::AppConfig;
+use flui::foundation::observe::TreeObserver;
 use flui_devtools::InspectorCounters;
-use flui_sdk::foundation::observe::TreeObserver;
 
 let counters = Arc::new(InspectorCounters::new());
-build_owner.set_tree_observer(Arc::clone(&counters) as Arc<dyn TreeObserver>);
-// ...drive frames...
+let config = AppConfig::new().dev_tree_observer({
+    let counters = Arc::clone(&counters);
+    move |_runtime| Arc::clone(&counters) as Arc<dyn TreeObserver>
+});
+// ...run the app with `config`...
 let snapshot = counters.snapshot();
 println!("{} mounts, {} rebuilds, {} unmounts", snapshot.mounts, snapshot.rebuilds, snapshot.unmounts);
 ```
 
+`AppConfig::dev_tree_observer` takes a factory, which every UI runtime the
+runner builds for a window calls once with its id, before its first root is
+mounted. The runner installs the observer it returns with the seeded install,
+which replays what is already mounted, and the runtime's retirement ends the
+observer's stream (`is_final()`). The observer sees the runtime's primary
+presentation; a presentation opened into an existing runtime is not observed.
+A factory that panics is logged and its runtime runs without an observer. One
+`InspectorCounters` shared by several runtimes adds their counts together and
+ends at the first runtime's retirement, so an application that opens several
+windows hands each runtime counters of its own.
+
 This is the event half of ADR-0040's dependency-inverted seam: structural
 observations pushed by the core, with no access to the trees themselves.
-The seam's end-to-end test lives in this package
-(`tests/tree_observer_inspector.rs`): it drives a real tree against the
-counters.
+The seam's end-to-end tests live in this package:
+`tests/tree_observer_inspector.rs` drives a real tree against the counters,
+and `tests/dev_tree_observer.rs` installs them through `AppConfig` and runs
+the application on the headless platform.
 
 Devtools is an official package: its only framework dependency is `flui-sdk`
 ([ADR-0088](../../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)).
