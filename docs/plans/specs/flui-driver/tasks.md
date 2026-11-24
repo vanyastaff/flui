@@ -1385,10 +1385,11 @@ graph LR
     `each_trait_reads_as_the_bridges_role_and_folds_back`,
     `the_role_table_covers_the_vocabulary_once`,
     `the_window_is_titled_by_the_device_and_its_runtime`,
-    `a_title_two_simulators_share_is_refused`,
-    `an_unavailable_simulator_sharing_the_title_is_no_twin`,
-    `a_window_naming_another_simulator_is_not_the_devices`,
-    `a_parent_gone_mid_read_cuts_its_children`,
+    `every_simulator_sharing_the_title_counts`,
+    `a_target_renamed_or_removed_since_connecting_is_refused`,
+    `a_window_naming_any_other_uuid_is_not_the_devices`,
+    `a_level_read_short_is_marked_whatever_stopped_it`,
+    `a_group_gone_mid_search_cuts_the_search_short`,
     `the_search_reaches_devicehubs_screen_seven_levels_down`,
     `the_search_reaches_a_screen_inside_simulator_apps_bezel`,
     `the_search_refuses_two_windows_and_finds_none_in_none`,
@@ -1457,8 +1458,10 @@ graph LR
     `tree` and `roles`. The read hands back the elements as served; naming, placing and matching
     them is pure code the scripted window goes through too. The Simulator's process is not looked
     up by name (AppKit reports DeviceHub's pid as -1): every owner of a window on screen is asked
-    within a second for its windows titled `<device> – <runtime>`; two such windows, or a title
-    another listed simulator shares, are refused. The screen is found by walking every group of
+    within a second for its windows titled `<device> – <runtime>`, taken by an allow-list (the
+    device's UDID; no UUID only while no other listed simulator shares the title; any other UUID
+    never), two left refused, and the device looked up by its UDID in the listing read before each
+    read, renamed or removed refused. The screen is found by walking every group of
     the window within ten levels: an `iOSContentGroup` (DeviceHub) when there is one, else the
     shallowest group of the app's window's shape (Simulator.app, inside its bezel or not).
     `accesskit_ios` serves the elements VoiceOver reads, so an element is matched among the

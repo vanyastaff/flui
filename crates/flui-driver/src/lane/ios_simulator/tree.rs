@@ -815,8 +815,8 @@ struct Candidate<'n> {
 }
 
 /// The projection's walk: where it places elements, the bounds tolerance in device pixels, the
-/// next handle, whether a budget cut it short, the app nodes already matched, and the path each
-/// matched.
+/// next handle, whether the read or the scope's budget left something unread, the app nodes
+/// already matched, and the path each matched.
 struct Walk {
     placing: Placing,
     tolerance: i64,
