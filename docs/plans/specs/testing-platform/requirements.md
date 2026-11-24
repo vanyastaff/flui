@@ -4,7 +4,7 @@
 - **Решения:** ADR-0400 (пишется вместе с [design.md](design.md));
   [ADR-0243](../../../adr/ADR-0243-one-testing-kit-per-layer.md) (один кит на слой),
   [ADR-0396](../../../adr/ADR-0396-a-perf-scenario-is-one-workload-every-instrument-measures-and-its-costs-are-a-file-beside-it.md)
-  (замер стоимости), [ADR-0238](../../../adr/ADR-0238-flui-driver.md) (драйвер)
+  (замер стоимости), [ADR-0238](../../../adr/ADR-0238-flui-driver-protocol.md) (драйвер)
 - **Дизайн:** [design.md](design.md); задачи: [tasks.md](tasks.md)
 
 ## Зачем
