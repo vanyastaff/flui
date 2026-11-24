@@ -1,7 +1,8 @@
-//! What `uiautomator dump` shows of the screen, read as untrusted input: how the display is
-//! turned and the accessibility nodes the app serves. The lane reads it only for the tree: where
-//! the app's window is comes from `dumpsys window` (`super::device::WINDOWS`), which pauses no
-//! accessibility service.
+//! What `uiautomator dump` shows of the screen, read as untrusted input: the accessibility nodes
+//! the app serves, and the display's turn when it dumped, which the lane compares with the turn
+//! `dumpsys window` gave it. The lane reads it only for the tree: where the app's window is and
+//! how the display is turned come from `dumpsys window` (`super::device::WINDOWS`), which pauses
+//! no accessibility service.
 //!
 //! The dump is the active window's view hierarchy as accessibility reads it:
 //! `<hierarchy rotation="N">` and its `<node>`s, each with its `package`, its `class`, its `text`
@@ -119,8 +120,9 @@ pub struct UiNode {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct UiDump {
-    /// The display's rotation from its natural orientation, in quarter turns counter-clockwise
-    /// (`Surface.ROTATION_0` to `ROTATION_270`).
+    /// The display's rotation from its natural orientation when it dumped, in quarter turns
+    /// counter-clockwise (`Surface.ROTATION_0` to `ROTATION_270`): the lane reads the tree only
+    /// when it is the rotation `dumpsys window` gave it before and after the dump.
     pub rotation: u8,
     /// The window's top nodes.
     pub roots: Vec<UiNode>,

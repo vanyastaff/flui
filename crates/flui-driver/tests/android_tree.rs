@@ -218,7 +218,24 @@ fn edge_cases() -> Tree {
         "apples",
     );
     apples.selected = Some(true);
-    root.children = vec![small, large, volume, items, cell, apples];
+    // The other selection roles the read reports a selection of: a tab, a tree item whose node
+    // the adapter publishes with no toggled state (not checkable), a list box option and a menu
+    // list option.
+    let selection = |number, role, accesskit, name: &str, x, selected| {
+        let mut node = identified(
+            app_node(number, role, accesskit, Some(name), (x, 400, 270, 100)),
+            &name.to_lowercase(),
+        );
+        node.selected = Some(selected);
+        node
+    };
+    let home = selection(12, Role::Tab, "Tab", "Home", 0, true);
+    let folder = selection(13, Role::TreeItem, "TreeItem", "Folder", 270, false);
+    let red = selection(14, Role::ListItem, "ListBoxOption", "Red", 540, false);
+    let medium = selection(15, Role::ListItem, "MenuListOption", "Medium", 810, true);
+    root.children = vec![
+        small, large, volume, items, cell, apples, home, folder, red, medium,
+    ];
     Tree::new(vec![root], false)
 }
 
@@ -660,7 +677,7 @@ fn any_accessibility_service_refuses_the_dump_naming_it() {
         assert!(refused.is_cannot_verify(), "{refused:?}");
         assert_eq!(
             refused.missing_capability().as_deref(),
-            Some(safety::WINDOW_DUMP)
+            Some(safety::TREE_DUMP)
         );
         for service in &services {
             assert!(refused.to_string().contains(service), "{refused}");
@@ -689,7 +706,7 @@ fn a_reply_of_another_shape_refuses_the_dump() {
             .into_error();
         assert_eq!(
             refused.missing_capability().as_deref(),
-            Some(safety::WINDOW_DUMP),
+            Some(safety::TREE_DUMP),
             "{printed:?}: {refused:?}"
         );
     }
@@ -751,7 +768,7 @@ fn a_running_service_stops_every_dump_before_it_starts() {
             .expect_err("no tree while a service runs");
         assert_eq!(
             refused.missing_capability().as_deref(),
-            Some(safety::WINDOW_DUMP),
+            Some(safety::TREE_DUMP),
             "{reader}: {refused:?}"
         );
     }
@@ -760,19 +777,59 @@ fn a_running_service_stops_every_dump_before_it_starts() {
     assert_eq!(adb.commands("exec-out uiautomator"), Vec::<String>::new());
 }
 
-/// An emulator runs nobody's service, so the lane reads the tree there without asking which run:
-/// a service the image has on is no person's, paused for a moment.
+/// An emulator can run TalkBack as a device does, which the dump would suspend: the read of its
+/// tree is refused the same way, and with no service on it is read.
 #[test]
-fn an_emulator_reads_the_tree_whatever_services_run() {
+fn an_emulator_running_a_service_refuses_the_tree_too() {
     let talkback = "com.google.android.marvin.talkback/.TalkBackService\n1\n";
     let adb = emulator_showing(CONTROLS)
         .reply_once("shell settings get secure", AdbReply::new(0, talkback));
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
+    let refused = lane
+        .read_tree(&placement(), &controls())
+        .expect_err("no tree while TalkBack runs on the emulator");
+    assert_eq!(
+        refused.missing_capability().as_deref(),
+        Some(safety::TREE_DUMP)
+    );
+    assert_eq!(adb.commands("exec-out uiautomator"), Vec::<String>::new());
     let os = lane
         .read_tree(&placement(), &controls())
-        .expect("the emulator's tree is read");
+        .expect("with no service on, the emulator's tree is read");
     assert!(find(&os.roots, "like").is_some());
-    assert_eq!(adb.commands("shell settings"), Vec::<String>::new());
+}
+
+/// The window is located before and after the dump: a window that moved while the device dumped
+/// it, or a dump of another turn than the window's, is no snapshot the mapping holds for, and the
+/// read answers busy rather than match the dump against the wrong place.
+#[test]
+fn a_window_that_moves_or_turns_during_the_dump_is_busy() {
+    let moved = windows_edge_to_edge(1080, 2400)
+        .replace("frame=[0,0][1080,2400]", "frame=[40,0][1120,2400]");
+    let turned = CONTROLS.replace("rotation=\"0\"", "rotation=\"1\"");
+    assert_ne!(turned, CONTROLS);
+    for (case, adb) in [
+        (
+            "moved",
+            emulator_showing(CONTROLS)
+                .reply_once("shell dumpsys window displays", AdbReply::new(0, moved)),
+        ),
+        (
+            "turned",
+            emulator_showing(CONTROLS).reply_once("exec-out uiautomator", AdbReply::new(0, turned)),
+        ),
+    ] {
+        let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
+        let refused = lane
+            .read_tree(&placement(), &controls())
+            .expect_err("the window did not hold still");
+        assert!(matches!(refused, Error::Busy { .. }), "{case}: {refused:?}");
+        assert_eq!(
+            adb.commands("shell dumpsys window displays").len(),
+            2,
+            "{case}"
+        );
+    }
 }
 
 /// An activation through the OS accessibility API is refused with its reason, before the device
@@ -845,17 +902,28 @@ fn a_radio_buttons_selection_is_the_checked_state_the_adapter_publishes() {
 
 /// A grid cell, which the app's read always reports as a selection, and a multi-select list row
 /// that publishes one, have a toggled state the read does not report and the adapter publishes as
-/// checkable and checked: each is matched, and projects its selection as the read does. The set
-/// of what the lane cannot observe names it.
+/// checkable and checked: each is matched, and projects its selection as the read does. So does a
+/// node of every other selection role, a tab, a list box option, a menu list option, and a tree
+/// item whose node the adapter publishes with no toggled state at all.
 #[test]
 fn a_selection_roles_toggled_state_the_read_does_not_report_is_no_mismatch() {
-    let named: tree::Unobservable = tree::Unobservable::UnreportedToggle;
-    assert_ne!(named, tree::Unobservable::RangeValue);
     let os = edge_cases_read();
-    let cell = find(&os.roots, "cell").expect("the grid cell is matched");
-    assert_eq!((cell.checked, cell.selected), (None, None));
-    let apples = find(&os.roots, "apples").expect("the list row is matched");
-    assert_eq!((apples.checked, apples.selected), (None, Some(true)));
+    for (identifier, selected) in [
+        ("cell", None),
+        ("apples", Some(true)),
+        ("home", Some(true)),
+        ("folder", None),
+        ("red", None),
+        ("medium", Some(true)),
+    ] {
+        let node = find(&os.roots, identifier)
+            .unwrap_or_else(|| panic!("{identifier} is matched: {os:?}"));
+        assert_eq!(
+            (node.checked, node.selected),
+            (None, selected),
+            "{identifier}"
+        );
+    }
 }
 
 /// A list hands Android one row past its viewport, the rest of the rows the app keeps past it to
@@ -914,7 +982,7 @@ fn what_a_dump_cannot_show_is_no_difference() {
     );
     assert_eq!(
         os.roots[0].children.len(),
-        6,
+        10,
         "the two announcers are left out"
     );
     let differences = Projection::of(&app, &os).differences();
@@ -1059,33 +1127,82 @@ fn children_past_the_node_budget_are_cut_before_they_are_matched() {
          bounds=\"[0,400][100,420]\" />"
     );
     // The root and the label take handles 1 and 2, the label's fillers the next ones, and the
-    // button, the count, the switch and the field four more: the pad takes the budget's last
-    // handle, so none is left for its two rows.
-    let fillers = flui_driver::lane::walk::MAX_NODES - 7;
+    // button, the count, the switch and the field four more. With MAX_NODES - 7 fillers the pad
+    // takes the budget's last handle, so none is left for its two rows; with one filler fewer the
+    // budget leaves room for exactly one of them, the budget's last handle.
     let gallery = "content-desc=\"Gallery\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,60][140,94]\" />";
     let pad = "bounds=\"[0,350][480,590]\" />";
     assert!(CONTROLS.contains(gallery) && CONTROLS.contains(pad));
-    let wide = CONTROLS
-        .replace(
-            gallery,
-            &format!(
-                "{}>{}</node>",
-                gallery.trim_end_matches(" />"),
-                filler.repeat(fillers)
-            ),
-        )
-        .replace(
-            pad,
-            &format!("bounds=\"[0,350][480,590]\">{row}{row}</node>"),
-        );
-    let mut app = controls();
-    let mut pad_row = app_node(8, Role::Label, "Label", Some("Row"), (0, 400, 100, 20));
-    pad_row.identifier = Some("row".to_owned());
-    app.roots[0].children[5].children = vec![pad_row];
-    let os = tree::read(&dump(&wide), PACKAGE, &app, MAPPING).expect("the budget cuts the rows");
-    assert!(os.truncated);
-    let pad = find(&os.roots, "pad").expect("the pad is read");
-    assert!(pad.children.is_empty() && pad.children_unread, "{pad:?}");
+    for (fillers, rows_kept) in [
+        (flui_driver::lane::walk::MAX_NODES - 7, 0),
+        (flui_driver::lane::walk::MAX_NODES - 8, 1),
+    ] {
+        let wide = CONTROLS
+            .replace(
+                gallery,
+                &format!(
+                    "{}>{}</node>",
+                    gallery.trim_end_matches(" />"),
+                    filler.repeat(fillers)
+                ),
+            )
+            .replace(
+                pad,
+                &format!("bounds=\"[0,350][480,590]\">{row}{row}</node>"),
+            );
+        let mut app = controls();
+        let mut pad_row = app_node(8, Role::Label, "Label", Some("Row"), (0, 400, 100, 20));
+        pad_row.identifier = Some("row".to_owned());
+        app.roots[0].children[5].children = vec![pad_row];
+        let os =
+            tree::read(&dump(&wide), PACKAGE, &app, MAPPING).expect("the budget cuts the rows");
+        assert!(os.truncated);
+        let pad = find(&os.roots, "pad").expect("the pad is read");
+        assert_eq!(pad.children.len(), rows_kept, "{fillers} fillers: {pad:?}");
+        assert!(pad.children_unread, "{fillers} fillers");
+    }
+}
+
+/// A root wider than the node budget is cut, and the child the cut leaves last stays, though it
+/// has the announcers' shape (static text with no area): only the last children of a root read
+/// whole are the announcers.
+#[test]
+fn a_root_cut_by_the_budget_keeps_its_last_kept_child() {
+    let filler = format!(
+        "<node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" \
+         package=\"{PACKAGE}\" content-desc=\"\" checkable=\"false\" checked=\"false\" \
+         clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" \
+         scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" \
+         bounds=\"[0,600][10,610]\" />"
+    );
+    let label = format!(
+        "<node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" \
+         package=\"{PACKAGE}\" content-desc=\"\" checkable=\"false\" checked=\"false\" \
+         clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" \
+         scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" \
+         bounds=\"[0,0][0,0]\" />"
+    );
+    // The root takes handle 1, so the budget leaves room for MAX_NODES - 1 of its children: the
+    // six of the app's, then fillers, then the label as the last one kept, then more.
+    let room = flui_driver::lane::walk::MAX_NODES - 1;
+    let pad = "bounds=\"[0,350][480,590]\" />";
+    let wide = CONTROLS.replacen(
+        pad,
+        &format!(
+            "{pad}{}{label}{}",
+            filler.repeat(room - 6 - 1),
+            filler.repeat(10)
+        ),
+        1,
+    );
+    let os = tree::read(&dump(&wide), PACKAGE, &controls(), MAPPING).expect("the dump matches");
+    assert!(os.truncated && os.roots[0].children_unread);
+    let children = &os.roots[0].children;
+    assert_eq!(children.len(), room);
+    assert_eq!(
+        children.last().map(|node| node.native_role.as_str()),
+        Some("android.widget.TextView")
+    );
 }
 
 /// The app's tree and the OS tree compared are of one revision: a tree that moved while the dump
@@ -1164,6 +1281,22 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
     assert!(find(&os.roots, "like").is_some());
     assert_eq!(adb.commands("exec-out uiautomator dump").len(), 2);
 
+    // An ambiguity met while the tree moved (two buttons alike in a dump of a tree the app no
+    // longer shows) is read again too.
+    let button = "<node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.Button\" package=\"dev.flui.scenario\" content-desc=\"Like\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"true\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,94][119,173]\" />";
+    assert!(CONTROLS.contains(button));
+    let twice = CONTROLS.replace(button, &format!("{button}{button}"));
+    let (_agent, mut driver, _reads, adb) = session(vec![1, 2]);
+    let _first = adb
+        .clone()
+        .reply_once("exec-out uiautomator", AdbReply::new(0, twice));
+    let os = driver
+        .main_window()
+        .and_then(|mut window| window.os_tree())
+        .expect("the second reading matches");
+    assert!(find(&os.roots, "like").is_some());
+    assert_eq!(adb.commands("exec-out uiautomator dump").len(), 2);
+
     // The same failed match on a tree that held still is the answer.
     let (_agent, mut driver, _reads, adb) = session(vec![1]);
     let _first = adb.clone().reply_once(
@@ -1186,6 +1319,8 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
         .and_then(|mut window| window.os_tree())
         .expect_err("the tree never held still");
     assert!(matches!(moving, Error::Busy { .. }), "{moving:?}");
+    // The driver has read again for the whole bound: the same call is no surer to succeed.
+    assert_eq!(moving.retry(), flui_driver::protocol::error::Retry::Never);
     assert!(
         adb.commands("exec-out uiautomator dump").len() > 3,
         "read again past any count of three"

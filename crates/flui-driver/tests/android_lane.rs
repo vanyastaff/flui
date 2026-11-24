@@ -480,6 +480,7 @@ fn the_windows_give_the_rotation_and_the_focused_apps_frame() {
     // Android 10 and before write the frame as `mFrame=`, a turned display's rotation by name.
     let older = "    mRotation=ROTATION_90 mDeferredRotationPauseCount=0\n\
                  \x20 Window #2 Window{abc u0 dev.flui.scenario/android.app.NativeActivity}:\n\
+                 \x20   mDisplayId=0 stackId=4 mSession=Session{e1 4321:u0a10456} mClient=x\n\
                  \x20   Frames: containing=[0,0][2400,1080] parent=[0,0][2400,1080]\n\
                  \x20   mFrame=[60,0][2400,1080] last=[60,0][2400,1080]\n\
                  \x20 mCurrentFocus=Window{abc u0 dev.flui.scenario/android.app.NativeActivity}\n";
@@ -508,13 +509,51 @@ fn the_windows_give_the_rotation_and_the_focused_apps_frame() {
             .rotation,
         3
     );
-    // No rotation, or one `Surface` does not have, is no reply the lane reads.
+    // A rotation no `Surface` has in another display's section is not the default display's.
+    let unreadable_elsewhere = WINDOWS.replace(
+        "  Display: mDisplayId=0 (organized)",
+        "  Display: mDisplayId=3 (organized)\n    mRotation=9\n  Display: mDisplayId=0 (organized)",
+    );
+    assert_eq!(
+        device::parse_windows(&unreadable_elsewhere)
+            .expect("windows")
+            .rotation,
+        0
+    );
+    // A display id written with a trailing mark is its digits.
+    let marked = WINDOWS.replace(
+        "Display: mDisplayId=0 (organized)",
+        "Display: mDisplayId=0,",
+    );
+    assert_ne!(marked, WINDOWS);
+    assert_eq!(device::parse_windows(&marked).expect("windows").rotation, 0);
+    // No rotation, one `Surface` does not have, or none of the default display (a reply listing
+    // only another display) is no reply the lane reads.
     for refused in [
         WINDOWS.replace("mRotation=0", "mRotation=4"),
         WINDOWS.replace("    mRotation=0 mDeferredRotationPauseCount=0\n", ""),
+        WINDOWS.replace(
+            "Display: mDisplayId=0 (organized)",
+            "Display: mDisplayId=2 (organized)",
+        ),
     ] {
         assert!(device::parse_windows(&refused).is_err(), "{refused}");
     }
+    // The app's window holding the focus on another display frames nothing: the lane drives the
+    // default display.
+    let elsewhere = WINDOWS.replace(
+        "    mDisplayId=0 rootTaskId=13",
+        "    mDisplayId=2 rootTaskId=13",
+    );
+    assert_ne!(elsewhere, WINDOWS);
+    let windows = device::parse_windows(&elsewhere).expect("windows");
+    assert_eq!(
+        windows
+            .focused_window()
+            .and_then(|window| window.display.as_deref()),
+        Some("2")
+    );
+    assert_eq!(windows.focused_frame(), None);
     // The focus on a window the list does not hold, or none, frames nothing.
     let unlisted = WINDOWS.replace(
         "mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario",
@@ -1511,6 +1550,66 @@ fn a_window_the_device_does_not_show_is_not_in_front() {
     assert!(matches!(refused, Error::NotForeground { .. }), "{refused}");
 }
 
+/// The window is located through one shell line: the displays' headers and rotations, and the
+/// windows' headers, displays, frames and focus, each kept by its own `grep` pattern.
+#[test]
+fn the_window_is_located_through_the_display_and_window_dumps() {
+    let adb = scripted(true, true);
+    drop(connected(&adb));
+    assert_eq!(
+        adb.commands("shell dumpsys window displays"),
+        vec![
+            "shell dumpsys window displays | grep -E 'Display: mDisplayId=|mRotation='; \
+             dumpsys window windows | grep -E 'Window #|mDisplayId=|mCurrentFocus=|rame=\\['"
+                .to_owned()
+        ]
+    );
+}
+
+/// The app's window holding the focus on another display than the default one, which `input`,
+/// `screencap` and the rotation read are of, is refused, naming the display.
+#[test]
+fn a_window_on_another_display_is_refused() {
+    let elsewhere = WINDOWS.replace(
+        "    mDisplayId=0 rootTaskId=13",
+        "    mDisplayId=2 rootTaskId=13",
+    );
+    let adb = scripted(true, true)
+        .reply_once("shell dumpsys window displays", AdbReply::new(0, elsewhere));
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    let refused = lane
+        .locate_window(&placement())
+        .expect_err("the window is on display 2");
+    assert_eq!(
+        refused.missing_capability().as_deref(),
+        Some("android_default_display"),
+        "{refused:?}"
+    );
+    assert!(refused.to_string().contains("display 2"), "{refused}");
+}
+
+/// The window holding the focus before a press must be the one the lane located, by its id: a
+/// window of the app's title (the one leaving as the activity starts again) is another window,
+/// and nothing is sent to it.
+#[test]
+fn a_press_with_another_window_of_the_apps_title_in_front_is_refused() {
+    let adb = scripted(true, true).reply_once(
+        "shell dumpsys window windows",
+        AdbReply::new(
+            0,
+            "  mCurrentFocus=Window{7e3d2c1 u0 dev.flui.scenario/android.app.NativeActivity}\n",
+        ),
+    );
+    let mut lane = connected(&adb);
+    let refused = lane::send_guarded(
+        &mut lane,
+        &tap(PointerDevice::Touch, DevicePoint::new(300, 600)),
+    )
+    .expect_err("another window of the app's title holds the focus");
+    assert!(matches!(refused, Error::NotForeground { .. }), "{refused}");
+    assert!(inputs(&adb).is_empty(), "nothing was sent");
+}
+
 /// A device whose user runs an accessibility service (a password manager, an automation app)
 /// still has its window located, pressed on and captured: none of them takes a `uiautomator
 /// dump`, which would pause the service. Only the read of the tree is refused, naming it.
@@ -1538,12 +1637,17 @@ fn a_service_on_a_device_refuses_the_tree_and_nothing_else() {
         .expect_err("no tree while the service runs");
     assert_eq!(
         refused.missing_capability().as_deref(),
-        Some(safety::WINDOW_DUMP)
+        Some("android_tree_dump")
     );
+    let message = refused.to_string();
+    assert!(message.contains("com.example.passwords"), "{message}");
+    // The refusal says what it refuses, the tree, and what goes on: no workaround of locating the
+    // window before the service starts, which the lane no longer needs.
     assert!(
-        refused.to_string().contains("com.example.passwords"),
-        "{refused}"
+        message.contains("reads no tree") && message.contains("still locates the window"),
+        "{message}"
     );
+    assert!(!message.contains("before the service"), "{message}");
     assert_eq!(adb.commands("exec-out uiautomator"), Vec::<String>::new());
 }
 

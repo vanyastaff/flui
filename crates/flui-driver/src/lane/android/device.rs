@@ -224,14 +224,15 @@ pub fn parse_focus(printed: &str) -> Option<String> {
 
 /// The line that prints where the windows are: each display's header (`Display: mDisplayId=N`)
 /// and its rotation (`DisplayRotation`'s `mRotation=`), then each window's header
-/// (`Window #N Window{hash uU title}:`), its frame (`frame=[l,t][r,b]` on its `Frames:` line from
-/// Android 11, `mFrame=[l,t][r,b]` before) and the window holding the input focus
-/// (`mCurrentFocus=`), as `dumpsys window` writes them. It reads no accessibility, so it pauses no
-/// accessibility service.
+/// (`Window #N Window{hash uU title}:`), its display (`mDisplayId=`, the first word of its dump),
+/// its frame (`frame=[l,t][r,b]` on its `Frames:` line from Android 11, `mFrame=[l,t][r,b]`
+/// before) and the window holding the input focus (`mCurrentFocus=`), as `dumpsys window` writes
+/// them. It reads no accessibility, so it pauses no accessibility service.
 pub const WINDOWS: &str = "dumpsys window displays | grep -E 'Display: mDisplayId=|mRotation='; \
-                           dumpsys window windows | grep -E 'Window #|mCurrentFocus=|rame=\\['";
+                           dumpsys window windows | grep -E 'Window #|mDisplayId=|mCurrentFocus=|rame=\\['";
 
-/// The display the app's window is on: the default one.
+/// The display the lane drives, the default one: the one `input`, `screencap` and
+/// `uiautomator dump` address, whose rotation the lane reads, and where the app's window must be.
 pub const DEFAULT_DISPLAY: &str = "0";
 
 /// The most bytes of the [`WINDOWS`] reply the lane reads.
@@ -249,6 +250,8 @@ pub struct WindowFrame {
     pub id: String,
     /// Its title: `package/activity` for an activity's window, `StatusBar` for the status bar.
     pub title: String,
+    /// The display it is on (its `mDisplayId=`); `None` when the dump named none.
+    pub display: Option<String>,
     /// Its frame in display pixels as the display is turned; `None` when no frame was read.
     pub frame: Option<Bounds>,
 }
@@ -269,16 +272,33 @@ pub struct Windows {
 }
 
 impl Windows {
-    /// The frame of the window holding the input focus, found by its id: a window of the same
-    /// title is another window.
+    /// The window holding the input focus, found by its id: a window of the same title is
+    /// another window.
+    #[must_use]
+    pub fn focused_window(&self) -> Option<&WindowFrame> {
+        let focus = self.focus_id.as_deref()?;
+        self.windows.iter().find(|window| window.id == focus)
+    }
+
+    /// The frame of the window holding the input focus, when that window is on the default
+    /// display ([`DEFAULT_DISPLAY`]), the one the rotation, `input` and `screencap` are of.
     #[must_use]
     pub fn focused_frame(&self) -> Option<Bounds> {
-        let focus = self.focus_id.as_deref()?;
-        self.windows
-            .iter()
-            .find(|window| window.id == focus)
+        self.focused_window()
+            .filter(|window| window.display.as_deref() == Some(DEFAULT_DISPLAY))
             .and_then(|window| window.frame)
     }
+}
+
+/// The id of the window holding the input focus, from a reply holding its `mCurrentFocus=` line
+/// ([`FOCUS`], [`WINDOWS`]).
+#[must_use]
+pub fn parse_focus_id(printed: &str) -> Option<String> {
+    printed
+        .lines()
+        .find_map(|line| line.split_once("mCurrentFocus="))
+        .and_then(|(_, window)| window_named(window.trim()))
+        .map(|(id, _)| id)
 }
 
 /// The windows the [`WINDOWS`] line printed as `printed`: see [`Windows`]. The rotation is the
@@ -293,7 +313,7 @@ impl Windows {
 pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
     let mut rotation = None;
     // The display whose section the lines are in; `None` before any display's header.
-    let mut display: Option<&str> = None;
+    let mut display: Option<String> = None;
     let mut windows: Vec<WindowFrame> = Vec::new();
     let mut in_window = false;
     for line in printed.lines() {
@@ -301,11 +321,13 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
         if line.starts_with("Display:")
             && let Some(id) = word_value(line, "mDisplayId=")
         {
-            display = Some(id.trim_end_matches(|c: char| !c.is_ascii_digit()));
+            display = Some(display_id(id));
             continue;
         }
         if rotation.is_none()
-            && display.is_none_or(|display| display == DEFAULT_DISPLAY)
+            && display
+                .as_deref()
+                .is_none_or(|display| display == DEFAULT_DISPLAY)
             && let Some(value) = word_value(line, "mRotation=")
         {
             rotation = match value.trim_end_matches(',') {
@@ -325,31 +347,35 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
                 windows.push(WindowFrame {
                     id,
                     title,
+                    display: None,
                     frame: None,
                 });
                 in_window = true;
             }
             continue;
         }
-        if in_window
-            && let Some(window) = windows.last_mut()
-            && window.frame.is_none()
-        {
-            window.frame = frame_of(line);
+        if in_window && let Some(window) = windows.last_mut() {
+            if window.display.is_none() {
+                window.display = word_value(line, "mDisplayId=").map(display_id);
+            }
+            if window.frame.is_none() {
+                window.frame = frame_of(line);
+            }
         }
     }
     let rotation = rotation
         .ok_or_else(|| "`dumpsys` printed no rotation of the default display".to_owned())?;
-    let focused = printed
-        .lines()
-        .find_map(|line| line.split_once("mCurrentFocus="))
-        .and_then(|(_, window)| window_named(window.trim()));
     Ok(Windows {
         rotation,
         windows,
         focus: parse_focus(printed),
-        focus_id: focused.map(|(id, _)| id),
+        focus_id: parse_focus_id(printed),
     })
+}
+
+/// A display's id as an `mDisplayId=` word gives it, the digits before any trailing mark.
+fn display_id(value: &str) -> String {
+    value.chars().take_while(char::is_ascii_digit).collect()
 }
 
 /// The value of the word of `line` that starts with `key`, wherever in the line it stands.

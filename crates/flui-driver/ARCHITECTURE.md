@@ -129,15 +129,21 @@ app's trees, frames and input, and this crate composes that with what only the O
   the app's root, where `FluiView.install` puts it, and a node fits an app node by structure and
   the order the adapter adds children in (those `accesskit_consumer`'s filter keeps), the class
   `lane::android::roles` gives its AccessKit role, its content description, its toggled state
-  (a radio button's selection included) and enabled state, and its bounds at the surface's
-  origin; two candidates the order does not tell apart are `Error::Ambiguous`, and bounds off the
-  display place a node nowhere. Only a matched node carries the app's role and identifier; what a
-  dump cannot show (`tree::Unobservable`) projects as the app published it. Only the read of the
-  tree dumps: the window is located from `dumpsys window` (`device::parse_windows`), so input and
-  capture pause no accessibility service, and on a device no dump runs while any service does
-  (`safety::check_dump`). The OS tree and the app's are of one revision, read again while the
-  app's moves for at most two seconds (`Window::compare_projection`). `invoke` is refused, since
-  UI Automator performs no accessibility action.
+  where the app's read reports it (a radio button's selection included; a grid cell's, and that
+  of a list item, list box option, menu list option, tab or tree item publishing a selection, it
+  does not report, and the match does not read the dump's: `tree::Unobservable::UnreportedToggle`)
+  and enabled state, and its bounds at the surface's origin; two candidates the order does not
+  tell apart are `Error::Ambiguous`, and bounds off the display place a node nowhere. Only a
+  matched node carries the app's role and identifier; what a dump cannot show
+  (`tree::Unobservable`) projects as the app published it. Only the read of the tree dumps: the
+  window is located from `dumpsys window` (`device::parse_windows`): the focused window by its
+  id, on the default display, located again after the dump, which a moved window or another
+  turn makes `Busy`; so input and capture pause no accessibility service, and no dump runs while
+  any service does (`safety::check_dump`). `invoke` is refused, since UI Automator performs no
+  accessibility action.
+- **The OS tree is compared with the app's tree of its own revision, on every lane:**
+  `Window::compare_projection` reads the app's tree again while it moves, by the rule its
+  rustdoc states, and answers `Busy` when it never held still.
 - **The iOS Simulator lane sends no input** until a supported channel exists (the flui-driver
   spec's rule; `lane::ios_simulator::xcode` has the evidence): `Lane::check` refuses every input
   event as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything

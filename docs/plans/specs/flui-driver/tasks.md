@@ -1089,7 +1089,7 @@ graph LR
     `a_stream_is_cut_into_lines_and_json_objects_and_a_record_is_bounded`,
     `a_command_fails_on_its_exit_code_or_on_what_the_device_printed`,
     `the_devices_listing_is_read_and_only_a_named_ready_device_is_taken`,
-    `what_the_device_prints_reads_into_its_facts`, `the_dump_gives_the_rotation_and_the_apps_surface`,
+    `what_the_device_prints_reads_into_its_facts`, `the_windows_give_the_rotation_and_the_focused_apps_frame`,
     `a_raw_capture_is_read_in_both_header_forms_and_refused_when_it_lies`,
     `a_png_capture_decodes_and_a_window_is_cut_from_it`,
     `getevent_lines_tell_the_lanes_devices_from_everyone_elses`,
@@ -1144,7 +1144,9 @@ graph LR
     `uinput` probe and the pen's hover, press and leave on a device that allows it, and the probe's
     refusal on one that does not; the pen's axes at each rotation and under a `wm size` override;
     `getevent -l` over `adb shell -tt` seeing the person's touch and not the lane's `input`
-    commands; `uiautomator dump` answering while the app animates; `screencap`'s raw header and
+    commands; the window's frame and rotation as the device's `dumpsys window` prints them (the
+    window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`);
+    `uiautomator dump` answering while the app animates; `screencap`'s raw header and
     format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
     endpoint forward and the app's exit when the session ends; which window is under the point
     before a press (a heads-up notification, the input method, an overlay), which the lane does
@@ -1188,10 +1190,11 @@ graph LR
     and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
     port tried when one is taken, is removed by that port once `adb` made it or may have.
   - `uiautomator dump` suspends every accessibility service running while it dumps, so only the
-    read of the tree takes one, and on a device it is refused while any service is on
-    (`enabled_accessibility_services`, a list never set or emptied being none) or touch
-    exploration is, naming `android_window_dump` and the services; an emulator runs nobody's
-    service (`docs/gaps.md`). Input and capture take no dump.
+    read of the tree takes one, and on a device or an emulator it is refused while any service is
+    on (`enabled_accessibility_services`, a list never set or emptied being none) or touch
+    exploration is, naming `android_tree_dump` and the services (`docs/gaps.md`). Input and
+    capture take no dump. The window is the focused one by its id, on the default display, and
+    the focus check before each press, key, text and scroll compares that id.
   - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
     sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,
     which `Lane::read_tree` is handed, of one revision with the OS tree: the root is the decor
