@@ -6,11 +6,11 @@
 # that job's log, with the reason in the pull request.
 
 [size]
-counter_release_bytes = 21988456
-counter_wasm_bytes = 13890883
+counter_release_bytes = 21985504
+counter_wasm_bytes = 13900111
 crates_android = 223
 crates_linux = 274
 crates_macos = 206
 crates_wasm32 = 179
 crates_windows = 205
-hot_reload_host_release_bytes = 22139752
+hot_reload_host_release_bytes = 22136544
