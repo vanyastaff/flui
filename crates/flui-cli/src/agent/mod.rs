@@ -26,6 +26,7 @@ pub(crate) mod browser;
 pub(crate) mod build_report;
 pub(crate) mod client;
 pub(crate) mod forward;
+pub(crate) mod listener;
 pub(crate) mod mcp;
 pub(crate) mod record;
 

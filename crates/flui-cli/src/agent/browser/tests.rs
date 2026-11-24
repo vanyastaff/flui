@@ -85,7 +85,7 @@ fn the_pipe_admits_the_user_whoami_names_by_sid() {
         ),
         ("\r\nUSER INFORMATION\r\n".to_owned(), None),
     ] {
-        assert_eq!(relay::sid_in_whoami(&table), expected, "{table}");
+        assert_eq!(crate::agent::listener::sid_in_whoami(&table), expected, "{table}");
     }
 }
 

@@ -8,6 +8,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 use flui_protocol::framing::{LineReader, MAX_LINE};
+use flui_protocol::launch::same_token;
 use flui_protocol::method::{Method as _, RecordStart};
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
@@ -564,17 +565,6 @@ fn parse_hello(line: &[u8]) -> Option<Hello> {
     serde_json::from_slice::<Greeting>(line)
         .ok()
         .map(|greeting| greeting.hello)
-}
-
-/// Compares two tokens in time that depends on their lengths only.
-fn same_token(presented: &[u8], expected: &[u8]) -> bool {
-    let mut difference = presented.len() ^ expected.len();
-    for index in 0..presented.len().max(expected.len()) {
-        let a = presented.get(index).copied().unwrap_or(0);
-        let b = expected.get(index).copied().unwrap_or(0);
-        difference |= usize::from(a ^ b);
-    }
-    std::hint::black_box(difference) == 0
 }
 
 /// The refusal of a line that is not a request: it answers the line's id when the line carries
