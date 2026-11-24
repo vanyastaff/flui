@@ -1877,4 +1877,15 @@ fn the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart() {
     assert!(cut.to_string().contains("levels"), "{cut}");
     let read = walk::read(&mut tree, &0, UIA_TIMEOUT).expect("a read");
     assert!(read.truncated, "a read cut by depth says so");
+
+    // The first element past the depth is only asked whether it has a child: found gone there,
+    // the search says an element went away, not that the depth cut it.
+    tree.children_gone = Some(walk::MAX_DEPTH);
+    let gone = walk::find(&mut tree, 0, "deep", UIA_TIMEOUT).expect_err("gone past the depth");
+    assert!(
+        gone.to_string()
+            .contains("went away before all its children were searched")
+            && !gone.to_string().contains("levels"),
+        "{gone}"
+    );
 }

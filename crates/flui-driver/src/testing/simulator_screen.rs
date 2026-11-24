@@ -38,8 +38,8 @@ impl Script {
 /// read takes one (`ios_simulator::tree::choose_window`): a read of another title finds no window
 /// on screen, and one of the title is taken by what its attributes name ([`Self::identity`]), so
 /// a window that names no UUID is refused while another listed simulator shares the title. A
-/// press finds the element as the Mac's does (`ios_simulator::tree::locate`, refusing none and
-/// two) and is recorded. Clones share one script, so a test keeps one while the lane owns
+/// press finds the element as the Mac's does (`ios_simulator::tree::locate`, refusing none, two,
+/// and one on a screen scripted as read short) and is recorded. Clones share one script, so a test keeps one while the lane owns
 /// another.
 #[derive(Debug, Clone)]
 pub struct ScriptedSimulatorScreen {

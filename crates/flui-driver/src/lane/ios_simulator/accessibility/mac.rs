@@ -36,7 +36,7 @@ use super::{
 use crate::error::{Error, Result};
 use crate::lane::ax;
 use crate::lane::ios_simulator::tree::{self, WindowFacts, WindowTree};
-use crate::lane::walk::{MAX_NODES, ProviderError};
+use crate::lane::walk::ProviderError;
 
 /// How long an owner of a window on screen may take to list its windows, in seconds: the probe
 /// asks every one, and a hung app must not hold the read for the client's whole timeout.
@@ -96,7 +96,7 @@ impl Ax {
 
     /// What a failed call answers: [`read_failure`] with the process's trust asked now and the
     /// deadline of the element the call was asked of.
-    fn failure(&self, error: ProviderError) -> Error {
+    fn failed(&self, error: ProviderError) -> Error {
         read_failure(error, ax::trusted(), self.asking)
     }
 
@@ -162,7 +162,7 @@ fn read_screen(screen: &ScreenRequest) -> Result<(HostScreen, ScreenWalk<Asked>)
         .map(Asked::new)
         .collect::<Vec<Asked>>();
     let (group, frame) = tree::find_screen(&mut ax, screen, windows)?;
-    let walk = walk_screen(&mut ax, &group).map_err(|error| ax.failure(error))?;
+    let walk = walk_screen(&mut ax, &group).map_err(|error| ax.failed(error))?;
     Ok((walk.screen(frame), walk))
 }
 
@@ -210,25 +210,23 @@ impl ScreenSource for Ax {
 impl WindowTree for Ax {
     type Element = Asked;
 
-    fn children(&mut self, element: &Asked) -> Result<(Vec<Asked>, bool)> {
-        let mut children = Vec::new();
-        while children.len() < MAX_NODES {
-            match self.child(element, children.len()) {
-                Ok(Some(child)) => children.push(child),
-                Ok(None) => return Ok((children, false)),
-                Err(ProviderError::Gone) => return Ok((children, true)),
-                Err(error) => return Err(self.failure(error)),
-            }
-        }
-        // The bound stopped the listing, so the list is short of the element's children.
-        Ok((children, true))
+    fn child_at(
+        &mut self,
+        element: &Asked,
+        index: usize,
+    ) -> std::result::Result<Option<Asked>, ProviderError> {
+        self.child(element, index)
+    }
+
+    fn failure(&mut self, error: ProviderError) -> Error {
+        self.failed(error)
     }
 
     fn facts(&mut self, element: &Asked) -> Result<WindowFacts> {
         let element = self.ask(element);
         let text = |name: &'static str| -> Result<Option<String>> {
             Ok(ax::attribute(element, name)
-                .map_err(|error| self.failure(error))?
+                .map_err(|error| self.failed(error))?
                 .as_deref()
                 .and_then(ax::string))
         };
@@ -238,7 +236,7 @@ impl WindowTree for Ax {
             role,
             subrole,
             frame: ax::frame(element)
-                .map_err(|error| self.failure(error))?
+                .map_err(|error| self.failed(error))?
                 .map(|(x, y, width, height)| PointFrame::new(x, y, width, height)),
         })
     }
@@ -249,7 +247,7 @@ impl WindowTree for Ax {
         for name in ["AXIdentifier", "AXDocument"] {
             texts.push(
                 ax::attribute(window, name)
-                    .map_err(|error| self.failure(error))?
+                    .map_err(|error| self.failed(error))?
                     .as_deref()
                     .and_then(ax::string),
             );

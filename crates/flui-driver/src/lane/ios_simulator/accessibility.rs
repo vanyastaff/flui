@@ -248,15 +248,17 @@ pub enum WindowIdentity {
 /// that names any other UUID is not, whatever the UUID is (another simulator's, from any device
 /// set, a document's), so a window is never taken on a UUID nobody checked; one that names none is
 /// `Unknown`, taken only while no other listed simulator shares its title
-/// ([`ScreenRequest::others_titled`]). A UUID is found wherever its 8-4-4-4-12 form stands with no
-/// hexadecimal digit on either side, whatever joins it to the text around it (`.`, `/`, `-`, `_`
-/// or nothing). No run has shown which attribute, if any, carries a UDID, or in what form.
+/// ([`ScreenRequest::others_titled`]). Every run of characters in a UUID's 8-4-4-4-12 form is
+/// read as a UUID, whatever stands beside it, a hexadecimal digit included: `udid` found
+/// anywhere makes the window `Named`; any other run of the form, and no `udid`, makes it `Other`,
+/// so a run glued to the text around it (`SimDevice<UUID>`, `<UUID>abc`) never reads as naming
+/// none. No run has shown which attribute, if any, carries a UDID, or in what form.
 #[must_use]
 pub fn window_identity(udid: &Udid, attributes: &[Option<String>]) -> WindowIdentity {
     let mut names_other = false;
     for text in attributes.iter().flatten() {
-        for found in uuids(text) {
-            if found == *udid {
+        for run in uuid_runs(text) {
+            if run.eq_ignore_ascii_case(udid.as_str()) {
                 return WindowIdentity::Named;
             }
             names_other = true;
@@ -272,19 +274,21 @@ pub fn window_identity(udid: &Udid, attributes: &[Option<String>]) -> WindowIden
 /// The length of a UUID's 8-4-4-4-12 form.
 const UUID_LEN: usize = 36;
 
-/// Every UUID in `text`: each run of [`UUID_LEN`] characters in the 8-4-4-4-12 form with no
-/// hexadecimal digit just before or just after it.
-fn uuids(text: &str) -> impl Iterator<Item = Udid> + '_ {
-    let bytes = text.as_bytes();
-    (0..=bytes.len().saturating_sub(UUID_LEN)).filter_map(move |start| {
-        let bounded = (start == 0 || !bytes[start - 1].is_ascii_hexdigit())
-            && bytes
-                .get(start + UUID_LEN)
-                .is_none_or(|after| !after.is_ascii_hexdigit());
-        if !bounded {
-            return None;
-        }
-        Udid::try_new(text.get(start..start + UUID_LEN)?).ok()
+/// Every run of [`UUID_LEN`] characters in `text` in a UUID's 8-4-4-4-12 form, whatever stands
+/// beside it, overlapping runs included.
+fn uuid_runs(text: &str) -> impl Iterator<Item = &str> + '_ {
+    (0..=text.len().saturating_sub(UUID_LEN)).filter_map(move |start| {
+        let run = text.get(start..start + UUID_LEN)?;
+        run.bytes()
+            .enumerate()
+            .all(|(at, byte)| {
+                if matches!(at, 8 | 13 | 18 | 23) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit()
+                }
+            })
+            .then_some(run)
     })
 }
 
@@ -361,19 +365,22 @@ pub fn read_failure(error: ProviderError, trusted: bool, deadline: Option<Durati
 }
 
 /// What pressing the element `label` answered: `offered`, whether it offers `AXPress`, and then
-/// `perform`, the press, made only when it does. A failure while the process is no trusted
-/// accessibility client is [`untrusted`] (`trusted` asked after it); a call that did not answer
-/// names `deadline`, the one the read gave this element, or, as `None`, says it refused that
-/// deadline and kept its own; the rest is [`walk::pattern`] and [`walk::invoked`].
+/// `perform`, the press, made only when it does. `trusted` is asked after a failure.
+///
+/// Before the press is sent, a failure while the process is no trusted accessibility client is
+/// [`untrusted`], whatever the call said. Once it is sent, the failure decides: a press not
+/// answered, or whose element went away during it, may have run and says so (`may_have_run`)
+/// whatever the trust, the permission taken back named in its message, so it is never sent again
+/// as if it had not; only a press that failed otherwise is [`untrusted`] when trust is gone. A
+/// call that did not answer names `deadline`, the one the read gave this element, or, as `None`,
+/// says it refused that deadline and kept its own.
 ///
 /// # Errors
 ///
 /// [`Error::NotSupported`] as [`untrusted`]; [`Error::ActionUnsupported`] when it offers no
-/// press; [`Error::Timeout`], with `may_have_run` for the press, when a call was not answered;
-/// [`Error::Gone`] and [`Error::Platform`] as [`walk::invoked`].
-///
-/// [`walk::pattern`]: crate::lane::walk::pattern
-/// [`walk::invoked`]: crate::lane::walk::invoked
+/// press; [`Error::Timeout`] when a call was not answered and [`Error::Gone`] when the element
+/// went away, each with `may_have_run` once the press was sent; [`Error::Platform`] when a call
+/// failed otherwise.
 pub fn pressed(
     offered: std::result::Result<bool, ProviderError>,
     perform: impl FnOnce() -> std::result::Result<(), ProviderError>,
@@ -381,37 +388,85 @@ pub fn pressed(
     deadline: Option<Duration>,
     trusted: impl Fn() -> bool,
 ) -> Result<()> {
-    let unanswered = |what: &str, may_have_run: bool| Error::Timeout {
-        awaited: crate::error::Awaited::Host,
-        effect: may_have_run.then(|| Effect::new(EffectKind::MayHaveRun)),
-        message: format!(
-            "the Simulator's window did not answer {what} {label:?} {}{}",
-            within(deadline),
-            if may_have_run {
-                ": read the tree for its effect"
-            } else {
-                ""
-            }
-        ),
-        retry: ErrorCode::Timeout.default_retry(),
-    };
-    if offered.is_err() && !trusted() {
-        return Err(untrusted());
-    }
-    let offered = match offered {
+    let may_have_run = || Some(Effect::new(EffectKind::MayHaveRun));
+    let offers = match offered {
+        Ok(offers) => offers,
+        Err(_) if !trusted() => return Err(untrusted()),
         Err(ProviderError::Timeout) => {
-            return Err(unanswered("whether it offers a press for", false));
+            return Err(Error::Timeout {
+                awaited: crate::error::Awaited::Host,
+                effect: None,
+                message: format!(
+                    "the Simulator's window did not answer whether {label:?} offers a press {}",
+                    within(deadline)
+                ),
+                retry: ErrorCode::Timeout.default_retry(),
+            });
         }
-        offered => offered.map(|offers| offers.then_some(())),
+        Err(ProviderError::Gone) => {
+            return Err(pressed_gone(
+                label,
+                "before it was asked for its press",
+                None,
+            ));
+        }
+        Err(ProviderError::Failed(why)) => {
+            return Err(Error::Platform {
+                effect: None,
+                message: format!("whether {label:?} offers a press could not be read: {why}"),
+                retry: Retry::Never,
+            });
+        }
     };
-    // A timeout is answered here and below, so the pattern's and the invoke's own timeout
-    // messages, which this deadline would fill, are never reached.
-    let unused = Duration::ZERO;
-    crate::lane::walk::pattern(offered, label, "AXPress", unused)?;
-    match perform() {
-        Err(_) if !trusted() => Err(untrusted()),
-        Err(ProviderError::Timeout) => Err(unanswered("the press of", true)),
-        answer => crate::lane::walk::invoked(answer, label, unused),
+    if !offers {
+        return Err(Error::ActionUnsupported {
+            message: format!("the element {label:?} offers no AXPress"),
+            retry: ErrorCode::ActionUnsupported.default_retry(),
+        });
+    }
+    let Err(failure) = perform() else {
+        return Ok(());
+    };
+    let permission = if trusted() {
+        ""
+    } else {
+        "; the process has lost the Accessibility permission since, so grant it again under \
+         System Settings > Privacy & Security > Accessibility before the next call"
+    };
+    match failure {
+        ProviderError::Timeout => Err(Error::Timeout {
+            awaited: crate::error::Awaited::Host,
+            effect: may_have_run(),
+            message: format!(
+                "the Simulator's window did not answer the press of {label:?} {}: read the tree \
+                 for its effect{permission}",
+                within(deadline)
+            ),
+            retry: ErrorCode::Timeout.default_retry(),
+        }),
+        ProviderError::Gone => Err(pressed_gone(
+            label,
+            &format!("while it was pressed, which may have run first{permission}"),
+            may_have_run(),
+        )),
+        ProviderError::Failed(_) if !permission.is_empty() => Err(untrusted()),
+        ProviderError::Failed(why) => Err(Error::Platform {
+            effect: None,
+            message: format!("pressing {label:?} failed: {why}"),
+            retry: Retry::Never,
+        }),
+    }
+}
+
+/// The element `label` gone `when`, with what reached it.
+fn pressed_gone(label: &str, when: &str, effect: Option<Effect>) -> Error {
+    Error::Gone {
+        kind: Some(HandleKind::Element),
+        handle: None,
+        exit: None,
+        effect,
+        message: format!("the element {label:?} went away {when}"),
+        retry: ErrorCode::Gone.default_retry(),
     }
 }
 
@@ -498,12 +553,53 @@ impl<E> ScreenWalk<E> {
     }
 }
 
+/// A parent's children as [`list_children`] lists them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildList<E> {
+    /// The children listed, in the API's order.
+    pub children: Vec<E>,
+    /// Whether the list is short of the parent's children: the parent went away before they were
+    /// all listed, or one is there past the bound.
+    pub cut: bool,
+}
+
+/// The children of a parent, `child_at` asked for each index in turn, at most `bound` of them:
+/// the list ends whole when `child_at` answers `None`, and is cut when the parent is gone
+/// ([`ProviderError::Gone`]) or a child is there at index `bound`, which is asked before the list
+/// is called cut, so a parent of exactly `bound` children is listed whole. A `bound` of zero asks
+/// only whether a first child is there. Both the screen's walk ([`walk_screen`]) and the window's
+/// search (`tree::find_screen`) list through it.
+///
+/// # Errors
+///
+/// Any other failure of `child_at`, as it answered.
+pub fn list_children<E>(
+    mut child_at: impl FnMut(usize) -> std::result::Result<Option<E>, ProviderError>,
+    bound: usize,
+) -> std::result::Result<ChildList<E>, ProviderError> {
+    let mut children = Vec::new();
+    loop {
+        let index = children.len();
+        let cut = match child_at(index) {
+            Ok(Some(child)) if index < bound => {
+                children.push(child);
+                continue;
+            }
+            Ok(Some(_)) | Err(ProviderError::Gone) => true,
+            Ok(None) => false,
+            Err(error) => return Err(error),
+        };
+        return Ok(ChildList { children, cut });
+    }
+}
+
 /// The elements under `screen`, read from `source` within [`MAX_NODES`] elements and
-/// [`MAX_DEPTH`] levels. A level stops short the same way whatever stops it, the node budget or
-/// its parent gone mid-read: the parent's children are marked unread and the walk truncated, never
-/// a shorter list read as whole; an element on the deepest level read has its children marked
-/// unread when it has a child or went away before it said. An element that went away while its
-/// own attributes were read is left out.
+/// [`MAX_DEPTH`] levels, each level listed by [`list_children`] within what is left of the
+/// budget, then each child read in turn. A level stops short the same way whatever stops it, the
+/// node budget or its parent gone mid-read: the parent's children are marked unread and the walk
+/// truncated, never a shorter list read as whole; an element on the deepest level read has its
+/// children marked unread when it has a child or went away before it said. An element that went
+/// away while its own attributes were read is left out.
 ///
 /// # Errors
 ///
@@ -544,35 +640,14 @@ impl ScreenWalker {
         parent: &S::Element,
         depth: usize,
     ) -> std::result::Result<Level<S::Element>, ProviderError> {
-        let mut children = Vec::new();
-        let mut index = 0;
-        loop {
-            let handle = match source.child_at(parent, index) {
-                Ok(Some(child)) => child,
-                Ok(None) => {
-                    return Ok(Level {
-                        children,
-                        unread: false,
-                    });
-                }
-                Err(ProviderError::Gone) => {
-                    self.truncated = true;
-                    return Ok(Level {
-                        children,
-                        unread: true,
-                    });
-                }
-                Err(error) => return Err(error),
-            };
-            index += 1;
-            if self.visited >= MAX_NODES {
-                self.truncated = true;
-                return Ok(Level {
-                    children,
-                    unread: true,
-                });
-            }
-            self.visited += 1;
+        let listed = list_children(
+            |index| source.child_at(parent, index),
+            MAX_NODES.saturating_sub(self.visited),
+        )?;
+        self.visited += listed.children.len();
+        self.truncated |= listed.cut;
+        let mut children = Vec::with_capacity(listed.children.len());
+        for handle in listed.children {
             let mut element = match source.element(&handle) {
                 Ok(element) => element,
                 // An element that went away while it was read is left out.
@@ -582,13 +657,9 @@ impl ScreenWalker {
             let grandchildren = if depth + 1 >= MAX_DEPTH {
                 // Past the depth only whether a child is there is asked: one there, or the
                 // element gone before it said, leaves its children unread.
-                let more = match source.child_at(&handle, 0) {
-                    Ok(first) => first.is_some(),
-                    Err(ProviderError::Gone) => true,
-                    Err(error) => return Err(error),
-                };
-                element.children_unread = more;
-                self.truncated |= more;
+                let probe = list_children(|index| source.child_at(&handle, index), 0)?;
+                element.children_unread = probe.cut;
+                self.truncated |= probe.cut;
                 Vec::new()
             } else {
                 let level = self.children_of(source, &handle, depth + 1)?;
@@ -601,6 +672,10 @@ impl ScreenWalker {
                 children: grandchildren,
             });
         }
+        Ok(Level {
+            children,
+            unread: listed.cut,
+        })
     }
 }
 

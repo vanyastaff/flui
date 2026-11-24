@@ -1392,6 +1392,8 @@ graph LR
     `a_level_read_short_is_marked_whatever_stopped_it`,
     `the_walk_reads_its_depth_and_marks_what_lies_past_it`,
     `the_walk_reads_its_budget_and_leaves_out_a_gone_element`,
+    `a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone`,
+    `the_search_keeps_to_its_budget_and_depth`,
     `a_group_gone_mid_search_cuts_the_search_short`,
     `the_search_reaches_devicehubs_screen_seven_levels_down`,
     `the_search_reaches_a_screen_inside_simulator_apps_bezel`,
@@ -1469,7 +1471,8 @@ graph LR
     device looked up by its UDID in the listing read before each read, renamed or removed
     refused. The screen is found by walking every group of
     the window within ten levels: an `iOSContentGroup` (DeviceHub) when there is one, else the
-    shallowest group of the app's window's shape (Simulator.app, inside its bezel or not).
+    shallowest group of the app's window's shape (Simulator.app, inside its bezel or not), which a
+    search left partial by a group gone or its budget does not take.
     `accesskit_ios` serves the elements VoiceOver reads, so an element is matched among the
     descendants of the node its nearest matched ancestor fits. The client is shared with the macOS
     lane as `lane::ax`, and `Lane::invoke` is handed the app's tree as `read_tree` is.

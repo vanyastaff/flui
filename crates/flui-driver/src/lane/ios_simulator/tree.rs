@@ -13,7 +13,9 @@
 //!   is [`SCREEN_SUBROLE`]. The search walks every group within [`MAX_SCREEN_DEPTH`] levels,
 //!   going into each but a [`SCREEN_SUBROLE`] one, whose children are the app's, and
 //!   [`choose_screen`] takes a [`SCREEN_SUBROLE`] group when there is one and the shallowest of
-//!   the window's shape otherwise. The window draws the screen scaled (DeviceHub at about three
+//!   the window's shape otherwise, but only from a search that read its levels whole: one that a
+//!   group gone or its budget left partial ([`SearchReach::Partial`]) takes no plain group
+//!   ([`TreeError::SearchCut`]). The window draws the screen scaled (DeviceHub at about three
 //!   quarters), so an element's frame is placed on the app's window by the screen's scale
 //!   ([`window_rect`]).
 //! - **What an element reads as** ([`describe`]): its native role (`AXRole` or
@@ -37,7 +39,8 @@
 //!   [`BOUNDS_TOLERANCE_POINTS`] on each edge. An element with no frame fits only an app node with
 //!   none either.
 //! - **Ambiguity** is refused, never guessed: two elements that fit one app node, two app nodes
-//!   that fit one element, or two elements a press could mean ([`locate`]) answer
+//!   that fit one element, or two elements a press could mean, or one on a read that stopped
+//!   short, where a second may sit in the part not read ([`locate`]), answer
 //!   [`TreeError::Ambiguous`] or [`Error::Ambiguous`].
 //!
 //! A matched element carries the app node's role and identifier, which the match checked against
@@ -56,13 +59,13 @@ use flui_protocol::tree::{ElementId, Node, Rect, Tree};
 use flui_protocol::wire::{Checked, Role};
 
 use super::accessibility::{
-    HostScreen, PointFrame, ScreenElement, ScreenRequest, WindowIdentity, no_window,
+    HostScreen, PointFrame, ScreenElement, ScreenRequest, WindowIdentity, list_children, no_window,
     window_identity,
 };
 use super::roles::{self, SCREEN_SUBROLE};
 use crate::error::{Error, Result};
 use crate::lane::ax;
-use crate::lane::walk::MAX_NODES;
+use crate::lane::walk::{MAX_DEPTH, MAX_NODES, ProviderError};
 
 /// How far, in the window's points, an edge of an element's frame may sit from the same edge of
 /// the app node it fits: the bridge places an iOS frame in the Mac's points and the window draws
@@ -99,6 +102,21 @@ pub struct ScreenCandidate {
     pub depth: usize,
 }
 
+/// How much of the device's window the screen search read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SearchReach {
+    /// Every element within the levels it searched, and nothing below them.
+    Whole,
+    /// Every element within [`MAX_SCREEN_DEPTH`] levels, groups on the deepest level not
+    /// entered: the levels searched were read whole, so the shallowest group of the window's
+    /// shape among them is the shallowest there is within the depth a screen may sit at.
+    ToDepth,
+    /// Part of the levels it searched: a group went away while its children were listed, or the
+    /// budget ran out.
+    Partial,
+}
+
 /// Why the Simulator's elements could not be read as the app's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -109,9 +127,15 @@ pub enum TreeError {
         title: String,
         /// The groups it shows, for people, at most ten.
         groups: Vec<String>,
-        /// Whether the search saw only part of the window: its budget ran out, or a group's list
-        /// of children came back short (it went away, or the listing's bound stopped it).
-        cut_short: bool,
+        /// How much of the window the search read.
+        reach: SearchReach,
+    },
+    /// The search read only part of the levels it searched and found no [`SCREEN_SUBROLE`]
+    /// group, so a plain group of the window's shape is not taken: the marked one may sit in the
+    /// part not read.
+    SearchCut {
+        /// The window's title.
+        title: String,
     },
     /// The app published no tree of the window to match the elements against.
     NoAppTree,
@@ -132,22 +156,35 @@ impl TreeError {
             Self::NoScreen {
                 title,
                 groups,
-                cut_short,
+                reach,
             } => Error::NotFound {
                 message: format!(
                     "the window {title:?} shows no group with the shape of the app's window, \
                      which is the device's screen{}: the device has not drawn yet, or the window \
                      shows another device",
-                    if cut_short {
-                        format!(
-                            " in the part of it read before the search's budget ({MAX_NODES} \
-                             elements, {MAX_SCREEN_DEPTH} levels) ran out or a group went away"
-                        )
-                    } else {
-                        String::new()
+                    match reach {
+                        SearchReach::Whole => String::new(),
+                        SearchReach::ToDepth => {
+                            format!(" within the {MAX_SCREEN_DEPTH} levels searched")
+                        }
+                        SearchReach::Partial => format!(
+                            " in the part of it read before a group went away or the search's \
+                             budget ({MAX_NODES} elements) ran out"
+                        ),
                     }
                 ),
                 candidates: groups,
+                retry: ErrorCode::NotFound.default_retry(),
+            },
+            Self::SearchCut { title } => Error::NotFound {
+                message: format!(
+                    "the search of the window {title:?} was cut short, by a group that went away \
+                     or by its budget ({MAX_NODES} elements), before it found the device's screen \
+                     by its subrole {SCREEN_SUBROLE}: a group of the app's window's shape was \
+                     seen, but the screen may sit in the part not read, so none is taken; read \
+                     again"
+                ),
+                candidates: Vec::new(),
                 retry: ErrorCode::NotFound.default_retry(),
             },
             Self::NoAppTree => Error::NotFound {
@@ -186,14 +223,21 @@ pub trait WindowTree {
     /// One element of a window, the window itself included.
     type Element: Clone;
 
-    /// The children of `element`, in the API's order, and whether the list is short of
-    /// `element`'s children: it went away before they were all listed, or a bound stopped the
-    /// listing.
+    /// The child of `element` at `index`, in the API's order; `None` past the last. The search
+    /// lists children through [`list_children`], which holds the bound.
     ///
     /// # Errors
     ///
-    /// The API's failure.
-    fn children(&mut self, element: &Self::Element) -> Result<(Vec<Self::Element>, bool)>;
+    /// [`ProviderError::Gone`] when `element` went away, which cuts its list short; any other
+    /// failure fails the search, as [`Self::failure`] answers it.
+    fn child_at(
+        &mut self,
+        element: &Self::Element,
+        index: usize,
+    ) -> std::result::Result<Option<Self::Element>, ProviderError>;
+
+    /// What a child read that failed with `error` answers.
+    fn failure(&mut self, error: ProviderError) -> Error;
 
     /// What `element` is and where.
     ///
@@ -304,13 +348,16 @@ fn the_window<T: WindowTree>(
 /// The device's screen among `windows`, the windows on screen titled as `screen` asks: the
 /// window [`choose_window`] takes; and in it the group [`choose_screen`] takes among every group
 /// within [`MAX_SCREEN_DEPTH`] levels and [`MAX_NODES`] elements, the search going into each but
-/// a [`SCREEN_SUBROLE`] group. A parent gone mid-search cuts the search short, as the budgets do,
-/// which a failure to find the screen names.
+/// a [`SCREEN_SUBROLE`] group, breadth first, each group's children listed by
+/// [`list_children`] within what is left of the budget. A group gone mid-search, or the budget,
+/// leaves part of the levels unread ([`SearchReach::Partial`]); groups past the deepest level are
+/// not entered ([`SearchReach::ToDepth`]).
 ///
 /// # Errors
 ///
-/// As [`choose_window`]; [`Error::NotFound`] when the window shows no screen; [`Error::Ambiguous`]
-/// when two screens fit; the API's failure.
+/// As [`choose_window`]; [`Error::NotFound`] when the window shows no screen, or when the search
+/// read only part of its levels and found no [`SCREEN_SUBROLE`] group; [`Error::Ambiguous`] when
+/// two screens fit; the API's failure.
 pub fn find_screen<T: WindowTree>(
     tree: &mut T,
     screen: &ScreenRequest,
@@ -320,18 +367,21 @@ pub fn find_screen<T: WindowTree>(
     let mut groups: Vec<(T::Element, ScreenCandidate)> = Vec::new();
     let mut level = vec![window];
     let mut visited = 0_usize;
-    let mut cut_short = false;
+    let mut reach = SearchReach::Whole;
     'search: for depth in 1..=MAX_SCREEN_DEPTH {
         let mut next = Vec::new();
         for parent in &level {
-            let (children, cut) = tree.children(parent)?;
-            cut_short |= cut;
-            for child in children {
-                visited += 1;
-                if visited > MAX_NODES {
-                    cut_short = true;
-                    break 'search;
-                }
+            let listed = list_children(
+                |index| tree.child_at(parent, index),
+                MAX_NODES.saturating_sub(visited),
+            )
+            .map_err(|error| tree.failure(error))?;
+            visited += listed.children.len();
+            if listed.cut {
+                reach = SearchReach::Partial;
+            }
+            let spent = listed.cut && visited >= MAX_NODES;
+            for child in listed.children {
                 let facts = tree.facts(&child)?;
                 if facts.role == "AXGroup"
                     && let Some(frame) = facts.frame
@@ -349,12 +399,15 @@ pub fn find_screen<T: WindowTree>(
                     next.push(child);
                 }
             }
+            if spent {
+                break 'search;
+            }
         }
         if next.is_empty() {
             break;
         }
-        if depth == MAX_SCREEN_DEPTH {
-            cut_short = true;
+        if depth == MAX_SCREEN_DEPTH && reach == SearchReach::Whole {
+            reach = SearchReach::ToDepth;
         }
         level = next;
     }
@@ -362,7 +415,7 @@ pub fn find_screen<T: WindowTree>(
         .iter()
         .map(|(_, candidate)| candidate.clone())
         .collect();
-    let index = choose_screen(&screen.title, &candidates, screen.size, cut_short)
+    let index = choose_screen(&screen.title, &candidates, screen.size, reach)
         .map_err(TreeError::into_error)?;
     let (group, candidate) = groups.swap_remove(index);
     Ok((group, candidate.frame))
@@ -385,18 +438,21 @@ pub fn screen_scale(frame: PointFrame, size: LogicalSize) -> Option<f64> {
 /// app window of `size`: of the groups with the window's shape ([`screen_scale`]), the
 /// [`SCREEN_SUBROLE`] one when there is one, and otherwise the shallowest. Two groups of one
 /// frame are one screen, reached along two paths or wrapped by a group of its own frame.
-/// `cut_short` says the search stopped at its budget, which a failure names.
+/// `reach` says how much of the window the search read: a plain group is taken only when no
+/// group of the levels searched went unread ([`SearchReach::Partial`]), since the
+/// [`SCREEN_SUBROLE`] group may sit in the part not read.
 ///
 /// # Errors
 ///
-/// [`TreeError::NoScreen`] when none has the shape, [`TreeError::Ambiguous`] when
-/// [`SCREEN_SUBROLE`] groups of two frames do, or plain groups of two frames at the shallowest
-/// depth.
+/// [`TreeError::NoScreen`] when none has the shape; [`TreeError::SearchCut`] when no
+/// [`SCREEN_SUBROLE`] group has it and the search read only part of the levels it searched;
+/// [`TreeError::Ambiguous`] when [`SCREEN_SUBROLE`] groups of two frames do, or plain groups of
+/// two frames at the shallowest depth.
 pub fn choose_screen(
     title: &str,
     candidates: &[ScreenCandidate],
     size: LogicalSize,
-    cut_short: bool,
+    reach: SearchReach,
 ) -> std::result::Result<usize, TreeError> {
     let shaped: Vec<usize> = (0..candidates.len())
         .filter(|index| screen_scale(candidates[*index].frame, size).is_some())
@@ -406,6 +462,11 @@ pub fn choose_screen(
         .copied()
         .filter(|index| candidates[*index].subrole.as_deref() == Some(SCREEN_SUBROLE))
         .collect();
+    if marked.is_empty() && !shaped.is_empty() && reach == SearchReach::Partial {
+        return Err(TreeError::SearchCut {
+            title: title.to_owned(),
+        });
+    }
     let pool: Vec<usize> = if marked.is_empty() {
         let shallowest = shaped.iter().map(|index| candidates[*index].depth).min();
         shaped
@@ -448,7 +509,7 @@ pub fn choose_screen(
                 .take(MAX_CANDIDATES)
                 .map(describe)
                 .collect(),
-            cut_short,
+            reach,
         }),
         several => Err(TreeError::Ambiguous {
             node: format!("the screen of the window {title:?}"),
@@ -602,10 +663,15 @@ pub fn element_at<'s>(elements: &'s [ScreenElement], path: &[usize]) -> Option<&
 /// label attributes, identifier and frame, the facts a read gave and a press finds an element by
 /// again.
 ///
+/// A read that stopped short (`HostScreen::truncated`) cannot show that one element is the only
+/// one: a second that reads the same may sit in the part not read. An identifier is no proof
+/// either, since nothing makes an author's identifier unique. So a press refuses one match on
+/// such a read, as it refuses two.
+///
 /// # Errors
 ///
-/// [`Error::NotFound`] when none does, [`Error::Ambiguous`] when more than one does: a press
-/// does not guess.
+/// [`Error::NotFound`] when none does; [`Error::Ambiguous`] when more than one does, or when the
+/// read stopped short: a press does not guess.
 pub fn locate(screen: &HostScreen, wanted: &ScreenElement) -> Result<Vec<usize>> {
     fn search(
         elements: &[ScreenElement],
@@ -634,6 +700,16 @@ pub fn locate(screen: &HostScreen, wanted: &ScreenElement) -> Result<Vec<usize>>
             .unwrap_or_default()
     );
     match found.len() {
+        1 if screen.truncated => Err(Error::Ambiguous {
+            message: format!(
+                "the read of the Simulator's window stopped short (its budget of {MAX_NODES} \
+                 elements or {MAX_DEPTH} levels, or an element gone mid-read), so the one element \
+                 that reads as {what} cannot be shown to be the only one; the lane presses none: \
+                 read again, and press through the app's own path when the read stays short"
+            ),
+            candidates: Vec::new(),
+            retry: ErrorCode::Ambiguous.default_retry(),
+        }),
         1 => Ok(found.swap_remove(0)),
         0 => Err(Error::not_found(format!(
             "the Simulator's window shows no element that reads as {what} now"

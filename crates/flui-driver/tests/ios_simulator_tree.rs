@@ -30,7 +30,8 @@ use flui_driver::lane::ios_simulator::roles::{
     self, ADAPTER_CHECKED_AGAINST, ROLES, RoleTrait, SCREEN_SUBROLE,
 };
 use flui_driver::lane::ios_simulator::tree::{
-    self, BOUNDS_TOLERANCE_POINTS, Placing, ScreenCandidate, TreeError, WindowFacts, WindowTree,
+    self, BOUNDS_TOLERANCE_POINTS, MAX_SCREEN_DEPTH, Placing, ScreenCandidate, SearchReach,
+    TreeError, WindowFacts, WindowTree,
 };
 use flui_driver::lane::walk::{MAX_DEPTH, MAX_NODES, ProviderError};
 use flui_driver::lane::{AccessibilityApi, Lane as _};
@@ -579,8 +580,9 @@ fn a_window_naming_any_other_uuid_is_not_the_devices() {
         WindowIdentity::Named
     );
 
-    // A UUID joined to the text around it by a dash, or by nothing, is still a UUID: whatever
-    // the attribute's form turns out to be, another simulator's is never read as none.
+    // A run of the UUID's form is a UUID whatever stands beside it, a hexadecimal letter or
+    // digit included: whatever the attribute's form turns out to be, another simulator's is never
+    // read as none.
     let stranger = "0F1E2D3C-4B5A-4697-8877-665544332211";
     for form in [
         "device-{}",
@@ -588,6 +590,13 @@ fn a_window_naming_any_other_uuid_is_not_the_devices() {
         "{}-0",
         "{}_main",
         "window{}",
+        "SimDevice{}",
+        "Device{}",
+        "{}Device",
+        "{}abc",
+        "{}data",
+        "A{}",
+        "{}0",
     ] {
         assert_eq!(
             accessibility::window_identity(&udid(), &[Some(form.replace("{}", UDID))]),
@@ -600,12 +609,16 @@ fn a_window_naming_any_other_uuid_is_not_the_devices() {
             "{form}"
         );
     }
-    // Hexadecimal digits that run on past the form are no UUID.
-    for longer in [format!("A{UDID}"), format!("{UDID}0")] {
+    // Text with no run of the form names none: a UUID's groups cut short, or without dashes.
+    for none in [
+        UDID.replace('-', ""),
+        UDID[..35].to_owned(),
+        UDID.replacen('-', "_", 1),
+    ] {
         assert_eq!(
-            accessibility::window_identity(&udid(), &[Some(longer.clone())]),
+            accessibility::window_identity(&udid(), &[Some(none.clone())]),
             WindowIdentity::Unknown,
-            "{longer}"
+            "{none}"
         );
     }
 }
@@ -700,6 +713,38 @@ fn chain(levels: usize) -> (Source, usize) {
         parent = source.add(parent, "AXGroup");
     }
     (source, parent)
+}
+
+/// A list of children ends whole when the parent has no more, and is cut only when one is there
+/// past the bound or the parent went away: a parent of exactly the bound's children is whole,
+/// and a bound of zero asks only whether a first child is there.
+#[test]
+fn a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone() {
+    use accessibility::{ChildList, list_children};
+    let parent = |count: usize, gone_at: Option<usize>| {
+        move |index: usize| {
+            if gone_at == Some(index) {
+                Err(ProviderError::Gone)
+            } else {
+                Ok((index < count).then_some(index))
+            }
+        }
+    };
+    let listed = |children: &[usize], cut: bool| {
+        Ok(ChildList {
+            children: children.to_vec(),
+            cut,
+        })
+    };
+    assert_eq!(list_children(parent(3, None), 3), listed(&[0, 1, 2], false));
+    assert_eq!(list_children(parent(4, None), 3), listed(&[0, 1, 2], true));
+    assert_eq!(list_children(parent(0, None), 0), listed(&[], false));
+    assert_eq!(list_children(parent(1, None), 0), listed(&[], true));
+    assert_eq!(list_children(parent(3, Some(1)), 3), listed(&[0], true));
+    assert_eq!(
+        list_children(|_| Err::<Option<usize>, _>(ProviderError::Timeout), 3),
+        Err(ProviderError::Timeout)
+    );
 }
 
 /// How many levels of `elements` a walk read, along each one's first child.
@@ -832,6 +877,10 @@ fn a_level_read_short_is_marked_whatever_stopped_it() {
         projected.roots[0].children_unread,
         "the root says its children went unread"
     );
+    assert!(
+        projected.truncated,
+        "the projection says the read was short"
+    );
 
     // A root list read short ends where the read stopped: its last elements are kept even in
     // an announcer's shape, since the announcers at the list's real end were never read.
@@ -846,6 +895,8 @@ fn a_level_read_short_is_marked_whatever_stopped_it() {
         "the last two elements read are kept"
     );
     assert!(projected.roots[0].children_unread);
+    assert!(projected.truncated);
+    assert!(!whole.truncated);
 }
 
 /// One node of a window a test builds.
@@ -854,8 +905,8 @@ struct Fixture {
     facts: WindowFacts,
     identity: Vec<Option<String>>,
     children: Vec<usize>,
-    /// Whether the node goes away before its children are all listed.
-    cut: bool,
+    /// The index from which a child read answers that the node went away.
+    gone_after: Option<usize>,
 }
 
 /// A set of windows written out as nodes by index, each window a root.
@@ -885,7 +936,7 @@ impl Windows {
             },
             identity: Vec::new(),
             children: Vec::new(),
-            cut: false,
+            gone_after: None,
         });
         if let Some(parent) = parent {
             self.nodes[parent].children.push(index);
@@ -897,12 +948,16 @@ impl Windows {
 impl WindowTree for Windows {
     type Element = usize;
 
-    fn children(&mut self, element: &usize) -> flui_driver::Result<(Vec<usize>, bool)> {
+    fn child_at(&mut self, element: &usize, index: usize) -> Result<Option<usize>, ProviderError> {
         let node = &self.nodes[*element];
-        if node.cut {
-            return Ok((Vec::new(), true));
+        if node.gone_after.is_some_and(|after| index >= after) {
+            return Err(ProviderError::Gone);
         }
-        Ok((node.children.clone(), false))
+        Ok(node.children.get(index).copied())
+    }
+
+    fn failure(&mut self, error: ProviderError) -> Error {
+        accessibility::read_failure(error, true, None)
     }
 
     fn facts(&mut self, element: &usize) -> flui_driver::Result<WindowFacts> {
@@ -986,12 +1041,81 @@ fn a_group_gone_mid_search_cuts_the_search_short() {
         Some(SCREEN_SUBROLE),
         Some((657.0, 266.0, 393.0 * 0.74, 852.0 * 0.74)),
     );
-    windows.nodes[pane].cut = true;
+    windows.nodes[pane].gone_after = Some(0);
     let refused = tree::find_screen(&mut windows, &request(), vec![window]).expect_err("cut");
     assert!(
         matches!(&refused, Error::NotFound { message, .. } if message.contains("went away")),
         "{refused:?}"
     );
+
+    // A plain group of the window's shape seen by a cut search is not taken: the marked screen
+    // may sit in the part not read.
+    let drawn = (657.0, 266.0, 393.0 * 0.74, 852.0 * 0.74);
+    let wrapper = windows.add(Some(window), "AXGroup", None, Some(drawn));
+    let refused =
+        tree::find_screen(&mut windows, &request(), vec![window]).expect_err("cut, plain group");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. } if message.contains("read again")),
+        "{refused:?}"
+    );
+    // Read whole, the same plain group is the screen.
+    windows.nodes[pane].gone_after = None;
+    windows.nodes[pane].children.clear();
+    let (found, _) = tree::find_screen(&mut windows, &request(), vec![window]).expect("whole");
+    assert_eq!(found, wrapper);
+}
+
+/// The search lists a group's children through the shared bounded listing: a window of exactly
+/// the budget's children is read whole, one more is cut, and groups past the deepest level left
+/// unentered do not stop a plain group of the window's shape being taken.
+#[test]
+fn the_search_keeps_to_its_budget_and_depth() {
+    let flat = |count: usize| {
+        let mut windows = Windows::new();
+        let window = windows.add(None, "AXWindow", None, Some((0.0, 0.0, 1100.0, 800.0)));
+        for _ in 0..count {
+            windows.add(Some(window), "AXButton", None, Some((0.0, 0.0, 10.0, 10.0)));
+        }
+        (windows, window)
+    };
+    let (mut whole, window) = flat(MAX_NODES);
+    let refused = tree::find_screen(&mut whole, &request(), vec![window]).expect_err("no screen");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. }
+            if message.contains("no group") && !message.contains("budget")),
+        "exactly the budget is read whole: {refused:?}"
+    );
+    let (mut more, window) = flat(MAX_NODES + 1);
+    let refused = tree::find_screen(&mut more, &request(), vec![window]).expect_err("no screen");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. } if message.contains("budget")),
+        "one past the budget is cut: {refused:?}"
+    );
+
+    let mut deep = Windows::new();
+    let window = deep.add(None, "AXWindow", None, Some((231.0, 142.0, 456.0, 972.0)));
+    let screen = deep.add(
+        Some(window),
+        "AXGroup",
+        None,
+        Some((258.0, 222.0, 393.0, 852.0)),
+    );
+    let mut pane = deep.add(
+        Some(window),
+        "AXGroup",
+        None,
+        Some((231.0, 142.0, 10.0, 10.0)),
+    );
+    for _ in 0..MAX_SCREEN_DEPTH {
+        pane = deep.add(
+            Some(pane),
+            "AXGroup",
+            None,
+            Some((231.0, 142.0, 10.0, 10.0)),
+        );
+    }
+    let (found, _) = tree::find_screen(&mut deep, &request(), vec![window]).expect("to depth");
+    assert_eq!(found, screen);
 }
 
 /// Simulator.app's window: the screen a child of a group the bezel adds, beside the bezel's
@@ -1123,46 +1247,59 @@ fn candidate(frame: (f64, f64, f64, f64), subrole: Option<&str>, depth: usize) -
 }
 
 /// The screen is the group with the window's shape: an `iOSContentGroup` first, else the
-/// shallowest; a turned window's turned; none and two of another frame are refused.
+/// shallowest, which a search that left part of its levels unread does not take; a turned
+/// window's turned; none and two of another frame are refused.
 #[test]
 fn the_screen_is_the_group_with_the_windows_shape() {
+    use SearchReach::{Partial, ToDepth, Whole};
     let simulator_app = [
         candidate((231.0, 142.0, 456.0, 52.0), None, 1),
         candidate((258.0, 222.0, 393.0, 852.0), None, 1),
     ];
     assert_eq!(
-        tree::choose_screen(TITLE, &simulator_app, SIZE, false),
+        tree::choose_screen(TITLE, &simulator_app, SIZE, Whole),
         Ok(1)
     );
+    assert_eq!(
+        tree::choose_screen(TITLE, &simulator_app, SIZE, ToDepth),
+        Ok(1),
+        "the levels searched were read whole"
+    );
+    assert!(matches!(
+        tree::choose_screen(TITLE, &simulator_app, SIZE, Partial),
+        Err(TreeError::SearchCut { .. })
+    ));
     let marked_deeper = [
         candidate((0.0, 0.0, 393.0, 852.0), None, 2),
         candidate((657.0, 266.0, 290.82, 630.48), Some(SCREEN_SUBROLE), 7),
     ];
-    assert_eq!(
-        tree::choose_screen(TITLE, &marked_deeper, SIZE, false),
-        Ok(1)
-    );
+    for reach in [Whole, Partial] {
+        assert_eq!(
+            tree::choose_screen(TITLE, &marked_deeper, SIZE, reach),
+            Ok(1)
+        );
+    }
     let turned = [candidate((0.0, 0.0, 852.0, 393.0), None, 1)];
     assert_eq!(
-        tree::choose_screen(TITLE, &turned, LogicalSize::new(852.0, 393.0), false),
+        tree::choose_screen(TITLE, &turned, LogicalSize::new(852.0, 393.0), Whole),
         Ok(0)
     );
     assert!(matches!(
-        tree::choose_screen(TITLE, &turned, SIZE, true),
-        Err(TreeError::NoScreen { groups, cut_short: true, .. }) if groups.len() == 1
+        tree::choose_screen(TITLE, &turned, SIZE, Partial),
+        Err(TreeError::NoScreen { groups, reach: Partial, .. }) if groups.len() == 1
     ));
     let two = [
         candidate((0.0, 0.0, 393.0, 852.0), None, 1),
         candidate((500.0, 0.0, 393.0, 852.0), None, 1),
     ];
-    let refused = tree::choose_screen(TITLE, &two, SIZE, false).expect_err("two screens");
+    let refused = tree::choose_screen(TITLE, &two, SIZE, Whole).expect_err("two screens");
     assert!(matches!(&refused, TreeError::Ambiguous { candidates, .. } if candidates.len() == 2));
     let two_marked = [
         candidate((0.0, 0.0, 393.0, 852.0), Some(SCREEN_SUBROLE), 7),
         candidate((500.0, 0.0, 393.0, 852.0), Some(SCREEN_SUBROLE), 8),
     ];
     assert!(matches!(
-        tree::choose_screen(TITLE, &two_marked, SIZE, false),
+        tree::choose_screen(TITLE, &two_marked, SIZE, Whole),
         Err(TreeError::Ambiguous { .. })
     ));
     for unaddressable in [(0.0, 0.0, 0.0, 0.0), (f64::NAN, 0.0, 393.0, 852.0)] {
@@ -1489,6 +1626,16 @@ fn a_press_refuses_an_element_it_cannot_tell_apart() {
     twice.elements.push(wrapper);
     let refused = tree::locate(&twice, &like).expect_err("two read alike");
     assert!(matches!(refused, Error::Ambiguous { .. }), "{refused:?}");
+    // A read that stopped short cannot show the one match is the only one, identifier or not.
+    let mut short = controls_screen(true);
+    short.truncated = true;
+    let tagged_like = short.elements[1].clone();
+    assert!(tagged_like.identifier.is_some());
+    let refused = tree::locate(&short, &tagged_like).expect_err("a read stopped short");
+    assert!(
+        matches!(&refused, Error::Ambiguous { message, .. } if message.contains("stopped short")),
+        "{refused:?}"
+    );
     let gone = labelled(element("AXButton", None, (0.0, 0.0, 1.0, 1.0)), "Gone");
     assert!(matches!(
         tree::locate(&screen, &gone),
@@ -1592,15 +1739,67 @@ fn a_press_names_its_own_elements_deadline() {
     );
     assert!(!ran, "no press is made on an element that offers none");
     assert!(accessibility::pressed(Ok(true), || Ok(()), "Like", None, || true).is_ok());
-    let untrusted = accessibility::pressed(
-        Ok(true),
-        || Err(ProviderError::Timeout),
+
+    // Before the press is sent, a failure with the permission gone is the permission refused.
+    let before = accessibility::pressed(
+        Err(ProviderError::Timeout),
+        || Ok(()),
         "Like",
         given,
         || false,
     );
     assert_eq!(
-        untrusted
+        before
+            .expect_err("untrusted")
+            .missing_capability()
+            .as_deref(),
+        Some("macos_permission_accessibility")
+    );
+    // Once it is sent, a press not answered or whose element went away may have run, and keeps
+    // saying so with the permission gone; the message names the permission.
+    let may_have_run = |answer: &flui_driver::Result<()>| match answer {
+        Err(
+            Error::Timeout {
+                effect, message, ..
+            }
+            | Error::Gone {
+                effect, message, ..
+            },
+        ) => effect.is_some() && message.contains("Accessibility permission"),
+        _ => false,
+    };
+    for failure in [ProviderError::Timeout, ProviderError::Gone] {
+        let answer =
+            accessibility::pressed(Ok(true), || Err(failure.clone()), "Like", given, || false);
+        assert!(may_have_run(&answer), "{failure:?}: {answer:?}");
+    }
+    let gone = accessibility::pressed(
+        Ok(true),
+        || Err(ProviderError::Gone),
+        "Like",
+        given,
+        || true,
+    );
+    assert!(
+        matches!(
+            &gone,
+            Err(Error::Gone {
+                effect: Some(_),
+                ..
+            })
+        ),
+        "{gone:?}"
+    );
+    // A press that failed otherwise with the permission gone is the permission refused.
+    let failed = accessibility::pressed(
+        Ok(true),
+        || Err(ProviderError::Failed("-25211".to_owned())),
+        "Like",
+        given,
+        || false,
+    );
+    assert_eq!(
+        failed
             .expect_err("untrusted")
             .missing_capability()
             .as_deref(),

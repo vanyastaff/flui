@@ -346,7 +346,8 @@ pub fn find_by<P: Provider>(
 ) -> Result<P::Element> {
     let mut visited = 0_usize;
     let mut cut_short = false;
-    let mut parent_gone = false;
+    // Whether a step found an element gone (a parent or a sibling), which cut a level short.
+    let mut met_gone = false;
     // Depth first, children before siblings: each level holds the next element to visit there.
     // The root's own siblings (the other windows) are not the app's.
     let mut levels: Vec<Option<P::Element>> = vec![Some(root)];
@@ -375,15 +376,15 @@ pub fn find_by<P: Provider>(
             return Ok(element);
         }
         if depth > 1 {
-            *slot = search_step(provider.next_sibling(&element), &mut parent_gone, timeout)?;
+            *slot = search_step(provider.next_sibling(&element), &mut met_gone, timeout)?;
         }
         if depth > MAX_DEPTH {
-            if search_step(provider.first_child(&element), &mut parent_gone, timeout)?.is_some() {
+            if search_step(provider.first_child(&element), &mut met_gone, timeout)?.is_some() {
                 cut_short = true;
             }
             continue;
         }
-        let child = search_step(provider.first_child(&element), &mut parent_gone, timeout)?;
+        let child = search_step(provider.first_child(&element), &mut met_gone, timeout)?;
         if child.is_some() {
             levels.push(child);
         }
@@ -395,7 +396,7 @@ pub fn find_by<P: Provider>(
         } else {
             String::new()
         },
-        if parent_gone {
+        if met_gone {
             ", and an element went away before all its children were searched"
         } else {
             ""
@@ -403,17 +404,17 @@ pub fn find_by<P: Provider>(
     )))
 }
 
-/// A step of a search: as [`Walk::step`], an element gone recorded in `parent_gone`, which the
-/// search's failure names.
+/// A step of a search: as [`Walk::step`], an element gone (a parent or a sibling) recorded in
+/// `met_gone`, which the search's failure names.
 fn search_step<E>(
     step: Result<Option<E>, ProviderError>,
-    parent_gone: &mut bool,
+    met_gone: &mut bool,
     timeout: Duration,
 ) -> Result<Option<E>> {
     match step {
         Ok(next) => Ok(next),
         Err(ProviderError::Gone) => {
-            *parent_gone = true;
+            *met_gone = true;
             Ok(None)
         }
         Err(error) => Err(provider_error(error, timeout)),
