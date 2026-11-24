@@ -41,10 +41,7 @@ pub(crate) use flui_foundation::panic::{AfterPanic, os_entry};
 
 /// Fallback text for a panic payload that is neither a `&'static str` nor a
 /// `String` (someone used `std::panic::panic_any` with an arbitrary type).
-#[cfg(any(
-    target_os = "windows",
-    linux_host,
-))]
+#[cfg(any(target_os = "windows", linux_host,))]
 pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
 
 /// Extracts the human-readable message from a caught panic payload.
@@ -52,10 +49,7 @@ pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
 /// `panic!("literal")` produces a `&'static str` payload; `panic!("{x}")`
 /// and every formatted variant produce a `String`; anything else (via
 /// `panic_any`) is opaque and reported as [`OPAQUE_PANIC_PAYLOAD`].
-#[cfg(any(
-    target_os = "windows",
-    linux_host,
-))]
+#[cfg(any(target_os = "windows", linux_host,))]
 #[must_use]
 pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
     flui_foundation::panic::payload_text(payload).unwrap_or(OPAQUE_PANIC_PAYLOAD)
