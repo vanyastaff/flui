@@ -10,8 +10,8 @@ use flui_driver::protocol::client::{CallError, Connection, EndChecks};
 use flui_driver::protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
-    ActionSequence, InputParams, InputPath, InputSource, PointerAction, PointerButton,
-    PointerDevice, gestures,
+    ActionSequence, InputKind, InputParams, InputPath, InputSource, JournalParams, LongPressParams,
+    PointerAction, PointerButton, PointerDevice, gestures,
 };
 use flui_driver::protocol::locator::{Locator, Target, TextMatch};
 use flui_driver::protocol::method::{
@@ -176,6 +176,56 @@ fn an_answer_that_did_not_arrive_releases_the_window_s_input() {
             released: true,
         }),
         "an accepted tap may have run, and the release is a read-sized answer"
+    );
+}
+
+/// A gesture the app's agent serves, accepted and playing when its reply deadline passes, is
+/// unanswered the same way: it may have run, its release is answered, and nothing it pressed
+/// stays down. A long press on the hold surface of a window presenting at 30 Hz plays its ticks
+/// a frame each, past the bound its parameters give at 60 Hz; `force` takes it at its first
+/// attempt, so its timeout adds nothing.
+#[test]
+fn a_served_gesture_that_outlives_its_reply_deadline_releases_what_it_pressed() {
+    let probe = Probe::default();
+    let launch = counter(&probe)
+        .reply_timeout(Duration::from_millis(1))
+        .frame_period(Duration::from_millis(33))
+        .expect("a headless launch");
+    let mut driver = Driver::launch(launch).expect("the headless app starts");
+    let press: LongPressParams = serde_json::from_value(json!({
+        "target": { "locator": { "identifier": "hold" } },
+        "duration_ms": 800,
+        "timeout_ms": 1,
+        "force": true,
+    }))
+    .expect("a long press reads");
+    let unanswered = Connection::call::<method::ElementLongPress>(&mut driver, press);
+    assert_eq!(
+        unanswered,
+        Err(CallError::Unanswered {
+            may_have_run: true,
+            released: true,
+        }),
+        "an accepted press may have run, and the release is answered"
+    );
+    assert_eq!(probe.downs(), 1, "the press went down");
+    let window = driver.windows().expect("the windows")[0];
+    let journal = Connection::call::<method::InputJournal>(&mut driver, JournalParams::new(window))
+        .expect("the journal is read");
+    let last = journal
+        .entries
+        .iter()
+        .rev()
+        .find(|entry| {
+            matches!(
+                entry.kind,
+                InputKind::PointerDown | InputKind::PointerUp | InputKind::PointerCancel
+            )
+        })
+        .map(|entry| entry.kind);
+    assert!(
+        matches!(last, Some(InputKind::PointerUp | InputKind::PointerCancel)),
+        "nothing the press pressed stays down: {last:?}"
     );
 }
 

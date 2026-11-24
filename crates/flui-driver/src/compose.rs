@@ -678,13 +678,21 @@ pub(crate) fn pinch(driver: &mut Driver, params: PinchParams) -> Result<ActOutco
 }
 
 /// `element.scroll_into_view`: the semantics action that scrolls each scrollable ancestor; the
-/// element need not be actionable, since it may be out of view.
+/// element need not be actionable, since it may be out of view. It has no other path, so a call
+/// that requires one is refused, as the app's agent refuses it.
 pub(crate) fn scroll_into_view(
     driver: &mut Driver,
     params: ScrollIntoViewParams,
 ) -> Result<ActOutcome> {
     if let Some(answer) = answered_by_agent::<method::ElementScrollIntoView>(driver, &params) {
         return answer;
+    }
+    let policy = params.options.via.unwrap_or_else(|| driver.input_policy());
+    if policy.require && policy.prefer != InputPath::Semantic {
+        return Err(Error::not_supported(
+            format!("{}_input", policy.prefer.name()),
+            "`element.scroll_into_view` is a semantics action and has no other path",
+        ));
     }
     let timeout = timeout_of(driver, &params.options);
     let element = resolve(driver, &params.target, timeout)?;

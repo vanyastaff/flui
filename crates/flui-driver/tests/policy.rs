@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use flui_driver::lane;
 use flui_driver::os_input::OsDevice;
+use flui_driver::protocol::act::ActOutcome;
 use flui_driver::protocol::error::{ErrorCode, ErrorObject};
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
@@ -14,6 +15,7 @@ use flui_driver::protocol::input::{
 use flui_driver::protocol::locator::Target;
 use flui_driver::protocol::method::{self, Method};
 use flui_driver::protocol::report::Report;
+use flui_driver::protocol::tree::WindowId;
 use flui_driver::protocol::verdict::Verdict;
 use flui_driver::steps::OsEvent;
 use flui_driver::testing::{LaneLog, Reply, ScriptedAgent, ScriptedLane};
@@ -505,7 +507,7 @@ fn a_handles_gesture_on_the_synthetic_path_is_sent_to_the_agent_not_composed() {
     let (agent, asked) = serving_taps(Duration::ZERO);
     let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
         .expect("the driver attaches");
-    let window = "w1".parse().expect("a window handle");
+    let window = "w1".parse::<WindowId>().expect("a window handle");
     let tapped = driver
         .window(window)
         .locate(Locator::identifier("increment"))
@@ -533,6 +535,118 @@ fn a_handles_gesture_on_the_synthetic_path_is_sent_to_the_agent_not_composed() {
                 && name.as_str() != method::InputInject::NAME
         }),
         "nothing of the composition was asked: {asked:?}"
+    );
+}
+
+/// A scripted agent whose hello serves every gesture, answering each that it ran, and the
+/// methods it was asked.
+fn serving_every_gesture() -> (ScriptedAgent, Arc<Mutex<Vec<String>>>) {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&asked);
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::ElementTap::NAME,
+            method::ElementDoubleTap::NAME,
+            method::ElementLongPress::NAME,
+            method::ElementDragTo::NAME,
+            method::ElementSwipe::NAME,
+            method::ElementFling::NAME,
+            method::ElementPinch::NAME,
+            method::ElementScrollIntoView::NAME,
+            method::ElementTypeText::NAME,
+            method::ElementPressKeys::NAME,
+        ],
+        Box::new(move |name, _| {
+            log.lock().expect("the log").push(name.to_owned());
+            match name {
+                "windows.list" => Reply::Result(json!({ "windows": ["w1"] })),
+                _ => Reply::Result(json!({ "via": "synthetic", "effect": { "kind": "ran" } })),
+            }
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    (agent, asked)
+}
+
+/// Each gesture of the driver's handles sends the agent that serves it its own method, whole: a
+/// swipe is `element.swipe` and a fling `element.fling`, and nothing of a composition (a locate,
+/// an actionability read, an injection) is asked.
+#[test]
+fn each_gesture_the_agent_serves_reaches_it_as_its_own_method() {
+    use flui_driver::protocol::input::Direction;
+
+    let (agent, asked) = serving_every_gesture();
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let window = "w1".parse::<WindowId>().expect("a window handle");
+    let mut window = driver.window(window);
+    let mut target = window
+        .locate(Locator::identifier("increment"))
+        .via(InputPath::Synthetic);
+    let calls: [(&str, Result<ActOutcome, Error>); 10] = [
+        (method::ElementTap::NAME, target.tap()),
+        (method::ElementDoubleTap::NAME, target.double_tap()),
+        (method::ElementLongPress::NAME, target.long_press(None)),
+        (
+            method::ElementDragTo::NAME,
+            target.drag_to(Target::Locator(Locator::identifier("increment"))),
+        ),
+        (method::ElementSwipe::NAME, target.swipe(Direction::Up)),
+        (method::ElementFling::NAME, target.fling(Direction::Up)),
+        (method::ElementPinch::NAME, target.pinch(2.0)),
+        (
+            method::ElementScrollIntoView::NAME,
+            target.scroll_into_view(),
+        ),
+        (method::ElementTypeText::NAME, target.type_text("a")),
+        (method::ElementPressKeys::NAME, target.press_keys(&["a"])),
+    ];
+    let asked = asked.lock().expect("the log");
+    let gestures: Vec<&str> = asked
+        .iter()
+        .map(String::as_str)
+        .filter(|name| *name != method::WindowsList::NAME)
+        .collect::<Vec<&str>>();
+    let sent: Vec<&str> = calls.iter().map(|(name, _)| *name).collect::<Vec<&str>>();
+    assert_eq!(
+        gestures, sent,
+        "each entry sent its own method, and only it"
+    );
+    for (name, answer) in calls {
+        let outcome = answer.unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(outcome.via, InputPath::Synthetic, "{name}");
+    }
+}
+
+/// `element.scroll_into_view` is a semantics action: composed by the driver, a call that
+/// requires another path is refused naming it, before the agent is asked anything.
+#[test]
+fn a_composed_scroll_into_view_refuses_a_path_it_has_no_form_on() {
+    let (agent, asked) = serving_taps(Duration::ZERO);
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    for path in [InputPath::Synthetic, InputPath::Os] {
+        let mut params: flui_driver::protocol::input::ScrollIntoViewParams =
+            serde_json::from_value(json!({ "target": { "locator": { "identifier": "row" } } }))
+                .expect("scroll into view reads");
+        params.options.via = Some(InputPolicy::require(path));
+        let refused = driver.call::<method::ElementScrollIntoView>(params);
+        assert!(
+            matches!(
+                &refused,
+                Err(Error::NotSupported { capability: Some(capability), .. })
+                    if *capability == format!("{}_input", path.name())
+            ),
+            "{path:?}: {refused:?}"
+        );
+    }
+    let asked = asked.lock().expect("the log");
+    assert!(
+        asked
+            .iter()
+            .all(|name| name.as_str() == method::WindowsList::NAME),
+        "nothing was located or acted on: {asked:?}"
     );
 }
 

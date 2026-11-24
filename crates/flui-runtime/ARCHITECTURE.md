@@ -1116,15 +1116,18 @@ without one (ADR-0288 §9). `agent_input.rs` plans the sequence once with
 refusals are the protocol's, and lowers the plan into the events this window takes (`lower`, which
 refuses the whole sequence, adding only what the window cannot deliver: a key that is no W3C name
 nor text, a composition caret outside its text, a trackpad gesture); it queues the lowered script
-on the presentation (`agent_input`, at most 64 jobs, then `InputQueueFull`). `drive_frame` advances
+on the presentation (`agent_input`, at most 64 jobs, then `InputQueueFull`). The frame that plays a
+job is asked for before the job is queued: the wake reaches the platform, user code, and one that
+panics leaves nothing queued, so the panic's answer is what happened. `drive_frame` advances
 the queue once per frame boundary, after the commit anchor, on the plan's timeline: a tick starts
 at a boundary, each input goes out at the first boundary at or past its offset in the tick,
 stamped with the instant the plan gives it, and the next tick starts at the first boundary at or past
 the tick's end unless the ending tick started or delivered an input there, so a boundary delivers the
 inputs of one tick and a release follows a move by a frame at least. An input goes in through
 `handle_input_from`, the path the platform's input takes (`handle_input_on`), marked as the
-agent's; each event is contained so one handler's panic does not keep the rest out, and the first
-panic continues once all went in. What a lease holds (contacts down, keys pressed) is kept per lease; a release
+agent's; each event is contained so one handler's panic does not keep the rest out, and the wake
+for the next tick and the parking of the answer run inside the same containment, after the
+input, so the first panic continues once all went in. What a lease holds (contacts down, keys pressed) is kept per lease; a release
 cancels the contacts and lifts the keys, the latest first. A lease the agent drops is recorded on
 the port (`DevAgentPort::release`, which wakes the owner) and released by the drain, which counts
 the dropped leases before it reads its commands and releases them after: a call asked through a
@@ -1137,12 +1140,20 @@ answers its queued input `gone`. Pinned by `tests/contracts/agent_input.rs` and 
 
 **Gestures.** The agent answers every `element.*` gesture on the synthetic and semantic paths
 (ADR-0400 §2; `agent_gesture.rs`, `agent_scroll.rs` for `scroll_until`), and refuses the `os`
-path, which the driver composes with its lane. A gesture is a held act (`agent_held.rs`): the
-presentation's `HeldActs`, at most 64 (`TooManyActs`, `busy`), is the one owner of every act it
-holds. An act is attempted when it is served, at each frame boundary before injected input goes on
-(`AgentSide::advance_held_acts`, so an act that passes injects its first tick at that boundary),
-and on an owner turn without a frame once its deadline passed, which wakes the owner
-(`AgentSide::next_act_deadline` in `next_wake`); while any act is held the window asks for frames.
+path, which the driver composes with its lane; every gesture asks `takes_semantic_path` before it
+is held, `scroll_into_view` (a semantics action alone) included, so a path a call requires and the
+gesture has no form on is refused `not_supported`. A gesture is a held act (`agent_held.rs`): the
+presentation's `HeldActs`, at most 64 (`TooManyActs`, `busy`, refused before anything of the act
+runs), is the one owner of every act it holds. An act is attempted when it is served, at each frame
+boundary before injected input goes on (`AgentSide::advance_held_acts`, so an act that passes
+injects its first tick at that boundary), and on an owner turn without a frame once its deadline
+passed: every held act's deadline wakes the owner (`AgentSide::next_act_deadline` in `next_wake`),
+so a window that draws nothing still answers it. While any act is held the window asks for frames,
+the frame asked for before the act is held or its input queued. An answer or a wake after an
+attempt runs inside the pass's `FirstPanic`, and `after_turn` evaluates the parked waits inside it
+too, so the first panic of a turn continues. The stability check remembers the two elements each
+held act reads and room for polls beside them (`AgentStability`), forgetting the element read
+longest ago.
 An attempt resolves a locator again in the application (none holds on, several under a strict
 pick answer `ambiguous`), reads the element's actionability as `element.actionability` does (the
 same `actionability`, its stability included), and performs once every check passes, or only
@@ -1160,9 +1171,13 @@ each step an injection whose answer the next attempt waits for, until the locato
 the scrollable to an element that shows, or the scrollable's descendants and their bounds are
 unchanged after a step (`ScrollEnded`, `not_found`), so a scrollable that does not move ends the
 search; a call that names no direction scrolls down, then right when the first step down moves
-nothing. The conversation routes gestures through the connection's input lease (`LEASED` in
-`agent/dispatch.rs`) and counts their act timeout and the time their input plays in the reply's
-deadline (`Addressed::holds_for`). Pinned by `tests/contracts/agent_gestures.rs`.
+nothing. At its deadline a step not played yet is withdrawn and the window is looked at once more,
+so no scroll goes out after the answer; a read of more than 4096 descendants or matches is
+refused, never taken for the whole. The conversation routes the window methods whose effect stays
+the connection's through its input lease (`LEASED` in `agent/dispatch.rs`: synthetic input and a
+perf span) and counts a gesture's act timeout and the time its input plays in the reply's deadline
+(`Addressed::holds_for`). Pinned by `tests/contracts/agent_gestures.rs` and
+`tests/contracts/agent_gesture_unwinding.rs`.
 
 **Input journal.** Once `dev_agent_window` has made the presentation's agent slot, every input
 routed to the presentation is journaled in the slot (`agent_journal.rs`): the platform's and the
