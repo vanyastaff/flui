@@ -487,6 +487,12 @@ fn serve_agent() {
             Duration::from_secs(60),
         );
     }
+    // The run opened its session only to report its builds: `flui mcp` finds no app through
+    // it, and a session file a `flui run --agent` wrote would be left alone.
+    assert!(
+        !app.join("target").join("flui-agent.json").exists(),
+        "a run without --agent wrote the session file"
+    );
 
     std::fs::write(app.join("src/main.rs"), "fn main() { this is not rust }\n")
         .expect("a compile error");
@@ -504,12 +510,14 @@ fn serve_agent() {
         "the previous build was stopped for a build that failed: {seen:?}"
     );
     // The running build shows the rebuild, then its failure (ADR-0395).
-    wait_for(
-        &events,
-        &mut seen,
-        says("REPORT failed"),
-        Duration::from_secs(30),
-    );
+    if !seen[mark..].iter().any(says("REPORT failed")) {
+        wait_for(
+            &events,
+            &mut seen,
+            says("REPORT failed"),
+            Duration::from_secs(30),
+        );
+    }
     assert!(
         seen[mark..].iter().any(says("REPORT building")),
         "the build was shown starting: {seen:?}"

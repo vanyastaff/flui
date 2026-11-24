@@ -86,9 +86,12 @@ pub(crate) fn execute(
         return super::ios::run(udid, release, profile.as_deref());
     }
 
-    // The overlay is the agent's, which a build keeps only with debug assertions: `dev`'s.
-    let build_overlay =
-        build_overlay && !release && profile.as_deref().is_none_or(|profile| profile == "dev");
+    // The overlay is the agent's, which a build keeps only with debug assertions: `dev`'s. Windows
+    // stops the app before it rebuilds, so no window would take a report.
+    let build_overlay = build_overlay
+        && !cfg!(windows)
+        && !release
+        && profile.as_deref().is_none_or(|profile| profile == "dev");
     let result = run_session(
         project,
         &target,

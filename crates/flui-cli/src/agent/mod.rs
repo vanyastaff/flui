@@ -15,6 +15,8 @@
 //!   to that endpoint through a [`client::Connection`].
 //! - `flui record` ([`record`]) connects as an observer and writes a recording
 //!   of the app's input to a file.
+//! - `flui run` without `--agent` creates an unlisted [`Session`] (no file) for a desktop app
+//!   and reports each rebuild to its windows as an observer ([`build_report`], ADR-0395).
 //!
 //! The launch contract (the variable and extra names, the shortest token) and
 //! the wire types are `flui-protocol`'s, the contract crate the app's server
@@ -178,10 +180,10 @@ pub(crate) fn target_dir_override() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// An agent session owned by one `flui run --agent`: the credentials, what
-/// keeps the endpoint (the private directory holding a desktop app's socket,
-/// or an Android app's `adb forward`), and the session file. Dropping it
-/// removes all of them, so a session never outlives the command.
+/// An agent session owned by one `flui run`: the credentials, what keeps the endpoint (the
+/// private directory holding a desktop app's socket, or an Android app's `adb forward`), and the
+/// session file `flui mcp` finds, which an [unlisted](Self::create_unlisted) session has none
+/// of. Dropping it removes all of them, so a session never outlives the command.
 pub(crate) struct Session {
     credentials: Credentials,
     /// The address the app binds: the endpoint of [`Self::credentials`] on

@@ -1371,7 +1371,7 @@ bottom with the error count ("see the terminal" when the failure carries no diag
 line per diagnostic cut to the panel's width, laid out from the surface's logical size and kept
 clear of the performance overlay's bounds while that is on; a surface without room for it shows
 none. A report is formatted when it is taken: each diagnostic's message and file are cut to one
-line of at most 400 characters, with control characters made spaces and the bidirectional
+line of at most `FIELD_LIMIT` characters, with control characters made spaces and the bidirectional
 formatting characters dropped, and a frame for the surface the last one laid it out for draws
 that layout again. A report with more than `MAX_DIAGNOSTICS` diagnostics is refused
 `invalid_argument` and changes nothing, an equal one asks for no frame, another replaces it, and

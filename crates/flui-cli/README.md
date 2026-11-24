@@ -208,7 +208,7 @@ reports it as an observer of the app's agent, over a session of its own that
 writes no session file
 ([ADR-0395](../../docs/adr/ADR-0395-a-rebuild-is-shown-over-the-app-it-will-replace.md)),
 so `flui mcp` still finds and drives the run started with `--agent`. On
-Windows the app is stopped while it builds, so nothing shows the report.
+Windows the app is stopped while it builds, so the run sends no report there.
 
 Ctrl-C always stops the app before the CLI exits and reports exit code 130;
 `q` stops it and exits 0, so supervisors can tell the two apart. Hot-keys need

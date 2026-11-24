@@ -3,7 +3,9 @@
 - **Status:** Accepted (2026-11-23)
 - **Date:** 2026-11-23
 - **Supersedes:** [ADR-0238](ADR-0238-flui-driver-protocol.md) §1, the list of effect classes
-  (`ReadOnly`, `Acts`, `Destructive`): `Annotates` is a fourth (§1);
+  (`ReadOnly`, `Acts`, `Destructive`): `Annotates` is a fourth (§1); ADR-0238 §5's "An `Acts`
+  method is never resent on timeout", which §4 below restates for every effect that changes the
+  app;
   [ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md) §4, the timeout's two
   answers ("retry `soon` when it only reads, `may_have_run` when it acts"), which §4 below
   restates for the four effects; and ADR-0288 §8, the sentence on what an observer may call ("a
@@ -58,7 +60,8 @@ its input. `MethodEffect::changes_app` is true for `acts` and `destructive` alon
 one rule: an observer may call a method that does not change the app (`may_call`), and §4's
 timeout reads it. The runtime serves an `annotates` row through a trait whose handler is given
 the window's build banner and nothing of the app, so a method declared `annotates` that would
-reach the app's state does not compile.
+reach the app's state does not build: the dispatch of an `annotates` row requires that trait
+and hands it nothing else.
 
 §2. **`build.report`.** Protocol 0.29 adds the window method `build.report { window, state }`.
 `state` is `building`, `succeeded` or `failed { diagnostics, omitted }`; a diagnostic is the
@@ -75,8 +78,8 @@ process restart opens an agent session (unlisted, writing no session file, when 
 the app, `failed` with cargo's errors, read from its JSON messages while each message still
 reaches the terminal as cargo writes it. It sends from a thread of its own and folds waiting
 reports into the latest, so a report never holds up a build. `flui run --no-build-overlay`, a
-release run and a profile other than `dev` send none, and a run that cannot open the session or
-start the thread warns and runs without the overlay.
+release run, a profile other than `dev` and a run on Windows send none, and a run that cannot
+open the session or start the thread warns and runs without the overlay.
 
 §4. **A call that timed out.** A call with no answer within its budget is answered `timeout`:
 retry `soon` when its effect does not change the app (a read or an annotation, which a resend
@@ -94,7 +97,7 @@ generator read the same `changes_app`.
 - Bad: a capture of the presented frame shows the banner, as it shows the performance overlay.
 - Bad: a window opened after a report shows nothing until the next one.
 - Bad: on Windows the running executable cannot be overwritten, so `flui run` stops the app
-  before it builds and no window is there to show the report.
+  before it builds and no window is there to show a report; a run there sends none.
 - Bad: the Android, browser and worker-host runs do not report yet
   ([gaps](../gaps.md#accepted-adr-sections-not-built-yet)).
 
@@ -120,7 +123,8 @@ generator read the same `changes_app`.
 - `flui-cli`'s `a_report_reaches_every_window_as_an_observer`,
   `a_window_that_refuses_the_report_leaves_the_others_to_get_it`,
   `a_report_whose_app_was_replaced_reaches_its_successor` and
-  `the_reports_that_waited_fold_into_the_newest` (the reporter);
+  `the_reports_that_waited_fold_into_the_newest` and
+  `the_reports_made_before_the_app_listens_reach_it_folded` (the reporter);
   `the_errors_are_kept_and_every_message_still_reaches_the_terminal` (cargo's messages);
   `an_unlisted_session_writes_no_file_and_leaves_the_listed_one`; and
   `a_restart_replaces_the_running_build_only_with_one_that_succeeded`, where the running app

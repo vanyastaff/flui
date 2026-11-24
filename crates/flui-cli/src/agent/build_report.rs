@@ -22,7 +22,7 @@ use super::client::{Connection, Failure};
 
 /// How long a report waits for the app's endpoint to accept it: an app that is still starting
 /// binds it within this, and one that is gone is given up on.
-const CONNECT_WAIT: Duration = Duration::from_secs(2);
+const CONNECT_WAIT: Duration = Duration::from_secs(5);
 
 /// Sends build reports to the app a session launched; see the module docs.
 pub(crate) struct BuildReporter {
@@ -170,10 +170,11 @@ mod conversation_tests {
         (hello, lines)
     }
 
-    /// opened with, then each `build.report`'s parameters, until one report reached each window or
+    /// One conversation of a stand-in agent with the windows `w1` and `w2`: the hello it was
+    /// opened with, then each `build.report`'s parameters, until `expected` reports were asked or
     /// the client went quiet for ten seconds. A report to a window in `refused` is answered
-    /// to a window in `refused` is answered `not_found`, as a window that closed since the list.
-    fn serve(stream: &UnixStream, refused: &[&str]) -> (Value, Vec<Value>) {
+    /// `not_found`, as a window that closed since the list.
+    fn serve(stream: &UnixStream, refused: &[&str], expected: usize) -> (Value, Vec<Value>) {
         let mut out = stream.try_clone().expect("clone");
         let (hello, lines) = greet(stream);
         let mut reports = Vec::new();
@@ -200,7 +201,7 @@ mod conversation_tests {
                 other => panic!("unexpected request {other:?}"),
             };
             writeln!(out, "{answer}").expect("answer");
-            if asked == 2 {
+            if asked == expected {
                 break;
             }
         }
@@ -280,9 +281,38 @@ mod conversation_tests {
         // conversation, which ends the stand-in's.
         drop(reporter);
         let stream = accept(&listener);
-        let (hello, reports) = serve(&stream, &[]);
+        let (hello, reports) = serve(&stream, &[], 2);
         assert_eq!(hello["hello"]["role"], "observer", "{hello}");
         assert_eq!(reports, reports_to(&["w1", "w2"], &failed()));
+    }
+
+    /// Reports made while the app is not reachable yet wait for it, and the window gets the
+    /// newest of them: the reporter folds what waited instead of replaying each one.
+    #[test]
+    fn the_reports_made_before_the_app_listens_reach_it_folded() {
+        let dir = tempfile::tempdir().expect("dir");
+        let socket = dir.path().join("agent.sock");
+        let reporter = BuildReporter::start(credentials(&socket)).expect("reporter");
+        reporter.report(BuildState::Building);
+        reporter.report(BuildState::Succeeded);
+        reporter.report(failed());
+        drop(reporter);
+        // The reporter's thread is connecting to an endpoint nobody listens at yet, with every
+        // report but the first one or all three waiting behind it.
+        std::thread::sleep(Duration::from_millis(300));
+        let listener = UnixListener::bind(&socket).expect("bind");
+        let stream = accept(&listener);
+        let (_, reports) = serve(&stream, &[], 4);
+        let succeeded = reports_to(&["w1", "w2"], &BuildState::Succeeded);
+        assert!(
+            !reports.iter().any(|report| succeeded.contains(report)),
+            "a report that waited behind a newer one was sent: {reports:?}"
+        );
+        assert_eq!(
+            reports[reports.len().saturating_sub(2)..],
+            reports_to(&["w1", "w2"], &failed()),
+            "the newest report is what the windows show last"
+        );
     }
 
     /// A window that refuses the report (it closed since the list) leaves the others to get it.
@@ -293,7 +323,7 @@ mod conversation_tests {
         reporter.report(failed());
         drop(reporter);
         let stream = accept(&listener);
-        let (_, reports) = serve(&stream, &["w1"]);
+        let (_, reports) = serve(&stream, &["w1"], 2);
         assert_eq!(reports, reports_to(&["w2"], &failed()));
     }
 
@@ -311,7 +341,7 @@ mod conversation_tests {
         drop(lines);
         gone.shutdown(std::net::Shutdown::Both).expect("shutdown");
         let successor = accept(&listener);
-        let (_, reports) = serve(&successor, &[]);
+        let (_, reports) = serve(&successor, &[], 2);
         assert_eq!(reports, reports_to(&["w1", "w2"], &failed()));
     }
 }

@@ -10,7 +10,8 @@
 - **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
   for the `xtask workspace` gate only (Decision): the rule stands and its reader confirms it; and
   [ADR-0395](ADR-0395-a-rebuild-is-shown-over-the-app-it-will-replace.md) for §1's list of
-  effect classes only: `Annotates` is a fourth, which an observer may call.
+  effect classes and §5's resend sentence only: `Annotates` is a fourth, which an observer may
+  call, and no call that changes the app (`acts` or `destructive`) is resent on timeout.
 - **Settles:** the still-Proposed items of [ADR-0095](ADR-0095-agent-protocol-schema-crate.md)
   §1 (finder criteria, handle kinds, `effect` as a schema type, event shapes), §3 (`flui mcp` and
   the handle table across windows) and §5 (one finder shared by tests and agents). §4's projection
