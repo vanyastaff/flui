@@ -57,6 +57,20 @@ impl PipelineWarmup {
         self.built.is_some()
     }
 
+    /// Wait until the worker has ended, leaving its library to be taken; a
+    /// panic of the build or the save resumes here.
+    #[cfg(test)]
+    pub(crate) fn wait(&mut self) {
+        if let Some(worker) = self.worker.take()
+            && let Err(payload) = worker.join()
+        {
+            // The library is not coming: `take` answers `None`, as after a
+            // build panic it resumed itself.
+            self.built = None;
+            std::panic::resume_unwind(payload);
+        }
+    }
+
     /// The built library, waiting for what is left of the build; `None` once
     /// taken. A panic of the build (wgpu's error handler, a tracing
     /// subscriber) resumes here, on the frame that needed the library, with

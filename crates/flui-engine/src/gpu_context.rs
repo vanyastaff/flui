@@ -557,6 +557,13 @@ impl GpuContext {
         #[cfg(not(target_arch = "wasm32"))]
         {
             self.requested = None;
+            // A warm-up still building on the lost device is joined before
+            // the new device is asked for. Where wgpu names its objects
+            // (`InstanceFlags::DEBUG`), the Vulkan loader looks the named
+            // pipeline's device up in lists that a device or instance created
+            // on another thread changes, and the warm-up crashed on lavapipe
+            // when it named a pipeline as a device was being made.
+            self.warmup = None;
         }
         #[cfg(test)]
         if self.rebuilds_failing > 0 {
@@ -1366,6 +1373,15 @@ impl GpuContext {
         self.warmup
             .as_ref()
             .is_some_and(crate::pipelines::warmup::PipelineWarmup::is_pending)
+    }
+
+    /// Wait until a warm-up has built its library, which the first frame
+    /// still takes.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(crate) fn finish_warmup(&mut self) {
+        if let Some(warmup) = self.warmup.as_mut() {
+            warmup.wait();
+        }
     }
 
     /// Wait for a warm-up's worker, its save included.
@@ -3969,6 +3985,10 @@ mod tests {
         assert!(executor.backend().warming_up());
         executor.backend().lose_device();
         let _ = executor.turn();
+        assert!(
+            !executor.backend().warming_up(),
+            "the warm-up is joined before the new device is asked for"
+        );
         executor.backend_mut().await_device_request();
         let _ = executor.turn();
         assert!(!executor.backend().warming_up(), "the rebuild dropped it");
