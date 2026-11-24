@@ -8,9 +8,16 @@
 
 use std::time::Duration;
 
+mod planning;
+
+pub use planning::{
+    MAX_COORDINATE, MAX_SOURCES, MAX_SPAN, MAX_STEPS, MAX_TICKS, Plan, PlanError, Planned,
+    PlannedInput, PlannedSource, STEP, SourceKind, plan,
+};
+
 use crate::act::JournalSpan;
 use crate::geometry::LogicalPoint;
-use crate::locator::Target;
+use crate::locator::{Locator, Target};
 use crate::snapshot::Snapshot;
 use crate::tree::WindowId;
 
@@ -92,6 +99,10 @@ vocabulary! {
         Touch => "touch",
         /// A pen or stylus.
         Pen => "pen",
+        /// A pointer with no physical contact: a gamepad-driven cursor, a dwell or switch device,
+        /// UI automation. It hovers, presses and releases as a mouse does, and routing treats
+        /// every contactless pointer alike (ADR-0216 §3).
+        Virtual => "virtual",
     }
 }
 
@@ -574,7 +585,10 @@ pub struct GestureOptions {
         serde(default, skip_serializing_if = "std::ops::Not::not")
     )]
     pub force: bool,
-    /// How long locating and actionability may take, in milliseconds; 5000 when absent.
+    /// How long locating and actionability may take, in milliseconds; 5000 when absent and at
+    /// most 24 hours ([`Self::effective_timeout_ms`]). It is what the window may hold the act
+    /// for, which the conversation counts in the reply's deadline (ADR-0288 §4); past it the act
+    /// is dropped, so nothing is injected after its answer.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -586,6 +600,23 @@ pub struct GestureOptions {
         serde(default, skip_serializing_if = "crate::skip::is_default")
     )]
     pub snapshot: Snapshot,
+}
+
+impl GestureOptions {
+    /// How long an act holds out for actionability when it names no timeout, in milliseconds.
+    pub const DEFAULT_TIMEOUT_MS: u64 = 5_000;
+
+    /// The longest an act holds out, in milliseconds (24 hours), as a wait does: a longer timeout
+    /// is this long.
+    pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1_000;
+
+    /// How long the window may hold the act, in milliseconds: the timeout named, at most
+    /// [`Self::MAX_TIMEOUT_MS`], or [`Self::DEFAULT_TIMEOUT_MS`].
+    #[must_use]
+    pub fn effective_timeout_ms(&self) -> u64 {
+        self.timeout_ms
+            .map_or(Self::DEFAULT_TIMEOUT_MS, |ms| ms.min(Self::MAX_TIMEOUT_MS))
+    }
 }
 
 /// `element.tap` and `element.double_tap`.
@@ -729,6 +760,41 @@ pub struct ScrollIntoViewParams {
     /// How.
     #[cfg_attr(feature = "serde", serde(flatten))]
     pub options: GestureOptions,
+}
+
+/// `element.scroll_until`: scroll a scrollable a viewport at a time, at frame boundaries, until a
+/// locator resolves inside it or its scroll extent ends (Flutter's `scrollUntilVisible`).
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ScrollUntilParams {
+    /// The scrollable; a point is refused.
+    pub target: Target,
+    /// What to scroll to: the element it names must resolve, strictly, under the scrollable.
+    pub until: Locator,
+    /// Which way to scroll; towards the end of the scrollable's axis when absent.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub direction: Option<Direction>,
+    /// How.
+    #[cfg_attr(feature = "serde", serde(flatten))]
+    pub options: GestureOptions,
+}
+
+impl ScrollUntilParams {
+    /// Scroll `target` until `until` resolves inside it.
+    #[must_use]
+    pub fn new(target: impl Into<Target>, until: Locator) -> Self {
+        Self {
+            target: target.into(),
+            until,
+            direction: None,
+            options: GestureOptions::default(),
+        }
+    }
 }
 
 /// `element.type_text`: focus the target, then commit text into it.

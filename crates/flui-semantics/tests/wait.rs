@@ -25,14 +25,15 @@ fn emitted(kinds: &[EventKind]) -> WaitFacts {
     WaitFacts { events, ..IDLE }
 }
 
-/// A window with a "Save" button, a "Notify" check box that is on, and a disabled "Later"
-/// button.
+/// A window with a "Save" button that says what it does, a "Notify" check box that is on, a
+/// disabled "Later" button, and a "Terms" link laid out below the window's bottom edge.
 fn shown() -> Fixture {
     let mut f = Fixture::new();
     f.add(None, 1, (0.0, 0.0, 400.0, 300.0), |c| c.set_label("App"));
     f.add(Some(1), 2, (0.0, 0.0, 50.0, 20.0), |c| {
         c.set_role(SemanticsRole::Button);
         c.set_label("Save");
+        c.set_hint("Writes the draft");
     });
     f.add(Some(1), 3, (0.0, 30.0, 50.0, 20.0), |c| {
         c.set_role(SemanticsRole::CheckBox);
@@ -43,6 +44,10 @@ fn shown() -> Fixture {
         c.set_role(SemanticsRole::Button);
         c.set_label("Later");
         c.set_enabled(Some(false));
+    });
+    f.add(Some(1), 5, (0.0, 400.0, 50.0, 20.0), |c| {
+        c.set_role(SemanticsRole::Link);
+        c.set_label("Terms");
     });
     f.flush();
     f
@@ -152,6 +157,60 @@ fn a_condition_holds_or_not_against_the_published_tree() {
             },
             IDLE,
             false,
+        ),
+        (
+            "description matches",
+            Condition::Matches {
+                locator: button("Save"),
+                expect: Expectation::Description(TextMatch::prefix("Writes")),
+            },
+            IDLE,
+            true,
+        ),
+        (
+            "no description to match",
+            Condition::Matches {
+                locator: button("Later"),
+                expect: Expectation::Description(TextMatch::contains("")),
+            },
+            IDLE,
+            false,
+        ),
+        (
+            "visible inside the window",
+            Condition::Matches {
+                locator: button("Save"),
+                expect: Expectation::Visible,
+            },
+            IDLE,
+            true,
+        ),
+        (
+            "laid out past the window's edge is not visible",
+            Condition::Matches {
+                locator: Locator::named("Terms"),
+                expect: Expectation::Visible,
+            },
+            IDLE,
+            false,
+        ),
+        (
+            "every matched element must be visible",
+            Condition::Matches {
+                locator: Locator::default().name_matching(TextMatch::contains("e")),
+                expect: Expectation::Visible,
+            },
+            IDLE,
+            false,
+        ),
+        (
+            "the root",
+            Condition::Matches {
+                locator: Locator::root(),
+                expect: Expectation::Name(TextMatch::exact("App")),
+            },
+            IDLE,
+            true,
         ),
         (
             "not focused",

@@ -377,6 +377,7 @@ fn criteria(locator: &Locator, entry: &Entry) -> Criteria {
             out.held += usize::from(holds);
         }
     };
+    check(locator.root, entry.parent.is_none());
     check(locator.role.is_some(), locator.role == Some(wire.role));
     let text = |criterion: &Option<TextMatch>, text: &Option<String>| {
         criterion

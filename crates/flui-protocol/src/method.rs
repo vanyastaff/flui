@@ -7,6 +7,11 @@
 //! file are all read from it, so none of the front ends can know a method the others do not.
 //! [`Method`] is sealed: a method exists only by being declared here.
 //!
+//! A gesture (`element.*` but the actionability read) is the agent's on the synthetic and semantic
+//! paths: the window locates, holds the act until its target is actionable or the act's timeout
+//! passes, and injects in the turn the check passed (ADR-0400 §2). On the `os` path the driver
+//! composes it from the agent's methods and its lane (ADR-0238 §5).
+//!
 //! The rest of the design's table joins as its tasks land: the OS lanes (`os.*`,
 //! `input.os`, `capture.os`), pixel baselines, recording and traces, layout facts, the other
 //! audits, review and reports, devices and exploration.
@@ -202,11 +207,70 @@ impl Addressed for crate::act::ActionabilityParams {
 
 impl Addressed for crate::act::ActParams {
     fn window(&self) -> Option<WindowId> {
-        match &self.target {
-            Target::Element(element) => Some(element.window),
-            Target::Locator(locator) => locator.window,
-            Target::Point { window, .. } => Some(*window),
+        target_window(&self.target)
+    }
+}
+
+/// The window a gesture's target names: an element's or a point's, or the window a locator names.
+fn target_window(target: &Target) -> Option<WindowId> {
+    match target {
+        Target::Element(element) => Some(element.window),
+        Target::Locator(locator) => locator.window,
+        Target::Point { window, .. } => Some(*window),
+    }
+}
+
+/// A gesture's act timeout, which the window may hold the act for (ADR-0400 §2).
+fn act_timeout(options: &crate::input::GestureOptions) -> Duration {
+    Duration::from_millis(options.effective_timeout_ms())
+}
+
+macro_rules! addressed_by_gesture_target {
+    ($($params:ty),+ $(,)?) => {$(
+        impl Addressed for $params {
+            fn window(&self) -> Option<WindowId> {
+                target_window(&self.target)
+            }
+
+            /// The act holds out for actionability until its timeout.
+            fn holds_for(&self) -> Duration {
+                act_timeout(&self.options)
+            }
         }
+    )+};
+}
+
+addressed_by_gesture_target!(
+    crate::input::DragParams,
+    crate::input::PinchParams,
+    crate::input::ScrollIntoViewParams,
+    crate::input::ScrollUntilParams,
+    crate::input::SwipeParams,
+    crate::input::TapParams,
+    crate::input::TypeTextParams,
+);
+
+impl Addressed for crate::input::LongPressParams {
+    fn window(&self) -> Option<WindowId> {
+        target_window(&self.target)
+    }
+
+    /// The act holds out for actionability until its timeout, then holds the press as long as
+    /// it names.
+    fn holds_for(&self) -> Duration {
+        act_timeout(&self.options)
+            .saturating_add(Duration::from_millis(self.duration_ms.unwrap_or(0)))
+    }
+}
+
+impl Addressed for crate::input::PressKeysParams {
+    /// The target's window, or the window named when there is no target.
+    fn window(&self) -> Option<WindowId> {
+        self.target.as_ref().map_or(self.window, target_window)
+    }
+
+    fn holds_for(&self) -> Duration {
+        act_timeout(&self.options)
     }
 }
 
@@ -375,34 +439,37 @@ macro_rules! __method_table {
             ElementActionability = "element.actionability", Agent(window), ReadOnly, Input,
                 $crate::act::ActionabilityParams => $crate::act::Actionability;
             /// Two taps, close enough to count as one double tap.
-            ElementDoubleTap = "element.double_tap", Driver, Acts, Input,
+            ElementDoubleTap = "element.double_tap", Agent(window), Acts, Input,
                 $crate::input::TapParams => $crate::act::ActOutcome;
             /// Press on one target, move to another, release.
-            ElementDragTo = "element.drag_to", Driver, Acts, Input,
+            ElementDragTo = "element.drag_to", Agent(window), Acts, Input,
                 $crate::input::DragParams => $crate::act::ActOutcome;
             /// A stroke that ends above the fling velocity.
-            ElementFling = "element.fling", Driver, Acts, Input,
+            ElementFling = "element.fling", Agent(window), Acts, Input,
                 $crate::input::SwipeParams => $crate::act::ActOutcome;
             /// Press and hold.
-            ElementLongPress = "element.long_press", Driver, Acts, Input,
+            ElementLongPress = "element.long_press", Agent(window), Acts, Input,
                 $crate::input::LongPressParams => $crate::act::ActOutcome;
             /// Two contacts spreading or closing.
-            ElementPinch = "element.pinch", Driver, Acts, Input,
+            ElementPinch = "element.pinch", Agent(window), Acts, Input,
                 $crate::input::PinchParams => $crate::act::ActOutcome;
             /// Key chords, in turn.
-            ElementPressKeys = "element.press_keys", Driver, Acts, Core,
+            ElementPressKeys = "element.press_keys", Agent(window), Acts, Core,
                 $crate::input::PressKeysParams => $crate::act::ActOutcome;
             /// Scroll until the element is visible.
-            ElementScrollIntoView = "element.scroll_into_view", Driver, Acts, Core,
+            ElementScrollIntoView = "element.scroll_into_view", Agent(window), Acts, Core,
                 $crate::input::ScrollIntoViewParams => $crate::act::ActOutcome;
+            /// Scroll a scrollable a viewport at a time until a locator resolves inside it.
+            ElementScrollUntil = "element.scroll_until", Agent(window), Acts, Input,
+                $crate::input::ScrollUntilParams => $crate::act::ActOutcome;
             /// A stroke that ends below the fling velocity.
-            ElementSwipe = "element.swipe", Driver, Acts, Input,
+            ElementSwipe = "element.swipe", Agent(window), Acts, Input,
                 $crate::input::SwipeParams => $crate::act::ActOutcome;
             /// Locate, check actionability, tap, observe.
-            ElementTap = "element.tap", Driver, Acts, Core,
+            ElementTap = "element.tap", Agent(window), Acts, Core,
                 $crate::input::TapParams => $crate::act::ActOutcome;
             /// Focus the element and commit text into it.
-            ElementTypeText = "element.type_text", Driver, Acts, Core,
+            ElementTypeText = "element.type_text", Agent(window), Acts, Core,
                 $crate::input::TypeTextParams => $crate::act::ActOutcome;
             /// Stream events.
             EventsSubscribe = "events.subscribe", Agent, ReadOnly, Record,

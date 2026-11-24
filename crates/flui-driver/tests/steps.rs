@@ -9,7 +9,7 @@ use flui_driver::coordinates::{DevicePoint, WindowGeometry};
 use flui_driver::lane::send_guarded;
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
 use flui_driver::protocol::input::{
-    ActionSequence, ImeAction, InputSource, PointerAction, PointerButton, PointerDevice,
+    ActionSequence, ImeAction, InputSource, MAX_SPAN, PointerAction, PointerButton, PointerDevice,
     ScrollUnit, WheelAction,
 };
 use flui_driver::steps::{MAX_STEPS, OsEvent, STEP, os_events};
@@ -309,9 +309,12 @@ fn no_pause_is_shorter_than_a_millisecond_and_a_tick_keeps_its_length() {
 
 #[test]
 fn a_very_long_move_takes_longer_steps_not_more_of_them() {
-    let day = 24 * 60 * 60 * 1000;
+    // Nearly the longest move a sequence holds, a whole number of milliseconds per step so the
+    // last pause is exact.
+    let per_step = u64::try_from(MAX_SPAN.as_millis()).expect("minutes") / u64::from(MAX_STEPS);
+    let long = per_step * u64::from(MAX_STEPS);
     let events = os_events(
-        &pointer(vec![move_to(0.0, 0.0, 0), move_to(100.0, 100.0, day)]),
+        &pointer(vec![move_to(0.0, 0.0, 0), move_to(100.0, 100.0, long)]),
         &geometry(),
     )
     .expect("a long move");
@@ -322,9 +325,20 @@ fn a_very_long_move_takes_longer_steps_not_more_of_them() {
     assert_eq!(moves, 1 + MAX_STEPS as usize);
     assert_eq!(
         events.last(),
-        Some(&OsEvent::Pause(Duration::from_millis(
-            day / u64::from(MAX_STEPS)
-        )))
+        Some(&OsEvent::Pause(Duration::from_millis(per_step)))
+    );
+}
+
+#[test]
+fn a_sequence_longer_than_any_path_plays_sends_nothing() {
+    let past = u64::try_from(MAX_SPAN.as_millis()).expect("minutes") + 1;
+    let refused = os_events(
+        &pointer(vec![move_to(0.0, 0.0, 0), move_to(100.0, 100.0, past)]),
+        &geometry(),
+    );
+    assert!(
+        matches!(refused, Err(Error::InvalidArgument { .. })),
+        "{refused:?}"
     );
 }
 

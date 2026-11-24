@@ -1,5 +1,6 @@
-//! The driver's methods (`ServedBy::Driver`), composed from the agent's: locate, check
-//! actionability, perform by the chosen input path, observe (ADR-0238 §5, §6).
+//! The methods the driver composes from the agent's (ADR-0238 §5, §6): its own (`ServedBy::Driver`),
+//! and every gesture on the `os` path or for an app whose agent does not answer it (ADR-0400 §2):
+//! locate, check actionability, perform by the chosen input path, observe.
 //!
 //! - **Locate.** A locator is resolved at the moment of the action, never cached (ADR-0238 §4):
 //!   strict with several matches is [`Error::Ambiguous`] with the first ten as outline lines;
@@ -86,6 +87,20 @@ const COMPOSED: &[&str] = &[
 /// Whether the driver composes the method `name`.
 pub(crate) fn composes(name: &str) -> bool {
     COMPOSED.contains(&name)
+}
+
+/// Whether the app's agent answers the gesture `name` asked with `params` (ADR-0400 §2): it
+/// serves the method, and the path the call names, or the session's, is not `os`, which the
+/// driver composes with its lane. An app whose agent does not answer gestures yet has each one
+/// composed here, as every app before protocol 0.32 did.
+pub(crate) fn agent_answers(driver: &Driver, name: &str, params: &Value) -> bool {
+    if !driver.serves(name) {
+        return false;
+    }
+    let requested = params
+        .get("via")
+        .and_then(|via| serde_json::from_value::<InputPolicy>(via.clone()).ok());
+    requested.unwrap_or_else(|| driver.input_policy()).prefer != InputPath::Os
 }
 
 /// Run the driver's method `name` with `params`.

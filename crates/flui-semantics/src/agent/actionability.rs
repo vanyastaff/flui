@@ -63,6 +63,16 @@ impl SemanticsOwner {
         })
     }
 
+    /// Whether `element` is shown in the published tree: the `visible` fact of
+    /// [`Self::actionability_wire`], with no hit-test. `false` before the first
+    /// assembly and on a tree that breaks AccessKit's contract.
+    pub(super) fn is_shown(&self, element: ElementRef, placement: Placement) -> bool {
+        self.with_published(|state, _| {
+            Facts::read(state, self.device_pixel_ratio(), element, placement).visible
+        })
+        .unwrap_or(false)
+    }
+
     /// The facts about `element` that decide whether input can reach it, from
     /// one committed tree.
     ///

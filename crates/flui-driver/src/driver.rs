@@ -1,8 +1,8 @@
 //! The [`Driver`]: one target, its connection, its session policy, and every method of the table.
 //!
 //! The agent's methods (`ServedBy::Agent`) go to the app as they are; the driver's own
-//! (`ServedBy::Driver`) are composed here from them ([`crate::compose`]); a lane's need one
-//! attached. [`Driver::call`] reaches all of them by type, [`Driver::call_value`] by wire name, so
+//! (`ServedBy::Driver`), and a gesture on the `os` path or one the app's agent does not answer,
+//! are composed here from them ([`crate::compose`]); a lane's need one attached. [`Driver::call`] reaches all of them by type, [`Driver::call_value`] by wire name, so
 //! every front end reaches the same set (ADR-0238 §1).
 
 use std::fmt;
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_protocol::error::HandleKind;
 use flui_protocol::events::Event;
-use flui_protocol::input::{InputParams, InputPath, InputPolicy, PointerDevice};
+use flui_protocol::input::{InputPath, InputPolicy, PointerDevice};
 use flui_protocol::method::{self, Method, MethodEffect, ServedBy};
 use flui_protocol::session::{
     AppDescription, Capabilities, Closed, Empty, HelloReply, Isolation, WindowList,
@@ -375,8 +375,10 @@ impl Driver {
         capabilities.paths = paths;
         capabilities.pointers = pointers;
         capabilities.isolation = Some(self.isolation());
+        // What the driver composes: its own methods, and the gestures an app's agent does not
+        // answer.
         for row in method::METHODS {
-            if row.served_by == ServedBy::Driver && crate::compose::composes(row.name) {
+            if crate::compose::composes(row.name) && !self.serves(row.name) {
                 capabilities.methods.push(row.name.to_owned());
             }
         }
@@ -430,6 +432,14 @@ impl Driver {
     /// Send `row`'s method to whoever serves it.
     fn dispatch_value(&mut self, row: &'static method::MethodRow, params: Value) -> Result<Value> {
         match row.served_by {
+            // A gesture the agent does not answer, or one asked for on the `os` path, the driver
+            // composes from the agent's methods and its lane.
+            ServedBy::Agent
+                if crate::compose::composes(row.name)
+                    && !crate::compose::agent_answers(self, row.name, &params) =>
+            {
+                crate::compose::call(self, row.name, params)
+            }
             ServedBy::Agent => {
                 if !self.serves(row.name) {
                     return Err(Error::not_supported(
@@ -903,20 +913,34 @@ pub(crate) fn decode<T: DeserializeOwned>(method: &str, output: Value) -> Result
 }
 
 /// How long the app may hold a request for `method` with `params` past serving it: a wait's
-/// timeout, an input sequence's span.
+/// timeout, an input sequence's span, a gesture's act timeout. A window method's own parameters
+/// say it ([`Addressed::holds_for`](flui_protocol::method::Addressed::holds_for)); a frame or
+/// settle wait holds for its timeout.
 fn holds_for(method: &str, params: &Value) -> Duration {
-    use flui_protocol::method::Addressed as _;
-    let read = |value: &Value| value.clone();
-    match method {
-        "wait.until" => serde_json::from_value::<WaitParams>(read(params)).map(|p| p.holds_for()),
-        "wait.frames" => serde_json::from_value::<FramesParams>(read(params))
-            .map(|p| Duration::from_millis(p.timeout_ms.unwrap_or(WaitParams::DEFAULT_TIMEOUT_MS))),
-        "wait.settled" => serde_json::from_value::<SettledParams>(read(params))
-            .map(|p| Duration::from_millis(p.timeout_ms.unwrap_or(WaitParams::DEFAULT_TIMEOUT_MS))),
-        "input.inject" => {
-            serde_json::from_value::<InputParams>(read(params)).map(|p| p.holds_for())
-        }
-        _ => return Duration::ZERO,
+    fn held<P: DeserializeOwned + flui_protocol::method::Addressed>(params: &Value) -> Duration {
+        serde_json::from_value::<P>(params.clone())
+            .map_or(Duration::ZERO, |params| params.holds_for())
     }
-    .unwrap_or(Duration::ZERO)
+    let timeout =
+        |ms: Option<u64>| Duration::from_millis(ms.unwrap_or(WaitParams::DEFAULT_TIMEOUT_MS));
+    match method {
+        "wait.frames" => {
+            return serde_json::from_value::<FramesParams>(params.clone())
+                .map_or(Duration::ZERO, |p| timeout(p.timeout_ms));
+        }
+        "wait.settled" => {
+            return serde_json::from_value::<SettledParams>(params.clone())
+                .map_or(Duration::ZERO, |p| timeout(p.timeout_ms));
+        }
+        _ => {}
+    }
+    macro_rules! window_methods {
+        ($($ty:ident = $name:literal, $effect:ident, $tier:ident, $params:ty => $output:ty;)+) => {
+            match method {
+                $($name => held::<$params>(params),)+
+                _ => Duration::ZERO,
+            }
+        };
+    }
+    flui_protocol::for_each_window_method!(window_methods)
 }

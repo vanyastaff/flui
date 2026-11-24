@@ -249,3 +249,114 @@ fn only_an_act_or_a_destructive_call_changes_the_app() {
         ]
     );
 }
+
+/// A gesture is the agent's on the synthetic and semantic paths (ADR-0400 §2): every acting
+/// `element.*` row is a window method, and what the window may hold it for is its act timeout,
+/// which the conversation counts in the reply's deadline (ADR-0288 §4).
+#[cfg(feature = "serde")]
+#[test]
+fn every_gesture_is_a_window_method_held_for_its_act_timeout() {
+    use std::time::Duration;
+
+    use flui_protocol::{
+        input::DragParams, input::GestureOptions, input::LongPressParams, input::PressKeysParams,
+        input::ScrollUntilParams, input::TapParams, locator::Locator, locator::Target,
+        method::Addressed, tree::ElementId, tree::ElementRef, tree::WindowId,
+    };
+
+    let gestures: Vec<&str> = METHODS
+        .iter()
+        .filter(|row| row.group() == "element" && row.effect == MethodEffect::Acts)
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(
+        gestures,
+        [
+            "element.double_tap",
+            "element.drag_to",
+            "element.fling",
+            "element.long_press",
+            "element.pinch",
+            "element.press_keys",
+            "element.scroll_into_view",
+            "element.scroll_until",
+            "element.swipe",
+            "element.tap",
+            "element.type_text",
+        ]
+    );
+    for name in &gestures {
+        let row = method::find(name).expect("a gesture is a method");
+        assert_eq!(row.served_by, ServedBy::Agent, "{name}");
+    }
+    let driver_composed: Vec<&str> = METHODS
+        .iter()
+        .filter(|row| row.served_by == ServedBy::Driver)
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(
+        driver_composed,
+        [
+            "audit.screen",
+            "input.perform",
+            "perf.expect",
+            "session.attach",
+            "session.capabilities",
+            "session.close",
+            "session.launch",
+        ],
+        "what only the driver composes: the `os` path of a gesture is `input.perform`'s"
+    );
+
+    let window = WindowId::from_u64(3).expect("non-zero");
+    let element = Target::Element(ElementRef::new(
+        window,
+        ElementId::from_u64(9).expect("non-zero"),
+    ));
+    let mut tap = TapParams::new(element);
+    assert_eq!(tap.window(), Some(window));
+    assert_eq!(
+        tap.holds_for(),
+        Duration::from_millis(GestureOptions::DEFAULT_TIMEOUT_MS),
+        "an act that names no timeout holds for the default"
+    );
+    tap.options.timeout_ms = Some(u64::MAX);
+    assert_eq!(
+        tap.holds_for(),
+        Duration::from_millis(GestureOptions::MAX_TIMEOUT_MS),
+        "an act holds for a day at most"
+    );
+    let until = ScrollUntilParams::new(
+        Target::Locator(Locator::identifier("inbox")),
+        Locator::root(),
+    );
+    assert_eq!(
+        until.window(),
+        None,
+        "a locator naming no window searches the only one"
+    );
+
+    let long_press: LongPressParams = serde_json::from_value(serde_json::json!({
+        "target": {"element": "w3/e9"},
+        "duration_ms": 800,
+        "timeout_ms": 1000,
+    }))
+    .expect("a long press reads");
+    assert_eq!(
+        long_press.holds_for(),
+        Duration::from_millis(1_800),
+        "a long press holds for its timeout and then its press"
+    );
+    let keys: PressKeysParams = serde_json::from_value(serde_json::json!({
+        "window": "w3",
+        "keys": ["Enter"],
+    }))
+    .expect("press keys reads");
+    assert_eq!(keys.window(), Some(window), "no target: the window named");
+    let drag: DragParams = serde_json::from_value(serde_json::json!({
+        "target": {"point": {"window": "w3", "at": {"x": 1.0, "y": 2.0}}},
+        "to": {"element": "w3/e9"},
+    }))
+    .expect("a drag reads");
+    assert_eq!(drag.window(), Some(window));
+}

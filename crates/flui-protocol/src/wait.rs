@@ -5,9 +5,10 @@
 //! delivery, so a wait never polls. A timeout answers the last observation and why the app had
 //! not settled.
 
+use crate::build::SourceLocation;
 use crate::events::EventFilter;
 use crate::locator::{Locator, StateFilter, TextMatch};
-use crate::tree::{Node, TreeRevision, WindowId};
+use crate::tree::{ElementRef, Node, TreeRevision, WindowId};
 
 /// What a matched element must show.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +30,11 @@ pub enum Expectation {
     Count(u32),
     /// It holds keyboard focus.
     Focused,
+    /// It is shown: included in the published tree, and its bounds keep a non-empty part inside
+    /// the window and every clipping ancestor, the `visible` fact of actionability.
+    Visible,
+    /// Its description matches.
+    Description(TextMatch),
 }
 
 /// What a wait holds out for.
@@ -161,7 +167,8 @@ pub struct FramesParams {
 }
 
 vocabulary! {
-    /// Why a window had not settled.
+    /// What keeps an application from being idle (ADR-0400 §3): part of it the runtime's, part
+    /// its host's, which runs the runtime's turns.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     #[cfg_attr(
         feature = "serde",
@@ -178,18 +185,97 @@ vocabulary! {
         PendingWork => "pending_work",
         /// A timer is due.
         Timer => "timer",
+        /// A ticker is running: an animation asks for every frame.
+        Ticker => "ticker",
+        /// Background work is held or running, which the host's executor owns.
+        Background => "background",
+        /// The host owes a turn for a close or a quit it was asked for.
+        OwedTurn => "owed_turn",
+        /// The host has an observation of a window (a resize, a focus change, its insets) not yet
+        /// delivered to the runtime.
+        WindowObservation => "window_observation",
+        /// The host holds a frame request due at a time of its own.
+        FrameRequest => "frame_request",
+        /// A scenario the host plays has a step still to come.
+        ScenarioStep => "scenario_step",
+        /// A covered window owes its surface a frame.
+        SurfaceFrame => "surface_frame",
+        /// A reply the platform owes is in flight.
+        PlatformReply => "platform_reply",
     }
 }
 
-/// One reason a window had not settled, with when a timer is due.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+vocabulary! {
+    /// What discharges a cause, which decides when its host's loop wakes for it (ADR-0400 §3).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    #[cfg_attr(
+        feature = "serde",
+        derive(serde::Serialize, serde::Deserialize),
+        serde(rename_all = "snake_case")
+    )]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum ClearedBy {
+        /// The next turn serves it.
+        NextFrame => "next_frame",
+        /// A turn at its deadline serves it: a timer, a frame's retry, a scenario step.
+        Deadline => "deadline",
+        /// Only the test discharges it: held background work.
+        Test => "test",
+        /// Something outside the application answers it: a platform reply in flight.
+        Outside => "outside",
+    }
+}
+
+vocabulary! {
+    /// Which halves of what keeps an application from being idle an answer counts (ADR-0400 §3).
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+    #[cfg_attr(
+        feature = "serde",
+        derive(serde::Serialize, serde::Deserialize),
+        serde(rename_all = "snake_case")
+    )]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum SettleScope {
+        /// The runtime's half and its host's: the answer saw every cause.
+        Complete => "complete",
+        /// The runtime's half alone: the host composes none of its own, so a cause only the host
+        /// sees (a held background job, an observation not yet delivered) is not in it. What an
+        /// answer is until its host says otherwise.
+        #[default]
+        RuntimeOnly => "runtime_only",
+    }
+}
+
+/// One cause that kept an application from being idle when the answer was made.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct UnsettledCause {
     /// The reason.
     pub reason: UnsettledReason,
-    /// When the next timer is due, in milliseconds from the answer.
+    /// The window it belongs to; `None` for a cause of the whole application.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub window: Option<WindowId>,
+    /// The element that owns it, where the runtime records one.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub owner: Option<ElementRef>,
+    /// Where in the source it was created, where the runtime records it.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub site: Option<SourceLocation>,
+    /// What discharges it.
+    pub cleared_by: ClearedBy,
+    /// How long until it is due, in whole milliseconds from the answer, rounded down: for the
+    /// report. The wake its host sleeps until is the exact instant whoever armed it holds.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -198,13 +284,46 @@ pub struct UnsettledCause {
 }
 
 impl UnsettledCause {
-    /// `reason`, with no due time.
+    /// `reason`, which `cleared_by` discharges, of the whole application, with no owner, site or
+    /// due time.
     #[must_use]
-    pub const fn new(reason: UnsettledReason) -> Self {
+    pub const fn new(reason: UnsettledReason, cleared_by: ClearedBy) -> Self {
         Self {
             reason,
+            window: None,
+            owner: None,
+            site: None,
+            cleared_by,
             due_in_ms: None,
         }
+    }
+
+    /// The cause, of `window`.
+    #[must_use]
+    pub const fn window(mut self, window: WindowId) -> Self {
+        self.window = Some(window);
+        self
+    }
+
+    /// The cause, owned by `owner`.
+    #[must_use]
+    pub const fn owner(mut self, owner: ElementRef) -> Self {
+        self.owner = Some(owner);
+        self
+    }
+
+    /// The cause, created at `site`.
+    #[must_use]
+    pub fn site(mut self, site: SourceLocation) -> Self {
+        self.site = Some(site);
+        self
+    }
+
+    /// The cause, due in `due_in_ms` whole milliseconds.
+    #[must_use]
+    pub const fn due_in_ms(mut self, due_in_ms: u64) -> Self {
+        self.due_in_ms = Some(due_in_ms);
+        self
     }
 }
 
@@ -245,4 +364,8 @@ pub struct WaitOutcome {
         serde(default, skip_serializing_if = "Vec::is_empty")
     )]
     pub unsettled: Vec<UnsettledCause>,
+    /// Which halves of the causes the answer counted; an app that names none counted its
+    /// runtime's alone.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub scope: SettleScope,
 }
