@@ -21,7 +21,7 @@ impl UiRuntime {
     ///   haptic delivery's, a frame-rate hold's, a dropped frame's retry, the in-flight floor, a
     ///   task's sleep, a drag's spring loading) is a `Timer` served at its exact instant, with the
     ///   window of the presentation it belongs to;
-    /// - a wait an agent parked is never a cause: its deadline is a wake alone.
+    /// - a wait an agent parked or an act it holds is never a cause: its deadline is a wake alone.
     ///
     /// A frame a covered window owes its surface is its host's half, never listed here. Reads
     /// state and runs no user code.

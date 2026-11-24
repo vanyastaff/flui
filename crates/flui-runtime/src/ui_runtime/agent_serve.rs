@@ -36,9 +36,8 @@ use flui_protocol::{
     input::Journal, input::JournalParams, input::Released, inspect::InspectParams,
     inspect::InspectReading, locator::LocateParams, locator::Locator, locator::Matches,
     locator::Target, motion::MotionParams, motion::MotionState, session::Empty, session::Placement,
-    session::Platform, session::WindowParams, tree::ReadParams, tree::Tree, tree::WindowId, wait::Condition, wait::FramesParams, wait::SettledParams,
-    wait::WaitOutcome,
-    wait::WaitParams,
+    session::Platform, session::WindowParams, tree::ReadParams, tree::Tree, tree::WindowId,
+    wait::Condition, wait::FramesParams, wait::SettledParams, wait::WaitOutcome, wait::WaitParams,
 };
 use flui_view::__runtime::{LeaseId, Reply, WindowCall};
 
@@ -386,10 +385,7 @@ macro_rules! not_answered {
     )+};
 }
 
-not_answered!(
-    CapturePresented,
-    CaptureRendered,
-);
+not_answered!(CapturePresented, CaptureRendered,);
 
 impl Serve for method::WindowPlacement {
     /// The surface's logical size, scale and safe area as the presentation's root media query
