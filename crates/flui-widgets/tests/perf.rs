@@ -39,7 +39,7 @@
 //! crate that dev-depends on `flui-testing` a dependent of the widget catalog,
 //! widening every change's CI scope.
 
-// A scenario's `baseline::Held` writes a bless when it drops; `let _ =` would
+// A scenario's `perf::Held` writes a bless when it drops; `let _ =` would
 // drop it before the scenario's budget assertions run.
 #![deny(let_underscore_drop)]
 
@@ -219,7 +219,7 @@ fn mount() -> Mounted {
 /// scenario's baseline file ([`baseline::hold`]). Called before a scenario
 /// asserts, so a failing budget still reports its numbers; the scenario keeps
 /// the returned hold to its end, so a bless waits for its assertions.
-fn hold_report(scenario: &str, report: &FrameReport, heap: HeapCounts) -> baseline::Held {
+fn hold_report(scenario: &str, report: &FrameReport, heap: HeapCounts) -> flui_testing::perf::Held {
     let mut counts: Vec<(&str, u64)> = report.counters().into_iter().collect();
     counts.extend(heap_counts(heap));
     baseline::hold(scenario, &counts)
@@ -562,7 +562,7 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
     }
     // Both sizes are measured before either is held; a check stops at the
     // first size whose counts fail.
-    let _baseline: Vec<baseline::Held> = measured
+    let _baseline: Vec<flui_testing::perf::Held> = measured
         .iter()
         .map(|(name, _, heap)| baseline::hold(&format!("label_change_{name}"), &heap_counts(*heap)))
         .collect();
