@@ -151,6 +151,8 @@ criterion = { workspace = true }
 # PNG encoding for GPU readback frame dumps (`wgpu::readback_dump` test
 # support) — the only remaining `image` consumer, and it is a dev/test one.
 image = { workspace = true }
+# Scratch directories for the test of the stripped shader copies `build.rs` writes.
+tempfile = { workspace = true }
 # Compile-fail fixtures pinning ADR-0305 §2: a `SurfaceFactory` stays on its
 # owner thread and takes only owned, `'static` targets. Same
 # crate/version flui-painting uses for its compile-fail suite

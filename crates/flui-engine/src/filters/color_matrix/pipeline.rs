@@ -152,9 +152,9 @@ impl ColorMatrixPipeline {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Color Matrix Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                crate::shaders::composed_wgsl!("effects/color_matrix").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                crate::shaders::COLOR_MATRIX,
+            )),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
