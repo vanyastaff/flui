@@ -156,7 +156,8 @@ fn component_contracts() {
     ]);
 }
 
-/// Theme and colour resolution through a mounted context, including the live brightness republish.
+/// Theme and colour resolution through a mounted context, including the live brightness
+/// republish and the interface level.
 #[test]
 fn theme_and_color_resolution() {
     common::run_cases(&[
@@ -179,6 +180,18 @@ fn theme_and_color_resolution() {
         (
             "colors::static color resolves to itself through a real context",
             colors::static_color_resolves_to_itself_through_a_real_context,
+        ),
+        (
+            "colors::palette constants resolve to flutters values",
+            colors::palette_constants_resolve_to_flutters_values,
+        ),
+        (
+            "colors::an elevated level picks the elevated variants",
+            colors::an_elevated_level_picks_the_elevated_variants,
+        ),
+        (
+            "colors::a theme below an elevated level resolves apart",
+            colors::a_theme_below_an_elevated_level_resolves_apart,
         ),
         (
             "theme::explicit theme brightness overrides media query",
