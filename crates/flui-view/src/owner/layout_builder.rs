@@ -20,9 +20,9 @@
 //! the real incoming constraints and its child is laid out and painted in the
 //! **same frame**; the cost is only extra internal layout passes.
 //!
-//! This requires no change to `flui-rendering`: the phase transitions
-//! (`into_layout` / `into_idle`) are already public, `run_layout` is re-drivable
-//! in-phase, and it is a no-op once the tree is clean.
+//! This requires no change to `flui-rendering`: a layout pass
+//! (`PipelineOwner::layout_pass`) is public, `run_layout` is re-drivable, and it
+//! is a no-op once the tree is clean.
 //!
 //! # Not a public feature
 //!

@@ -13,6 +13,7 @@ use flui_testing::window_commands::AdmitAndApply as _;
 use flui_testing::window_handler::{HandlerCall, RecordingWindowHandler};
 use std::any::Any;
 use std::cell::{Cell, RefCell};
+use std::mem::DropGuard;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak as RcWeak};
 use std::sync::Arc;
@@ -51,24 +52,6 @@ fn within(case: impl std::fmt::Display, body: impl FnOnce() + Send + 'static) {
             "{case}: deadlocked — a handler ran, or a replaced one was dropped, under a lock the \
              platform holds"
         ),
-    }
-}
-
-/// Runs its action when dropped: a capture whose destructor calls back into
-/// the platform, as a UI runtime's state does.
-struct OnDrop(Option<Box<dyn FnOnce()>>);
-
-impl OnDrop {
-    fn new(action: impl FnOnce() + 'static) -> Self {
-        Self(Some(Box::new(action)))
-    }
-}
-
-impl Drop for OnDrop {
-    fn drop(&mut self) {
-        if let Some(action) = self.0.take() {
-            action();
-        }
     }
 }
 
@@ -295,7 +278,9 @@ fn a_handler_dropped_at_close_reaches_the_platform(
     let opened: Rc<RefCell<Vec<Rc<dyn HostWindow>>>> = Rc::default();
     let observed = Rc::clone(&opened);
     let weak = Rc::downgrade(platform);
-    let calls_back = OnDrop::new(move || {
+    // A capture whose destructor calls back into the platform, as a UI
+    // runtime's state does.
+    let calls_back = DropGuard::new((), move |()| {
         if let Some(platform) = weak.upgrade() {
             let window = platform.open(options(), RecordingWindowHandler::new());
             observed.borrow_mut().push(window);

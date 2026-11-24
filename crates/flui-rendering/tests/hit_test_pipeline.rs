@@ -22,7 +22,7 @@ use flui_rendering::{
 use crate::common::{BoxedRenderObject, laid_out_loose_200x200 as laid_out};
 
 fn hits(
-    owner: &flui_rendering::pipeline::PipelineOwner<flui_rendering::pipeline::phase::Layout>,
+    owner: &flui_rendering::pipeline::PipelineOwner,
     x: f64,
     y: f64,
 ) -> Vec<flui_foundation::RenderId> {
@@ -266,7 +266,7 @@ pub(crate) fn perspective_flow_hits_its_actual_child_plane() {
         0.0, 200.0, 0.0, 200.0,
     )));
     let mut scene = SceneHost::new();
-    let (owner, frame) = scene.run_frame(owner);
+    let frame = scene.run_frame(&mut owner);
     frame.expect("the flow paints");
     assert!(
         inspect::hit_path(&owner, 10.0 / 7.0, 25.0 / 7.0).is_empty(),
@@ -432,7 +432,7 @@ impl flui_rendering::traits::RenderBox for RecoveringHitParent {
 /// The walk's leaf-first `(target, transform)` path and the panic it resumed
 /// once the path was complete, as text.
 fn contained_hit_path(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
+    owner: &PipelineOwner,
     x: f64,
     y: f64,
 ) -> (

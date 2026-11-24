@@ -73,6 +73,7 @@ use flui_foundation::ElementId;
 
 use super::element_tree::{ElementTree, ProvisionalOrder};
 use super::reconcile_event::{ReconcileEvent, emit as emit_event};
+use crate::key::hash_index::KeyHashIndex;
 use crate::view::{ElementBase, View};
 
 /// Children a reconcile keeps on the stack: most parents hold a handful, and
@@ -111,19 +112,16 @@ const INLINE_CHILDREN: usize = 8;
 ///
 /// # Complexity
 ///
-/// `O(n + m)` average over `n` old children and `m` new views (one
-/// FxHashMap-indexed pass plus the prefix/suffix scans). Worst case rises
+/// `O(n + m)` average over `n` old children and `m` new views (one pass
+/// over a [`KeyHashIndex`] plus the prefix/suffix scans). Worst case rises
 /// to `O(n * m)` only when every new keyed view's hash collides into one
 /// bucket whose candidates mostly fail the semantic `key_eq` check —
 /// the cost of collision-resistant keyed matching. Both `n`
-/// and `m` are bounded by the parent's fan-out, not the whole tree.
+/// and `m` are bounded by the parent's fan-out, not the whole tree. The
+/// index makes two allocations for the whole old middle, none per child.
 // Five phases + per-disposition ReconcileEvent emission push the body past 100
 // lines; splitting would scramble the phase-by-phase reading of the keyed
 // reconcile algorithm.
-#[expect(
-    clippy::disallowed_types,
-    reason = "indexed by view keys, whose hashes an application derives from its own data, so the table keeps SipHash's random seed against chosen collisions"
-)]
 pub(crate) fn reconcile_children_by_id(
     tree: &mut ElementTree,
     parent_id: ElementId,
@@ -228,15 +226,14 @@ pub(crate) fn reconcile_children_by_id(
     // keyless old middle child (it can only match positionally, which
     // the top/bottom scans already exhausted).
     //
-    // The bucket holds OLD-SLOT INDICES (a `Vec<usize>`, not a single
-    // index) so two old children with DISTINCT keys that collide on `u64`
-    // hash both stay claim candidates — the symmetric collision
-    // defense. Phase 4 disambiguates via the semantic `key_eq` inside
-    // `can_update_by_id`, and clears a claim by index in O(1) (indexing
-    // the bucket by slot, not id, is what keeps phase 4 linear rather than
-    // O(n*m) — no per-claim scan of `old_slots`).
-    let mut old_keyed: std::collections::HashMap<u64, Vec<usize>> =
-        std::collections::HashMap::new();
+    // A bucket holds every OLD-SLOT INDEX of its hash, so two old children
+    // with DISTINCT keys that collide on `u64` hash both stay claim
+    // candidates — the symmetric collision defense. Phase 4 disambiguates
+    // via the semantic `key_eq` inside `can_update_by_id`, and clears a
+    // claim by index in O(1) (indexing the bucket by slot, not id, is what
+    // keeps phase 4 linear rather than O(n*m) — no per-claim scan of
+    // `old_slots`). The index's positions are offsets from `old_top`.
+    let mut old_keyed = KeyHashIndex::over(old_bottom - old_top);
     for (idx, slot) in old_slots
         .iter_mut()
         .enumerate()
@@ -249,7 +246,7 @@ pub(crate) fn reconcile_children_by_id(
         if let Some(hash) = key_hash_of(tree, old_id) {
             // Keyed: defer the claim to phase 4. FIFO bucket order
             // preserves first-wins across true duplicate keys.
-            old_keyed.entry(hash).or_default().push(idx);
+            old_keyed.insert(hash, idx - old_top);
         } else {
             // Keyless middle child with no positional match: remove.
             // Capture the view type BEFORE the slab frees the slot so the
@@ -271,7 +268,14 @@ pub(crate) fn reconcile_children_by_id(
     for new_offset in 0..(new_bottom - new_top) {
         let new_slot = new_top + new_offset;
         let new_view = view_at(new_views, new_slot);
-        if let Some(old_idx) = claim_old_for_new(tree, new_view, &mut old_keyed, &old_slots) {
+        if let Some(old_idx) = claim_old_for_new(
+            tree,
+            new_view,
+            &mut old_keyed,
+            &old_slots[old_top..old_bottom],
+        )
+        .map(|offset| old_top + offset)
+        {
             // Clear the claim by index in O(1) and take its id; `take`
             // leaves `None`, so phase 5b will not also remove this reused
             // child.
@@ -534,35 +538,26 @@ fn slot_of(tree: &ElementTree, old_id: ElementId) -> Option<usize> {
 }
 
 /// Claim the old-middle child a keyed `new_view` should reuse, returning
-/// its OLD-SLOT INDEX and removing that index from `old_keyed` so a later
-/// duplicate-key view cannot reclaim it (first-wins). The caller clears
-/// the slot by index in O(1) — there is no per-claim scan of `old_slots`.
+/// its index in `old_middle` and removing that index from `old_keyed` so a
+/// later duplicate-key view cannot reclaim it (first-wins). The caller
+/// clears the slot by index in O(1) — there is no per-claim scan of the
+/// old slots.
 ///
 /// Walks the whole hash bucket (distinct keys can collide on `u64`) and
 /// returns the index of the first candidate that [`can_update_by_id`]
 /// accepts — non-matching candidates stay in the bucket for a later view.
 /// Returns `None` for a keyless new view (those only match positionally,
 /// already handled by the top/bottom scans) or when no candidate matches.
-#[expect(
-    clippy::disallowed_types,
-    reason = "indexed by view keys, whose hashes an application derives from its own data, so the table keeps SipHash's random seed against chosen collisions"
-)]
 fn claim_old_for_new(
     tree: &ElementTree,
     new_view: &dyn View,
-    old_keyed: &mut std::collections::HashMap<u64, Vec<usize>>,
-    old_slots: &[Option<ElementId>],
+    old_keyed: &mut KeyHashIndex,
+    old_middle: &[Option<ElementId>],
 ) -> Option<usize> {
     let key_hash = new_view.key()?.key_hash();
-    let bucket = old_keyed.get_mut(&key_hash)?;
-    let position = bucket.iter().position(|&old_idx| {
-        old_slots[old_idx].is_some_and(|old_id| can_update_by_id(tree, old_id, new_view))
-    })?;
-    let old_idx = bucket.remove(position);
-    if bucket.is_empty() {
-        old_keyed.remove(&key_hash);
-    }
-    Some(old_idx)
+    old_keyed.claim(key_hash, |offset| {
+        old_middle[offset].is_some_and(|old_id| can_update_by_id(tree, old_id, new_view))
+    })
 }
 
 /// Apply `new` to the reused slab child `id` through the bounded update

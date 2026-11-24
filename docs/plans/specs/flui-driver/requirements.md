@@ -530,8 +530,9 @@ and each idea was accepted or rejected there with a reason.
     rebuild roots. `element_rebuild` moves from INFO to TRACE, and carries the rebuild reasons as a
     bitmask;
   - a disabled level costs nothing on the frame path: `tracing::enabled!` gates any field that
-    costs to compute, and nothing allocates before the macro. Framework crates never set
-    `max_level_*` features, so release profiling and the driver's `perf` keep working.
+    costs to compute, and nothing allocates before the macro. No framework crate turns a
+    `max_level_*` feature on; the release build mode alone holds the events at INFO (ADR-0398),
+    so profiling and the driver's `perf` read a debug, `profiling` or agent build.
 - **R53.** **One span stream.** A single capture layer, partitioned by runtime and presentation
   id, feeds the profiler, the devtools timeline, the driver's `perf` and trace rows, and a
   Chrome/Perfetto export with `X` events and counters. Phases are recognized by
@@ -648,7 +649,8 @@ and each idea was accepted or rejected there with a reason.
   explicitly (R50–R55; ADR-0242).
   - **Rejected:** `bevy_reflect` or `facet` as the core model; `valuable`, which is still behind
     `tracing_unstable`; serde as the description trait (it stays the output format);
-    Compose-style source strings; a second profiling API; `max_level_*` in framework crates;
+    Compose-style source strings; a second profiling API; a `max_level_*` feature a framework
+    crate turns on (the release build mode turns one on, ADR-0398);
     `miette` source-span errors.
 
 ## Changed by the session lead (2026-11-20)

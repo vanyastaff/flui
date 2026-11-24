@@ -1,7 +1,7 @@
 use flui_rendering::{PipelineOwner, TextContextHandle};
 
 fn main() {
-    let owner = PipelineOwner::new(TextContextHandle::standalone());
-    let mut owner = owner.into_layout();
-    owner.run_paint();
+    let mut owner = PipelineOwner::new(TextContextHandle::standalone());
+    let mut layout = owner.layout_pass();
+    layout.run_paint();
 }

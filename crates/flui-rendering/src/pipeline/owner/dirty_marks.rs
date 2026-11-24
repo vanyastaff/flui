@@ -3,11 +3,11 @@
 
 use flui_foundation::RenderId;
 
-use crate::{RenderUpdateImpact, pipeline::phase::PipelinePhase};
+use crate::RenderUpdateImpact;
 
 use super::PipelineOwner;
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Adds a node to the layout dirty list.
     ///
     /// Routes into the mid-phase side queue when layout is active, otherwise

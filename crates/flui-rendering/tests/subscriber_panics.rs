@@ -60,17 +60,17 @@ fn layout_survives(subscriber: PanicsOnSpan) {
         // One whole frame first, so the tree is laid out and painted and owes nothing; the
         // constraints change then dirties layout alone.
         let mut scene = SceneHost::new();
-        let (mut owner, shown) = scene.run_frame(owner);
+        let shown = scene.run_frame(&mut owner);
         shown.expect("the first frame runs");
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(150.0, 150.0))));
-        (owner.into_layout(), root)
+        (owner, root)
     };
     // A second dispatcher keeps the callsites' interest from being cached against another
     // thread's empty default.
     let _second = tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default());
     let unwound = tracing::subscriber::with_default(subscriber, || {
         tracing::callsite::rebuild_interest_cache();
-        catch_unwind(AssertUnwindSafe(|| owner.run_layout()))
+        catch_unwind(AssertUnwindSafe(|| owner.layout_pass().run_layout()))
     });
     assert!(unwound.is_err(), "the subscriber's panic continues");
     assert!(!owner.debug_doing_layout(), "the layout phase was left");
@@ -89,7 +89,10 @@ fn layout_survives(subscriber: PanicsOnSpan) {
     tracing::callsite::rebuild_interest_cache();
 
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
-    owner.run_layout().expect("the owner lays out again");
+    owner
+        .layout_pass()
+        .run_layout()
+        .expect("the owner lays out again");
     assert_eq!(
         owner.box_size(root),
         Some(Size::new(200.0, 200.0)),

@@ -27,7 +27,7 @@
 
 | Fact | Evidence |
 |---|---|
-| The faces are Roboto Regular (305,608 bytes), Material Icons (356,840) and Cupertino Icons (257,628). The two icon faces are 614,468 bytes of every application, 2.7% of the generated counter's Linux release binary | `crates/flui-painting/assets/fonts/`; `counter_release_bytes` in `perf/size.toml` |
+| The faces are Roboto Regular (305,608 bytes), Material Icons (356,840) and Cupertino Icons (257,628). The two icon faces are 614,468 bytes of every application, 2.9% of the generated counter's Linux release binary | `crates/flui-painting/assets/fonts/`; `counter_release_bytes` in `perf/size.toml` |
 | Roboto is what makes text measure alike on every host: every generic family is bound to it (flui-painting `ARCHITECTURE.md`, mapping decision 16). An icon face takes no part in that rule | `register_embedded_faces` in `crates/flui-painting/src/text_layout/context.rs` |
 | No spine crate draws with either icon family. `flui-material` draws three glyphs of Material Icons (`BackButton`, the delete icons of `Chip` and `FilterChip`); `flui-cupertino` draws no glyph of CupertinoIcons | `packages/flui-material/src/back_button.rs`, `chip.rs`; `packages/flui-cupertino/src/` |
 | A host feed adds the host's faces to a collection once it is built; a family the collection already holds is skipped, and one it lacks is filled from whatever copy the host has | `feed_host_faces` in `crates/flui-painting/src/text_layout/context.rs` |
@@ -146,7 +146,7 @@ package with its own icon face ships the bytes and documents the `register_font`
   the package draws by itself is the glyph the embedded face's own ligature names, so a codepoint
   from another numbering of the icon set fails.
 - `counter_release_bytes` and `counter_wasm_bytes` in `perf/size.toml`: the generated counter uses
-  no catalog. Both faces coming back is 2.7% of it, past the 2% the `size` job allows; one face
+  no catalog. Both faces coming back is 2.9% of it, past the 2% the `size` job allows; one face
   alone is under that, which is why the graph test above holds each.
 
 ## Pros and cons of the options

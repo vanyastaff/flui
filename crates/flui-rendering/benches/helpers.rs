@@ -17,7 +17,7 @@ use flui_objects::{RenderColoredBox, RenderFlex, RenderPadding, RenderRepaintBou
 use flui_rendering::{
     BoxProtocol, RenderObject,
     constraints::BoxConstraints,
-    pipeline::{Compositing, Layout, PaintPhase, PipelineOwner},
+    pipeline::PipelineOwner,
     testing::{SceneHost, TreeNode, box_node, tree},
 };
 
@@ -30,12 +30,12 @@ pub fn root_constraints() -> BoxConstraints {
 /// constraints and returns it in the `Layout` phase, ready for `run_layout`.
 /// Construction goes through the same `flui_rendering::testing` builder the
 /// integration tests use, so benches measure the genuine production contract.
-fn mount_layout(spec: TreeNode) -> PipelineOwner<Layout> {
+fn mount_layout(spec: TreeNode) -> PipelineOwner {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, _registry) = tree::mount(&mut owner, spec);
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(root_constraints()));
-    owner.into_layout()
+    owner
 }
 
 // ============================================================================
@@ -46,7 +46,7 @@ fn mount_layout(spec: TreeNode) -> PipelineOwner<Layout> {
 /// children, returned in the `Layout` phase ready for `run_layout`.
 ///
 /// Measures the cost of one root-layout pass across `n` same-depth children.
-pub fn build_flat(n: usize) -> PipelineOwner<Layout> {
+pub fn build_flat(n: usize) -> PipelineOwner {
     mount_layout(
         box_node(RenderFlex::row())
             .children((0..n).map(|_| box_node(RenderColoredBox::red(1.0, 1.0)))),
@@ -66,7 +66,7 @@ pub fn build_flat(n: usize) -> PipelineOwner<Layout> {
 /// The spec is built leaf-first and wrapped `depth` times, so `depth == 0`
 /// degenerates to a bare leaf and `depth == k` yields `k` padding wrappers
 /// around one `ColoredBox`.
-pub fn build_deep(depth: usize) -> PipelineOwner<Layout> {
+pub fn build_deep(depth: usize) -> PipelineOwner {
     let mut node = box_node(RenderColoredBox::red(1.0, 1.0));
     for _ in 0..depth {
         node = box_node(RenderPadding::all(0.0)).child(node);
@@ -84,48 +84,46 @@ pub fn build_deep(depth: usize) -> PipelineOwner<Layout> {
 /// Identical to [`build_flat`]; provided as a named alias so bench code reads
 /// as "wide N" rather than "flat N" at the call site.
 #[inline]
-pub fn build_wide(n: usize) -> PipelineOwner<Layout> {
+pub fn build_wide(n: usize) -> PipelineOwner {
     build_flat(n)
 }
 
 // ============================================================================
-// Paint-ready builders: run layout + compositing, return PipelineOwner<PaintPhase>
+// Paint-ready builders: run layout + compositing, ready for run_paint
 // ============================================================================
 
 /// Build a flat tree already advanced through layout and compositing, ready
 /// for `run_paint`. The layout and compositing phases are run in setup so the
 /// paint bench measures only `run_paint` cost.
-pub fn build_flat_paint_ready(n: usize) -> (PipelineOwner<PaintPhase>, SceneHost) {
+pub fn build_flat_paint_ready(n: usize) -> (PipelineOwner, SceneHost) {
     (advance_to_paint(build_flat(n)), SceneHost::new())
 }
 
 /// Build a deep chain already advanced through layout and compositing, ready
 /// for `run_paint`.
-pub fn build_deep_paint_ready(depth: usize) -> (PipelineOwner<PaintPhase>, SceneHost) {
+pub fn build_deep_paint_ready(depth: usize) -> (PipelineOwner, SceneHost) {
     (advance_to_paint(build_deep(depth)), SceneHost::new())
 }
 
 /// Build a compositing-only-ready owner from a flat tree (layout run, not yet
 /// compositing). Used when benching `run_compositing` in isolation.
-pub fn build_flat_compositing_ready(n: usize) -> PipelineOwner<Compositing> {
-    let mut layout_owner = build_flat(n);
-    layout_owner
+pub fn build_flat_compositing_ready(n: usize) -> PipelineOwner {
+    let mut owner = build_flat(n);
+    owner
+        .layout_pass()
         .run_layout()
         .expect("run_layout must succeed: tree was built with valid root constraints");
-    layout_owner.into_compositing()
+    owner
 }
 
-/// Advance a `Layout`-phase owner through `run_layout` + `run_compositing`,
-/// returning a `PaintPhase` owner ready for `run_paint`.
-fn advance_to_paint(mut layout_owner: PipelineOwner<Layout>) -> PipelineOwner<PaintPhase> {
-    layout_owner
+/// Lays out and composites `owner`, returning it ready for `run_paint`.
+fn advance_to_paint(mut owner: PipelineOwner) -> PipelineOwner {
+    let mut layout = owner.layout_pass();
+    layout
         .run_layout()
         .expect("run_layout must succeed: tree was built with valid root constraints");
-    let mut compositing_owner = layout_owner.into_compositing();
-    compositing_owner
-        .run_compositing()
-        .expect("run_compositing must succeed: all nodes were freshly inserted");
-    compositing_owner.into_paint()
+    layout.into_compositing().run_compositing();
+    owner
 }
 
 // ============================================================================
@@ -145,9 +143,7 @@ fn advance_to_paint(mut layout_owner: PipelineOwner<Layout>) -> PipelineOwner<Pa
 /// `run_paint` does not destroy an N-boundary tree inside the measurement. The
 /// returned [`SceneHost`] keeps the scene the warm-up applied, so the timed
 /// frame is a patch against it, as in a running application.
-pub fn build_boundary_tree_painted_once(
-    n: usize,
-) -> (PipelineOwner<PaintPhase>, SceneHost, Vec<RenderId>) {
+pub fn build_boundary_tree_painted_once(n: usize) -> (PipelineOwner, SceneHost, Vec<RenderId>) {
     const LABELS: [&str; 8] = [
         "leaf-0", "leaf-1", "leaf-2", "leaf-3", "leaf-4", "leaf-5", "leaf-6", "leaf-7",
     ];
@@ -178,9 +174,15 @@ pub fn build_boundary_tree_painted_once(
         "at least one leaf must be labelled at construction"
     );
 
-    let mut owner = advance_to_paint(owner.into_layout());
+    let mut owner = advance_to_paint(owner);
     let mut scene = SceneHost::new();
-    let (painted, warm_up) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    let (painted, warm_up) = scene.drive(&mut owner, |owner, writer| {
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .run_paint(writer)
+    });
     painted.expect("the first paint must succeed on a freshly composited tree");
     drop(warm_up);
     (owner, scene, leaf_ids)
@@ -191,9 +193,7 @@ pub fn build_boundary_tree_painted_once(
 ///
 /// Returns the owner and the leaf inside item 0's inner boundary: marking it
 /// dirties only that inner boundary, the case a blinking caret produces.
-pub fn build_nested_boundary_tree_painted_once(
-    n: usize,
-) -> (PipelineOwner<PaintPhase>, SceneHost, RenderId) {
+pub fn build_nested_boundary_tree_painted_once(n: usize) -> (PipelineOwner, SceneHost, RenderId) {
     let spec = box_node(RenderFlex::row()).children((0..n).map(|i| {
         let caret = box_node(RenderColoredBox::red(1.0, 1.0));
         let caret = if i == 0 { caret.label("caret") } else { caret };
@@ -211,9 +211,15 @@ pub fn build_nested_boundary_tree_painted_once(
     owner.set_root_constraints(Some(root_constraints()));
     let caret = registry.get("caret").expect("item 0 labels its caret");
 
-    let mut owner = advance_to_paint(owner.into_layout());
+    let mut owner = advance_to_paint(owner);
     let mut scene = SceneHost::new();
-    let (painted, warm_up) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    let (painted, warm_up) = scene.drive(&mut owner, |owner, writer| {
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .run_paint(writer)
+    });
     painted.expect("the first paint must succeed on a freshly composited tree");
     drop(warm_up);
     (owner, scene, caret)
@@ -258,7 +264,7 @@ pub fn build_effect_tree(
     layered: bool,
     subtree: usize,
     effect: impl RenderObject<BoxProtocol> + 'static,
-) -> (PipelineOwner<PaintPhase>, SceneHost, RenderId) {
+) -> (PipelineOwner, SceneHost, RenderId) {
     let content = box_node(RenderFlex::row()).children((0..subtree).map(|_| {
         let leaf = box_node(RenderColoredBox::red(1.0, 1.0));
         if layered {
@@ -280,9 +286,15 @@ pub fn build_effect_tree(
     owner.set_root_constraints(Some(root_constraints()));
     let effect_id = registry.get("effect").expect("effect is labelled");
 
-    let mut owner = advance_to_paint(owner.into_layout());
+    let mut owner = advance_to_paint(owner);
     let mut scene = SceneHost::new();
-    let (painted, warm_up) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    let (painted, warm_up) = scene.drive(&mut owner, |owner, writer| {
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .run_paint(writer)
+    });
     painted.expect("the first paint must succeed on a freshly composited tree");
     drop(warm_up);
     (owner, scene, effect_id)

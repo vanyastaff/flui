@@ -160,6 +160,8 @@ struct Fixture {
     /// The second rigged leaf, after the first in the walks.
     late: RenderId,
     late_compositing: Arc<AtomicU8>,
+    /// The frames this fixture ran that painted, its first included.
+    painted: std::cell::Cell<u64>,
 }
 
 /// The fixture's tree, before its first frame.
@@ -217,7 +219,11 @@ impl Fixture {
     fn run_frame(
         &self,
     ) -> Result<Option<flui_layer::LayerTree>, flui_foundation::TreeError<RenderError>> {
-        self.scene.borrow_mut().run_cell_frame(&self.cell)
+        let frame = self.scene.borrow_mut().run_cell_frame(&self.cell);
+        if matches!(frame, Ok(Some(_))) {
+            self.painted.set(self.painted.get() + 1);
+        }
+        frame
     }
 }
 
@@ -251,13 +257,12 @@ fn fixture() -> Fixture {
         compositing,
         late,
         late_compositing,
+        painted: std::cell::Cell::new(1),
     }
 }
 
 /// Counts the wakes `owner` sends from here on.
-fn count_wakes<Phase: flui_rendering::pipeline::PipelinePhase>(
-    owner: &mut PipelineOwner<Phase>,
-) -> Arc<AtomicUsize> {
+fn count_wakes(owner: &mut PipelineOwner) -> Arc<AtomicUsize> {
     let wakes = Arc::new(AtomicUsize::new(0));
     let counted = Arc::clone(&wakes);
     owner.set_on_need_visual_update(move || {
@@ -267,9 +272,7 @@ fn count_wakes<Phase: flui_rendering::pipeline::PipelinePhase>(
 }
 
 /// Installs a wake that panics the first time it runs, and reports whether it ran.
-fn wake_panics_once<Phase: flui_rendering::pipeline::PipelinePhase>(
-    owner: &mut PipelineOwner<Phase>,
-) -> Arc<AtomicBool> {
+fn wake_panics_once(owner: &mut PipelineOwner) -> Arc<AtomicBool> {
     let armed = Arc::new(AtomicBool::new(true));
     let wake_armed = Arc::clone(&armed);
     owner.set_on_need_visual_update(move || {
@@ -307,9 +310,9 @@ fn unwinds_under<R>(trigger: Trigger, frame: impl FnOnce() -> R) {
 }
 
 /// The checks every row ends with: the owner in the cell is the pipeline's own, no phase is
-/// left open, and the retry at the constraints the frame already had paints. The production
-/// retry runs at unchanged constraints, so only the work the unwound frame kept brings the
-/// tree to its new size.
+/// left open, the unwound frame is not counted, and the retry at the constraints the frame
+/// already had paints and is counted. The production retry runs at unchanged constraints, so
+/// only the work the unwound frame kept brings the tree to its new size.
 fn the_pipeline_kept_its_owner(f: &Fixture) {
     assert!(f.cell.is_free(), "the cell is not left borrowed");
     f.cell.with(|owner| {
@@ -323,11 +326,21 @@ fn the_pipeline_kept_its_owner(f: &Fixture) {
             "the cell's owner measures through the pipeline's context"
         );
         assert!(!owner.debug_doing_any_phase(), "no phase is left open");
+        assert_eq!(
+            owner.counters().frames_produced,
+            f.painted.get(),
+            "the owner counts the frames that painted, not the one that unwound"
+        );
     });
 
     assert!(
         matches!(f.run_frame(), Ok(Some(_))),
         "the retry at unchanged constraints paints"
+    );
+    assert_eq!(
+        f.cell.with(|owner| owner.counters().frames_produced),
+        f.painted.get(),
+        "the retry is counted once"
     );
     assert_eq!(
         f.cell.with(|owner| owner.box_size(f.root)),
@@ -540,6 +553,33 @@ fn a_frame_that_unwinds_leaves_the_pipeline_its_owner() {
     ]);
 }
 
+/// A pass that ends before its frame does leaves the owner as its last finished phase left it
+/// (ADR-0399 §1): the next frame paints what the abandoned one still owed, and the frame after
+/// it owes nothing. A pass has no `Drop` (`FramePass` asserts it), so forgetting one is this
+/// same drop.
+#[test]
+fn a_pass_ended_early_leaves_the_next_frame_whole() {
+    let mut owner = PipelineOwner::new(TextContextHandle::standalone());
+    owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
+    owner.set_root_constraints(Some(tight(100.0)));
+    let mut layout = owner.layout_pass();
+    assert!(
+        format!("{layout:?}").starts_with("FramePass { phase: \"Layout\", owner: PipelineOwner {"),
+        "a pass names its phase and shows its owner: {layout:?}"
+    );
+    layout.run_layout().expect("the first layout runs");
+    drop(layout.into_compositing());
+    let mut scene = SceneHost::new();
+    assert!(
+        matches!(scene.run_frame(&mut owner), Ok(Some(_))),
+        "the next frame paints what the abandoned one owed"
+    );
+    assert!(
+        matches!(scene.run_frame(&mut owner), Ok(None)),
+        "the frame after it owes nothing"
+    );
+}
+
 /// Lays its child out loose within its own size, then fails while armed, with an error that
 /// counts toward its poison budget rather than poisoning it at once.
 #[derive(Debug)]
@@ -581,7 +621,7 @@ impl RenderBox for FailsAfterItsChild {
 /// paint the queue does not hold yet.
 fn painted_then_resized(owner: &mut PipelineOwner) {
     assert!(
-        matches!(SceneHost::new().run_frame_in_place(owner), Ok(Some(_))),
+        matches!(SceneHost::new().run_frame(owner), Ok(Some(_))),
         "the first frame paints"
     );
     owner.set_root_constraints(Some(tight(150.0)));
@@ -628,9 +668,8 @@ fn an_error_in_the_layout_pass() {
 fn an_error_at_a_dirty_root() {
     let (mut owner, root, _) = fails_after_a_boundary();
     let woke = wake_panics_once(&mut owner);
-    let mut owner = owner.into_layout();
     let failed = catch_unwind(AssertUnwindSafe(|| {
-        owner.layout_dirty_root(root, tight(150.0))
+        owner.layout_pass().layout_dirty_root(root, tight(150.0))
     }));
     assert!(
         matches!(failed, Ok(Err(_))),
@@ -652,14 +691,13 @@ fn a_panic_at_a_dirty_root() {
     painted_then_resized(&mut owner);
     fails_layout.store(true, Ordering::SeqCst);
     let wakes = count_wakes(&mut owner);
-    let mut owner = owner.into_layout();
     let before = wakes.load(Ordering::SeqCst);
     unwinds_under(
         Trigger::Event {
             target: "flui_rendering::pipeline::owner::subtree_arena",
             level: tracing::Level::DEBUG,
         },
-        || owner.layout_dirty_root(root, tight(150.0)),
+        || owner.layout_pass().layout_dirty_root(root, tight(150.0)),
     );
     assert!(
         wakes.load(Ordering::SeqCst) > before,

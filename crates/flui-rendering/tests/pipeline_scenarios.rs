@@ -341,3 +341,42 @@ fn a_pipeline_cell_runs_frame_after_frame() {
     let second = scene.run_cell_frame(&cell).expect("the owner was put back");
     assert!(second.is_some(), "a repaint request paints again");
 }
+
+/// `PipelineCell::run_layout`, the layout pass of the build-during-layout
+/// fixpoint, takes the marks a `RenderInvalidationHandle` sent before it lays
+/// out, as a whole frame does: a pass with nothing sent lays out nothing.
+#[test]
+fn a_pipeline_cell_layout_pass_takes_the_marks_handles_sent() {
+    use flui_foundation::geometry::Size;
+    use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+
+    let cell = PipelineCell::new(PipelineOwner::new(
+        flui_rendering::TextContextHandle::standalone(),
+    ));
+    let child = cell.with_mut(|owner| {
+        let root = owner.set_root_render_object(Box::new(RenderPadding::all(2.0)));
+        let child = owner
+            .insert_child_render_object(root, Box::new(RenderColoredBox::red(10.0, 10.0)))
+            .expect("child attaches");
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(40.0, 40.0))));
+        child
+    });
+    let mut scene = SceneHost::new();
+    scene.run_cell_frame(&cell).expect("the first frame runs");
+    let passes = || cell.with(|owner| owner.counters().layout_passes);
+    let laid_out = passes();
+
+    cell.run_layout().expect("a pass with nothing sent runs");
+    assert_eq!(passes(), laid_out, "nothing was sent, so nothing lays out");
+
+    cell.with(|owner| owner.render_invalidation_handle(child))
+        .expect("the child is attached")
+        .mark_needs_layout()
+        .expect("the owner is live");
+    cell.run_layout().expect("the pass runs");
+    assert_eq!(
+        passes(),
+        laid_out + 1,
+        "the pass took the handle's mark and laid it out"
+    );
+}

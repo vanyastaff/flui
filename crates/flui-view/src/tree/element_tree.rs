@@ -32,6 +32,7 @@ mod render_children;
 
 pub use element_node::ElementNode;
 pub(crate) use mounting::{InsertedChild, ProvisionalOrder};
+use removal::RemovalScratch;
 pub(crate) use removal::SubtreeRemoval;
 pub(crate) use render_children::enclosing_sparse_child;
 
@@ -68,6 +69,8 @@ pub struct ElementTree {
     /// [`reorder_render_children_after_build`]: ElementTree::reorder_render_children_after_build
     needs_render_reorder: bool,
     reconcile_state: Rc<ReconcileState>,
+    /// The buffers `remove_subtree` walks into, reused across removals.
+    removal_scratch: RemovalScratch,
 }
 
 #[derive(Debug, Default)]
@@ -105,6 +108,7 @@ impl ElementTree {
             root: None,
             needs_render_reorder: false,
             reconcile_state: Rc::new(ReconcileState::default()),
+            removal_scratch: RemovalScratch::default(),
         }
     }
 
@@ -116,6 +120,7 @@ impl ElementTree {
             root: None,
             needs_render_reorder: false,
             reconcile_state: Rc::new(ReconcileState::default()),
+            removal_scratch: RemovalScratch::default(),
         }
     }
 

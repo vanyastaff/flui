@@ -50,7 +50,7 @@ pub extern "C" fn flui_scene_abi_token() -> u64 { TOKEN }
 "#,
     );
     let plugin = flui_hot_reload::ScenePlugin::load(&library).expect("the scene fixture loads");
-    // SAFETY: the fixture's token matched, and a `None` owns no scene.
+    // SAFETY: nothing here clones a payload out of the scene.
     #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
     let scene = unsafe { plugin.build_scene(64.0, 64.0) };
     assert!(scene.is_none(), "a null answer is a skipped frame");

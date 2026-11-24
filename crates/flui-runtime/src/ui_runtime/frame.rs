@@ -623,8 +623,8 @@ impl UiRuntime {
             presentation.url_owner.end_cold_start();
         }
 
-        // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
-        // typestate-driven orchestrator.
+        // Phase 2 & 3: Layout, Compositing, Paint, Semantics, one pass each
+        // over the owner in place.
         presentation.enter_segment_phase(SegmentPhase::Pipeline);
         presentation
             .renderer()

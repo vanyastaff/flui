@@ -191,15 +191,9 @@ fn a_panicking_layout_callback_costs_no_key_of_its_turn() {
 /// the first is dropped at the registration, so it never hears a change
 /// again.
 fn a_second_layout_callback_replaces_the_first() {
-    struct OnDrop(Rc<std::cell::Cell<bool>>);
-    impl Drop for OnDrop {
-        fn drop(&mut self) {
-            self.0.set(true);
-        }
-    }
     let fixture = X11Fixture::open_with("layout callbacks", RecordingWindowHandler::new());
     let dropped = Rc::new(std::cell::Cell::new(false));
-    let guard = OnDrop(Rc::clone(&dropped));
+    let guard = std::mem::DropGuard::new(Rc::clone(&dropped), |dropped| dropped.set(true));
     keyboard_layout::on_change(
         &fixture.platform,
         Box::new(move || {

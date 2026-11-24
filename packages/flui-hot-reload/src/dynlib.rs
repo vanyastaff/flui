@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use flui_hot_reload::dynlib::DynLib;
+//! use flui_hot_reload::DynLib;
 //! use std::path::Path;
 //!
 //! let lib = DynLib::open(Path::new("libplugin.so")).expect("failed to load");

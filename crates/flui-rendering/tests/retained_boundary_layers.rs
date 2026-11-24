@@ -46,7 +46,7 @@ fn spec(n: usize) -> TreeNode {
     root
 }
 
-fn mount(n: usize) -> (PipelineOwner<flui_rendering::pipeline::Idle>, TreeIds) {
+fn mount(n: usize) -> (PipelineOwner, TreeIds) {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(&mut owner, spec(n));
     owner.set_root_id(Some(root_id));
@@ -100,23 +100,23 @@ fn fingerprint(t: &flui_layer::LayerTree) -> Vec<(&'static str, usize)> {
 pub(crate) fn a_retained_frame_matches_what_a_full_repaint_produces() {
     const N: usize = 8;
 
-    let (owner, ids) = mount(N);
+    let (mut owner, ids) = mount(N);
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("first frame");
 
     // Dirty exactly one boundary; the other seven must be reused.
     owner.mark_needs_paint(ids.first);
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     let retained_tree = result
         .expect("second frame")
         .expect("second frame produces a layer tree");
     drop(owner);
 
     // Reference: a fresh owner painting the same tree from scratch.
-    let (reference_owner, _) = mount(N);
+    let (mut reference_owner, _) = mount(N);
     let mut reference_scene = SceneHost::new();
-    let (_, result) = reference_scene.run_frame(reference_owner);
+    let result = reference_scene.run_frame(&mut reference_owner);
     let full_tree = result
         .expect("reference frame")
         .expect("reference frame produces a layer tree");
@@ -206,7 +206,7 @@ pub(crate) fn the_content_of_a_clean_boundary_is_not_repainted() {
     let dirty_id = registry.get("dirty").expect("dirty boundary is labelled");
 
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("first frame");
 
     let clean_after_first = clean_paints.load(Ordering::Relaxed);
@@ -220,9 +220,8 @@ pub(crate) fn the_content_of_a_clean_boundary_is_not_repainted() {
     // Two more frames, each with only the first boundary dirty.
     for _ in 0..2 {
         owner.mark_needs_paint(dirty_id);
-        let (next, result) = scene.run_frame(owner);
+        let result = scene.run_frame(&mut owner);
         result.expect("frame");
-        owner = next;
     }
 
     assert_eq!(
@@ -310,7 +309,7 @@ impl flui_rendering::traits::RenderBox for PaintCounter {
 fn mount_opacity_under_boundary(
     opacity: f64,
 ) -> (
-    PipelineOwner<flui_rendering::pipeline::Idle>,
+    PipelineOwner,
     flui_foundation::RenderId,
     flui_foundation::RenderId,
     Arc<AtomicUsize>,
@@ -342,12 +341,8 @@ fn mount_opacity_under_boundary(
 
 /// Applies a new opacity through the same seam a widget rebuild uses:
 /// the setter reports an impact, the owner applies it.
-fn set_opacity(
-    owner: &mut PipelineOwner<flui_rendering::pipeline::Idle>,
-    id: flui_foundation::RenderId,
-    value: f64,
-) {
-    update_render_object::<RenderOpacity, _>(owner, id, |o| o.set_opacity(value));
+fn set_opacity(owner: &mut PipelineOwner, id: flui_foundation::RenderId, value: f64) {
+    update_render_object::<RenderOpacity>(owner, id, |o| o.set_opacity(value));
 }
 
 /// An alpha change updates the emitted layer without repainting the subtree.
@@ -356,9 +351,9 @@ fn set_opacity(
 /// alone passes if nothing painted at all, and the alpha alone passes on a
 /// full repaint.
 pub(crate) fn an_alpha_change_updates_the_layer_without_repainting_the_subtree() {
-    let (owner, opacity_id, _sibling, painted) = mount_opacity_under_boundary(0.5);
+    let (mut owner, opacity_id, _sibling, painted) = mount_opacity_under_boundary(0.5);
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("first frame");
     let before = painted.load(Ordering::Relaxed);
     assert!(
@@ -367,7 +362,7 @@ pub(crate) fn an_alpha_change_updates_the_layer_without_repainting_the_subtree()
     );
 
     set_opacity(&mut owner, opacity_id, 0.25);
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     let tree = result
         .expect("second frame")
         .expect("second frame produces a layer tree");
@@ -470,7 +465,7 @@ pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
     let poison = registry.get("poison").expect("poison is labelled");
 
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("first frame");
 
     // Both reasons at once: a layer property moved AND painted content changed.
@@ -480,7 +475,7 @@ pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
     // reach: it is queued too, so the pass reaches it after the boundary.
     owner.mark_needs_paint(poison);
     armed.store(true, Ordering::Relaxed);
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     assert!(
         result.is_err(),
         "precondition: the armed leaf poisons this pass"
@@ -492,7 +487,7 @@ pub(crate) fn a_failed_pass_does_not_downgrade_a_real_repaint_to_an_update() {
     let after_error = painted.load(Ordering::Relaxed);
 
     armed.store(false, Ordering::Relaxed);
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the retry paints cleanly");
     drop(owner);
 
@@ -522,10 +517,7 @@ enum OwedBeforeRemoval {
 /// `g` holds `p` behind a tight box, so `g` stays clean when `p` changes;
 /// `p` holds an opacity over a column with the boundary `inner`. A sibling
 /// boundary sits beside `g` under a non-boundary row at the root.
-fn mount_nested_under_opacity() -> (
-    PipelineOwner<flui_rendering::pipeline::Idle>,
-    [flui_foundation::RenderId; 5],
-) {
+fn mount_nested_under_opacity() -> (PipelineOwner, [flui_foundation::RenderId; 5]) {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(
         &mut owner,
@@ -586,8 +578,8 @@ pub(crate) fn a_boundary_removed_before_its_patch_applies_retires_every_node_und
     for (owed, remove_g) in cases {
         let (mut owner, [g, p, opacity, column, inner]) = mount_nested_under_opacity();
         let mut scene = SceneHost::new();
-        scene.run_frame_in_place(&mut owner).expect("first frame");
-        let node_of = |owner: &PipelineOwner<flui_rendering::pipeline::Idle>, id| {
+        scene.run_frame(&mut owner).expect("first frame");
+        let node_of = |owner: &PipelineOwner, id| {
             owner
                 .boundary_scene_node(id)
                 .expect("a painted boundary has a scene node")
@@ -615,13 +607,13 @@ pub(crate) fn a_boundary_removed_before_its_patch_applies_retires_every_node_und
         }
         let target = if remove_g { g } else { p };
         let (painted, _) = scene.drive(&mut owner, |pipeline, writer| {
-            let painted = pipeline.run_frame_in_place(writer);
+            let painted = pipeline.run_frame(writer);
             pipeline.remove_render_object(target);
             painted
         });
         painted.expect("the frame before the removal");
         for _ in 0..3 {
-            scene.run_frame_in_place(&mut owner).expect("a later frame");
+            scene.run_frame(&mut owner).expect("a later frame");
         }
         let kept = if remove_g { 1 } else { 2 };
         assert_eq!(
@@ -651,10 +643,10 @@ pub(crate) fn a_boundary_removed_before_its_patch_applies_retires_every_node_und
 fn nodes_after_removal(remove_g: bool) -> usize {
     let (mut owner, [g, p, ..]) = mount_nested_under_opacity();
     let mut scene = SceneHost::new();
-    scene.run_frame_in_place(&mut owner).expect("first frame");
+    scene.run_frame(&mut owner).expect("first frame");
     owner.remove_render_object(if remove_g { g } else { p });
     for _ in 0..4 {
-        scene.run_frame_in_place(&mut owner).expect("a later frame");
+        scene.run_frame(&mut owner).expect("a later frame");
     }
     scene.version().len()
 }
@@ -681,9 +673,7 @@ pub(crate) fn a_frame_without_a_root_forgets_the_scene_it_cannot_paint() {
         let (mut owner, [_, _, opacity, column, _]) = mount_nested_under_opacity();
         let root = owner.root_id().expect("the tree has a root");
         let mut scene = SceneHost::new();
-        scene
-            .run_frame_in_place(&mut owner)
-            .expect("the first frame");
+        scene.run_frame(&mut owner).expect("the first frame");
         match owed {
             UnappliedPatch => {
                 set_opacity(&mut owner, opacity, 0.25);
@@ -698,7 +688,7 @@ pub(crate) fn a_frame_without_a_root_forgets_the_scene_it_cannot_paint() {
                     // applying it.
                     let mut writer = scene.owner_mut().writer();
                     owner
-                        .run_frame_in_place(&mut writer)
+                        .run_frame(&mut writer)
                         .expect_err("semantics fails after paint");
                 }
                 assert!(
@@ -724,9 +714,7 @@ pub(crate) fn a_frame_without_a_root_forgets_the_scene_it_cannot_paint() {
             // A raw writer: `SceneHost` would apply whatever stays staged
             // and hide it.
             let mut writer = scene.owner_mut().writer();
-            let painted = owner
-                .run_frame_in_place(&mut writer)
-                .expect("a frame with no root");
+            let painted = owner.run_frame(&mut writer).expect("a frame with no root");
             assert!(!painted, "{owed:?}: a frame with no root paints nothing");
             assert!(
                 !owner.scene_staged(),
@@ -736,7 +724,7 @@ pub(crate) fn a_frame_without_a_root_forgets_the_scene_it_cannot_paint() {
 
         owner.set_root_id(Some(root));
         let tree = scene
-            .run_frame_in_place(&mut owner)
+            .run_frame(&mut owner)
             .expect("the root returns")
             .unwrap_or_else(|| panic!("{owed:?}: the returned root's first frame paints"));
         assert_eq!(
@@ -745,7 +733,7 @@ pub(crate) fn a_frame_without_a_root_forgets_the_scene_it_cannot_paint() {
             "{owed:?}: the change made while the root was gone is painted"
         );
         for _ in 0..3 {
-            scene.run_frame_in_place(&mut owner).expect("a later frame");
+            scene.run_frame(&mut owner).expect("a later frame");
         }
         assert_eq!(
             scene.version().len(),
@@ -759,6 +747,6 @@ pub(crate) fn a_frame_without_a_root_forgets_the_scene_it_cannot_paint() {
 fn nodes_after_first_frame() -> usize {
     let (mut owner, _) = mount_nested_under_opacity();
     let mut scene = SceneHost::new();
-    scene.run_frame_in_place(&mut owner).expect("first frame");
+    scene.run_frame(&mut owner).expect("first frame");
     scene.version().len()
 }

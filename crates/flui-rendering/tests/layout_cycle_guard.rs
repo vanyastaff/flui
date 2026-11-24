@@ -63,7 +63,7 @@ pub(crate) fn callback_reentry_poisons_structural_cycle() {
     // failure) and clears the flags the cycle left set. P1's callback
     // only sees Ok(Size) from P2, so P1 is marked clean by the walk
     // itself as well.
-    let result = pipeline.layout_dirty_root(p1, constraints);
+    let result = pipeline.layout_pass().layout_dirty_root(p1, constraints);
     assert!(
         result.is_ok(),
         "cyclic re-entry must not panic — LayoutCycle Err is collapsed \
@@ -165,7 +165,9 @@ pub(crate) fn drop_guard_clears_id_on_perform_layout_panic() {
 
     // Frame 1: panic surfaces as Poisoned (the non-leaf path wraps
     // perform_layout_raw in catch_unwind).
-    let frame_1 = pipeline.layout_dirty_root(parent_id, constraints);
+    let frame_1 = pipeline
+        .layout_pass()
+        .layout_dirty_root(parent_id, constraints);
     assert!(
         matches!(frame_1, Err(RenderError::Poisoned { .. })),
         "frame 1 PanicOnceWidget panic must surface as Poisoned; got {frame_1:?}",
@@ -188,7 +190,9 @@ pub(crate) fn drop_guard_clears_id_on_perform_layout_panic() {
     // cleared parent_id's in-flight flag — no flag set, no
     // spurious LayoutCycle. Widget's `already_panicked = true` so the
     // perform_layout body completes normally.
-    let frame_2 = pipeline.layout_dirty_root(parent_id, constraints);
+    let frame_2 = pipeline
+        .layout_pass()
+        .layout_dirty_root(parent_id, constraints);
     assert!(
         frame_2.is_ok(),
         "frame 2 retry must succeed (drop-guard cleared parent_id's \

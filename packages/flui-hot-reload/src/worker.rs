@@ -6,10 +6,10 @@
 //!
 //! See `docs/hot-reload.md`.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 
 use crate::LoadError;
 use crate::dynlib::{self, DynLib};
@@ -47,31 +47,50 @@ fn host_request_rebuild_fn() -> HostRequestRebuildFn {
     }
 }
 
-static WORKER_BUILDS: OnceLock<Mutex<BTreeMap<u64, BuildPtr>>> = OnceLock::new();
-
-fn worker_builds() -> &'static Mutex<BTreeMap<u64, BuildPtr>> {
-    WORKER_BUILDS.get_or_init(|| Mutex::new(BTreeMap::new()))
+/// One build a worker's init registered: its layout fingerprint and the
+/// build function's address. A [`WorkerPlugin`] keeps the address as an
+/// integer, only to recognise its own entry when it prunes, so the plugin stays
+/// `Send` while the registry, which holds the pointer, stays on its thread.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Registration {
+    fingerprint: u64,
+    address: usize,
 }
 
-/// While a [`WorkerPlugin`] init call is in flight, collects the
-/// `(fingerprint, ptr)` pairs it registers, so the plugin can prune exactly
-/// those entries when it unloads. `None` outside an init call — a registration
-/// arriving then still lands in the map but belongs to no plugin (and is
-/// logged), so it can never be pruned; workers must register from
-/// `flui_worker_init` only.
-static REGISTRATION_SESSION: Mutex<Option<Vec<(u64, BuildPtr)>>> = Mutex::new(None);
+/// The worker builds the host can dispatch to, and the registrations of the
+/// init call in flight.
+struct Registry {
+    /// The newest build registered for each fingerprint.
+    builds: BTreeMap<u64, *const ()>,
+    /// While a [`WorkerPlugin`] init call is in flight, what it registers, so
+    /// the plugin can prune exactly those entries when it is dropped. `None`
+    /// outside an init call: a registration arriving then still lands in
+    /// `builds` but belongs to no plugin (and is logged), so it is never
+    /// pruned; workers register from `flui_worker_init` only.
+    session: Option<Vec<Registration>>,
+}
+
+thread_local! {
+    /// The owner thread's worker builds (ADR-0323 §1). A worker is loaded, and
+    /// its builds are looked up, on the thread that drives the host's frames:
+    /// another thread sees an empty registry. No borrow of it is held while
+    /// code the registry does not own runs (the worker's init, a `tracing`
+    /// subscriber), so no call finds it borrowed.
+    static WORKER_BUILDS: RefCell<Registry> = const {
+        RefCell::new(Registry {
+            builds: BTreeMap::new(),
+            session: None,
+        })
+    };
+}
 
 /// Runs a worker's `flui_worker_init` and returns what it registered, or
 /// `None` when the init panicked, with those registrations pruned again.
-fn run_init(init_fn: WorkerInitFn) -> Option<Vec<(u64, BuildPtr)>> {
-    *REGISTRATION_SESSION
-        .lock()
-        .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state") = Some(Vec::new());
+fn run_init(init_fn: WorkerInitFn) -> Option<Vec<Registration>> {
+    WORKER_BUILDS.with_borrow_mut(|registry| registry.session = Some(Vec::new()));
     let initialized = init_fn(host_register_fn(), host_request_rebuild_fn());
-    let registered = REGISTRATION_SESSION
-        .lock()
-        .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
-        .take()
+    let registered = WORKER_BUILDS
+        .with_borrow_mut(|registry| registry.session.take())
         .unwrap_or_default();
     if initialized {
         Some(registered)
@@ -82,49 +101,31 @@ fn run_init(init_fn: WorkerInitFn) -> Option<Vec<(u64, BuildPtr)>> {
 }
 
 /// Removes the registrations that are still the ones in `registered`. A newer
-/// worker registering the same fingerprint keeps its entry.
-fn prune(registered: Vec<(u64, BuildPtr)>) {
+/// worker registering the same fingerprint keeps its entry. On a thread whose
+/// registry is already destroyed there is nothing left to prune.
+fn prune(registered: Vec<Registration>) {
     if registered.is_empty() {
         return;
     }
-    let mut builds = worker_builds()
-        .lock()
-        .expect("BUG: WORKER_BUILDS mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state");
-    for (fingerprint, ptr) in registered {
-        if builds.get(&fingerprint) == Some(&ptr) {
-            builds.remove(&fingerprint);
-            tracing::debug!(fingerprint, "worker build pruned");
-        }
+    let pruned = WORKER_BUILDS.try_with(|registry| {
+        let builds = &mut registry.borrow_mut().builds;
+        registered
+            .into_iter()
+            .filter(|registration| {
+                let current = builds
+                    .get(&registration.fingerprint)
+                    .is_some_and(|build| build.addr() == registration.address);
+                if current {
+                    builds.remove(&registration.fingerprint);
+                }
+                current
+            })
+            .count()
+    });
+    if let Ok(pruned) = pruned {
+        tracing::debug!(pruned, "worker builds pruned");
     }
 }
-
-/// Type-erased function pointer — safe to store in a `Sync` static.
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct BuildPtr(*const ());
-
-// SAFETY: a code address is a `Copy` integer as far as these auto traits are
-// concerned — `BuildPtr` is never dereferenced as data, and neither moving nor
-// sharing the value aliases anything. Both impls rest on that alone.
-//
-// Deliberately NOT claimed (an earlier version of this comment claimed both,
-// wrongly): that the address is in the host image, and that the function is
-// only invoked on the main thread. It points into the WORKER dylib, and
-// nothing enforces a calling thread — `get_worker_build_ptr` is public and
-// takes no thread context. This is a distinct, still-open gap from
-// `app_plugin!`'s `flui_app_build` (`plugin.rs`), which pins its calling
-// thread at the C ABI and refuses a foreign-thread call instead of racing
-// one — the worker build-pointer registry has no equivalent guard.
-//
-// Lifetime: every admitted WorkerPlugin retains its loader reference for the
-// process lifetime (ADR-0111). Registry pruning stops fresh dispatch to obsolete
-// workers without invalidating previously returned addresses or plugin-backed
-// view values and callbacks that escaped into the host tree.
-#[expect(unsafe_code, reason = "`BuildPtr`'s raw address is not auto-`Send`")]
-unsafe impl Send for BuildPtr {}
-// SAFETY: the `Send` argument above: a shared `&BuildPtr` only reads the
-// address, never what it points to.
-#[expect(unsafe_code, reason = "`BuildPtr`'s raw address is not auto-`Sync`")]
-unsafe impl Sync for BuildPtr {}
 
 /// Host entry point wired into [`WorkerPlugin::load`].
 extern "C" fn host_register_worker_build(fingerprint: u64, build: *const ()) {
@@ -135,17 +136,16 @@ extern "C" fn host_register_worker_build(fingerprint: u64, build: *const ()) {
         );
         return;
     }
-    let ptr = BuildPtr(build);
-    worker_builds()
-        .lock()
-        .expect("BUG: WORKER_BUILDS mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
-        .insert(fingerprint, ptr);
-    if let Some(session) = &mut *REGISTRATION_SESSION
-        .lock()
-        .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
-    {
-        session.push((fingerprint, ptr));
-    } else {
+    let owned = WORKER_BUILDS.with_borrow_mut(|registry| {
+        registry.builds.insert(fingerprint, build);
+        registry.session.as_mut().map(|session| {
+            session.push(Registration {
+                fingerprint,
+                address: build.addr(),
+            });
+        })
+    });
+    if owned.is_none() {
         tracing::warn!(
             fingerprint,
             "worker build registered outside flui_worker_init — the entry \
@@ -161,27 +161,23 @@ pub fn host_register_fn() -> RegisterWorkerBuildFn {
     host_register_worker_build
 }
 
-/// Look up a worker-registered build function by layout fingerprint.
+/// Look up a worker-registered build function by layout fingerprint, in this
+/// thread's registry: the thread that loaded the worker.
 ///
-/// Returns `None` when no current worker registered the fingerprint, including
-/// after its registration owner is dropped or a reload fails. Previously
-/// returned addresses remain mapped because admitted worker images are retained
-/// until process exit (ADR-0111); do not cache a pointer when dispatch should
-/// follow the newest registration. Calling an address still requires its exact
-/// function signature and matching host/worker Rust-ABI contract.
-/// Registrations must be made from `flui_worker_init` so ownership and pruning
-/// remain defined.
+/// Returns `None` when no current worker registered the fingerprint on this
+/// thread, including after its registration owner is dropped or a reload
+/// fails. Previously returned addresses remain mapped because admitted worker
+/// images are retained until process exit (ADR-0111); do not cache a pointer
+/// when dispatch should follow the newest registration. Calling an address
+/// still requires its exact function signature and matching host/worker
+/// Rust-ABI contract. Registrations must be made from `flui_worker_init` so
+/// ownership and pruning remain defined.
 #[must_use]
 pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
-    worker_builds()
-        .lock()
-        .expect("BUG: WORKER_BUILDS mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
-        .get(&fingerprint)
-        .map(|slot| slot.0)
+    WORKER_BUILDS.with_borrow(|registry| registry.builds.get(&fingerprint).copied())
 }
 
 type WorkerInitFn = extern "C" fn(RegisterWorkerBuildFn, HostRequestRebuildFn) -> bool;
-type WorkerVersionFn = extern "C" fn() -> u32;
 type WorkerFingerprintFn = extern "C" fn() -> u64;
 type WorkerAbiTokenFn = extern "C" fn() -> u64;
 
@@ -195,11 +191,10 @@ pub struct WorkerPlugin {
     // tree and carry image-owned code, vtables or storage (ADR-0111).
     lib: ManuallyDrop<DynLib>,
     fingerprint_fn: Option<WorkerFingerprintFn>,
-    version: u32,
     mtime: Option<std::time::SystemTime>,
-    /// The `(fingerprint, ptr)` pairs this plugin's init hook registered in
+    /// The builds this plugin's init registered in this thread's
     /// `WORKER_BUILDS` — pruned by `Drop`; the admitted image stays mapped.
-    registered: Mutex<Vec<(u64, BuildPtr)>>,
+    registered: Vec<Registration>,
 }
 
 impl WorkerPlugin {
@@ -248,11 +243,6 @@ impl WorkerPlugin {
                 });
             }
 
-            let version = lib.symbol("flui_worker_version").map_or(0, |ptr| {
-                let version_fn: WorkerVersionFn = std::mem::transmute(ptr);
-                version_fn()
-            });
-
             let fingerprint_fn = lib
                 .symbol("flui_worker_fingerprint")
                 .map(|ptr| std::mem::transmute::<_, WorkerFingerprintFn>(ptr));
@@ -266,12 +256,10 @@ impl WorkerPlugin {
             let plugin = WorkerPlugin {
                 lib: ManuallyDrop::new(lib),
                 fingerprint_fn,
-                version,
                 mtime,
-                registered: Mutex::new(registered),
+                registered,
             };
             tracing::info!(
-                version = plugin.version,
                 path = %lib_path.display(),
                 "Worker plugin loaded"
             );
@@ -295,33 +283,21 @@ impl WorkerPlugin {
     /// Rust values and callbacks can still be used and destroyed safely.
     /// Restart the development host to reclaim older images and staged files.
     pub fn unload(self) {
-        tracing::info!(
-            version = self.version,
-            "Worker registrations retired; image retained"
-        );
+        tracing::info!(path = %self.lib.path().display(), "Worker registrations retired; image retained");
     }
 
     /// Path this worker was loaded from.
     pub fn path(&self) -> &Path {
         self.lib.path()
     }
-
-    /// Version reported by `flui_worker_version`.
-    pub fn version(&self) -> u32 {
-        self.version
-    }
 }
 
 impl Drop for WorkerPlugin {
     fn drop(&mut self) {
         // The loader reference is permanently retained independently of this
-        // registry and its lock.
-        prune(std::mem::take(
-            &mut *self
-                .registered
-                .lock()
-                .expect("BUG: WorkerPlugin::registered mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state"),
-        ));
+        // registry. A plugin dropped on another thread than the one that
+        // loaded it finds nothing of its own to prune there.
+        prune(std::mem::take(&mut self.registered));
     }
 }
 
@@ -441,7 +417,7 @@ impl WorkerReloadDriver {
             loaded_path: load_path,
             plugin,
             lib_path,
-            poll_interval: crate::strategy::timing::ARTIFACT_POLL,
+            poll_interval: crate::timing::ARTIFACT_POLL,
             last_poll: std::time::Instant::now(),
             reload_count,
             last_fingerprint,
@@ -449,31 +425,11 @@ impl WorkerReloadDriver {
         }
     }
 
-    /// Polling interval for mtime checks (default:
-    /// [`timing::ARTIFACT_POLL`](crate::strategy::timing::ARTIFACT_POLL)).
+    /// Polling interval for mtime checks (default: the artifact poll interval
+    /// every driver starts with).
     pub fn with_poll_interval(mut self, interval: std::time::Duration) -> Self {
         self.poll_interval = interval;
         self
-    }
-
-    /// Whether a worker is currently loaded.
-    pub fn is_loaded(&self) -> bool {
-        self.plugin.is_some()
-    }
-
-    /// Reload count (1 after the initial successful load).
-    pub fn reload_count(&self) -> u32 {
-        self.reload_count
-    }
-
-    /// Last observed type fingerprint from the worker.
-    pub fn fingerprint(&self) -> u64 {
-        self.last_fingerprint
-    }
-
-    /// Library path being watched.
-    pub fn lib_path(&self) -> &Path {
-        &self.lib_path
     }
 
     /// Poll for worker updates. Call from the platform frame loop: the

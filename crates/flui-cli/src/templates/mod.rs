@@ -50,13 +50,17 @@ pub(super) fn main_rs(lib_name: &str) -> String {
 ///
 /// A release build is what ships, so it strips the symbol table too: a panic
 /// still prints its message and `file:line`, and only a backtrace's frame
-/// names go, as in a Flutter release build. `--profile profiling` keeps the
-/// symbols and line tables a profiler or a crash report needs.
+/// names go, as in a Flutter release build. `flui build --release` also
+/// leaves every `trace!` and `debug!` call site out (ADR-0398), which no
+/// profile can say. `--profile profiling` keeps the
+/// symbols and line tables a profiler or a crash report needs, and the spans
+/// its timeline reads.
 ///
 /// A release build is also sized: whole-program LTO, the dependencies at
 /// `opt-level = "s"`, and the crates a frame runs through, together with the
 /// application's own (workspace members, which `"*"` leaves out), at `3`.
-/// CI's `size` job builds a generated counter with this profile
+/// CI's `size` job builds a generated counter with this profile and the
+/// release ceiling
 /// (`perf/size.toml`). `panic = "abort"` would drop the unwind tables too, but
 /// it turns a panic FLUI contains in a widget, a callback or a platform entry
 /// (ADR-0281, ADR-0287) into the end of the application, so it stays `unwind`.

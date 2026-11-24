@@ -26,10 +26,13 @@
 //! }
 //! ```
 
-use std::alloc::{AllocError, Allocator, Global, Layout};
+mod allocator;
+
 use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::ptr::NonNull;
+
+use allocator::Chunk;
 
 /// A `Vec` whose memory comes from a [`FrameArena`] and lives until the arena's next reset.
 pub type FrameVec<'f, T> = Vec<T, &'f FrameArena>;
@@ -41,43 +44,14 @@ const RECENT_RESETS: usize = 120;
 /// The smallest chunk the arena takes from the global allocator.
 const MIN_CHUNK: usize = 4 * 1024;
 
-/// Every chunk's alignment; a block aligned more strictly is padded inside its chunk.
-const CHUNK_ALIGN: usize = 16;
-
 /// How much larger than the recent need a kept chunk may be.
 const RELEASE_FACTOR: usize = 4;
-
-/// One block of the global allocator's memory the arena bumps through.
-struct Chunk {
-    ptr: NonNull<u8>,
-    layout: Layout,
-}
-
-impl Chunk {
-    /// `size` must be above zero.
-    fn try_new(size: usize) -> Result<Self, AllocError> {
-        let layout = Layout::from_size_align(size, CHUNK_ALIGN).map_err(|_| AllocError)?;
-        let ptr = Global.allocate(layout)?.cast::<u8>();
-        Ok(Self { ptr, layout })
-    }
-
-    fn capacity(&self) -> usize {
-        self.layout.size()
-    }
-}
-
-impl Drop for Chunk {
-    fn drop(&mut self) {
-        // SAFETY: `Chunk::try_new` took `ptr` from `Global` with exactly `layout`, and a chunk is
-        // freed only here, once.
-        unsafe { Global.deallocate(self.ptr, self.layout) }
-    }
-}
 
 /// Scratch memory for one owner's frame walks, handed out by bumping a cursor and freed all at
 /// once by [`Self::reset`] (ADR-0328).
 ///
-/// A collection allocates from it through the [`Allocator`] implementation on `&FrameArena`:
+/// A collection allocates from it through the [`Allocator`](std::alloc::Allocator)
+/// implementation on `&FrameArena`, which never panics:
 /// `Vec::new_in(&arena)`. The arena only provides memory: each collection still drops its own
 /// elements, so a destructor never runs out of the arena itself.
 ///
@@ -200,59 +174,6 @@ impl FrameArena {
         self.retired.set(0);
         self.peak.set(0);
     }
-
-    /// Bytes handed out since the last reset, padding included.
-    fn used(&self) -> usize {
-        self.retired.get().saturating_add(self.cursor.get())
-    }
-
-    /// The offset of `ptr` in the current chunk when the block `[ptr, ptr + size)` is the last
-    /// one handed out from it.
-    fn last_block_offset(&self, ptr: NonNull<u8>, size: usize) -> Option<usize> {
-        let offset = ptr.addr().get().checked_sub(self.base.get().addr().get())?;
-        (offset.checked_add(size)? == self.cursor.get()).then_some(offset)
-    }
-
-    /// Hands out `layout` from the current chunk, or `None` when it does not fit there.
-    fn bump(&self, layout: Layout) -> Option<NonNull<[u8]>> {
-        let base = self.base.get().addr().get();
-        let start = base
-            .checked_add(self.cursor.get())?
-            .checked_next_multiple_of(layout.align())?;
-        let offset = start - base;
-        let end = offset.checked_add(layout.size())?;
-        if end > self.capacity.get() {
-            return None;
-        }
-        self.cursor.set(end);
-        self.peak.set(self.peak.get().max(self.used()));
-        // SAFETY: `offset + layout.size() <= capacity`, so the block lies inside the current
-        // chunk's allocation (`base` is dangling only while `capacity` is zero, and `end` above
-        // zero exceeds it).
-        let ptr = unsafe { self.base.get().add(offset) };
-        Some(NonNull::slice_from_raw_parts(ptr, layout.size()))
-    }
-
-    /// Opens a chunk that holds `layout`, at least twice the current one.
-    fn open_chunk(&self, layout: Layout) -> Result<(), AllocError> {
-        let size = layout
-            .size()
-            .checked_add(layout.align())
-            .ok_or(AllocError)?
-            .max(self.capacity.get().saturating_mul(2))
-            .max(self.next_chunk)
-            .max(MIN_CHUNK)
-            .checked_next_power_of_two()
-            .ok_or(AllocError)?;
-        let chunk = Chunk::try_new(size)?;
-        let ptr = chunk.ptr;
-        self.chunks.borrow_mut().push(chunk);
-        self.retired.set(self.used());
-        self.base.set(ptr);
-        self.capacity.set(size);
-        self.cursor.set(0);
-        Ok(())
-    }
 }
 
 impl Default for FrameArena {
@@ -273,103 +194,6 @@ impl fmt::Debug for FrameArena {
             .field("capacity", &capacity)
             .field("used", &used)
             .finish_non_exhaustive()
-    }
-}
-
-/// A dangling pointer aligned for `align`, for a zero-size block.
-fn dangling(align: usize) -> NonNull<[u8]> {
-    let ptr = NonNull::new(std::ptr::without_provenance_mut::<u8>(align))
-        .expect("BUG: a layout's alignment is a non-zero power of two");
-    NonNull::slice_from_raw_parts(ptr, 0)
-}
-
-// SAFETY: a block is handed out at most once between two resets: `bump` moves the cursor past
-// every block it returns, and the cursor moves back only over the last block, when that block is
-// freed or shrunk. A block stays valid while the `&'f FrameArena` that handed it out lives: its
-// chunk is freed only by `reset`, which needs `&mut FrameArena`, or by the arena's drop, and
-// neither can happen while `'f` lasts. Copies of the reference are the same allocator, so any
-// copy may free or grow a block another copy handed out.
-unsafe impl Allocator for &FrameArena {
-    fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, AllocError> {
-        if layout.size() == 0 {
-            return Ok(dangling(layout.align()));
-        }
-        if let Some(block) = self.bump(layout) {
-            return Ok(block);
-        }
-        self.open_chunk(layout)?;
-        self.bump(layout).ok_or(AllocError)
-    }
-
-    unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout) {
-        if layout.size() == 0 {
-            return;
-        }
-        if let Some(offset) = self.last_block_offset(ptr, layout.size()) {
-            self.cursor.set(offset);
-        }
-    }
-
-    unsafe fn grow(
-        &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        if old_layout.size() > 0
-            && ptr.addr().get().is_multiple_of(new_layout.align())
-            && let Some(offset) = self.last_block_offset(ptr, old_layout.size())
-            && let Some(end) = offset.checked_add(new_layout.size())
-            && end <= self.capacity.get()
-        {
-            self.cursor.set(end);
-            self.peak.set(self.peak.get().max(self.used()));
-            return Ok(NonNull::slice_from_raw_parts(ptr, new_layout.size()));
-        }
-        let new = self.allocate(new_layout)?;
-        // SAFETY: the caller guarantees `ptr` holds `old_layout.size()` initialised bytes and
-        // `new_layout.size() >= old_layout.size()`; `new` is a different block, since the old
-        // one is still handed out, so the two do not overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                ptr.as_ptr(),
-                new.cast::<u8>().as_ptr(),
-                old_layout.size(),
-            );
-            self.deallocate(ptr, old_layout);
-        }
-        Ok(new)
-    }
-
-    unsafe fn shrink(
-        &self,
-        ptr: NonNull<u8>,
-        old_layout: Layout,
-        new_layout: Layout,
-    ) -> Result<NonNull<[u8]>, AllocError> {
-        if new_layout.size() == 0 {
-            // SAFETY: the caller hands over the block `ptr` with `old_layout`.
-            unsafe { self.deallocate(ptr, old_layout) };
-            return Ok(dangling(new_layout.align()));
-        }
-        if ptr.addr().get().is_multiple_of(new_layout.align()) {
-            if let Some(offset) = self.last_block_offset(ptr, old_layout.size()) {
-                self.cursor.set(offset + new_layout.size());
-            }
-            return Ok(NonNull::slice_from_raw_parts(ptr, new_layout.size()));
-        }
-        let new = self.allocate(new_layout)?;
-        // SAFETY: the caller guarantees `ptr` holds at least `new_layout.size()` initialised
-        // bytes; `new` is a different block, since the old one is still handed out.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                ptr.as_ptr(),
-                new.cast::<u8>().as_ptr(),
-                new_layout.size(),
-            );
-            self.deallocate(ptr, old_layout);
-        }
-        Ok(new)
     }
 }
 

@@ -87,8 +87,8 @@ View Tree        ──build──▶   Element Tree   ──layout──▶   R
 | Phase | Owner | Input | Output | Constraint |
 |-------|-------|-------|--------|------------|
 | Build | `BuildOwner` | dirty `View` nodes | reconciled `Element` tree | `View::build()` is pure — no I/O, no external mutation |
-| Layout | `PipelineOwner<Layout>` | `Constraints` | `Size` per `RenderBox` | Single-pass O(n) where possible (constraints down, sizes up) |
-| Paint | `PipelineOwner<PaintPhase>` | `RenderBox` tree | `DisplayList` → layers | Recording is in `flui-painting`; GPU submission in `flui-engine` |
+| Layout | `FramePass<Layout>` | `Constraints` | `Size` per `RenderBox` | Single-pass O(n) where possible (constraints down, sizes up) |
+| Paint | `FramePass<PaintPhase>` | `RenderBox` tree | `DisplayList` → layers | Recording is in `flui-painting`; GPU submission in `flui-engine` |
 
 The pipeline is **on-demand**. The platform event loop waits (`ControlFlow::Wait`, or `WaitUntil` for a scheduled deadline), and a frame runs only when something asks for one: a dirty tree (`mark_needs_layout`, `mark_needs_paint`), or work that waits for a frame (a running animation, a woken async task, an `end_of_frame` waiter), which asks the scheduler for a frame even when no tree is dirty. A render loop that polls every frame is not an accepted design.
 
@@ -199,7 +199,7 @@ Hot-reload is split into two layers so build tooling and runtime hosts stay deco
 1. **Build orchestration** — `flui run` watches the sources with the CLI's own debounced watcher (`SourceWatcher`, crate-private in `crates/flui-cli/src/watch.rs`) and triggers `cargo build`; the app being reloaded never watches files.
 2. **Artifact reload** — `HotReloadDriver` polls the plugin `.so`/`.dll` mtime and reloads via `dlopen` without restarting the host.
 
-See [Hot Reload](hot-reload.md) for workflows, `ReloadStrategy`, and integration examples.
+See [Hot Reload](hot-reload.md) for workflows and integration examples.
 
 ## See Also
 

@@ -22,3 +22,7 @@ mod refused_entries;
 #[cfg(feature = "app-plugin")]
 #[path = "worker_init.rs"]
 mod worker_init;
+
+#[cfg(feature = "host-hook")]
+#[path = "worker_hook.rs"]
+mod worker_hook;

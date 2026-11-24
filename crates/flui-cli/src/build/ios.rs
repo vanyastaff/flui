@@ -73,8 +73,9 @@ impl IosBuilder {
         };
         let mut outputs = Vec::new();
         for target in targets {
-            let mut args = cargo_args_for(ctx, target);
+            let mut args = cargo_args_for(target);
             args.extend(selected.cargo_args());
+            args.extend(ctx.mode_args(selected.framework()));
             outputs.push(
                 crate::build::util::cargo::build_artifact(
                     &ctx.workspace_root,
@@ -134,16 +135,12 @@ impl IosBuilder {
 /// `--lib` is added only for the library path: `--lib` and `--example` are
 /// mutually exclusive in cargo, and an example must be built with
 /// `--example NAME` alone.
-fn cargo_args_for(ctx: &BuilderContext, target: &str) -> Vec<String> {
-    let mut args = vec![
+fn cargo_args_for(target: &str) -> Vec<String> {
+    vec![
         "build".to_string(),
         "--target".to_string(),
         target.to_string(),
-    ];
-    if let Some(profile_flag) = ctx.profile.cargo_flag() {
-        args.push(profile_flag.to_string());
-    }
-    args
+    ]
 }
 
 #[cfg(test)]

@@ -4,11 +4,11 @@
 use flui_foundation::RenderId;
 use flui_foundation::panic::{FailureClass, PanicRecovery, RecoveryScope};
 
-use crate::pipeline::{handle::DirtyKind, phase::PipelinePhase};
+use crate::pipeline::handle::DirtyKind;
 
 use super::PipelineOwner;
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Sets the callback for when a visual update is needed.
     pub fn set_on_need_visual_update<F>(&mut self, callback: F)
     where
@@ -69,7 +69,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Drains the pending dirty-request channel into the scheduler's
     /// dirty sets.
     ///
-    /// Called at phase boundaries by the typestate transitions; producers
+    /// Called before a frame's first pass (`run_frame`); producers
     /// (background asset loaders, async work) write into the channel via
     /// a [`crate::pipeline::RenderInvalidationHandle`] and the owner observes them on
     /// the next frame. Non-blocking; processes every request

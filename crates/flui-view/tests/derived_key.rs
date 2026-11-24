@@ -5,14 +5,14 @@ use std::rc::Rc;
 
 use flui_foundation::{UniqueKey, ValueKey, ViewKey};
 use flui_view::prelude::*;
-use flui_view::{ErrorView, GlobalKey};
+use flui_view::{ErrorView, GlobalKey, Memo};
 
 fn leaf() -> ErrorView {
     ErrorView::new("a keyed view's subtree")
 }
 
 /// A key the view always has.
-#[derive(Clone, StatelessView)]
+#[derive(Clone, PartialEq, StatelessView)]
 struct Always {
     #[view(key)]
     key: ValueKey<u32>,
@@ -112,6 +112,10 @@ fn a_derived_view_reports_the_key_its_marked_field_holds() {
     let always = Always { key: seven.clone() };
     assert!(is(&always, &seven), "a key field is the view's key");
     assert!(!is(&always, &eight), "and no other key");
+    assert!(
+        is(&Memo::new(always), &seven),
+        "a memo is matched by the key of the view it wraps"
+    );
 
     let keyed = Sometimes {
         key: Some(seven.clone()),

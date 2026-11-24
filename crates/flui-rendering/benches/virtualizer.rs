@@ -52,7 +52,6 @@ use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints},
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::{BoxParentData, SliverMultiBoxAdaptorParentData},
-    pipeline::Layout,
     protocol::{BoxProtocol, SliverProtocol},
     testing::sliver as sliver_presets,
     traits::{RenderBox, RenderObject},
@@ -421,7 +420,7 @@ fn bench_constraints(scroll_offset: f64) -> SliverConstraints {
 fn build_settled_list(
     n_items: usize,
 ) -> (
-    PipelineOwner<Layout>,
+    PipelineOwner,
     flui_foundation::RenderId,
     flui_foundation::RenderId,
 ) {
@@ -461,8 +460,8 @@ fn build_settled_list(
         BENCH_VIEWPORT,
     ))));
 
-    let mut owner = owner.into_layout();
     owner
+        .layout_pass()
         .run_layout()
         .expect("layout must not fail during bench setup");
     (owner, root_id, sliver_id)
@@ -503,6 +502,7 @@ fn bench_lazy_sliver_frame_settled(c: &mut Criterion) {
             b.iter(|| {
                 owner.mark_needs_layout(black_box(root_id));
                 owner
+                    .layout_pass()
                     .run_layout()
                     .expect("layout must not fail during bench");
             });

@@ -16,11 +16,11 @@ use flui_objects::{
 };
 use flui_rendering::{
     constraints::BoxConstraints,
-    pipeline::{Idle, PipelineOwner},
+    pipeline::PipelineOwner,
     testing::{SceneHost, TreeNode, box_node, tree, update_render_object},
 };
 
-fn mount(root: TreeNode) -> (PipelineOwner<Idle>, tree::RenderLabelRegistry) {
+fn mount(root: TreeNode) -> (PipelineOwner, tree::RenderLabelRegistry) {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(&mut owner, root);
     owner.set_root_id(Some(root_id));
@@ -28,18 +28,14 @@ fn mount(root: TreeNode) -> (PipelineOwner<Idle>, tree::RenderLabelRegistry) {
     (owner, registry)
 }
 
-fn frame(scene: &mut SceneHost, owner: PipelineOwner<Idle>) -> PipelineOwner<Idle> {
-    let (owner, result) = scene.run_frame(owner);
+fn frame(scene: &mut SceneHost, mut owner: PipelineOwner) -> PipelineOwner {
+    let result = scene.run_frame(&mut owner);
     result.expect("frame").expect("the frame produces a patch");
     owner
 }
 
 /// The content `boundary` is published with in the scene's current version.
-fn content(
-    scene: &SceneHost,
-    owner: &PipelineOwner<Idle>,
-    boundary: RenderId,
-) -> Arc<BoundaryContent> {
+fn content(scene: &SceneHost, owner: &PipelineOwner, boundary: RenderId) -> Arc<BoundaryContent> {
     scene
         .content_of(owner, boundary)
         .expect("the boundary is published")
@@ -50,7 +46,7 @@ fn leaf() -> TreeNode {
 }
 
 /// Root boundary → row → [boundary "a" → leaf, boundary "b" → leaf].
-fn two_boundaries() -> (PipelineOwner<Idle>, RenderId, RenderId, RenderId) {
+fn two_boundaries() -> (PipelineOwner, RenderId, RenderId, RenderId) {
     let (owner, registry) = mount(
         box_node(RenderRepaintBoundary::new()).label("root").child(
             box_node(RenderFlex::row())
@@ -179,7 +175,7 @@ fn a_layer_update_republishes() {
     let mut scene = SceneHost::new();
     let mut owner = frame(&mut scene, owner);
     let first = content(&scene, &owner, boundary);
-    update_render_object::<RenderOpacity, _>(&mut owner, opacity, |o| o.set_opacity(0.25));
+    update_render_object::<RenderOpacity>(&mut owner, opacity, |o| o.set_opacity(0.25));
     let mut owner = frame(&mut scene, owner);
     let second = content(&scene, &owner, boundary);
     assert!(
@@ -268,8 +264,8 @@ fn pipeline_frames_diff_to_the_changed_boundary_rect() {
     );
     let get = |name| registry.get(name).expect("labelled");
     let (a, b) = (get("a"), get("b"));
-    let recolour = |owner: &mut PipelineOwner<Idle>, leaf: RenderId| {
-        update_render_object::<RenderColoredBox, _>(owner, leaf, |leaf| {
+    let recolour = |owner: &mut PipelineOwner, leaf: RenderId| {
+        update_render_object::<RenderColoredBox>(owner, leaf, |leaf| {
             leaf.set_color([0.0, 0.0, 1.0, 1.0])
         });
     };
@@ -284,7 +280,7 @@ fn pipeline_frames_diff_to_the_changed_boundary_rect() {
 
     // Each later patch damages its own operations: the rect of a 10x10 boundary at its node's
     // placement, under a root boundary and a frame node that stand at the origin.
-    let expected = |scene: &SceneHost, owner: &PipelineOwner<Idle>, boundary: RenderId| {
+    let expected = |scene: &SceneHost, owner: &PipelineOwner, boundary: RenderId| {
         let node = owner.boundary_scene_node(boundary).expect("published");
         let origin = scene
             .version()
@@ -396,7 +392,7 @@ fn a_paint_panic_applies_no_patch_and_keeps_the_presented_version() {
     armed.store(true, std::sync::atomic::Ordering::Relaxed);
     owner.mark_needs_paint(leaf_id);
     owner.mark_needs_paint(other);
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     assert!(
         result.is_err(),
         "precondition: the armed leaf fails the paint"
@@ -409,7 +405,7 @@ fn a_paint_panic_applies_no_patch_and_keeps_the_presented_version() {
     assert!(Arc::ptr_eq(&other_before, &content(&scene, &owner, other)));
 
     armed.store(false, std::sync::atomic::Ordering::Relaxed);
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the retry paints").expect("a patch");
     assert_ne!(scene.version().id(), presented);
     assert!(
@@ -485,7 +481,7 @@ fn a_boundary_placed_at_a_non_finite_offset_keeps_its_last_placement() {
     );
     let parent = registry.get("parent").expect("labelled");
     let placed = registry.get("placed").expect("labelled");
-    let placement = |scene: &SceneHost, owner: &PipelineOwner<Idle>| {
+    let placement = |scene: &SceneHost, owner: &PipelineOwner| {
         let node = owner.boundary_scene_node(placed).expect("published");
         scene
             .version()
@@ -612,7 +608,7 @@ fn a_parent_painting_its_child_again_drops_the_order_that_left_it_out() {
     let parent = registry.get("parent").expect("labelled");
     let child = registry.get("child").expect("labelled");
     let presents =
-        |owner: &PipelineOwner<Idle>| owner.presented_nodes().iter().any(|node| node.id == child);
+        |owner: &PipelineOwner| owner.presented_nodes().iter().any(|node| node.id == child);
     let mut scene = SceneHost::new();
     let mut owner = frame(&mut scene, owner);
     assert!(!presents(&owner), "precondition: the child is left out");
@@ -639,7 +635,7 @@ fn chunk_version(content: &BoundaryContent, owner: RenderId) -> flui_layer::Cont
 
 /// Root boundary → row → leaves "a", "b" and "c", each 10×10, painted into
 /// the root's content.
-fn three_leaves() -> (PipelineOwner<Idle>, RenderId, [RenderId; 3]) {
+fn three_leaves() -> (PipelineOwner, RenderId, [RenderId; 3]) {
     let (owner, registry) = mount(
         box_node(RenderRepaintBoundary::new()).label("root").child(
             box_node(RenderFlex::row())
@@ -664,7 +660,7 @@ fn a_repaint_keeps_the_chunks_of_the_render_objects_that_owe_no_paint() {
     let mut owner = frame(&mut scene, owner);
     let before = content(&scene, &owner, root);
 
-    update_render_object::<RenderColoredBox, _>(&mut owner, b, |leaf| {
+    update_render_object::<RenderColoredBox>(&mut owner, b, |leaf| {
         leaf.set_color([0.0, 0.0, 1.0, 1.0])
     });
     let owner = frame(&mut scene, owner);
@@ -716,7 +712,7 @@ fn a_chunk_that_moved_in_its_boundary_is_a_new_recording() {
     let before = content(&scene, &owner, root);
 
     // "a" widens, so the row moves "b" and "c" without laying them out.
-    update_render_object::<RenderColoredBox, _>(&mut owner, a, |leaf| {
+    update_render_object::<RenderColoredBox>(&mut owner, a, |leaf| {
         leaf.set_preferred_size(Size::new(20.0, 10.0))
     });
     let owner = frame(&mut scene, owner);
@@ -882,7 +878,7 @@ fn a_chunk_that_read_its_paint_anchor_is_a_new_recording() {
     // The boundary moves against the anchor, and repaints for its sibling.
     dx.store(20.0_f64.to_bits(), std::sync::atomic::Ordering::Relaxed);
     owner.mark_needs_paint(mover);
-    update_render_object::<RenderColoredBox, _>(&mut owner, get("sibling"), |leaf| {
+    update_render_object::<RenderColoredBox>(&mut owner, get("sibling"), |leaf| {
         leaf.set_color([0.0, 0.0, 1.0, 1.0])
     });
     let owner = frame(&mut scene, owner);
@@ -928,12 +924,12 @@ fn the_pass_after_a_failed_one_keeps_no_chunk() {
     let mut owner = frame(&mut scene, owner);
     let before = chunk_version(&content(&scene, &owner, root), a);
 
-    update_render_object::<RenderColoredBox, _>(&mut owner, a, |leaf| {
+    update_render_object::<RenderColoredBox>(&mut owner, a, |leaf| {
         leaf.set_color([0.0, 0.0, 1.0, 1.0])
     });
     armed.store(true, std::sync::atomic::Ordering::Relaxed);
     owner.mark_needs_paint(panics);
-    let (mut owner, failed) = scene.run_frame(owner);
+    let failed = scene.run_frame(&mut owner);
     assert!(
         failed.is_err(),
         "precondition: the pass fails after painting \"a\""

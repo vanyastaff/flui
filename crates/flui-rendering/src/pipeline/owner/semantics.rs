@@ -1,4 +1,4 @@
-//! Semantics phase implementation for `PipelineOwner<Semantics>`.
+//! Semantics phase implementation: the body of `FramePass<Semantics>::run_semantics`.
 //!
 //! # Assembly is mark-scoped, with a full rebuild as the fallback
 //!
@@ -43,14 +43,11 @@ use rustc_hash::FxHashSet;
 
 use crate::{
     error::SemanticsError,
-    pipeline::{
-        phase::{Idle, Semantics},
-        scheduler::PhaseKind,
-    },
+    pipeline::scheduler::PhaseKind,
     storage::{RenderNode, RenderTree},
 };
 
-use super::{PipelineOwner, rebind_phase, subtree_arena::ensure_stack};
+use super::{PipelineOwner, subtree_arena::ensure_stack};
 
 mod clips;
 mod collections;
@@ -92,13 +89,7 @@ pub(crate) fn reset_assembly_visits() {
 // Semantics phase: run_semantics
 // ============================================================================
 
-impl PipelineOwner<Semantics> {
-    /// Completes the frame and returns to [`Idle`].
-    #[must_use]
-    pub fn finish(self) -> PipelineOwner<Idle> {
-        rebind_phase(self)
-    }
-
+impl PipelineOwner {
     /// Updates semantics for all dirty render objects.
     ///
     /// This is phase 4 of the rendering pipeline. During semantics:
@@ -108,7 +99,7 @@ impl PipelineOwner<Semantics> {
     /// Nodes are sorted by depth (shallow first) for top-down traversal.
     /// The geometries of children depend on ancestors' transforms and clips,
     /// so parents must be processed first.
-    pub fn run_semantics(&mut self) -> crate::error::RenderResult<()> {
+    pub(super) fn flush_semantics(&mut self) -> crate::error::RenderResult<()> {
         if !self.semantics_enabled() {
             return Ok(());
         }

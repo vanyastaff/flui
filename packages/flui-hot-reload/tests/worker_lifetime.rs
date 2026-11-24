@@ -47,8 +47,6 @@ pub extern "C" fn flui_worker_init(register: extern "C" fn(u64, *const ()), _req
 #[unsafe(no_mangle)]
 pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
 #[unsafe(no_mangle)]
-pub extern "C" fn flui_worker_version() -> u32 { VALUE }
-#[unsafe(no_mangle)]
 pub extern "C" fn flui_worker_fingerprint() -> u64 { 0xC007_EA01 }
 "#;
     compile_fixture(
@@ -92,6 +90,14 @@ fn worker_lifetime_child(directory: &Path) {
         flui_hot_reload::WorkerPlugin::load(&first_path).expect("first actual worker loads");
     let pointer =
         flui_hot_reload::get_worker_build_ptr(FINGERPRINT).expect("first build registered");
+    let registered_elsewhere =
+        std::thread::spawn(|| flui_hot_reload::get_worker_build_ptr(FINGERPRINT).is_some())
+            .join()
+            .expect("the lookup thread runs to its end");
+    assert!(
+        !registered_elsewhere,
+        "the registry is the owner thread's, not the process's"
+    );
     // SAFETY: the fixture registers Build's exact signature; both artifacts use
     // the pinned compiler, and drops remains alive through every callback Drop.
     let first_build: Build = unsafe { std::mem::transmute(pointer) };

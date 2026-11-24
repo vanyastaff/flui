@@ -607,7 +607,7 @@ that wires what it adds.
      `new_with_capacity` take a `TextContextHandle`, `PipelineOwner` has no `Default`, and a
      layout, intrinsic or dry-query context takes a `TextSource`, so no path builds a context
      of its own. A presentation's pipeline is built inside `PresentationState::new` from
-     `RuntimeCapabilities::text`. A frame on an owner held in a slot (`PipelineOwner::run_frame_in_place`,
+     `RuntimeCapabilities::text`. A frame on an owner held in a slot (`PipelineOwner::run_frame`,
      `PipelineCell::run_frame`) leaves the same owner, and so the same context, in the slot on
      every exit, an unwind included. A pipeline with no UI runtime behind it passes `TextContextHandle::standalone`, a
      context over a collection of its own holding the bundled faces.

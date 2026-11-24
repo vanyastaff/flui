@@ -25,13 +25,16 @@ pub(crate) fn paint_root_carries_the_dpr_scale_and_ops_stay_logical() {
     // 200×200-physical surface).
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
 
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout");
-    let mut owner = owner.into_compositing();
-    owner.run_compositing().expect("compositing");
-    let mut owner = owner.into_paint();
+    owner.layout_pass().run_layout().expect("layout");
+    owner.layout_pass().into_compositing().run_compositing();
     let mut scene = SceneHost::new();
-    let (painted, tree) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    let (painted, tree) = scene.drive(&mut owner, |owner, writer| {
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .run_paint(writer)
+    });
     painted.expect("paint");
 
     let tree = tree.expect("layer tree");

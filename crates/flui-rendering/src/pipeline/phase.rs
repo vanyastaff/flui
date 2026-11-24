@@ -1,39 +1,44 @@
-//! Pipeline phase typestate markers.
+//! The phases of a frame, as type markers of [`FramePass`].
 //!
-//! `PipelineOwner` carries a phantom type parameter `Phase: PipelinePhase`
-//! that lifts the runtime "what frame phase am I in" question into the
-//! type system: each `run_*` method lives only on its phase's impl block,
-//! so calling `run_paint` on `<Idle>` or `run_layout` on `<Compositing>` is
-//! a compile error, not a runtime assert.
+//! A frame lends its [`PipelineOwner`] to one phase at a time: layout,
+//! compositing, paint, semantics (ADR-0399). Each phase's `run_*` method is a
+//! method of its own pass only, so running a phase out of order is a compile
+//! error, not a runtime assert, and while any pass is alive the owner's own
+//! `&mut self` operations are a second borrow the compiler refuses.
 //!
 //! # Compile-time enforcement examples
 //!
-//! `tests/compile_fail.rs` pins the exact diagnostics for the three invalid
-//! phase calls below and for a downstream phase implementation, alongside a
-//! passing constructor and complete phase sequence.
+//! `tests/compile_fail.rs` pins the exact diagnostics for the invalid phase
+//! calls below and for a downstream phase implementation, alongside a passing
+//! constructor and complete phase sequence.
 //!
-//! `run_layout`, `run_compositing`, `run_paint`, and `run_semantics`
-//! each live on the matching phase's impl block. Calling them on the
-//! wrong phase (or on `<Idle>`) fails at compile time:
+//! An owner has no phase methods of its own:
 //!
 //! ```compile_fail
 //! use flui_rendering::pipeline::PipelineOwner;
-//! let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
-//! owner.run_paint();                       // error[E0599]: run_paint is on <PaintPhase> only
+//! let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+//! owner.run_paint();                       // error[E0599]: run_paint is on the paint pass only
 //! ```
 //!
-//! ```compile_fail
-//! use flui_rendering::pipeline::PipelineOwner;
-//! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
-//! let mut owner = owner.into_layout();     // <Layout>
-//! owner.run_paint();                       // error[E0599]: run_paint is on <PaintPhase>, not <Layout>
-//! ```
+//! A pass runs its own phase and no other:
 //!
 //! ```compile_fail
 //! use flui_rendering::pipeline::PipelineOwner;
-//! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
-//! let owner = owner.into_layout();         // <Layout>
-//! let (_owner, _layer) = owner.run_frame(); // error[E0599]: run_frame is on <Idle> only
+//! let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+//! let mut layout = owner.layout_pass();
+//! layout.run_paint();                      // error[E0599]: run_paint is on the paint pass, not layout
+//! ```
+//!
+//! And while a pass borrows the owner, no frame runs on it:
+//!
+//! ```compile_fail
+//! use flui_layer::SceneOwner;
+//! use flui_rendering::pipeline::PipelineOwner;
+//! let mut scene = SceneOwner::new();
+//! let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+//! let layout = owner.layout_pass();
+//! let _ = owner.run_frame(&mut scene.writer()); // error[E0499]: the layout pass still borrows it
+//! drop(layout);
 //! ```
 //!
 //! The phase markers are sealed in this module; downstream crates cannot
@@ -46,59 +51,55 @@
 //! }
 //! ```
 //!
-//! The legitimate transition sequence type-checks and runs. Each `run_*`
-//! returns [`crate::error::RenderResult<()>`]; `?` or
-//! `expect` propagates panics-turned-errors from third-party render
-//! objects:
+//! The legitimate sequence type-checks and runs. `run_layout`, `run_paint` and
+//! `run_semantics` return [`crate::error::RenderResult<()>`] (compositing
+//! cannot fail); `?` or `expect` propagates panics-turned-errors from
+//! third-party render objects:
 //!
 //! ```
 //! use flui_layer::SceneOwner;
 //! use flui_rendering::pipeline::PipelineOwner;
 //! let mut scene = SceneOwner::new();
-//! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone()); // <Idle>
-//! let mut owner = owner.into_layout();     // <Layout>
-//! owner.run_layout().unwrap();
-//! let mut owner = owner.into_compositing();// <Compositing>
-//! owner.run_compositing().unwrap();
-//! let mut owner = owner.into_paint();      // <PaintPhase>
-//! owner.run_paint(&mut scene.writer()).unwrap();
-//! let mut owner = owner.into_semantics();  // <Semantics>
-//! owner.run_semantics().unwrap();
-//! let _owner = owner.finish();             // back to <Idle>
+//! let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+//! let mut layout = owner.layout_pass();
+//! layout.run_layout().unwrap();
+//! let mut compositing = layout.into_compositing();
+//! compositing.run_compositing();
+//! let mut paint = compositing.into_paint();
+//! paint.run_paint(&mut scene.writer()).unwrap();
+//! let mut semantics = paint.into_semantics();
+//! semantics.run_semantics().unwrap();
+//! drop(semantics);                         // the owner is free again
 //! ```
 //!
-//! And the convenience orchestrator. `run_frame` buffers the frame's patch
-//! in the writer it is handed and always returns the owner at [`Idle`]
-//! alongside a [`crate::error::RenderResult`] saying whether it painted:
+//! And the orchestrator. `run_frame` buffers the frame's patch in the writer
+//! it is handed and answers whether it painted:
 //!
 //! ```
 //! use flui_layer::SceneOwner;
 //! use flui_rendering::pipeline::PipelineOwner;
 //! let mut scene = SceneOwner::new();
-//! let owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-//! let (_owner, result) = owner.run_frame(&mut scene.writer());
-//! let _painted: bool = result.unwrap();
+//! let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+//! let _painted: bool = owner.run_frame(&mut scene.writer()).unwrap();
 //! ```
 //!
-//! ## States
+//! ## Passes
 //!
 //! ```text
-//!   Idle ──into_layout()──▶ Layout
-//!     ▲                       │ into_compositing()
-//!     │ finish()               ▼
-//!     │                     Compositing
-//!     │                       │ into_paint()
-//!     │                        ▼
-//!     │                      Paint
-//!     │                       │ into_semantics()
-//!     │                        ▼
-//!     └─────────────────── Semantics
+//!   PipelineOwner ─layout_pass()──▶ Layout
+//!     ▲                               │ into_compositing()
+//!     │ the last pass is dropped      ▼
+//!     │                             Compositing
+//!     │                               │ into_paint()
+//!     │                               ▼
+//!     │                             Paint
+//!     │                               │ into_semantics()
+//!     │                               ▼
+//!     └────────────────────────── Semantics
 //! ```
 //!
-//! Transitions consume `self`, so the borrow checker (not a runtime
-//! flag) enforces that you cannot call `run_paint` before `into_paint`.
-
-use core::marker::PhantomData;
+//! [`FramePass`]: crate::pipeline::FramePass
+//! [`PipelineOwner`]: crate::pipeline::PipelineOwner
 
 // ---------------------------------------------------------------------------
 // Sealed marker trait
@@ -109,11 +110,9 @@ mod sealed {
 }
 
 /// Phase marker trait, sealed so only this crate can name phases.
-///
-/// Implementors are zero-sized marker structs ([`Idle`], [`Layout`],
-/// [`Compositing`], [`PaintPhase`], [`Semantics`]). They never appear in
-/// runtime values -- they live only as `PhantomData<Phase>` on
-/// `PipelineOwner<Phase>`.
+/// Implementors are zero-sized marker structs ([`Layout`], [`Compositing`],
+/// [`PaintPhase`], [`Semantics`]). They never appear in runtime values: they
+/// live only as the `PhantomData` of a [`FramePass`](crate::pipeline::FramePass).
 pub trait PipelinePhase: sealed::Sealed + 'static {
     /// Static name of the phase, for debug printing.
     const NAME: &'static str;
@@ -122,17 +121,6 @@ pub trait PipelinePhase: sealed::Sealed + 'static {
 // ---------------------------------------------------------------------------
 // Phase markers
 // ---------------------------------------------------------------------------
-
-/// Default phase: no frame work in progress.
-///
-/// Insertion / removal / mark-dirty operations are valid in this phase
-/// via the phase-agnostic accessors on `impl<Phase: PipelinePhase>
-/// PipelineOwner<Phase>`. The phase-specific work (`run_layout`,
-/// `run_compositing`, `run_paint`, `run_semantics`) lives elsewhere; on
-/// `<Idle>` only the constructors and `run_frame` are reachable.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Idle;
-
 /// Layout phase: `run_layout` may execute.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Layout;
@@ -153,15 +141,11 @@ pub struct PaintPhase;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Semantics;
 
-impl sealed::Sealed for Idle {}
 impl sealed::Sealed for Layout {}
 impl sealed::Sealed for Compositing {}
 impl sealed::Sealed for PaintPhase {}
 impl sealed::Sealed for Semantics {}
 
-impl PipelinePhase for Idle {
-    const NAME: &'static str = "Idle";
-}
 impl PipelinePhase for Layout {
     const NAME: &'static str = "Layout";
 }
@@ -174,13 +158,3 @@ impl PipelinePhase for PaintPhase {
 impl PipelinePhase for Semantics {
     const NAME: &'static str = "Semantics";
 }
-
-// ---------------------------------------------------------------------------
-// PhaseMarker helper
-// ---------------------------------------------------------------------------
-
-/// `PhantomData<Phase>` helper used by `PipelineOwner<Phase>`.
-///
-/// Always `Copy`/`Default`; carrying it on a struct adds no runtime
-/// footprint.
-pub type PhaseMarker<P> = PhantomData<P>;

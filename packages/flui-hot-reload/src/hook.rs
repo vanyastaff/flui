@@ -29,8 +29,7 @@ use std::{
 use flui_sdk::view::dev_reload::{DevReloadHook, ReloadEvent, ReloadWake};
 
 use crate::{
-    HotReloadDriver, Scene, WorkerPollOutcome, WorkerReloadDriver, strategy::timing,
-    worker_artifact_stamp,
+    HotReloadDriver, Scene, WorkerPollOutcome, WorkerReloadDriver, timing, worker_artifact_stamp,
 };
 
 /// Reloads a host/worker application's worker `cdylib`.
@@ -46,7 +45,10 @@ use crate::{
 /// - **Detached** or dropped, it stops and joins the watcher and drops its
 ///   rebuild registration.
 pub struct WorkerReloadHook {
-    driver: WorkerReloadDriver,
+    /// Made by the first `attach`, on the thread that runs the event loop:
+    /// the worker's builds land in that thread's registry, which is where the
+    /// host's views look them up.
+    driver: Option<WorkerReloadDriver>,
     watch_path: PathBuf,
     watch_interval: Duration,
     /// A worker asked for a rebuild since the last poll.
@@ -70,12 +72,14 @@ impl std::fmt::Debug for WorkerReloadHook {
 
 impl WorkerReloadHook {
     /// A hook for the worker dylib at `path` (or the path its sidecar
-    /// manifest names, as [`WorkerReloadDriver`] resolves it). The worker is
-    /// loaded now if it exists, and on a later poll if it appears.
+    /// manifest names, as [`WorkerReloadDriver`] resolves it). Nothing is
+    /// loaded yet: the worker is loaded when the host attaches the hook, on
+    /// the thread that runs the event loop, and on a later poll if it
+    /// appears then.
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let watch_path = path.into();
         Self {
-            driver: WorkerReloadDriver::new(&watch_path),
+            driver: None,
             watch_path,
             watch_interval: timing::WATCHER_POLL,
             rebuild_requested: Arc::new(AtomicBool::new(false)),
@@ -99,10 +103,15 @@ impl DevReloadHook for WorkerReloadHook {
                 rebuild_wake.wake();
             }));
         }
-        // The driver last read the artifact when the hook was made, maybe long
-        // before: the first poll after attach reads it again, so a rebuild
-        // between the two, which the watcher's baseline below already holds,
-        // is not missed.
+        // The worker's builds register in the registry of the thread that
+        // loads it, so the load waits for the loop's thread, here.
+        let watch_path = &self.watch_path;
+        self.driver
+            .get_or_insert_with(|| WorkerReloadDriver::new(watch_path));
+        // The driver last read the artifact when it loaded, maybe long before
+        // when it outlived an earlier loop: the first poll after attach reads
+        // it again, so a rebuild between the two, which the watcher's baseline
+        // below already holds, is not missed.
         self.artifact_changed.store(true, Ordering::Release);
         self.watcher = ArtifactWatcher::spawn(
             &self.watch_path,
@@ -121,10 +130,13 @@ impl DevReloadHook for WorkerReloadHook {
     }
 
     fn poll(&mut self) -> ReloadEvent {
-        let outcome = if self.artifact_changed.swap(false, Ordering::AcqRel) {
-            self.driver.poll_now()
-        } else {
-            self.driver.poll()
+        let changed = self.artifact_changed.swap(false, Ordering::AcqRel);
+        // A host polls only after `attach`, which makes the driver; a poll
+        // before it has nothing loaded to report on.
+        let outcome = match &mut self.driver {
+            Some(driver) if changed => driver.poll_now(),
+            Some(driver) => driver.poll(),
+            None => WorkerPollOutcome::NoChange,
         };
         event_for(
             outcome,
@@ -307,14 +319,17 @@ impl ScenePluginHook {
         self.pending_font_reset |= updated;
     }
 
+    /// Runs `render` over `scene` with the pending font reset, which a
+    /// successful render clears. An associated function over the one field it
+    /// changes, so it runs while the scene borrows the driver.
     fn render_loaded_scene(
-        &mut self,
+        pending_font_reset: &mut bool,
         scene: &Scene,
         render: &mut dyn FnMut(&Scene, bool) -> bool,
     ) -> bool {
-        let rendered = render(scene, self.pending_font_reset);
+        let rendered = render(scene, *pending_font_reset);
         if rendered {
-            self.pending_font_reset = false;
+            *pending_font_reset = false;
         }
         rendered
     }
@@ -349,19 +364,16 @@ impl DevReloadHook for ScenePluginHook {
         let updated = self.driver.poll();
         self.observe_image_update(updated);
 
-        // SAFETY: `HotReloadDriver::build_scene` reclaims a scene the plugin
-        // allocated, so host and plugin must agree on `Scene`'s layout and
-        // the scene must be dropped before the library is unloaded. The
-        // layout agreement is the ABI-token handshake the loader checked; the
-        // original scene is dropped before this method returns, while the
-        // driver holds the image. The unsafe scene_frame caller additionally
-        // guarantees render retains no cloned image-dependent payloads.
+        // SAFETY: `build_scene`'s one obligation is that no clone of a scene
+        // payload outlives the image, and this method's caller guarantees
+        // that `render` retains none. The scene itself borrows the driver and
+        // is dropped before this method returns.
         #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
         let built = unsafe { self.driver.build_scene(width, height) };
         let Some(scene) = built else {
             return false;
         };
-        let rendered = self.render_loaded_scene(&scene, render);
+        let rendered = Self::render_loaded_scene(&mut self.pending_font_reset, &scene, render);
         drop(scene);
         rendered
     }

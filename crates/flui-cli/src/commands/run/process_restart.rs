@@ -9,8 +9,8 @@ use flui_protocol::build::{BuildState, Diagnostics};
 use flui_protocol::reload::{ReloadTier, Reloaded};
 
 use super::{
-    AppChild, ReloadStrategy, announce_started, reap_exited, spawn_app, stop_and_report,
-    timed_build, with_build,
+    AppChild, DesktopBuild, ReloadStrategy, announce_started, reap_exited, spawn_app,
+    stop_and_report, timed_build, with_build,
 };
 use crate::agent::Session;
 use crate::agent::build_report::BuildReporter;
@@ -19,8 +19,8 @@ use crate::error::{CliError, CliResult};
 use crate::ui;
 /// Rebuild the binary and restart the process on every change.
 pub(super) struct ProcessRestart {
-    /// The `--package` and `--bin` of the binary each build and run names.
-    pub(super) selection: Vec<String>,
+    /// The binary and features each build and run names.
+    pub(super) build: DesktopBuild,
     pub(super) profile: Option<String>,
     pub(super) verbose: bool,
     /// The session the app is started with (its endpoint and token): `--agent`'s, built with the
@@ -111,7 +111,7 @@ impl ProcessRestart {
         let mut failed = None;
         let built = timed_build(|| {
             run_cargo_build(
-                &self.selection,
+                &self.build,
                 self.profile.as_deref(),
                 self.verbose,
                 self.agent.as_ref(),
@@ -139,7 +139,7 @@ impl ProcessRestart {
             session.clear_endpoint();
         }
         let spawned = spawn_app(
-            &self.selection,
+            &self.build,
             self.profile.as_deref(),
             self.verbose,
             self.agent.as_ref(),
@@ -157,7 +157,7 @@ impl ProcessRestart {
 /// shows in the app, and each message's text is written to stderr as cargo
 /// would have written it: in colour on a terminal that takes it.
 fn run_cargo_build(
-    selection: &[String],
+    build: &DesktopBuild,
     profile: Option<&str>,
     verbose: bool,
     agent: Option<&Session>,
@@ -182,7 +182,7 @@ fn run_cargo_build(
         cmd.envs(floors.host_cargo_env());
     }
     // The same features as the run that follows, or cargo builds twice.
-    with_build(&mut cmd, selection, agent);
+    with_build(&mut cmd, build, agent);
     // Cargo's own colour switch decides, then the terminal and `NO_COLOR`.
     let colour = match std::env::var("CARGO_TERM_COLOR").as_deref() {
         Ok("always") => true,

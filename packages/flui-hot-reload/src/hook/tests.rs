@@ -21,6 +21,14 @@ fn fast_hook(path: &Path) -> WorkerReloadHook {
     hook
 }
 
+/// When the hook's driver last read the artifact.
+fn driver_read(hook: &WorkerReloadHook) -> Instant {
+    hook.driver
+        .as_ref()
+        .expect("the test installed a driver")
+        .last_poll
+}
+
 /// A wake that reports each call on a channel.
 fn channel_wake() -> (ReloadWake, mpsc::Receiver<()>) {
     let (sender, receiver) = mpsc::channel();
@@ -124,11 +132,12 @@ fn the_poll_a_watcher_wakes_reads_the_artifact_inside_the_poll_interval() {
     let _registry = crate::dispatch::REBUILD_HOOK_TEST_LOCK.lock();
     let path = scratch_worker("woken-poll");
     let mut hook = fast_hook(&path);
-    hook.driver = WorkerReloadDriver::new(&path).with_poll_interval(Duration::from_secs(3600));
+    hook.driver =
+        Some(WorkerReloadDriver::new(&path).with_poll_interval(Duration::from_secs(3600)));
     let (wake, wakes) = channel_wake();
     hook.attach(wake);
     assert_eq!(hook.poll(), ReloadEvent::Unchanged);
-    let read_before = hook.driver.last_poll;
+    let read_before = driver_read(&hook);
 
     // Renamed into place, as a build lands it: the watcher sees one change.
     let staged = path.with_extension("staged");
@@ -139,13 +148,14 @@ fn the_poll_a_watcher_wakes_reads_the_artifact_inside_the_poll_interval() {
         .expect("the watcher woke the host after the artifact appeared");
     hook.poll();
     assert!(
-        hook.driver.last_poll > read_before,
+        driver_read(&hook) > read_before,
         "the woken poll read the artifact although the interval has not passed"
     );
-    let read_on_wake = hook.driver.last_poll;
+    let read_on_wake = driver_read(&hook);
     hook.poll();
     assert_eq!(
-        hook.driver.last_poll, read_on_wake,
+        driver_read(&hook),
+        read_on_wake,
         "a later poll with no new change keeps to the interval"
     );
 
@@ -161,15 +171,16 @@ fn the_first_poll_after_attach_reads_a_rebuild_made_before_it() {
     let _registry = crate::dispatch::REBUILD_HOOK_TEST_LOCK.lock();
     let path = scratch_worker("before-attach");
     let mut hook = fast_hook(&path);
-    hook.driver = WorkerReloadDriver::new(&path).with_poll_interval(Duration::from_secs(3600));
-    let made = hook.driver.last_poll;
+    hook.driver =
+        Some(WorkerReloadDriver::new(&path).with_poll_interval(Duration::from_secs(3600)));
+    let made = driver_read(&hook);
     std::fs::write(&path, b"a rebuilt worker").expect("write the artifact");
 
     let (wake, _wakes) = channel_wake();
     hook.attach(wake);
     hook.poll();
     assert!(
-        hook.driver.last_poll > made,
+        driver_read(&hook) > made,
         "the first poll after attach read the artifact inside the poll interval"
     );
 
@@ -238,24 +249,40 @@ fn first_render_and_replacement_reset_fonts() {
     let path = scratch_worker("font-reset-generations");
     let mut hook = ScenePluginHook::new(&path);
     let scene = Scene::default();
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(reset, "first image requires its own font namespace");
-        true
-    }));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(reset, "first image requires its own font namespace");
+            true
+        }
+    ));
     hook.observe_image_update(false);
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(!reset, "successful rendering acknowledged the reset");
-        true
-    }));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(!reset, "successful rendering acknowledged the reset");
+            true
+        }
+    ));
     hook.observe_image_update(true);
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(reset, "replacement image may reuse font identifiers");
-        true
-    }));
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(!reset, "replacement reset acknowledged exactly once");
-        true
-    }));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(reset, "replacement image may reuse font identifiers");
+            true
+        }
+    ));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(!reset, "replacement reset acknowledged exactly once");
+            true
+        }
+    ));
     let _ = std::fs::remove_dir_all(path.parent().expect("scratch directory"));
 }
 
@@ -263,19 +290,31 @@ fn failed_render_preserves_font_reset_for_retry() {
     let path = scratch_worker("font-reset-refusal");
     let mut hook = ScenePluginHook::new(&path);
     let scene = Scene::default();
-    assert!(!hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(reset);
-        false
-    }));
+    assert!(!ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(reset);
+            false
+        }
+    ));
     hook.observe_image_update(false);
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(reset, "unchanged image must still retry the failed reset");
-        true
-    }));
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(!reset);
-        true
-    }));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(reset, "unchanged image must still retry the failed reset");
+            true
+        }
+    ));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(!reset);
+            true
+        }
+    ));
     let _ = std::fs::remove_dir_all(path.parent().expect("scratch directory"));
 }
 
@@ -284,24 +323,36 @@ fn panicking_render_preserves_font_reset_for_retry() {
     let mut hook = ScenePluginHook::new(&path);
     let scene = Scene::default();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        hook.render_loaded_scene(&scene, &mut |_, reset| {
-            assert!(reset);
-            panic!("render failure");
-        });
+        ScenePluginHook::render_loaded_scene(
+            &mut hook.pending_font_reset,
+            &scene,
+            &mut |_, reset| {
+                assert!(reset);
+                panic!("render failure");
+            },
+        );
     }));
     assert!(outcome.is_err());
     hook.observe_image_update(false);
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(
-            reset,
-            "unwinding render cannot acknowledge the namespace reset"
-        );
-        true
-    }));
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(!reset);
-        true
-    }));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(
+                reset,
+                "unwinding render cannot acknowledge the namespace reset"
+            );
+            true
+        }
+    ));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(!reset);
+            true
+        }
+    ));
     let _ = std::fs::remove_dir_all(path.parent().expect("scratch directory"));
 }
 
