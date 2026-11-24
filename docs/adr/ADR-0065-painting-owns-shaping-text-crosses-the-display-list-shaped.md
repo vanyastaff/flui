@@ -18,6 +18,9 @@ ellipsis. One shaper, one font door, and a shaped paragraph on the wire make
 - **Superseded-by:** [ADR-0309](ADR-0309-every-text-paint-attribute-crosses-the-display-list.md)
   for Part 2's "one `Paragraph` op on the wire" only: a paragraph also crosses as the shadows
   its spans cast and the rectangles of their backgrounds.
+  [ADR-0397](ADR-0397-an-icon-face-is-in-a-binary-only-where-a-package-or-the-application-asks-for-it.md)
+  for the Decision's clause that each icon family is embedded behind `bundled-fonts`: an icon
+  face has a feature of its own.
 - **Deciders:** @vanyastaff
 - **Original scope (2026-09-18):** `flui-painting`'s font-system surface (`SharedFontSystem`,
   `Shaper`, `fonts`), its `TextLayout`/`TextPainter` paint path, the

@@ -781,6 +781,13 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - Parley 0.13 shapes with `skrifa` 0.49 and `read-fonts` 0.46, while `swash` 0.2.10, the latest release, which rasterizes FLUI's glyphs (`crates/flui-painting/src/glyphs/swash.rs`), caps `skrifa` at 0.44 and so brings `read-fonts` 0.41 too. The facade's graph holds both pairs (`perf/size.toml`'s `crates_*` counts them).
 - The entry closes when one `skrifa` serves both: a `swash` release that takes `skrifa` 0.49, or glyph rasterization moved onto `skrifa`'s outlines, with `perf/size.toml` lowered by the two packages and the `size` job's bytes by what they cost.
 
+### An icon of a face the build does not embed draws boxes with no word why
+
+> **Environments:** all · **Who it hurts:** Authors who draw `Icon` with "Material Icons" or "CupertinoIcons" and turn on neither the catalog nor the facade's `material-icons` or `cupertino-icons` · **Parity:** none (diagnostics)
+
+- An icon family is in a binary only under its feature (ADR-0397), and a host never supplies one. A style naming either family in a build that embeds no face for it, and on whose collection the application registered none, shapes every codepoint to `.notdef`; nothing tells the author which feature brings the face. `Icon`'s documentation and the facade's feature table are the only pointers.
+- The entry closes when shaping a style whose family is one of `EMBEDDED_ICON_FAMILIES` on a collection that does not hold it reports, once per collection and family, a diagnostic naming the feature, with a test of that report.
+
 ### Most crates still hash ids with SipHash
 
 > **Environments:** all · **Who it hurts:** Every frame that looks up an id in a std `HashMap` · **Parity:** none (performance)

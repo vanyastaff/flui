@@ -23,7 +23,9 @@ exclude = ["/ARCHITECTURE.md", "/assets"]
 # The package-author surface (ADR-0088 §4): the widget spine, the value types,
 # `Material`'s render object through `pipeline`, and the derives' runtime
 # paths. Material names no internal crate in a normal dependency.
-flui-sdk = { workspace = true }
+# `material-icons` embeds the face of the family the icons here name
+# ("Material Icons"; ADR-0397).
+flui-sdk = { workspace = true, features = ["material-icons"] }
 tracing = { workspace = true }
 
 # Test harnesses only; the library build never sees them. Tests name the

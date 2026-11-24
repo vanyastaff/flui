@@ -134,6 +134,109 @@ fn compile_consumer(dependencies: toml::Table, source: &str) -> Output {
     run_consumer(dependencies, None, source, "check")
 }
 
+/// The features of `flui-painting` in the normal graph of a consumer that
+/// depends on `package` (the facade, or `flui-sdk` as a package does), at
+/// `path`, with its defaults and `features`.
+fn painting_features_of_a_consumer(package: &str, path: &Path, features: &[&str]) -> Vec<String> {
+    let mut framework = dependency(package, path, true);
+    framework
+        .as_table_mut()
+        .expect("framework dependency table")
+        .insert(
+            "features".into(),
+            toml::Value::Array(features.iter().map(|&feature| feature.into()).collect()),
+        );
+    let mut dependencies = toml::Table::new();
+    dependencies.insert(package.into(), framework);
+    let project = consumer_project(dependencies, None, "");
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "tree",
+            "--offline",
+            "--edges",
+            "normal",
+            "--prefix",
+            "none",
+            "--format",
+            "{p}|{f}",
+        ])
+        .current_dir(project.path())
+        .output()
+        .expect("inspect the consumer's feature graph");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let graph = String::from_utf8_lossy(&output.stdout);
+    let painting = graph
+        .lines()
+        .find(|line| line.starts_with("flui-painting v"))
+        .unwrap_or_else(|| panic!("no `flui-painting` in the graph:\n{graph}"));
+    let (_package, enabled) = painting
+        .split_once('|')
+        .expect("the format separates the package from its features");
+    enabled
+        .split(',')
+        .filter(|feature| !feature.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// An icon face is in a consumer's binary only where the catalog that draws
+/// with it, or the facade feature of its name, asks for it (ADR-0397): the
+/// default facade embeds the text face alone, and the `cupertino` catalog,
+/// which draws no glyph of its family, does not bring the Cupertino face. A
+/// package on `flui-sdk` alone gets each face from the SDK feature of its
+/// name.
+#[test]
+fn an_icon_face_reaches_a_consumer_only_with_its_catalog_or_its_feature() {
+    let Some(root) = checkout_root() else { return };
+    let sdk = root.join("crates/flui-sdk");
+    for (package, path, features, material, cupertino) in [
+        ("flui", root, &[][..], false, false),
+        ("flui", root, &["material"][..], true, false),
+        ("flui", root, &["cupertino"][..], false, false),
+        ("flui", root, &["material-icons"][..], true, false),
+        ("flui", root, &["cupertino-icons"][..], false, true),
+        ("flui", root, &["material", "cupertino"][..], true, false),
+        (
+            "flui",
+            root,
+            &["cupertino", "cupertino-icons"][..],
+            false,
+            true,
+        ),
+        ("flui-sdk", sdk.as_path(), &[][..], false, false),
+        (
+            "flui-sdk",
+            sdk.as_path(),
+            &["material-icons"][..],
+            true,
+            false,
+        ),
+        (
+            "flui-sdk",
+            sdk.as_path(),
+            &["cupertino-icons"][..],
+            false,
+            true,
+        ),
+    ] {
+        let enabled = painting_features_of_a_consumer(package, path, features);
+        let has = |feature: &str| enabled.iter().any(|name| name == feature);
+        assert!(
+            has("bundled-fonts"),
+            "the text face with {package} {features:?}: {enabled:?}"
+        );
+        assert_eq!(
+            (has("material-icons"), has("cupertino-icons")),
+            (material, cupertino),
+            "the icon faces with {package} {features:?}: {enabled:?}"
+        );
+    }
+}
+
 #[test]
 fn ordinary_facade_graph_excludes_test_support() {
     let Some(root) = checkout_root() else { return };

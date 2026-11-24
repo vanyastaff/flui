@@ -230,8 +230,9 @@ nothing out: it is one fontdb scan of the host with the generic families and
 fallback lists picked for it, a value the app's shared engine services build
 and drop once `FontCollection::with_host_fonts` has fed the collection from it
 (decision 17). No font state is process-global. A registration loads the
-collection (decision 11). The embedded baseline faces (`fonts.rs`,
-`bundled-fonts`) are in every collection, and bind its generics (decision 16).
+collection (decision 11). The embedded faces (`fonts.rs`) are in every collection: with
+`bundled-fonts` the text face, which binds its generics (decision 16), and each icon face with
+its own feature, which the package that draws with the family turns on (ADR-0397).
 
 The raster side is `glyphs` (ADR-0092 §5). What crosses to the engine is the
 `ShapedParagraph`; the engine's atlas registers each run's face in its
@@ -521,7 +522,7 @@ holds, degrading to the sans-serif generic only when none of them is present. Th
 limit is precisely locatable — a family that is present
 but lacks the glyph still stops the walk: `font_family:
 "CupertinoIcons", font_family_fallback: ["Noto Sans"]` on Latin text renders tofu,
-because `CupertinoIcons` IS held. Closing that needs per-run family splitting above
+because `CupertinoIcons` IS held (in a build with `cupertino-icons`). Closing that needs per-run family splitting above
 the style, which is tracked separately.
 
 Locked by the table `family_resolution` (`src/text_layout/context.rs`). Its row
@@ -896,7 +897,9 @@ a file that panics on every read is skipped; a file replaced between that
 read and the registration is not covered. The scan is fontdb's: the platform's font
 directories, and fontconfig's configuration where there is one. The
 collection holds the bundled faces, then every face the scan found whose
-family it does not already hold, read from the same files. A generic it
+family it does not already hold and that is not "Material Icons" or
+"CupertinoIcons" (ADR-0397 §2: an icon draws the face the build embeds or the
+app registers, never a host copy), read from the same files. A generic it
 leaves unbound takes the scan's pick for it, system-ui taking sans-serif's
 (decision 16). A style's family is resolved by one rule, `resolve_family_name`
 (decision 8), over the families the collection holds, spelled exactly:
@@ -955,9 +958,12 @@ paint and carets, so one set of lists, FLUI's, decides the face everywhere.
   sans-serif family alone there; unverified, since Android is clippy-only here.
 - A family name fontdb records in another language only (fontique keeps the
   English or first name) is not found by the family rule's exact match.
-- A host copy of a bundled family (Roboto, Material Icons, CupertinoIcons) is
-  not fed, so one family never mixes two copies; an app that wants a host's
-  own icon font registers it under another family name.
+- A host copy of a family the build embeds (Roboto, under `bundled-fonts`) is
+  not fed, so one family never mixes two copies. Material Icons and
+  CupertinoIcons are never fed, embedded or not (`EMBEDDED_ICON_FAMILIES`):
+  an icon draws the face FLUI pins or the one the app registers, never the
+  copy a host happens to have; an app that wants a host's own icon font
+  registers it under another family name.
 - The first frame renders with the bundled faces; the host's arrive when
   the feed lands, and text measured before is laid out again then, as after
   a registration. A family the collection holds when the feed starts is not

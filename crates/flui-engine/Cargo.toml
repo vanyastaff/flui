@@ -145,7 +145,7 @@ flui-objects = { workspace = true }
 # `testing::heap::CountingAllocator`, the global allocator of the allocation tests.
 flui-foundation = { workspace = true, features = ["testing"] }
 flui-rendering = { workspace = true, features = ["testing"] }
-flui-painting = { workspace = true, features = ["testing"] }
+flui-painting = { workspace = true, features = ["testing", "material-icons"] }
 pollster = { workspace = true }
 criterion = { workspace = true }
 # PNG encoding for GPU readback frame dumps (`wgpu::readback_dump` test

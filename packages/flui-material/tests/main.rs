@@ -89,6 +89,9 @@ fn gesture_alternatives() {
 #[path = "icon_button.rs"]
 mod icon_button;
 
+#[path = "icon_face.rs"]
+mod icon_face;
+
 #[path = "ink_ripple.rs"]
 mod ink_ripple;
 
