@@ -90,6 +90,10 @@ pub struct ParagraphLayout {
     /// The kept lines by run and grapheme, for `TextPainter::line_layouts`;
     /// built on the first query.
     pub(super) line_layouts: OnceLock<Vec<crate::typography::TextLineLayout>>,
+    /// The paragraph's metrics, read from its lines on the first query: the
+    /// layout validates them, the measurement reports them and the painted
+    /// paragraph is sized by them, and the lines never change after shaping.
+    metrics: OnceLock<TextLayoutResult>,
     /// The colour each paint run paints with, by the run's index in its
     /// glyph runs' [`SpanBrush`]: a colour is not shaped, so the layout keeps
     /// it beside the runs and [`recolor`](Self::recolor) replaces it.
@@ -160,6 +164,11 @@ impl ParagraphLayout {
     /// with the baseline at `0.8 ×` that height.
     #[must_use]
     pub fn metrics(&self) -> TextLayoutResult {
+        self.metrics.get_or_init(|| self.measure_metrics()).clone()
+    }
+
+    /// [`Self::metrics`], read from the lines.
+    fn measure_metrics(&self) -> TextLayoutResult {
         let Some(first) = self.layout.get(0) else {
             return TextLayoutResult {
                 width: f64::from(self.alignment_width),
@@ -1141,6 +1150,7 @@ impl TextContext {
             kept_text,
             placed: OnceLock::new(),
             line_layouts: OnceLock::new(),
+            metrics: OnceLock::new(),
             run_colors: shaped.run_colors.into_boxed_slice(),
             source_spans: paragraph.spans.len(),
         };
