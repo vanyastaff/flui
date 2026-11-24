@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use std::rc::{Rc, Weak};
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{PresentationAddress, UiRuntimeId};
 use flui_scheduler::AppLifecycleState;
 
@@ -208,6 +209,18 @@ impl RuntimeWork {
     }
 
     pub(super) fn run(self, core: &OwnerCore, runtime: &mut UiRuntime, effects: &dyn OwnerEffects) {
+        let mut first = FirstPanic::new();
+        first.contain(|| self.run_in_turn(core, runtime, effects));
+        // The dispatch's turn has closed. Every entry of a host's loop comes through here, and a
+        // turn the runtime ran inside it was not the outermost: a host that composes no half of
+        // its own has the waits that read settledness answered now, from the runtime's
+        // (ADR-0400 §3), behind the work's own failure.
+        first.contain(|| runtime.answer_settled_from_own_half());
+        first.resume();
+    }
+
+    /// The work itself, inside one geometry turn.
+    fn run_in_turn(self, core: &OwnerCore, runtime: &mut UiRuntime, effects: &dyn OwnerEffects) {
         let _geometry_turn = runtime.begin_geometry_turn();
         match self {
             Self::Initialize(initial) => runtime.enter(|runtime| {

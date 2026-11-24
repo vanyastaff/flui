@@ -19,6 +19,7 @@ use flui_protocol::wait::{
 };
 use flui_protocol::{locator::Locator, tree::WindowId};
 use flui_runtime::dev_agent::{AgentWindowSource, DevAgentHost};
+use flui_runtime::owner::{OwnerEffects, OwnerHost, RecoveryState, RuntimeOperation};
 use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::SampledClock;
 use flui_runtime::settledness::{HostHalf, TURNS_AT_ONE_INSTANT, Unsettled};
@@ -720,4 +721,109 @@ fn a_settlement_answers_settled_waits_behind_its_own_first_failure() {
             row.name
         );
     }
+}
+
+/// A runner's owner: a frame it delivers pumps the runtime at the clock's reading into a sink
+/// that shows every frame; it installs nothing and retires nothing.
+struct OwnerFrames(ManualClock);
+
+impl OwnerEffects for OwnerFrames {
+    fn runtime_lifecycle(
+        &self,
+        _: flui_foundation::UiRuntimeId,
+        _: flui_scheduler::AppLifecycleState,
+    ) {
+    }
+    fn runtimes_stopped(&self, _: RecoveryState) {}
+    fn retire_host(&self, _: &[flui_foundation::PresentationAddress], _: RecoveryState) {}
+    fn commit_install(
+        &self,
+        _: flui_runtime::owner::InstallToken,
+        _: RecoveryState,
+    ) -> Option<flui_runtime::owner::InstallInitialization> {
+        panic!("no pending install");
+    }
+    fn finish_install(
+        &self,
+        _: flui_foundation::PresentationAddress,
+        _: flui_runtime::owner::InitializationOutcome,
+        _: RecoveryState,
+    ) {
+    }
+    fn cancel_install(&self, _: flui_runtime::owner::InstallToken, _: RecoveryState) {
+        panic!("no pending install");
+    }
+    fn resize_surface(
+        &self,
+        _: flui_foundation::PresentationAddress,
+        _: flui_foundation::geometry::WindowMetrics,
+    ) {
+    }
+    fn frame(&self, _: flui_foundation::PresentationAddress, runtime: &mut UiRuntime) {
+        let _ = runtime.pump(&mut SampledClock(self.0.now()), &mut Shown);
+    }
+    fn retire_presentation(
+        &self,
+        _: flui_foundation::PresentationAddress,
+        _: Option<flui_foundation::PresentationAddress>,
+    ) {
+    }
+    fn after_turn(&self, _: RecoveryState) {}
+    fn request_continuation(&self) -> bool {
+        true
+    }
+}
+
+/// On a runner every turn comes through an owner dispatch, which holds the runtime's turn open
+/// around its work, so no turn the runtime runs inside it is the outermost: a runtime whose host
+/// composes no half answers its settled waits where the dispatch ends. A settled wait is answered
+/// once the frames a dispatch delivered leave nothing listed, and a wait that never holds is
+/// answered at its deadline by the background turn delivered then.
+///
+/// Fails against a runtime that answers only where a turn it ran by itself ends: inside a
+/// dispatch neither wait is ever answered.
+#[test]
+fn an_owner_dispatch_answers_the_settled_waits_of_a_host_without_a_half() {
+    let clock = ManualClock::new();
+    let (runtime, _held, window) = mounted_runtime(&clock, false);
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("the runtime publishes")
+        .commit();
+    let effects = OwnerFrames(clock.clone());
+    let mut settled = wait_until(&window, Condition::Settled, 5_000);
+    let mut never = wait_until(&window, missing(), 200);
+
+    let frames = owner.frame_dispatcher(address).expect("frame authority");
+    let mut answered = None;
+    for _ in 0..8 {
+        clock.advance(Duration::from_millis(16));
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("the owner admits the frame");
+        answered = settled.try_take();
+        if answered.is_some() {
+            break;
+        }
+    }
+    let outcome = answered
+        .expect("a frame dispatch's end answered the settled wait")
+        .expect("an answer");
+    assert_eq!(outcome.end, WaitEnd::Satisfied);
+    assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
+    assert!(never.try_take().is_none(), "before its deadline");
+
+    clock.advance(Duration::from_millis(200));
+    owner
+        .runtime_dispatcher(address.ui_runtime_id)
+        .expect("runtime authority")
+        .deliver(RuntimeOperation::Background, &effects)
+        .expect("the owner admits the background turn");
+    let outcome = never
+        .try_take()
+        .expect("the background dispatch's end answered the wait at its deadline")
+        .expect("an answer");
+    assert_eq!(outcome.end, WaitEnd::Unsatisfied);
+    assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
 }

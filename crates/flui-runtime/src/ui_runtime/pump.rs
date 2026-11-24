@@ -449,12 +449,12 @@ impl UiRuntime {
             first.contain(|| {
                 self.deliver_sampling_reports_if_unleased();
             });
-            // A host that composes no half of its own has its settled waits answered here,
-            // from the runtime's half alone; a composing host answers them after its own steps
-            // (ADR-0400 §3). A reply's delivery is user code, contained behind the turn's own
-            // failure.
-            first.contain(|| self.answer_settled_from_own_half());
         }
+        // A host that composes no half of its own has its settled waits answered where its
+        // outermost turn ends: here when this turn was it, otherwise where the enclosing turn
+        // or owner dispatch ends (ADR-0400 §3). An answer pass can unwind, behind the turn's
+        // own failure.
+        first.contain(|| self.answer_settled_from_own_half());
         if let Some(failure) = first.into_payload() {
             resume_unwind(failure);
         }

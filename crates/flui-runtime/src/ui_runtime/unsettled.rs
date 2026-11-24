@@ -122,8 +122,9 @@ impl UiRuntime {
     ///
     /// A runtime whose host does not compose a half
     /// ([`RuntimeHostServices::composes_host_half`](super::RuntimeHostServices::composes_host_half))
-    /// answers with [`HostHalf::Absent`] itself at the end of each turn and of each frame
-    /// settlement ([`Self::settle_frame`]), which discharges a cause with no turn after it.
+    /// answers with [`HostHalf::Absent`] itself wherever its outermost turn ends: an owner
+    /// dispatch, a turn its host ran outside one, and a frame settlement ([`Self::settle_frame`])
+    /// outside any turn, which discharges a cause with no turn after it.
     ///
     /// # Panics
     ///
@@ -147,12 +148,17 @@ impl UiRuntime {
                 .any(|presentation| !presentation.agent_waits.borrow().is_empty())
     }
 
-    /// A runtime whose host composes no half answers its settled waits from its own: at the end
-    /// of an owner turn, and after a frame's settlement, which discharges the frame in flight
-    /// with no turn after it. On a host that composes one this does nothing: that host answers
-    /// after its own steps (ADR-0400 §3).
-    pub(super) fn answer_settled_from_own_half(&self) {
-        if self.composes_host_half || !self.awaits_settled_answer() {
+    /// A runtime whose host composes no half answers its settled waits from its own, wherever
+    /// its outermost turn ends: an owner dispatch ([`crate::owner`]), a turn a host ran by
+    /// itself, and a frame's settlement outside any turn, which discharges the frame in flight
+    /// with no turn after it. It does nothing while a turn is still open, whose end answers, and
+    /// nothing on a host that composes a half: that host answers after its own steps
+    /// (ADR-0400 §3).
+    pub(crate) fn answer_settled_from_own_half(&self) {
+        if self.composes_host_half
+            || self.geometry_turn.borrow().is_some()
+            || !self.awaits_settled_answer()
+        {
             return;
         }
         let now = flui_foundation::MonotonicClock::now(&self.clock);
