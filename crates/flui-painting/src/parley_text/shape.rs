@@ -90,10 +90,6 @@ pub struct ParagraphLayout {
     /// The kept lines by run and grapheme, for `TextPainter::line_layouts`;
     /// built on the first query.
     pub(super) line_layouts: OnceLock<Vec<crate::typography::TextLineLayout>>,
-    /// The paragraph's metrics, read from its lines on the first query: the
-    /// layout validates them, the measurement reports them and the painted
-    /// paragraph is sized by them, and the lines never change after shaping.
-    metrics: OnceLock<TextLayoutResult>,
     /// The colour each paint run paints with, by the run's index in its
     /// glyph runs' [`SpanBrush`]: a colour is not shaped, so the layout keeps
     /// it beside the runs and [`recolor`](Self::recolor) replaces it.
@@ -164,11 +160,6 @@ impl ParagraphLayout {
     /// with the baseline at `0.8 ×` that height.
     #[must_use]
     pub fn metrics(&self) -> TextLayoutResult {
-        self.metrics.get_or_init(|| self.measure_metrics()).clone()
-    }
-
-    /// [`Self::metrics`], read from the lines.
-    fn measure_metrics(&self) -> TextLayoutResult {
         let Some(first) = self.layout.get(0) else {
             return TextLayoutResult {
                 width: f64::from(self.alignment_width),
@@ -196,26 +187,43 @@ impl ParagraphLayout {
 
     /// The width and height of the kept lines.
     pub(super) fn kept_extent(&self) -> (f32, f32) {
+        (self.kept_width(), self.kept_height())
+    }
+
+    /// The widest kept line, trailing whitespace excluded (Parley's rule):
+    /// the one extent that walks every kept line's clusters.
+    fn kept_width(&self) -> f32 {
         let kept = self.kept();
         if kept < self.layout.len() {
-            // The layout's own width and height cover every line; a
-            // truncated paragraph measures only the lines it keeps, with
-            // Parley's rule (trailing whitespace excluded from the width).
+            // The layout's own width covers every line; a truncated
+            // paragraph measures only the lines it keeps.
             self.layout
                 .lines()
                 .take(kept)
-                .fold((0.0_f32, 0.0_f32), |(width, height), line| {
-                    let metrics = line.metrics();
-                    let extent = metrics.inline_min_coord + Self::visible_line_width(&line);
-                    (width.max(extent), height + metrics.line_height)
-                })
+                .map(|line| line.metrics().inline_min_coord + Self::visible_line_width(&line))
+                .fold(0.0_f32, f32::max)
         } else {
-            let width = self
-                .layout
+            self.layout
                 .lines()
                 .map(|line| Self::visible_line_width(&line))
-                .fold(0.0_f32, f32::max);
-            (width, self.layout.height())
+                .fold(0.0_f32, f32::max)
+        }
+    }
+
+    /// The height of the kept lines, or of one line box of the paragraph's
+    /// line height when the layout has no line: the height
+    /// [`metrics`](Self::metrics) reports, read from line metrics alone.
+    fn kept_height(&self) -> f32 {
+        let kept = self.kept();
+        if self.layout.get(0).is_none() {
+            self.line_height
+        } else if kept < self.layout.len() {
+            self.layout
+                .lines()
+                .take(kept)
+                .fold(0.0_f32, |height, line| height + line.metrics().line_height)
+        } else {
+            self.layout.height()
         }
     }
 
@@ -484,7 +492,6 @@ impl ParagraphLayout {
                 .filter(|color| Some(*color) != root)
         };
         let sources = casts.map(|_| SpanSourceMap::of(&self.spans));
-        let metrics = self.metrics();
         // Sized from the kept lines up front, so a paragraph that casts every
         // glyph fills each list once and boxes it without reallocating. A
         // paragraph names a face or two: they are found by a scan.
@@ -598,7 +605,11 @@ impl ParagraphLayout {
             .collect::<Box<[SpanDescription]>>();
         ShapedParagraph {
             text: self.text.as_str().into(),
-            size: Size::new(metrics.width, metrics.height),
+            // The box `metrics` reports, without the walk its widest line takes.
+            size: Size::new(
+                f64::from(self.alignment_width),
+                f64::from(self.kept_height()),
+            ),
             baselines: baselines.into(),
             ink: ink.finish(),
             faces: faces.into(),
@@ -1038,8 +1049,10 @@ fn validate_request(paragraph: &ParagraphSpec<'_>) -> Result<(), TextLayoutError
     Ok(())
 }
 
-fn validate_layout(paragraph: &ParagraphLayout) -> Result<(), TextLayoutError> {
-    let metrics = paragraph.metrics();
+fn validate_layout(
+    paragraph: &ParagraphLayout,
+    metrics: &TextLayoutResult,
+) -> Result<(), TextLayoutError> {
     let values = [
         metrics.width,
         metrics.height,
@@ -1102,6 +1115,15 @@ impl TextContext {
         &mut self,
         paragraph: &ParagraphSpec<'_>,
     ) -> Result<ParagraphLayout, TextLayoutError> {
+        self.shape_measured(paragraph).map(|(layout, _)| layout)
+    }
+
+    /// [`shape`](Self::shape), with the metrics the layout was validated by:
+    /// the same value [`ParagraphLayout::metrics`] reads again from its lines.
+    pub(crate) fn shape_measured(
+        &mut self,
+        paragraph: &ParagraphSpec<'_>,
+    ) -> Result<(ParagraphLayout, TextLayoutResult), TextLayoutError> {
         validate_request(paragraph)?;
         let max_lines = paragraph.max_lines.filter(|&lines| lines > 0);
         let mut shaped = self.shape_spans(paragraph, paragraph.spans, SpanSources::Own)?;
@@ -1150,12 +1172,12 @@ impl TextContext {
             kept_text,
             placed: OnceLock::new(),
             line_layouts: OnceLock::new(),
-            metrics: OnceLock::new(),
             run_colors: shaped.run_colors.into_boxed_slice(),
             source_spans: paragraph.spans.len(),
         };
-        validate_layout(&layout)?;
-        Ok(layout)
+        let metrics = layout.metrics();
+        validate_layout(&layout, &metrics)?;
+        Ok((layout, metrics))
     }
 
     /// `shaped` cut after its `max_lines`-th line with `ellipsis` appended,

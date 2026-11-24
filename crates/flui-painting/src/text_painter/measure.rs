@@ -52,14 +52,13 @@ impl TextPainter {
 
         // One layout measures and paints: the paragraph the display list
         // carries is built from the layout the metrics are read from.
-        let layout = self.parley_paragraph(
+        let (layout, result) = self.parley_paragraph(
             text_ctx,
             &resolved,
             shape_widths.0,
             shape_widths.1,
             LineOverflow::Enforce,
         )?;
-        let result = layout.metrics();
         let metrics = Self::metrics_from(&result, min_width);
         let root = self
             .text
@@ -131,7 +130,8 @@ impl TextPainter {
             .collect::<Vec<Option<crate::styling::Color>>>()
     }
 
-    /// Shapes resolved typography on Parley through `text_ctx`. Every span
+    /// Shapes resolved typography on Parley through `text_ctx`, with the
+    /// layout's metrics read once from its lines. Every span
     /// carries its merged style; the root's style, scaled as a span's is, is
     /// the paragraph default, so a paragraph with no run (empty text)
     /// measures the line its style would, family and line height included.
@@ -149,12 +149,12 @@ impl TextPainter {
         min_width: f32,
         max_width: Option<f32>,
         line_overflow: LineOverflow,
-    ) -> Result<crate::parley_text::ParagraphLayout, TextLayoutError> {
+    ) -> Result<(crate::parley_text::ParagraphLayout, TextLayoutResult), TextLayoutError> {
         let (max_lines, ellipsis) = match line_overflow {
             LineOverflow::Enforce => (self.max_lines.map(|n| n as usize), self.ellipsis.as_deref()),
             LineOverflow::IgnoreForWidthIntrinsic => (None, None),
         };
-        text_ctx.shape(&crate::parley_text::ParagraphSpec {
+        text_ctx.shape_measured(&crate::parley_text::ParagraphSpec {
             font_weight_adjustment: self.font_weight_adjustment,
             spans: &text.spans,
             default_style: text.default_style.as_ref(),
@@ -198,6 +198,7 @@ impl TextPainter {
                 None,
                 LineOverflow::IgnoreForWidthIntrinsic,
             )?
+            .0
             .content_widths();
         self.floored_at_ellipsis(text_ctx, text, widths)
     }
@@ -240,7 +241,7 @@ impl TextPainter {
         let first = text.spans.first().and_then(|(_, style)| style.clone());
         let spans = vec![(ellipsis.to_string(), first)];
         Ok(text_ctx
-            .shape(&crate::parley_text::ParagraphSpec {
+            .shape_measured(&crate::parley_text::ParagraphSpec {
                 font_weight_adjustment: self.font_weight_adjustment,
                 spans: &spans,
                 default_style: text.default_style.as_ref(),
@@ -253,7 +254,7 @@ impl TextPainter {
                 max_lines: None,
                 ellipsis: None,
             })?
-            .metrics()
+            .1
             .width)
     }
 
