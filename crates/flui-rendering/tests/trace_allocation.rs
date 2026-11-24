@@ -6,58 +6,15 @@
 //! subscriber that admits TRACE and formats the fields must raise it, which shows the witness
 //! sees the instrumentation at all.
 
-use std::{
-    alloc::{GlobalAlloc, Layout, System},
-    cell::Cell,
-    fmt::Write as _,
-};
+use std::fmt::Write as _;
 
 use flui_foundation::geometry::Size;
+use flui_foundation::testing::heap::{CountingAllocator, HeapCounts};
 use flui_objects::{RenderColoredBox, RenderPadding};
 use flui_rendering::{constraints::BoxConstraints, pipeline::PipelineOwner};
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Dispatch, Event, Level, Metadata, Subscriber};
-
-thread_local! {
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
-}
-
-struct CountingAllocator;
-
-fn record() {
-    let _ = ALLOCATIONS.try_with(|counter| counter.set(counter.get().saturating_add(1)));
-}
-
-// SAFETY: every operation delegates the caller's original pointer, layout and
-// requested size to System; recording does not allocate or retain any pointer.
-#[expect(unsafe_code, reason = "a counting `GlobalAlloc` is an unsafe impl")]
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        record();
-        // SAFETY: the caller supplied the allocation layout required by System.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        record();
-        // SAFETY: the caller supplied the allocation layout required by System.
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        record();
-        // SAFETY: System owns the pointer; the caller supplied its layout and
-        // valid replacement size, forwarded without modification.
-        unsafe { System.realloc(ptr, layout, size) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: System owns the pointer with this exact layout.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -101,7 +58,7 @@ impl Subscriber for FormattingSubscriber {
 }
 
 /// Allocations of eight relayouts of a warm three-deep tree under `dispatch`.
-fn relayout_allocations(dispatch: &Dispatch) -> usize {
+fn relayout_allocations(dispatch: &Dispatch) -> u64 {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root = owner.set_root_render_object(Box::new(RenderPadding::all(1.0)));
     let middle = owner
@@ -120,9 +77,9 @@ fn relayout_allocations(dispatch: &Dispatch) -> usize {
         let mut total = 0;
         for _ in 0..8 {
             owner.mark_needs_layout(root);
-            let before = ALLOCATIONS.with(Cell::get);
+            let before = HeapCounts::now().allocations;
             owner.run_layout().expect("the tree lays out");
-            total += ALLOCATIONS.with(Cell::get) - before;
+            total += HeapCounts::now().allocations - before;
         }
         total
     })

@@ -367,7 +367,7 @@ fn is_below_the_asker(frame: &Frame) -> bool {
         || file.contains("cargo/registry/")
         || file.contains("cargo/git/")
         // The counting allocator itself.
-        || file.ends_with("flui-testing/src/heap.rs")
+        || file.ends_with("flui-foundation/src/testing/heap.rs")
         || frame.foreign
         || file == "???"
 }
@@ -444,7 +444,7 @@ mod tests {
               ],
               "ftbl": [
                 "[root]",
-                "0x1: <flui_testing::heap::CountingAllocator as core::alloc::global::GlobalAlloc>::alloc (crates/flui-testing/src/heap.rs:90:9)",
+                "0x1: <flui_foundation::testing::heap::CountingAllocator as core::alloc::global::GlobalAlloc>::alloc (crates/flui-foundation/src/testing/heap.rs:180:9)",
                 "0x2: alloc::raw_vec::RawVec<T>::grow (/rustc/abc/library/alloc/src/raw_vec.rs:10:5)",
                 "0x3: <alloc::vec::Vec<T> as kurbo::Shape>::push (/root/.cargo/registry/src/x/kurbo-0.13.1/src/bezpath.rs:1:1)",
                 "0x4: flui_view::tree::build (crates/flui-view/src/tree.rs:120:9)",

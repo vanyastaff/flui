@@ -142,6 +142,8 @@ wesl = { workspace = true }
 
 [dev-dependencies]
 flui-objects = { workspace = true }
+# `testing::heap::CountingAllocator`, the global allocator of the allocation tests.
+flui-foundation = { workspace = true, features = ["testing"] }
 flui-rendering = { workspace = true, features = ["testing"] }
 flui-painting = { workspace = true, features = ["testing"] }
 pollster = { workspace = true }
