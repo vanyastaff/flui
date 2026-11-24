@@ -128,8 +128,8 @@ separate unsafe `build_scene` operation: its caller must drop every scene and
 retained clone before the image can be unloaded. A safe polling method that
 returned an unrestricted `Scene` would let that lifetime obligation escape
 without an unsafe call. The hook polls, builds once, lends the scene to the
-renderer and retires it before returning; reload no longer builds and discards
-an extra scene. The driver and host hook boundaries follow ADR-0108. The consumer test
+renderer and retires it before returning; a reload builds no scene of its own.
+The driver and host hook boundaries follow ADR-0108. The consumer test
 `polling_an_unavailable_plugin_reports_no_change` pins the polling result type
 and retries an unavailable image without constructing a scene.
 
