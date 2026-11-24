@@ -310,7 +310,7 @@ pub enum WorkerPollOutcome {
 
     /// Worker dylib was reloaded and `flui_worker_init` ran again.
     Reloaded {
-        /// How many reloads since the driver was created (includes the first load).
+        /// How many worker images this driver has loaded, the first included.
         reload_count: u32,
     },
 
@@ -390,6 +390,7 @@ pub struct WorkerReloadDriver {
     poll_interval: std::time::Duration,
     /// When the artifact was last read.
     pub(crate) last_poll: std::time::Instant,
+    /// How many worker images this driver has loaded, the first included.
     reload_count: u32,
     last_fingerprint: u64,
     /// The artifact that last failed to load, not reopened until rebuilt.
@@ -450,20 +451,19 @@ impl WorkerReloadDriver {
 
         let load_path = resolve_worker_path(&self.lib_path);
 
-        if let Some(ref plugin) = self.plugin {
+        if self.plugin.is_some() {
             let path_changed = load_path != self.loaded_path;
-            if !path_changed && !plugin.has_update() {
+            let Some(old) = self
+                .plugin
+                .take_if(|plugin| path_changed || plugin.has_update())
+            else {
                 return WorkerPollOutcome::NoChange;
-            }
+            };
 
             tracing::info!(
                 path = %load_path.display(),
                 "WorkerReloadDriver: worker dylib updated — reloading"
             );
-            let old = self
-                .plugin
-                .take()
-                .expect("BUG: self.plugin just matched Some above and nothing else can clear it before this take() runs");
             old.unload();
 
             self.plugin = self
@@ -471,7 +471,7 @@ impl WorkerReloadDriver {
                 .load(&load_path, |path| WorkerPlugin::load(path));
             if let Some(ref plugin) = self.plugin {
                 self.loaded_path = load_path;
-                self.reload_count += 1;
+                self.reload_count = self.reload_count.saturating_add(1);
                 let old_fingerprint = self.last_fingerprint;
                 self.last_fingerprint = plugin.fingerprint();
                 // A changed fingerprint means the shared `types` layout moved
@@ -515,21 +515,18 @@ impl WorkerReloadDriver {
         self.plugin = self
             .refusal
             .load(&load_path, |path| WorkerPlugin::load(path));
-        if self.plugin.is_some() {
-            self.loaded_path = load_path;
+        let Some(plugin) = &self.plugin else {
+            return WorkerPollOutcome::NoChange;
+        };
+        self.loaded_path = load_path;
+        self.reload_count = self.reload_count.saturating_add(1);
+        self.last_fingerprint = plugin.fingerprint();
+        tracing::info!(
+            path = %self.lib_path.display(),
+            "WorkerReloadDriver: worker now available"
+        );
+        WorkerPollOutcome::Reloaded {
+            reload_count: self.reload_count,
         }
-        if self.plugin.is_some() {
-            self.reload_count = 1;
-            self.last_fingerprint = self.plugin.as_ref().map_or(0, WorkerPlugin::fingerprint);
-            tracing::info!(
-                path = %self.lib_path.display(),
-                "WorkerReloadDriver: worker now available"
-            );
-            return WorkerPollOutcome::Reloaded {
-                reload_count: self.reload_count,
-            };
-        }
-
-        WorkerPollOutcome::NoChange
     }
 }
