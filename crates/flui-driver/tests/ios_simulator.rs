@@ -98,7 +98,7 @@ fn report_of(
 ) -> Report {
     let mut report = Report::new();
     match session(app) {
-        Ok(mut driver) => report.run_scenario(name, &mut driver, scenario),
+        Ok(mut driver) => driver.run_scenario(&mut report, name, scenario),
         Err(error) => {
             let _ = report.check(
                 "the scenario app starts on the simulator",
