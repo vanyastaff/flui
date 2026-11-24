@@ -562,7 +562,10 @@ impl GpuContext {
             // (`InstanceFlags::DEBUG`), the Vulkan loader looks the named
             // pipeline's device up in lists that a device or instance created
             // on another thread changes, and the warm-up crashed on lavapipe
-            // when it named a pipeline as a device was being made.
+            // when it named a pipeline as a device was being made. The join
+            // waits for one pipeline at most: wgpu marks a lost device
+            // invalid before its lost callback runs, and refuses every later
+            // create on it without compiling.
             self.warmup = None;
         }
         #[cfg(test)]

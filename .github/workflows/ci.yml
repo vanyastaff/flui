@@ -824,27 +824,6 @@ jobs:
           cargo nextest run -p flui --no-default-features --run-ignored all \
             --test facade_it -E 'test(/^composited_layer_update_readback::/)' --locked --no-fail-fast --test-threads 1
 
-      # TEMPORARY, removed before merge: repeat the two tests that crashed
-      # under lavapipe until one crashes, so the core steps print its stack.
-      - name: Repeat the crashing GPU tests
-        env:
-          FLUI_REQUIRE_GPU: "1"
-        run: |
-          crashes=0
-          for i in $(seq 1 80); do
-            for backend in vulkan ""; do
-              if ! WGPU_BACKEND="$backend" cargo nextest run -p flui-engine --features testing --lib \
-                --locked --no-fail-fast --test-threads 2 --status-level fail --final-status-level fail \
-                -E 'test(=damage_readback_tests::an_invalid_target_promotes_to_full) | test(=blur_filter_tests::foreground::foreground_filter_invalid_parameters_refuse_and_recover)'; then
-                crashes=$((crashes + 1))
-                echo "::warning::iteration $i (WGPU_BACKEND='$backend') failed"
-              fi
-            done
-            [ "$crashes" -ge 3 ] && break
-          done
-          echo "failed runs: $crashes"
-          [ "$crashes" -eq 0 ]
-
       - name: GPU readbacks on GL
         if: needs.plan.outputs.lane == 'full'
         env:
