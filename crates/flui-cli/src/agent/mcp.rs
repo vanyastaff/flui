@@ -437,10 +437,8 @@ impl Agent for Live {
     fn call(&mut self, method: &str, params: Value, holds: Duration) -> Result<Value, Failure> {
         // Once more when the connection broke: the app may have restarted
         // since the last call and left a dead socket behind. A request that
-        // never reached it goes again; one that did goes again only when the
-        // method leaves the app as it was, since one that changes it may have run.
-        let resendable =
-            flui_protocol::method::find(method).is_some_and(|info| !info.effect.changes_app());
+        // never reached it goes again; one that did, only when `resendable`.
+        let resendable = resendable(method);
         for attempt in 0..2 {
             if self.connection.is_none() {
                 self.connection = Some(self.connect()?);
@@ -463,11 +461,42 @@ impl Agent for Live {
     }
 }
 
+/// Whether a call of `method` that reached the app before its connection broke may go again on a
+/// new one: only when the method leaves the app as it was (a read or an annotation, ADR-0395
+/// §4), since one that changes it may have run. A method outside the protocol's table does not.
+fn resendable(method: &str) -> bool {
+    flui_protocol::method::find(method).is_some_and(|info| !info.effect.changes_app())
+}
+
 #[cfg(test)]
 mod tests {
+    use flui_protocol::method::MethodEffect;
     use flui_protocol::wait::WaitParams;
 
     use super::*;
+
+    /// A call that reached the app goes again on a broken connection exactly when its method
+    /// leaves the app as it was, an annotation included. Fails if `build.report` is not resent or
+    /// an act is.
+    #[test]
+    fn a_broken_call_goes_again_only_when_it_leaves_the_app_as_it_was() {
+        for row in flui_protocol::method::METHODS {
+            let again = matches!(row.effect, MethodEffect::ReadOnly | MethodEffect::Annotates);
+            assert_eq!(
+                resendable(row.name),
+                again,
+                "{} ({:?})",
+                row.name,
+                row.effect
+            );
+        }
+        assert!(resendable("build.report"), "an annotation goes again");
+        assert!(!resendable("element.tap"), "an act does not");
+        assert!(
+            !resendable("no.such_method"),
+            "nor what the table does not know"
+        );
+    }
 
     /// Answers each method from a table and records what it was asked, and
     /// how long each call let the app hold its answer.

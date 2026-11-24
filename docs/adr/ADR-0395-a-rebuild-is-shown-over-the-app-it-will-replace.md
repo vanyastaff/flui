@@ -124,7 +124,9 @@ generator read the same `changes_app`.
   `a_tap_on_the_banner_reaches_the_app_under_it` (a tap inside the drawn panel reaches the
   app's widget under it, and the banner stays drawn).
 - `flui-driver`'s `a_timed_out_call_is_resent_only_when_it_leaves_the_app_as_it_was` (§4 in the
-  driver).
+  driver) and `codegen_marks_what_it_cannot_write_and_writes_the_main_window_as_the_tests_own`
+  (a generated test leaves out a `build.report`, as it leaves out a read); `flui-cli`'s
+  `a_broken_call_goes_again_only_when_it_leaves_the_app_as_it_was` (§4 in `flui mcp`).
 - `flui-cli`'s `a_report_reaches_every_window_as_an_observer`,
   `a_window_that_refuses_the_report_leaves_the_others_to_get_it`,
   `a_report_whose_app_was_replaced_reaches_its_successor` and
