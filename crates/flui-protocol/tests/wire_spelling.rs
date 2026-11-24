@@ -19,7 +19,8 @@ use flui_protocol::{
     session::ClientRole, session::Hello, session::Isolation, session::Placement, session::Platform,
     snapshot::ChangedField, snapshot::Snapshot, tree::ElementRef, verdict::Verdict,
     version::ProtocolVersion, wait::ClearedBy, wait::Condition, wait::SettleScope,
-    wait::UnsettledReason, wait::WaitOutcome, wait::WaitParams, wire::ActionName, wire::Role,
+    wait::UnsettledReason, wait::WaitEnd, wait::WaitOutcome, wait::WaitParams, wire::ActionName,
+    wire::Role,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -83,6 +84,7 @@ fn every_vocabulary_enum_is_spelled_as_it_is_named() {
     spelled_as_named(Verdict::ALL, Verdict::name);
     spelled_as_named(ClearedBy::ALL, ClearedBy::name);
     spelled_as_named(SettleScope::ALL, SettleScope::name);
+    spelled_as_named(WaitEnd::ALL, WaitEnd::name);
     spelled_as_named(Platform::ALL, Platform::name);
     {
         use flui_protocol::native_recording::{
@@ -368,7 +370,7 @@ fn waits_take_conditions_and_answer_the_last_observation() {
     }));
     assert!(matches!(wait.condition, Condition::All(ref all) if all.len() == 10));
     let outcome: WaitOutcome = round_trips(json!({
-        "satisfied": false,
+        "end": "unsatisfied",
         "frames": 300,
         "observation": {"revision": 9, "count": 0},
         "unsettled": [
@@ -377,20 +379,30 @@ fn waits_take_conditions_and_answer_the_last_observation() {
             {"reason": "ticker", "window": "w3", "owner": "w3/e12",
              "site": {"file": "src/spinner.rs", "line": 40, "column": 9},
              "cleared_by": "next_frame"},
-            {"reason": "background", "cleared_by": "test"},
             {"reason": "platform_reply", "window": "w3", "cleared_by": "outside"},
         ],
         "scope": "complete",
     }));
+    assert_eq!(outcome.end, WaitEnd::Unsatisfied);
     assert_eq!(outcome.scope, SettleScope::Complete);
-    // An app before 0.32 named no scope: its answer counted its runtime's half alone.
-    let older: WaitOutcome = serde_json::from_value(json!({
-        "satisfied": true,
+    // Only the test can release what is left: the wait ends idle, naming it.
+    let idle: WaitOutcome = round_trips(json!({
+        "end": "idle",
+        "frames": 2,
+        "observation": {"revision": 9, "count": 0},
+        "unsettled": [{"reason": "background", "cleared_by": "test"}],
+        "scope": "complete",
+    }));
+    assert_eq!(idle.end, WaitEnd::Idle);
+    // An answer that names no scope counted its runtime's half alone.
+    let runtime_only: WaitOutcome = serde_json::from_value(json!({
+        "end": "satisfied",
         "frames": 1,
         "observation": {"revision": 2, "count": 1},
     }))
     .expect("an answer without a scope reads");
-    assert_eq!(older.scope, SettleScope::RuntimeOnly);
+    assert_eq!(runtime_only.end, WaitEnd::Satisfied);
+    assert_eq!(runtime_only.scope, SettleScope::RuntimeOnly);
 }
 
 #[test]

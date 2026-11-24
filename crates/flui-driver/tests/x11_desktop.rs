@@ -22,6 +22,7 @@ use flui_driver::protocol::input::{
 };
 use flui_driver::protocol::report::Report;
 use flui_driver::protocol::verdict::Verdict;
+use flui_driver::protocol::wait::WaitEnd;
 use flui_driver::protocol::wire::Role;
 use flui_driver::steps::OsEvent;
 use flui_driver::{
@@ -384,7 +385,11 @@ fn the_server_captures_the_apps_window_alone() {
             Duration::from_secs(30),
         )
         .expect("the app answers");
-    assert!(settled.satisfied, "the app settled: {settled:?}");
+    assert_eq!(
+        settled.end,
+        WaitEnd::Satisfied,
+        "the app settled: {settled:?}"
+    );
     let drawn = |capture: &flui_driver::pixels::Image| {
         let first = capture.pixel(0, 0);
         (0..capture.height())

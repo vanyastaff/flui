@@ -36,7 +36,7 @@ use flui_protocol::method::{self, Method};
 use flui_protocol::session::{Empty, Isolation, Placement, WindowParams};
 use flui_protocol::snapshot::Snapshot;
 use flui_protocol::tree::{ElementRef, WindowId};
-use flui_protocol::wait::{Condition, WaitOutcome, WaitParams};
+use flui_protocol::wait::{Condition, WaitEnd, WaitOutcome, WaitParams};
 use flui_protocol::wire::ActionName;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -192,7 +192,7 @@ fn resolve_locator(
                 };
                 let outcome =
                     wait_until(driver, window, Condition::Appears(locator.clone()), timeout)?;
-                if !outcome.satisfied {
+                if outcome.end != WaitEnd::Satisfied {
                     return Err(not_found(locator));
                 }
             }
@@ -300,7 +300,8 @@ fn actionable(
         }
         let left = deadline.saturating_sub(driver.clock());
         let presented = !left.is_zero()
-            && wait_until(driver, element.window, Condition::Frames(1), left)?.satisfied;
+            && wait_until(driver, element.window, Condition::Frames(1), left)?.end
+                == WaitEnd::Satisfied;
         // Past the deadline, or no frame to wait for: the next reading is the last.
         expired = !presented || driver.clock() >= deadline;
     }

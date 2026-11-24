@@ -225,11 +225,15 @@ pub const BREAKING: &[Break] = &[
         // ticker's, and says what discharges it, so `UnsettledReason` gains values and a cause
         // requires its `cleared_by`; the vocabulary grows for one `Tester` (a root locator, the
         // visible and description expectations, a virtual pointer, the contrast rule, a
-        // window's platform), so an app speaking 0.32 refuses older clients, which would refuse
-        // the new values.
+        // window's platform); a wait ends satisfied, unsatisfied or idle, so `WaitOutcome`'s
+        // `satisfied` gives way to a required `end`; an app speaking 0.32 refuses older clients,
+        // which would refuse the new values.
         renamed: &[],
-        removed: &[],
-        required: &["/$defs/UnsettledCause/required/cleared_by"],
+        removed: &["/$defs/WaitOutcome/properties/satisfied"],
+        required: &[
+            "/$defs/UnsettledCause/required/cleared_by",
+            "/$defs/WaitOutcome/required/end",
+        ],
     },
 ];
 

@@ -1,7 +1,6 @@
 # testing-platform: задачи
 
-- **Статус:** утверждено владельцем 2026-11-24. Сделано: ADR-0400, эта спека, TP1 без `WaitOutcome::Idle`
-  (см. TP1). Следующая: TP2.
+- **Статус:** утверждено владельцем 2026-11-24. Сделано: ADR-0400, эта спека, TP1. Следующая: TP2.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md); решение:
   [ADR-0400](../../../adr/ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md)
 - **База:** `main` @ `aa45aa8`. Числа сняты поиском по именам; перед правкой сверить.
@@ -47,32 +46,38 @@
   `CallError::Unanswered { may_have_run, released }`; корневая форма `Locator`;
   `Expectation::{Visible, Description}`; у `UnsettledCause` поля `window`, `owner`, `site`,
   `cleared_by` и тип `ClearedBy`; `SettleScope` в `WaitOutcome`; новые `UnsettledReason` (причины
-  хоста, тикер); `WaitOutcome::Idle`; `approx_eq` у `LogicalRect`; платформенная конвенция и
-  безопасная область в `Placement`; виртуальный указатель в `InputSource`; `input::plan` с
+  хоста, тикер); `WaitEnd::Idle` в поле `end` у `WaitOutcome`; `approx_eq` у `LogicalRect`;
+  платформенная конвенция и безопасная область в `Placement`; виртуальный указатель в
+  `InputSource`; `input::plan` с
   понижением в инъекцию, платформенный путь и строки `HostInput`; метод `element.scroll_until`;
   таймаут действия в запросе жеста, который разговор считает удержанием окна (ADR-0288 §4);
   жесты синтетического и семантического путей в таблице методов отвечает агент, путь `os`
   собирает драйвер; `AuditRule::TextContrast`; типы отчёта переезжают из `flui-driver`.
 - **Проверка:** nextest `flui-protocol` с таблицей написаний, схемой и таблицей методов;
   `rg 'flui_driver::report' --glob '*.rs'` = 0.
-- **Состояние:** сделано на ветке `claude/project-thread-5mrv8h`, кроме `WaitOutcome::Idle`.
-  `Connection` реализует `flui_driver::Driver`; приватный трейт транспорта драйвера переименован в
-  `Transport` и остался под ним: протокольный `Connection` обобщён по методу и не может быть
-  объектом, а транспорту нужны hello, события и методы не окна. `Idle` не построен: §3
-  ADR-0400 называет его вариантом `WaitOutcome`, а `SettleScope` полем того же типа; форму
-  решает координатор. `site` причины несёт `build::SourceLocation`, а не новый тип. Значения до
-  TP2: причины рантайма без `window`, `owner`, `site`, `cleared_by` из его предикатов, `scope`
-  всегда `runtime_only`; жесты в таблице за агентом, рантайм отвечает на них `not_supported`, их
-  собирает драйвер; `element.scroll_until` не отвечает никто; `agent_input` рантайма ещё
-  понижает последовательность сам, мимо `input::plan`. Протокол 0.32, схема
-  `tests/schema/protocol-0.32.json`, обязательное поле `UnsettledCause.cleared_by` записано в
-  `BREAKING`.
+- **Состояние:** сделано на ветке `claude/project-thread-5mrv8h`. `Connection` реализует
+  `flui_driver::Driver`; приватный трейт транспорта драйвера переименован в `Transport` и остался
+  под ним: протокольный `Connection` обобщён по методу и не может быть объектом, а транспорту
+  нужны hello, события и методы не окна. Ожидание кончается полем `end: WaitEnd`
+  (`satisfied`, `unsatisfied`, `idle`) вместо `satisfied: bool`. `site` причины несёт
+  `build::SourceLocation`, а не новый тип. Значения до TP2: рантайм не отвечает `Idle` нигде (ему
+  нужны `HostHalf::Complete` и причины только `Test`); причины рантайма без `window`, `owner`,
+  `site`, `cleared_by` из его предикатов, `scope` всегда `runtime_only`; жесты в таблице за
+  агентом, рантайм отвечает на них `not_supported`, их собирает драйвер; `element.scroll_until`
+  не отвечает никто; `agent_input` рантайма ещё понижает последовательность сам, мимо
+  `input::plan`. Протокол 0.32, схема `tests/schema/protocol-0.32.json`; в `BREAKING` записаны
+  обязательные `UnsettledCause.cleared_by` и `WaitOutcome.end` и удалённое
+  `WaitOutcome.satisfied`.
 - **Доказательства:** `cargo test` (heli и nextest на машине нет): `flui-protocol --all-features`
   18 + 57 + 2, без фич 9 + 26 + 2; `flui-driver` 380 + 1 + 1; `flui-semantics --all-features`
-  68 + 81 + 7; `flui-runtime` 255; `flui-cli` 183 + 66; `flui-testing` 15 + 188 + 11 (3 ignored, ни одного нового). clippy
-  `--all-targets -D warnings` чист у `flui-protocol` (с фичами и без), `flui-driver`,
-  `flui-semantics`, `flui-runtime`, `flui-cli`, `flui-testing`. `rg 'flui_driver::report' --glob
-  '*.rs'` = 0. Ни один случай trybuild не называет изменённые типы.
+  68 + 81 + 7; `flui-runtime` 255; `flui-cli` 183 + 66; `flui-testing` 15 + 188 + 11 (3 ignored,
+  ни одного нового); `flui-app --lib agent::served` 11. clippy `--all-targets -D warnings` чист у
+  `flui-protocol` (с фичами и без), `flui-driver` (с фичами и без), `flui-semantics`,
+  `flui-runtime`, `flui-cli`, `flui-testing`, `flui-app`. `cargo check -p flui-driver
+  --all-targets` чист для `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `aarch64-apple-ios` и
+  `aarch64-linux-android` с подставным компилятором C (пустые объекты: SDK целей на машине нет,
+  код C не проверен). `rg 'flui_driver::report' --glob '*.rs'` = 0. Ни один случай trybuild не
+  называет изменённые типы.
 
 ### TP2. Рантайм: один список причин, ответы на методы, жесты в агенте
 

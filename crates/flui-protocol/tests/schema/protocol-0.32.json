@@ -11582,8 +11582,27 @@
         }
       ]
     },
+    "WaitEnd": {
+      "oneOf": [
+        {
+          "const": "satisfied",
+          "type": "string"
+        },
+        {
+          "const": "unsatisfied",
+          "type": "string"
+        },
+        {
+          "const": "idle",
+          "type": "string"
+        }
+      ]
+    },
     "WaitOutcome": {
       "properties": {
+        "end": {
+          "$ref": "#/$defs/WaitEnd"
+        },
         "frames": {
           "format": "uint64",
           "minimum": 0,
@@ -11591,9 +11610,6 @@
         },
         "observation": {
           "$ref": "#/$defs/Observation"
-        },
-        "satisfied": {
-          "type": "boolean"
         },
         "scope": {
           "$ref": "#/$defs/SettleScope",
@@ -11607,7 +11623,7 @@
         }
       },
       "required": [
-        "satisfied",
+        "end",
         "frames",
         "observation"
       ],

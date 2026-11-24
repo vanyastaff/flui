@@ -6,8 +6,8 @@ use flui_foundation::ManualClock;
 use flui_protocol::method;
 use flui_protocol::{
     error::ErrorCode, error::ErrorObject, error::Retry, events::Event, events::EventFilter,
-    events::EventKind, tree::WindowId, wait::Condition, wait::WaitOutcome, wait::WaitParams,
-    wire::ActionName,
+    events::EventKind, tree::WindowId, wait::Condition, wait::WaitEnd, wait::WaitOutcome,
+    wait::WaitParams, wire::ActionName,
 };
 use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentWindow};
 
@@ -254,7 +254,7 @@ fn a_wait_on_an_event_is_satisfied_by_the_next_one_the_window_emits() {
         .try_take()
         .expect("the frame that published the new tree answered")
         .expect("the wait ran");
-    assert!(outcome.satisfied);
+    assert_eq!(outcome.end, WaitEnd::Satisfied);
     assert!(
         on_close.try_take().is_none(),
         "the window has not closed, so the wait on it holds out"

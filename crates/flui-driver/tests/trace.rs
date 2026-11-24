@@ -552,10 +552,13 @@ fn a_headless_replay_has_no_divergence_and_a_changed_app_diverges_at_its_wait() 
         (divergence.seq, divergence.method.as_str()),
         (4, "wait.until")
     );
-    assert_eq!(divergence.at, "/satisfied");
+    assert_eq!(divergence.at, "/end");
     assert_eq!(
         (divergence.expected, divergence.actual),
-        (serde_json::json!(true), serde_json::json!(false))
+        (
+            serde_json::json!("satisfied"),
+            serde_json::json!("unsatisfied")
+        )
     );
 }
 
@@ -581,7 +584,7 @@ fn a_replay_leaves_out_frames_and_compares_positions_only_at_exact_fidelity() {
     // The wait's answer recorded other frame counts and its element somewhere else.
     rewrite(&dir, |row| {
         if let Some(ok) = row.pointer_mut("/result/ok")
-            && ok.get("satisfied").is_some()
+            && ok.get("end").is_some()
         {
             ok["frames"] = 999.into();
             let x = ok["observation"]["matched"][0]["surface_rect"]["x"]

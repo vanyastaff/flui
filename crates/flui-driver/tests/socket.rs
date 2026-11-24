@@ -397,7 +397,7 @@ fn an_element_that_turns_actionable_on_the_last_frame_is_acted_on() {
                 let timeout_ms = params["timeout_ms"].as_u64().unwrap_or(5_000).min(2_000);
                 std::thread::sleep(Duration::from_millis(timeout_ms + 1));
                 Reply::Result(json!({
-                    "satisfied": true,
+                    "end": "satisfied",
                     "frames": 1,
                     "observation": { "revision": 2, "count": 0 },
                 }))
@@ -451,7 +451,7 @@ fn actionability_is_waited_for_by_the_clock_on_a_window_that_draws_nothing() {
                 let timeout_ms = params["timeout_ms"].as_u64().unwrap_or(5_000).min(2_000);
                 std::thread::sleep(Duration::from_millis(timeout_ms));
                 Reply::Result(json!({
-                    "satisfied": false,
+                    "end": "unsatisfied",
                     "frames": 0,
                     "observation": { "revision": 1, "count": 0 },
                 }))

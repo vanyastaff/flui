@@ -163,7 +163,7 @@ impl<'d> Window<'d> {
     }
 
     /// Hold out for `condition` on the window's frame and event timeline, at most `timeout` of
-    /// the app's clock; a wait that runs out is an answer, `satisfied: false`, with why the window
+    /// the app's clock; a wait that runs out is an answer, `unsatisfied`, with why the window
     /// had not settled.
     ///
     /// # Errors

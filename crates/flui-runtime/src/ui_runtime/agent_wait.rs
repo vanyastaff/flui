@@ -5,7 +5,7 @@
 //! already holds answers at once), after each frame the owner presents, and when its deadline
 //! passes. The deadline is on the presentation's own clock, so a manual clock expires it
 //! deterministically, and it joins [`UiRuntime::next_wake`] so a window that draws nothing still
-//! times out. A timeout is an answer (`satisfied: false` with the last observation and why the
+//! times out. A timeout is an answer (`unsatisfied`, with the last observation and why the
 //! window had not settled), not an error.
 
 use std::panic::resume_unwind;
@@ -14,7 +14,7 @@ use std::time::Duration;
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
     tree::WindowId, wait::ClearedBy, wait::Condition, wait::UnsettledCause, wait::UnsettledReason,
-    wait::WaitOutcome, wait::WaitParams,
+    wait::WaitEnd, wait::WaitOutcome, wait::WaitParams,
 };
 use flui_semantics::{EventSet, Placement, WaitFacts, counts_frames};
 use web_time::Instant;
@@ -196,7 +196,11 @@ impl UiRuntime {
             return Some(wait);
         }
         let mut outcome = WaitOutcome::default();
-        outcome.satisfied = holds;
+        outcome.end = if holds {
+            WaitEnd::Satisfied
+        } else {
+            WaitEnd::Unsatisfied
+        };
         outcome.frames = wait.frames;
         if let Some(evaluation) = evaluation {
             outcome.observation = evaluation.observation;

@@ -12,10 +12,11 @@
 - Protocol 0.32: `Locator::root`; `Expectation::Visible` and `Expectation::Description`; an
   `UnsettledCause` names its `window`, `owner`, `site` and what clears it (`ClearedBy`, a required
   field), with the reasons `ticker`, `background`, `owed_turn`, `window_observation`,
-  `frame_request`, `scenario_step`, `surface_frame` and `platform_reply`; a `WaitOutcome` carries
-  its `scope` (`SettleScope`); a `Placement` names its `platform` and `safe_area`; the `virtual`
-  pointer device; `AuditRule::TextContrast`; the method `element.scroll_until`;
-  `LogicalRect::approx_eq`.
+  `frame_request`, `scenario_step`, `surface_frame` and `platform_reply`; a `WaitOutcome` says how
+  it ended (`end`: `WaitEnd::{Satisfied, Unsatisfied, Idle}`, of which no runtime answers `Idle`
+  yet) and carries its `scope` (`SettleScope`); a `Placement` names its `platform` and
+  `safe_area`; the `virtual` pointer device; `AuditRule::TextContrast`; the method
+  `element.scroll_until`; `LogicalRect::approx_eq`.
 - `Driver::run_scenario(&mut report, name, scenario)`.
 
 ### Changed
@@ -28,6 +29,7 @@
 
 ### Removed
 
+- `WaitOutcome::satisfied`: a wait's answer says how it ended in `end` (`WaitEnd`).
 - `flui_driver::report` and the driver's re-exports of `Report`, `Check`, `Outcome` and
   `Verdict`: they are `flui_protocol::report` and `flui_protocol::verdict::Verdict`.
 - `Report::to_json` (serialize the report) and `Report::run_scenario` (use

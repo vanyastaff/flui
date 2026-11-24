@@ -16,7 +16,7 @@ use flui_driver::protocol::method::{
 };
 use flui_driver::protocol::report::{CheckFailure, Outcome};
 use flui_driver::protocol::session::WindowParams;
-use flui_driver::protocol::wait::{Condition, Expectation, SettleScope};
+use flui_driver::protocol::wait::{Condition, Expectation, SettleScope, WaitEnd};
 use flui_driver::protocol::{input::TapParams, locator::LocateParams};
 use flui_driver::{Driver, Launch};
 
@@ -66,7 +66,7 @@ fn a_wait_answers_on_the_connection_s_window() {
     let outcome = driver
         .wait(&count, Duration::from_secs(5))
         .expect("the wait is answered");
-    assert!(outcome.satisfied, "{outcome:?}");
+    assert_eq!(outcome.end, WaitEnd::Satisfied, "{outcome:?}");
     assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
 }
 

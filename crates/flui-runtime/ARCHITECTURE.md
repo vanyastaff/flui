@@ -1180,7 +1180,7 @@ which `UiRuntime::unsettled_causes` reads without the agent's own waits, so a pa
 why the window is busy. A condition that counts frames asks for a redraw while it is parked,
 because an idle window presents none. The deadline is on the presentation's clock (a manual clock
 expires it deterministically) and joins `next_wake`, so a window that draws nothing still times
-out; a timeout is an answer, `satisfied: false` with the last observation and the causes, and the
+out; a timeout is an answer, ending `unsatisfied` with the last observation and the causes, and the
 window closing answers `gone`. A presentation holds 256 waits: the next is refused with
 `TooManyWaits` (`busy`, retry `soon`), never dropped and never in place of an older one. A
 condition on an event holds once the window emitted an event of that kind after the wait began

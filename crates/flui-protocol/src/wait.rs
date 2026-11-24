@@ -246,6 +246,30 @@ vocabulary! {
     }
 }
 
+vocabulary! {
+    /// How a wait ended (ADR-0400 §3).
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+    #[cfg_attr(
+        feature = "serde",
+        derive(serde::Serialize, serde::Deserialize),
+        serde(rename_all = "snake_case")
+    )]
+    #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+    pub enum WaitEnd {
+        /// The condition held.
+        Satisfied => "satisfied",
+        /// The condition did not hold before the wait's limit: its timeout, or its turn bound on
+        /// a virtual clock.
+        #[default]
+        Unsatisfied => "unsatisfied",
+        /// The condition was false and nothing but the test can change that: the host's half is
+        /// counted (`SettleScope::Complete`) and every remaining cause is cleared by the test.
+        /// No runtime answers it yet: an answer counts its runtime's half alone, so today's waits
+        /// end `satisfied` or `unsatisfied`.
+        Idle => "idle",
+    }
+}
+
 /// One cause that kept an application from being idle when the answer was made.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -345,15 +369,15 @@ pub struct Observation {
     pub count: u32,
 }
 
-/// What a wait answers. A wait that ran out is still an answer, `satisfied: false`; the
+/// What a wait answers. A wait that ran out is still an answer, [`WaitEnd::Unsatisfied`]; the
 /// `timeout` error is for a window that answered nothing at all.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct WaitOutcome {
-    /// Whether the condition held.
-    pub satisfied: bool,
+    /// How the wait ended: whether the condition held.
+    pub end: WaitEnd,
     /// Frames presented while waiting.
     pub frames: u64,
     /// The observation that satisfied it, or the last one.
