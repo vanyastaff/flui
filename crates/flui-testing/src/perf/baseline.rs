@@ -424,9 +424,11 @@ fn read_file(path: &Path, scenario: &str) -> Result<Counts, FileError> {
 /// The file's text: a header, then the scenario's table with its counters
 /// sorted.
 fn render(scenario: &str, counts: &Counts) -> String {
-    let mut text = format!(
-        "# Written by `{BLESS_COMMAND}`,\n# `{INSTRUCTIONS}` by CI's perf-gates job;\n# counts, not timings.\n\n[{scenario}]\n"
-    );
+    let mut text = format!("# Written by `{BLESS_COMMAND}`");
+    if counts.contains_key(INSTRUCTIONS) {
+        text.push_str(",\n# `instructions` by CI's perf-gates job");
+    }
+    write!(text, ";\n# counts, not timings.\n\n[{scenario}]\n").expect("BUG: writing to a String");
     for (name, value) in counts {
         writeln!(text, "{name} = {value}").expect("BUG: writing to a String");
     }

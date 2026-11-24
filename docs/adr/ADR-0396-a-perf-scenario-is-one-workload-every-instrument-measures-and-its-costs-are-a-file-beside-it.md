@@ -86,9 +86,11 @@ that window and nothing else:
   a developer asks for one;
 - frame times, from the scheduler's `FrameSnapshot`s, on the nightly platform runs (§4).
 
-The window is `flui_testing::perf::measure`, which returns what the steps cost; a scenario never
-reads a counter around its own code. Until `measure` exists, each target's `perf_measured`
-function is the window.
+The window is `flui_testing::perf::measure`, which runs the steps and returns their result with
+their `Cost`; a scenario never reads a counter around its own code, and holds the cost with
+`Baselines::hold_measured`. Each window a test thread opens takes the next number of that
+thread's sequence, so the test run again from its start opens the same windows in the same order,
+which is how the instruction count finds its window (§3).
 
 The heap is counted by one global allocator, `flui_foundation::testing::heap::CountingAllocator`,
 per thread, which every test or bench that counts allocations installs: the foundation layer
@@ -99,30 +101,46 @@ and the kit re-exports it with `HeapCounts` as `flui_testing::heap`. A largest-b
 ### §2. Every gate metric is a checked-in file beside the scenario
 
 `flui_testing::perf::Baselines` is the one holder: a target names its directory and its sorted
-scenarios once, and a scenario holds its counts with `Baselines::hold` before it asserts its own
-budget. The rules are the holder's, with its tests:
+scenarios once, and a scenario holds the cost of its window with `Baselines::hold_measured`, or
+counts no window measured with `Baselines::hold`, before it asserts its own budget. The rules
+are the holder's, with its tests:
 
 - a **work** counter (elements rebuilt, nodes laid out, layers produced) equals its file;
-- a **cost** counter (a name with `alloc` or `bytes`) stays at or under its file, so a fall
-  passes and a bless on `main` lowers the file;
+- a **cost** counter (a name with `alloc` or `bytes`, and `instructions`, which may rise 3%, §3)
+  stays at or under its file, so a fall passes and a bless on `main` lowers the file;
 - a counter on one side only fails, and a file no scenario holds fails
   (`Baselines::assert_files_are_scenarios`).
 
 `FLUI_PERF_BASELINE=check` compares, `bless` rewrites a file when its scenario's body ends
 without a panic, and unset compares nothing. CI's `test` job runs the workspace with
-`FLUI_PERF_BASELINE=check` and its own features, which is where every file is blessed
-(`flui_testing::perf::BLESS_COMMAND`), then fails on a file no scenario recorded into
-`FLUI_PERF_OUT`. A baseline file a pull request edits is an expectation it names (ADR-0331).
+`FLUI_PERF_BASELINE=check` and its own features, which is where every file's work and heap lines
+are blessed (`flui_testing::perf::BLESS_COMMAND`; the `instructions` lines are §3's), then fails
+on a file no scenario recorded into `FLUI_PERF_OUT`. A baseline file a pull request edits is an
+expectation it names (ADR-0331).
 
 ### §3. Instructions are a file too, on `main`
 
-The kit counts a scenario's instructions inside its window and holds them in the scenario's file
-as `instructions`, a cost counter that may rise by at most 3% before it fails. The tolerance
-absorbs a toolchain or dependency update; a file blessed on `main` follows each one, so a series
-of small rises cannot pass unnoticed. The count needs valgrind, so `perf-gates` on `main` runs it.
-A `perf_scaling_` scenario also holds its large tree within 5% of its small one. The 3% is
-measured before it is set: five CI runs of one commit give the spread, and a spread over 1%
-reopens this section.
+The kit counts a window's instructions and holds them in the scenario's file as `instructions`,
+a cost counter that may rise by at most 3% before it fails. The tolerance absorbs a toolchain or
+dependency update; a file blessed on `main` follows each one, so a series of small rises cannot
+pass unnoticed. `FLUI_PERF_INSTRUCTIONS=callgrind` turns the count on: each
+`Baselines::hold_measured` then runs its own test again, alone, under
+`valgrind --tool=callgrind`, which collects only while the window with the hold's number runs,
+and a missing valgrind fails the hold. The child is marked by a variable and its window by a
+function name that are private to `flui_testing::perf`, and it compares, records and blesses
+nothing. A `perf_scaling_` scenario holds its small and its large tree with
+`Baselines::hold_scaling`, which fails when the large one costs more than 5% over the small one.
+
+A file's lines come from two builds. The `test` job owns the work and heap counters, at
+opt-level 0 (`BLESS_COMMAND`), on every pull request; `perf-gates` owns the `instructions`
+lines, in release, on `main`, since the count needs valgrind and release is the code an
+application ships. Release and opt-level 0 do different work for one frame (the optimizer removes
+allocations, and debug assertions add work), so neither run compares the other's lines, and each
+writes them back as the file has them. Instructions are blessed on the runner alone, since
+callgrind's counts follow the host's valgrind and processor: on a miss `perf-gates` blesses them,
+prints the diff and uploads the files, and a pull request that raises a window's cost runs that
+job on its branch and commits them. The 3% is measured before it is set: five CI runs of one
+commit give the spread, and a spread over 1% reopens this section.
 
 ### §4. Frame time is a trend, never a gate
 
@@ -169,13 +187,18 @@ names are stabilised once the framework's own scenarios have run on it.
 ### Confirmation
 
 - The holder's rules: the tests of `crates/flui-testing/src/perf/baseline.rs`
-  (`the_comparison_passes_only_an_equal_counter_or_a_cost_that_fell`,
+  (`the_comparison_passes_only_an_equal_counter_or_a_cost_within_its_allowance`,
   `a_check_fails_on_a_difference_that_fails_and_on_a_missing_file`,
+  `each_kind_of_run_compares_only_its_own_lines`,
   `a_bless_writes_the_file_only_when_the_test_ends_without_a_panic`,
-  `only_a_run_with_a_mode_records_its_counts`).
+  `a_bless_keeps_the_lines_of_the_other_kind`,
+  `only_a_run_with_a_mode_records_its_counts`) and of `crates/flui-testing/src/perf/instructions.rs`
+  (`the_switch_is_callgrind_or_unset`, `the_count_is_callgrinds_collected_line`).
 - Each target's `every_baseline_file_is_a_scenario`.
 - CI's `test` job: `FLUI_PERF_BASELINE=check` on its nextest step, and the step after it that fails
   on a baseline file with no record.
+- CI's `perf-gates` job: `FLUI_PERF_INSTRUCTIONS=callgrind` and `FLUI_PERF_BASELINE=check` on its
+  release run, which fails on a window that collects nothing.
 - `let_underscore_drop` denied in each `perf` target, so a `Held` cannot be dropped before the
   scenario's assertions.
 
