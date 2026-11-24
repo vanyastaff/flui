@@ -1,13 +1,13 @@
-//! `input::plan`, the one lowering of an action sequence every path plays (ADR-0400 §2): one row
-//! per gesture kind, each with the timeline it plans to, and the sequences it refuses.
+//! `input::plan`, the lowering the driver's OS lane plays (ADR-0400 §2): one row per gesture kind,
+//! each with the timeline it plans to, the sequences it refuses and the bounds it accepts exactly.
 
 use std::time::Duration;
 
 use flui_protocol::geometry::LogicalPoint;
 use flui_protocol::input::{
-    ActionSequence, ImeAction, InputSource, KeyAction, MAX_SOURCES, MAX_SPAN, MAX_STEPS, MAX_TICKS,
-    PlanError, PlannedInput, PointerAction, PointerButton, PointerDevice, STEP, ScrollUnit,
-    SourceKind, TrackpadAction, WheelAction, plan,
+    ActionSequence, ImeAction, InputSource, KeyAction, MAX_COORDINATE, MAX_SOURCES, MAX_SPAN,
+    MAX_STEPS, MAX_TICKS, PlanError, PlannedInput, PointerAction, PointerButton, PointerDevice,
+    STEP, ScrollUnit, SourceKind, TimedInput, TrackpadAction, WheelAction, plan,
 };
 
 fn ms(ms: u64) -> Duration {
@@ -47,39 +47,72 @@ fn up() -> PointerAction {
     }
 }
 
-/// One planned input as a line: its instant in milliseconds, its source and what it is.
-fn line(at_ms: u128, source: usize, input: &PlannedInput) -> String {
-    let what = match input {
-        PlannedInput::PointerDown { at, .. } => format!("down {at:?}"),
-        PlannedInput::PointerUp { at, .. } => format!("up {at:?}"),
-        PlannedInput::PointerMove { to, .. } => format!("move {} {}", to.x, to.y),
-        PlannedInput::PointerCancel { .. } => "cancel".to_owned(),
+fn pause(duration_ms: u64) -> PointerAction {
+    PointerAction::Pause { duration_ms }
+}
+
+/// The milliseconds of `duration`, which every bound here is a whole number of.
+fn millis(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).expect("small")
+}
+
+/// Where a pointer is, `x,y`, or `nowhere` before its first step.
+fn point(at: Option<LogicalPoint>) -> String {
+    at.map_or_else(|| "nowhere".to_owned(), |at| format!("{},{}", at.x, at.y))
+}
+
+/// A pressure the input carries, ` p<pressure>`, or nothing.
+fn pressed(pressure: Option<f64>) -> String {
+    pressure.map_or_else(String::new, |pressure| format!(" p{pressure}"))
+}
+
+/// One planned input as a line: its instant in milliseconds, its tick, its source and what it is,
+/// with every value it carries.
+fn line(timed: &TimedInput) -> String {
+    let what = match &timed.input {
+        PlannedInput::PointerDown {
+            button,
+            pressure,
+            at,
+        } => format!("down {button:?} {}{}", point(*at), pressed(*pressure)),
+        PlannedInput::PointerUp { button, at } => format!("up {button:?} {}", point(*at)),
+        PlannedInput::PointerMove { to, pressure } => {
+            format!("move {}{}", point(Some(*to)), pressed(*pressure))
+        }
+        PlannedInput::PointerCancel { at } => format!("cancel {}", point(*at)),
         PlannedInput::Scroll {
-            delta_x, delta_y, ..
-        } => format!("scroll {delta_x} {delta_y}"),
+            at,
+            delta_x,
+            delta_y,
+            unit,
+        } => format!("scroll {} {delta_x} {delta_y} {unit:?}", point(Some(*at))),
         PlannedInput::KeyDown(key) => format!("key_down {key}"),
         PlannedInput::KeyUp(key) => format!("key_up {key}"),
         PlannedInput::Text(text) => format!("text {text}"),
-        PlannedInput::Ime(_) => "ime".to_owned(),
-        PlannedInput::Trackpad(_) => "trackpad".to_owned(),
+        PlannedInput::Ime(action) => format!("ime {action:?}"),
+        PlannedInput::Trackpad(action) => format!("trackpad {action:?}"),
         other => format!("{other:?}"),
     };
-    format!("{at_ms} s{source} {what}")
+    format!(
+        "{} t{} s{} {what}",
+        timed.at.as_millis(),
+        timed.tick,
+        timed.source
+    )
 }
 
 fn timeline(sequence: &ActionSequence) -> (Vec<String>, Duration) {
     let planned = plan(sequence).expect("the sequence plans");
-    let lines = planned
-        .inputs()
-        .iter()
-        .map(|input| line(input.at.as_millis(), input.source, &input.input))
-        .collect();
+    let lines = planned.inputs().iter().map(line).collect();
     (lines, planned.span())
+}
+
+fn lines(lines: &[&str]) -> Vec<String> {
+    lines.iter().map(|line| (*line).to_owned()).collect()
 }
 
 #[test]
 fn each_gesture_kind_plans_to_one_timeline() {
-    let here = Some(at(10.0, 20.0));
     let table: Vec<(&str, ActionSequence, Vec<String>, Duration)> = vec![
         (
             "a tap: the move lasts one step, the press and release share the next tick's start",
@@ -88,11 +121,11 @@ fn each_gesture_kind_plans_to_one_timeline() {
                 PointerDevice::Mouse,
                 vec![move_to(10.0, 20.0, 0), down(), up()],
             )]),
-            vec![
-                "0 s0 move 10 20".to_owned(),
-                format!("16 s0 down {here:?}"),
-                format!("16 s0 up {here:?}"),
-            ],
+            lines(&[
+                "0 t0 s0 move 10,20",
+                "16 t1 s0 down Primary 10,20",
+                "16 t2 s0 up Primary 10,20",
+            ]),
             STEP,
         ),
         (
@@ -100,18 +133,13 @@ fn each_gesture_kind_plans_to_one_timeline() {
             ActionSequence::new(vec![pointer(
                 "p",
                 PointerDevice::Touch,
-                vec![
-                    move_to(10.0, 20.0, 0),
-                    down(),
-                    PointerAction::Pause { duration_ms: 800 },
-                    up(),
-                ],
+                vec![move_to(10.0, 20.0, 0), down(), pause(800), up()],
             )]),
-            vec![
-                "0 s0 move 10 20".to_owned(),
-                format!("16 s0 down {here:?}"),
-                format!("816 s0 up {here:?}"),
-            ],
+            lines(&[
+                "0 t0 s0 move 10,20",
+                "16 t1 s0 down Primary 10,20",
+                "816 t3 s0 up Primary 10,20",
+            ]),
             ms(816),
         ),
         (
@@ -121,15 +149,71 @@ fn each_gesture_kind_plans_to_one_timeline() {
                 PointerDevice::Pen,
                 vec![move_to(0.0, 0.0, 0), down(), move_to(30.0, 0.0, 40), up()],
             )]),
-            vec![
-                "0 s0 move 0 0".to_owned(),
-                "16 s0 down Some(LogicalPoint { x: 0.0, y: 0.0 })".to_owned(),
-                "16 s0 move 10 0".to_owned(),
-                "29 s0 move 20 0".to_owned(),
-                "42 s0 move 30 0".to_owned(),
-                "56 s0 up Some(LogicalPoint { x: 30.0, y: 0.0 })".to_owned(),
-            ],
+            lines(&[
+                "0 t0 s0 move 0,0",
+                "16 t1 s0 down Primary 0,0",
+                "16 t2 s0 move 10,0",
+                "29 t2 s0 move 20,0",
+                "42 t2 s0 move 30,0",
+                "56 t3 s0 up Primary 30,0",
+            ]),
             ms(56),
+        ),
+        (
+            "a pen stroke: the press and every step of a move carry their pressure",
+            ActionSequence::new(vec![pointer(
+                "p",
+                PointerDevice::Pen,
+                vec![
+                    move_to(0.0, 0.0, 0),
+                    PointerAction::Down {
+                        button: PointerButton::Primary,
+                        pressure: Some(0.25),
+                    },
+                    PointerAction::Move {
+                        to: at(20.0, 0.0),
+                        duration_ms: 32,
+                        pressure: Some(0.75),
+                    },
+                    up(),
+                ],
+            )]),
+            lines(&[
+                "0 t0 s0 move 0,0",
+                "16 t1 s0 down Primary 0,0 p0.25",
+                "16 t2 s0 move 10,0 p0.75",
+                "32 t2 s0 move 20,0 p0.75",
+                "48 t3 s0 up Primary 20,0",
+            ]),
+            ms(48),
+        ),
+        (
+            "a cancel: the platform takes the contact where its last step put it",
+            ActionSequence::new(vec![pointer(
+                "p",
+                PointerDevice::Touch,
+                vec![move_to(7.0, 8.0, 0), down(), PointerAction::Cancel],
+            )]),
+            lines(&[
+                "0 t0 s0 move 7,8",
+                "16 t1 s0 down Primary 7,8",
+                "16 t2 s0 cancel 7,8",
+            ]),
+            STEP,
+        ),
+        (
+            "a press before any move: the pointer is nowhere yet",
+            ActionSequence::new(vec![pointer(
+                "p",
+                PointerDevice::Mouse,
+                vec![down(), up(), PointerAction::Cancel],
+            )]),
+            lines(&[
+                "0 t0 s0 down Primary nowhere",
+                "0 t1 s0 up Primary nowhere",
+                "0 t2 s0 cancel nowhere",
+            ]),
+            Duration::ZERO,
         ),
         (
             "a pinch: two contacts' steps due in one millisecond go out together, in source order",
@@ -145,18 +229,18 @@ fn each_gesture_kind_plans_to_one_timeline() {
                     vec![move_to(60.0, 0.0, 0), down(), move_to(80.0, 0.0, 32), up()],
                 ),
             ]),
-            vec![
-                "0 s0 move 40 0".to_owned(),
-                "0 s1 move 60 0".to_owned(),
-                "16 s0 down Some(LogicalPoint { x: 40.0, y: 0.0 })".to_owned(),
-                "16 s1 down Some(LogicalPoint { x: 60.0, y: 0.0 })".to_owned(),
-                "16 s0 move 30 0".to_owned(),
-                "16 s1 move 70 0".to_owned(),
-                "32 s0 move 20 0".to_owned(),
-                "32 s1 move 80 0".to_owned(),
-                "48 s0 up Some(LogicalPoint { x: 20.0, y: 0.0 })".to_owned(),
-                "48 s1 up Some(LogicalPoint { x: 80.0, y: 0.0 })".to_owned(),
-            ],
+            lines(&[
+                "0 t0 s0 move 40,0",
+                "0 t0 s1 move 60,0",
+                "16 t1 s0 down Primary 40,0",
+                "16 t1 s1 down Primary 60,0",
+                "16 t2 s0 move 30,0",
+                "16 t2 s1 move 70,0",
+                "32 t2 s0 move 20,0",
+                "32 t2 s1 move 80,0",
+                "48 t3 s0 up Primary 20,0",
+                "48 t3 s1 up Primary 80,0",
+            ]),
             ms(48),
         ),
         (
@@ -165,7 +249,7 @@ fn each_gesture_kind_plans_to_one_timeline() {
                 InputSource::Wheel {
                     id: "w".to_owned(),
                     actions: vec![WheelAction::Scroll {
-                        at: at(5.0, 5.0),
+                        at: at(5.0, 6.0),
                         delta_x: 0.0,
                         delta_y: 120.0,
                         unit: ScrollUnit::Pixel,
@@ -187,12 +271,12 @@ fn each_gesture_kind_plans_to_one_timeline() {
                     text: "hi".to_owned(),
                 },
             ]),
-            vec![
-                "0 s0 scroll 0 120".to_owned(),
-                "0 s1 key_down Control".to_owned(),
-                "0 s2 text hi".to_owned(),
-                "30 s1 key_up Control".to_owned(),
-            ],
+            lines(&[
+                "0 t0 s0 scroll 5,6 0 120 Pixel",
+                "0 t0 s1 key_down Control",
+                "0 t0 s2 text hi",
+                "30 t2 s1 key_up Control",
+            ]),
             ms(30),
         ),
         (
@@ -220,11 +304,29 @@ fn each_gesture_kind_plans_to_one_timeline() {
                 },
             ]),
             vec![
-                "0 s0 ime".to_owned(),
-                "0 s1 trackpad".to_owned(),
-                "0 s0 ime".to_owned(),
-                "0 s1 trackpad".to_owned(),
-                "0 s1 trackpad".to_owned(),
+                format!(
+                    "0 t0 s0 ime {:?}",
+                    ImeAction::SetComposition {
+                        text: "に".to_owned(),
+                        cursor: None,
+                        caret_hidden: false,
+                    }
+                ),
+                format!(
+                    "0 t0 s1 trackpad {:?}",
+                    TrackpadAction::Begin { at: at(1.0, 1.0) }
+                ),
+                format!(
+                    "0 t1 s0 ime {:?}",
+                    ImeAction::Commit {
+                        text: "に".to_owned(),
+                    }
+                ),
+                format!(
+                    "0 t1 s1 trackpad {:?}",
+                    TrackpadAction::Pinch { scale: 1.5 }
+                ),
+                format!("0 t2 s1 trackpad {:?}", TrackpadAction::End),
             ],
             Duration::ZERO,
         ),
@@ -235,11 +337,11 @@ fn each_gesture_kind_plans_to_one_timeline() {
                 PointerDevice::Virtual,
                 vec![move_to(10.0, 20.0, 0), down(), up()],
             )]),
-            vec![
-                "0 s0 move 10 20".to_owned(),
-                format!("16 s0 down {here:?}"),
-                format!("16 s0 up {here:?}"),
-            ],
+            lines(&[
+                "0 t0 s0 move 10,20",
+                "16 t1 s0 down Primary 10,20",
+                "16 t2 s0 up Primary 10,20",
+            ]),
             STEP,
         ),
     ];
@@ -275,7 +377,7 @@ fn a_plan_names_its_sources_in_order() {
 
 #[test]
 fn a_long_move_takes_at_most_the_step_bound() {
-    let long = u64::try_from(STEP.as_millis()).expect("small") * u64::from(MAX_STEPS) * 4;
+    let long = millis(STEP) * u64::from(MAX_STEPS) * 4;
     let sequence = ActionSequence::new(vec![pointer(
         "p",
         PointerDevice::Mouse,
@@ -291,6 +393,14 @@ fn a_long_move_takes_at_most_the_step_bound() {
     assert_eq!(planned.span(), STEP + ms(long));
 }
 
+/// A sequence of one mouse whose ticks are a pause of `pause_ms` and then `moves` moves that name
+/// no duration, each played for one [`STEP`].
+fn paused_then_moved(pause_ms: u64, moves: usize) -> ActionSequence {
+    let mut actions = vec![pause(pause_ms)];
+    actions.extend((0..moves).map(|_| move_to(0.0, 0.0, 0)));
+    ActionSequence::new(vec![pointer("p", PointerDevice::Mouse, actions)])
+}
+
 #[test]
 fn a_sequence_no_path_plays_is_refused_whole() {
     let named = |id: &str| pointer(id, PointerDevice::Mouse, vec![down()]);
@@ -304,6 +414,18 @@ fn a_sequence_no_path_plays_is_refused_whole() {
             }],
         )])
     };
+    let trackpad = |action: TrackpadAction| {
+        ActionSequence::new(vec![InputSource::Trackpad {
+            id: "t".to_owned(),
+            actions: vec![action],
+        }])
+    };
+    let out_of_range = |tick: usize, field: &'static str| PlanError::OutOfRange {
+        source: 0,
+        tick,
+        field,
+    };
+    let past = MAX_COORDINATE + 1.0;
     let table: Vec<(&str, ActionSequence, PlanError)> = vec![
         (
             "too many sources",
@@ -321,23 +443,28 @@ fn a_sequence_no_path_plays_is_refused_whole() {
             ActionSequence::new(vec![pointer(
                 "p",
                 PointerDevice::Mouse,
-                vec![PointerAction::Pause { duration_ms: 0 }; MAX_TICKS + 1],
+                vec![pause(0); MAX_TICKS + 1],
             )]),
             PlanError::TooManyTicks {
                 ticks: MAX_TICKS + 1,
             },
         ),
         (
-            "too long",
+            "a pause past the span",
             ActionSequence::new(vec![pointer(
                 "p",
                 PointerDevice::Mouse,
-                vec![PointerAction::Pause {
-                    duration_ms: u64::try_from(MAX_SPAN.as_millis()).expect("small") + 1,
-                }],
+                vec![pause(millis(MAX_SPAN) + 1)],
             )]),
             PlanError::TooLong {
                 span: MAX_SPAN + ms(1),
+            },
+        ),
+        (
+            "moves that name no duration, played past the span the sequence names",
+            paused_then_moved(millis(MAX_SPAN), 1),
+            PlanError::TooLong {
+                span: MAX_SPAN + STEP,
             },
         ),
         (
@@ -352,20 +479,39 @@ fn a_sequence_no_path_plays_is_refused_whole() {
                 PointerDevice::Mouse,
                 vec![down(), move_to(f64::NAN, 0.0, 0)],
             )]),
-            PlanError::OutOfRange {
-                source: 0,
-                tick: 1,
-                field: "to",
-            },
+            out_of_range(1, "to"),
         ),
         (
-            "a pressure above one",
+            "a point past the coordinate bound",
+            ActionSequence::new(vec![pointer(
+                "p",
+                PointerDevice::Mouse,
+                vec![move_to(0.0, -past, 0)],
+            )]),
+            out_of_range(0, "to"),
+        ),
+        (
+            "a press's pressure above one",
             pressed(1.0 + f64::EPSILON),
-            PlanError::OutOfRange {
-                source: 0,
-                tick: 0,
-                field: "pressure",
-            },
+            out_of_range(0, "pressure"),
+        ),
+        (
+            "a press's pressure below zero",
+            pressed(-f64::EPSILON),
+            out_of_range(0, "pressure"),
+        ),
+        (
+            "a move's pressure above one",
+            ActionSequence::new(vec![pointer(
+                "p",
+                PointerDevice::Pen,
+                vec![PointerAction::Move {
+                    to: at(0.0, 0.0),
+                    duration_ms: 0,
+                    pressure: Some(1.5),
+                }],
+            )]),
+            out_of_range(0, "pressure"),
         ),
         (
             "a scroll whose delta is infinite",
@@ -378,20 +524,124 @@ fn a_sequence_no_path_plays_is_refused_whole() {
                     unit: ScrollUnit::Line,
                 }],
             }]),
-            PlanError::OutOfRange {
-                source: 0,
-                tick: 0,
-                field: "delta",
-            },
+            out_of_range(0, "delta"),
+        ),
+        (
+            "a scroll past the coordinate bound",
+            ActionSequence::new(vec![InputSource::Wheel {
+                id: "w".to_owned(),
+                actions: vec![WheelAction::Scroll {
+                    at: at(past, 0.0),
+                    delta_x: 0.0,
+                    delta_y: 1.0,
+                    unit: ScrollUnit::Pixel,
+                }],
+            }]),
+            out_of_range(0, "at"),
+        ),
+        (
+            "a trackpad gesture begun past the coordinate bound",
+            trackpad(TrackpadAction::Begin { at: at(past, 0.0) }),
+            out_of_range(0, "trackpad"),
+        ),
+        (
+            "a trackpad pinch to nothing",
+            trackpad(TrackpadAction::Pinch { scale: 0.0 }),
+            out_of_range(0, "trackpad"),
+        ),
+        (
+            "a trackpad pinch that is not a number",
+            trackpad(TrackpadAction::Pinch { scale: f64::NAN }),
+            out_of_range(0, "trackpad"),
+        ),
+        (
+            "a trackpad rotation that is infinite",
+            trackpad(TrackpadAction::Rotate {
+                degrees: f64::INFINITY,
+            }),
+            out_of_range(0, "trackpad"),
+        ),
+        (
+            "a trackpad pan that is not a number",
+            trackpad(TrackpadAction::Pan {
+                dx: 0.0,
+                dy: f64::NAN,
+            }),
+            out_of_range(0, "trackpad"),
         ),
     ];
     for (case, sequence, refused) in table {
         assert_eq!(plan(&sequence), Err(refused), "{case}");
     }
-    for pressure in [0.0, 1.0] {
-        assert!(
-            plan(&pressed(pressure)).is_ok(),
-            "a pressure of {pressure} is in range"
-        );
+}
+
+#[test]
+fn every_bound_is_inclusive() {
+    let named = |id: &str| pointer(id, PointerDevice::Mouse, vec![down()]);
+    let pressed = |pressure: f64| {
+        ActionSequence::new(vec![pointer(
+            "p",
+            PointerDevice::Pen,
+            vec![PointerAction::Down {
+                button: PointerButton::Primary,
+                pressure: Some(pressure),
+            }],
+        )])
+    };
+    let table: Vec<(&str, ActionSequence, Duration)> = vec![
+        (
+            "as many sources as the bound",
+            ActionSequence::new(
+                (0..MAX_SOURCES)
+                    .map(|index| named(&format!("p{index}")))
+                    .collect(),
+            ),
+            Duration::ZERO,
+        ),
+        (
+            "as many ticks as the bound",
+            ActionSequence::new(vec![pointer(
+                "p",
+                PointerDevice::Mouse,
+                vec![pause(0); MAX_TICKS],
+            )]),
+            Duration::ZERO,
+        ),
+        (
+            "a pause of the whole span",
+            ActionSequence::new(vec![pointer(
+                "p",
+                PointerDevice::Mouse,
+                vec![pause(millis(MAX_SPAN))],
+            )]),
+            MAX_SPAN,
+        ),
+        (
+            "moves that name no duration, played to the span exactly",
+            paused_then_moved(millis(MAX_SPAN) - 2 * millis(STEP), 2),
+            MAX_SPAN,
+        ),
+        (
+            "a point on the coordinate bound",
+            ActionSequence::new(vec![pointer(
+                "p",
+                PointerDevice::Mouse,
+                vec![
+                    PointerAction::Move {
+                        to: at(MAX_COORDINATE, -MAX_COORDINATE),
+                        duration_ms: 1,
+                        pressure: None,
+                    },
+                    down(),
+                ],
+            )]),
+            ms(1),
+        ),
+        ("a pressure of zero", pressed(0.0), Duration::ZERO),
+        ("a pressure of one", pressed(1.0), Duration::ZERO),
+    ];
+    for (case, sequence, span) in table {
+        let planned = plan(&sequence).unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert_eq!(planned.span(), span, "{case}");
     }
 }

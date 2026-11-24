@@ -11,8 +11,8 @@ use std::time::Duration;
 mod planning;
 
 pub use planning::{
-    MAX_COORDINATE, MAX_SOURCES, MAX_SPAN, MAX_STEPS, MAX_TICKS, Plan, PlanError, Planned,
-    PlannedInput, PlannedSource, STEP, SourceKind, plan,
+    MAX_COORDINATE, MAX_SOURCES, MAX_SPAN, MAX_STEPS, MAX_TICKS, Plan, PlanError, PlannedInput,
+    PlannedSource, STEP, SourceKind, TimedInput, plan,
 };
 
 use crate::act::JournalSpan;
@@ -457,9 +457,12 @@ impl ActionSequence {
             .unwrap_or(0)
     }
 
-    /// How long playing the sequence takes: the ticks play one after another, and each lasts as
-    /// long as its longest pause or move. Saturates at [`Duration::MAX`]. Linear in the number of
+    /// How long the durations the sequence names last: the ticks one after another, each as long
+    /// as its longest pause or move. Saturates at [`Duration::MAX`]. Linear in the number of
     /// actions, however many sources the ticks are spread over.
+    ///
+    /// A [`plan`] plays each move that names no duration for one [`STEP`], so its
+    /// [`Plan::span`] is what playing the sequence takes, and never less than this.
     #[must_use]
     pub fn span(&self) -> Duration {
         let mut lasts = vec![Duration::ZERO; self.ticks()];

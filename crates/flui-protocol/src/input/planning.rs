@@ -1,9 +1,10 @@
-//! [`plan`]: an action sequence planned once into timed input (ADR-0400 §2): what the agent's injection
-//! plays at frame boundaries, what a platform lane sends, and what the `HostInput` rows of a
-//! conformance table replay, so the three paths deliver the same events at the same instants.
+//! [`plan`]: an action sequence planned once into timed input (ADR-0400 §2), which the driver's
+//! OS lane turns into the events it sends. The runtime's agent still plans `input.inject` with a
+//! planner of its own, whose bounds and refusals are its own, until it plays this plan as
+//! ADR-0400 §2 decides (`docs/gaps.md` keeps that gap).
 //!
-//! [`plan`] checks a sequence against the bounds every path holds (sources, ticks, span, ranges)
-//! and lays its ticks on one timeline. Tick `n` holds the `n`th action of every source and starts
+//! [`plan`] checks a sequence against its bounds (sources, ticks, span, ranges) and lays its
+//! ticks on one timeline. Tick `n` holds the `n`th action of every source and starts
 //! where tick `n - 1` ended. Within a tick the presses, releases, cancels, scrolls, keys and text
 //! come first, at the tick's start, in the order the sources are listed; then the moves share the
 //! tick's timeline, each split into steps of [`STEP`] (at most [`MAX_STEPS`]) at its own speed,
@@ -127,7 +128,7 @@ pub enum PlannedInput {
 /// One input at its instant.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub struct Planned {
+pub struct TimedInput {
     /// When, from the sequence's start.
     pub at: Duration,
     /// The tick it belongs to, from 0.
@@ -142,7 +143,7 @@ pub struct Planned {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Plan {
     sources: Vec<PlannedSource>,
-    inputs: Vec<Planned>,
+    inputs: Vec<TimedInput>,
     span: Duration,
 }
 
@@ -156,7 +157,7 @@ impl Plan {
     /// Every input, in the order it is delivered: by instant, and within one instant as the
     /// [module docs](self) order them.
     #[must_use]
-    pub fn inputs(&self) -> &[Planned] {
+    pub fn inputs(&self) -> &[TimedInput] {
         &self.inputs
     }
 
@@ -253,6 +254,10 @@ pub fn plan(sequence: &ActionSequence) -> Result<Plan, PlanError> {
     if ticks > MAX_TICKS {
         return Err(PlanError::TooManyTicks { ticks });
     }
+    // The sequence's own span counts the durations it names and never exceeds the plan's, which
+    // adds a step for each move that names none: a sequence already past the bound is refused
+    // before its steps are laid, which bounds how many there are. The bound holds the span that
+    // is played, checked once the ticks are laid.
     let span = sequence.span();
     if span > MAX_SPAN {
         return Err(PlanError::TooLong { span });
@@ -282,7 +287,7 @@ pub fn plan(sequence: &ActionSequence) -> Result<Plan, PlanError> {
                 field,
             };
             let mut instant = |input| {
-                inputs.push(Planned {
+                inputs.push(TimedInput {
                     at: start,
                     tick,
                     source: index,
@@ -384,6 +389,9 @@ pub fn plan(sequence: &ActionSequence) -> Result<Plan, PlanError> {
         let end = lay_strokes(&strokes, start, tick, lasts, &mut inputs);
         start = end;
     }
+    if start > MAX_SPAN {
+        return Err(PlanError::TooLong { span: start });
+    }
     Ok(Plan {
         sources,
         inputs,
@@ -408,7 +416,7 @@ fn lay_strokes(
     start: Duration,
     tick: usize,
     lasts: Duration,
-    inputs: &mut Vec<Planned>,
+    inputs: &mut Vec<TimedInput>,
 ) -> Duration {
     let mut end = lasts;
     // Every step of every stroke at the whole millisecond it falls in, counted from the tick's
@@ -439,7 +447,7 @@ fn lay_strokes(
     }
     steps.sort_by_key(|&(due, order, ..)| (due, order));
     for (due, order, to, pressure) in steps {
-        inputs.push(Planned {
+        inputs.push(TimedInput {
             at: start.saturating_add(due),
             tick,
             source: strokes[order].source,
