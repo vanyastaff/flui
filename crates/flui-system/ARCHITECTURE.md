@@ -15,11 +15,13 @@ the crate is a field, so no platform compiles until it says how it answers it, a
 registers the Linux literal over another bus, refusals included.
 
 Work off the owner thread (ADR-0360 §2) is bounded once per UI runtime, on every platform: each
-piece (an Apple dispatch work item, an Android or Windows thread, a save's write) takes one of
-`off_owner::MAX_IN_FLIGHT` places in the runtime's `OffOwner` before it starts and gives it back on
-every exit, a panic included, and a request past the bound is refused at once with `Unavailable`,
-never queued. On Windows the count is the shell threads', which may also reclaim the place of a
-request past its deadline.
+piece (an Apple dispatch work item, an Android or Windows thread, a portal request that reads the
+file system or waits on the portal, a save's write) takes one of `off_owner::MAX_IN_FLIGHT` places
+in the runtime's `OffOwner` before it starts and gives it back on every exit, a panic included,
+and a request past the bound is refused at once with `Unavailable`, never queued. A request whose
+number something else bounds (a window's one dialog, a shortcut binding's watch, the launcher
+entry's one sender) takes none. On Windows the count is the shell threads', which may also reclaim
+the place of a request past its deadline; on Linux it is the portal's.
 
 ## Handles and backends
 

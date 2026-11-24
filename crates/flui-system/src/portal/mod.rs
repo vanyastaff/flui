@@ -42,6 +42,7 @@ use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 use crate::autostart::Autostart;
 use crate::dialog::FileDialogs;
 use crate::grant::Grants;
+use crate::off_owner::{OffOwner, Place};
 use crate::providers::{Providers, Provision};
 use crate::shortcuts::GlobalShortcuts;
 use crate::taskbar::TaskbarEntry;
@@ -512,7 +513,14 @@ pub(crate) struct Portal {
     next_token: Cell<u64>,
     address: RefCell<Option<Arc<str>>>,
     app_id: RefCell<Option<AppName>>,
+    /// The runtime's off-owner places, on Linux the portal's.
+    off_owner: OffOwner,
 }
+
+/// A request's place among the runtime's off-owner places, taken once the
+/// portal's thread runs: what proves [`Portal::spawn_reserved`] may run it.
+#[must_use = "the place is given back when it drops"]
+pub(crate) struct Reservation(#[expect(dead_code, reason = "held for its drop")] Place);
 
 impl Portal {
     /// Talk to the portal on the bus at `address` instead of the session
@@ -540,7 +548,50 @@ impl Portal {
         Ok(())
     }
 
-    /// Run `request` on the portal's thread, with the session bus.
+    /// Start the portal's thread unless it runs, and take one of the
+    /// runtime's off-owner places for a request that reads the file system
+    /// or waits on the portal: what [`Portal::spawn_reserved`] runs.
+    ///
+    /// # Errors
+    ///
+    /// The thread could not be made, or every place is taken
+    /// (`Unavailable` either way).
+    pub(crate) fn reserve(&self) -> Result<Reservation, PortalError> {
+        self.start()?;
+        self.off_owner
+            .place()
+            .map(Reservation)
+            .ok_or(PortalError::Unsupported(Unsupported::new(
+                UnsupportedReason::Unavailable,
+            )))
+    }
+
+    /// The runtime's off-owner places, which the portal's requests take and
+    /// every other piece of work off the owner thread (a save's write)
+    /// takes its place in too.
+    pub(crate) fn off_owner(&self) -> &OffOwner {
+        &self.off_owner
+    }
+
+    /// Run `request` on the portal's thread, with the session bus, holding
+    /// `reservation`'s place until it ends, cancelled at the drain included.
+    pub(crate) fn spawn_reserved<F, Fut>(&self, reservation: Reservation, request: F)
+    where
+        F: FnOnce(Arc<Bus>) -> Fut,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.spawn(move |bus| {
+            let request = request(bus);
+            async move {
+                let _place = reservation;
+                request.await;
+            }
+        });
+    }
+
+    /// Run `request` on the portal's thread, with the session bus, holding
+    /// no place: a request whose number something else bounds (a window's
+    /// one dialog, a binding's watch, the launcher entry's latest state).
     ///
     /// # Panics
     ///

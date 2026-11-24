@@ -67,14 +67,17 @@ impl PortalLauncher {
     ) where
         A: FnOnce(&str, String) -> Result<OpenUriBody, LaunchError> + Send + 'static,
     {
-        if let Err(error) = self.portal.start() {
-            let _ = answer.resolve(Err(launch_error(error)));
-            return;
-        }
+        let reservation = match self.portal.reserve() {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let _ = answer.resolve(Err(launch_error(error)));
+                return;
+            }
+        };
         let portal = Rc::clone(&self.portal);
         with_parent(self.window.as_ref(), &self.completions, move |parent| {
             let token = portal.token();
-            portal.spawn(move |bus| async move {
+            portal.spawn_reserved(reservation, move |bus| async move {
                 let named = parent.as_str().to_owned();
                 let asked = token.clone();
                 let made = zruntime::unblock(move || argument(&named, asked)).await;
@@ -249,43 +252,47 @@ impl LauncherBackend for PortalLauncher {
 
     /// Trashing shows nothing, so it names no window.
     fn trash_path(&self, path: PathBuf, answer: Resolver<LaunchResult>) {
-        if let Err(error) = self.portal.start() {
-            let _ = answer.resolve(Err(launch_error(error)));
-            return;
-        }
-        self.portal.spawn(move |bus| async move {
-            let opened = zruntime::unblock(move || open(&path, Purpose::Trash)).await;
-            let file = match opened {
-                Ok(file) => zbus::OwnedFd::from(std::os::fd::OwnedFd::from(file)),
-                Err(refusal) => {
-                    let _ = answer.resolve(Err(refusal));
-                    return;
-                }
-            };
-            let result = async {
-                let desktop = bus.desktop().await?;
-                desktop.require(TRASH).await?;
-                let reply = desktop
-                    .connection
-                    .call_method(
-                        Some(desktop.owner.as_str()),
-                        request::PATH,
-                        Some(TRASH.name),
-                        "TrashFile",
-                        &(file,),
-                    )
-                    .await?;
-                Ok::<_, PortalError>(reply.body().deserialize::<u32>()?)
+        let reservation = match self.portal.reserve() {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let _ = answer.resolve(Err(launch_error(error)));
+                return;
             }
-            .await;
-            let _ = answer.resolve(match result {
-                Ok(1) => Ok(()),
-                // The portal does not say why; a file it may not trash is
-                // the usual reason.
-                Ok(_) => Err(LaunchError::Denied),
-                Err(error) => Err(launch_error(error)),
+        };
+        self.portal
+            .spawn_reserved(reservation, move |bus| async move {
+                let opened = zruntime::unblock(move || open(&path, Purpose::Trash)).await;
+                let file = match opened {
+                    Ok(file) => zbus::OwnedFd::from(std::os::fd::OwnedFd::from(file)),
+                    Err(refusal) => {
+                        let _ = answer.resolve(Err(refusal));
+                        return;
+                    }
+                };
+                let result = async {
+                    let desktop = bus.desktop().await?;
+                    desktop.require(TRASH).await?;
+                    let reply = desktop
+                        .connection
+                        .call_method(
+                            Some(desktop.owner.as_str()),
+                            request::PATH,
+                            Some(TRASH.name),
+                            "TrashFile",
+                            &(file,),
+                        )
+                        .await?;
+                    Ok::<_, PortalError>(reply.body().deserialize::<u32>()?)
+                }
+                .await;
+                let _ = answer.resolve(match result {
+                    Ok(1) => Ok(()),
+                    // The portal does not say why; a file it may not trash is
+                    // the usual reason.
+                    Ok(_) => Err(LaunchError::Denied),
+                    Err(error) => Err(launch_error(error)),
+                });
             });
-        });
     }
 }
 

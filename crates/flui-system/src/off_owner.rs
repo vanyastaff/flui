@@ -4,10 +4,10 @@
 //! off the owner thread, and a stalled volume or a provider that never
 //! answers can hold that work for good. One count per UI runtime bounds it on
 //! every platform: Apple's dispatch work items, Android's and Windows'
-//! threads and a save's write each take a place in [`OffOwner`] before they
-//! start, at most [`MAX_IN_FLIGHT`] at once, and give it back on every exit,
-//! a panic included. A request past the bound is refused at once with its
-//! caller's refusal, never queued.
+//! threads, the portal's requests and a save's write each take a place in
+//! [`OffOwner`] before they start, at most [`MAX_IN_FLIGHT`] at once, and
+//! give it back on every exit, a panic included. A request past the bound is
+//! refused at once with its caller's refusal, never queued.
 #![cfg_attr(
     target_arch = "wasm32",
     expect(
@@ -58,8 +58,9 @@ pub(crate) enum NotRun {
 impl OffOwner {
     /// The places of the UI runtime acquiring in `ctx`.
     ///
-    /// On Windows every shell request runs on the runtime's shell threads,
-    /// so the count is theirs; elsewhere it is the runtime's own.
+    /// The count is the one executor's that runs a platform's requests where
+    /// there is one: on Windows the shell threads', on Linux the portal's.
+    /// Elsewhere it is the runtime's own.
     pub(crate) fn of(ctx: &ProviderContext<'_>) -> Rc<Self> {
         #[cfg(windows)]
         {
@@ -69,7 +70,15 @@ impl OffOwner {
                     .clone(),
             )
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "linux")]
+        {
+            Rc::new(
+                ctx.runtime_local::<crate::portal::Portal>()
+                    .off_owner()
+                    .clone(),
+            )
+        }
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             ctx.runtime_local::<Self>()
         }
