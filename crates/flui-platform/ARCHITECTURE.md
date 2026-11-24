@@ -400,9 +400,12 @@ are separate observations (ADR-0359). The `preferences_contract` table
 pins numeric admission, including adjacent rejected boundary values, subnormal
 text factors and both signs of zero. The widget contract
 `media_text_scaling_changes_the_laid_out_text` checks real paragraph layout at
-both admitted boundaries and fallback after extreme observations. Source
-lifecycle, ordered delivery and consumer projection remain under implementation in
-the platform-layer spec; these value tests do not establish those behaviors.
+both admitted boundaries and fallback after extreme observations. These value
+tests do not establish the source's lifecycle, ordered delivery or consumer
+projection: `flui-runtime`'s `owner_metrics` contracts
+(`a_revision_is_accepted_before_the_turn_that_delivers_it`,
+`queued_preferences_are_not_coalesced_across_an_input`) and the consumer tables
+ADR-0172 names hold those.
 
 Mouse double-click timing and touch double-tap timing are independent observations.
 `NativeMouseGeometry` keeps full double-click rectangle dimensions separate from
