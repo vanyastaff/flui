@@ -329,3 +329,41 @@ fn a_worker_images_rebuild_request_runs_the_hosts_hook() {
     drop(worker);
     drop(registration);
 }
+
+/// A panic in the developer's root view, its mount or its frame cannot unwind
+/// out of `flui_app_build`, an `extern "C"` entry: it aborts the host's
+/// process. Fails, by aborting the test binary, when the entry runs that code
+/// outside containment. The image loads from a copy at a path of its own, so
+/// its root mounts fresh.
+#[test]
+fn a_panicking_app_root_skips_the_frame_and_the_next_build_mounts() {
+    let copy = TempPath::new("panicking_root");
+    std::fs::copy(fixture_artifact_path(), copy.path()).expect("copy the fixture");
+    let plugin = ScenePlugin::load(copy.path()).expect("the fixture loads as a ScenePlugin");
+    let image = DynLib::open(copy.path()).expect("the image opens again by its path");
+    // SAFETY: `fixture_panic_next_mount` is the fixture's own exported
+    // `extern "C" fn()`, compiled from this workspace with this toolchain, and
+    // `image` keeps it mapped through the call.
+    #[expect(unsafe_code, reason = "transmutes the symbol to its signature")]
+    unsafe {
+        let ptr = image
+            .symbol("fixture_panic_next_mount")
+            .expect("fixture must export fixture_panic_next_mount");
+        std::mem::transmute::<*mut c_void, extern "C" fn()>(ptr)();
+    }
+
+    // SAFETY: the load's token handshake confirmed the layouts, and each
+    // scene is dropped before `plugin` unloads the image below.
+    #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
+    let (refused, mounted) = unsafe {
+        (
+            plugin.build_scene(64.0, 64.0),
+            plugin.build_scene(64.0, 64.0),
+        )
+    };
+    assert!(refused.is_none(), "a panicking root is a skipped frame");
+    assert!(mounted.is_some(), "the next build mounts the root again");
+    drop(mounted);
+    drop(image);
+    plugin.unload();
+}

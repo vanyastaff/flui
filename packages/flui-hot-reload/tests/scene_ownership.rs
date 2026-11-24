@@ -19,10 +19,30 @@ impl Drop for Payload {
     }
 }
 
+/// What this thread's builds produce. A test other than the ownership test
+/// builds empty scenes, so the ownership test's payload count stays its own.
+#[derive(Clone, Copy, PartialEq)]
+enum NextBuild {
+    Payload,
+    Empty,
+    Panic,
+}
+
+thread_local! {
+    static NEXT_BUILD: std::cell::Cell<NextBuild> = const { std::cell::Cell::new(NextBuild::Payload) };
+}
+
 fn build_scene(_: f64, _: f64) -> Scene {
-    Scene::new(LayerTree::new(Layer::AnnotatedRegion(
-        AnnotatedRegionLayer::sized_by_parent(Arc::new(Payload)),
-    )))
+    match NEXT_BUILD.get() {
+        NextBuild::Payload => Scene::new(LayerTree::new(Layer::AnnotatedRegion(
+            AnnotatedRegionLayer::sized_by_parent(Arc::new(Payload)),
+        ))),
+        NextBuild::Empty => Scene::default(),
+        NextBuild::Panic => {
+            NEXT_BUILD.set(NextBuild::Empty);
+            panic!("the scene function panicked");
+        }
+    }
 }
 
 flui_hot_reload::scene_plugin!(build_scene);
@@ -171,4 +191,22 @@ fn same_path_subsecond_revisions_and_recreation_are_detected() {
     assert_ne!(flui_hot_reload::worker_artifact_stamp(&path), unavailable);
     std::fs::remove_dir_all(path.parent().expect("scratch directory"))
         .expect("remove scratch directory");
+}
+
+/// A panic in the scene function cannot unwind out of the `extern "C"`
+/// entry: it aborts the host's process. Fails, by aborting the test binary,
+/// when the entry runs the scene function outside containment.
+#[test]
+fn a_panicking_scene_function_answers_null_and_the_next_build_works() {
+    NEXT_BUILD.set(NextBuild::Panic);
+    assert!(
+        flui_scene_build(10.0, 20.0).is_null(),
+        "a panicking scene function answers null"
+    );
+    let built = flui_scene_build(10.0, 20.0);
+    assert!(!built.is_null(), "the next build works");
+    // A runner that runs every test on one thread reaches the ownership test next.
+    NEXT_BUILD.set(NextBuild::Payload);
+    // SAFETY: unique initialized allocation from this image, never moved or consumed.
+    unsafe { flui_scene_drop(built) };
 }

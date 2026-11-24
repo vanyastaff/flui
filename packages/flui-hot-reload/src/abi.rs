@@ -33,7 +33,7 @@ use flui_sdk::hooks::Scene;
 /// The revision of the generated symbol families' signatures. It changes
 /// with every change to a `flui_*` symbol a plugin macro emits or a loader
 /// calls, such as an argument `flui_worker_init` gains.
-const SYMBOL_REVISION: u32 = 1;
+const SYMBOL_REVISION: u32 = 2;
 
 /// The ABI-compatibility token for THIS compilation of the plugin boundary.
 ///
