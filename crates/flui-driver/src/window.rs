@@ -464,10 +464,7 @@ impl<'a> ElementLocator<'a> {
     /// [`Error::Ambiguous`](crate::Error::Ambiguous) and
     /// [`Error::NotFound`](crate::Error::NotFound) after waiting for one to appear.
     pub fn resolve(self) -> Result<Element<'a>> {
-        let timeout = self
-            .options
-            .timeout_ms
-            .map_or(self.driver.timeout, Duration::from_millis);
+        let timeout = compose::timeout_of(self.driver, &self.options);
         let handle = compose::resolve(self.driver, &self.target(), timeout)?;
         Ok(Element {
             driver: self.driver,

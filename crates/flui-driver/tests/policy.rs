@@ -1,19 +1,27 @@
 //! The session's input policy, the scenario's window rule and the OS-input announcement
 //! (ADR-0238 §5, §11), on the headless target with a scripted OS lane.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_driver::lane;
 use flui_driver::os_input::OsDevice;
+use flui_driver::protocol::error::{ErrorCode, ErrorObject};
 use flui_driver::protocol::geometry::LogicalPoint;
-use flui_driver::protocol::input::{ActionSequence, InputSource, PointerAction, PointerDevice};
+use flui_driver::protocol::input::{
+    ActionSequence, InputSource, PointerAction, PointerDevice, TapParams,
+};
+use flui_driver::protocol::locator::Target;
+use flui_driver::protocol::method::{self, Method};
 use flui_driver::protocol::report::Report;
 use flui_driver::protocol::verdict::Verdict;
 use flui_driver::steps::OsEvent;
-use flui_driver::testing::{LaneLog, ScriptedLane};
+use flui_driver::testing::{LaneLog, Reply, ScriptedAgent, ScriptedLane};
 use flui_driver::{
     Driver, Error, InputPath, InputPolicy, Isolation, Launch, Locator, Scenario, WindowSpec,
 };
+
+use serde_json::json;
 
 use crate::fixtures::{Counter, Probe};
 
@@ -388,4 +396,103 @@ fn a_sequence_the_lane_cannot_send_is_refused_before_any_event() {
     assert!(log.sent().is_empty(), "nothing was sent");
     assert_eq!(log.arms(), 0, "the guard never armed");
     assert_eq!(log.releases(), 0, "nothing was pressed to release");
+}
+
+/// A scripted agent whose hello serves `element.tap`, answering it after `delay`, and the
+/// methods it was asked.
+fn serving_taps(delay: Duration) -> (ScriptedAgent, Arc<Mutex<Vec<String>>>) {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&asked);
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::SemanticsLocate::NAME,
+            method::ElementTap::NAME,
+        ],
+        Box::new(move |name, _| {
+            log.lock().expect("the log").push(name.to_owned());
+            match name {
+                "windows.list" => Reply::Result(json!({ "windows": ["w1"] })),
+                "element.tap" => {
+                    std::thread::sleep(delay);
+                    Reply::Result(json!({ "via": "synthetic", "effect": { "kind": "ran" } }))
+                }
+                _ => Reply::Error(ErrorObject::new(ErrorCode::NotFound, "nothing matches")),
+            }
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    (agent, asked)
+}
+
+fn tap_increment() -> TapParams {
+    TapParams::new(Target::Locator(Locator::identifier("increment")))
+}
+
+/// A gesture the app's agent lists in its hello goes to the agent, unless the call or the
+/// session asks for the `os` path, which the driver composes with its lane; the capabilities list
+/// a served gesture once and the driver's compositions of the rest.
+#[test]
+fn a_gesture_the_agent_serves_goes_to_it_except_on_the_os_path() {
+    let (agent, asked) = serving_taps(Duration::ZERO);
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+
+    let capabilities = driver.capabilities();
+    let listed = |name: &str| {
+        capabilities
+            .methods
+            .iter()
+            .filter(|method| method.as_str() == name)
+            .count()
+    };
+    assert_eq!(listed(method::ElementTap::NAME), 1, "{capabilities:?}");
+    assert_eq!(
+        listed(method::ElementDoubleTap::NAME),
+        1,
+        "{capabilities:?}"
+    );
+
+    let tapped = driver
+        .call::<method::ElementTap>(tap_increment())
+        .expect("the agent answers the tap");
+    assert_eq!(tapped.via, InputPath::Synthetic);
+    let taps = |asked: &Mutex<Vec<String>>| {
+        asked
+            .lock()
+            .expect("the log")
+            .iter()
+            .filter(|name| name.as_str() == method::ElementTap::NAME)
+            .count()
+    };
+    assert_eq!(taps(&asked), 1, "the served tap went to the agent");
+
+    let mut on_os = tap_increment();
+    on_os.options.via = Some(InputPolicy::require(InputPath::Os));
+    let composed = driver.call::<method::ElementTap>(on_os);
+    assert!(composed.is_err(), "the session has no lane: {composed:?}");
+    driver.set_input_policy(InputPolicy::require(InputPath::Os));
+    let composed = driver.call::<method::ElementTap>(tap_increment());
+    assert!(composed.is_err(), "the session has no lane: {composed:?}");
+    assert_eq!(
+        taps(&asked),
+        1,
+        "a tap on the `os` path, the call's or the session's, is the driver's"
+    );
+}
+
+/// The driver waits for a served gesture as long as its act may hold, past its own reply bound:
+/// an agent that answers a tap after the bound but within the tap's timeout is answered.
+#[test]
+fn a_served_gesture_is_waited_for_as_long_as_its_act_may_hold() {
+    // The attached driver waits 15 s past what the app may hold a request for.
+    let (agent, _asked) = serving_taps(Duration::from_secs(17));
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let mut tap = tap_increment();
+    tap.options.timeout_ms = Some(10_000);
+    let tapped = driver
+        .call::<method::ElementTap>(tap)
+        .expect("the tap's act timeout extends the reply's deadline");
+    assert_eq!(tapped.via, InputPath::Synthetic);
 }

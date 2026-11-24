@@ -91,8 +91,8 @@ pub(crate) fn composes(name: &str) -> bool {
 
 /// Whether the app's agent answers the gesture `name` asked with `params` (ADR-0400 §2): it
 /// serves the method, and the path the call names, or the session's, is not `os`, which the
-/// driver composes with its lane. An app whose agent does not answer gestures yet has each one
-/// composed here, as every app before protocol 0.32 did.
+/// driver composes with its lane. A gesture the app's agent does not list in its hello is composed
+/// here.
 pub(crate) fn agent_answers(driver: &Driver, name: &str, params: &Value) -> bool {
     if !driver.serves(name) {
         return false;
@@ -337,9 +337,11 @@ fn aim(driver: &mut Driver, target: &Target, options: &GestureOptions) -> Result
     })
 }
 
-fn timeout_of(driver: &Driver, options: &GestureOptions) -> Duration {
+/// How long a composed act locates and checks: the timeout it names, as
+/// [`GestureOptions::named_timeout_ms`] bounds it, or the session's.
+pub(crate) fn timeout_of(driver: &Driver, options: &GestureOptions) -> Duration {
     options
-        .timeout_ms
+        .named_timeout_ms()
         .map_or(driver.timeout, Duration::from_millis)
 }
 
