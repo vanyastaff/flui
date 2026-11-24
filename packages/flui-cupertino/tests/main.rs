@@ -86,6 +86,10 @@ fn component_contracts() {
             bottom_tab_bar::each_item_is_one_node_its_click_reaches_on_tap,
         ),
         (
+            "bottom_tab_bar::the default border is a hairline and border replaces it",
+            bottom_tab_bar::the_default_border_is_a_hairline_and_border_replaces_it,
+        ),
+        (
             "button::tap callback writes a signal and rebuilds its reader",
             button::tap_callback_writes_a_signal_and_rebuilds_its_reader,
         ),
@@ -146,8 +150,24 @@ fn component_contracts() {
             nav_bar::the_middle_announces_as_a_level_one_heading,
         ),
         (
-            "page_scaffold::content is padded below the nav bar plus the top inset",
-            page_scaffold::content_is_padded_below_the_nav_bar_plus_the_top_inset,
+            "nav_bar::the default border is one device pixel",
+            nav_bar::the_default_border_is_one_device_pixel,
+        ),
+        (
+            "nav_bar::the middle is centred until it would reach a side",
+            nav_bar::the_middle_is_centred_until_it_would_reach_a_side,
+        ),
+        (
+            "nav_bar::a translucent bar blurs its backdrop and an opaque one does not",
+            nav_bar::a_translucent_bar_blurs_its_backdrop_and_an_opaque_one_does_not,
+        ),
+        (
+            "nav_bar::a bar whose background crosses full opacity keeps its slots state",
+            nav_bar::a_bar_whose_background_crosses_full_opacity_keeps_its_slots_state,
+        ),
+        (
+            "page_scaffold::content runs under a translucent bar and below an opaque one",
+            page_scaffold::content_runs_under_a_translucent_bar_and_below_an_opaque_one,
         ),
         (
             "tab_scaffold::tab controller relays keep failure custody",

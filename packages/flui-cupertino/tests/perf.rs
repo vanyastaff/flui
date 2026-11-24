@@ -27,8 +27,8 @@ use flui_testing::perf::{Baselines, Held};
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-const TAB_BAR_ELEMENTS: u64 = 33;
-const TAB_BAR_RENDER_NODES: u64 = 18;
+const TAB_BAR_ELEMENTS: u64 = 35;
+const TAB_BAR_RENDER_NODES: u64 = 19;
 
 /// Every scenario that holds a file, kept sorted.
 const SCENARIOS: &[&str] = &["cupertino_button_over_text", "cupertino_tab_bar_alone"];
@@ -77,7 +77,7 @@ fn perf_cupertino_button_over_text() {
 }
 
 /// What a `CupertinoTabBar` of two items costs in place of an empty box,
-/// under a `MediaQuery`: the bar's decoration and row, and per item its
+/// under a `MediaQuery`: the bar's backdrop filter, decoration and row, and per item its
 /// icon and label on one interactive node that carries the item's
 /// selection and tap.
 #[test]

@@ -184,3 +184,49 @@ slide and its chrome through `CupertinoApp::router`.
 the window, the announced value, right-to-left order and reduced motion are the indicator's, so
 the two cannot drift apart. `the_control_draws_ios_dots_and_turns_its_pager` pins the look and
 the paging through this package's public entry point.
+
+### A bar's background decides what it obstructs
+
+`CupertinoNavigationBar` and `CupertinoTabBar` implement
+`ObstructingPreferredSizeView`: a bar fully obstructs when its background,
+resolved for the context, is fully opaque. The scaffolds ask on every build,
+so a theme or brightness change that makes the bar translucent moves the
+content under it on the next frame. Under a bar that fully obstructs, the
+content is padded clear of it and the obstructed edge's `MediaQuery` padding
+is consumed; under one that does not, the content runs under the bar and reads
+the bar's height plus the safe-area inset as that edge's padding.
+`CupertinoPageScaffold` takes any implementor and erases it into a
+`BoxedView`; beside it the scaffold keeps a function made for the bar's type
+that finds the bar again in that view and asks it, so the scaffold holds one
+copy of the bar and needs no `Clone` bound. `CupertinoTabScaffold` holds its
+concrete `CupertinoTabBar` and asks it directly.
+
+A translucent bar blurs its backdrop with a sigma-10 Gaussian blur. The
+filter is mounted under every bar and switched off while the background is
+fully opaque, as Flutter's navigation bar keeps a disabled filter: a bar whose
+background crosses full opacity keeps its subtree's shape, so its slots keep
+their elements, a leading button its press fade and focus. Flutter's tab bar
+adds the filter only when translucent; here both bars keep it. Flutter clips
+the filter with a `ClipRect`; FLUI's `BackdropFilter` already covers only its
+child's laid-out box, so the bars add no clip.
+
+The bars' default border is one device pixel: `1 / device_pixel_ratio`
+logical pixels under the ambient `MediaQuery`. Flutter writes width `0.0` for
+a hairline; `flui-painting` paints nothing for a side of width `0.0`. The
+default is a state of the bar's border, resolved in `build`, beside an
+authored border and a removed one.
+
+The navigation bar lays out its slots with a private toolbar delegate:
+`leading` at the start edge, `trailing` at the end, and `middle` centred on
+the full width while it keeps 6 points from both, otherwise moved toward the
+side with room and limited to the space between them. Flutter's
+`NavigationToolbar` keeps that spacing from `leading` only; here it holds on
+both sides.
+
+`the_default_border_is_one_device_pixel`,
+`the_default_border_is_a_hairline_and_border_replaces_it`,
+`the_middle_is_centred_until_it_would_reach_a_side`,
+`a_translucent_bar_blurs_its_backdrop_and_an_opaque_one_does_not`,
+`a_bar_whose_background_crosses_full_opacity_keeps_its_slots_state` and
+`content_runs_under_a_translucent_bar_and_below_an_opaque_one` pin the
+hairline, the layout, the blur and the obstruction.
