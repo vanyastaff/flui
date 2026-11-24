@@ -245,8 +245,13 @@ passed. Strict clippy, private-items rustdoc, doctests, native Windows and wasm
 checks passed, together with both 65-case per-feature passes. Complete Apple and
 Android cross-typechecks need unavailable SDKs/toolchains on this host; the
 Linux native suite needs xvfb-run. Those paths and CI acceptance remain pending.
-This local gesture/wheel acceptance does not complete text, motion or
-the broader host-authority acceptance in the platform-layer specification.
+These rows cover gestures and the wheel. Text sizing is held by
+`the_system_text_scale_grows_each_span_once` and
+`a_field_measures_and_hit_tests_the_current_text_scale` (`flui-widgets`), motion by
+`normal_and_preserve_use_distinct_duration_timelines` (`flui-animation`), and the source's
+admission and fan-out by `a_revision_is_accepted_before_the_turn_that_delivers_it`,
+`preference_fanout_survives_a_failing_runtime` and
+`queued_preferences_are_not_coalesced_across_an_input` (`flui-runtime`).
 
 ## Windows transport constraint
 
@@ -262,8 +267,9 @@ is balanced while preserving the platform's outer COM lifetime.
 
 Native callback execution, headless protocol behavior, cross-platform compilation
 and actual OS notification delivery are separate evidence. A probe that registers
-and removes a token does not establish change delivery. Implementation acceptance
-is tracked in the [platform-layer spec](../plans/specs/platform-layer/tasks.md).
+and removes a token does not establish change delivery. Which hosts deliver each
+preference, and the device runs each still owes, are
+[`docs/platform-parity.md`](../platform-parity.md#system-preferences)'s.
 
 A Windows winit transport used this same owner-local source; it and its two native witnesses left
 with the winit host (ADR-0151 §11).
