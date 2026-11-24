@@ -254,6 +254,12 @@ pub(crate) fn the_system_text_scale_grows_each_span_once() {
             vec![18.0],
             vec![18.0],
         ),
+        (
+            "a RichText keeps its spans' authored sizes, as Flutter's scales by none",
+            flui_widgets::RichText::new(TextSpan::styled("rich", sized(16.0))).boxed(),
+            vec![16.0],
+            vec![16.0],
+        ),
     ];
     // Painted glyph sizes span by span: runs come in visual order, and a
     // fallback face can split one span into neighbouring runs of one size.
@@ -439,6 +445,90 @@ pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
 // ============================================================================
 // Directionality
 // ============================================================================
+
+/// A rich `Text` puts its span tree beneath the ambient style and passes the
+/// ambient weight adjustment on; a `RichText` keeps its spans as authored and
+/// the adjustment it is given, none by default.
+pub(crate) fn a_rich_text_reads_the_style_and_weight_around_it() {
+    use flui_objects::RenderParagraph;
+    use flui_painting::typography::{InlineSpan, TextSpan};
+    use flui_view::{BoxedView, ViewExt};
+    use flui_widgets::RichText;
+
+    fn sized(size: f64) -> TextStyle {
+        TextStyle::default().with_font_size(size)
+    }
+    let tree = || TextSpan::new("ab").with_child(TextSpan::styled("cd", sized(12.0)));
+    // The laid-out paragraph's text and weight adjustment.
+    let read = |view: BoxedView| {
+        let laid = lay_out(view, loose(1000.0));
+        let paragraph = laid.find_by_render_type("RenderParagraph");
+        laid.pipeline_owner().with(|owner| {
+            let painter = owner
+                .render_tree()
+                .get(paragraph)
+                .and_then(|node| node.as_box())
+                .and_then(|node| node.render_object().downcast_ref::<RenderParagraph>())
+                .expect("a mounted paragraph")
+                .painter();
+            let text = painter.text().cloned().expect("the paragraph has text");
+            (text, painter.font_weight_adjustment())
+        })
+    };
+    let root_size = |text: &InlineSpan| match text {
+        InlineSpan::Text(span) => span.style.as_ref().and_then(|style| style.font_size),
+        InlineSpan::Placeholder(_) => None,
+    };
+    let bold = |view: BoxedView| {
+        MediaQuery::new(
+            MediaQueryData {
+                font_weight_adjustment: 300,
+                ..MediaQueryData::default()
+            },
+            view,
+        )
+        .boxed()
+    };
+
+    let (text, adjustment) = read(DefaultTextStyle::new(sized(18.0), Text::rich(tree())).boxed());
+    assert_eq!(text.to_plain_text(), "abcd", "the tree's text, and only it");
+    assert_eq!(root_size(&text), Some(18.0), "beneath the ambient style");
+    assert_eq!(adjustment, 0, "no MediaQuery adjusts no weight");
+
+    let (text, _) = read(Text::rich(tree()).boxed());
+    assert_eq!(
+        text,
+        InlineSpan::from(tree()),
+        "no ambient style leaves the tree as authored"
+    );
+
+    let (_, adjustment) = read(bold(Text::rich(tree()).boxed()));
+    assert_eq!(
+        adjustment, 300,
+        "a rich Text passes the ambient adjustment on"
+    );
+
+    let (text, adjustment) =
+        read(DefaultTextStyle::new(sized(18.0), bold(RichText::new(tree()).boxed())).boxed());
+    assert_eq!(
+        (text, adjustment),
+        (InlineSpan::from(tree()), 0),
+        "a RichText reads neither the style nor the adjustment around it"
+    );
+    let (_, adjustment) = read(RichText::new(tree()).font_weight_adjustment(300).boxed());
+    assert_eq!(
+        adjustment, 300,
+        "a RichText takes the adjustment it is given"
+    );
+
+    let described = format!("{:?}", Text::rich(tree()).on_link(|_ctx, _link| {}));
+    assert!(
+        described.starts_with("Text {")
+            && described.contains("content: Rich(")
+            && described.contains("on_link: true"),
+        "a Text describes its content and whether it handles links: {described}"
+    );
+}
 
 /// A run with no direction of its own reads the ambient `Directionality`: in RTL
 /// its paragraph is right-to-left and start-aligned glyphs sit at the right

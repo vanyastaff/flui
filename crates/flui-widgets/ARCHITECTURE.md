@@ -3584,8 +3584,12 @@ reads it in `createRenderObject` and `updateRenderObject` (`basic.dart:6665` and
 `:6687`): a direction change reconfigures the same render object, and a run that
 names a direction takes no dependency
 (`a_text_run_reads_the_ambient_direction_unless_it_names_one`). A `RichText` built
-directly reads no `MediaQuery`: unset, its sizing is its presentation's
-(`media_text_scaling_changes_the_laid_out_text`). Native settings never enter
+directly reads no `MediaQuery` and lays its spans out at their authored sizes unless it
+is given a sizing, as Flutter's defaults to `TextScaler.noScaling` (`basic.dart:6535`),
+so the ambient direction is its only dependency; `Text` gives it the `MediaQuery`'s
+sizing, or leaves it to the presentation's with no `MediaQuery` above
+(`media_text_scaling_changes_the_laid_out_text`,
+`the_system_text_scale_grows_each_span_once`). Native settings never enter
 `RenderObjectContext`. The paragraph update reports layout and semantics invalidation
 when sizing changes, so the same render object produces updated geometry. Weight
 changes likewise invalidate layout and semantics; EditableText forwards the same inherited adjustment to its painter.

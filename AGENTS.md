@@ -101,6 +101,7 @@ and edits its row.
 | The platform whose conventions a widget follows (chords, handles, menus, transitions) | `flui_view::environment::PlatformConvention::of`, installed by the runtime above every root; a test names its platform with `HeadlessWindow::with_platform` or a `PlatformConvention` wrapper (ADR-0028) | `TargetPlatform::current()` outside the app runner, a theme's platform field, a `Default` that reads the build host |
 | A platform's status, a version floor, an open gap | `crates/flui-native/platform-parity.toml` (rendered into `docs/platform-parity.md`), `platform-support.toml`, `docs/gaps.md` | a status line in an ADR, a spec or an `ARCHITECTURE.md`; a hand edit of `docs/platform-parity.md` |
 | A custom painter draws text | `CustomPainter::paint(&self, ctx: &mut CustomPaintContext)` with `ctx.text()` and a `TextPainter` (the Flutter counterpart is `paint(Canvas, Size)` with a `TextPainter`; FLUI lends the text context per phase) | a `TextContextHandle` or font collection held by the painter; shaping outside the loan |
+| An application shows text, a span tree included | `Text::new` or `Text::rich`, which read the ambient `DefaultTextStyle`, the `MediaQuery` sizing and bold text, a `SelectionArea` and `on_link`, and build a `RichText` (Flutter 3.50.1's `Text`/`RichText` split) | a `RichText` built by an application: it reads only `Directionality`, lays out at the authored sizes and neither selects nor opens links; `RichText::on_link`, removed |
 
 ## Codebase map
 

@@ -28,9 +28,10 @@ use crate::support::RefCallback;
 /// The ambient [`DefaultTextStyle`](crate::DefaultTextStyle), the
 /// [`MediaQuery`](flui_view::environment::MediaQuery) text sizing and weight
 /// adjustment, a [`SelectionArea`](crate::SelectionArea) and link handling
-/// are [`Text`](crate::Text)'s: a `RichText` is sized by the
-/// [`text_sizing`](Self::text_sizing) it is given, else by its presentation's
-/// own (the platform's text scale), and its links are plain text.
+/// are [`Text`](crate::Text)'s: a `RichText` paints its spans at their
+/// authored sizes unless it is given a [`text_sizing`](Self::text_sizing), as
+/// Flutter's defaults to `TextScaler.noScaling` (`basic.dart:6535`), and its
+/// links are plain text.
 ///
 /// # Examples
 ///
@@ -51,6 +52,8 @@ pub struct RichText {
     /// The authored direction; unset, the ambient one.
     pub(super) direction: Option<TextDirection>,
     pub(super) max_lines: Option<u32>,
+    /// The sizing its spans are laid out at; `None` inherits the
+    /// presentation's, which only [`Text`](crate::Text) asks for.
     pub(super) text_sizing: Option<TextSizing>,
     pub(super) font_weight_adjustment: i32,
     /// What reaches the links, when a handler activates them.
@@ -69,7 +72,7 @@ impl RichText {
     /// Display `text` (any type convertible into an [`InlineSpan`] — most
     /// commonly a [`TextSpan`](flui_painting::typography::TextSpan)) with start
     /// alignment, in the ambient [`Directionality`]'s reading direction, at
-    /// its presentation's text scale.
+    /// its spans' authored sizes.
     #[track_caller]
     pub fn new(text: impl Into<InlineSpan>) -> Self {
         Self {
@@ -77,7 +80,7 @@ impl RichText {
             align: TextAlign::Start,
             direction: None,
             max_lines: None,
-            text_sizing: None,
+            text_sizing: Some(TextSizing::fixed()),
             font_weight_adjustment: 0,
             links: None,
             link_focus: None,
@@ -110,9 +113,9 @@ impl RichText {
     }
 
     /// Size each span by `sizing`, as Flutter's `RichText` takes a
-    /// `textScaler` (`basic.dart:6611`). Unset, its presentation's own sizing
-    /// (the platform's text scale) applies; [`Text`](crate::Text) passes the
-    /// ambient [`MediaQuery`](flui_view::environment::MediaQuery)'s.
+    /// `textScaler` (`basic.dart:6611`). Unset, each span keeps its authored
+    /// size; [`Text`](crate::Text) passes the ambient
+    /// [`MediaQuery`](flui_view::environment::MediaQuery)'s.
     #[must_use]
     pub fn text_sizing(mut self, sizing: TextSizing) -> Self {
         self.text_sizing = Some(sizing);
@@ -128,7 +131,8 @@ impl RichText {
         self
     }
 
-    /// The text sizing to apply, unset when none was given.
+    /// The text sizing `Text` resolved: the ambient `MediaQuery`'s, or, with
+    /// none above it, the presentation's own (`None`).
     pub(super) fn with_text_sizing(mut self, sizing: Option<TextSizing>) -> Self {
         self.text_sizing = sizing;
         self

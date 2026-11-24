@@ -11,6 +11,9 @@
   `Directionality` while it configures its render object, and no longer reads the
   `MediaQuery` text sizing or weight adjustment, joins a `SelectionArea` or handles links.
   `Text` (and `Text::rich`) does all three, and builds one element fewer per run.
+- A `RichText` given no `text_sizing` lays its spans out at their authored sizes, as
+  Flutter's `RichText` defaults to `TextScaler.noScaling`; it no longer follows the
+  platform's text scale. Use `Text::rich` for text that scales.
 
 ### Removed
 
