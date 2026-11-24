@@ -74,8 +74,8 @@ mod measured {
     };
     use flui_sdk::geometry::{EdgeInsets as _, RRect as _, Radius as _};
     use flui_sdk::hooks::{
-        FrameSnapshot as _, LayerTree as _, PluginFrameError as _, PluginPipeline as _, Scene as _,
-        SceneError as _, TextContextHandle as _,
+        LayerTree as _, PluginFrameError as _, PluginPipeline as _, Scene as _, SceneError as _,
+        TextContextHandle as _,
     };
     use flui_sdk::interaction::{
         ArenaMembership as _, BeginContactError as _, CancelOutcome as _, CompositionBranch as _,
@@ -766,7 +766,6 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_rendering::view::ScrollDirection;",
         "pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};",
         "pub use flui_scheduler::AsyncDriver;",
-        "pub use flui_scheduler::FrameSnapshot;",
         "pub use flui_scheduler::FrameWaker;",
         "pub use flui_scheduler::Instant;",
         "pub use flui_scheduler::PostFrameHandle;",

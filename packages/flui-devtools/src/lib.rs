@@ -4,12 +4,13 @@
 //! or render tree:
 //!
 //! - **`profiling`** — [`Capture`], the one recorder of the framework's frame
-//!   spans (its [`layer`](Capture::layer) subscribes to the `frame` span
-//!   `UpdateScheduler::drive_frame` opens and the [`Phase`] spans the pipeline
-//!   emits inside it), and [`Profiler`], per-frame statistics read from a capture.
+//!   spans and frame telemetry (its [`layer`](Capture::layer) subscribes to the `frame` span
+//!   `UpdateScheduler::drive_frame` opens, the [`Phase`] spans the pipeline
+//!   emits inside it, and the `frame_telemetry` events the runtime traces for each
+//!   [`ProducedFrame`]), and [`Profiler`], per-frame statistics read from a capture.
 //! - **`timeline`** — [`Timeline`], an event recorder with Chrome
-//!   trace export and a bridge from the scheduler's `FrameSnapshot`s; over a
-//!   capture it shows the framework's frames and phases beside the application's events.
+//!   trace export; over a capture it shows the framework's frames, phases and produced frames
+//!   beside the application's events.
 //! - **`inspector`** — [`GestureInspector`], which reports
 //!   what a gesture arena decided per contest through `GestureObserver`, and
 //!   [`GestureInspectorOverlay`], a debug overlay that draws
@@ -51,14 +52,22 @@
 //! # }
 //! ```
 //!
+//! # Frame telemetry and build levels
+//!
+//! The spans a capture reads are `DEBUG`; the `frame_telemetry` and `frame_gpu_time` events
+//! behind each [`ProducedFrame`] are `TRACE`. Today the framework sets no `max_level_*` feature
+//! (ADR-0242 §7), so a release build still traces them for a capture that asks. A build that
+//! caps `tracing` below `TRACE` (a `max_level_*` or `release_max_level_*` feature) compiles the
+//! two events out, and its capture then records no produced frames; one capped below `DEBUG`
+//! loses the spans too.
+//!
 //! # Feature flags
 //!
 //! The first three are on by default; disable what you do not need.
 //!
 //! - `profiling`: [`Capture`] and [`Profiler`] (`tracing` + `tracing-subscriber`).
 //! - `timeline`: [`Timeline`], [`TimelineEvent`] and [`TimelineEventKind`]
-//!   (`flui_sdk::hooks::FrameSnapshot` for the scheduler bridge, `serde` for the exporters);
-//!   with `profiling`, [`Timeline::over`] reads a capture.
+//!   (`serde` for the exporters); with `profiling`, [`Timeline::over`] reads a capture.
 //! - `inspector`: [`InspectorCounters`] (`flui_sdk::foundation::observe` for the
 //!   seam), [`GestureInspectorOverlay`] (`flui_sdk::widgets`) and [`GestureInspector`] (`flui_sdk::interaction`'s arena
 //!   observation).
@@ -99,7 +108,7 @@ mod timeline;
 #[cfg(feature = "profiling")]
 pub use capture::{
     Capture, CaptureLayer, CaptureLimits, CaptureSubscription, CapturedFrame, CapturedSpan,
-    FrameSpanFilter, Partition,
+    FrameOutcome, FrameSpanFilter, Partition, ProducedFrame,
 };
 #[cfg(feature = "inspector")]
 pub use gesture_inspector::{
