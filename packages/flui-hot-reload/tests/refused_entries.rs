@@ -1,6 +1,7 @@
-//! A plugin entry that answers with its refusal value, as one does when the
-//! developer's code behind it panicked, is a skipped frame or a refused load
-//! on the host, through the public loaders and real dynamic images.
+//! A refused plugin library says why, and a plugin entry that answers with its
+//! refusal value, as one does when the developer's code behind it panicked, is
+//! a skipped frame or a refused load on the host, through the public loaders
+//! and real dynamic images.
 
 use std::path::{Path, PathBuf};
 
@@ -77,11 +78,87 @@ pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
 "#,
     );
     assert!(
-        flui_hot_reload::WorkerPlugin::load(&library).is_none(),
+        matches!(
+            flui_hot_reload::WorkerPlugin::load(&library),
+            Err(flui_hot_reload::LoadError::InitFailed { .. })
+        ),
         "a worker whose init failed is refused"
     );
     assert!(
         flui_hot_reload::get_worker_build_ptr(FINGERPRINT).is_none(),
         "the registration its init made is pruned"
     );
+}
+
+/// Each refusal names its reason, so a developer whose plugin does not load
+/// learns why. Fails when the loader's own text is dropped, or a refusal is
+/// reported under another reason.
+#[test]
+fn a_refused_library_says_why() {
+    use flui_hot_reload::{LoadError, ScenePlugin};
+
+    let directory = FixtureDirectory::new("reasons");
+    let missing = directory.path().join("not_built_yet.so");
+    assert!(matches!(
+        ScenePlugin::load(&missing),
+        Err(LoadError::Missing { path }) if path == missing
+    ));
+
+    let garbage = directory.path().join("garbage.so");
+    std::fs::write(&garbage, b"not a library").expect("write a file that is no library");
+    let Err(LoadError::Open { message, .. }) = ScenePlugin::load(&garbage) else {
+        panic!("a file that is no library is refused by the platform loader");
+    };
+    // Every Unix loader's text names the file it refused.
+    #[cfg(unix)]
+    assert!(
+        message.contains("garbage.so"),
+        "the loader's own text is kept: {message}"
+    );
+    #[cfg(not(unix))]
+    assert!(!message.is_empty(), "the loader's own text is kept");
+
+    let unrelated = compile_fixture(
+        directory.path(),
+        "unrelated",
+        "#[unsafe(no_mangle)] pub extern \"C\" fn unrelated() {}",
+    );
+    assert!(matches!(
+        ScenePlugin::load(&unrelated),
+        Err(LoadError::NotAPlugin { .. })
+    ));
+
+    let foreign = compile_fixture(
+        directory.path(),
+        "foreign",
+        r#"
+#[unsafe(no_mangle)]
+pub extern "C" fn flui_scene_build(_width: f64, _height: f64) -> *mut std::ffi::c_void {
+    std::ptr::null_mut()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn flui_scene_abi_token() -> u64 { 1 }
+"#,
+    );
+    assert!(matches!(
+        ScenePlugin::load(&foreign),
+        Err(LoadError::AbiMismatch { plugin: 1, .. })
+    ));
+
+    let unfreeable = compile_fixture(
+        directory.path(),
+        "unfreeable",
+        r#"
+#[unsafe(no_mangle)]
+pub extern "C" fn flui_scene_build(_width: f64, _height: f64) -> *mut std::ffi::c_void {
+    std::ptr::null_mut()
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn flui_scene_abi_token() -> u64 { TOKEN }
+"#,
+    );
+    assert!(matches!(
+        ScenePlugin::load(&unfreeable),
+        Err(LoadError::MissingSymbol { symbol, .. }) if symbol == "flui_scene_free"
+    ));
 }

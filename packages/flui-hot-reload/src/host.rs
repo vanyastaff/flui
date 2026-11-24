@@ -19,7 +19,10 @@ use std::path::Path;
 
 use flui_sdk::hooks::Scene;
 
-use crate::dynlib::{self, DynLib};
+use crate::{
+    LoadError,
+    dynlib::{self, DynLib},
+};
 
 /// Function pointer: `flui_scene_build(width, height) -> *mut c_void`
 type BuildSceneFn = unsafe extern "C" fn(f64, f64) -> *mut std::ffi::c_void;
@@ -109,9 +112,12 @@ impl ScenePlugin {
     /// Tries `flui_app_build` symbols first (widget-based `app_plugin!`),
     /// then falls back to `flui_scene_build` (raw `scene_plugin!`).
     ///
-    /// Returns `None` if the file doesn't exist, loading fails, or neither
-    /// symbol set is found.
-    pub fn load(lib_path: impl AsRef<Path>) -> Option<Self> {
+    /// # Errors
+    ///
+    /// The [`LoadError`] that says why: the file is missing or the platform
+    /// loader refused it, it exports neither family, or the family it exports
+    /// lacks a required symbol or fails the ABI-token handshake.
+    pub fn load(lib_path: impl AsRef<Path>) -> Result<Self, LoadError> {
         let lib_path = lib_path.as_ref();
         let lib = DynLib::open(lib_path)?;
 
@@ -120,58 +126,44 @@ impl ScenePlugin {
         // below are the plugin ABI this crate defines, so a library built by
         // the matching macro exports them with these signatures.
         #[expect(unsafe_code, reason = "symbol resolution on a freshly opened library")]
-        unsafe {
-            // Try app_plugin! symbols first (flui_app_build)
-            if let Some(resolved) = Self::try_resolve(&lib, "flui_app") {
-                let mtime = dynlib::file_revision(lib_path);
-                tracing::info!(
-                    "App plugin loaded (version {}) from {}",
-                    resolved.version,
-                    lib_path.display()
-                );
-                return Some(ScenePlugin {
-                    lib,
-                    build_fn: resolved.build_fn,
-                    free_fn: resolved.free_fn,
-                    drop_fn: resolved.drop_fn,
-                    kind: PluginKind::App,
-                    version: resolved.version,
-                    mtime,
-                });
+        let (resolved, kind) = unsafe {
+            match Self::try_resolve(&lib, "flui_app")? {
+                Some(resolved) => (resolved, PluginKind::App),
+                None => match Self::try_resolve(&lib, "flui_scene")? {
+                    Some(resolved) => (resolved, PluginKind::Scene),
+                    None => {
+                        return Err(LoadError::NotAPlugin {
+                            path: lib_path.to_path_buf(),
+                        });
+                    }
+                },
             }
-
-            // Fall back to scene_plugin! symbols (flui_scene_build)
-            if let Some(resolved) = Self::try_resolve(&lib, "flui_scene") {
-                let mtime = dynlib::file_revision(lib_path);
-                tracing::info!(
-                    "Scene plugin loaded (version {}) from {}",
-                    resolved.version,
-                    lib_path.display()
-                );
-                return Some(ScenePlugin {
-                    lib,
-                    build_fn: resolved.build_fn,
-                    free_fn: resolved.free_fn,
-                    drop_fn: resolved.drop_fn,
-                    kind: PluginKind::Scene,
-                    version: resolved.version,
-                    mtime,
-                });
-            }
-
-            tracing::trace!("No plugin symbols found in {}", lib_path.display());
-            None
-        }
+        };
+        tracing::info!(
+            "{kind:?} plugin loaded (version {}) from {}",
+            resolved.version,
+            lib_path.display()
+        );
+        Ok(ScenePlugin {
+            mtime: dynlib::file_revision(lib_path),
+            lib,
+            build_fn: resolved.build_fn,
+            free_fn: resolved.free_fn,
+            drop_fn: resolved.drop_fn,
+            kind,
+            version: resolved.version,
+        })
     }
 
     /// Try to resolve one symbol family (`flui_app` / `flui_scene`) from the
     /// library, enforcing the ABI handshake.
     ///
-    /// Refuses (returns `None`, with a log) when the family's `_free` or
-    /// `_abi_token` symbol is missing — a library that predates them cannot
-    /// discharge the ownership contract — or when the plugin's token differs
-    /// from the host's (different compiler, source revision, or crate
-    /// version: `repr(Rust)` layout agreement is then unestablished).
+    /// `Ok(None)` when the library has no build entry of this family. A
+    /// library that has one but lacks the family's `_free` or `_abi_token`
+    /// symbol cannot discharge the ownership contract, and one whose token
+    /// differs from the host's (different compiler, source revision, or
+    /// crate version) has no established `repr(Rust)` layout agreement: both
+    /// are refused.
     ///
     /// # Safety
     ///
@@ -180,60 +172,47 @@ impl ScenePlugin {
         unsafe_code,
         reason = "an `unsafe fn`: `lib` must be a live loaded library, stated under `# Safety`"
     )]
-    unsafe fn try_resolve(lib: &DynLib, family: &str) -> Option<ResolvedSceneFamily> {
+    unsafe fn try_resolve(
+        lib: &DynLib,
+        family: &str,
+    ) -> Result<Option<ResolvedSceneFamily>, LoadError> {
+        let missing = |symbol: &str| LoadError::MissingSymbol {
+            path: lib.path().to_path_buf(),
+            symbol: format!("{family}_{symbol}"),
+        };
         // SAFETY: edition 2024 makes unsafe-fn bodies safe by default, so the
         // calls still need their own block. The caller guarantees `lib` is a
         // live library, and each symbol/type pair is the ABI this crate
         // declares for that name.
         //
-        // On null: only `build_ptr` is checked at its use site. The other
-        // transmutes come straight out of `lib.symbol(..)` — sound because
-        // `get_symbol` maps a null `dlsym` result to `None`, so a `Some` is
-        // already non-null.
+        // On null: `get_symbol` maps a null `dlsym` result to `None`, so a
+        // `Some` is already non-null.
         unsafe {
-            let build_ptr = lib.symbol(&format!("{family}_build"))?;
-            if build_ptr.is_null() {
-                return None;
-            }
+            let Some(build_ptr) = lib.symbol(&format!("{family}_build")) else {
+                return Ok(None);
+            };
             let build_fn: BuildSceneFn = std::mem::transmute(build_ptr);
 
             // ABI handshake FIRST: nothing else about the library may be
             // trusted (not even calling its version fn is interesting) until
             // the layout premise is established.
-            let Some(token_ptr) = lib.symbol(&format!("{family}_abi_token")) else {
-                tracing::error!(
-                    family,
-                    path = %lib.path().display(),
-                    "plugin refused: no ABI-token symbol — rebuild it against \
-                     this tree (the ownership-safe plugin ABI requires it)"
-                );
-                return None;
-            };
+            let token_ptr = lib
+                .symbol(&format!("{family}_abi_token"))
+                .ok_or_else(|| missing("abi_token"))?;
             let token_fn: AbiTokenFn = std::mem::transmute(token_ptr);
             let plugin_token = token_fn();
             let host_token = crate::abi_token();
             if plugin_token != host_token {
-                tracing::error!(
-                    family,
-                    plugin_token,
-                    host_token,
-                    path = %lib.path().display(),
-                    "plugin refused: ABI token mismatch — host and plugin \
-                     were built by different compilers or source revisions; \
-                     rebuild both from one worktree with one toolchain"
-                );
-                return None;
+                return Err(LoadError::AbiMismatch {
+                    path: lib.path().to_path_buf(),
+                    host: host_token,
+                    plugin: plugin_token,
+                });
             }
 
-            let Some(free_ptr) = lib.symbol(&format!("{family}_free")) else {
-                tracing::error!(
-                    family,
-                    path = %lib.path().display(),
-                    "plugin refused: no deallocate-only symbol — rebuild it \
-                     against this tree"
-                );
-                return None;
-            };
+            let free_ptr = lib
+                .symbol(&format!("{family}_free"))
+                .ok_or_else(|| missing("free"))?;
             let free_fn: SceneFreeFn = std::mem::transmute(free_ptr);
 
             let drop_fn: Option<SceneDropFn> = lib
@@ -245,12 +224,12 @@ impl ScenePlugin {
                 version_fn()
             });
 
-            Some(ResolvedSceneFamily {
+            Ok(Some(ResolvedSceneFamily {
                 build_fn,
                 free_fn,
                 drop_fn,
                 version,
-            })
+            }))
         }
     }
 

@@ -22,6 +22,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::LoadError;
+
 /// A loaded dynamic library handle with automatic cleanup on drop.
 ///
 /// Wraps platform-specific `dlopen`/`LoadLibraryW` and provides
@@ -55,14 +57,26 @@ unsafe impl Send for DynLib {}
 impl DynLib {
     /// Load a dynamic library from the given path.
     ///
-    /// Returns `None` if the file doesn't exist or loading fails.
-    pub fn open(path: impl AsRef<Path>) -> Option<Self> {
+    /// # Errors
+    ///
+    /// [`LoadError::Missing`] when no file is at `path`, and
+    /// [`LoadError::Open`] with the platform loader's text when the loader
+    /// refuses the file.
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, LoadError> {
         let path = path.as_ref();
-        let handle = sys::load_library(path)?;
-        Some(DynLib {
-            handle,
-            path: path.to_path_buf(),
-        })
+        match sys::load_library(path) {
+            Ok(handle) => Ok(DynLib {
+                handle,
+                path: path.to_path_buf(),
+            }),
+            Err(_) if !path.exists() => Err(LoadError::Missing {
+                path: path.to_path_buf(),
+            }),
+            Err(message) => Err(LoadError::Open {
+                path: path.to_path_buf(),
+                message,
+            }),
+        }
     }
 
     /// Resolve a symbol by name from the loaded library.
@@ -88,7 +102,7 @@ impl DynLib {
 impl Drop for DynLib {
     fn drop(&mut self) {
         // SAFETY: `self.handle` is the non-null value `load_library` returned
-        // (it returns `None` on a null handle), `DynLib` is not `Clone`, and
+        // (it answers `Err` for a null handle), `DynLib` is not `Clone`, and
         // `Drop` runs once — so this is neither a null nor a double close.
         #[expect(unsafe_code, reason = "`dlclose` of the handle this `DynLib` owns")]
         unsafe {
@@ -147,30 +161,50 @@ impl LoadRefusal {
     /// unchanged since and refused less than the retry interval ago. A
     /// failure is remembered by the revision read before the load, so a
     /// build that lands while `load` runs is not taken for the refused file.
+    ///
+    /// A refusal is logged with its reason once per artifact revision: a file
+    /// not built yet at `debug`, any other at `warn`. Retries of the same
+    /// revision stay quiet.
     pub(crate) fn load<T>(
         &mut self,
         path: &Path,
-        load: impl FnOnce(&Path) -> Option<T>,
+        load: impl FnOnce(&Path) -> Result<T, LoadError>,
     ) -> Option<T> {
         let revision = file_revision(path);
-        if self.refused.as_ref().is_some_and(|refused| {
-            refused.path == path
-                && refused.revision == revision
-                && refused.at.elapsed() < self.retry
-        }) {
+        let same_artifact = self
+            .refused
+            .as_ref()
+            .is_some_and(|refused| refused.path == path && refused.revision == revision);
+        if same_artifact
+            && self
+                .refused
+                .as_ref()
+                .is_some_and(|refused| refused.at.elapsed() < self.retry)
+        {
             return None;
         }
         let at = std::time::Instant::now();
-        let loaded = load(path);
-        self.refused = match loaded {
-            Some(_) => None,
-            None => Some(Refused {
-                path: path.to_path_buf(),
-                revision,
-                at,
-            }),
-        };
-        loaded
+        match load(path) {
+            Ok(loaded) => {
+                self.refused = None;
+                Some(loaded)
+            }
+            Err(error) => {
+                if !same_artifact {
+                    if matches!(error, LoadError::Missing { .. }) {
+                        tracing::debug!(%error, "hot reload: plugin not loaded");
+                    } else {
+                        tracing::warn!(%error, "hot reload: plugin refused");
+                    }
+                }
+                self.refused = Some(Refused {
+                    path: path.to_path_buf(),
+                    revision,
+                    at,
+                });
+                None
+            }
+        }
     }
 }
 
@@ -183,12 +217,16 @@ mod sys {
         path::Path,
     };
 
-    pub(super) fn load_library(path: &Path) -> Option<*mut c_void> {
-        let c_path = CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
+    /// The handle, or the loader's text on failure.
+    pub(super) fn load_library(path: &Path) -> Result<*mut c_void, String> {
+        let c_path = CString::new(path.as_os_str().as_encoded_bytes())
+            .map_err(|_| "the path contains a NUL byte".to_owned())?;
 
         // SAFETY: `c_path` is a NUL-terminated `CString` that outlives the
         // `dlopen` call, and the returned handle is null-checked before it
-        // escapes this block.
+        // escapes this block. `dlerror` is read on the thread whose `dlopen`
+        // failed, before any other loader call, and its text is copied before
+        // the next one can overwrite it.
         #[expect(unsafe_code, reason = "`dlopen` of a NUL-terminated path")]
         unsafe {
             // RTLD_LOCAL prevents the plugin's symbols from polluting the global
@@ -198,10 +236,16 @@ mod sys {
             // unloaded and a new one is loaded.
             let handle = libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
             if handle.is_null() {
-                tracing::trace!(path = %path.display(), "dlopen failed");
-                return None;
+                let error = libc::dlerror();
+                return Err(if error.is_null() {
+                    "dlopen failed and set no error text".to_owned()
+                } else {
+                    std::ffi::CStr::from_ptr(error)
+                        .to_string_lossy()
+                        .into_owned()
+                });
             }
-            Some(handle)
+            Ok(handle)
         }
     }
 
@@ -253,16 +297,18 @@ mod sys {
         System::LibraryLoader::{GetProcAddress, LoadLibraryW},
     };
 
-    pub(super) fn load_library(path: &Path) -> Option<*mut c_void> {
+    /// The handle, or the loader's text on failure.
+    pub(super) fn load_library(path: &Path) -> Result<*mut c_void, String> {
         let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
 
         // SAFETY: `wide` is a NUL-terminated UTF-16 path that outlives the
-        // `LoadLibraryW` call; a failed load is an `Err` turned into `None`
-        // before any handle escapes this block.
+        // `LoadLibraryW` call; a failed load is an `Err` carrying the
+        // system's message, and no handle escapes this block with it.
         #[expect(unsafe_code, reason = "`LoadLibraryW` of a NUL-terminated path")]
         unsafe {
-            let handle = LoadLibraryW(windows::core::PCWSTR(wide.as_ptr())).ok()?;
-            Some(handle.0)
+            LoadLibraryW(windows::core::PCWSTR(wide.as_ptr()))
+                .map(|handle| handle.0)
+                .map_err(|error| error.to_string())
         }
     }
 
@@ -321,7 +367,9 @@ mod tests {
         let mut refusal = LoadRefusal::default();
         let refuse = |_: &std::path::Path| {
             opened.set(opened.get() + 1);
-            None::<()>
+            Err::<(), _>(crate::LoadError::NotAPlugin {
+                path: std::path::PathBuf::from("libworker.so"),
+            })
         };
 
         assert_eq!(refusal.load(&artifact, refuse), None);
@@ -345,7 +393,7 @@ mod tests {
         assert_eq!(
             refusal.load(&artifact, |_| {
                 opened.set(opened.get() + 1);
-                Some(())
+                Ok(())
             }),
             Some(())
         );
