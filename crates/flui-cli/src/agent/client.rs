@@ -9,12 +9,14 @@
 //!
 //! A thread of the connection's own reads every line the app sends and another writes, so a
 //! peer that stops answering, or stops reading, costs a bounded wait ([`REPLY_TIMEOUT`], past
-//! the time a wait asked the app to hold its answer) instead of a stuck `flui mcp`. A request
+//! the time a wait asked the app to hold its answer) instead of a stuck `flui mcp`; dropping the
+//! connection shuts its socket down, which ends both threads ([`Closer`]). A request
 //! takes the first line that answers its id: a late answer to an earlier request that timed out
 //! is passed over.
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpStream};
+#[cfg(not(unix))]
 use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
@@ -27,8 +29,9 @@ use flui_protocol::{
     envelope::Greeting, envelope::Request, envelope::RequestId, envelope::ServerLine,
     error::ErrorCode, events::Event,
 };
-use interprocess::local_socket::traits::Stream as _;
-use interprocess::local_socket::{Name, Stream};
+use interprocess::local_socket::Name;
+#[cfg(not(unix))]
+use interprocess::local_socket::{Stream, traits::Stream as _};
 use serde_json::Value;
 
 use super::{Credentials, Endpoint};
@@ -64,6 +67,14 @@ pub(crate) struct Connection {
     /// Every line the app sent, and the failure that ended either thread.
     incoming: mpsc::Receiver<Result<String, Failure>>,
     next_id: u64,
+    /// Shuts the socket down when the connection is dropped.
+    closer: Closer,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.closer.close();
+    }
 }
 
 impl Connection {
@@ -85,7 +96,11 @@ impl Connection {
     }
 
     fn connect_once(credentials: &Credentials, role: ClientRole) -> Result<Self, String> {
-        let (receiving, sending) = open(&credentials.endpoint)
+        let Opened {
+            reader,
+            writer,
+            closer,
+        } = open(&credentials.endpoint)
             .map_err(|e| format!("could not connect to {}: {e}", credentials.endpoint))?;
 
         let (outgoing, to_write) = mpsc::channel::<String>();
@@ -93,17 +108,18 @@ impl Connection {
         let failures = lines.clone();
         thread::Builder::new()
             .name("flui-agent-client-write".into())
-            .spawn(move || send(sending, &to_write, &failures))
+            .spawn(move || send(writer, &to_write, &failures))
             .map_err(|e| format!("could not start the connection's writer: {e}"))?;
         thread::Builder::new()
             .name("flui-agent-client-read".into())
-            .spawn(move || receive(receiving, &lines))
+            .spawn(move || receive(reader, &lines))
             .map_err(|e| format!("could not start the connection's reader: {e}"))?;
 
         let connection = Self {
             outgoing,
             incoming,
             next_id: 1,
+            closer,
         };
         let hello = Hello::new(credentials.token.clone(), PROTOCOL_VERSION)
             .client(CLIENT)
@@ -327,35 +343,87 @@ fn write_line(stream: &mut impl Write, line: &str) -> Result<(), Failure> {
 /// before the app binds its socket; a port nobody holds is refused at once.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// A connection to `endpoint`, as the halves its reader and its writer own.
-fn open(endpoint: &Endpoint) -> io::Result<(Box<dyn Read + Send>, Box<dyn Write + Send>)> {
+/// A connection, opened: the halves its reader and its writer own, and the [`Closer`] the
+/// connection keeps.
+struct Opened {
+    reader: Box<dyn Read + Send>,
+    writer: Box<dyn Write + Send>,
+    closer: Closer,
+}
+
+/// A connection to `endpoint`.
+fn open(endpoint: &Endpoint) -> io::Result<Opened> {
     match endpoint {
+        #[cfg(unix)]
+        Endpoint::Local(address) => {
+            // The app binds a socket at this path (`name`, `GenericFilePath`).
+            let stream = std::os::unix::net::UnixStream::connect(address)?;
+            Ok(Opened {
+                reader: Box::new(stream.try_clone()?),
+                writer: Box::new(stream.try_clone()?),
+                closer: Closer::Local(stream),
+            })
+        }
+        #[cfg(not(unix))]
         Endpoint::Local(address) => {
             let stream = Arc::new(Stream::connect(name(address)?)?);
-            Ok((
-                Box::new(SharedStream(Arc::clone(&stream))),
-                Box::new(SharedStream(stream)),
-            ))
+            Ok(Opened {
+                reader: Box::new(SharedStream(Arc::clone(&stream))),
+                writer: Box::new(SharedStream(stream)),
+                closer: Closer::Pipe,
+            })
         }
         Endpoint::Forwarded(address) => {
             let stream = TcpStream::connect_timeout(address, CONNECT_TIMEOUT)?;
             // One line is one request: send it whole, now.
             stream.set_nodelay(true)?;
-            Ok((Box::new(stream.try_clone()?), Box::new(stream)))
+            Ok(Opened {
+                reader: Box::new(stream.try_clone()?),
+                writer: Box::new(stream.try_clone()?),
+                closer: Closer::Forwarded(stream),
+            })
         }
+    }
+}
+
+/// What ends the reader's blocked read once its connection is dropped: one more handle on the
+/// same socket, shut down both ways, so the read returns and the reader thread and the socket go
+/// with the connection instead of living until the app closes its end. A Windows named pipe has
+/// no such handle: its reader ends when the app closes the pipe.
+enum Closer {
+    #[cfg(unix)]
+    Local(std::os::unix::net::UnixStream),
+    Forwarded(TcpStream),
+    #[cfg(not(unix))]
+    Pipe,
+}
+
+impl Closer {
+    fn close(&self) {
+        // The app may have closed its end first; a socket already shut down needs nothing more.
+        let _ = match self {
+            #[cfg(unix)]
+            Self::Local(stream) => stream.shutdown(Shutdown::Both),
+            Self::Forwarded(stream) => stream.shutdown(Shutdown::Both),
+            #[cfg(not(unix))]
+            Self::Pipe => Ok(()),
+        };
     }
 }
 
 /// One local-socket connection read by one owner and written by another. `&Stream` reads and
 /// writes, so both owners share the stream; the socket closes when the last one drops.
+#[cfg(not(unix))]
 struct SharedStream(Arc<Stream>);
 
+#[cfg(not(unix))]
 impl Read for SharedStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         (&*self.0).read(buf)
     }
 }
 
+#[cfg(not(unix))]
 impl Write for SharedStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         (&*self.0).write(buf)
@@ -435,5 +503,56 @@ mod tests {
                 "{accept} bytes taken, flush fails: {flush_fails}: {failure:?}"
             );
         }
+    }
+
+    /// A dropped connection shuts its socket down: the app reads the end of the conversation at
+    /// once, though the connection's reader was blocked in a read. Fails if the reader's handle
+    /// keeps the socket open until the app closes it.
+    #[cfg(unix)]
+    #[test]
+    fn a_dropped_connection_closes_its_socket() {
+        use std::io::{BufRead as _, BufReader, Read as _};
+        use std::os::unix::net::UnixListener;
+        use std::time::Duration;
+
+        use flui_protocol::session::ClientRole;
+        use flui_protocol::version::PROTOCOL_VERSION;
+
+        use super::Connection;
+        use crate::agent::{Credentials, Endpoint};
+
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let socket = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket).expect("bind");
+        let credentials = Credentials {
+            endpoint: Endpoint::Local(socket.to_str().expect("a UTF-8 path").to_owned()),
+            token: "0123456789abcdef0123456789abcdef".into(),
+            pid: 0,
+        };
+        let app = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .expect("a read timeout");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut hello = String::new();
+            reader.read_line(&mut hello).expect("a hello");
+            let mut out = stream;
+            writeln!(out, r#"{{"hello":{{"protocol":"{PROTOCOL_VERSION}"}}}}"#).expect("hello");
+            // The client sends nothing more: the read ends when its socket is shut down, or
+            // times out when the connection's reader keeps it open.
+            let mut rest = Vec::new();
+            reader.read_to_end(&mut rest).map(|_| rest.len())
+        });
+        let connection =
+            Connection::connect(&credentials, ClientRole::Observer, Duration::from_secs(5))
+                .expect("the stand-in greets");
+        drop(connection);
+        let read = app.join().expect("the stand-in app");
+        assert_eq!(
+            read.map_err(|error| error.kind()),
+            Ok(0),
+            "the app reads the end of the conversation"
+        );
     }
 }
