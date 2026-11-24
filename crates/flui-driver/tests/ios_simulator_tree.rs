@@ -22,8 +22,8 @@ use std::time::Duration;
 
 use flui_driver::Error;
 use flui_driver::lane::ios_simulator::accessibility::{
-    self, ChildRead, HostAccessibility as _, HostScreen, PointFrame, ScreenElement, ScreenRequest,
-    WindowIdentity,
+    self, HostAccessibility as _, HostScreen, PointFrame, ScreenElement, ScreenRequest,
+    ScreenSource, WindowIdentity,
 };
 use flui_driver::lane::ios_simulator::device::{self, Udid};
 use flui_driver::lane::ios_simulator::roles::{
@@ -65,7 +65,12 @@ fn udid() -> Udid {
 }
 
 fn request() -> ScreenRequest {
-    ScreenRequest::new(TITLE, udid(), SIZE, 3.0)
+    request_shared(0)
+}
+
+/// [`request`] for a title `others` other listed simulators share.
+fn request_shared(others: usize) -> ScreenRequest {
+    ScreenRequest::new(TITLE, udid(), others, SIZE, 3.0)
 }
 
 fn id(number: u64) -> ElementId {
@@ -344,119 +349,202 @@ fn the_window_is_titled_by_the_device_and_its_runtime() {
     let simulators = device::parse_devices(listing.as_bytes()).expect("a listing");
     let simulator = device::choose(&simulators, &udid()).expect("the named simulator");
     assert_eq!(accessibility::window_title(simulator), TITLE);
-    accessibility::check_title_names_one(&simulators, simulator).expect("one iPhone 16 on 18.0");
+    assert_eq!(
+        accessibility::screen_title(&simulators, simulator).expect("listed"),
+        (TITLE.to_owned(), 0)
+    );
 }
 
-/// A title two listed simulators share is refused, whatever the other's state: DeviceHub keeps a
-/// window titled for a simulator that shut down.
-#[test]
-fn a_title_two_simulators_share_is_refused() {
-    let twice = listing("Booted", true).replace(
-        r#""name": "iPad Air""#,
-        r#""name": "iPhone 16", "state": "Shutdown""#,
-    );
-    let simulators = device::parse_devices(twice.as_bytes()).expect("a listing");
-    let simulator = device::choose(&simulators, &udid()).expect("the named simulator");
-    let refused = accessibility::check_title_names_one(&simulators, simulator)
-        .expect_err("two simulators titled alike");
-    assert!(
-        matches!(&refused, Error::Ambiguous { candidates, .. } if candidates.len() == 2),
-        "{refused:?}"
-    );
+/// The scripted listing with the iPad Air entry made the target's twin: `iPhone 16` on iOS 18.0,
+/// shut down, available as `available` says.
+fn with_twin(available: bool) -> String {
+    listing("Booted", true).replace(
+        r#""isAvailable": true, "name": "iPad Air""#,
+        &format!(r#""isAvailable": {available}, "name": "iPhone 16", "state": "Shutdown""#),
+    )
+}
 
-    // Through the lane: refused before the window is read.
+/// Every other listed simulator of the title counts, available or not, booted or not: a window
+/// shown before its runtime went stays on screen. Through the lane, the count reaches the read.
+#[test]
+fn every_simulator_sharing_the_title_counts() {
+    for available in [true, false] {
+        let twin = with_twin(available);
+        assert_ne!(twin, listing("Booted", true));
+        let simulators = device::parse_devices(twin.as_bytes()).expect("a listing");
+        let simulator = device::choose(&simulators, &udid()).expect("the named simulator");
+        assert_eq!(
+            accessibility::screen_title(&simulators, simulator).expect("listed"),
+            (TITLE.to_owned(), 1),
+            "available: {available}"
+        );
+    }
     let xcrun = flui_driver::testing::ScriptedXcrun::new().reply(
         "simctl list devices",
-        flui_driver::lane::ios_simulator::xcrun::XcrunReply::new(0, twice),
+        flui_driver::lane::ios_simulator::xcrun::XcrunReply::new(0, with_twin(false)),
     );
     let screen = ScriptedSimulatorScreen::new(TITLE, controls_screen(true));
     let (_dir, lane) = connect(&xcrun);
     let mut lane = lane.read_through(screen.accessibility());
-    let refused = lane
-        .read_tree(&placement(), &controls())
-        .expect_err("refused");
-    assert!(matches!(refused, Error::Ambiguous { .. }), "{refused:?}");
-    assert_eq!(screen.requests(), Vec::<ScreenRequest>::new());
+    lane.read_tree(&placement(), &controls()).expect("read");
+    assert_eq!(screen.requests(), [request_shared(1)]);
 }
 
-/// Another simulator's UDID.
-const OTHER_UDID: &str = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE";
-
-/// A listing's UDIDs: the test's simulator and [`OTHER_UDID`].
-fn listed() -> Vec<Udid> {
-    vec![udid(), Udid::try_new(OTHER_UDID).expect("a UDID")]
-}
-
-/// A window's attributes name its simulator when one carries a listed UDID: the asked one's is
-/// the window, another listed simulator's is not, and a UUID no simulator has (a document's, a
-/// session's) or none at all leaves the title to stand for it.
+/// The target is found in the listing read now by its UDID: one renamed or removed since the
+/// lane connected is refused, never matched by the title it had; one whose runtime went is still
+/// the target.
 #[test]
-fn a_window_naming_another_simulator_is_not_the_devices() {
-    let listed = listed();
+fn a_target_renamed_or_removed_since_connecting_is_refused() {
+    let connected = device::parse_devices(listing("Booted", true).as_bytes()).expect("a listing");
+    let target = device::choose(&connected, &udid())
+        .expect("the named simulator")
+        .clone();
+    let renamed = listing("Booted", true).replace(r#""name": "iPhone 16""#, r#""name": "Mine""#);
+    let renamed = device::parse_devices(renamed.as_bytes()).expect("a listing");
+    let refused = accessibility::screen_title(&renamed, &target).expect_err("renamed");
+    assert!(
+        matches!(&refused, Error::InvalidArgument { message, .. } if message.contains("Mine")),
+        "{refused:?}"
+    );
+    let removed = listing("Booted", true).replace(UDID, "BBBBBBBB-CCCC-4DDD-8EEE-FFFFFFFFFFFF");
+    let removed = device::parse_devices(removed.as_bytes()).expect("a listing");
+    assert!(matches!(
+        accessibility::screen_title(&removed, &target),
+        Err(Error::NotFound { .. })
+    ));
+    // A twin renamed to the target's old title does not stand in for it.
+    let swapped = listing("Booted", true)
+        .replace(r#""name": "iPhone 16""#, r#""name": "Mine""#)
+        .replace(
+            r#""isAvailable": true, "name": "iPad Air""#,
+            r#""isAvailable": true, "name": "iPhone 16", "state": "Booted""#,
+        );
+    let swapped = device::parse_devices(swapped.as_bytes()).expect("a listing");
+    assert!(matches!(
+        accessibility::screen_title(&swapped, &target),
+        Err(Error::InvalidArgument { .. })
+    ));
+    let unavailable = listing("Booted", false);
+    let unavailable = device::parse_devices(unavailable.as_bytes()).expect("a listing");
+    assert_eq!(
+        accessibility::screen_title(&unavailable, &target).expect("still the target"),
+        (TITLE.to_owned(), 0)
+    );
+}
+
+/// A window names its simulator by an allow-list: the asked one's UDID makes it the device's;
+/// any other UUID, another simulator's from any device set or a document's, makes it not; none
+/// leaves the title to stand for it.
+#[test]
+fn a_window_naming_any_other_uuid_is_not_the_devices() {
     let ours = Some(format!("com.apple.CoreSimulator.SimDevice.{UDID}"));
-    let other = Some(OTHER_UDID.to_owned());
+    let other = Some("AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE".to_owned());
     let stranger = Some("file:///tmp/0F1E2D3C-4B5A-4697-8877-665544332211.session".to_owned());
     assert_eq!(
-        accessibility::window_identity(&udid(), &listed, &[None, ours]),
+        accessibility::window_identity(&udid(), &[None, ours]),
         WindowIdentity::Named
     );
     assert_eq!(
-        accessibility::window_identity(&udid(), &listed, &[other.clone(), None]),
+        accessibility::window_identity(&udid(), &[other.clone(), None]),
         WindowIdentity::Other
     );
     assert_eq!(
-        accessibility::window_identity(&udid(), &listed, &[stranger, None]),
-        WindowIdentity::Unknown,
-        "a UUID no listed simulator has names no simulator"
+        accessibility::window_identity(&udid(), &[stranger, None]),
+        WindowIdentity::Other,
+        "a UUID nobody checked is not the device's"
     );
     assert_eq!(
-        accessibility::window_identity(&udid(), &listed, &[Some("iPhone 16".to_owned()), None]),
+        accessibility::window_identity(&udid(), &[Some("iPhone 16".to_owned()), None]),
         WindowIdentity::Unknown
     );
     assert_eq!(
-        accessibility::window_identity(&udid(), &listed, &[other, Some(UDID.to_ascii_lowercase())]),
+        accessibility::window_identity(&udid(), &[other, Some(UDID.to_ascii_lowercase())]),
         WindowIdentity::Named
     );
 }
 
-/// A child read that answers `Gone` is the parent gone: the level is cut, never ended as if
-/// whole, and every other failure stays the read's.
-#[test]
-fn a_parent_gone_mid_read_cuts_its_children() {
-    assert_eq!(
-        accessibility::child_read(Ok(Some(7))),
-        Ok(ChildRead::Child(7))
-    );
-    assert_eq!(
-        accessibility::child_read::<u8>(Ok(None)),
-        Ok(ChildRead::End)
-    );
-    assert_eq!(
-        accessibility::child_read::<u8>(Err(ProviderError::Gone)),
-        Ok(ChildRead::Cut)
-    );
-    assert_eq!(
-        accessibility::child_read::<u8>(Err(ProviderError::Timeout)),
-        Err(ProviderError::Timeout)
-    );
+/// A screen of a test's, read as a source: each node's attributes, its children, and the index
+/// past which a child read answers that the node went away.
+struct Source {
+    nodes: Vec<(ScreenElement, Vec<usize>, Option<usize>)>,
 }
 
-/// A simulator that is not available cannot boot, so its sharing the title is no twin.
+impl ScreenSource for Source {
+    type Element = usize;
+
+    fn child_at(&mut self, parent: &usize, index: usize) -> Result<Option<usize>, ProviderError> {
+        let (_, children, gone_after) = &self.nodes[*parent];
+        if gone_after.is_some_and(|after| index >= after) {
+            return Err(ProviderError::ParentGone);
+        }
+        Ok(children.get(index).copied())
+    }
+
+    fn element(&mut self, element: &usize) -> Result<ScreenElement, ProviderError> {
+        Ok(self.nodes[*element].0.clone())
+    }
+}
+
+/// A screen of a group holding the controls' elements and a list of `items` items.
+fn source(items: usize) -> Source {
+    let mut nodes = vec![(ScreenElement::new("AXGroup"), vec![1, 2], None)];
+    nodes.push((
+        labelled(
+            element("AXButton", None, (258.0, 239.0, 60.0, 33.0)),
+            "Like",
+        ),
+        Vec::new(),
+        None,
+    ));
+    nodes.push((ScreenElement::new("AXGroup"), Vec::new(), None));
+    for _ in 0..items {
+        let index = nodes.len();
+        nodes[2].1.push(index);
+        nodes.push((ScreenElement::new("AXGenericElement"), Vec::new(), None));
+    }
+    Source { nodes }
+}
+
+/// The walk marks a level read short the same way whatever stopped it: a parent gone mid-read
+/// or the node budget leave its children unread and the walk truncated; the screen's own
+/// children left unread reach the projection's root.
 #[test]
-fn an_unavailable_simulator_sharing_the_title_is_no_twin() {
-    let twin = listing("Booted", true).replace(
-        r#""name": "iPad Air""#,
-        r#""name": "iPhone 16", "state": "Shutdown""#,
+fn a_level_read_short_is_marked_whatever_stopped_it() {
+    let whole = accessibility::walk_screen(&mut source(3), &0).expect("walked");
+    assert!(!whole.truncated && !whole.children_unread);
+    assert_eq!(whole.elements[1].children.len(), 3);
+    assert!(!whole.elements[1].element.children_unread);
+
+    let mut gone = source(3);
+    gone.nodes[2].2 = Some(1);
+    let walked = accessibility::walk_screen(&mut gone, &0).expect("walked");
+    assert!(walked.truncated);
+    assert_eq!(walked.elements[1].children.len(), 1);
+    assert!(
+        walked.elements[1].element.children_unread,
+        "the list went away"
     );
-    let unavailable = twin.replace(
-        r#""isAvailable": true, "name": "iPhone 16", "state": "Shutdown""#,
-        r#""isAvailable": false, "name": "iPhone 16", "state": "Shutdown""#,
+    assert!(!walked.children_unread);
+
+    let budget = accessibility::walk_screen(&mut source(MAX_NODES + 5), &0).expect("walked");
+    assert!(budget.truncated);
+    assert!(
+        budget.elements[1].element.children_unread,
+        "the list the budget cut is marked as a vanished one is"
     );
-    assert_ne!(unavailable, twin);
-    let simulators = device::parse_devices(unavailable.as_bytes()).expect("a listing");
-    let simulator = device::choose(&simulators, &udid()).expect("the named simulator");
-    accessibility::check_title_names_one(&simulators, simulator)
-        .expect("an unavailable simulator shows no window");
+
+    let mut screen_gone = source(0);
+    screen_gone.nodes[0].2 = Some(1);
+    let walked = accessibility::walk_screen(&mut screen_gone, &0).expect("walked");
+    assert!(walked.children_unread && walked.truncated);
+    let screen = walked.screen(SCREEN);
+    let mut app = controls();
+    app.roots[0].children.truncate(2);
+    let projected = tree::read(&screen, &app, placing()).expect("read");
+    assert!(
+        projected.roots[0].children_unread,
+        "the root says its children went unread"
+    );
 }
 
 /// One node of a window a test builds.
@@ -465,6 +553,8 @@ struct Fixture {
     facts: WindowFacts,
     identity: Vec<Option<String>>,
     children: Vec<usize>,
+    /// Whether the node goes away before its children are all listed.
+    cut: bool,
 }
 
 /// A set of windows written out as nodes by index, each window a root.
@@ -494,6 +584,7 @@ impl Windows {
             },
             identity: Vec::new(),
             children: Vec::new(),
+            cut: false,
         });
         if let Some(parent) = parent {
             self.nodes[parent].children.push(index);
@@ -505,8 +596,12 @@ impl Windows {
 impl WindowTree for Windows {
     type Element = usize;
 
-    fn children(&mut self, element: &usize) -> flui_driver::Result<Vec<usize>> {
-        Ok(self.nodes[*element].children.clone())
+    fn children(&mut self, element: &usize) -> flui_driver::Result<(Vec<usize>, bool)> {
+        let node = &self.nodes[*element];
+        if node.cut {
+            return Ok((Vec::new(), true));
+        }
+        Ok((node.children.clone(), false))
     }
 
     fn facts(&mut self, element: &usize) -> flui_driver::Result<WindowFacts> {
@@ -572,6 +667,32 @@ fn the_search_reaches_devicehubs_screen_seven_levels_down() {
     assert_eq!(frame, PointFrame::new(drawn.0, drawn.1, drawn.2, drawn.3));
 }
 
+/// A group that goes away while the search lists its children leaves the search cut short, which
+/// a failure to find the screen names, never a whole window that shows no screen.
+#[test]
+fn a_group_gone_mid_search_cuts_the_search_short() {
+    let mut windows = Windows::new();
+    let window = windows.add(None, "AXWindow", None, Some((246.0, 185.0, 1100.0, 800.0)));
+    let pane = windows.add(
+        Some(window),
+        "AXGroup",
+        None,
+        Some((466.0, 185.0, 660.0, 800.0)),
+    );
+    windows.add(
+        Some(pane),
+        "AXGroup",
+        Some(SCREEN_SUBROLE),
+        Some((657.0, 266.0, 393.0 * 0.74, 852.0 * 0.74)),
+    );
+    windows.nodes[pane].cut = true;
+    let refused = tree::find_screen(&mut windows, &request(), vec![window]).expect_err("cut");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. } if message.contains("went away")),
+        "{refused:?}"
+    );
+}
+
 /// Simulator.app's window: the screen a child of a group the bezel adds, beside the bezel's
 /// buttons and the toolbar, the app's elements under it.
 #[test]
@@ -623,7 +744,10 @@ fn the_search_reaches_a_screen_inside_simulator_apps_bezel() {
     assert_eq!(frame, SCREEN);
 }
 
-/// Two windows of the title are refused unless one names another simulator; none is not found.
+/// The window is taken by the allow-list: two that name no UUID are refused; one that names any
+/// other UUID is left out, and when every one does the read says why; one that names no UUID is
+/// refused while another listed simulator shares the title, and one that names the device's UDID
+/// is taken even then; none is not found.
 #[test]
 fn the_search_refuses_two_windows_and_finds_none_in_none() {
     let mut windows = Windows::new();
@@ -645,17 +769,27 @@ fn the_search_refuses_two_windows_and_finds_none_in_none() {
         .expect_err("two windows titled alike");
     assert!(matches!(refused, Error::Ambiguous { .. }), "{refused:?}");
 
-    // A UUID no listed simulator has leaves the window in: still two.
-    windows.nodes[second].identity = vec![Some(OTHER_UDID.to_owned())];
-    let refused = tree::find_screen(&mut windows, &request(), vec![first, second])
-        .expect_err("an unlisted UUID names no simulator");
+    // Any UUID that is not the device's leaves the window out, whatever lists it.
+    windows.nodes[second].identity = vec![Some(
+        "file:///tmp/0F1E2D3C-4B5A-4697-8877-665544332211.session".to_owned(),
+    )];
+    let (found, _) = tree::find_screen(&mut windows, &request(), vec![first, second])
+        .expect("the window naming another UUID is left out");
+    assert_eq!(windows.nodes[first].children, [found]);
+    let refused = tree::find_screen(&mut windows, &request(), vec![second])
+        .expect_err("every window names another UUID");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. } if message.contains("UUID")),
+        "{refused:?}"
+    );
+
+    // A window that names no UUID could be a twin's: refused while one shares the title.
+    let refused = tree::find_screen(&mut windows, &request_shared(1), vec![first])
+        .expect_err("a twin shares the title");
     assert!(matches!(refused, Error::Ambiguous { .. }), "{refused:?}");
-    let (found, _) = tree::find_screen(
-        &mut windows,
-        &request().listed(listed()),
-        vec![first, second],
-    )
-    .expect("the other simulator's window is left out");
+    windows.nodes[first].identity = vec![Some(UDID.to_owned())];
+    let (found, _) = tree::find_screen(&mut windows, &request_shared(1), vec![first, second])
+        .expect("the window naming the device is taken");
     assert_eq!(windows.nodes[first].children, [found]);
 
     let missing = tree::find_screen(&mut windows, &request(), Vec::new()).expect_err("none");
@@ -1048,28 +1182,43 @@ fn a_press_refuses_an_element_it_cannot_tell_apart() {
 }
 
 /// A failure while the process is no longer trusted is the permission taken back, whatever the
-/// call said; a call that did not answer names the deadline it ran under.
+/// call said; a call that did not answer names the deadline it ran under, or, when an element
+/// refused the read's deadline, says it ran under the one the element kept.
 #[test]
 fn a_permission_taken_back_mid_read_is_named() {
     for error in [
         ProviderError::Failed("the accessibility API answered -25211".to_owned()),
         ProviderError::Timeout,
         ProviderError::Gone,
+        ProviderError::ParentGone,
     ] {
-        let refused = accessibility::read_failure(error, false, Duration::from_secs(5));
+        let refused = accessibility::read_failure(error, false, Some(Duration::from_secs(5)));
         assert_eq!(
             refused.missing_capability().as_deref(),
             Some("macos_permission_accessibility")
         );
     }
-    let timeout =
-        accessibility::read_failure(ProviderError::Timeout, true, Duration::from_millis(1500));
+    let timeout = accessibility::read_failure(
+        ProviderError::Timeout,
+        true,
+        Some(Duration::from_millis(1500)),
+    );
     assert!(
         matches!(&timeout, Error::Timeout { message, .. } if message.contains("1500 ms")),
         "{timeout:?}"
     );
+    let refused_deadline = accessibility::read_failure(ProviderError::Timeout, true, None);
+    assert!(
+        matches!(&refused_deadline, Error::Timeout { message, .. }
+            if message.contains("refused") && !message.contains(" ms")),
+        "{refused_deadline:?}"
+    );
     assert!(matches!(
-        accessibility::read_failure(ProviderError::Failed("x".to_owned()), true, Duration::ZERO),
+        accessibility::read_failure(
+            ProviderError::Failed("x".to_owned()),
+            true,
+            Some(Duration::ZERO)
+        ),
         Error::Platform { .. }
     ));
 }
@@ -1105,9 +1254,7 @@ fn the_lane_reads_and_presses_through_the_simulators_window() {
     let projected = lane.read_tree(&placement(), &app).expect("the tree");
     assert!(Projection::of(&app, &projected).is_equal());
     assert_eq!(projected.roots[0].window, Some(window()));
-    // The listing's readable entries: the iPhone and the Apple TV.
-    let tv = Udid::try_new("0A1B2C3D-4E5F-4061-8728-394A5B6C7D8E").expect("a UDID");
-    assert_eq!(screen.requests(), [request().listed(vec![udid(), tv])]);
+    assert_eq!(screen.requests(), [request()]);
     lane.invoke(&placement(), "like", &app).expect("pressed");
     let pressed = screen.presses();
     assert!(

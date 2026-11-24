@@ -312,26 +312,14 @@ impl IosSimulatorLane {
     }
 
     /// Which screen a read of the window `placement` describes is of: the simulator's window by
-    /// its title, and the app's window it shows.
-    fn screen_request(&self, placement: &Placement) -> ScreenRequest {
-        ScreenRequest::new(
-            accessibility::window_title(&self.simulator),
-            self.simulator.udid.clone(),
-            placement.size,
-            placement.scale,
-        )
-    }
-
-    /// Refuse a read whose window title names another available simulator as well, asked of
-    /// `simctl` before each read, since a simulator made or renamed since the lane connected
-    /// counts ([`accessibility::check_title_names_one`]); the UDIDs listed, which a window may name
-    /// ([`accessibility::window_identity`]).
+    /// its title as `simctl` lists it now, how many other simulators share that title, and the
+    /// app's window it shows. The listing is read before each read, since a simulator made,
+    /// renamed or removed since the lane connected counts ([`accessibility::screen_title`]).
     ///
     /// # Errors
     ///
-    /// [`Error::Ambiguous`] naming the simulators that share the title; the Simulator's failure to
-    /// list its devices.
-    fn check_title(&mut self) -> Result<Vec<Udid>> {
+    /// As [`accessibility::screen_title`]; the Simulator's failure to list its devices.
+    fn screen_request(&mut self, placement: &Placement) -> Result<ScreenRequest> {
         let listing = checked(
             self.xcrun.as_mut(),
             &XcrunCommand::ListDevices,
@@ -339,11 +327,14 @@ impl IosSimulatorLane {
             SHORT,
         )?;
         let simulators = device::parse_devices(&listing.stdout).map_err(xcrun::lane_error)?;
-        accessibility::check_title_names_one(&simulators, &self.simulator)?;
-        Ok(simulators
-            .into_iter()
-            .map(|simulator| simulator.udid)
-            .collect())
+        let (title, others_titled) = accessibility::screen_title(&simulators, &self.simulator)?;
+        Ok(ScreenRequest::new(
+            title,
+            self.simulator.udid.clone(),
+            others_titled,
+            placement.size,
+            placement.scale,
+        ))
     }
 
     /// The Mac's accessibility API the lane reads through.
@@ -373,8 +364,7 @@ impl IosSimulatorLane {
     ) -> Result<(ScreenRequest, HostScreen, tree::Placing)> {
         // Refused before anything is asked when the lane reads through nothing.
         self.host_accessibility(capability)?;
-        let listed = self.check_title()?;
-        let request = self.screen_request(placement).listed(listed);
+        let request = self.screen_request(placement)?;
         let screen = self.host_accessibility(capability)?.read(&request)?;
         let placing = tree::Placing {
             screen: screen.frame,

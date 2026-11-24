@@ -1592,6 +1592,9 @@ struct FakeTree {
     hung: Option<usize>,
     /// The element that went away.
     gone: Option<usize>,
+    /// The parent that goes away once a sibling is asked for after this child: the macOS
+    /// accessibility API's answer to a child read asked of a parent gone.
+    parent_gone_after: Option<usize>,
     /// The elements whose properties were read, in order.
     read: Vec<usize>,
 }
@@ -1602,6 +1605,7 @@ impl FakeTree {
             nodes,
             hung: None,
             gone: None,
+            parent_gone_after: None,
             read: Vec::new(),
         }
     }
@@ -1621,6 +1625,9 @@ impl Provider for FakeTree {
     }
 
     fn next_sibling(&mut self, element: &usize) -> Result<Option<usize>, ProviderError> {
+        if self.parent_gone_after == Some(*element) {
+            return Err(ProviderError::ParentGone);
+        }
         let Some(parent) = self.parent_of(*element) else {
             // A root's sibling is another window: present, and not the app's.
             return Ok(Some(self.nodes.len() - 1));
@@ -1683,6 +1690,33 @@ fn the_walk_reads_the_window_and_leaves_a_gone_element_out() {
     assert!(
         !tree.read.contains(&6),
         "the window beside the app's is not read"
+    );
+}
+
+/// A parent that goes away after some of its children were read leaves them marked unread and
+/// the read cut short, never a shorter list read as whole; a search that meets it says so.
+#[test]
+fn a_parent_gone_mid_walk_leaves_its_children_unread() {
+    let mut tree = fake_window();
+    tree.parent_gone_after = Some(3);
+    let read = walk::read(&mut tree, &0, UIA_TIMEOUT).expect("the window reads");
+    assert!(read.truncated);
+    let items = &read.roots[0].children[1];
+    assert_eq!(items.children.len(), 1, "{items:?}");
+    assert!(
+        items.children_unread,
+        "the list went away after its first item"
+    );
+    assert!(!read.roots[0].children_unread);
+
+    let mut tree = fake_window();
+    tree.parent_gone_after = Some(3);
+    let missing = walk::find(&mut tree, 0, "third", UIA_TIMEOUT).expect_err("cut short");
+    assert!(
+        missing
+            .to_string()
+            .contains("went away before all its children were searched"),
+        "{missing}"
     );
 }
 

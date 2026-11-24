@@ -176,6 +176,11 @@ pub(crate) fn elements(
 /// The child of `parent` at `index`, read alone (`AXUIElementCopyAttributeValues` for one value),
 /// so a walk copies no more children than its budget visits; `None` past the last child, which
 /// the API answers as an index outside the array.
+///
+/// The call is asked of `parent`, so `kAXErrorInvalidUIElement` is `parent` gone, not a child:
+/// every later index would answer the same. It reads as [`ProviderError::ParentGone`], which a
+/// walk takes as the parent's children cut short, never as their end: the one place both lanes
+/// that read through this API learn the rule.
 pub(crate) fn child_at(
     parent: &AXUIElement,
     index: CFIndex,
@@ -191,6 +196,7 @@ pub(crate) fn child_at(
         AXError::NoValue | AXError::AttributeUnsupported | AXError::IllegalArgument => {
             return Ok(None);
         }
+        AXError::InvalidUIElement => return Err(ProviderError::ParentGone),
         error => return Err(classify(error)),
     }
     let Some(values) = NonNull::new(values.cast_mut()) else {
@@ -222,16 +228,21 @@ pub(crate) fn application(pid: i32, seconds: f32) -> CFRetained<AXUIElement> {
     // SAFETY: any process id names an element; one with no app behind it answers every call
     // with an error.
     let app = unsafe { AXUIElement::new_application(pid) };
-    // SAFETY: a live element and a positive timeout. A refused timeout leaves the default one.
-    let _ = unsafe { app.set_messaging_timeout(seconds) };
+    // A refused timeout leaves the default one, which the caller cannot tell from its own.
+    let _ = set_messaging_timeout(&app, seconds);
     app
 }
 
-/// Let calls asked of `element` wait `seconds` for its app: an element's own messaging timeout,
-/// set where a read must know the deadline its calls run under.
-pub(crate) fn wait_for(element: &AXUIElement, seconds: f32) {
-    // SAFETY: a live element and a positive timeout. A refused timeout leaves the one it had.
-    let _ = unsafe { element.set_messaging_timeout(seconds) };
+/// Set how long calls asked of `element` wait for its app, `seconds`, the element's own
+/// messaging timeout; whether the element took it. One that refused keeps the timeout it had (its
+/// application's or the system's), so a timeout of its calls ran under that one.
+pub(crate) fn set_messaging_timeout(element: &AXUIElement, seconds: f32) -> bool {
+    if !(seconds.is_finite() && seconds > 0.0) {
+        return false;
+    }
+    // SAFETY: a live element and a finite, positive timeout, checked above.
+    let error = unsafe { element.set_messaging_timeout(seconds) };
+    error == AXError::Success
 }
 
 /// The actions `element` offers, by name.
@@ -278,7 +289,7 @@ pub(crate) fn read_error(error: ProviderError) -> Error {
             ),
             retry: flui_protocol::error::ErrorCode::Timeout.default_retry(),
         },
-        ProviderError::Gone => Error::gone(
+        ProviderError::Gone | ProviderError::ParentGone => Error::gone(
             flui_protocol::error::HandleKind::Window,
             None,
             None,
