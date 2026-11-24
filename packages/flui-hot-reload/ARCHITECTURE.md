@@ -34,8 +34,7 @@ The host never reconstructs a `Box` to free plugin memory. Free uses
 `MaybeUninit<Scene>`, which preserves allocation size/alignment without dropping
 the moved value. Both teardown functions are `unsafe extern "C"`: the caller
 must supply the live allocation, preserve unique ownership, and choose the
-matching consumption path. Null is a no-op. The C ABI and symbol names remain
-unchanged; Rust callers now must acknowledge their obligations explicitly.
+matching consumption path. Null is a no-op.
 
 Keep the image loaded until both its allocation and every retained plugin-backed
 payload have been destroyed, including payloads moved out or cloned from a
