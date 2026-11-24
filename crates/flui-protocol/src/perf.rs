@@ -8,6 +8,10 @@ use crate::tree::WindowId;
 use crate::verdict::Verdict;
 
 /// `perf.start`: begin keeping frame samples for a window.
+///
+/// A window runs one span at a time, owned by the connection that started it: a `perf.start`
+/// while one runs is refused `invalid_argument`, and so is a `perf.stop` from another
+/// connection. A span whose connection has gone is dropped, so the next `perf.start` begins.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -15,13 +19,15 @@ use crate::verdict::Verdict;
 pub struct PerfStartParams {
     /// The window.
     pub window: WindowId,
-    /// Work over this many refresh periods makes a frame janky; 2 when absent.
+    /// Work over this many refresh periods makes a frame janky; 2 when absent. Finite and at
+    /// least 1: any other value is refused `invalid_argument`.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub jank_multiplier: Option<f64>,
-    /// How many of the worst frames to report; 5 when absent.
+    /// How many of the worst frames to report; 5 when absent, at most 64: a larger number
+    /// reports 64.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
