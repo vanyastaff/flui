@@ -1,46 +1,37 @@
-//! [`RichText`] — displays a tree of styled inline spans in one paragraph.
+//! [`RichText`] — lays out and paints a tree of styled inline spans as one
+//! paragraph.
 
 use flui_foundation::{CreationSite, TextDirection};
 use flui_layer::LayerLink;
 use flui_objects::{RenderParagraph, TextLinkFocus};
+use flui_painting::TextSizing;
 use flui_painting::typography::{InlineSpan, TextAlign, TextLink};
 use flui_rendering::protocol::BoxProtocol;
 use flui_semantics::SemanticsAnchor;
-use flui_view::element::ElementKind;
-use flui_view::{
-    BoxedView, BuildContext, EventContext, EventOutcome, IntoView, RenderView, StatelessView, View,
-    ViewExt, impl_render_view,
-};
+use flui_view::{BoxedView, RenderView, ViewExt, impl_render_view};
 
 use super::linked_paragraph::{LinkRouting, LinkedParagraph};
-use super::selection_area::{SelectableParagraph, SelectionScope};
 use crate::Directionality;
-use crate::support::{RefCallback, ref_callback};
-use flui_view::environment::MediaQuery;
+use crate::support::RefCallback;
 
-/// Displays a tree of styled [`InlineSpan`]s (most commonly a
-/// [`TextSpan`](flui_painting::typography::TextSpan)) in a single paragraph.
+/// Lays out and paints a tree of styled [`InlineSpan`]s (most commonly a
+/// [`TextSpan`](flui_painting::typography::TextSpan)) as one paragraph.
 ///
-/// Backed by `RenderParagraph`, the same render object [`Text`](crate::Text)
-/// uses. Unlike `Text`, which
-/// applies one style to a flat string, `RichText` accepts a span tree where
-/// each node carries its own style, letting a sentence mix e.g. bold and
-/// colored words without splitting it across multiple widgets.
-/// Text sizing follows the nearest [`MediaQuery`]; changes invalidate paragraph
-/// layout without modifying the authored span styles.
-///
-/// # Links
-///
-/// A span made a link with
-/// [`TextSpan::with_link`](flui_painting::typography::TextSpan::with_link)
-/// does something only through [`on_link`](Self::on_link): a tap on the
-/// link's glyphs, or assistive technology activating the link, calls it with
-/// the span's [`TextLink`]. While it is set, the pointer over a link is a
-/// pointing hand, each link is an accessible link node, and each link is a
-/// focus stop: Tab reaches it in reading order, Enter or Select opens it
-/// ([`ActivateLinkIntent`](crate::ActivateLinkIntent)), and a
-/// [`FocusRing`](crate::FocusRing)-styled ring outlines each line of its
-/// glyphs while the focus is visible. Without it, links are plain text.
+/// The render widget [`Text`](crate::Text) builds, as Flutter's `RichText`
+/// is the one its `Text` builds (`flutter/flutter@3.50.1`,
+/// `packages/flutter/lib/src/widgets/basic.dart:6514`): each span carries its
+/// own style, so a sentence mixes bold and coloured words in one paragraph.
+/// It reads the ambient [`Directionality`] when it names no direction of its
+/// own, as Flutter's does, while it configures its render object
+/// (`basic.dart:6665` and `:6687`), so a direction change reconfigures the
+/// same render object.
+/// The ambient [`DefaultTextStyle`](crate::DefaultTextStyle), the
+/// [`MediaQuery`](flui_view::environment::MediaQuery) text sizing and weight
+/// adjustment, a [`SelectionArea`](crate::SelectionArea) and link handling
+/// are [`Text`](crate::Text)'s: a `RichText` paints its spans at their
+/// authored sizes unless it is given a [`text_sizing`](Self::text_sizing), as
+/// Flutter's defaults to `TextScaler.noScaling` (`basic.dart:6535`), and its
+/// links are plain text.
 ///
 /// # Examples
 ///
@@ -54,43 +45,34 @@ use flui_view::environment::MediaQuery;
 ///     })),
 /// );
 /// ```
-///
-/// A link:
-///
-/// ```rust
-/// # use flui_widgets::prelude::*;
-/// # use flui_painting::typography::TextSpan;
-/// let _ = RichText::new(
-///     TextSpan::new("Read the ").with_child(TextSpan::new("terms").with_link("app://terms")),
-/// )
-/// .on_link(|_ctx, link| println!("open {link}"));
-/// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RichText {
     pub(super) text: InlineSpan,
-    align: TextAlign,
-    direction: Option<TextDirection>,
-    max_lines: Option<u32>,
-    pub(super) on_link: Option<RefCallback<TextLink>>,
-    site: CreationSite,
-}
-
-impl std::fmt::Debug for RichText {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RichText")
-            .field("text", &self.text)
-            .field("align", &self.align)
-            .field("direction", &self.direction)
-            .field("max_lines", &self.max_lines)
-            .field("on_link", &self.on_link.is_some())
-            .finish_non_exhaustive()
-    }
+    pub(super) align: TextAlign,
+    /// The authored direction; unset, the ambient one.
+    pub(super) direction: Option<TextDirection>,
+    pub(super) max_lines: Option<u32>,
+    /// The sizing its spans are laid out at; `None` inherits the
+    /// presentation's, which only [`Text`](crate::Text) asks for.
+    pub(super) text_sizing: Option<TextSizing>,
+    pub(super) font_weight_adjustment: i32,
+    /// What reaches the links, when a handler activates them.
+    pub(super) links: Option<LinkRouting>,
+    /// The link holding the primary keyboard focus.
+    pub(super) link_focus: Option<TextLinkFocus>,
+    /// The anchor a selection area registered the text under, while it is
+    /// selectable (ADR-0214).
+    pub(super) selectable: Option<SemanticsAnchor>,
+    /// The selected bytes and the colour that highlights them.
+    pub(super) highlight: Option<super::selection_area::Highlight>,
+    pub(super) site: CreationSite,
 }
 
 impl RichText {
     /// Display `text` (any type convertible into an [`InlineSpan`] — most
     /// commonly a [`TextSpan`](flui_painting::typography::TextSpan)) with start
-    /// alignment, in the ambient [`Directionality`]'s reading direction.
+    /// alignment, in the ambient [`Directionality`]'s reading direction, at
+    /// its spans' authored sizes.
     #[track_caller]
     pub fn new(text: impl Into<InlineSpan>) -> Self {
         Self {
@@ -98,7 +80,12 @@ impl RichText {
             align: TextAlign::Start,
             direction: None,
             max_lines: None,
-            on_link: None,
+            text_sizing: Some(TextSizing::fixed()),
+            font_weight_adjustment: 0,
+            links: None,
+            link_focus: None,
+            selectable: None,
+            highlight: None,
             site: CreationSite::here(),
         }
     }
@@ -125,56 +112,32 @@ impl RichText {
         self
     }
 
-    /// Call `handler` with a link's [`TextLink`] when a tap or assistive
-    /// technology activates that link. It receives the activation's
-    /// [`EventContext`], so it writes signals as any event callback does.
+    /// Size each span by `sizing`, as Flutter's `RichText` takes a
+    /// `textScaler` (`basic.dart:6611`). Unset, each span keeps its authored
+    /// size; [`Text`](crate::Text) passes the ambient
+    /// [`MediaQuery`](flui_view::environment::MediaQuery)'s.
     #[must_use]
-    pub fn on_link<F, R>(mut self, handler: F) -> Self
-    where
-        F: Fn(&mut EventContext<'_>, &TextLink) -> R + 'static,
-        R: EventOutcome,
-    {
-        self.on_link = Some(ref_callback(handler));
+    pub fn text_sizing(mut self, sizing: TextSizing) -> Self {
+        self.text_sizing = Some(sizing);
         self
     }
-}
 
-impl View for RichText {
-    fn create_element(self: std::rc::Rc<Self>) -> ElementKind {
-        ElementKind::stateless(self)
+    /// Shift every span's weight by `adjustment` before its face is matched
+    /// (ADR-0174), as the platform's bold-text setting does through
+    /// [`Text`](crate::Text). Zero keeps the authored weights.
+    #[must_use]
+    pub fn font_weight_adjustment(mut self, adjustment: i32) -> Self {
+        self.font_weight_adjustment = adjustment;
+        self
     }
 
-    fn creation_site(&self) -> CreationSite {
-        self.site
+    /// The text sizing `Text` resolved: the ambient `MediaQuery`'s, or, with
+    /// none above it, the presentation's own (`None`).
+    pub(super) fn with_text_sizing(mut self, sizing: Option<TextSizing>) -> Self {
+        self.text_sizing = sizing;
+        self
     }
-}
 
-impl StatelessView for RichText {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let paragraph = ResolvedParagraph {
-            authored: self.clone(),
-            // Read only when unset: an explicit direction takes no dependency.
-            direction: self
-                .direction
-                .unwrap_or_else(|| Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr)),
-            text_sizing: MediaQuery::text_sizing_of(ctx),
-            font_weight_adjustment: MediaQuery::font_weight_adjustment_of(ctx).unwrap_or(0),
-            links: None,
-            link_focus: None,
-            selectable: None,
-            highlight: None,
-        };
-        // Inside a selection area the text registers itself, which takes a
-        // mounted state of its own.
-        if let Some((registry, color)) = SelectionScope::registry_of(ctx) {
-            return SelectableParagraph::new(paragraph, self.on_link.clone(), registry, color)
-                .boxed();
-        }
-        paragraph.linked(self.on_link.as_ref())
-    }
-}
-
-impl ResolvedParagraph {
     /// This paragraph, with its links activated by `on_link` when set.
     pub(super) fn linked(self, on_link: Option<&RefCallback<TextLink>>) -> BoxedView {
         match on_link {
@@ -184,36 +147,37 @@ impl ResolvedParagraph {
             None => self.boxed(),
         }
     }
+
+    /// The authored direction, else the ambient one, read with a dependency
+    /// only when none is authored.
+    fn resolved_direction(&self, ctx: &flui_view::RenderObjectContext<'_>) -> TextDirection {
+        self.direction
+            .unwrap_or_else(|| Directionality::of_render_object(ctx))
+    }
+
+    /// The links the selection's start and end are published under, for a
+    /// selection area's handles.
+    fn handles(&self) -> (Option<LayerLink>, Option<LayerLink>) {
+        self.highlight
+            .as_ref()
+            .map_or((None, None), |highlight| highlight.handles)
+    }
+
+    fn shown_links_listener(&self) -> Option<flui_objects::ShownLinksListener> {
+        self.links
+            .as_ref()
+            .map(|links| links.shown_links_listener().clone())
+    }
 }
 
-/// The inherited dependency belongs to the widget build; the render object
-/// receives values and keeps the authored span tree unchanged.
-#[derive(Clone, Debug)]
-pub(super) struct ResolvedParagraph {
-    pub(super) authored: RichText,
-    /// The authored direction, else the ambient one.
-    pub(super) direction: TextDirection,
-    pub(super) text_sizing: Option<flui_painting::TextSizing>,
-    pub(super) font_weight_adjustment: i32,
-    /// What reaches the links, when a handler activates them.
-    pub(super) links: Option<LinkRouting>,
-    /// The link holding the primary keyboard focus.
-    pub(super) link_focus: Option<TextLinkFocus>,
-    /// The anchor a selection area registered the text under, while it is
-    /// selectable (ADR-0214).
-    pub(super) selectable: Option<SemanticsAnchor>,
-    /// The selected bytes and the colour that highlights them.
-    pub(super) highlight: Option<super::selection_area::Highlight>,
-}
-
-impl RenderView for ResolvedParagraph {
+impl RenderView for RichText {
     type Protocol = BoxProtocol;
     type RenderObject = RenderParagraph;
 
     fn create_render_object(&self, ctx: &flui_view::RenderObjectContext<'_>) -> Self::RenderObject {
-        let mut paragraph = RenderParagraph::new(self.authored.text.clone(), self.direction)
-            .with_text_align(self.authored.align)
-            .with_max_lines(self.authored.max_lines)
+        let mut paragraph = RenderParagraph::new(self.text.clone(), self.resolved_direction(ctx))
+            .with_text_align(self.align)
+            .with_max_lines(self.max_lines)
             .with_text_sizing(self.text_sizing.clone())
             .with_font_weight_adjustment(self.font_weight_adjustment)
             .with_link_routes(LinkRouting::sync(self.links.as_ref(), ctx, &[]));
@@ -242,10 +206,10 @@ impl RenderView for ResolvedParagraph {
         let routes = LinkRouting::sync(self.links.as_ref(), ctx, &existing);
         render_object.set_shown_links_listener(self.shown_links_listener());
         let (start, end) = self.handles();
-        render_object.set_text(self.authored.text.clone())
-            | render_object.set_text_align(self.authored.align)
-            | render_object.set_text_direction(self.direction)
-            | render_object.set_max_lines(self.authored.max_lines)
+        render_object.set_text(self.text.clone())
+            | render_object.set_text_align(self.align)
+            | render_object.set_text_direction(self.resolved_direction(ctx))
+            | render_object.set_max_lines(self.max_lines)
             | render_object.set_text_sizing(self.text_sizing.clone())
             | render_object.set_font_weight_adjustment(self.font_weight_adjustment)
             | render_object.set_link_routes(routes)
@@ -275,20 +239,4 @@ impl RenderView for ResolvedParagraph {
     }
 }
 
-impl ResolvedParagraph {
-    /// The links the selection's start and end are published under, for a
-    /// selection area's handles.
-    fn handles(&self) -> (Option<LayerLink>, Option<LayerLink>) {
-        self.highlight
-            .as_ref()
-            .map_or((None, None), |highlight| highlight.handles)
-    }
-
-    fn shown_links_listener(&self) -> Option<flui_objects::ShownLinksListener> {
-        self.links
-            .as_ref()
-            .map(|links| links.shown_links_listener().clone())
-    }
-}
-
-impl_render_view!(ResolvedParagraph);
+impl_render_view!(RichText, site = site);

@@ -2,8 +2,8 @@
 # counts, not timings.
 
 [navigation_bar_alone]
-allocations = 517
-bytes = 83928
-elements = 51
+allocations = 513
+bytes = 83570
+elements = 49
 reallocations = 4
 render_nodes = 26

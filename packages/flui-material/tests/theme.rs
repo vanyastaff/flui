@@ -119,7 +119,7 @@ impl StatelessView for PaintedThemeRoles {
         use flui_painting::typography::TextSpan;
         use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
         use flui_sdk::painting::typography::TextStyle;
-        use flui_sdk::widgets::{Column, RichText, Text};
+        use flui_sdk::widgets::{Column, Text};
 
         let theme = Theme::of(ctx).text_theme.clone();
         let title = theme.title_small.expect("Material title style");
@@ -146,7 +146,7 @@ impl StatelessView for PaintedThemeRoles {
             Text::new("title role").style(title).boxed(),
             Text::new("label role").style(label).boxed(),
             Text::new("body role").style(body).boxed(),
-            RichText::new(nested).boxed(),
+            Text::rich(nested).boxed(),
         ])
     }
 }
