@@ -125,6 +125,14 @@ timeline, metrics, and capture layers can choose independent filters. Within
 the native sink nothing narrows the result afterwards:
 `RUST_LOG=flui_view=trace` really does deliver `TRACE`.
 
+One ceiling is the build's, not the filter's: `tracing` compiles the events
+above its static maximum level out of a binary, and `flui build --release` and
+`flui run --release` set that level to `info` through this crate's
+`release-max-level-info` feature, which the facade forwards (ADR-0398). A
+directive above it selects nothing there, so the subscriber `setup` installs
+says so once, in a warning on target `flui_log::ceiling` that its filter
+admits, through the platform's sink.
+
 A directive string is `target=level` pairs and one bare level for the rest
 (`info,wgpu=warn,flui_view=trace`), read by `tracing_subscriber`'s `Targets`
 filter, so an application links no regex engine. A span or field directive
@@ -137,6 +145,7 @@ filter, so an application links no regex engine. A span or field directive
 | `hierarchical` | Adds `DesktopFormat::Hierarchical`, a `tracing-forest` span tree printed when each root span closes |
 | `apple-unified-logging` | Makes `os_log` selectable on macOS (always available on iOS) |
 | `testing` | `testing::capture`, a race-free capture of the events a closure emits; `flui-testing` re-exports it as `log_capture` |
+| `release-max-level-info` | `tracing`'s `release_max_level_info`: no `trace!` or `debug!` call site in a build without debug assertions; `flui build --release` turns it on through the facade (ADR-0398) |
 
 ## Out of scope
 

@@ -13,6 +13,8 @@
   [ADR-0239](../../../adr/ADR-0239-every-debug-app-hosts-the-driver-agent.md) (agent in the app),
   [ADR-0240](../../../adr/ADR-0240-semantics-identifier.md) (test identifier),
   [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md) (trace format),
+  [ADR-0400](../../../adr/ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md)
+  (the Rust front end is `flui_testing::Tester`; headless runs are `flui_testing::Headless`),
   [ADR-0242](../../../adr/ADR-0242-typed-inspect-and-tracing-conventions.md) (`Inspect` and
   tracing conventions)
 
@@ -22,12 +24,13 @@ platform. How it is built (crates, wire types, lanes) is the design's business.
 
 ## Who uses it
 
-**A test author** (depends on `flui-driver` as a dev-dependency):
+**A test author** (writes a `flui_testing::Tester` scenario; a crate's device target depends on
+`flui-driver` as a dev-dependency):
 
 1. writes one Rust test that finds a button by its role and name, presses it and waits until the
-   counter reads 1. The same test runs headless in CI on a virtual clock, and against the real app
-   on Windows, macOS, Linux, an Android device, the iOS Simulator and Chrome, with no change but
-   the target;
+   counter reads 1. The same function runs headless in CI on a virtual clock through
+   `flui_testing::Headless`, and against the real app on Windows, macOS, Linux, an Android device,
+   the iOS Simulator and Chrome through `flui_driver::Device`, with no change but the connection;
 2. chooses how input arrives: a semantics action, framework-level synthetic input or real OS
    input. Then reads from the result which path the input actually took and whether the app
    observed it;
@@ -85,9 +88,11 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 
 ### Targets and connection
 
-- **R1.** One API drives a *target*: a running FLUI app. The target kinds are headless
-  (in-process), Windows, macOS, Linux X11, Linux Wayland, Android device or emulator over `adb`,
-  iOS Simulator and Chrome. Code written against one target compiles and runs against any other.
+- **R1.** One API drives a *target*: a running FLUI app, through `flui_testing::Tester` over a
+  `flui_protocol::client::Connection`. The target kinds are headless (in-process,
+  `flui_testing::Headless`; not a lane of `flui-driver`), Windows, macOS, Linux X11, Linux
+  Wayland, Android device or emulator over `adb`, iOS Simulator and Chrome (each a
+  `flui_driver::Device`). Code written against one target compiles and runs against any other.
 - **R2.** The driver launches an example or binary on any target (build, install, start) and can
   also attach to one already running. A launched target is ended when its session ends, including
   when the driver panics or is killed.
@@ -193,8 +198,9 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   presented; an input or semantics event is observed; and combinations of these. Every wait has a
   timeout and returns either the observation that satisfied it or, on timeout, the last
   observation and why the app had not settled (pending frame, transient callbacks, timers).
-- **R19.** On the headless target, time is virtual. A wait advances the manual clock frame by
-  frame up to a frame limit and is deterministic across runs. On live targets time is real.
+- **R19.** On the headless target, time is virtual. A wait moves the manual clock to each next
+  wake up to a limit of virtual time and is deterministic across runs. On live targets time is
+  real.
 - **R20.** Assertions retry until they pass or time out (default 5 s, overridable per session and
   per call). One-shot reads stay available. A failed assertion reports expected against last
   actual.
@@ -234,7 +240,7 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 
 ### Surfaces
 
-- **R28.** One protocol, three front ends: the Rust API, the `flui drive` CLI and the `flui mcp`
+- **R28.** One protocol, three front ends: the Rust API (`flui_testing::Tester`), the `flui drive` CLI and the `flui mcp`
   server. All three expose the same operations, with the same names, parameters, results and
   errors, generated from one method table. None can do what the others cannot.
 - **R28a.** MCP lists a **core tool set** by default, 13 tools enough to launch, read,
@@ -530,8 +536,9 @@ and each idea was accepted or rejected there with a reason.
     rebuild roots. `element_rebuild` moves from INFO to TRACE, and carries the rebuild reasons as a
     bitmask;
   - a disabled level costs nothing on the frame path: `tracing::enabled!` gates any field that
-    costs to compute, and nothing allocates before the macro. Framework crates never set
-    `max_level_*` features, so release profiling and the driver's `perf` keep working.
+    costs to compute, and nothing allocates before the macro. No framework crate turns a
+    `max_level_*` feature on; the release build mode alone holds the events at INFO (ADR-0398),
+    so profiling and the driver's `perf` read a debug, `profiling` or agent build.
 - **R53.** **One span stream.** A single capture layer, partitioned by runtime and presentation
   id, feeds the profiler, the devtools timeline, the driver's `perf` and trace rows, and a
   Chrome/Perfetto export with `X` events and counters. Phases are recognized by
@@ -648,7 +655,8 @@ and each idea was accepted or rejected there with a reason.
   explicitly (R50–R55; ADR-0242).
   - **Rejected:** `bevy_reflect` or `facet` as the core model; `valuable`, which is still behind
     `tracing_unstable`; serde as the description trait (it stays the output format);
-    Compose-style source strings; a second profiling API; `max_level_*` in framework crates;
+    Compose-style source strings; a second profiling API; a `max_level_*` feature a framework
+    crate turns on (the release build mode turns one on, ADR-0398);
     `miette` source-span errors.
 
 ## Changed by the session lead (2026-11-20)

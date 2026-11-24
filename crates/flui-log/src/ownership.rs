@@ -247,6 +247,24 @@ pub fn install_subscriber<S>(
 where
     S: Subscriber + Send + Sync + 'static,
 {
+    install_dispatch(
+        tracing::Dispatch::new(subscriber),
+        policy,
+        log_bridge_policy,
+    )
+}
+
+/// [`install_subscriber`] for a subscriber already behind a [`Dispatch`],
+/// so the caller keeps a handle to the one it installed and can send an event
+/// to it alone (`tracing::dispatcher::with_default`), whatever scoped default
+/// the calling thread has.
+///
+/// [`Dispatch`]: tracing::Dispatch
+pub(crate) fn install_dispatch(
+    dispatch: tracing::Dispatch,
+    policy: InstallPolicy,
+    log_bridge_policy: LogBridgePolicy,
+) -> Result<SubscriberInstallation, SetupError> {
     match policy {
         // `set_global_default` is the whole test. It writes the slot only when
         // the slot is empty and reports the refusal as an error, so trying it
@@ -258,12 +276,12 @@ where
         // subscriber anywhere in the process would make `Auto` believe the
         // global slot was taken and refuse to install for the rest of the
         // program's life. (It is `#[doc(hidden)]` upstream, too.)
-        InstallPolicy::Auto => match tracing::subscriber::set_global_default(subscriber) {
+        InstallPolicy::Auto => match tracing::dispatcher::set_global_default(dispatch) {
             Ok(()) => Ok(SubscriberInstallation::installed(log_bridge_policy)),
             Err(_) => Ok(SubscriberInstallation::unchanged()),
         },
 
-        InstallPolicy::Install => tracing::subscriber::set_global_default(subscriber)
+        InstallPolicy::Install => tracing::dispatcher::set_global_default(dispatch)
             .map(|()| SubscriberInstallation::installed(log_bridge_policy))
             .map_err(|_| SetupError::SubscriberAlreadyInstalled),
     }

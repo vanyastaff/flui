@@ -332,6 +332,153 @@ fn ordinary_facade_graph_excludes_test_support() {
     }
 }
 
+/// `tracing`'s static maximum level reaches a consumer through the facade's
+/// `release-max-level-info` alone (ADR-0398 §1): without it no crate of the
+/// normal graph turns a `max_level_*` feature on, and with it the release
+/// ceiling is on.
+#[test]
+fn the_release_ceiling_reaches_tracing_only_through_its_feature() {
+    let Some(root) = checkout_root() else { return };
+    for (features, ceiling) in [(&[][..], false), (&["release-max-level-info"][..], true)] {
+        let mut dependencies = toml::Table::new();
+        dependencies.insert("flui".into(), facade_with_features(root, features));
+        let project = consumer_project(dependencies, None, "");
+        let output = Command::new(env!("CARGO"))
+            .args([
+                "tree",
+                "--offline",
+                "--edges",
+                "normal",
+                "--prefix",
+                "none",
+                "--format",
+                "{p}|{f}",
+            ])
+            .current_dir(project.path())
+            .output()
+            .expect("inspect normal consumer dependency graph");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let graph = String::from_utf8_lossy(&output.stdout);
+        let Some((_, features_of_tracing)) = graph.lines().find_map(|line| {
+            line.starts_with("tracing v")
+                .then(|| line.split_once('|'))
+                .flatten()
+        }) else {
+            panic!("no `tracing` in the normal graph:\n{graph}");
+        };
+        let tracing_features: Vec<&str> = features_of_tracing.split(',').collect();
+        assert_eq!(
+            tracing_features.contains(&"release_max_level_info"),
+            ceiling,
+            "{features:?}: {tracing_features:?}"
+        );
+        assert!(
+            !tracing_features.iter().any(
+                |feature| feature.contains("max_level") && *feature != "release_max_level_info"
+            ),
+            "{features:?}: a level feature beyond the facade's: {tracing_features:?}"
+        );
+    }
+}
+
+/// A build without debug assertions and with `flui-log`'s
+/// `release-max-level-info` reports a filter that selects DEBUG once, through
+/// the subscriber `setup` installs, whichever arm of `setup_with_env_fallback`
+/// installs it and whatever the directives say of other targets (ADR-0398
+/// §3). A filter at the ceiling, a build without the feature and a setup that
+/// finds the slot taken report nothing.
+#[test]
+fn a_filter_above_the_release_ceiling_is_reported_where_the_log_goes() {
+    let Some(root) = checkout_root() else { return };
+    const MAIN: &str = r#"
+use flui_log::config::LogConfig;
+use flui_log::filter::FilterConfig;
+use flui_log::ownership::SubscriberPolicy;
+
+fn main() {
+    let config = LogConfig::builder()
+        .filter(FilterConfig::new("warn,flui_app=debug"))
+        .build();
+    // A second setup finds the slot this one took: the subscriber it would
+    // have installed is not the one that filters.
+    if std::env::var_os("FLUI_CONSUMER_SETUP_TWICE").is_some() {
+        flui_log::setup(&config, SubscriberPolicy::Auto).expect("the first setup");
+    }
+    flui_log::setup_with_env_fallback(&config, SubscriberPolicy::Auto)
+        .expect("the consumer's directives parse");
+}
+"#;
+    const CEILING: &[&str] = &["release-max-level-info"];
+    for (features, rust_log, twice, reports) in [
+        (CEILING, None, false, 1),
+        // No bare level: only the admitted target lets the report through.
+        (CEILING, Some("flui_view=debug"), false, 1),
+        (CEILING, Some("off,flui_view=debug"), false, 1),
+        // A rejected override: the configuration's own directives are installed.
+        (CEILING, Some("flui_view[frame]=debug"), false, 1),
+        (CEILING, None, true, 1),
+        (CEILING, Some("warn,flui_view=info"), false, 0),
+        (&[][..], None, false, 0),
+    ] {
+        let mut log = dependency("flui-log", &root.join("crates/flui-log"), false);
+        log.as_table_mut().expect("dependency table").insert(
+            "features".into(),
+            toml::Value::Array(features.iter().map(|&feature| feature.into()).collect()),
+        );
+        let mut dependencies = toml::Table::new();
+        dependencies.insert("flui-log".into(), log);
+        let project = consumer_project(dependencies, None, "");
+        std::fs::write(project.path().join("src/main.rs"), MAIN).expect("write consumer main");
+        let mut command = Command::new(env!("CARGO"));
+        command
+            .args(["run", "--offline", "--release", "--quiet", "--manifest-path"])
+            .arg(project.path().join("Cargo.toml"))
+            .arg("--target-dir")
+            .arg(workspace_target_dir(root).join("facade-consumer-check"))
+            // The ceiling follows `debug_assertions`, which the release
+            // profile turns off; the optimizer does not matter here.
+            .env("CARGO_PROFILE_RELEASE_OPT_LEVEL", "0")
+            // The report is matched as text, which colours would split.
+            .env("NO_COLOR", "1")
+            .current_dir(project.path());
+        match rust_log {
+            Some(value) => command.env("RUST_LOG", value),
+            None => command.env_remove("RUST_LOG"),
+        };
+        if twice {
+            command.env("FLUI_CONSUMER_SETUP_TWICE", "1");
+        } else {
+            command.env_remove("FLUI_CONSUMER_SETUP_TWICE");
+        }
+        let case = format!("{features:?} RUST_LOG={rust_log:?} twice={twice}");
+        let output = command.output().expect("run the log consumer");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{case}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // FLUI's desktop sink writes to standard output.
+        let report: Vec<&str> = stdout
+            .lines()
+            .filter(|line| line.contains("flui_log::ceiling"))
+            .collect();
+        assert_eq!(report.len(), reports, "{case}: {stdout}");
+        for line in report {
+            assert!(
+                line.contains("WARN")
+                    && line.contains("selected.public=debug")
+                    && line.contains("ceiling.public=info"),
+                "{case}: {line}"
+            );
+        }
+    }
+}
+
 #[test]
 fn external_consumers_extend_and_test_through_the_facade() {
     let Some(root) = checkout_root() else { return };

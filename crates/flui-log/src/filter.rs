@@ -13,6 +13,21 @@
 //! of each native backend is likewise pinned wide open (see
 //! [`crate::backend`]).
 //!
+//! # The build's ceiling
+//!
+//! One ceiling is not this module's to lift: `tracing` compiles the events
+//! above its static maximum level out of a build
+//! (`tracing::level_filters::STATIC_MAX_LEVEL`), which a `max_level_*` or
+//! `release_max_level_*` feature anywhere in the graph sets; `flui build
+//! --release` sets it to `info` through the facade's `release-max-level-info`
+//! (ADR-0398). A directive above it selects events the binary does not hold:
+//! a filter that asks for `debug` and silently delivers nothing looks like a
+//! framework that logs nothing. So the subscriber [`setup`](crate::setup)
+//! installs over such a filter says so once, on target [`CEILING_TARGET`],
+//! which its filter admits whatever the directives say of other targets,
+//! through the platform's sink: a WARN, or an ERROR in a build capped below
+//! WARN. A build capped at `off` has no call site left to say it with.
+//!
 //! # Directives
 //!
 //! A directive string is a comma-separated list of `target=level` pairs and at
@@ -22,6 +37,7 @@
 //! and regular expressions are not supported, so an application does not link
 //! a regex engine to read its log level.
 
+use tracing::level_filters::LevelFilter;
 use tracing_subscriber::filter::{ParseError, Targets};
 
 /// Directives used when neither the environment nor the application says
@@ -221,4 +237,132 @@ fn parse_directives(directives: &str) -> Result<Targets, DirectiveError> {
         });
     }
     Ok(directives.parse::<Targets>()?)
+}
+
+/// The target of the one event that reports a filter above the build's
+/// ceiling (see [The build's ceiling](self#the-builds-ceiling)). The filter of
+/// the subscriber [`setup`](crate::setup) installs admits it at WARN.
+pub const CEILING_TARGET: &str = "flui_log::ceiling";
+
+/// `targets` as the installed filter: with [`CEILING_TARGET`] admitted at
+/// WARN when they select a level above `ceiling`, which comes back beside
+/// them, so the report of that level passes the filter it is about.
+pub(crate) fn admitting_the_ceiling_report(
+    targets: Targets,
+    ceiling: LevelFilter,
+) -> (Targets, Option<LevelFilter>) {
+    match beyond(&targets, ceiling) {
+        Some(selected) => (
+            targets.with_target(CEILING_TARGET, LevelFilter::WARN),
+            Some(selected),
+        ),
+        None => (targets, None),
+    }
+}
+
+/// Reports, on [`CEILING_TARGET`], that the installed filter selects
+/// `selected` events, which the build's `ceiling` compiled out: a WARN, or an
+/// ERROR where the ceiling holds no WARN call site. A build whose ceiling is
+/// `off` holds neither, and says nothing.
+pub(crate) fn report_ceiling(selected: LevelFilter, ceiling: LevelFilter) {
+    const REPORT: &str = "the log filter selects events above this build's `tracing` static \
+         maximum level, which compiled them out; a `max_level_*` feature in the build sets that \
+         level, as `flui build --release` does through `release-max-level-info` (ADR-0398). \
+         Events bridged from `log` still reach the filter";
+    if ceiling >= LevelFilter::WARN {
+        tracing::warn!(
+            target: CEILING_TARGET,
+            { selected.public = %selected, ceiling.public = %ceiling },
+            "{REPORT}"
+        );
+    } else {
+        tracing::error!(
+            target: CEILING_TARGET,
+            { selected.public = %selected, ceiling.public = %ceiling },
+            "{REPORT}"
+        );
+    }
+}
+
+/// The most verbose level `targets` selects above `ceiling`, the build's
+/// static maximum level (see [The build's ceiling](self#the-builds-ceiling));
+/// `None` when every level the filter selects is at or below it.
+///
+/// A filter that turns everything off selects nothing, so it is never beyond
+/// the ceiling.
+pub(crate) fn beyond(targets: &Targets, ceiling: LevelFilter) -> Option<LevelFilter> {
+    let most_verbose = targets
+        .iter()
+        .map(|(_target, level)| level)
+        .chain(targets.default_level())
+        .max()?;
+    (most_verbose > ceiling).then_some(most_verbose)
+}
+
+#[cfg(test)]
+mod ceiling_tests {
+    use tracing::level_filters::LevelFilter;
+
+    use super::{beyond, parse_directives};
+
+    #[test]
+    fn a_filter_is_beyond_the_ceiling_by_its_most_verbose_directive() {
+        for (directives, ceiling, expected) in [
+            ("warn,wgpu=error", LevelFilter::INFO, None),
+            ("info", LevelFilter::INFO, None),
+            ("debug", LevelFilter::INFO, Some(LevelFilter::DEBUG)),
+            (
+                "warn,flui_view=trace",
+                LevelFilter::INFO,
+                Some(LevelFilter::TRACE),
+            ),
+            (
+                "flui_view=debug",
+                LevelFilter::INFO,
+                Some(LevelFilter::DEBUG),
+            ),
+            (
+                "flui_view=debug,flui_app=trace",
+                LevelFilter::DEBUG,
+                Some(LevelFilter::TRACE),
+            ),
+            ("trace", LevelFilter::TRACE, None),
+            ("off", LevelFilter::INFO, None),
+            ("info", LevelFilter::OFF, Some(LevelFilter::INFO)),
+        ] {
+            let targets = parse_directives(directives).expect("valid directives");
+            assert_eq!(
+                beyond(&targets, ceiling),
+                expected,
+                "`{directives}` under a ceiling of {ceiling}"
+            );
+        }
+    }
+
+    /// The report passes the filter it is about, a directive that turns its
+    /// crate off included, and a filter at or below the ceiling is installed
+    /// as written.
+    #[test]
+    fn a_filter_above_the_ceiling_admits_its_report() {
+        use super::{CEILING_TARGET, admitting_the_ceiling_report};
+
+        for (directives, ceiling, reported) in [
+            ("warn,flui_log=off,flui_view=debug", LevelFilter::INFO, true),
+            ("off,flui_view=trace", LevelFilter::INFO, true),
+            ("error,flui_log=off", LevelFilter::INFO, false),
+            ("debug", LevelFilter::TRACE, false),
+        ] {
+            let written = parse_directives(directives).expect("valid directives");
+            let (filter, selected) = admitting_the_ceiling_report(written.clone(), ceiling);
+            assert_eq!(selected.is_some(), reported, "`{directives}`");
+            if reported {
+                assert!(
+                    filter.would_enable(CEILING_TARGET, &tracing::Level::WARN),
+                    "`{directives}` under a ceiling of {ceiling}: {filter}"
+                );
+            } else {
+                assert_eq!(filter.to_string(), written.to_string(), "`{directives}`");
+            }
+        }
+    }
 }

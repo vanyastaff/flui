@@ -75,14 +75,8 @@ impl WebBuilder {
         let dir = &ctx.workspace_root;
         let target = cargo::select_target(dir, &ctx.target).await?;
         let mut args = vec!["build".to_string(), "--target".into(), WASM_TARGET.into()];
-        if let Some(flag) = ctx.profile.cargo_flag() {
-            args.push(flag.into());
-        }
         args.extend(target.cargo_args());
-        // `flui run --agent`'s `driver` feature, for a build without debug assertions.
-        for feature in &ctx.features {
-            args.extend(["--features".to_owned(), feature.clone()]);
-        }
+        args.extend(ctx.mode_args(target.framework()));
         let package = target.built_package();
         crate::ui::debug(format!(
             "building {} {} for {WASM_TARGET}",

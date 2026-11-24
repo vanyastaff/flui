@@ -101,7 +101,9 @@
 //!     .with(tracing_tracy::TracyLayer::default());
 //! ```
 //!
-//! The framework sets no `max_level_*` feature, so a release build can be profiled this way.
+//! The release build `flui build --release` makes holds no DEBUG span (ADR-0398), so a
+//! timeline is taken this way from a debug build, a `--profile profiling` build or an agent
+//! build.
 //!
 //! # Platforms
 //!
@@ -162,13 +164,16 @@ mod test_support;
 
 use config::LogConfig;
 use filter::FilterError;
-use ownership::{SetupError, SubscriberInstallation, SubscriberPolicy, install_subscriber};
+use ownership::{SetupError, SubscriberInstallation, SubscriberPolicy, install_dispatch};
+use tracing::level_filters::STATIC_MAX_LEVEL;
 
 /// Build FLUI's default subscriber and apply an ownership policy to it.
 ///
 /// Under [`SubscriberPolicy::Inherit`] no subscriber is built and the
 /// process-global slot is not even read, so an embedded entry point provably
-/// cannot disturb its host.
+/// cannot disturb its host. A subscriber this call installs over a filter
+/// that selects events the build compiled out reports it once, through the
+/// platform's sink (see [the build's ceiling](filter#the-builds-ceiling)).
 ///
 /// # Errors
 ///
@@ -188,11 +193,24 @@ pub fn setup(
         return Ok(SubscriberInstallation::unchanged());
     };
 
-    install_subscriber(
-        config.subscriber()?,
-        install_policy,
-        config.log_bridge_policy(),
-    )
+    // The filter is resolved once, and the subscriber is filtered by what was
+    // resolved, with the ceiling report admitted when it is due.
+    let (filter, compiled_out) =
+        filter::admitting_the_ceiling_report(config.filter().targets()?, STATIC_MAX_LEVEL);
+    let dispatch = tracing::Dispatch::new(config.subscriber_filtered_by(filter));
+    let installation =
+        install_dispatch(dispatch.clone(), install_policy, config.log_bridge_policy())?;
+    // A subscriber the host installed filters by its own directives, so the
+    // report is this installation's alone, sent to it whatever scoped default
+    // the calling thread has.
+    if let Some(selected) = compiled_out
+        && installation.ownership.is_installed()
+    {
+        tracing::dispatcher::with_default(&dispatch, || {
+            filter::report_ceiling(selected, STATIC_MAX_LEVEL);
+        });
+    }
+    Ok(installation)
 }
 
 /// What [`setup_with_env_fallback`] did.

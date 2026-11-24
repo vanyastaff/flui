@@ -58,6 +58,11 @@ pub(crate) fn execute(
         build_overlay,
         register_associations,
     } = options;
+    // `--profile release` is `--release` on every target and in every step below: one mode
+    // decides the cargo profile, the ceiling, hot reload and the overlay (ADR-0398 §2).
+    let release = crate::build::Profile::of_run(release, profile.as_deref())
+        == crate::build::Profile::Release;
+    let profile = profile.filter(|_| !release);
     let mode = if release { "release" } else { "debug" };
     ui::intro(style(" flui run ").on_green().black())?;
     ui::info(format!("Mode: {}", style(mode).cyan()))?;
@@ -182,15 +187,30 @@ fn run_session(
     // The application runs on this desktop: refused before it is built when
     // it opens links or files a later launch could not hand to it.
     // An application's run names the binary it builds, selected once: a
-    // hot-reload session keeps it. A worker project's host is built by its
-    // own strategy.
-    let selection = if let Project::Application { selected, .. } = &project {
-        let root = std::env::current_dir().context("failed to resolve application directory")?;
-        let host = crate::build::DesktopBuilder::detect_host_target(&root)?;
-        require_one_instance(&root, &host, &selected.built_package(), agent.as_ref())?;
-        selected.cargo_args()
-    } else {
-        Vec::new()
+    // hot-reload session keeps it. A worker project's hot reload builds its
+    // host through its own strategy; a run without it (a release run among
+    // them) runs the host as an application, in the run's mode.
+    let build = match &project {
+        Project::Application { selected } => {
+            let root =
+                std::env::current_dir().context("failed to resolve application directory")?;
+            let host = crate::build::DesktopBuilder::detect_host_target(&root)?;
+            let build = desktop_build(selected, release, agent.as_ref());
+            require_one_instance(&root, &host, &selected.built_package(), &build.features)?;
+            build
+        }
+        Project::Worker(project) if !hot_reload => {
+            let unit = crate::build::BuildUnit::Package(project.config.host_package.clone());
+            let selected = select_unit(&project.workspace_root, &unit).map_err(|error| {
+                CliError::NotFluiProject {
+                    reason: format!(
+                        "`[hot_reload] host_package` names no binary of the workspace: {error}"
+                    ),
+                }
+            })?;
+            desktop_build(&selected, release, None)
+        }
+        Project::Worker(_) => DesktopBuild::default(),
     };
     if hot_reload {
         match project {
@@ -235,7 +255,7 @@ fn run_session(
                     agent => (agent, None),
                 };
                 let mut strategy = ProcessRestart {
-                    selection,
+                    build,
                     profile,
                     verbose,
                     agent,
@@ -247,7 +267,7 @@ fn run_session(
         }
     } else {
         run_once(
-            &selection,
+            &build,
             release,
             profile,
             verbose,
@@ -303,20 +323,20 @@ fn start_agent_session(
                 .into(),
         });
     }
-    let host = match project {
+    let selected = match project {
         Project::Worker(_) => {
             return Err(CliError::Unsupported {
                 what: "`flui run --agent` on a worker hot-reload project".into(),
                 reason: "run the application project instead".into(),
             });
         }
-        Project::Application { host, .. } => host,
+        Project::Application { selected } => selected,
     };
     // Cargo's `dev` profile is the one known to keep debug assertions; any
     // other may drop them, and the feature costs nothing where they stay.
     let optimized = release || profile.is_some_and(|profile| profile != "dev");
     let driver_feature = if optimized {
-        let Some(feature) = host.driver_feature() else {
+        let Some(feature) = selected.framework().feature(agent::DRIVER_FEATURE) else {
             return Err(CliError::Unsupported {
                 what: "`flui run --agent` on an optimized build of this package".into(),
                 reason: "it names neither `flui` nor `flui-app`, whose `driver` feature keeps \
@@ -375,25 +395,47 @@ fn start_agent_session(
     Ok(session)
 }
 
-/// The features a desktop run builds the application with beyond its
-/// defaults: the agent's driver feature, when the profile needs one. The
-/// cargo commands that build and run the application and the check of what
-/// it declares read this one list, so the check reads what is built.
-fn desktop_features(agent: Option<&Session>) -> Vec<String> {
-    agent
-        .and_then(Session::driver_feature)
-        .map(str::to_owned)
-        .into_iter()
-        .collect()
+/// What a desktop run's cargo commands build. The commands that build and
+/// run the application and the check of what it declares read this one
+/// value, so the check reads what is built.
+#[derive(Debug, Default)]
+pub(super) struct DesktopBuild {
+    /// The `--package` and `--bin` of the application's binary
+    /// ([`run_selection`]); empty for cargo's own choice.
+    selection: Vec<String>,
+    /// The features the run's mode turns on beyond the package's defaults
+    /// ([`FrameworkDependency::mode_features`](crate::build::framework::FrameworkDependency::mode_features)):
+    /// the agent's driver, or a release run's ceiling.
+    features: Vec<String>,
 }
 
-/// Adds what the run builds to a `cargo` command: `selection`, the
-/// `--package` and `--bin` of the application's binary ([`run_selection`]),
-/// the run's features and the agent's credentials.
-fn with_build(cmd: &mut Command, selection: &[String], agent: Option<&Session>) {
-    cmd.args(selection);
-    for feature in desktop_features(agent) {
-        cmd.args(["--features", &feature]);
+/// What a desktop run of `selected` builds, `release` or not, for `agent`.
+/// `release` is the run's mode, which `execute` reads once
+/// ([`Profile::of_run`](crate::build::Profile::of_run)).
+fn desktop_build(
+    selected: &crate::build::util::cargo::CargoTarget,
+    release: bool,
+    agent: Option<&Session>,
+) -> DesktopBuild {
+    let mode = if release {
+        crate::build::Profile::Release
+    } else {
+        crate::build::Profile::Debug
+    };
+    DesktopBuild {
+        selection: selected.cargo_args(),
+        features: selected
+            .framework()
+            .mode_features(mode, agent.and_then(Session::driver_feature)),
+    }
+}
+
+/// Adds what the run builds to a `cargo` command: the binary and features
+/// of `build` and the agent's credentials.
+fn with_build(cmd: &mut Command, build: &DesktopBuild, agent: Option<&Session>) {
+    cmd.args(&build.selection);
+    for feature in &build.features {
+        cmd.args(["--features", feature]);
     }
     if let Some(session) = agent {
         session.apply(cmd);
@@ -409,6 +451,14 @@ fn with_build(cmd: &mut Command, selection: &[String], agent: Option<&Session>) 
 fn run_selection(
     root: &Path,
 ) -> crate::build::error::BuildResult<crate::build::util::cargo::CargoTarget> {
+    select_unit(root, &crate::build::BuildUnit::DefaultBinary)
+}
+
+/// The binary of `unit` in the workspace at `root`, as `flui build` selects it.
+fn select_unit(
+    root: &Path,
+    unit: &crate::build::BuildUnit,
+) -> crate::build::error::BuildResult<crate::build::util::cargo::CargoTarget> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -417,27 +467,23 @@ fn run_selection(
                 "could not start the target selection runtime: {error}"
             ))
         })?
-        .block_on(crate::build::util::cargo::select_target(
-            root,
-            &crate::build::BuildUnit::DefaultBinary,
-        ))
+        .block_on(crate::build::util::cargo::select_target(root, unit))
 }
 
 /// Refuse a desktop run for `host` of `package`, the application at `root`
 /// the run builds ([`run_selection`]), that opens links or files without the
-/// code that keeps one instance of it, read with the run's features
-/// ([`desktop_features`]).
+/// code that keeps one instance of it, read with the run's `features`
+/// ([`DesktopBuild::features`]).
 fn require_one_instance(
     root: &Path,
     host: &str,
     package: &crate::build::BuiltPackage,
-    agent: Option<&Session>,
+    features: &[String],
 ) -> CliResult<()> {
-    let features = desktop_features(agent);
     crate::declarations::Declarations::collect(
         crate::declarations::Build::at(root)
             .selecting(crate::declarations::Selection::of_built(Some(package)))
-            .features(&features),
+            .features(features),
         &[host],
     )?
     .require_one_instance(host)?;
@@ -699,9 +745,9 @@ fn match_target(device: &super::devices::Device) -> CliResult<Target> {
 ///
 /// Goes through the same child policy as the dev loop, so `--json` gets the
 /// `run.app.*` events and Ctrl-C stops the app before the CLI returns.
-/// `selection` names the binary to run (empty: cargo's own choice).
+/// `build` names the binary to run and its features.
 fn run_once(
-    selection: &[String],
+    build: &DesktopBuild,
     release: bool,
     profile: Option<String>,
     verbose: bool,
@@ -720,7 +766,7 @@ fn run_once(
     if verbose {
         cmd.arg("--verbose");
     }
-    with_build(&mut cmd, selection, agent);
+    with_build(&mut cmd, build, agent);
     with_registration(&mut cmd, register_associations);
     with_asset_root(&mut cmd, &root);
 
@@ -1547,7 +1593,7 @@ impl BrowserSession {
             .and_then(Session::driver_feature)
             .map(str::to_owned);
         let ctx = BuilderContextBuilder::new(self.root.clone())
-            .features(driver_feature)
+            .agent_driver(driver_feature)
             // The page and the dev server name the same base path.
             .platform(Platform::Web {
                 page: self.page.clone(),
@@ -1904,7 +1950,7 @@ impl AndroidSession {
             .map(str::to_owned);
         let ctx = BuilderContextBuilder::new(self.root.clone())
             .floors(floors)
-            .features(driver_feature)
+            .agent_driver(driver_feature)
             .platform(Platform::Android {
                 targets: vec![abi.to_owned()],
             })
@@ -2050,7 +2096,7 @@ impl ReloadStrategy for AndroidSession {
 
 /// Spawn the application as a child process.
 fn spawn_app(
-    selection: &[String],
+    build: &DesktopBuild,
     profile: Option<&str>,
     verbose: bool,
     agent: Option<&Session>,
@@ -2069,7 +2115,7 @@ fn spawn_app(
         cmd.arg("--verbose");
     }
 
-    with_build(&mut cmd, selection, agent);
+    with_build(&mut cmd, build, agent);
     with_registration(&mut cmd, register_associations);
     with_asset_root(&mut cmd, &root);
 
@@ -2611,9 +2657,6 @@ struct ProjectPackage {
 enum Project {
     /// A single application package (`cargo run` is the entry point).
     Application {
-        /// The crate whose `driver` feature keeps the agent in an optimized
-        /// build, by the key the selected package names it under.
-        host: AgentHost,
         /// The binary `cargo run` would run, which every cargo command of
         /// the run names.
         selected: crate::build::util::cargo::CargoTarget,
@@ -2622,32 +2665,9 @@ enum Project {
     Worker(WorkerHotReloadProject),
 }
 
-/// Which of an application's normal dependencies carries the `driver`
-/// feature, by the key the application names it under.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum AgentHost {
-    /// `flui` (the facade, preferred) or `flui-app`, under this key: its
-    /// `rename` when the manifest gives one, else the crate's name.
-    Named(String),
-    /// Neither (a legacy `flui-widgets`-only package).
-    Neither,
-}
-
-impl AgentHost {
-    /// The `--features` value that keeps the agent in an optimized build.
-    fn driver_feature(&self) -> Option<String> {
-        match self {
-            Self::Named(key) => Some(format!("{key}/{}", agent::DRIVER_FEATURE)),
-            Self::Neither => None,
-        }
-    }
-}
-
 #[derive(serde::Deserialize)]
 struct ProjectDependency {
     name: String,
-    /// The key the manifest declares the dependency under, when it renames it.
-    rename: Option<String>,
     kind: Option<String>,
 }
 
@@ -2663,35 +2683,11 @@ fn has_flui_dependency(dependencies: &[ProjectDependency]) -> bool {
     })
 }
 
-/// The crate among the normal dependencies whose `driver` feature an
-/// optimized `--agent` build turns on, the facade first, by its key.
-fn agent_host(dependencies: &[ProjectDependency]) -> AgentHost {
-    let key = |name: &str| {
-        dependencies
-            .iter()
-            .find(|dependency| dependency.kind.is_none() && dependency.name == name)
-            .map(|dependency| {
-                dependency
-                    .rename
-                    .clone()
-                    .unwrap_or_else(|| dependency.name.clone())
-            })
-    };
-    key("flui")
-        .or_else(|| key("flui-app"))
-        .map_or(AgentHost::Neither, AgentHost::Named)
-}
-
-/// `Some(host)` for the application `selected` names (a package id), the
-/// binary the run builds (the crate whose `driver` feature it builds an
-/// optimized agent with), `None` when that package is not a FLUI app.
+/// Whether the application `selected` names (a package id), the binary the
+/// run builds, is a FLUI app.
 /// `manifest`, the directory's, has to be a package: a virtual workspace
 /// root is refused.
-fn metadata_identifies_project(
-    bytes: &[u8],
-    manifest: &Path,
-    selected: &str,
-) -> CliResult<Option<AgentHost>> {
+fn metadata_identifies_project(bytes: &[u8], manifest: &Path, selected: &str) -> CliResult<bool> {
     let metadata: ProjectMetadata = serde_json::from_slice(bytes)
         .context("could not decode Cargo metadata; expected --format-version 1 JSON")?;
     let manifest = manifest
@@ -2719,14 +2715,15 @@ fn metadata_identifies_project(
                 "Cargo metadata contains no package `{selected}`, the one `cargo run` builds here"
             ),
         })?;
-    Ok(has_flui_dependency(&package.dependencies).then(|| agent_host(&package.dependencies)))
+    Ok(has_flui_dependency(&package.dependencies))
 }
 
 /// Ensure we're in a FLUI project directory and say which kind. An
 /// application is read from the binary `cargo run` builds there
 /// ([`run_selection`]), which at a workspace root that is a package itself
 /// is a default member's: its dependencies say whether it is a FLUI app and
-/// which crate carries the `driver` feature.
+/// which crate carries the build switches
+/// ([`CargoTarget::framework`](crate::build::util::cargo::CargoTarget::framework)).
 fn ensure_flui_project() -> CliResult<Project> {
     if let Some(project) = find_worker_hot_reload_project()? {
         return Ok(Project::Worker(project));
@@ -2766,15 +2763,13 @@ fn ensure_flui_project() -> CliResult<Project> {
              with `flui test` or from an app crate: {error}"
         ),
     })?;
-    let Some(host) =
-        metadata_identifies_project(&output.stdout, cargo_toml, &selected.package_id().repr)?
-    else {
+    if !metadata_identifies_project(&output.stdout, cargo_toml, &selected.package_id().repr)? {
         return Err(CliError::NotFluiProject {
             reason: "normal dependency on flui (or legacy flui-app/flui-widgets) not found in the package `cargo run` builds here".into(),
         });
-    };
+    }
 
-    Ok(Project::Application { host, selected })
+    Ok(Project::Application { selected })
 }
 
 /// Execute scene-only hot-reload mode for Android.
@@ -3430,7 +3425,7 @@ mod tests {
             "flui/Cargo.toml",
             &manifest(
                 "flui",
-                "[features]\ndriver = [\"flui-native/single-instance\"]\n\
+                "[features]\ndriver = [\"flui-native/single-instance\"]\nrelease-max-level-info = []\n\
                  [dependencies]\nflui-native = { path = \"../flui-native\" }\n",
             ),
         );
@@ -3442,9 +3437,9 @@ mod tests {
         write("flui-native/src/lib.rs", "");
 
         let host = "x86_64-unknown-linux-gnu";
-        let args = |selection: &[String], agent: Option<&crate::agent::Session>| {
+        let args = |build: &super::DesktopBuild, agent: Option<&crate::agent::Session>| {
             let mut cargo = std::process::Command::new("cargo");
-            super::with_build(&mut cargo, selection, agent);
+            super::with_build(&mut cargo, build, agent);
             cargo
                 .get_args()
                 .map(|arg| arg.to_string_lossy().into_owned())
@@ -3452,17 +3447,34 @@ mod tests {
         };
         let selected = super::run_selection(project.path()).expect("the binary cargo runs");
         let app_id = selected.package_id().repr.clone();
+        let debug = super::desktop_build(&selected, false, None);
         assert_eq!(
-            args(&selected.cargo_args(), None),
+            args(&debug, None),
             ["--package", app_id.as_str(), "--bin", "app"],
             "the run names the binary the check reads"
         );
-        let plain =
-            super::require_one_instance(project.path(), host, &selected.built_package(), None)
-                .expect_err("a run without the one-instance code");
+        let plain = super::require_one_instance(
+            project.path(),
+            host,
+            &selected.built_package(),
+            &debug.features,
+        )
+        .expect_err("a run without the one-instance code");
         assert!(
             format!("{plain:?}").contains("single-instance"),
             "the application that runs is refused for its links: {plain:?}"
+        );
+        assert_eq!(
+            args(&super::desktop_build(&selected, true, None), None),
+            [
+                "--package",
+                app_id.as_str(),
+                "--bin",
+                "app",
+                "--features",
+                "flui/release-max-level-info"
+            ],
+            "a release run builds with the facade's release ceiling (ADR-0398 §2)"
         );
 
         let app = project.path().join("app");
@@ -3470,8 +3482,9 @@ mod tests {
             .expect("an agent session")
             .with_driver_feature("flui/driver".to_owned());
         let selected = super::run_selection(&app).expect("the binary cargo runs");
+        let agent = super::desktop_build(&selected, true, Some(&session));
         assert_eq!(
-            args(&selected.cargo_args(), Some(&session)),
+            args(&agent, Some(&session)),
             [
                 "--package",
                 app_id.as_str(),
@@ -3480,19 +3493,19 @@ mod tests {
                 "--features",
                 "flui/driver"
             ],
-            "the run builds with the driver feature"
+            "the run builds with the driver feature, and an agent's without the ceiling"
         );
-        super::require_one_instance(&app, host, &selected.built_package(), Some(&session))
+        super::require_one_instance(&app, host, &selected.built_package(), &agent.features)
             .expect("the driver feature brings the one-instance code");
     }
 
-    /// The crate whose `driver` feature an optimized `--agent` run turns on
-    /// is named by the package the run builds: at a root package that names
-    /// `flui` itself and builds its default member `app`, which reaches
-    /// `flui-app` under the key `ui`, the feature is `ui/driver`, a key of
-    /// `app`'s.
+    /// The crate whose features an optimized `--agent` run and a release run
+    /// turn on is named by the package the run builds: at a root package
+    /// that names `flui` itself and builds its default member `app`, which
+    /// reaches `flui-app` under the key `ui`, the features are `ui/driver`
+    /// and `ui/release-max-level-info`, keys of `app`'s.
     #[test]
-    fn the_agent_host_is_named_by_the_package_the_run_builds() {
+    fn the_framework_key_is_named_by_the_package_the_run_builds() {
         let project = tempfile::tempdir().expect("a temporary directory");
         let write = |path: &str, contents: &str| {
             let path = project.path().join(path);
@@ -3535,13 +3548,25 @@ mod tests {
                 .expect("cargo metadata");
         assert!(metadata.status.success(), "{metadata:?}");
         let selected = super::run_selection(project.path()).expect("the binary cargo runs");
-        let host = super::metadata_identifies_project(
-            &metadata.stdout,
-            &project.path().join("Cargo.toml"),
-            &selected.package_id().repr,
-        )
-        .expect("the project")
-        .expect("a FLUI application");
-        assert_eq!(host.driver_feature().as_deref(), Some("ui/driver"));
+        assert!(
+            super::metadata_identifies_project(
+                &metadata.stdout,
+                &project.path().join("Cargo.toml"),
+                &selected.package_id().repr,
+            )
+            .expect("the project"),
+            "a FLUI application"
+        );
+        assert_eq!(
+            selected
+                .framework()
+                .feature(crate::agent::DRIVER_FEATURE)
+                .as_deref(),
+            Some("ui/driver")
+        );
+        assert_eq!(
+            super::desktop_build(&selected, true, None).features,
+            ["ui/release-max-level-info"]
+        );
     }
 }

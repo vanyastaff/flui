@@ -38,7 +38,9 @@ pub(crate) fn managed_log_config(config: &AppConfig) -> LogConfig {
 /// Install managed defaults without replacing an application-owned subscriber.
 ///
 /// A rejected `RUST_LOG` falls back to the selected profile and is reported
-/// after the subscriber exists.
+/// after the subscriber exists; a filter that selects events the build
+/// compiled out is reported by the subscriber `flui_log` installs, through
+/// the platform's sink (ADR-0398 §3).
 ///
 /// # Panics
 ///

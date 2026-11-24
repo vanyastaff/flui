@@ -7,7 +7,9 @@
   [ADR-0239](../../../adr/ADR-0239-every-debug-app-hosts-the-driver-agent.md),
   [ADR-0240](../../../adr/ADR-0240-semantics-identifier.md),
   [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md),
-  [ADR-0242](../../../adr/ADR-0242-typed-inspect-and-tracing-conventions.md)
+  [ADR-0242](../../../adr/ADR-0242-typed-inspect-and-tracing-conventions.md),
+  [ADR-0400](../../../adr/ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md)
+  (the Rust front end is `flui_testing::Tester` over the driver's `Device`)
 - **Market survey:** [2026-10-18](https://github.com/vanyastaff/flui/blob/083b0f75da003030e908d107825e9f4db4e54437/docs/research/2026-10-18-flui-driver-market-survey.md). It
   covers AI design agents, layout and visual verification, automation tools, computer-use and MCP
   servers, and performance and exploration tooling; its corrections are folded in here.
@@ -23,16 +25,16 @@
 ## Shape in one picture
 
 ```text
- Rust test ─┐      flui drive (CLI) ─┐      flui mcp (stdio) ─┐
+ flui_testing::Tester ─┐   flui drive (CLI) ─┐   flui mcp (stdio) ─┐
             ▼                        ▼                        ▼
    ┌─────────────────────── flui-driver ──────────────────────────────┐
-   │ Driver ─ Target ─ Window ─ Locator/Element   (sync, typed)       │
+   │ Device ─ Target ─ lanes             (sync, typed; a Connection)  │
    │ method table (flui-protocol) · waits · actionability · effects   │
    │ pixels (capture, baselines, predicates) · trace writer/replayer  │
    │ ┌──────────────┐ ┌──────────────────────────────────────────────┐│
-   │ │ Connection   │ │ Lane: windows · macos · x11 · wayland ·      ││
-   │ │ socket|bidi| │ │       android · ios_simulator · chrome       ││
-   │ │ in-process   │ │ (real input, OS a11y read, OS capture,       ││
+   │ │ transport    │ │ Lane: windows · macos · x11 · wayland ·      ││
+   │ │ socket|bidi  │ │       android · ios_simulator · chrome       ││
+   │ │              │ │ (real input, OS a11y read, OS capture,       ││
    │ └──────┬───────┘ │  launch and process ownership)               ││
    └────────┼─────────┴──────────────────────────────────────────────┘┘
             │ NDJSON, method table subset "served by agent"
@@ -47,7 +49,9 @@
 The app knows the truth: its trees, its frames, the input it actually received, the pixels it
 presented. The driver composes that truth with what only the OS can do: deliver real input, read
 what assistive technology sees, capture what the compositor shows, own the process. Every front
-end calls the same driver methods.
+end calls the same driver methods. A headless run is not a lane of the driver: it is
+`flui_testing::Tester` over `flui_testing::Headless`, which speaks the same method table to the
+agent in the same process (ADR-0400 §1).
 
 ## Options considered
 
@@ -55,7 +59,7 @@ end calls the same driver methods.
 |---|---|---|---|
 | **A. Grow `tools/desktop-mcp`** into every platform | Its safety rules and error model are proven on Windows | Black box only: no widget or render tree, no frame-timeline waits, no presented pixels. MCP-shaped core, so Rust tests would speak MCP. A tool crate, not publishable | Rejected (D1, D8) |
 | **B. In-app only** (Flutter `integration_test`) | One process, deterministic, works on device farms | Never proves the OS delivers input. Flutter kept `flutter drive` for exactly that host-side role | Rejected (D1) |
-| **C. Agent in the app plus OS lanes in one client crate** | The app answers what only it knows; lanes prove delivery; one protocol for the three front ends; headless is the same agent in-process | Two halves to version together; the app gains a local endpoint in debug builds | **Chosen** |
+| **C. Agent in the app plus OS lanes in one client crate** | The app answers what only it knows; lanes prove delivery; one protocol for the three front ends; a headless run speaks it to the same agent through `flui_testing::Headless` (ADR-0400) | Two halves to version together; the app gains a local endpoint in debug builds | **Chosen** |
 | **D. MCP inside the app** (Slint's `SLINT_MCP_PORT`) | Zero client code for agents | Every app carries an MCP SDK and an HTTP port; Rust tests would speak MCP; ADR-0095 already rejected it | Rejected |
 
 Within C, the in-app server's home is the open question that ADR-0095 §3 had settled differently. That
@@ -73,7 +77,7 @@ built (requirements R3), and Android and web drive no hook. ADR-0239 moves the s
 | Render and layer inspection | `flui-rendering`, `flui-layer` (non-test `inspect` modules; the existing `testing::inspect` builds on them) | Same, for their trees |
 | Owner-side agent ops (frame-boundary execution, input injection, journal, waits, events) | `flui-runtime` (`ui_runtime::agent`, extended) | It owns the owner inbox and the frame transaction |
 | Endpoint server, transports, launch contract, presented-frame capture | `flui-app` (`app::agent`) | The composition root owns windows, the raster lane and the platform; ADR-0239 |
-| Client: `Driver`, connections, lanes, pixels, trace, reports | **`flui-driver`**, new, tier H between `flui-app` and `flui-cli`, published, Evolving `0.N` | It depends on `flui-protocol` and, with feature `headless`, on `flui-testing`. It never depends on `flui-platform` or `flui-app` |
+| Client: `Device`, transports, lanes, pixels, trace, reports | **`flui-driver`**, new, tier H between `flui-app` and `flui-cli`, published, Evolving `0.N` | It depends on `flui-protocol`, whose `client::Connection` `Device` implements, and has no edge to `flui-testing` and no `headless` feature (ADR-0400 §1). It never depends on `flui-platform` or `flui-app` |
 | CLI `flui drive …`, `flui mcp`, `flui inspect` | `flui-cli` | The `flui` binary is the user's entry point |
 | MCP adapter | `flui-driver`, feature `mcp` (`rmcp`) | Reused by `flui mcp` and testable without the CLI |
 | Inspector | `tools/flui-inspector`, an application on the facade and `flui-driver` | Dogfoods FLUI (D10) |
@@ -133,8 +137,8 @@ pub const METHODS: &[MethodInfo] = methods![ … ];   // one list; generated by 
 The trait is sealed, so the table is closed. `METHODS` drives the MCP tool list (sorted, deterministic),
 the CLI subcommand coverage test, the schema golden file and the agent's dispatch. A unit test
 fails when a method lacks a CLI subcommand or an MCP tool (R28). `ServedBy::Agent` methods are
-what the app's endpoint answers. `Driver` and `Lane` methods are composed in `flui-driver`, so the
-app never sees `launch`, OS input or baseline comparison.
+what the app's endpoint answers. `Driver` and `Lane` methods are composed in `flui-driver`'s
+`Device`, so the app never sees `launch`, OS input or baseline comparison.
 
 | Group | Methods (`ServedBy`) |
 |---|---|
@@ -142,7 +146,7 @@ app never sees `launch`, OS input or baseline comparison.
 | semantics | `semantics.read`, `semantics.locate`, `semantics.act` (A); `os.tree`, `os.compare_projection` (L) |
 | inspect | `inspect.widgets`, `inspect.render`, `inspect.layers` (A) |
 | input | `input.perform` (D: chooses the path); `input.inject` (A, synthetic); `input.os` (L); `input.journal`, `input.release` (A) |
-| gestures | `element.tap`, `element.double_tap`, `element.long_press`, `element.drag_to`, `element.fling`, `element.swipe`, `element.pinch`, `element.scroll_into_view`, `element.type_text`, `element.press_keys` (D: locate → actionability → `input.perform` → observe) |
+| gestures | `element.tap`, `element.double_tap`, `element.long_press`, `element.drag_to`, `element.fling`, `element.swipe`, `element.pinch`, `element.scroll_into_view`, `element.type_text`, `element.press_keys` (A on the synthetic and semantic paths: the agent locates, checks actionability at each frame boundary and injects in the turn the check passed (ADR-0400 §2); D on the `os` path: locate → actionability → `input.perform` → observe) |
 | facts | `element.actionability` (A) |
 | waits | `wait.until` (A for app conditions; D adds a wall-clock or virtual deadline); `wait.settled`, `wait.frames` (A) |
 | events | `events.subscribe`, `events.unsubscribe` (A) |
@@ -231,19 +235,22 @@ today (`flui-runtime/src/ui_runtime/agent.rs`). The endpoint thread never touche
 parses, enqueues, waits a bounded time and answers. Consequences:
 
 - **Consistency.** A locate and an actionability check each read one committed tree
-  (`semantics.locate` answers with the tree revision). The protocol has no `batch` method: the
-  driver's composed `element.tap` sends `element.actionability`, then `input.inject` at the point
-  the facts named, and the stability check needs two frames anyway; an element that moved between
-  the two is what `receives` at the next check catches.
+  (`semantics.locate` answers with the tree revision). The protocol has no `batch` method. On the
+  synthetic and semantic paths the agent answers a gesture itself: it checks actionability at each
+  frame boundary until the target is attached, visible, stable over two frames, enabled and
+  receives the hit, and injects in the turn the check passed, aimed at that frame's bounds
+  (ADR-0400 §2). On the `os` path the driver composes `element.tap` from `element.actionability`
+  and `input.os` at the point the facts named; an element that moved between the two is what
+  `receives` at the next check catches.
 - **Waits do not poll.** `wait.until` registers the condition with the owner. The owner evaluates
   it after each frame's semantics publish and after each input delivery, and answers when it holds or
   at the deadline. Live targets express the deadline in the runtime's `ClockSource`, so a test's
   motion override (`motion.set`) also slows timeouts consistently. Headless waits run on the
-  manual clock. The driver advances it frame by frame (`frame_dt`, default 16.667 ms) up to
-  `max_frames`, so the outcome is deterministic.
-- **Unsettled causes** come from the runtime's own predicates (`needs_redraw`,
-  `is_frame_scheduled`, `has_pending_work`, `next_wake`), the same signals `pump_until_settled`
-  reads (kittest reports repaint causes; Flutter `waitUntilNoTransientCallbacks`).
+  manual clock. The `flui_testing::Headless` connection moves it to each next wake, up to the
+  wait's limit of virtual time (ADR-0400 §3), so the outcome is deterministic.
+- **Unsettled causes** are one list the host gathers after each turn, the runtime's half and its
+  own, each with what clears it; the same list answers `wait.settled` and the host's settle
+  (ADR-0400 §3; kittest reports repaint causes; Flutter `waitUntilNoTransientCallbacks`).
 - **Reentrancy (F5).** Jobs run outside any borrow of the agent table. The owner commits the job's
   answer slot before running user-visible effects (semantics action handlers, injected input
   dispatch), and a callback that closes the window makes the answer `gone` rather than tearing the
@@ -396,7 +403,7 @@ follows ADR-0215 §5: text is redacted unless `keep_text` is set.
 | iOS Simulator | Unix socket on the host filesystem (the simulator shares it) | `SIMCTL_CHILD_FLUI_AGENT_*` env on `simctl launch` |
 | Android | abstract Unix socket `@flui-agent-<random>` (`interprocess` namespaced name); host side `adb forward tcp:0 localabstract:…` bound to 127.0.0.1 | intent extras `flui.agent.endpoint`, `flui.agent.token` on `am start`, read by the Android runner through the Java view (ADR-0237) |
 | Chrome | BiDi: the driver adds a preload script that installs the launch object (the export's name as the endpoint, and the token) before the wasm starts. The web runner exports `__flui_agent` as `{ version, connect(onLine) }`; the driver connects with a BiDi channel as `onLine`, so each line comes back as a `script.message`, and sends each line with `send` on the connection `connect` answered (`script.callFunction`) | the preload script; no URL parameter carries the token |
-| Headless | none: `flui-driver` calls the runtime's agent in-process | — |
+| Headless | none: `flui_testing::Headless` calls the runtime's agent in-process; `flui-driver` has no headless lane (ADR-0400 §1) | — |
 
 `FLUI_AGENT_EXIT_ON_DISCONNECT=1` (env or extra) makes a launched app exit when its driver's
 connection closes. Together with OS-level ownership (a Windows job object with kill-on-close,
@@ -412,58 +419,82 @@ the feature contain none of the code.
 
 ### API
 
-```rust
-use flui_driver::{Driver, Launch, Locator, Role, expect};
+A Rust test is a `flui_testing::Tester` over a connection (ADR-0400 §1). `flui-driver` supplies
+the connection to a running app, `Device`:
 
-#[test]
-fn increments() -> flui_driver::Result<()> {
-    let mut driver = Driver::launch(Launch::headless(app))?;  // or Launch::executable, cargo_example
-    let mut window = driver.main_window()?;
-    window.locate(Locator::role(Role::Button).name("Increment")).tap()?; // the session's policy picks the path
-    expect(window.locate(Locator::identifier("counter"))).to_have_value("1")?;
-    Ok(())
+```rust
+use flui_driver::{Device, Launch};
+use flui_testing::{Tester, find, value};
+
+fn increments<C: Connection>(t: &mut Tester<C>) {
+    t.tap(&find::button("Increment"));               // the session's policy picks the path
+    t.expect(&find::id("counter"), value("1"));
 }
+flui::testing::scenarios! { increments }             // a headless #[test], and a SCENARIOS entry
+
+// a crate's `device` target: the same function against a launched app
+let mut t = Tester::attach(Device::launch(Launch::executable(exe))?, spec)?;  // or Launch::cargo_example
+increments(&mut t);
 ```
 
-Captures and baselines (`capture_presented`, `expect_baseline`) join with the pixels task (FD10).
+The headless `#[test]` that `scenarios!` makes mounts the view with `Tester::mount` over
+`flui_testing::Headless`; `flui-driver` is not involved. Captures and baselines (`capture_presented`,
+`expect_baseline`) join with the pixels task (FD10). The handle-chaining front end this spec first
+described (`Driver`, `Window`, `Element`, `ElementLocator`, `expect`, `expect_soft`,
+`Launch::headless`) is replaced by this shape, and task TP18 of
+[the testing-platform spec](../testing-platform/tasks.md) deletes it.
 
-- `Driver` owns one target and its connection. It is `Send` but not `Sync`; front ends wrap it in
-  a worker when they need concurrency. Methods are synchronous. Lanes that need a thread affinity
-  (UIA's COM apartment, AppKit's main thread) run on a lane worker thread the target owns, as
+- `Device` owns one launched target, its lanes and its connection, and implements
+  `flui_protocol::client::Connection`. It is `Send` but not `Sync`; front ends wrap it in a worker
+  when they need concurrency. Methods are synchronous. Lanes that need a thread affinity (UIA's
+  COM apartment, AppKit's main thread) run on a lane worker thread the target owns, as
   desktop-mcp's `worker.rs` does today. A queued job is cancellable by one compare-and-swap.
-- `Window`, `Element` and `ElementLocator` are cheap handles borrowing the `Driver` mutably (a
-  read sends a request too). Their methods mirror the method table one to one. The options of a
-  gesture are set on the handle before it (`.via(InputPath::Os)`, `.require(..)`, `.force()`,
-  `.timeout(..)`, `.snapshot(..)`).
-- `expect(locator)` gives retrying assertions with a 5 s default (`to_have_value`, `to_have_name`,
-  `to_be_checked`, `to_be_enabled`, `to_be_focused`, `to_have_count`, `to_be_gone`). Each is one
-  `wait.until` with a `Matches` condition, never a client-side poll loop. `expect_soft`
-  collects failures into the report.
-- `Launch` describes the target and artifact (exe, `.app`, `.apk`, wasm bundle, or a headless view
-  factory). Building is not the driver's business: `flui drive launch` and the xtask scenarios use
-  `flui-cli`'s per-target build pipeline. `Launch::cargo_example` covers host-desktop tests.
+- `Tester` holds the scenario's verbs; `Device` holds the method table. A finder is a
+  `flui_testing::Find` over the protocol's `Locator`, resolved again at each use, and an action
+  takes a `Find<One>`, so a locator that matches two elements is `TestError::Ambiguous` with every
+  candidate. The options of a gesture are set on the verb (an input path, `.require(..)`,
+  `.force()`, `.timeout(..)`, `.snapshot(..)`); the methods the table gives a real target alone
+  (`perform_via(InputPath::Os)`, `os_tree`, `release_input`) are inherent methods of
+  `Tester<Device>`.
+- `Tester::expect(&find, matcher)` is one `wait.until` whose condition the matcher lowers to
+  (`exists`, `gone`, `count`, `name`, `value`, `checked`, `enabled`, `focused`, …), with a 5 s
+  default and never a client-side poll loop. `Tester::checks` collects soft failures into the
+  `Tester`'s report.
+- `Tester::attach(device, spec)` takes a `WindowSpec` (size, platform convention, scale, safe
+  area). A `Device` checks its window against it and refuses another with
+  `TestError::WindowMismatch`: a scenario fixes its window (F9).
+- `Launch` describes the target and artifact (exe, `.app`, `.apk`, wasm bundle). It has no headless
+  view factory: a headless run is `Tester::mount`. Building is not the driver's business:
+  `flui drive launch` and the xtask scenarios use `flui-cli`'s per-target build pipeline.
+  `Launch::cargo_example` covers host-desktop tests.
 - Errors: `flui_driver::Error`, a `thiserror` enum with a variant per ADR-0080/0238 code carrying
   its fields (`Ambiguous { candidates }`, `NotActionable { failed, covered_by }`, `Gone { kind }`,
   `NotSupported { capability }`…), plus `Io`, `Protocol` and `Lane`. `retry()`, `effect()` and
   `is_cannot_verify()` come from the code. The report's verdict rule reads `is_cannot_verify`.
+  `Tester` reports them as `TestError` with a `Diagnosis` (ADR-0400 §2).
 
 ### Connections
 
+`Device` implements the public `flui_protocol::client::Connection` (ADR-0400 §1), the one trait
+`flui_testing::Tester` is generic over:
+
 ```rust
-trait Connection: Send {
-    fn hello(&self) -> &HelloReply;
-    fn call(&mut self, call: Call) -> Result<Value>;   // Call: method, effect, params, budget
-    fn take_events(&mut self) -> (Vec<Event>, u64);    // and how many were dropped unread
+pub trait Connection {
+    fn call<M: WindowMethod>(&mut self, params: M::Params) -> Result<M::Output, CallError>;
+    fn wait(&mut self, condition: &Condition, limit: Duration) -> Result<WaitOutcome, CallError>;
+    fn perform(&mut self, actions: &ActionSequence) -> Result<Performed, CallError>;
+    fn now(&self) -> At;
 }
 ```
 
-Three implementations: `SocketConnection` (NDJSON plus blob frames over `interprocess`, or over
-the `adb`-forwarded TCP loopback), `BidiConnection` (`script.callFunction` and `script.message`,
-with the Chrome lane) and `InProcess` (headless, feature `headless`). `InProcess` speaks the same
-lines: it runs the agent's own conversation (`flui_runtime::agent::Session`, through
-`flui_testing::HeadlessAgentService`, since `flui-runtime` admits only the hosts) on the headless
-app's thread, and counts a call's budget in the host's virtual frames. The trait is private:
-front ends see `Driver`.
+Below it `Device` has two transports: `SocketConnection` (NDJSON plus blob frames over
+`interprocess`, or over the `adb`-forwarded TCP loopback) and `BidiConnection`
+(`script.callFunction` and `script.message`, with the Chrome lane). A `Device` has a real clock, so
+it is not a `VirtualClock`. There is no `headless` feature and no in-process lane in
+`flui-driver`: `flui_testing::Headless` and `flui_app::testing::AppRun` implement the same trait
+over the agent's own conversation (`flui_runtime::agent::Session`, which `flui-runtime` admits to
+the hosts only) and count a wait in the host's virtual time. The transports are private to the
+crate; a front end sees `Device`.
 
 ### Coordinates (F9)
 
@@ -705,15 +736,15 @@ as evidence.
 These come from a new `inspect` query on `flui-rendering` (box, clip, transform), and from
 `RenderParagraph`'s layout, exposed as data rather than diagnostics text.
 
-**Assertions** (`layout.expect`, D) in the Rust API, CLI and MCP `layout` group:
+**Assertions** (`layout.expect`, D) are methods of the CLI and MCP `layout` group, and a `Tester`
+reads the same facts through `Tester::rect` and the layout reads of ADR-0400 §5. Each assertion
+below is one `layout.expect` check:
 
-```rust
-expect(save_label).to_be_centered_in(&save_button, Axis::Both)?;                     // ink bounds vs content box
-expect(&[name_field, email_field]).to_be_aligned(Edge::Leading)?;
-expect(title).to_have_contrast_at_least(4.5)?;
-expect(row.children()).to_have_equal_gaps()?;
-expect(price).to_not_be_truncated()?;
-```
+- the label's ink bounds are centred in the button's content box on both axes;
+- the name and email fields are aligned at the leading edge;
+- the title's contrast is at least 4.5;
+- the row's children have equal gaps;
+- the price is not truncated.
 
 The default tolerance is 0.5 logical px. A failure says what was measured: "ink centre (164.0,
 22.5) vs container centre (158.0, 22.0): 6.0 px right, 0.5 px down".
@@ -835,13 +866,15 @@ The verdict is `Fail` if any check failed, else `CannotVerify` if any requested 
 run or nothing was checked, else `Pass`. The report lists `checked` and `not_checked` (with reasons) for every check, so
 a pass always says what it covered. `Report::exit_code()` maps them to 0, 1 and 2. A report prints the same way everywhere: a
 human block plus one final line `FLUI_DRIVER_VERDICT=<pass|fail|cannot_verify>`, or `--json`. A
-scenario is `fn(&mut Driver, &mut Report) -> Result<()>`. An `Error` that `is_cannot_verify`
+device scenario is `fn(&mut Device, &mut Report) -> Result<()>`. An `Error` that `is_cannot_verify`
 becomes a cannot-verify check, never a failure.
 
 ## Front ends
 
-- **Rust:** the API above; `flui-driver` with feature `headless` for in-process tests. The facade
-  re-exports nothing of it; tests depend on it directly.
+- **Rust:** `flui_testing::Tester` (re-exported as `flui::testing`) over `flui_driver::Device` for a
+  real target, and over `flui_testing::Headless` for a headless run. A crate's `device` test target
+  takes `flui-driver` as a dev-dependency; the facade has no `device` feature and re-exports
+  nothing of the driver.
 - **CLI:** `flui drive <group> <verb>`, mirroring the method table (`flui drive semantics locate
   --role button --name Increment`, `flui drive element tap …`, `flui drive capture presented -o
   shot.png`, `flui drive wait until --appears …`). Every method is also reachable as `flui drive call
@@ -899,8 +932,9 @@ What the driver relies on:
 | `TreeError<E>` with `TreeContext` | `flui-rendering` (pipeline owner), `flui-view` (build owner) | `platform` error details, trace rows, findings |
 
 The agent installs the capture layer per UI runtime only while a driver session subscribes, and it
-partitions by presentation id. Because the framework sets no compile-time level cap, release
-builds with the `driver` feature can be profiled.
+partitions by presentation id. The CLI's release mode compiles DEBUG and TRACE call sites out
+(ADR-0398) and an agent build is a development build, so a profile is taken from an agent, debug
+or `profiling` build.
 
 ## Self-contained by construction (R46–R49)
 
@@ -1016,7 +1050,7 @@ fixture, with an identifier on every interactive widget.
   0.5, the `METHODS` coverage of the CLI and MCP, and wire spellings. In `flui-semantics`: one
   table of locator cases over a fixed tree (each criterion, scoping, strictness, `pick`, unicode case
   folding) and one of actionability (covered, clipped, offscreen, disabled ancestor, unstable).
-- **Headless end to end** (`flui-driver`, feature `headless`, on `interaction_gallery`): every
+- **Headless end to end** (`flui_testing::Tester` over `flui_testing::Headless`, on `interaction_gallery`): every
   gesture through `synthetic` and `semantic`, waits on the virtual clock (deterministic frame
   counts), the failure matrix F1 to F10 (app panic, window closed by the action's callback,
   stale handle after slot reuse, exhausted generations, two clients, a timed-out act that runs at

@@ -87,9 +87,7 @@ impl DesktopBuilder {
 
         let mut args = vec!["build".to_string(), "--target".to_string(), target.clone()];
         args.extend(selected.cargo_args());
-        if let Some(profile_flag) = ctx.profile.cargo_flag() {
-            args.push(profile_flag.to_string());
-        }
+        args.extend(ctx.mode_args(selected.framework()));
 
         let env = Self::cargo_env(ctx, &target);
         let executable = cargo::build_artifact(&ctx.workspace_root, &args, &selected, &env).await?;

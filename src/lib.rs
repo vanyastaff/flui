@@ -110,6 +110,7 @@ returned request or poll `try_result` to obtain the window result."
 //! | `unstable-windows` | off | `app::open_window`, `app::open_secondary_window` and `app::WindowPolicy`: windows beyond the first (unstable) |
 //! | `devtools` | off | `flui::devtools`: the frame profiler, timeline and inspector counters |
 //! | `driver` | off | the driver agent in an optimized build; every debug build serves its windows to a driver launched with an endpoint (ADR-0239) |
+//! | `release-max-level-info` | off | no `trace!` or `debug!` call site, FLUI's or the application's, in a build without debug assertions (ADR-0398); `flui build --release` and `flui run --release` turn it on, a plain `cargo build --release` does not, and `profiling` and agent builds keep every span |
 //! | `serde` | off | `serde` implementations for the framework's value types: geometry, paint and style, locale and brightness, gesture details, layout enums, curves and stored document revisions |
 //!
 //! A module whose feature is off is **absent**, not empty: `flui::cupertino`

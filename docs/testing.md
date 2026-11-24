@@ -45,14 +45,17 @@ the same bug found by a whole-demo snapshot names a demo.
 
 Two structural rules hold across the stack:
 
-- **Test-only APIs live in the kit of their layer** (ADR-0243). From the frame layer up that kit is
-  `flui-testing`: it sits above the frame runtime and the widget catalog, so
+- **Test-only APIs live in the kit of their layer** (ADR-0243, ADR-0400 §8). From the frame layer
+  up that kit is `flui-testing`: it sits above the frame runtime and the widget catalog, so
   the widget harness lives there too and drives the product frame
-  transaction: `lay_out` mounts its tree in a `HeadlessHost`, whose frames are
-  `UiRuntime::pump` (ADR-0083 §4). A crate below it exposes its own kit behind a
+  transaction: `Tester::mount` mounts its tree in the headless host, whose frames are
+  `UiRuntime::pump` (ADR-0083 §4). ADR-0400 §1 replaces `lay_out`, `LaidOut`, `Harness` and a
+  public `HeadlessHost`, which the rest of this page describes as the code has them today, with
+  `Tester`; they are not deprecated yet ([gaps](gaps.md#accepted-adr-sections-not-built-yet)).
+  A crate below it exposes its own kit behind a
   feature named `testing`, never `test-support` or `test-utils`.
-- **A test's frames are the UI runtime's.** A tree mounts through `HeadlessHost::attach` (or
-  `lay_out`, which wraps it), and its first frame, the mount included, is `UiRuntime::pump`:
+- **A test's frames are the UI runtime's.** A tree mounts through `Tester::mount` (today
+  `HeadlessHost::attach` or `lay_out`, which wraps it), and its first frame, the mount included, is `UiRuntime::pump`:
   the same layout↔build fixpoint and lazy-sliver service pass every later frame runs. Frame
   loops hand-rolled over raw owners drifted once, silently: one
   bootstrapped with a bare `PipelineOwner::run_frame` and captured every `SliverAppBar`
@@ -901,7 +904,9 @@ line: a change that adds a package to an application's default graph raises
 that line in the same PR and says why, and one that removes a package lowers
 it. The
 `size` job, on `main` (ADR-0375), builds projects `flui create --local`
-generates in release, with the release profile the templates write: a counter
+generates in release, as `flui build --release` builds them: the release
+profile the templates write and the facade's `release-max-level-info`
+(ADR-0398). A counter
 for the host and for wasm32, and the host of a `--hot-reload` project, which
 links the logic crate and installs no reload hook. A binary grows with every
 change to the code it links, so a size fails only past 2% over its line, and
@@ -1423,7 +1428,7 @@ needs. One row per job:
 | `test-features` | the job's `cargo nextest run` lines | — |
 | `doc` | `RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --locked --document-private-items --features <every package's testing feature>` | the job reads the feature list from `cargo metadata`; its step shows how |
 | `perf-gates` | the job's callgrind loop over the `perf_scaling_` scenarios of flui-widgets' `perf` target | main only; needs valgrind (Linux); the baseline files are checked by `test` |
-| `size` | the job's step: `flui create --local` twice, three `cargo build --release` runs and their binaries' bytes against `perf/size.toml` | main only, CI only: three cold release builds on Linux x86_64, the baseline's host |
+| `size` | the job's step: `flui create --local` twice, three `cargo build --release` runs with the facade's release ceiling (the build `flui build --release` makes) and their binaries' bytes against `perf/size.toml` | main only, CI only: three cold release builds on Linux x86_64, the baseline's host |
 | `deps` | `cargo deny --workspace --locked check bans licenses sources`, `cargo deny --workspace --locked check advisories`, then for each triple `cargo tree --locked --quiet --edges normal --prefix none --package flui --target <triple> \| awk 'NF >= 2 { print $1, $2 }' \| LC_ALL=C sort -u \| wc -l` against `perf/size.toml` | an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and only reports on a pull request, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` | — |
 | `miri` | the `cargo +nightly miri test -p …` lines above | nightly + miri; ci.yml lists every one |
