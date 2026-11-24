@@ -9,7 +9,7 @@
 //! `FLUI_ANDROID_ROLES_PACKAGE`). Without them it asks `adb` nothing and comes out
 //! `cannot_verify`, naming what is missing; `FLUI_REQUIRE_ANDROID=1` makes that a failure, for a
 //! run on a device. The accessibility reads take UI Automator's dump, which the lane refuses while
-//! a screen reader runs, so they run with TalkBack off.
+//! any accessibility service runs, so they run with every service off.
 
 use std::time::Duration;
 
@@ -91,8 +91,9 @@ fn unverified_says_why(report: &Report) {
     }
 }
 
-/// The roles scenario through the Android lane: each role of the table reads back as the class
-/// `accesskit_android` gives it, in the dump UI Automator takes with no screen reader on. It takes
+/// The roles scenario through the Android lane: the node the lane matches to each role's reads
+/// back as the class `accesskit_android` gives it, in the dump UI Automator takes with no
+/// accessibility service on. It takes
 /// the scenario app built to show its roles page: `FLUI_ANDROID_ROLES_APK` and
 /// `FLUI_ANDROID_ROLES_PACKAGE`.
 #[test]

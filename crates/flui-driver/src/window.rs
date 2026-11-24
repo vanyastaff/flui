@@ -27,6 +27,10 @@ use crate::lane::AccessibilityApi;
 use crate::projection::Projection;
 use crate::scenario::WindowSpec;
 
+/// How many times [`Window::os_tree`] and [`Window::compare_projection`] read the OS tree against
+/// the app's before they report that the app's tree moved between the two reads.
+const MAX_TREE_READS: usize = 3;
+
 /// What reading the OS accessibility tree answers in a session without an OS lane.
 fn no_tree_lane() -> crate::Error {
     crate::Error::not_supported("os_accessibility_tree", "the session has no OS lane")
@@ -96,14 +100,47 @@ impl<'d> Window<'d> {
     /// # Errors
     ///
     /// As [`Self::read`]; [`Error::NotSupported`](crate::Error::NotSupported) naming
-    /// `os_accessibility_tree` without a lane that reads one; the lane's failures.
+    /// `os_accessibility_tree` without a lane that reads one; the lane's failures;
+    /// [`Error::Busy`](crate::Error::Busy) when the app's tree changed while the OS tree was read
+    /// against it on each of three reads.
     pub fn os_tree(&mut self) -> Result<Tree> {
-        let app = if self.lane_matches_app_tree()? {
-            self.read()?
-        } else {
-            Tree::new(Vec::new(), false)
-        };
-        self.os_tree_against(app)
+        if self.lane_matches_app_tree()? {
+            return self.read_against().map(|(_, os)| os);
+        }
+        self.os_tree_against(Tree::new(Vec::new(), false))
+    }
+
+    /// The app's tree of the window and its OS tree read against it, both of one revision: the
+    /// app's revision is read again once the OS tree is, and a tree that moved in between is
+    /// read again, at most [`MAX_TREE_READS`] times, so a change of the app is never taken for a
+    /// difference of the OS. A read that reports no revision is taken as it is.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`] and [`Self::os_tree_against`]; [`Error::Busy`](crate::Error::Busy)
+    /// naming the revisions when the tree moved on every read.
+    fn read_against(&mut self) -> Result<(Tree, Tree)> {
+        let mut moved = String::new();
+        for _ in 0..MAX_TREE_READS {
+            let app = self.read()?;
+            let os = self.os_tree_against(app.clone())?;
+            let Some(before) = app.revision else {
+                return Ok((app, os));
+            };
+            let after = self.read_with(ReadQuery::new().max_depth(0))?.revision;
+            if after == Some(before) {
+                return Ok((app, os));
+            }
+            moved = after.map_or_else(
+                || format!("revision {before} became one that reports none"),
+                |after| format!("revision {before} became {after}"),
+            );
+        }
+        Err(crate::Error::busy(format!(
+            "the app's tree changed while the OS tree was read against it, on each of \
+             {MAX_TREE_READS} reads (last, {moved}): the OS tree is not compared with a tree the \
+             app no longer shows"
+        )))
     }
 
     /// Whether the session's lane finds the app's nodes by matching the app's own tree, which it
@@ -145,10 +182,9 @@ impl<'d> Window<'d> {
     ///
     /// # Errors
     ///
-    /// As [`Self::read`] and [`Self::os_tree`].
+    /// As [`Self::read`] and [`Self::os_tree`]: the two trees are of one revision of the app's.
     pub fn compare_projection(&mut self) -> Result<Projection> {
-        let app = self.read()?;
-        let os = self.os_tree_against(app.clone())?;
+        let (app, os) = self.read_against()?;
         Ok(Projection::of(&app, &os))
     }
 

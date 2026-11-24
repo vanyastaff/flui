@@ -21,9 +21,8 @@
 //! - **Reading.** The window's place, the display's rotation and the app's accessibility nodes,
 //!   the tree TalkBack reads, from `uiautomator dump` ([`uiautomator`]); the nodes carry no
 //!   identifier on Android, so `Lane::read_tree` matches them to the app's own tree by structure,
-//!   role, name, state and bounds ([`tree`], [`roles`]). The dump suspends the accessibility
-//!   services while it runs, so the lane dumps nothing while a screen reader is on
-//!   ([`safety::check_dump`]). The window's pixels come from `screencap` ([`screencap`]).
+//!   role, name, state and bounds ([`tree`], [`roles`]). The dump suspends every accessibility
+//!   service while it runs, so the lane dumps nothing while one is on ([`safety::check_dump`]). The window's pixels come from `screencap` ([`screencap`]).
 //! - **No activation.** `Lane::invoke` is refused: UI Automator's shell performs no action, and
 //!   `ACTION_CLICK` reaches a node only from an accessibility service or an instrumentation on the
 //!   device, neither of which the lane runs; a tap at the node's center would be the touch path
@@ -376,8 +375,8 @@ impl AndroidLane {
         }
     }
 
-    /// The active window, dumped and read, once the device shows no screen reader running: the
-    /// dump suspends the accessibility services while it runs.
+    /// The active window, dumped and read, once the device shows no accessibility service
+    /// running: the dump suspends every service while it runs.
     fn dump(&mut self) -> Result<UiDump> {
         let settings = Run {
             limit: device::MAX_ACCESSIBILITY_SETTINGS,
