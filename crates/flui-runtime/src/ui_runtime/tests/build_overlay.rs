@@ -101,7 +101,7 @@ fn failed(count: usize, omitted: u32) -> BuildState {
             )
         })
         .collect();
-    serde_json::from_value(serde_json::json!({
+    serde_json::from_value::<BuildState>(serde_json::json!({
         "failed": { "diagnostics": diagnostics, "omitted": omitted }
     }))
     .expect("a report within the bound")

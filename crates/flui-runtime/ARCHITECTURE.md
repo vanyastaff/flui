@@ -1363,7 +1363,10 @@ nothing and damages nothing (`OverlayContent`), and content whose labels do not 
 unpublished, so it is not recorded again until it, the fonts or the scale change. The readout is
 composed only on frames that paint; a banner that changed is published on a frame whose pipeline
 paints nothing, as a patch of its node and the root that keeps the readout as the version shows
-it, so no boundary of the pipeline repaints for it.
+it, so no boundary of the pipeline repaints for it. A frame that paints nothing and records no
+banner (the text context lent, the lineage out of content versions) publishes no patch: the
+banner is tried again on the next frame the presentation draws, which nothing asks for on its
+behalf; the context is free at scene assembly, so a real frame meets neither case.
 
 The banner (`build_overlay`) is the presentation's `BuildBanner`, which `build.report` alone
 writes: a chip in the top-right corner while a build runs, and while one failed a panel along the
@@ -1390,7 +1393,8 @@ that already draws over every frame, and a test that drives the app passes the s
 shown. Pinned by `build_overlay_matrix` (`src/ui_runtime/tests/build_overlay.rs`, its
 `a_tap_on_the_banner_reaches_the_app_under_it` included), `build_overlay`'s unit tests and
 `presentation_scene`'s `an_unshapeable_banner_holds_still` and
-`a_banner_only_frame_keeps_the_readout`.
+`a_banner_only_frame_keeps_the_readout` and
+`a_banner_waits_for_the_text_context_without_publishing`.
 
 
 ### Deterministic execution preserves concurrent admission during compaction

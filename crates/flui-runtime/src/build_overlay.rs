@@ -120,9 +120,9 @@ impl BuildBanner {
     }
 
     /// The banner of the shown report on a surface of `surface` logical pixels, kept clear of
-    /// `avoid` (the performance overlay's bounds while it is drawn); `None` when nothing is shown
-    /// or nothing of it fits. A frame for the surface the last one laid out for gets that banner
-    /// again, without laying it out.
+    /// `avoid` (the bounds of the performance overlay's readout while the scene shows it); `None`
+    /// when nothing is shown or nothing of it fits. A frame for the surface the last one laid out
+    /// for gets that banner again, without laying it out.
     pub(crate) fn banner(&self, surface: Size<f64>, avoid: Option<Rect<f64>>) -> Option<Banner> {
         let shown = self.shown.borrow();
         let report = shown.as_ref()?;
@@ -456,7 +456,7 @@ mod tests {
 
     /// A failed build as a window may read it off the wire: `diagnostics`, and `omitted` more.
     fn failed_with(diagnostics: &[Diagnostic], omitted: u32) -> BuildState {
-        serde_json::from_value(serde_json::json!({
+        serde_json::from_value::<BuildState>(serde_json::json!({
             "failed": { "diagnostics": diagnostics, "omitted": omitted }
         }))
         .expect("a report within the bound")

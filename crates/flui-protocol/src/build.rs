@@ -53,12 +53,13 @@ pub enum BuildState {
     Failed(Diagnostics),
 }
 
-/// The errors of a failed build: the first [`MAX_DIAGNOSTICS`] the compiler reported, in its
-/// order, and how many more it reported.
+/// The errors of a failed build: those kept, in the compiler's order, and how many more it
+/// reported. [`push`](Self::push) keeps the first [`MAX_DIAGNOSTICS`] and counts the rest.
 ///
 /// No value holds more than [`MAX_DIAGNOSTICS`], a decoded one included: decoding refuses the
 /// element past the bound before it reads it, so a report's size on the wire does not decide how
-/// much a window holds.
+/// much a window holds. A decoded count of omitted errors is the sender's word: it is shown, not
+/// checked against how many were kept.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema), schemars(inline))]
@@ -102,22 +103,6 @@ impl Diagnostics {
     }
 }
 
-impl Extend<Diagnostic> for Diagnostics {
-    fn extend<I: IntoIterator<Item = Diagnostic>>(&mut self, diagnostics: I) {
-        for diagnostic in diagnostics {
-            self.push(diagnostic);
-        }
-    }
-}
-
-impl FromIterator<Diagnostic> for Diagnostics {
-    fn from_iter<I: IntoIterator<Item = Diagnostic>>(diagnostics: I) -> Self {
-        let mut all = Self::new();
-        all.extend(diagnostics);
-        all
-    }
-}
-
 /// The kept diagnostics, read up to [`MAX_DIAGNOSTICS`]: an element past them is refused before
 /// it is decoded.
 #[cfg(feature = "serde")]
@@ -144,7 +129,9 @@ fn bounded<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Diag
             }
             match seq.next_element::<serde::de::IgnoredAny>()? {
                 None => Ok(kept),
-                Some(_) => Err(serde::de::Error::invalid_length(MAX_DIAGNOSTICS + 1, &self)),
+                Some(_) => Err(serde::de::Error::custom(format_args!(
+                    "more than {MAX_DIAGNOSTICS} diagnostics"
+                ))),
             }
         }
     }

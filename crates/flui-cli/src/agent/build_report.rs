@@ -216,14 +216,12 @@ mod conversation_tests {
     }
 
     fn failed() -> BuildState {
-        BuildState::Failed(
-            [Diagnostic::new(
-                "mismatched types".into(),
-                Some(SourceLocation::new("src/lib.rs".into(), 12, 5)),
-            )]
-            .into_iter()
-            .collect::<Diagnostics>(),
-        )
+        let mut errors = Diagnostics::new();
+        errors.push(Diagnostic::new(
+            "mismatched types".into(),
+            Some(SourceLocation::new("src/lib.rs".into(), 12, 5)),
+        ));
+        BuildState::Failed(errors)
     }
 
     fn reports_to(windows: &[&str], state: &BuildState) -> Vec<Value> {

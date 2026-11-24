@@ -65,6 +65,7 @@
   renaming a new file over it, and an overflowing event queue is a change to every watched path
   instead of a lost one. A worker host that exited while the worker built is reported as that
   exit before its successor starts.
-- **`flui-cli`**: a dropped connection to an app's agent shuts its socket down on Linux and macOS,
+- **`flui-cli`**: a dropped connection to an app's agent shuts its socket down (a Unix socket or an
+  `adb` forward; not yet a Windows named pipe),
   so `flui mcp` reconnecting to a restarted app, and `flui run`'s build reports, no longer leave
   the old connection's socket and reader thread open until the app closes its end.

@@ -237,6 +237,10 @@ fn scene_apply_contract() {
         "scene_apply_contract",
         &[
             (
+                "a_patch_is_empty_until_an_op_is_buffered",
+                s::a_patch_is_empty_until_an_op_is_buffered,
+            ),
+            (
                 "a_slot_naming_its_own_ancestor_is_refused",
                 s::a_slot_naming_its_own_ancestor_is_refused,
             ),

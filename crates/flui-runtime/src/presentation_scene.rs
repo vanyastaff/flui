@@ -273,8 +273,9 @@ impl PresentationScene {
         Self::compose_root(&mut writer, frame(), overlay, banner);
         // A banner that could not be recorded this frame (the text context
         // lent, the lineage out of content versions) leaves the patch empty:
-        // a frame that did not paint then publishes nothing, and the next
-        // frame tries the banner again.
+        // a frame that did not paint then publishes nothing, and the next frame
+        // the presentation draws, which nothing asks for on its behalf, tries
+        // the banner again.
         Ok(painted || !writer.is_empty())
     }
 

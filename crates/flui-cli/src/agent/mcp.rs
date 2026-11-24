@@ -437,8 +437,8 @@ impl Agent for Live {
     fn call(&mut self, method: &str, params: Value, holds: Duration) -> Result<Value, Failure> {
         // Once more when the connection broke: the app may have restarted
         // since the last call and left a dead socket behind. A request that
-        // never reached it goes again; one that did, only when `resendable`.
-        let resendable = resendable(method);
+        // never reached it goes again; one that did, only when it `may_resend`.
+        let may_resend = resendable(method);
         for attempt in 0..2 {
             if self.connection.is_none() {
                 self.connection = Some(self.connect()?);
@@ -449,7 +449,7 @@ impl Agent for Live {
                 .expect("BUG: connected one line above");
             match connection.request(method, params.clone(), holds) {
                 Err(Failure::Unsent(_)) if attempt == 0 => self.connection = None,
-                Err(Failure::Transport(_)) if attempt == 0 && resendable => self.connection = None,
+                Err(Failure::Transport(_)) if attempt == 0 && may_resend => self.connection = None,
                 Err(failure @ (Failure::Transport(_) | Failure::Unsent(_))) => {
                     self.connection = None;
                     return Err(failure);
@@ -475,9 +475,99 @@ mod tests {
 
     use super::*;
 
-    /// A call that reached the app goes again on a broken connection exactly when its method
-    /// leaves the app as it was, an annotation included. Fails if `build.report` is not resent or
-    /// an act is.
+    /// A stand-in app on a Unix socket that closes its first connection on the first request,
+    /// unanswered, and answers each request on the connections after it; the call makes one of
+    /// `method` through [`Live`] and answers the call's outcome and every request the app read.
+    #[cfg(unix)]
+    fn call_through_a_broken_connection(method: &str) -> (Result<Value, Failure>, Vec<String>) {
+        use std::io::{BufRead as _, BufReader, Write as _};
+        use std::os::unix::net::UnixListener;
+        use std::sync::mpsc;
+
+        use flui_protocol::version::PROTOCOL_VERSION;
+
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let socket = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket).expect("bind");
+        listener
+            .set_nonblocking(true)
+            .expect("a non-blocking listener");
+        let session = dir.path().join("flui-agent.json");
+        let credentials = Credentials {
+            endpoint: super::super::Endpoint::Local(
+                socket.to_str().expect("a UTF-8 path").to_owned(),
+            ),
+            token: "0123456789abcdef0123456789abcdef".into(),
+            pid: 0,
+        };
+        std::fs::write(&session, serde_json::to_vec(&credentials).expect("json"))
+            .expect("the session file");
+        let (done, finished) = mpsc::channel::<()>();
+        let app = std::thread::spawn(move || {
+            let mut asked = Vec::new();
+            let mut connections = 0;
+            while finished.try_recv() == Err(mpsc::TryRecvError::Empty) {
+                let Ok((stream, _)) = listener.accept() else {
+                    std::thread::sleep(Duration::from_millis(10));
+                    continue;
+                };
+                connections += 1;
+                stream.set_nonblocking(false).expect("a blocking stream");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .expect("a read timeout");
+                let mut out = stream.try_clone().expect("clone");
+                let mut lines = BufReader::new(stream).lines();
+                let _hello = lines.next();
+                writeln!(out, r#"{{"hello":{{"protocol":"{PROTOCOL_VERSION}"}}}}"#).expect("hello");
+                for line in lines {
+                    let Ok(line) = line else { break };
+                    let request: Value = serde_json::from_str(&line).expect("json");
+                    asked.push(request["method"].as_str().unwrap_or_default().to_owned());
+                    if connections == 1 {
+                        // Gone before it answers, as an app that restarted.
+                        break;
+                    }
+                    writeln!(out, "{}", json!({ "id": request["id"], "result": {} }))
+                        .expect("answer");
+                }
+            }
+            asked
+        });
+        let mut live = Live::new(Some(session));
+        let outcome = live.call(
+            method,
+            json!({ "window": "w1", "state": "building" }),
+            Duration::ZERO,
+        );
+        drop(live);
+        done.send(()).expect("the stand-in waits");
+        (outcome, app.join().expect("the stand-in app"))
+    }
+
+    /// A call that reached the app before its connection broke goes again on a new connection
+    /// only when its method leaves the app as it was: an annotation does, an act does not.
+    /// Fails if `build.report` is not resent or an act is.
+    #[cfg(unix)]
+    #[test]
+    fn a_call_whose_connection_broke_goes_again_only_when_it_leaves_the_app_as_it_was() {
+        let (outcome, asked) = call_through_a_broken_connection("build.report");
+        assert!(
+            outcome.is_ok(),
+            "the annotation is answered on the new connection: {outcome:?}"
+        );
+        assert_eq!(asked, ["build.report", "build.report"]);
+
+        let (outcome, asked) = call_through_a_broken_connection("element.tap");
+        assert!(
+            matches!(outcome, Err(Failure::Transport(_))),
+            "an act that may have run is not sent again: {outcome:?}"
+        );
+        assert_eq!(asked, ["element.tap"]);
+    }
+
+    /// Which methods [`resendable`] lets go again, over the protocol's table: exactly those that
+    /// leave the app as it was, an annotation included.
     #[test]
     fn a_broken_call_goes_again_only_when_it_leaves_the_app_as_it_was() {
         for row in flui_protocol::method::METHODS {

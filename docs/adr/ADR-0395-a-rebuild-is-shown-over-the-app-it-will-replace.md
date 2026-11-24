@@ -68,7 +68,7 @@ and hands it nothing else.
 compiler's first line and the primary span's `file:line:column`. A report carries at most
 `MAX_DIAGNOSTICS` (8) diagnostics and counts the rest: the type `Diagnostics` holds the bound,
 built or decoded, and decoding refuses the element past it before reading it, so a window refuses
-a report with more before it holds it. Protocol 0.30 states the bound in the schema. The window
+a report with more before it holds it; the schema states the bound (`maxItems`). The window
 draws the latest report beside the performance overlay: a chip while a build runs, a panel of the
 errors while the last build failed, nothing after a success. The banner takes no input: every
 pointer event reaches the app as it would without it.
@@ -126,7 +126,8 @@ generator read the same `changes_app`.
 - `flui-driver`'s `a_timed_out_call_is_resent_only_when_it_leaves_the_app_as_it_was` (§4 in the
   driver) and `codegen_marks_what_it_cannot_write_and_writes_the_main_window_as_the_tests_own`
   (a generated test leaves out a `build.report`, as it leaves out a read); `flui-cli`'s
-  `a_broken_call_goes_again_only_when_it_leaves_the_app_as_it_was` (§4 in `flui mcp`).
+  `a_call_whose_connection_broke_goes_again_only_when_it_leaves_the_app_as_it_was` (§4 in `flui
+  mcp`, over a connection the app closes).
 - `flui-cli`'s `a_report_reaches_every_window_as_an_observer`,
   `a_window_that_refuses_the_report_leaves_the_others_to_get_it`,
   `a_report_whose_app_was_replaced_reaches_its_successor` and

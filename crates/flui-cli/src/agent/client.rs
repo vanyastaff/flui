@@ -10,7 +10,8 @@
 //! A thread of the connection's own reads every line the app sends and another writes, so a
 //! peer that stops answering, or stops reading, costs a bounded wait ([`REPLY_TIMEOUT`], past
 //! the time a wait asked the app to hold its answer) instead of a stuck `flui mcp`; dropping the
-//! connection shuts its socket down, which ends both threads ([`Closer`]). A request
+//! connection shuts its socket down, which ends both threads ([`Closer`]); a Windows named pipe
+//! has no shutdown, so there the reader ends when the app closes the pipe. A request
 //! takes the first line that answers its id: a late answer to an earlier request that timed out
 //! is passed over.
 

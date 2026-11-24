@@ -291,17 +291,12 @@ fn an_observer_reports_a_build_and_is_still_refused_an_act() {
     let listed = transmitted(&mut observer);
     let window = serde_json::from_value::<WindowId>(listed[0]["result"]["windows"][0].clone())
         .expect("the window's id");
-    let report = BuildReportParams::new(
-        window,
-        BuildState::Failed(
-            [Diagnostic::new(
-                "expected `;`".to_owned(),
-                Some(SourceLocation::new("src/main.rs".to_owned(), 3, 7)),
-            )]
-            .into_iter()
-            .collect::<Diagnostics>(),
-        ),
-    );
+    let mut errors = Diagnostics::new();
+    errors.push(Diagnostic::new(
+        "expected `;`".to_owned(),
+        Some(SourceLocation::new("src/main.rs".to_owned(), 3, 7)),
+    ));
+    let report = BuildReportParams::new(window, BuildState::Failed(errors));
     observer.receive(
         &line(&json!({ "id": 2, "method": "build.report", "params": report })),
         now,
