@@ -3,16 +3,20 @@
 //!
 //! The scene is walked as the raster side draws it (`flui-engine`'s `walk_scene`): a node at its
 //! placement, each effect entry's layer over the entries under it, each chunk's commands in
-//! order, each slot's child node where it stands. Geometry is taken to the window's logical
-//! pixels. Each paint is kept as the region it may touch and, for a solid fill, the region it
-//! surely covers; a text's backdrop is read back from the paints before it (module docs of
-//! [`super`]).
+//! order, each slot's child node where it stands. Geometry stays in the logical pixels the frame
+//! was laid out in: the walk leaves out the layer that scales the frame to the device pixels it
+//! was painted at, so the ratio the pipeline holds now plays no part. Each paint is kept as the
+//! region it may touch and, for a solid fill, the region it surely covers; a text's backdrop is
+//! read back from the paints before it, and what is painted over it from the paints after it
+//! (module docs of [`super`]).
 //!
 //! Regions are under-approximated where they must cover and over-approximated where they may
-//! touch: a rounded rectangle surely covers its two bands clear of the corners, a clip by a path
-//! or a superellipse surely leaves nothing, and a paint whose extent the walk does not compute
-//! may touch everything its clip leaves. So an unknown shape can make a text not checked, never
-//! judged against the wrong colour.
+//! touch: a rounded rectangle surely covers its two bands clear of the corners, a clip by a path,
+//! a superellipse or a difference surely leaves nothing, a save layer's bounds clip what it
+//! holds, and a paint whose extent the walk does not compute may touch everything its clip
+//! leaves. A paint that changes what is already painted (a backdrop filter, a save layer that
+//! composites with another blend mode than source-over) touches its whole region. So an unknown
+//! shape can make a text not checked, never judged against the wrong colour.
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, RRect, Rect};
@@ -61,38 +65,97 @@ pub(super) struct RunFacts {
     pub(super) font_size: f64,
 }
 
-/// One text the frame paints, and what is painted behind it.
+/// The colours a text is read against.
+#[derive(Debug, Clone)]
+pub(super) struct Backdrop {
+    /// The opaque colour painted behind the text.
+    pub(super) behind: Color,
+    /// The translucent solid fills painted over the text after it, each covering its whole
+    /// box, in paint order: they tint its glyphs and its background alike.
+    pub(super) over: Vec<Color>,
+}
+
+impl Backdrop {
+    /// `color`, painted over what is behind the text, with the fills over it composited on.
+    pub(super) fn shown(&self, color: Color) -> Color {
+        self.over
+            .iter()
+            .fold(color, |below, above| above.blend_over(below))
+    }
+}
+
+/// One text the frame paints, and what is painted behind and over it.
 #[derive(Debug, Clone)]
 pub(super) struct PaintedText {
     pub(super) painter: RenderId,
     pub(super) text: String,
     pub(super) runs: Vec<RunFacts>,
     pub(super) bold: Boldness,
-    /// The opaque colour behind the text, or why it is not known.
-    pub(super) backdrop: Result<Color, ContrastUnknown>,
+    /// The colours the text is read against, or why they are not known.
+    pub(super) backdrop: Result<Backdrop, ContrastUnknown>,
+    /// The part of its box its clips may leave, in logical pixels.
+    shown: Rect<f64>,
+    /// How many paints the walk had kept once it kept this text's own: the paints after it
+    /// start there.
+    after: usize,
 }
 
-/// Every text the frame `frame` of `version` paints, in paint order, its geometry divided by
-/// `device_pixel_ratio` to logical pixels. `None` when `version` holds no node `frame`.
+/// Every text the frame `frame` of `version` paints, in paint order, in the logical pixels the
+/// frame was laid out in. `None` when `version` holds no node `frame`.
 pub(super) fn painted_texts(
     version: &SceneVersion,
     frame: SceneNodeId,
-    device_pixel_ratio: f64,
 ) -> Option<Vec<PaintedText>> {
-    version.node(frame)?;
-    let to_logical = device_pixel_ratio.recip();
+    let node = version.node(frame)?;
+    // `PipelineOwner::paint_frame` pushes the frame's first effect: an offset at a ratio of 1, a
+    // scale to the device pixels it was painted at otherwise. Left out, the frame's geometry
+    // stays in logical pixels whatever ratio the pipeline holds now.
+    let device_scale = node
+        .content()
+        .effect_layers()
+        .next()
+        .filter(|(_, layer)| matches!(layer, Layer::Offset(_) | Layer::Transform(_)))
+        .map(|(entry, _)| EntryAddress { node: frame, entry });
     let root = Scope {
-        transform: Matrix4::scaling(to_logical, to_logical, 1.0),
+        transform: Matrix4::IDENTITY,
         clip: Clip::everywhere(),
         effect: Effect::Resolved,
     };
     let mut walk = Walk {
         version,
+        device_scale,
         paints: Vec::new(),
         texts: Vec::new(),
     };
     walk.run(frame, root);
-    Some(walk.texts)
+    let Walk {
+        paints, mut texts, ..
+    } = walk;
+    for text in &mut texts {
+        if let Ok(backdrop) = &mut text.backdrop {
+            match painted_over(&paints[text.after..], &text.shown) {
+                Ok(over) => backdrop.over = over,
+                Err(why) => text.backdrop = Err(why),
+            }
+        }
+    }
+    Some(texts)
+}
+
+/// The translucent solid fills among `after` that cover the whole of `rect`, in paint order;
+/// [`ContrastUnknown::PaintedOver`] when anything else painted after a text touches its box.
+fn painted_over(after: &[Painted], rect: &Rect<f64>) -> Result<Vec<Color>, ContrastUnknown> {
+    let mut over = Vec::new();
+    for paint in after.iter().filter(|paint| paint.touches(rect)) {
+        match &paint.mark {
+            Mark::Solid { color, sure, .. } if !color.is_opaque() && sure.holds(rect) => {
+                over.push(*color);
+            }
+            // An opaque fill hides the text; anything else changes part of what shows.
+            _ => return Err(ContrastUnknown::PaintedOver),
+        }
+    }
+    Ok(over)
 }
 
 /// What paint under a scope reaches the screen as.
@@ -152,6 +215,10 @@ struct Clip {
     may: Option<Rect<f64>>,
     /// What the clip surely leaves whole.
     sure: Cover,
+    /// A shape the walk does not resolve narrowed it (a path, a superellipse, a difference, a
+    /// rectangle under a transform that does not keep rectangles), so what it leaves is known
+    /// only by its bounding box.
+    unresolved_shape: bool,
 }
 
 impl Clip {
@@ -159,6 +226,7 @@ impl Clip {
         Self {
             may: None,
             sure: Cover::Plane,
+            unresolved_shape: false,
         }
     }
 
@@ -171,11 +239,13 @@ impl Clip {
                     None => region.may,
                 }),
                 sure: self.sure.within(&region.sure),
+                unresolved_shape: self.unresolved_shape || !region.exact,
             },
             // What a difference leaves is not a rectangle: nothing of it is surely left.
             ClipOp::Difference => Self {
                 may: self.may,
                 sure: Cover::Rects(SmallVec::new()),
+                unresolved_shape: true,
             },
         }
     }
@@ -195,17 +265,21 @@ impl Clip {
 struct Region {
     may: Rect<f64>,
     sure: SmallVec<[Rect<f64>; 2]>,
+    /// The walk resolves the shape: a rectangle or a rounded one under a transform that keeps
+    /// rectangles. Otherwise only its bounding box is known.
+    exact: bool,
 }
 
 impl Region {
     /// `rect` under `transform`: exact when the transform keeps rectangles rectangles.
     fn of_rect(transform: &Matrix4, rect: Rect<f64>) -> Self {
         let may = transform.transform_rect(&rect);
+        let exact = keeps_rects(transform);
         let mut sure = SmallVec::new();
-        if keeps_rects(transform) {
+        if exact {
             sure.push(may);
         }
-        Self { may, sure }
+        Self { may, sure, exact }
     }
 
     /// `rrect` under `transform`: the box may be touched, and the two bands clear of the
@@ -213,8 +287,9 @@ impl Region {
     fn of_rrect(transform: &Matrix4, rrect: &RRect) -> Self {
         let rect = rrect.rect;
         let may = transform.transform_rect(&rect);
+        let exact = keeps_rects(transform);
         let mut sure = SmallVec::new();
-        if keeps_rects(transform) {
+        if exact {
             let left = rrect.top_left.x.max(rrect.bottom_left.x);
             let right = rrect.top_right.x.max(rrect.bottom_right.x);
             let top = rrect.top_left.y.max(rrect.top_right.y);
@@ -238,7 +313,7 @@ impl Region {
                 }
             }
         }
-        Self { may, sure }
+        Self { may, sure, exact }
     }
 
     /// A shape known only by its bounding box `rect`: nothing of it is surely covered.
@@ -246,6 +321,7 @@ impl Region {
         Self {
             may: transform.transform_rect(&rect),
             sure: SmallVec::new(),
+            exact: false,
         }
     }
 }
@@ -264,8 +340,22 @@ struct Scope {
 struct Painted {
     /// What it may touch; `None` for anywhere.
     may: Option<Rect<f64>>,
-    /// A solid colour over what it surely covers; `None` for any other paint.
-    solid: Option<(Color, Cover)>,
+    mark: Mark,
+}
+
+/// What a paint leaves where it may touch.
+#[derive(Debug)]
+enum Mark {
+    /// One colour, composited source-over, over what it surely covers.
+    Solid {
+        color: Color,
+        sure: Cover,
+        /// What it surely covers was narrowed by a shape the walk does not resolve: a text it
+        /// does not surely cover is [`ContrastUnknown::UnresolvedEffect`].
+        unresolved_shape: bool,
+    },
+    /// Anything else, and why a text it touches cannot be judged.
+    Other(ContrastUnknown),
 }
 
 impl Painted {
@@ -298,6 +388,8 @@ enum Visit {
 
 struct Walk<'v> {
     version: &'v SceneVersion,
+    /// The frame's own layer that scales it to device pixels, which the walk leaves out.
+    device_scale: Option<EntryAddress>,
     /// Every paint so far, in paint order.
     paints: Vec<Painted>,
     texts: Vec<PaintedText>,
@@ -399,6 +491,10 @@ impl Walk<'_> {
     /// The scope inside the effect `layer` at `at`, opened over `scope`; `None` when nothing
     /// under it draws.
     fn enter(&mut self, layer: &Layer, at: EntryAddress, scope: &Scope) -> Option<Scope> {
+        if self.device_scale == Some(at) {
+            // The frame's scale to device pixels, left out (`painted_texts`).
+            return Some(scope.clone());
+        }
         let mut inner = scope.clone();
         if let Layer::Transform(transform) = layer {
             inner.transform *= *transform.transform();
@@ -450,7 +546,11 @@ impl Walk<'_> {
             Layer::BackdropFilter(filter) => {
                 // It filters what is already behind its bounds; what it holds paints as recorded.
                 let region = Region::of_bounds(&scope.transform, filter.bounds());
-                self.paint_other(Some(region.may), scope);
+                self.push(
+                    Some(region.may),
+                    Mark::Other(ContrastUnknown::UnresolvedEffect),
+                    scope,
+                );
             }
             Layer::Follower(_) => {
                 let transform = self.version.follower_transform(at)?;
@@ -478,8 +578,22 @@ impl Walk<'_> {
             };
             match command.op {
                 DrawOp::Save => saved.push(current.clone()),
-                DrawOp::SaveLayer { paint, .. } => {
+                DrawOp::SaveLayer { bounds, paint } => {
                     saved.push(current.clone());
+                    // Nothing the layer holds shows outside its bounds (`Canvas::save_layer`).
+                    let region = bounds.map(|bounds| Region::of_rect(&transform, bounds));
+                    if paint.blend_mode != BlendMode::SrcOver {
+                        // Another mode composites the layer's whole region at its restore,
+                        // where nothing was drawn too, so it changes what is painted there.
+                        self.push(
+                            region.as_ref().map(|region| region.may),
+                            Mark::Other(ContrastUnknown::UnresolvedEffect),
+                            &current,
+                        );
+                    }
+                    if let Some(region) = &region {
+                        current.clip = current.clip.narrowed(region, ClipOp::Intersect);
+                    }
                     if solid(paint).is_none_or(|color| !color.is_opaque()) {
                         current.effect = current.effect.unresolved();
                     }
@@ -648,10 +762,13 @@ impl Walk<'_> {
         } else {
             region.may
         };
-        let solid = color
-            .filter(|_| current.effect == Effect::Resolved)
-            .map(|color| (color, current.clip.sure.within(&region.sure)));
-        self.push(Some(may), solid, current);
+        let sure = current.clip.sure.within(&region.sure);
+        let unresolved_shape = current.clip.unresolved_shape || !region.exact;
+        self.push(
+            Some(may),
+            solid_mark(color, sure, unresolved_shape, current),
+            current,
+        );
     }
 
     /// A paint over everything its clip leaves, solid in `color` when it is one.
@@ -659,21 +776,28 @@ impl Walk<'_> {
         if color.is_some_and(|color| color.is_transparent()) {
             return;
         }
-        let solid = color
-            .filter(|_| current.effect == Effect::Resolved)
-            .map(|color| (color, current.clip.sure.clone()));
-        self.push(None, solid, current);
+        let mark = solid_mark(
+            color,
+            current.clip.sure.clone(),
+            current.clip.unresolved_shape,
+            current,
+        );
+        self.push(None, mark, current);
     }
 
     /// A paint that does not resolve to one colour, touching `may` (`None`: anywhere).
     fn paint_other(&mut self, may: Option<Rect<f64>>, current: &Scope) {
-        self.push(may, None, current);
+        self.push(
+            may,
+            Mark::Other(ContrastUnknown::UnresolvedBackdrop),
+            current,
+        );
     }
 
     /// Keeps a paint touching `may` (`None`: anywhere) under `current`: inside its clip, or
     /// anywhere its clip leaves under a spreading effect or when its extent is not finite. A
     /// paint nothing of which shows is not kept.
-    fn push(&mut self, may: Option<Rect<f64>>, solid: Option<(Color, Cover)>, current: &Scope) {
+    fn push(&mut self, may: Option<Rect<f64>>, mark: Mark, current: &Scope) {
         let may = match may {
             Some(may) if may.is_finite() && current.effect != Effect::Spread => Some(may),
             _ => current.clip.may,
@@ -685,7 +809,7 @@ impl Walk<'_> {
             },
             None => None,
         };
-        self.paints.push(Painted { may, solid });
+        self.paints.push(Painted { may, mark });
     }
 
     /// A paragraph `painter` painted at `offset` in `color`, under `transform` and `current`.
@@ -715,36 +839,44 @@ impl Walk<'_> {
                 font_size: f64::from(run.font_size()) * scale,
             })
             .collect();
-        if !runs.is_empty() && !paragraph.text().trim().is_empty() {
-            let backdrop = if current.effect != Effect::Resolved || !keeps_rects(transform) {
-                Err(ContrastUnknown::UnresolvedEffect)
-            } else {
-                self.backdrop_of(&shown)
-            };
+        let judged = !runs.is_empty() && !paragraph.text().trim().is_empty();
+        let backdrop = if !judged {
+            None
+        } else if current.effect != Effect::Resolved || !keeps_rects(transform) {
+            Some(Err(ContrastUnknown::UnresolvedEffect))
+        } else {
+            Some(self.behind(&shown).map(|behind| Backdrop {
+                behind,
+                over: Vec::new(),
+            }))
+        };
+        self.paints.push(Painted {
+            may: Some(shown),
+            mark: Mark::Other(ContrastUnknown::UnresolvedBackdrop),
+        });
+        if let Some(backdrop) = backdrop {
             self.texts.push(PaintedText {
                 painter,
                 text: paragraph.text().to_owned(),
                 runs,
                 bold: boldness(paragraph.span_weights()),
                 backdrop,
+                shown,
+                after: self.paints.len(),
             });
         }
-        self.paints.push(Painted {
-            may: Some(shown),
-            solid: None,
-        });
     }
 
     /// The opaque colour behind `rect`, from the paints so far: the last solid fill that covers
     /// it whole, with the translucent ones above it composited on.
-    fn backdrop_of(&self, rect: &Rect<f64>) -> Result<Color, ContrastUnknown> {
+    fn behind(&self, rect: &Rect<f64>) -> Result<Color, ContrastUnknown> {
         let mut over: Vec<Color> = Vec::new();
         for paint in self.paints.iter().rev() {
             if !paint.touches(rect) {
                 continue;
             }
-            match &paint.solid {
-                Some((color, sure)) if sure.holds(rect) => {
+            match &paint.mark {
+                Mark::Solid { color, sure, .. } if sure.holds(rect) => {
                     if color.is_opaque() {
                         return Ok(over
                             .iter()
@@ -753,10 +885,29 @@ impl Walk<'_> {
                     }
                     over.push(*color);
                 }
-                _ => return Err(ContrastUnknown::UnresolvedBackdrop),
+                Mark::Solid {
+                    unresolved_shape: true,
+                    ..
+                } => return Err(ContrastUnknown::UnresolvedEffect),
+                Mark::Solid { .. } => return Err(ContrastUnknown::UnresolvedBackdrop),
+                Mark::Other(why) => return Err(*why),
             }
         }
         Err(ContrastUnknown::NothingOpaqueBehind)
+    }
+}
+
+/// What a fill in `color` (`None`: not one solid colour) leaves under `current`, surely covering
+/// `sure`.
+fn solid_mark(color: Option<Color>, sure: Cover, unresolved_shape: bool, current: &Scope) -> Mark {
+    match color {
+        Some(color) if current.effect == Effect::Resolved => Mark::Solid {
+            color,
+            sure,
+            unresolved_shape,
+        },
+        Some(_) => Mark::Other(ContrastUnknown::UnresolvedEffect),
+        None => Mark::Other(ContrastUnknown::UnresolvedBackdrop),
     }
 }
 

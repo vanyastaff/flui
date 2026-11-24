@@ -1306,22 +1306,34 @@ No other phase-misuse variant exists. The passes leave no site that could constr
 
 **Rule.** `audit` reads a frame the pipeline already produced and changes nothing.
 `PipelineOwner::audit_text_contrast` walks the owner's frame node of a `SceneVersion` in paint
-order, as the raster side draws it, to the window's logical pixels. Each paint is kept as the box
-it may touch and, for a solid source-over fill under no unresolved layer, the rectangles it
-surely covers (a rounded rectangle its two bands clear of the corners; a clip by a path or a
-superellipse surely leaves nothing). A text's background is the last such fill that covers its
-whole line boxes inside every clip, with the translucent fills above it composited on; anything
-else touching the box after it, no opaque fill at all, or the text under opacity, a filter, a
-mask or a rotation makes the text `NotChecked` with why. Colours are the run's span colour or the
-paragraph command's, sizes the run's times the axis scale it is painted under; the requirement
-is WCAG 1.4.3's 4.5:1, or 3:1 from 24 px or 18.66 px bold, with a 0.01 tolerance. A text's
-element is the nearest render object, the painter or above, with a committed semantics node.
+order, as the raster side draws it, in the logical pixels the frame was laid out in: it leaves out
+the frame's own first layer, the scale to the device pixels it was painted at, so a ratio the
+pipeline took after that frame plays no part. Each paint is kept as the box it may touch and, for
+a solid source-over fill under no unresolved layer, the rectangles it surely covers (a rounded
+rectangle its two bands clear of the corners; a clip by a path, a superellipse or a difference
+surely leaves nothing; a save layer's bounds clip what it holds). A backdrop filter, and a save
+layer that composites with another blend mode than source-over, change what is already painted
+over their whole region. A text's background is the last solid fill that covers its whole line
+boxes inside every clip, with the translucent fills above it composited on, and a translucent
+fill painted after it over the whole box is composited over both colours. Anything else touching
+the box before it (`UnresolvedBackdrop`), no opaque fill at all (`NothingOpaqueBehind`), the text
+under opacity, a filter, a mask, a translucent save layer or a transform other than a scale, flip
+or quarter turn, or a fill behind it that such a layer, an unresolved clip shape, a backdrop
+filter or a replacing save layer keeps from being known (`UnresolvedEffect`), or anything else
+painted over the box after it (`PaintedOver`) makes the text `NotChecked` with why. A text under
+a clip of any shape is judged against what is behind its box: the clip hides part of the text,
+not the fill behind what shows. Colours are the run's span colour or the paragraph command's,
+sizes the run's times the axis scale it is painted under; the requirement is WCAG 1.4.3's 4.5:1,
+or 3:1 from 24 px or 18.66 px bold, less 0.01, the tolerance of Flutter's
+`textContrastGuideline` (WCAG does not round). A text's element is the nearest render object,
+the painter or above, with a committed semantics node.
 
-**Why.** Pixels mix the text's antialiasing into the background and differ by adapter
-(flutter/flutter#103235, #144121); the scene holds the colours exactly. The background is
-under-approximated where it must cover and over-approximated where it may touch, so an unknown
-shape costs a check, never a wrong colour. Ink bounds are a damage extent and run far past the
-glyphs, so the laid-out line boxes stand for the glyphs. The walk keeps its own stack.
+**Why.** The scene holds the colours exactly, where pixels mix the text's antialiasing into the
+background. Flutter's guideline samples pixels and passes white text on `#fafafa`
+(flutter/flutter#103235). The background is under-approximated where it must cover and
+over-approximated where it may touch, so an unknown shape costs a check, never a wrong colour.
+Ink bounds are a damage extent and run far past the glyphs, so the laid-out line boxes stand for
+the glyphs. The walk keeps its own stack.
 
 **Test.** `text_contrast.rs` in `tests/`.
 

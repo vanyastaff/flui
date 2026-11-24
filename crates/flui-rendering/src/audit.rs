@@ -4,25 +4,38 @@
 //! [`PipelineOwner::audit_text_contrast`] judges each text the frame paints by WCAG 2.2's
 //! contrast minimum (success criterion 1.4.3): the contrast ratio of the colour its glyphs
 //! paint in against the colour painted behind them is at least 4.5:1, or 3:1 for large text
-//! (at least 24 logical px, or at least 18.66 px bold, CSS's 18 pt and 14 pt), with a 0.01
-//! tolerance for rounding. The development agent's `audit.a11y` and the testing kit call it, so
-//! the rule is written once.
+//! (at least 24 logical px, or at least 18.66 px bold, CSS's 18 pt and 14 pt), less a 0.01
+//! tolerance that is Flutter's, not WCAG's (`CONTRAST_TOLERANCE` says why). The development
+//! agent's `audit.a11y` is its caller.
 //!
-//! Both colours come from the frame's scene, read in paint order:
+//! Both colours come from the frame's scene, read in paint order, in the logical pixels the
+//! frame was laid out in:
 //!
 //! - the text's colour is its run's span colour, or the paragraph command's, composited over
 //!   what is behind it when it is translucent;
 //! - what is behind it is the last solid fill painted before it that covers the whole visible
-//!   box of the text (the line boxes its glyphs are set in, inside every clip), with each
-//!   translucent solid fill painted over that one, covering the box too, composited on top.
+//!   box of the text (the line boxes its glyphs are set in, inside every clip and save layer's
+//!   bounds), with each translucent solid fill painted over that one, covering the box too,
+//!   composited on top;
+//! - each translucent solid fill painted after the text that covers its whole visible box (a
+//!   scrim) is composited over both colours.
 //!
-//! A text whose background the commands do not determine is not passed: anything else painted
-//! over its box before it and after the last covering opaque fill (an image, a gradient, a
-//! stroke, another text, a fill that covers only part of it, a blend mode other than
-//! source-over), no opaque fill behind it at all (the surface's clear colour is the host's, not
-//! the frame's), or the text or its backdrop under a layer the walk does not resolve (opacity, a
-//! colour or image filter, a shader mask, a backdrop filter, a path clip, a transform that turns
-//! rectangles into other shapes) is reported [`ContrastOutcome::NotChecked`] with why.
+//! A text whose colours the commands do not determine is not passed; it is reported
+//! [`ContrastOutcome::NotChecked`] with one of the reasons [`ContrastUnknown`] names:
+//!
+//! - anything else painted over its box before it and after the last covering opaque fill (an
+//!   image, a gradient, a stroke, another text, a fill that covers only part of it, a blend
+//!   mode other than source-over): [`ContrastUnknown::UnresolvedBackdrop`];
+//! - no opaque fill behind it at all (the surface's clear colour is the host's, not the
+//!   frame's): [`ContrastUnknown::NothingOpaqueBehind`];
+//! - the text under a layer or transform the walk does not resolve, or a fill behind it that
+//!   only such a layer, a clip of a shape the walk does not resolve or a paint that changes what
+//!   is already painted keeps from being one known colour: [`ContrastUnknown::UnresolvedEffect`];
+//! - anything but a covering translucent fill painted over its box after it:
+//!   [`ContrastUnknown::PaintedOver`].
+//!
+//! A text under a clip of any shape is judged against what is behind its box: the clip hides
+//! part of the text, not the fill behind what shows.
 //!
 //! The module only reads a frame the pipeline already produced: it changes no layout, paint,
 //! layer or phase.
@@ -37,7 +50,7 @@ use flui_painting::styling::Color;
 use rustc_hash::FxHashSet;
 
 use crate::pipeline::PipelineOwner;
-use backdrop::{Boldness, PaintedText};
+use backdrop::{Backdrop, Boldness, PaintedText};
 
 /// The ratio normal text needs (WCAG 2.2, 1.4.3).
 const NORMAL_TEXT_CONTRAST: f64 = 4.5;
@@ -51,8 +64,10 @@ const LARGE_TEXT_PX: f64 = 24.0;
 /// The smallest large bold text, in logical px: 14 pt.
 const LARGE_BOLD_TEXT_PX: f64 = 18.66;
 
-/// How far below its requirement a ratio may fall and still meet it: the rounding a ratio
-/// printed to two decimals hides.
+/// How far below its requirement a ratio may fall and still meet it. Not WCAG's (1.4.3 does
+/// not round): Flutter's `textContrastGuideline` passes a ratio within 0.01 of its requirement
+/// (`MinimumTextContrastGuideline._tolerance`, `flutter_test`'s `accessibility.dart`), and the
+/// same margin keeps a pair tuned against it, at 4.49:1, from failing here.
 const CONTRAST_TOLERANCE: f64 = 0.01;
 
 /// A font size this close to a threshold, in logical px, is at it: run sizes are `f32`, and
@@ -95,9 +110,11 @@ pub struct ContrastReading {
     pub ratio: f64,
     /// The ratio its size needs: 4.5, or 3 for large text.
     pub required: f64,
-    /// The colour its glyphs show in, composited over the background.
+    /// The colour its glyphs show in: composited over the colour painted behind them, with the
+    /// translucent fills painted over the text composited on top.
     pub foreground: Color,
-    /// The opaque colour behind it.
+    /// The opaque colour behind it, with the translucent fills painted over the text composited
+    /// on top.
     pub background: Color,
     /// Its font size, in logical px, as painted (a scale above it applied).
     pub font_size: f64,
@@ -116,14 +133,21 @@ pub enum ContrastUnknown {
     /// image, a gradient, a stroke, another text, a fill that covers only part of the box, or a
     /// blend mode other than source-over.
     UnresolvedBackdrop,
-    /// The text, or what is painted behind it, sits under a layer the rule does not resolve:
-    /// opacity, a colour or image filter, a shader mask, a backdrop filter, a path clip, or a
-    /// transform that turns rectangles into other shapes.
+    /// The text sits under a layer or transform the rule does not resolve (opacity below 1 or
+    /// a blend mode other than source-over, a colour or image filter, a shader mask, a save
+    /// layer whose paint is not one opaque colour, a transform other than a scale, a flip or a
+    /// quarter turn), or a fill painted behind it is kept from being one known colour over its
+    /// box by such a layer or transform, by a clip of a path, a superellipse or a difference,
+    /// by a backdrop filter, or by a save layer that composites with another blend mode.
     UnresolvedEffect,
+    /// Something painted over the text's box after it, other than a translucent solid fill
+    /// covering the whole box, changes what shows: an opaque fill hides the text, and an image,
+    /// a gradient, a stroke, another text or a fill over part of it changes part of it.
+    PaintedOver,
     /// The text mixes bold and regular spans at a size where only bold text is large, and its
     /// runs do not say which is which.
     MixedWeight,
-    /// A font size or a colour is not finite.
+    /// A run's font size, as painted, is not a finite positive number.
     NonFinite,
 }
 
@@ -138,13 +162,17 @@ impl fmt::Display for ContrastUnknown {
                  another paint over part of it)"
             }
             Self::UnresolvedEffect => {
-                "the text or its background is under an opacity, filter, mask, path clip or \
-                 rotation the rule does not resolve"
+                "the text, or the fill behind it, is under an effect the rule does not resolve \
+                 (opacity, a filter, a mask, a save layer, a skewing or rotating transform, a \
+                 path or superellipse clip, a backdrop filter)"
+            }
+            Self::PaintedOver => {
+                "something painted over the text after it hides or changes part of what shows"
             }
             Self::MixedWeight => {
                 "the text mixes bold and regular spans at a size where only bold counts as large"
             }
-            Self::NonFinite => "the text's size or colour is not finite",
+            Self::NonFinite => "the text's font size is not a finite positive number",
         })
     }
 }
@@ -158,7 +186,7 @@ impl PipelineOwner {
     #[must_use]
     pub fn audit_text_contrast(&self, version: &SceneVersion) -> Option<Vec<TextContrast>> {
         let frame = self.scene_frame_node()?;
-        let painted = backdrop::painted_texts(version, frame, self.device_pixel_ratio().get())?;
+        let painted = backdrop::painted_texts(version, frame)?;
         let with_nodes: FxHashSet<RenderId> = self.semantics_owner().map_or_default(|owner| {
             owner
                 .tree()
@@ -193,15 +221,15 @@ impl PipelineOwner {
 
 /// The outcome for one painted text: its runs against its backdrop.
 fn judge(text: &PaintedText) -> ContrastOutcome {
-    let background = match text.backdrop {
-        Ok(background) => background,
-        Err(unknown) => return ContrastOutcome::NotChecked(unknown),
+    let backdrop = match &text.backdrop {
+        Ok(backdrop) => backdrop,
+        Err(unknown) => return ContrastOutcome::NotChecked(*unknown),
     };
     let mut worst_meeting: Option<ContrastReading> = None;
     let mut worst_below: Option<ContrastReading> = None;
     let mut unknown = None;
     for run in &text.runs {
-        match reading(run.color, run.font_size, text.bold, background) {
+        match reading(run.color, run.font_size, text.bold, backdrop) {
             Ok(reading) if meets(reading) => {
                 if worst_meeting.is_none_or(|worst| margin(reading) < margin(worst)) {
                     worst_meeting = Some(reading);
@@ -224,12 +252,12 @@ fn judge(text: &PaintedText) -> ContrastOutcome {
     }
 }
 
-/// One run's reading: `color` at `font_size` over the opaque `background`.
+/// One run's reading: `color` at `font_size` against `backdrop`.
 fn reading(
     color: Color,
     font_size: f64,
     bold: Boldness,
-    background: Color,
+    backdrop: &Backdrop,
 ) -> Result<ContrastReading, ContrastUnknown> {
     if !font_size.is_finite() || font_size <= 0.0 {
         return Err(ContrastUnknown::NonFinite);
@@ -245,11 +273,10 @@ fn reading(
     } else {
         (NORMAL_TEXT_CONTRAST, bold == Boldness::Bold)
     };
-    let foreground = color.blend_over(background);
+    // Colours are normalized to 0..=1 (`Color`), so the ratio is finite, from 1 to 21.
+    let foreground = backdrop.shown(color.blend_over(backdrop.behind));
+    let background = backdrop.shown(backdrop.behind);
     let ratio = contrast_ratio(foreground, background);
-    if !ratio.is_finite() {
-        return Err(ContrastUnknown::NonFinite);
-    }
     Ok(ContrastReading {
         ratio,
         required,
@@ -278,8 +305,8 @@ fn contrast_ratio(a: Color, b: Color) -> f64 {
     (lighter + 0.05) / (darker + 0.05)
 }
 
-/// WCAG's relative luminance of an opaque sRGB colour, computed in `f64` so the 0.01
-/// tolerance is not spent on rounding.
+/// WCAG's relative luminance of an opaque sRGB colour, computed in `f64` so a ratio is exact to
+/// far below the 0.01 tolerance.
 fn relative_luminance(color: Color) -> f64 {
     let channel = |value: f32| {
         let value = f64::from(value);
@@ -292,4 +319,31 @@ fn relative_luminance(color: Color) -> f64 {
     0.2126 * channel(color.red_f32())
         + 0.7152 * channel(color.green_f32())
         + 0.0722 * channel(color.blue_f32())
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_painting::styling::Color;
+
+    use super::backdrop::{Backdrop, Boldness};
+    use super::{ContrastUnknown, reading};
+
+    /// A run whose size is not a finite positive number is not judged. The walk cannot hand one
+    /// over through a frame (it drops a text whose box is not finite before it reads a size), so
+    /// the answer is pinned on the reading itself.
+    #[test]
+    fn a_run_whose_size_is_not_finite_and_positive_is_not_judged() {
+        let white = Backdrop {
+            behind: Color::WHITE,
+            over: Vec::new(),
+        };
+        for size in [f64::NAN, f64::INFINITY, 0.0, -16.0] {
+            assert_eq!(
+                reading(Color::BLACK, size, Boldness::Regular, &white),
+                Err(ContrastUnknown::NonFinite),
+                "{size}"
+            );
+        }
+        assert!(reading(Color::BLACK, 16.0, Boldness::Regular, &white).is_ok());
+    }
 }
