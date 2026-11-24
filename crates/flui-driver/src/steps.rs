@@ -83,7 +83,9 @@ pub enum OsEvent {
 ///
 /// # Errors
 ///
-/// As [`admit`] for a sequence the plan refuses or no OS lane sends; as
+/// [`Error::InvalidArgument`] for a sequence the plan refuses (its bounds and ranges);
+/// [`Error::NotSupported`] for input no OS lane sends (a trackpad gesture, a pointer's cancel, a
+/// virtual pointer, a scroll by lines), naming it; as
 /// [`coordinates::to_device`] for a point outside the window. Each is answered before any event is
 /// handed over. An input-method composition becomes its steps ([`OsEvent::Composition`]), one
 /// per tick, which only a lane that composes takes.

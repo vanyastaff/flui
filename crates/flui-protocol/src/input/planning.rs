@@ -1,16 +1,7 @@
 //! [`plan`]: an action sequence planned once into timed input (ADR-0400 §2), which the driver's
 //! OS lane turns into the events it sends. The runtime's agent still plans `input.inject` with a
 //! planner of its own, whose bounds and refusals are its own, until it plays this plan as
-//! ADR-0400 §2 decides (`docs/gaps.md` keeps that gap).
-//!
-//! [`plan`] checks a sequence against its bounds (sources, ticks, span, ranges) and lays its
-//! ticks on one timeline. Tick `n` holds the `n`th action of every source and starts
-//! where tick `n - 1` ended. Within a tick the presses, releases, cancels, scrolls, keys and text
-//! come first, at the tick's start, in the order the sources are listed; then the moves share the
-//! tick's timeline, each split into steps of [`STEP`] (at most [`MAX_STEPS`]) at its own speed,
-//! every step at the whole millisecond it falls in. A tick lasts as long as its longest pause or
-//! move, and one [`STEP`] after a move that names no duration, so the window's frames see it.
-//! A path never interpolates further and never coalesces: a step is one event.
+//! ADR-0400 §2 decides (`docs/gaps.md` keeps that gap). The timeline's rules are [`plan`]'s.
 
 use std::fmt;
 use std::time::Duration;
@@ -139,7 +130,7 @@ pub struct TimedInput {
     pub input: PlannedInput,
 }
 
-/// An action sequence as timed input: see the [module docs](self).
+/// An action sequence as timed input, laid on the timeline [`plan`] describes.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Plan {
     sources: Vec<PlannedSource>,
@@ -154,8 +145,8 @@ impl Plan {
         &self.sources
     }
 
-    /// Every input, in the order it is delivered: by instant, and within one instant as the
-    /// [module docs](self) order them.
+    /// Every input, in the order it is delivered: by instant, and within one instant as
+    /// [`plan`] orders them.
     #[must_use]
     pub fn inputs(&self) -> &[TimedInput] {
         &self.inputs
@@ -241,7 +232,16 @@ impl fmt::Display for PlanError {
 
 impl std::error::Error for PlanError {}
 
-/// `sequence` as timed input: see the [module docs](self).
+/// `sequence` as timed input: checked against its bounds (sources, ticks, span, ranges) and
+/// laid, tick by tick, on one timeline.
+///
+/// Tick `n` holds the `n`th action of every source and starts where tick `n - 1` ended. Within a
+/// tick the presses, releases, cancels, scrolls, keys and text come first, at the tick's start,
+/// in the order the sources are listed; then the moves share the tick's timeline, each split
+/// into steps of [`STEP`] (at most [`MAX_STEPS`]) at its own speed, every step at the whole
+/// millisecond it falls in. A tick lasts as long as its longest pause or move, and one [`STEP`]
+/// after a move that names no duration, so the window's frames see it. A path never interpolates
+/// further and never coalesces: a step is one event.
 ///
 /// # Errors
 ///
