@@ -460,15 +460,9 @@ mod cases {
     /// A second keyboard layout callback replaces the first, as on every
     /// host: the first is dropped at the registration.
     fn a_second_layout_callback_replaces_the_first(_: &Session) {
-        struct OnDrop(Rc<Cell<bool>>);
-        impl Drop for OnDrop {
-            fn drop(&mut self) {
-                self.0.set(true);
-            }
-        }
         let platform = WaylandPlatform::try_new().expect("the harness's Weston answers");
         let dropped = Rc::new(Cell::new(false));
-        let guard = OnDrop(Rc::clone(&dropped));
+        let guard = std::mem::DropGuard::new(Rc::clone(&dropped), |dropped| dropped.set(true));
         keyboard_layout::on_change(
             &platform,
             Box::new(move || {

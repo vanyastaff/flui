@@ -129,13 +129,6 @@ pub(crate) fn replacing_a_hero_navigator_retires_routes_after_attachment() {
     let fails = case == "hero_attachment_failure";
     let retains_alias = case == "hero_attachment_alias";
 
-    struct OnDrop(Box<dyn Fn()>);
-    impl Drop for OnDrop {
-        fn drop(&mut self) {
-            (self.0)();
-        }
-    }
-
     let controller = HeroController::new();
     let replacement = seeded_navigator();
     let final_attachment = seeded_navigator();
@@ -144,7 +137,7 @@ pub(crate) fn replacing_a_hero_navigator_retires_routes_after_attachment() {
     let callback_controller = Rc::downgrade(&controller);
     let callback_replacement = replacement.clone();
     let callback_final = final_attachment.clone();
-    let capture = OnDrop(Box::new(move || {
+    let capture = std::mem::DropGuard::new((), move |()| {
         eprintln!("entered retired Hero navigator route capture");
         let controller = callback_controller
             .upgrade()
@@ -158,7 +151,7 @@ pub(crate) fn replacing_a_hero_navigator_retires_routes_after_attachment() {
             controller.did_attach(callback_final.clone());
         }
         assert!(!fails, "outgoing Hero navigator capture failed");
-    }));
+    });
     let old = NavigatorHandle::new(flui_foundation::BuildPhase::default());
     old.seed_initial(SimpleRoute::<()>::new(move |_ctx| {
         let _capture = &capture;

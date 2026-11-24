@@ -86,7 +86,10 @@ chunks taken from the global allocator (ADR-0328). A block is handed out at most
 resets, because the bump cursor moves back only over the last block when that block is freed or
 shrunk; a block stays valid while the `&FrameArena` that handed it out lives, because only `reset`
 (`&mut self`) and the arena's drop free a chunk. A `FrameVec` alive across `reset` is a borrow
-error, pinned by the `compile_fail` doctest on `FrameArena`. `reset` never allocates
+error, pinned by the `compile_fail` doctest on `FrameArena`. Nothing that hands out memory
+panics, since std's collections are unsound when an allocator unwinds: that code lives in
+`arena/allocator.rs`, whose `#![deny]` refuses `expect`, `unwrap`, `panic!`, indexing and unchecked
+arithmetic, and every failure there, the list of chunks included, is an `AllocError`. `reset` never allocates
 (`a_reset_never_allocates`), and a reset that follows no allocation changes nothing, so idle
 passes keep the chunk busy frames sized (`idle_resets_keep_the_chunk_busy_frames_need`). Miri
 runs `arena::tests` with the crate's other unit tests.
