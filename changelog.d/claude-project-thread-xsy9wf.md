@@ -21,6 +21,16 @@
 - **`flui-cli`**: `flui run --json` reports `run.watch {paths}` once the sources are watched; a
   save made after it is a change the run sees.
 
+- **`flui-cli`**: `flui mcp` gains `flui_reload`, which rebuilds the app and applies the build
+  through the `flui run --agent` that started it, and answers what the reload came to: applied
+  at a tier, or failed with the compiler's errors and their `file:line:column`, with the time it
+  took. `flui run --agent` with a rebuild loop serves it at a private run endpoint of its own and
+  names it `run` in `target/flui-agent.json` (ADR-0401).
+- **`flui-protocol`**: protocol 0.31 adds `run.reload { at_least? }`, served by the new
+  `ServedBy::Supervisor`, with `ReloadTier`, `ReloadParams`, `ReloadReport` and `Reloaded`.
+  `ClientRole::may_call` and `launch::same_token` hold, for every server of the protocol, which
+  calls a role may make and how a hello's token is compared.
+
 ### Changed
 
 - **`flui-cli`**: a project `flui create` writes declares no `cdylib`: the library is an rlib, and
@@ -42,6 +52,9 @@
   screen instead of closing the window for the length of the build. Windows, which cannot
   overwrite a running executable, still stops the application first, and `R` still stops,
   rebuilds and starts.
+- **`flui-cli`**: `flui run --json`'s `run.reload` event is the report `flui_reload` answers
+  with, `{"outcome": {"applied": {"tier": …}} | {"failed": {"diagnostics": […], "omitted": n}},
+  "elapsed_ms": …}`, for every reload whatever started it, in place of `{"kind": …, "ok": …}`.
 
 ### Removed
 

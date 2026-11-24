@@ -92,6 +92,11 @@ impl RunEndpoint {
     ///
     /// The endpoint could not be made or bound, or the thread not started.
     pub(crate) fn start(token: String) -> CliResult<Self> {
+        Self::serve(token, GREETING_WAIT)
+    }
+
+    /// [`Self::start`], closing a client that sends no hello within `greeting_wait`.
+    fn serve(token: String, greeting_wait: Duration) -> CliResult<Self> {
         let (dir, address) = super::private_endpoint("run")?;
         let listener = bind(&address).context("could not bind the run endpoint")?;
         let (handed, requests) = mpsc::sync_channel(MAX_CLIENTS);
@@ -102,6 +107,7 @@ impl RunEndpoint {
             .spawn(move || {
                 let mut turns = Turns {
                     token,
+                    greeting_wait,
                     handed,
                     clients: BTreeMap::new(),
                     next_id: 0,
@@ -143,6 +149,7 @@ impl Drop for RunEndpoint {
 /// The endpoint's state, owned by its thread.
 struct Turns {
     token: String,
+    greeting_wait: Duration,
     handed: SyncSender<ReloadRequest>,
     clients: BTreeMap<u64, Client>,
     next_id: u64,
@@ -225,7 +232,7 @@ impl Turns {
             let keep = self
                 .clients
                 .get_mut(&id)
-                .is_some_and(|client| client.turn(&self.token, &self.handed));
+                .is_some_and(|client| client.turn(&self.token, self.greeting_wait, &self.handed));
             if !keep {
                 self.clients.remove(&id);
             }
@@ -235,13 +242,18 @@ impl Turns {
 
 impl Client {
     /// Reads, answers and writes; `false` once the client is to be dropped.
-    fn turn(&mut self, token: &str, handed: &SyncSender<ReloadRequest>) -> bool {
+    fn turn(
+        &mut self,
+        token: &str,
+        greeting_wait: Duration,
+        handed: &SyncSender<ReloadRequest>,
+    ) -> bool {
         if !self.ending {
             if !self.read(token, handed) {
                 return false;
             }
             if let Phase::Greeting { since } = self.phase
-                && since.elapsed() >= GREETING_WAIT
+                && since.elapsed() >= greeting_wait
             {
                 return false;
             }
@@ -337,21 +349,20 @@ impl Client {
             )));
             return;
         };
-        let outcome = self.admit(&request, role, handed);
-        if let Err(error) = outcome {
-            self.send(&ServerLine::answer(request.id, Err(error)));
+        if let Some(refusal) = self.hand_on(&request, role, handed) {
+            self.send(&ServerLine::answer(request.id, Err(refusal)));
         }
     }
 
-    /// Hands `request` to the loop, or says why not.
-    fn admit(
+    /// Hands `request` to the loop; the refusal when it may not go.
+    fn hand_on(
         &mut self,
         request: &Request<Value>,
         role: ClientRole,
         handed: &SyncSender<ReloadRequest>,
-    ) -> Result<(), ErrorObject> {
+    ) -> Option<ErrorObject> {
         if request.method != RunReload::NAME {
-            return Err(ErrorObject::new(
+            return Some(ErrorObject::new(
                 ErrorCode::NotSupported,
                 format!(
                     "the run endpoint serves `{}` alone; the app's endpoint serves `{}`",
@@ -361,27 +372,32 @@ impl Client {
             ));
         }
         if !role.may_call(RunReload::EFFECT) {
-            return Err(ErrorObject::new(
+            return Some(ErrorObject::new(
                 ErrorCode::NotDriver,
                 "a reload replaces the app; connect as a driver",
             ));
         }
         if self.waiting.is_some() {
-            return Err(ErrorObject::new(
-                ErrorCode::Busy,
-                "this connection waits for a reload already; one runs at a time",
-            )
-            .retry(Retry::Soon));
+            return Some(
+                ErrorObject::new(
+                    ErrorCode::Busy,
+                    "this connection waits for a reload already; one runs at a time",
+                )
+                .retry(Retry::Soon),
+            );
         }
         let params = if request.params.is_null() {
             ReloadParams::default()
         } else {
-            serde_json::from_value::<ReloadParams>(request.params.clone()).map_err(|error| {
-                ErrorObject::new(
-                    ErrorCode::InvalidArgument,
-                    format!("{}: {error}", RunReload::NAME),
-                )
-            })?
+            match serde_json::from_value::<ReloadParams>(request.params.clone()) {
+                Ok(params) => params,
+                Err(error) => {
+                    return Some(ErrorObject::new(
+                        ErrorCode::InvalidArgument,
+                        format!("{}: {error}", RunReload::NAME),
+                    ));
+                }
+            }
         };
         let (answer, answered) = mpsc::channel::<ReloadReport>();
         let handing = ReloadRequest {
@@ -391,14 +407,16 @@ impl Client {
         match handed.try_send(handing) {
             Ok(()) => {
                 self.waiting = Some((request.id.clone(), answered));
-                Ok(())
+                None
             }
-            Err(TrySendError::Full(_)) => Err(ErrorObject::new(
-                ErrorCode::Busy,
-                "the run has as many reloads waiting as it takes",
-            )
-            .retry(Retry::Soon)),
-            Err(TrySendError::Disconnected(_)) => Err(ErrorObject::new(
+            Err(TrySendError::Full(_)) => Some(
+                ErrorObject::new(
+                    ErrorCode::Busy,
+                    "the run has as many reloads waiting as it takes",
+                )
+                .retry(Retry::Soon),
+            ),
+            Err(TrySendError::Disconnected(_)) => Some(ErrorObject::new(
                 ErrorCode::ShuttingDown,
                 "the run is ending",
             )),
@@ -559,6 +577,59 @@ mod tests {
         assert!(
             endpoint.next_request().is_none(),
             "nothing reached the loop"
+        );
+    }
+
+    /// Whether the endpoint ends `stream` (it reads the end of the stream) within `within`.
+    fn closed_within(stream: &Stream, within: Duration) -> bool {
+        use std::io::Read as _;
+
+        stream
+            .set_recv_timeout(Some(within))
+            .expect("a read timeout");
+        let mut byte = [0_u8; 1];
+        matches!((&*stream).read(&mut byte), Ok(0))
+    }
+
+    /// What bounds a client: a hello in a schema the run does not serve is refused `version`;
+    /// a client that sends no hello in time is closed; and one past the most clients the
+    /// endpoint holds is closed as it connects.
+    #[test]
+    fn the_endpoint_bounds_its_clients() {
+        let endpoint = RunEndpoint::serve(TOKEN.to_owned(), Duration::from_millis(200))
+            .expect("the endpoint starts");
+        let connect = || Stream::connect(name(endpoint.address()).unwrap()).expect("connect");
+
+        let newer = connect();
+        let mut writer = &newer;
+        writeln!(
+            writer,
+            r#"{{"hello":{{"token":"{TOKEN}","protocol":"999.0"}}}}"#
+        )
+        .unwrap();
+        let refused: Value =
+            serde_json::from_str(&BufReader::new(&newer).lines().next().unwrap().unwrap()).unwrap();
+        assert_eq!(refused["error"]["code"], "version", "{refused}");
+
+        let silent = connect();
+        assert!(
+            closed_within(&silent, Duration::from_secs(5)),
+            "a client that sends no hello is closed"
+        );
+
+        let endpoint = RunEndpoint::start(TOKEN.to_owned()).expect("the endpoint starts");
+        let connect = || Stream::connect(name(endpoint.address()).unwrap()).expect("connect");
+        let held = (0..super::MAX_CLIENTS)
+            .map(|_| connect())
+            .collect::<Vec<Stream>>();
+        let past = connect();
+        assert!(
+            closed_within(&past, Duration::from_secs(5)),
+            "one past the most clients is closed"
+        );
+        assert!(
+            !closed_within(&held[0], Duration::from_millis(100)),
+            "the clients it holds stay open"
         );
     }
 
