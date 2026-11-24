@@ -16,10 +16,15 @@ app's trees, frames and input, and this crate composes that with what only the O
   `flui_testing::agent_service::HeadlessAgentService`, so the in-process answers are the ones a socket carries.
   The transport trait, `connection::Transport`, is private. The driver is a
   `flui_protocol::client::Connection` (`client.rs`, ADR-0400 §1) over the window that had content
-  when the connection was first used, kept for the session.
+  when the connection was first used, kept for the session: every call, wait, input and end
+  addresses it, a call whose parameters name no window is sent to it and one naming another is
+  refused (`invalid_argument`), and once it closes each operation answers `gone`, the end's
+  release counting a closed window as holding nothing.
 - **Virtual time on the headless target.** The headless app's host runs on a thread of its own and
   pumps no frame by itself: a call that waits asks for one frame at a time, each 16 ms of the
-  host's clock, and the call's budget is counted in that time. A run is the same on every host.
+  host's clock unless the launch names a longer period (`Launch::frame_period`, a window
+  presenting more slowly),
+  and the call's budget is counted in that time. A run is the same on every host.
 - **The headless app keeps a native app's edges.** A failure a frame contained is dropped and the
   app serves on; the frame that closes its window ends it, and what the agent had not written goes
   with it; the call waiting and every later one fail as the process gone.
@@ -37,8 +42,8 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **A timed-out act is never resent.** A call with no answer in its budget is `timeout`, with
   `may_have_run` for a method that acts; a late answer is passed over by its id. `Error::Timeout`
   says what it awaited (`Awaited`): only the app's agent leaving a call unanswered is a
-  `Connection`'s `CallError::Unanswered`, which releases the input of the window the call
-  addressed; a tool on the host that hung is the lane's failure, `CallError::Failed` with its
+  `Connection`'s `CallError::Unanswered`, which releases the input of the connection's
+  window; a tool on the host that hung is the lane's failure, `CallError::Failed` with its
   message.
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
@@ -274,7 +279,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   pause is whole milliseconds, none under one, and a tick's pauses add up to its length exactly.
   A wheel source carries the part of a device pixel each scroll leaves into the next, and a scroll
   that adds up to no whole pixel yet sends nothing. A scroll by lines is refused: an OS event
-  scrolls by device pixels, and no lane knows the line height the app scrolls a line by.
+  scrolls by device pixels, and no lane knows the line height the app scrolls a line by. What no
+  lane sends and what the plan refuses (`steps::admit`, which needs no window) are refused before
+  the desktop is locked, the window located or the run announced.
 - **A hung app costs one timeout.** Reading a UI Automation, AX or AT-SPI element stops at the
   first property read that times out or finds the element gone
   (`lane::walk::Properties`, which all three readers walk through), and the walk ends

@@ -104,7 +104,8 @@ every depth above it. A depth supplies a connection, not a harness:
 ```rust
 // flui_protocol::client
 pub trait Connection {
-    /// One request to the window's agent. Never runs a frame and never moves the clock.
+    /// One request to the connection's window; parameters that name another are refused. A read
+    /// runs no frame; an act or a wait may run frames and move the clock while it is served.
     fn call<M: WindowMethod>(&mut self, params: M::Params) -> Result<M::Output, CallError>;
     /// Hold out until the application answers `condition` (§3), at most `limit` of the
     /// connection's clock.
