@@ -8,8 +8,8 @@ use flui_foundation::ManualClock;
 use flui_protocol::method;
 use flui_protocol::{
     error::ErrorCode, error::HandleKind, error::Retry, locator::Locator, tree::WindowId,
-    wait::Condition, wait::UnsettledReason, wait::WaitEnd, wait::WaitOutcome, wait::WaitParams,
-    wire::ActionName,
+    wait::ClearedBy, wait::Condition, wait::UnsettledReason, wait::WaitEnd, wait::WaitOutcome,
+    wait::WaitParams, wire::ActionName,
 };
 
 use flui_view::dev_agent::{AgentAnswer, AgentWindow};
@@ -191,6 +191,18 @@ fn a_timeout_names_why_the_window_had_not_settled() {
         reasons.contains(&UnsettledReason::NeedsRedraw),
         "a frame was still wanted: {reasons:?}"
     );
+    for cause in &outcome.unsettled {
+        assert_eq!(
+            cause.cleared_by,
+            if cause.reason == UnsettledReason::Timer {
+                ClearedBy::Deadline
+            } else {
+                ClearedBy::NextFrame
+            },
+            "a redraw, a scheduled frame and queued work are the next turn's, a timer its \
+             deadline's: {cause:?}"
+        );
+    }
 }
 
 #[test]
@@ -324,5 +336,10 @@ fn a_timer_the_window_waits_on_is_named_with_when_it_is_due() {
     assert!(
         timer.due_in_ms.is_some(),
         "when it is due is part of the cause: {timer:?}"
+    );
+    assert_eq!(
+        timer.cleared_by,
+        ClearedBy::Deadline,
+        "a turn at its deadline discharges a timer: {timer:?}"
     );
 }

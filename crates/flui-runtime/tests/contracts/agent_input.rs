@@ -499,6 +499,36 @@ fn the_journal_lists_what_the_window_was_delivered_and_an_injection_names_its_en
     );
 }
 
+/// A virtual pointer is injected as a pointer of no physical device: the window sees a contact
+/// that is neither a mouse, a finger nor a pen, and the journal names each of its steps as other.
+#[test]
+fn a_virtual_pointer_is_delivered_as_no_physical_device() {
+    let (mut host, _agent, window, seen) = shown();
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    let virtual_pointer = InputSource::Pointer {
+        id: "v".to_owned(),
+        device: PointerDevice::Virtual,
+        actions: vec![to(50.0, 50.0), down(), up()],
+    };
+    let mut tap = inject(&lease, vec![virtual_pointer]);
+    answered(&mut host, &mut tap, 10).0.expect("the tap plays");
+    assert_eq!(seen.lock().as_slice(), ["down", "up"]);
+
+    let journal = read_journal(&mut host, &window, None, None);
+    let at = Some((50.0, 50.0));
+    assert_eq!(
+        journal.entries.iter().map(step).collect::<Vec<_>>(),
+        [
+            (DeviceClass::Other, InputKind::PointerMove, at, true),
+            (DeviceClass::Other, InputKind::PointerDown, at, true),
+            (DeviceClass::Other, InputKind::PointerUp, at, true),
+        ],
+        "{journal:?}"
+    );
+}
+
 /// Each entry goes out to a subscriber as an `input` event as the journal takes it.
 #[test]
 fn each_journal_entry_goes_out_as_an_input_event() {
