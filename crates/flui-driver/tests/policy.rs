@@ -497,6 +497,45 @@ fn a_served_gesture_is_waited_for_as_long_as_its_act_may_hold() {
     assert_eq!(tapped.via, InputPath::Synthetic);
 }
 
+/// A gesture asked through the Rust handles, a locator's or a point's, goes to the app's agent
+/// whole on the synthetic path when the agent serves it: the driver neither locates, checks
+/// actionability nor injects.
+#[test]
+fn a_handles_gesture_on_the_synthetic_path_is_sent_to_the_agent_not_composed() {
+    let (agent, asked) = serving_taps(Duration::ZERO);
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let window = "w1".parse().expect("a window handle");
+    let tapped = driver
+        .window(window)
+        .locate(Locator::identifier("increment"))
+        .via(InputPath::Synthetic)
+        .tap()
+        .expect("the agent answers the tap");
+    assert_eq!(tapped.via, InputPath::Synthetic);
+    driver
+        .window(window)
+        .tap_at(LogicalPoint::new(4.0, 4.0))
+        .expect("the agent answers a tap at a point");
+    let asked = asked.lock().expect("the log");
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|name| name.as_str() == method::ElementTap::NAME)
+            .count(),
+        2,
+        "{asked:?}"
+    );
+    assert!(
+        asked.iter().all(|name| {
+            name.as_str() != method::SemanticsLocate::NAME
+                && name.as_str() != method::ElementActionability::NAME
+                && name.as_str() != method::InputInject::NAME
+        }),
+        "nothing of the composition was asked: {asked:?}"
+    );
+}
+
 /// A counter whose session sends every input by the OS path through a guarded scripted lane on
 /// the shared desktop, its lock at `dir`'s `os-input.lock`.
 fn on_the_os_path(probe: &Probe, dir: &tempfile::TempDir) -> (Driver, LaneLog) {

@@ -1,6 +1,9 @@
 //! The methods the driver composes from the agent's (ADR-0238 §5, §6): its own (`ServedBy::Driver`),
 //! and every gesture on the `os` path or for an app whose agent does not answer it (ADR-0400 §2):
-//! locate, check actionability, perform by the chosen input path, observe.
+//! locate, check actionability, perform by the chosen input path, observe. A gesture the app's
+//! agent answers on the path the call takes goes to the agent whole, from every entry here
+//! ([`agent_answers`]); the sequence a composed gesture performs is
+//! [`gestures`](flui_protocol::input::gestures)'s, the one the agent plays.
 //!
 //! - **Locate.** A locator is resolved at the moment of the action, never cached (ADR-0238 §4):
 //!   strict with several matches is [`Error::Ambiguous`] with the first ten as outline lines;
@@ -25,14 +28,14 @@ use flui_protocol::act::{
 };
 use flui_protocol::error::{ErrorCode, HandleKind};
 use flui_protocol::geometry::{LogicalPoint, LogicalRect};
+use flui_protocol::input::gestures::{self, Aim as Landing};
 use flui_protocol::input::{
-    ActionSequence, Direction, DragParams, GestureOptions, InputKind, InputParams, InputPath,
-    InputPolicy, InputSource, Journal, JournalParams, KeyAction, LongPressParams, PinchParams,
-    PointerAction, PointerButton, PointerDevice, PressKeysParams, ScrollIntoViewParams,
-    SwipeParams, TapParams, TypeTextParams,
+    ActionSequence, DragParams, GestureOptions, InputKind, InputParams, InputPath, InputPolicy,
+    InputSource, Journal, JournalParams, LongPressParams, PinchParams, PointerButton,
+    PointerDevice, PressKeysParams, ScrollIntoViewParams, SwipeParams, TapParams, TypeTextParams,
 };
 use flui_protocol::locator::{LocateParams, Locator, Matches, Pick, Target};
-use flui_protocol::method::{self, Addressed as _, Method};
+use flui_protocol::method::{self, Addressed, Method};
 use flui_protocol::session::{Empty, Isolation, Placement, WindowParams};
 use flui_protocol::snapshot::Snapshot;
 use flui_protocol::tree::{ElementRef, WindowId};
@@ -46,27 +49,6 @@ use crate::driver::Driver;
 use crate::error::{Error, Result};
 use crate::os_input::{Announcement, OsDevice};
 use crate::steps::{self, OsEvent};
-
-/// The id of the pointer a composed gesture moves.
-const POINTER: &str = "driver.pointer";
-
-/// How long a long press holds when the call names no duration: the long-press delay (500 ms)
-/// and a margin.
-const LONG_PRESS_MS: u64 = 800;
-
-/// The gap between the two taps of a double tap.
-const DOUBLE_TAP_GAP_MS: u64 = 60;
-
-/// How long a drag's and a pinch's move lasts.
-const STROKE_MS: u64 = 300;
-
-/// A fling's speed, in logical pixels a second, when the call names none: well above the
-/// platform's fling velocity.
-const FLING_VELOCITY: f64 = 2_500.0;
-
-/// How long a swipe holds still before it lifts, so its release velocity is under the fling
-/// velocity whatever speed it moved at.
-const SWIPE_SETTLE_MS: u64 = 120;
 
 /// The wire names of the methods composed here.
 const COMPOSED: &[&str] = &[
@@ -101,6 +83,33 @@ pub(crate) fn agent_answers(driver: &Driver, name: &str, params: &Value) -> bool
         .get("via")
         .and_then(|via| serde_json::from_value::<InputPolicy>(via.clone()).ok());
     requested.unwrap_or_else(|| driver.input_policy()).prefer != InputPath::Os
+}
+
+/// The app's agent's answer to the gesture `M` with `params`, when it answers it on the path the
+/// call takes ([`agent_answers`]); `None` for a gesture composed here.
+fn answered_by_agent<M>(driver: &mut Driver, params: &M::Params) -> Option<Result<ActOutcome>>
+where
+    M: Method<Output = ActOutcome>,
+    M::Params: Serialize + Addressed,
+{
+    let value = match serde_json::to_value(params) {
+        Ok(value) => value,
+        Err(error) => {
+            return Some(Err(Error::invalid_argument(format!(
+                "the parameters of `{}` did not serialize: {error}",
+                M::NAME
+            ))));
+        }
+    };
+    if !agent_answers(driver, M::NAME, &value) {
+        return None;
+    }
+    let holds = params.holds_for();
+    Some(
+        driver
+            .agent_value(M::NAME, M::EFFECT, value, holds)
+            .and_then(|output| crate::driver::decode::<ActOutcome>(M::NAME, output)),
+    )
 }
 
 /// Run the driver's method `name` with `params`.
@@ -575,88 +584,54 @@ fn devices_of(events: &[OsEvent]) -> Vec<OsDevice> {
     devices
 }
 
-fn pointer(device: PointerDevice, id: &str, actions: Vec<PointerAction>) -> InputSource {
-    InputSource::Pointer {
-        id: id.to_owned(),
-        device,
-        actions,
+impl Aim {
+    /// Where the gesture lands, as [`gestures`] builds it.
+    fn landing(&self) -> Landing {
+        Landing::new(self.point, self.rect)
     }
 }
 
-fn move_to(to: LogicalPoint, duration_ms: u64) -> PointerAction {
-    PointerAction::Move {
-        to,
-        duration_ms,
-        pressure: None,
-    }
-}
-
-fn down(button: PointerButton) -> PointerAction {
-    PointerAction::Down {
-        button,
-        pressure: None,
-    }
-}
-
-fn up(button: PointerButton) -> PointerAction {
-    PointerAction::Up { button }
-}
-
-fn pause(duration_ms: u64) -> PointerAction {
-    PointerAction::Pause { duration_ms }
+/// `params` refused as a gesture's parameters.
+fn invalid_gesture(error: &gestures::GestureError) -> Error {
+    Error::invalid_argument(error.to_string())
 }
 
 /// `element.tap`.
 pub(crate) fn tap(driver: &mut Driver, params: TapParams) -> Result<ActOutcome> {
+    if let Some(answer) = answered_by_agent::<method::ElementTap>(driver, &params) {
+        return answer;
+    }
     let aim = aim(driver, &params.target, &params.options)?;
-    let button = params.button;
-    let sequence = ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        POINTER,
-        vec![move_to(aim.point, 0), down(button), up(button)],
-    )]);
-    let semantic = (button == PointerButton::Primary).then_some(ActionName::Invoke);
+    let sequence = gestures::tap(aim.point, params.button);
+    let semantic = gestures::tap_action(params.button);
     act(driver, aim, &params.options, sequence, semantic)
 }
 
 /// `element.double_tap`.
 pub(crate) fn double_tap(driver: &mut Driver, params: TapParams) -> Result<ActOutcome> {
+    if let Some(answer) = answered_by_agent::<method::ElementDoubleTap>(driver, &params) {
+        return answer;
+    }
     let aim = aim(driver, &params.target, &params.options)?;
-    let button = params.button;
-    let sequence = ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        POINTER,
-        vec![
-            move_to(aim.point, 0),
-            down(button),
-            up(button),
-            pause(DOUBLE_TAP_GAP_MS),
-            down(button),
-            up(button),
-        ],
-    )]);
+    let sequence = gestures::double_tap(aim.point, params.button);
     act(driver, aim, &params.options, sequence, None)
 }
 
 /// `element.long_press`.
 pub(crate) fn long_press(driver: &mut Driver, params: LongPressParams) -> Result<ActOutcome> {
+    if let Some(answer) = answered_by_agent::<method::ElementLongPress>(driver, &params) {
+        return answer;
+    }
     let aim = aim(driver, &params.target, &params.options)?;
-    let hold = params.duration_ms.unwrap_or(LONG_PRESS_MS);
-    let sequence = ActionSequence::new(vec![pointer(
-        PointerDevice::Touch,
-        POINTER,
-        vec![
-            move_to(aim.point, 0),
-            down(PointerButton::Primary),
-            pause(hold),
-            up(PointerButton::Primary),
-        ],
-    )]);
+    let sequence = gestures::long_press(aim.point, params.duration_ms);
     act(driver, aim, &params.options, sequence, None)
 }
 
 /// `element.drag_to`.
 pub(crate) fn drag_to(driver: &mut Driver, params: DragParams) -> Result<ActOutcome> {
+    if let Some(answer) = answered_by_agent::<method::ElementDragTo>(driver, &params) {
+        return answer;
+    }
     let from = aim(driver, &params.target, &params.options)?;
     let to = aim(driver, &params.to, &params.options)?;
     if from.window != to.window {
@@ -665,90 +640,40 @@ pub(crate) fn drag_to(driver: &mut Driver, params: DragParams) -> Result<ActOutc
             from.window, to.window
         )));
     }
-    let sequence = ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        POINTER,
-        vec![
-            move_to(from.point, 0),
-            down(PointerButton::Primary),
-            move_to(to.point, STROKE_MS),
-            up(PointerButton::Primary),
-        ],
-    )]);
+    let sequence = gestures::drag(from.point, to.point);
     act(driver, from, &params.options, sequence, None)
 }
 
 /// `element.swipe` (`fling` false) and `element.fling`.
 pub(crate) fn swipe(driver: &mut Driver, params: SwipeParams, fling: bool) -> Result<ActOutcome> {
-    let aim = aim(driver, &params.target, &params.options)?;
-    let (dx, dy) = match params.direction {
-        Direction::Up => (0.0, -1.0),
-        Direction::Down => (0.0, 1.0),
-        Direction::Left => (-1.0, 0.0),
-        _ => (1.0, 0.0),
+    let answered = if fling {
+        answered_by_agent::<method::ElementFling>(driver, &params)
+    } else {
+        answered_by_agent::<method::ElementSwipe>(driver, &params)
     };
-    let extent = aim.rect.map_or(
-        100.0,
-        |rect| if dx == 0.0 { rect.height } else { rect.width },
-    );
-    let distance = params.distance.unwrap_or(extent * 0.8);
-    let velocity = params.velocity.unwrap_or(FLING_VELOCITY);
-    if !(distance.is_finite() && distance > 0.0 && velocity.is_finite() && velocity > 0.0) {
-        return Err(Error::invalid_argument(format!(
-            "a stroke of {distance} px at {velocity} px/s goes nowhere"
-        )));
+    if let Some(answer) = answered {
+        return answer;
     }
-    let end = LogicalPoint::new(aim.point.x + dx * distance, aim.point.y + dy * distance);
-    let stroke_ms = ((distance / velocity) * 1_000.0).clamp(1.0, 10_000.0);
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "clamped to 1..=10000 just above"
-    )]
-    let stroke_ms = stroke_ms as u64;
-    let mut actions = vec![
-        move_to(aim.point, 0),
-        down(PointerButton::Primary),
-        move_to(end, stroke_ms),
-    ];
-    if !fling {
-        actions.push(pause(SWIPE_SETTLE_MS));
-    }
-    actions.push(up(PointerButton::Primary));
-    let sequence = ActionSequence::new(vec![pointer(PointerDevice::Touch, POINTER, actions)]);
+    let aim = aim(driver, &params.target, &params.options)?;
+    let sequence = gestures::swipe(
+        aim.landing(),
+        params.direction,
+        params.distance,
+        params.velocity,
+        fling,
+    )
+    .map_err(|error| invalid_gesture(&error))?;
     act(driver, aim, &params.options, sequence, None)
 }
 
 /// `element.pinch`.
 pub(crate) fn pinch(driver: &mut Driver, params: PinchParams) -> Result<ActOutcome> {
-    if !(params.scale.is_finite() && params.scale > 0.0) {
-        return Err(Error::invalid_argument(format!(
-            "a pinch to scale {} is not one",
-            params.scale
-        )));
+    if let Some(answer) = answered_by_agent::<method::ElementPinch>(driver, &params) {
+        return answer;
     }
     let aim = aim(driver, &params.target, &params.options)?;
-    let radius = aim
-        .rect
-        .map_or(50.0, |rect| rect.width.min(rect.height) / 4.0)
-        .max(4.0);
-    let contact = |id: &str, side: f64| {
-        let at = |r: f64| LogicalPoint::new(aim.point.x + side * r, aim.point.y);
-        pointer(
-            PointerDevice::Touch,
-            id,
-            vec![
-                move_to(at(radius), 0),
-                down(PointerButton::Primary),
-                move_to(at(radius * params.scale), STROKE_MS),
-                up(PointerButton::Primary),
-            ],
-        )
-    };
-    let sequence = ActionSequence::new(vec![
-        contact("driver.pinch.a", -1.0),
-        contact("driver.pinch.b", 1.0),
-    ]);
+    let sequence =
+        gestures::pinch(aim.landing(), params.scale).map_err(|error| invalid_gesture(&error))?;
     act(driver, aim, &params.options, sequence, None)
 }
 
@@ -758,6 +683,9 @@ pub(crate) fn scroll_into_view(
     driver: &mut Driver,
     params: ScrollIntoViewParams,
 ) -> Result<ActOutcome> {
+    if let Some(answer) = answered_by_agent::<method::ElementScrollIntoView>(driver, &params) {
+        return answer;
+    }
     let timeout = timeout_of(driver, &params.options);
     let element = resolve(driver, &params.target, timeout)?;
     let mut outcome = driver.agent::<method::SemanticsAct>(
@@ -770,30 +698,34 @@ pub(crate) fn scroll_into_view(
 
 /// `element.type_text`: tap the field to focus it, then commit the text.
 pub(crate) fn type_text(driver: &mut Driver, params: TypeTextParams) -> Result<ActOutcome> {
+    if let Some(answer) = answered_by_agent::<method::ElementTypeText>(driver, &params) {
+        return answer;
+    }
     let aim = aim(driver, &params.target, &params.options)?;
     focus(driver, aim, &params.options)?;
-    let text = ActionSequence::new(vec![InputSource::Text { text: params.text }]);
-    act(driver, aim, &params.options, text, None)
+    act(
+        driver,
+        aim,
+        &params.options,
+        gestures::text(&params.text),
+        None,
+    )
 }
 
 /// Tap `aim` to focus it, reading nothing back.
 fn focus(driver: &mut Driver, aim: Aim, options: &GestureOptions) -> Result<ActOutcome> {
     let mut quiet = *options;
     quiet.snapshot = Snapshot::None;
-    let sequence = ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        POINTER,
-        vec![
-            move_to(aim.point, 0),
-            down(PointerButton::Primary),
-            up(PointerButton::Primary),
-        ],
-    )]);
+    let sequence = gestures::tap(aim.point, PointerButton::Primary);
     act(driver, aim, &quiet, sequence, Some(ActionName::Focus))
 }
 
 /// `element.press_keys`: focus the target when there is one, then each chord in turn.
 pub(crate) fn press_keys(driver: &mut Driver, params: PressKeysParams) -> Result<ActOutcome> {
+    if let Some(answer) = answered_by_agent::<method::ElementPressKeys>(driver, &params) {
+        return answer;
+    }
+    let sequence = gestures::chords(&params.keys).map_err(|error| invalid_gesture(&error))?;
     let aim = if let Some(target) = &params.target {
         let aim = aim(driver, target, &params.options)?;
         focus(driver, aim, &params.options)?;
@@ -811,25 +743,6 @@ pub(crate) fn press_keys(driver: &mut Driver, params: PressKeysParams) -> Result
             rect: None,
         }
     };
-    let mut actions = Vec::new();
-    for chord in &params.keys {
-        let keys: Vec<&str> = chord.split('+').filter(|key| !key.is_empty()).collect();
-        if keys.is_empty() {
-            return Err(Error::invalid_argument(format!(
-                "the chord {chord:?} names no key"
-            )));
-        }
-        actions.extend(keys.iter().map(|key| KeyAction::Down {
-            key: (*key).to_owned(),
-        }));
-        actions.extend(keys.iter().rev().map(|key| KeyAction::Up {
-            key: (*key).to_owned(),
-        }));
-    }
-    let sequence = ActionSequence::new(vec![InputSource::Keys {
-        id: "driver.keys".to_owned(),
-        actions,
-    }]);
     act(driver, aim, &params.options, sequence, None)
 }
 

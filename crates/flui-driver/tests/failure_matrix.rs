@@ -5,6 +5,7 @@ use std::time::Duration;
 use flui_driver::protocol::act::EffectKind;
 use flui_driver::protocol::error::{HandleKind, Retry};
 use flui_driver::protocol::geometry::LogicalPoint;
+use flui_driver::protocol::input::gestures;
 use flui_driver::protocol::input::{
     ActionSequence, InputSource, PointerAction, PointerButton, PointerDevice,
 };
@@ -176,14 +177,23 @@ fn an_accepted_action_times_out(app: App) {
     let probe = Probe::default();
     // The agent answers `timeout` for whatever its window has not answered within a millisecond
     // of virtual time past what the request plays at 60 Hz: a window presenting at 30 Hz plays a
-    // tap's ticks a frame each, twice as long.
+    // tap's ticks a frame each, twice as long. The tap is injected input: a served `element.tap`
+    // may hold for its act timeout, which leaves a 30 Hz window time to play it.
     let launch = launch(app, &probe)
         .reply_timeout(Duration::from_millis(1))
         .frame_period(Duration::from_millis(33))
         .expect("a headless launch");
     let mut driver = Driver::launch(launch).expect("the headless app starts");
     let mut window = driver.main_window().expect("a window");
-    let tapped = window.locate(Locator::identifier("increment")).tap();
+    let at = window
+        .locate(Locator::identifier("increment"))
+        .resolve()
+        .expect("the button")
+        .actionability()
+        .expect("its facts")
+        .point
+        .expect("a point to tap");
+    let tapped = window.perform(gestures::tap(at, PointerButton::Primary));
     let Err(error) = tapped else {
         panic!("{app:?}: the tap answered in time: {tapped:?}");
     };

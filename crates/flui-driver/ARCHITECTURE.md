@@ -45,6 +45,13 @@ app's trees, frames and input, and this crate composes that with what only the O
   `Connection`'s `CallError::Unanswered`, which releases the input of the connection's
   window; a tool on the host that hung is the lane's failure, `CallError::Failed` with its
   message.
+- **A gesture the app's agent serves is the agent's, whole.** Every entry to a gesture, the
+  method table's dispatch and the `Window`, `Element` and `ElementLocator` handles alike, sends it
+  to the agent when its hello lists it and the path the call takes is not `os`
+  (`compose::agent_answers`); the agent then locates, holds for actionability and injects in the
+  application (ADR-0400 §2). The driver composes a gesture only on the `os` path or for an app that
+  does not serve it, and the sequence it performs is `flui_protocol::input::gestures`'s, the one
+  the agent plays.
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
   `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device

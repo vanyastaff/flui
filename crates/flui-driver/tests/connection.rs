@@ -10,7 +10,8 @@ use flui_driver::protocol::client::{CallError, Connection, EndChecks};
 use flui_driver::protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
-    ActionSequence, InputPath, InputSource, PointerAction, PointerButton, PointerDevice,
+    ActionSequence, InputParams, InputPath, InputSource, PointerAction, PointerButton,
+    PointerDevice, gestures,
 };
 use flui_driver::protocol::locator::{Locator, Target, TextMatch};
 use flui_driver::protocol::method::{
@@ -147,13 +148,27 @@ fn an_answer_that_did_not_arrive_releases_the_window_s_input() {
     let probe = Probe::default();
     // The agent answers `timeout` for whatever its window has not answered within a millisecond
     // of virtual time past what the request plays at 60 Hz: a window presenting at 30 Hz plays a
-    // tap's ticks a frame each, twice as long.
+    // tap's ticks a frame each, twice as long. The tap is injected input: a served `element.tap`
+    // may hold for its act timeout, which leaves a 30 Hz window time to play it.
     let launch = counter(&probe)
         .reply_timeout(Duration::from_millis(1))
         .frame_period(Duration::from_millis(33))
         .expect("a headless launch");
     let mut driver = Driver::launch(launch).expect("the headless app starts");
-    let unanswered = Connection::call::<ElementTap>(&mut driver, TapParams::new(increment()));
+    let window = driver.windows().expect("the windows")[0];
+    let at = driver
+        .window(window)
+        .locate(Locator::identifier("increment"))
+        .resolve()
+        .expect("the button")
+        .actionability()
+        .expect("its facts")
+        .point
+        .expect("a point to tap");
+    let unanswered = Connection::call::<method::InputInject>(
+        &mut driver,
+        InputParams::new(window, gestures::tap(at, PointerButton::Primary)),
+    );
     assert_eq!(
         unanswered,
         Err(CallError::Unanswered {
