@@ -20,7 +20,6 @@ use crate::agent::browser::relay::Relay;
 use crate::agent::browser::{self, Dialect};
 use crate::agent::build_report::BuildReporter;
 use crate::agent::{self, Session};
-use crate::build::util::compile_errors::{self, CompileErrors};
 use crate::build::web_page::WebPage;
 use crate::build::{BuilderContextBuilder, Platform, Profile, WebBuilder};
 use crate::config::{FluiConfig, HotReloadConfig};
@@ -29,7 +28,6 @@ use crate::serve::DevServer;
 use crate::ui;
 use crate::watch::SourceWatcher;
 use console::style;
-use flui_protocol::build::BuildState;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -37,6 +35,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
+
+mod process_restart;
+
+use process_restart::ProcessRestart;
 
 /// Execute the run command.
 ///
@@ -209,18 +211,25 @@ fn run_session(
             Project::Application { .. } => {
                 ui::success("Hot reload enabled (process restart)")?;
                 // The overlay reaches the app through its agent, so a run without `--agent`
-                // opens a session of its own: local, with the same credentials `--agent` uses.
-                let agent = match agent {
-                    Some(session) => Some(session),
-                    None if build_overlay => Some(desktop_session()?),
-                    None => None,
-                };
-                let build_report = match &agent {
-                    Some(session) if build_overlay => Some(
-                        BuildReporter::start(session.credentials().clone())
-                            .context("could not start the build reporter")?,
-                    ),
-                    _ => None,
+                // opens a session of its own, unlisted: `flui mcp` keeps finding the session
+                // a `flui run --agent` wrote. A run that cannot open one runs without the
+                // overlay.
+                let (agent, build_report) = match agent {
+                    Some(session) if build_overlay => {
+                        let reporter = start_build_reporter(&session)?;
+                        (Some(session), reporter)
+                    }
+                    None if build_overlay => match Session::create_unlisted() {
+                        Ok(session) => {
+                            let reporter = start_build_reporter(&session)?;
+                            (reporter.is_some().then_some(session), reporter)
+                        }
+                        Err(why) => {
+                            ui::warning(format!("rebuilds are not shown in the app: {why}"))?;
+                            (None, None)
+                        }
+                    },
+                    agent => (agent, None),
                 };
                 let mut strategy = ProcessRestart {
                     selection,
@@ -246,16 +255,16 @@ fn run_session(
     Ok(())
 }
 
-/// A session for an app on this desktop, which `--agent` would have opened: the run's own when
-/// it opens one only to show its builds in the app (`build.report`).
-fn desktop_session() -> CliResult<Session> {
-    let start = std::env::current_dir().context("could not read current directory")?;
-    let workspace = find_workspace_root(&start);
-    Session::create(
-        &start,
-        workspace.as_deref(),
-        agent::target_dir_override().as_deref(),
-    )
+/// The thread that shows the run's builds in the app `session` reaches (`build.report`), or
+/// none, with a warning, when it cannot start: the run goes on without the overlay.
+fn start_build_reporter(session: &Session) -> CliResult<Option<BuildReporter>> {
+    match BuildReporter::start(session.credentials().clone()) {
+        Ok(reporter) => Ok(Some(reporter)),
+        Err(why) => {
+            ui::warning(format!("rebuilds are not shown in the app: {why}"))?;
+            Ok(None)
+        }
+    }
 }
 
 /// What `--agent` needs before anything is built: this desktop, an Android
@@ -338,13 +347,17 @@ fn start_agent_session(
     if let Some(feature) = driver_feature {
         session = session.with_driver_feature(feature);
     }
+    let file = session
+        .file()
+        .expect("BUG: every session `--agent` opens is listed")
+        .to_owned();
     ui::success(format!(
         "Agent session: {} (connect with `flui mcp`)",
-        style(session.file().display()).cyan()
+        style(file.display()).cyan()
     ))?;
     let mut ready = serde_json::json!({
         "endpoint": session.app_endpoint(),
-        "session": session.file(),
+        "session": file,
     });
     match (&session.credentials().endpoint, target) {
         (agent::Endpoint::Forwarded(address), _) => {
@@ -1400,145 +1413,6 @@ fn log_changed_paths(paths: &[PathBuf]) {
 }
 
 // ============================================================================
-// Strategy: process restart
-// ============================================================================
-
-/// Rebuild the binary and restart the process on every change.
-struct ProcessRestart {
-    /// The `--package` and `--bin` of the binary each build and run names.
-    selection: Vec<String>,
-    profile: Option<String>,
-    verbose: bool,
-    /// `--agent`: the app is built (with the `driver` feature for a profile
-    /// without debug assertions) and started
-    /// with the session's endpoint and token.
-    agent: Option<Session>,
-    /// Shows each rebuild over the running app's windows: the session's
-    /// agent, as an observer. `None` with `--no-build-overlay`.
-    build_report: Option<BuildReporter>,
-    /// `--register-associations`: the app registers its URL schemes and file
-    /// types with Windows.
-    register_associations: bool,
-}
-
-impl ReloadStrategy for ProcessRestart {
-    fn watch_paths(&self) -> Vec<(PathBuf, bool)> {
-        vec![
-            (PathBuf::from("src"), true),
-            (PathBuf::from("Cargo.toml"), false),
-        ]
-    }
-
-    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
-        if self.build().is_ok() {
-            self.spawn(child)?;
-        }
-        Ok(())
-    }
-
-    /// Rebuild while the app keeps running, and replace it only with a build
-    /// that succeeded: a compile error leaves the window up with the
-    /// previous build while the author fixes it, and a good build replaces
-    /// it without the app being gone for the length of the build. Windows
-    /// refuses to overwrite a running executable, so there the app stops
-    /// before the build, and a failed build leaves no app running.
-    ///
-    /// The app that keeps running shows the build over its windows: that it
-    /// runs, then where it failed. A build that succeeded is reported too
-    /// before the app is replaced, so a report still on its way lands on a
-    /// state that shows nothing, whichever app it reaches.
-    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
-        if cfg!(windows) {
-            stop_and_report(child);
-        }
-        ui::step("Rebuilding...")?;
-        self.show(BuildState::Building);
-        let built = self.build();
-        match &built {
-            Ok(()) => {
-                self.show(BuildState::Succeeded);
-                stop_and_report(child);
-                self.spawn(child)?;
-            }
-            Err(errors) => self.show(BuildState::Failed {
-                diagnostics: errors.diagnostics.clone(),
-                omitted: errors.omitted,
-            }),
-        }
-        ui::emit(
-            "run.reload",
-            &serde_json::json!({ "kind": "restart", "ok": built.is_ok() }),
-        );
-        if built.is_err() {
-            // The app was not polled while the build ran.
-            reap_exited(child);
-            if self.is_running(child.as_ref()) {
-                ui::warning(
-                    "Build failed. The application keeps running its previous build... \
-                     (fix errors and save to retry)",
-                )?;
-            } else {
-                ui::warning(
-                    "Build failed. Watching for changes... (fix errors and save to retry)",
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    fn reload_label(&self) -> &'static str {
-        "Rebuild and restart"
-    }
-}
-
-impl ProcessRestart {
-    /// `cargo build` of the application, reported as `run.build.*`; a build
-    /// that failed answers its compiler errors.
-    fn build(&self) -> Result<(), CompileErrors> {
-        let mut failed = None;
-        let built = timed_build(|| {
-            run_cargo_build(
-                &self.selection,
-                self.profile.as_deref(),
-                self.verbose,
-                self.agent.as_ref(),
-            )
-            .map_err(|errors| failed = Some(errors))
-            .is_ok()
-        });
-        if built {
-            Ok(())
-        } else {
-            Err(failed.unwrap_or_default())
-        }
-    }
-
-    /// Show `state` over the running app's windows, unless `--no-build-overlay`.
-    fn show(&self, state: BuildState) {
-        if let Some(reporter) = &self.build_report {
-            reporter.report(state);
-        }
-    }
-
-    /// Start the built application into `child`.
-    fn spawn(&self, child: &mut Option<AppChild>) -> CliResult<()> {
-        if let Some(session) = &self.agent {
-            session.clear_endpoint();
-        }
-        let spawned = spawn_app(
-            &self.selection,
-            self.profile.as_deref(),
-            self.verbose,
-            self.agent.as_ref(),
-            self.register_associations,
-        )?;
-        announce_started(&spawned, "Application started");
-        *child = Some(spawned);
-        Ok(())
-    }
-}
-
-// ============================================================================
 // Browser: build for wasm32, serve, reload the page
 // ============================================================================
 
@@ -2168,77 +2042,6 @@ impl ReloadStrategy for AndroidSession {
 
     fn reload_label(&self) -> &'static str {
         "Rebuild, reinstall and restart"
-    }
-}
-
-/// Run `cargo build`; a build that failed answers its compiler errors.
-///
-/// Cargo writes its messages as JSON, which the run reads for the errors it
-/// shows in the app, and each message's text is written to stderr as cargo
-/// would have written it: in colour on a terminal that takes it.
-fn run_cargo_build(
-    selection: &[String],
-    profile: Option<&str>,
-    verbose: bool,
-    agent: Option<&Session>,
-) -> Result<(), CompileErrors> {
-    let mut cmd = Command::new("cargo");
-    cmd.arg("build");
-
-    if let Some(prof) = profile {
-        cmd.args(["--profile", prof]);
-    }
-
-    if verbose {
-        cmd.arg("--verbose");
-    }
-
-    // The same floors as the run that follows, or the build script reruns:
-    // a refused `flui.toml` is reported by that run.
-    if let Ok(floors) = std::env::current_dir()
-        .map_err(CliError::from)
-        .and_then(|root| crate::config::project_floors(&root))
-    {
-        cmd.envs(floors.host_cargo_env());
-    }
-    // The same features as the run that follows, or cargo builds twice.
-    with_build(&mut cmd, selection, agent);
-    let colour = std::io::IsTerminal::is_terminal(&std::io::stderr())
-        && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty());
-    cmd.arg(if colour {
-        "--message-format=json-diagnostic-rendered-ansi"
-    } else {
-        "--message-format=json"
-    });
-    cmd.stdout(Stdio::piped());
-
-    let failed = |why: String| {
-        let _ = crate::ui::error(why);
-        Err(CompileErrors::default())
-    };
-    let mut cargo = match cmd.spawn() {
-        Ok(cargo) => cargo,
-        Err(e) => return failed(format!("failed to run cargo build: {e}")),
-    };
-    let stdout = cargo
-        .stdout
-        .take()
-        .expect("BUG: cargo's stdout is piped above");
-    let errors = compile_errors::read(
-        std::io::BufReader::new(stdout),
-        &mut std::io::stderr().lock(),
-    );
-    // A read that stopped early leaves cargo blocked on a full pipe: it is
-    // stopped, and reaped whatever the read came to.
-    if errors.is_err() {
-        let _ = cargo.kill();
-    }
-    let status = cargo.wait();
-    match (errors, status) {
-        (Ok(_), Ok(status)) if status.success() => Ok(()),
-        (Ok(errors), Ok(_)) => Err(errors),
-        (Err(e), _) => failed(format!("failed to read cargo build's messages: {e}")),
-        (_, Err(e)) => failed(format!("failed to wait for cargo build: {e}")),
     }
 }
 

@@ -51,10 +51,8 @@ impl BuildReporter {
 /// The reporter's thread: each report, or the latest of those that waited, to every window.
 fn send_reports(credentials: &Credentials, pending: &mpsc::Receiver<BuildState>) {
     let mut connection = None;
-    while let Ok(mut state) = pending.recv() {
-        while let Ok(newer) = pending.try_recv() {
-            state = newer;
-        }
+    while let Ok(state) = pending.recv() {
+        let state = latest(state, pending);
         // A connection to an app that has since exited breaks on first use: the run replaced
         // the app, so the report goes to its successor over a new connection, once.
         for _ in 0..2 {
@@ -67,6 +65,11 @@ fn send_reports(credentials: &Credentials, pending: &mpsc::Receiver<BuildState>)
             }
         }
     }
+}
+
+/// `state`, or the newest of the reports that arrived after it: a window shows only the latest.
+fn latest(state: BuildState, pending: &mpsc::Receiver<BuildState>) -> BuildState {
+    pending.try_iter().last().unwrap_or(state)
 }
 
 /// Show `state` in every window over `connection`, opening it first when there is none.
@@ -111,8 +114,36 @@ fn describe(failure: &Failure) -> String {
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The reports that waited while one was sent fold into the newest: the window shows only
+    /// that one.
+    #[test]
+    fn the_reports_that_waited_fold_into_the_newest() {
+        let (reports, pending) = mpsc::channel();
+        let failed = BuildState::Failed {
+            diagnostics: Vec::new(),
+            omitted: 0,
+        };
+        reports.send(failed).expect("send");
+        reports.send(BuildState::Succeeded).expect("send");
+        assert_eq!(
+            latest(BuildState::Building, &pending),
+            BuildState::Succeeded
+        );
+        assert_eq!(pending.try_recv(), Err(mpsc::TryRecvError::Empty));
+        assert_eq!(
+            latest(BuildState::Building, &pending),
+            BuildState::Building,
+            "nothing waited"
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod conversation_tests {
     use std::io::{BufRead as _, BufReader, Write as _};
     use std::os::unix::net::{UnixListener, UnixStream};
 
@@ -125,27 +156,53 @@ mod tests {
 
     const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
-    /// One conversation of a stand-in agent with two windows: the hello it was opened with,
-    /// then each `build.report`'s parameters, until the client closes it.
-    fn serve(stream: UnixStream) -> (Value, Vec<Value>) {
+    /// The hello a stand-in agent read and answered.
+    fn greet(stream: &UnixStream) -> (Value, impl Iterator<Item = std::io::Result<String>>) {
+        // A client that goes quiet fails the test instead of hanging it.
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("a read timeout");
         let mut out = stream.try_clone().expect("clone");
-        let mut lines = BufReader::new(stream).lines();
+        let mut lines = BufReader::new(stream.try_clone().expect("clone")).lines();
         let hello: Value =
             serde_json::from_str(&lines.next().expect("a hello").expect("a line")).expect("json");
         writeln!(out, r#"{{"hello":{{"protocol":"{PROTOCOL_VERSION}"}}}}"#).expect("hello");
+        (hello, lines)
+    }
+
+    /// opened with, then each `build.report`'s parameters, until one report reached each window or
+    /// the client went quiet for ten seconds. A report to a window in `refused` is answered
+    /// to a window in `refused` is answered `not_found`, as a window that closed since the list.
+    fn serve(stream: &UnixStream, refused: &[&str]) -> (Value, Vec<Value>) {
+        let mut out = stream.try_clone().expect("clone");
+        let (hello, lines) = greet(stream);
         let mut reports = Vec::new();
+        let mut asked = 0;
         for line in lines {
             let Ok(line) = line else { break };
             let request: Value = serde_json::from_str(&line).expect("json");
-            let result = match request["method"].as_str() {
-                Some("windows.list") => json!({ "windows": ["w1", "w2"] }),
+            let answer = match request["method"].as_str() {
+                Some("windows.list") => {
+                    json!({ "id": request["id"], "result": { "windows": ["w1", "w2"] } })
+                }
                 Some("build.report") => {
-                    reports.push(request["params"].clone());
-                    json!({})
+                    asked += 1;
+                    let window = request["params"]["window"].as_str().unwrap_or_default();
+                    if refused.contains(&window) {
+                        json!({ "id": request["id"], "error": {
+                            "code": "not_found", "message": "no such window", "retry": "never"
+                        } })
+                    } else {
+                        reports.push(request["params"].clone());
+                        json!({ "id": request["id"], "result": {} })
+                    }
                 }
                 other => panic!("unexpected request {other:?}"),
             };
-            writeln!(out, "{}", json!({ "id": request["id"], "result": result })).expect("answer");
+            writeln!(out, "{answer}").expect("answer");
+            if asked == 2 {
+                break;
+            }
         }
         (hello, reports)
     }
@@ -158,36 +215,103 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_report_reaches_every_window_as_an_observer() {
-        let dir = tempfile::tempdir().expect("dir");
-        let socket = dir.path().join("agent.sock");
-        let listener = UnixListener::bind(&socket).expect("bind");
-        let failed = BuildState::Failed {
+    fn failed() -> BuildState {
+        BuildState::Failed {
             diagnostics: vec![Diagnostic::new(
                 "mismatched types".into(),
                 Some(SourceLocation::new("src/lib.rs".into(), 12, 5)),
             )],
             omitted: 0,
-        };
-        let reporter = BuildReporter::start(credentials(&socket)).expect("reporter");
-        reporter.report(failed.clone());
-        // A report sent before the drop is still sent; then the thread ends and closes the
-        // conversation, which ends the stand-in's.
-        drop(reporter);
-        let (stream, _) = listener.accept().expect("accept");
-        let (hello, reports) = serve(stream);
-        assert_eq!(hello["hello"]["role"], "observer", "{hello}");
-        let expected: Vec<Value> = ["w1", "w2"]
-            .into_iter()
+        }
+    }
+
+    fn reports_to(windows: &[&str], state: &BuildState) -> Vec<Value> {
+        windows
+            .iter()
             .map(|window| {
                 serde_json::to_value(BuildReportParams::new(
                     window.parse().expect("a window handle"),
-                    failed.clone(),
+                    state.clone(),
                 ))
                 .expect("json")
             })
-            .collect();
-        assert_eq!(reports, expected);
+            .collect()
+    }
+
+    /// The next conversation the client opens, within ten seconds: a client that never opens
+    /// one fails the test instead of hanging it.
+    fn accept(listener: &UnixListener) -> UnixStream {
+        listener
+            .set_nonblocking(true)
+            .expect("a non-blocking listener");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            match listener.accept() {
+                Ok((stream, _)) => {
+                    stream.set_nonblocking(false).expect("a blocking stream");
+                    return stream;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "the client opened no conversation"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => panic!("accept: {error}"),
+            }
+        }
+    }
+
+    /// A stand-in agent listening at a fresh socket.
+    fn listen() -> (tempfile::TempDir, std::path::PathBuf, UnixListener) {
+        let dir = tempfile::tempdir().expect("dir");
+        let socket = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket).expect("bind");
+        (dir, socket, listener)
+    }
+
+    #[test]
+    fn a_report_reaches_every_window_as_an_observer() {
+        let (_dir, socket, listener) = listen();
+        let reporter = BuildReporter::start(credentials(&socket)).expect("reporter");
+        reporter.report(failed());
+        // A report sent before the drop is still sent; then the thread ends and closes the
+        // conversation, which ends the stand-in's.
+        drop(reporter);
+        let stream = accept(&listener);
+        let (hello, reports) = serve(&stream, &[]);
+        assert_eq!(hello["hello"]["role"], "observer", "{hello}");
+        assert_eq!(reports, reports_to(&["w1", "w2"], &failed()));
+    }
+
+    /// A window that refuses the report (it closed since the list) leaves the others to get it.
+    #[test]
+    fn a_window_that_refuses_the_report_leaves_the_others_to_get_it() {
+        let (_dir, socket, listener) = listen();
+        let reporter = BuildReporter::start(credentials(&socket)).expect("reporter");
+        reporter.report(failed());
+        drop(reporter);
+        let stream = accept(&listener);
+        let (_, reports) = serve(&stream, &["w1"]);
+        assert_eq!(reports, reports_to(&["w2"], &failed()));
+    }
+
+    /// The app the conversation reached was replaced: the conversation breaks on its first
+    /// request, and the report goes to the successor over a new one.
+    #[test]
+    fn a_report_whose_app_was_replaced_reaches_its_successor() {
+        let (_dir, socket, listener) = listen();
+        let reporter = BuildReporter::start(credentials(&socket)).expect("reporter");
+        reporter.report(failed());
+        drop(reporter);
+        let gone = accept(&listener);
+        let (_, mut lines) = greet(&gone);
+        let _ = lines.next().expect("the first request");
+        drop(lines);
+        gone.shutdown(std::net::Shutdown::Both).expect("shutdown");
+        let successor = accept(&listener);
+        let (_, reports) = serve(&successor, &[]);
+        assert_eq!(reports, reports_to(&["w1", "w2"], &failed()));
     }
 }

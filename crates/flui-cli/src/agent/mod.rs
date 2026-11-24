@@ -190,7 +190,8 @@ pub(crate) struct Session {
     app_endpoint: String,
     /// What keeps the endpoint; removed on drop.
     _held: Held,
-    file: PathBuf,
+    /// The session file `flui mcp` reads; none for an [unlisted](Self::create_unlisted) one.
+    file: Option<PathBuf>,
     /// The feature a build without debug assertions needs to keep the agent.
     driver_feature: Option<String>,
 }
@@ -206,12 +207,25 @@ enum Held {
 impl Session {
     /// A new session for the project at `start` (`workspace_root` is the
     /// workspace it belongs to, when it has one; `target_dir` the
-    /// command's [`target_dir_override`]).
+    /// command's [`target_dir_override`]), written to its session file so
+    /// `flui mcp` finds it.
     pub(crate) fn create(
         start: &Path,
         workspace_root: Option<&Path>,
         target_dir: Option<&Path>,
     ) -> CliResult<Self> {
+        let mut session = Self::create_unlisted()?;
+        let file = session_file_for_writing(start, workspace_root, target_dir);
+        write_private(&file, &session.credentials)
+            .context("could not write the agent session file")?;
+        session.file = Some(file);
+        Ok(session)
+    }
+
+    /// A new session for an app on this desktop that writes no session file: only the command
+    /// holding it knows the credentials, so no other client finds the app through it and a
+    /// session file another `flui run --agent` wrote is left as it is.
+    pub(crate) fn create_unlisted() -> CliResult<Self> {
         let dir = tempfile::Builder::new()
             .prefix("flui-agent-")
             .tempdir()
@@ -230,13 +244,11 @@ impl Session {
             token: launch_token()?,
             pid: std::process::id(),
         };
-        let file = session_file_for_writing(start, workspace_root, target_dir);
-        write_private(&file, &credentials).context("could not write the agent session file")?;
         Ok(Self {
             credentials,
             app_endpoint: endpoint,
             _held: Held::Directory { _dir: dir },
-            file,
+            file: None,
             driver_feature: None,
         })
     }
@@ -264,7 +276,7 @@ impl Session {
             credentials,
             app_endpoint: format!("@{socket}"),
             _held: Held::Forward { _forward: forward },
-            file,
+            file: Some(file),
             driver_feature: None,
         })
     }
@@ -301,9 +313,10 @@ impl Session {
         &self.app_endpoint
     }
 
-    /// The session file `flui mcp` reads.
-    pub(crate) fn file(&self) -> &Path {
-        &self.file
+    /// The session file `flui mcp` reads, unless the session is
+    /// [unlisted](Self::create_unlisted).
+    pub(crate) fn file(&self) -> Option<&Path> {
+        self.file.as_deref()
     }
 
     /// The `--features` value a build without debug assertions needs to keep
@@ -366,8 +379,10 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.clear_endpoint();
         // Only our own file: a newer session in the same project replaced it.
-        if Credentials::read(&self.file).is_ok_and(|c| c.pid == self.credentials.pid) {
-            let _ = fs::remove_file(&self.file);
+        if let Some(file) = &self.file
+            && Credentials::read(file).is_ok_and(|c| c.pid == self.credentials.pid)
+        {
+            let _ = fs::remove_file(file);
         }
     }
 }
@@ -476,10 +491,10 @@ mod tests {
         let session = Session::create(project.path(), None, None).unwrap();
 
         let found = find_session_file(&nested, None).expect("found from a nested directory");
-        assert_eq!(found, session.file());
+        assert_eq!(found, session.file().expect("a listed session"));
         assert_eq!(Credentials::read(&found).unwrap(), *session.credentials());
 
-        let file = session.file().to_owned();
+        let file = session.file().expect("a listed session").to_owned();
         drop(session);
         assert!(!file.exists(), "the file goes with the session");
     }
@@ -491,16 +506,34 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let session = Session::create(project.path(), None, None).unwrap();
         let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(session.file()), 0o600);
+        assert_eq!(mode(session.file().expect("a listed session")), 0o600);
         let socket_dir = Path::new(session.app_endpoint()).parent().unwrap();
         assert_eq!(mode(socket_dir), 0o700, "the app refuses anything wider");
+    }
+
+    /// A run that opens a session only to report its builds leaves the session `flui mcp` finds
+    /// to the `flui run --agent` that wrote it, while it runs and once it ends.
+    #[test]
+    fn an_unlisted_session_writes_no_file_and_leaves_the_listed_one() {
+        let project = tempfile::tempdir().unwrap();
+        let listed = Session::create(project.path(), None, None).unwrap();
+        let file = listed.file().expect("a listed session").to_owned();
+        let unlisted = Session::create_unlisted().unwrap();
+        assert_eq!(unlisted.file(), None);
+        assert_ne!(
+            unlisted.credentials().endpoint,
+            listed.credentials().endpoint
+        );
+        assert_eq!(Credentials::read(&file).unwrap(), *listed.credentials());
+        drop(unlisted);
+        assert_eq!(Credentials::read(&file).unwrap(), *listed.credentials());
     }
 
     #[test]
     fn a_newer_session_keeps_its_file_when_an_older_one_ends() {
         let project = tempfile::tempdir().unwrap();
         let older = Session::create(project.path(), None, None).unwrap();
-        let file = older.file().to_owned();
+        let file = older.file().expect("a listed session").to_owned();
         // Another `flui run` in the same project replaced the file.
         let replacement = Credentials {
             endpoint: Endpoint::Local("elsewhere".into()),
@@ -572,7 +605,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            Credentials::read(session.file()).unwrap(),
+            Credentials::read(session.file().expect("a listed session")).unwrap(),
             *session.credentials()
         );
         let other =
@@ -593,7 +626,7 @@ mod tests {
         assert_eq!(removed(), 0, "a live session keeps its forward");
         drop(other);
         assert_eq!(removed(), 1);
-        let file = session.file().to_owned();
+        let file = session.file().expect("a listed session").to_owned();
         drop(session);
         assert_eq!(removed(), 2, "the forward goes with the session");
         assert!(!file.exists(), "the file goes with the session");

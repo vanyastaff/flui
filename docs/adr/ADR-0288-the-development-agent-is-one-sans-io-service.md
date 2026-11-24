@@ -13,9 +13,10 @@
 - **Superseded-by:** [ADR-0390](ADR-0390-a-page-journals-its-native-layer-as-a-native-host-does.md)
   for §11's sentence "A page records the input layer only" and the capture's "debug build of a
   native host" only: a page's debug build journals its backend for the `native` layer too; and
-  [ADR-0395](ADR-0395-a-rebuild-is-shown-over-the-app-it-will-replace.md) for §8's sentence on
-  what an observer may call only: an observer may also call a method whose effect is
-  `annotates`.
+  [ADR-0395](ADR-0395-a-rebuild-is-shown-over-the-app-it-will-replace.md) for §4's timeout
+  answers and §8's sentence on what an observer may call only: an observer may also call a
+  method whose effect is `annotates`, and a timed-out call is retried `soon` whenever it does not
+  change the app.
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md) (the protocol);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (user code runs after
   the state is committed); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (what
@@ -344,8 +345,8 @@ with `input` (`native` alone is `invalid_argument`):
 - `flui-app`'s build script and the agent's module agree on `cfg(driver_agent)`: a
   `compile_error!` fires in a build where the alias and `any(debug_assertions, feature = "driver")`
   on a system with a local-socket transport, or wasm32, differ.
-- `flui-runtime`'s `one_driver_at_a_time_and_an_observer_only_reads` refuses a second driver's
-  hello `not_driver` until the first goes, lists an observer only the methods that read, and
+- `flui-runtime`'s `one_driver_at_a_time_and_an_observer_never_changes_the_app` refuses a second driver's
+  hello `not_driver` until the first goes, lists an observer only the methods that do not change the app (ADR-0395), and
   answers its act `not_driver` without running it; `the_drivers_end_runs_its_obligation_once_and_not_after_a_stop`
   runs the obligation for the driver alone and answers a later driver `shutting_down`.
   `flui-protocol`'s `a_hello_names_its_role_only_when_it_observes` pins the spelling, and the

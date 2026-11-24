@@ -6,14 +6,15 @@
   check running beside it, five one-line edits of the counter rebuilt in a median 1.64 s
   (1.61–1.72 s) instead of 1.94 s (1.61–2.10 s); with no check, 1.49 s.
 
-- **`flui-cli`**: a debug `flui run` of a desktop application shows each rebuild over the app's
-  windows: a chip while it builds, and a panel of the compiler's errors with their
-  `file:line:column` while the last build failed, which a tap dismisses. Every compiler message
-  still reaches the terminal as cargo writes it. `--no-build-overlay` turns it off
-  (ADR-0395).
+- **`flui-cli`**: a debug `flui run` of a desktop application on Linux or macOS shows each
+  rebuild over the app's windows: a chip while it builds, and a panel of the compiler's errors
+  with their `file:line:column` while the last build failed. The banner takes no input, and every
+  compiler message still reaches the terminal as cargo writes it. `--no-build-overlay` turns it
+  off (ADR-0395).
 - **`flui-protocol`**: protocol 0.29 adds `build.report` and the method effect `annotates`, which
   an observer may call: it changes only what the development tools draw over a window, never the
-  app's state.
+  app. `MethodEffect::changes_app` is the one rule for what an observer may call and what a
+  timed-out call may resend.
 
 - **`flui-cli`**: `flui run --json` reports `run.watch {paths}` once the sources are watched; a
   save made after it is a change the run sees.
