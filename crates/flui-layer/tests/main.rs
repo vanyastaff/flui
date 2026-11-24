@@ -528,6 +528,13 @@ fn patch_damage_covers_diff_damage() {
     scene_damage::patch_damage_covers_diff_damage();
 }
 
+/// Damage read through each node's chain folded once equals damage read
+/// entry by entry on 2 000 random cases (ADR-0304 §4).
+#[test]
+fn shared_chain_reads_damage_as_each_entry_read_alone() {
+    scene_damage::shared_chain_reads_damage_as_each_entry_read_alone();
+}
+
 /// A scene version resolves followers and leaders as the tree it flattens to
 /// does (ADR-0304 §8).
 #[test]
