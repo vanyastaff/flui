@@ -893,6 +893,15 @@ images = ["dep:flui-assets", "flui-widgets/asset-images", "flui-app/images", "fl
 # manifest declares URL schemes or file types without it.
 single-instance = ["flui-app/single-instance"]
 
+# === Release logging ===
+# An application's choice, which `flui create` writes into its manifest: a
+# build without debug assertions holds no `trace!` or `debug!` event, the
+# framework's or the application's own (`tracing`'s `release_max_level_info`).
+# Off, a release build keeps them for `RUST_LOG` to select, with their call
+# sites and strings in the binary. A library never turns it on: the level is
+# one for the whole application.
+release-max-level-info = ["tracing/release_max_level_info"]
+
 # === Unstable input surface ===
 # Additive. Re-exports the handle-less input capabilities
 # (`flui::platform::input_capabilities`: `InputCapabilities` and its builder)

@@ -224,7 +224,7 @@ fn host_plan(
     worker_lib: &str,
     source: &DependencySource,
 ) -> ProjectPlan {
-    let facade_dep = source.dependency(FrameworkPackage::Facade, &[]);
+    let facade_dep = source.dependency(FrameworkPackage::Facade, super::APPLICATION_FEATURES);
     let reload_dep = source.dependency(FrameworkPackage::HotReload, &["app-plugin"]);
     let types_dep = member_dep(types_package);
     let worker_dep = optional_member_dep(worker_package);

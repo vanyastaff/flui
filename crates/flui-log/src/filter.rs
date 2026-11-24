@@ -13,6 +13,17 @@
 //! of each native backend is likewise pinned wide open (see
 //! [`crate::backend`]).
 //!
+//! # The build's ceiling
+//!
+//! One ceiling is not this module's to lift: `tracing` compiles the events
+//! above its static maximum level out of a build
+//! (`tracing::level_filters::STATIC_MAX_LEVEL`), and an application sets that
+//! level for its release builds with the facade's `release-max-level-info`
+//! feature. A directive above it selects events the binary does not hold, so
+//! [`compiled_out`] names the level for the entry point to report: a filter
+//! that asks for `debug` and silently delivers nothing looks like a framework
+//! that logs nothing.
+//!
 //! # Directives
 //!
 //! A directive string is a comma-separated list of `target=level` pairs and at
@@ -22,6 +33,7 @@
 //! and regular expressions are not supported, so an application does not link
 //! a regex engine to read its log level.
 
+use tracing::level_filters::LevelFilter;
 use tracing_subscriber::filter::{ParseError, Targets};
 
 /// Directives used when neither the environment nor the application says
@@ -221,4 +233,67 @@ fn parse_directives(directives: &str) -> Result<Targets, DirectiveError> {
         });
     }
     Ok(directives.parse::<Targets>()?)
+}
+
+/// The most verbose level `targets` selects, when this build holds no event of
+/// that level (see [The build's ceiling](self#the-builds-ceiling)); `None` when
+/// every level the filter selects is in the build.
+///
+/// A filter that turns everything off selects nothing, so it is never beyond
+/// the ceiling.
+#[must_use]
+pub fn compiled_out(targets: &Targets) -> Option<LevelFilter> {
+    beyond(targets, tracing::level_filters::STATIC_MAX_LEVEL)
+}
+
+/// The most verbose level `targets` selects above `ceiling`: [`compiled_out`]
+/// against a ceiling the caller names.
+pub(crate) fn beyond(targets: &Targets, ceiling: LevelFilter) -> Option<LevelFilter> {
+    let most_verbose = targets
+        .iter()
+        .map(|(_target, level)| level)
+        .chain(targets.default_level())
+        .max()?;
+    (most_verbose > ceiling).then_some(most_verbose)
+}
+
+#[cfg(test)]
+mod ceiling_tests {
+    use tracing::level_filters::LevelFilter;
+
+    use super::{beyond, parse_directives};
+
+    #[test]
+    fn a_filter_is_beyond_the_ceiling_by_its_most_verbose_directive() {
+        for (directives, ceiling, expected) in [
+            ("warn,wgpu=error", LevelFilter::INFO, None),
+            ("info", LevelFilter::INFO, None),
+            ("debug", LevelFilter::INFO, Some(LevelFilter::DEBUG)),
+            (
+                "warn,flui_view=trace",
+                LevelFilter::INFO,
+                Some(LevelFilter::TRACE),
+            ),
+            (
+                "flui_view=debug",
+                LevelFilter::INFO,
+                Some(LevelFilter::DEBUG),
+            ),
+            (
+                "flui_view=debug,flui_app=trace",
+                LevelFilter::DEBUG,
+                Some(LevelFilter::TRACE),
+            ),
+            ("trace", LevelFilter::TRACE, None),
+            ("off", LevelFilter::INFO, None),
+            ("info", LevelFilter::OFF, Some(LevelFilter::INFO)),
+        ] {
+            let targets = parse_directives(directives).expect("valid directives");
+            assert_eq!(
+                beyond(&targets, ceiling),
+                expected,
+                "`{directives}` under a ceiling of {ceiling}"
+            );
+        }
+    }
 }

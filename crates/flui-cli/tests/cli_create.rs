@@ -111,7 +111,12 @@ fn assert_generated_project_compiles(template: &str, hot_reload: bool) {
                 .expect("features"),
             &[toml::Value::String("testing".into())]
         );
-        assert!(manifest["dependencies"]["flui"].get("features").is_none());
+        assert_eq!(
+            manifest["dependencies"]["flui"]["features"]
+                .as_array()
+                .expect("features"),
+            &[toml::Value::String("release-max-level-info".into())]
+        );
     }
 
     // Reuse this checkout's resolved dependency graph and cached crates. The
@@ -569,10 +574,26 @@ fn templates_depend_on_the_facade_and_hot_reload_on_its_package() {
                 Path::new(facade["path"].as_str().expect("facade source")),
                 repo_root()
             );
-            // The facade names no reload package (ADR-0311 §6): no member
-            // turns a facade feature on for it.
-            assert!(
-                facade.get("features").is_none(),
+            // The facade names no reload package (ADR-0311 §6) and a template
+            // no catalog its source does not use: the one facade feature a
+            // generated manifest turns on is the release log level, and only
+            // in the application's own package, since the level is one for
+            // the whole application.
+            let application = !hot_reload || member == host_package;
+            let expected_features: &[&str] = if application {
+                &["release-max-level-info"]
+            } else {
+                &[]
+            };
+            let features: Vec<&str> = facade
+                .get("features")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .collect();
+            assert_eq!(
+                features, expected_features,
                 "facade features for {name}/{member}: {facade}"
             );
             if hot_reload && member != types_package {

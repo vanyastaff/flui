@@ -22,7 +22,7 @@ fn cargo_toml(name: &str, source: &DependencySource) -> String {
 
     let deps = format!(
         "flui = {}",
-        source.dependency(FrameworkPackage::Facade, &[])
+        source.dependency(FrameworkPackage::Facade, super::APPLICATION_FEATURES)
     );
     let mode_comment = if matches!(source, DependencySource::Local(_)) {
         " (local development)"

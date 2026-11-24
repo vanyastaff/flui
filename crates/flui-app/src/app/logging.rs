@@ -38,7 +38,8 @@ pub(crate) fn managed_log_config(config: &AppConfig) -> LogConfig {
 /// Install managed defaults without replacing an application-owned subscriber.
 ///
 /// A rejected `RUST_LOG` falls back to the selected profile and is reported
-/// after the subscriber exists.
+/// after the subscriber exists, and so is a filter that selects events the
+/// build compiled out.
 ///
 /// # Panics
 ///
@@ -52,6 +53,14 @@ pub(crate) fn init_managed_logging(config: &AppConfig) -> SubscriberInstallation
         tracing::warn!(
             %error,
             "the RUST_LOG filter was rejected; using FLUI's built-in directives instead"
+        );
+    }
+    if let Some(selected) = setup.compiled_out {
+        tracing::warn!(
+            %selected,
+            compiled = %tracing::level_filters::STATIC_MAX_LEVEL,
+            "the log filter selects events this build compiled out: `tracing`'s static maximum \
+             level, which the `release-max-level-info` feature of `flui` sets for a release build"
         );
     }
 

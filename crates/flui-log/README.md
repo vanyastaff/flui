@@ -125,6 +125,13 @@ timeline, metrics, and capture layers can choose independent filters. Within
 the native sink nothing narrows the result afterwards:
 `RUST_LOG=flui_view=trace` really does deliver `TRACE`.
 
+One ceiling is the build's, not the filter's: `tracing` compiles the events
+above its static maximum level out of a binary, and the facade's
+`release-max-level-info` feature, which `flui create` writes into an
+application's manifest, sets that level to `info` for a release build. A
+directive above it selects nothing there, and the managed entry point says so
+in a warning (`filter::compiled_out`).
+
 A directive string is `target=level` pairs and one bare level for the rest
 (`info,wgpu=warn,flui_view=trace`), read by `tracing_subscriber`'s `Targets`
 filter, so an application links no regex engine. A span or field directive

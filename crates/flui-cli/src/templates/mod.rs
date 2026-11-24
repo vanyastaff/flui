@@ -41,6 +41,13 @@ pub(super) fn main_rs(lib_name: &str) -> String {
     )
 }
 
+/// The facade features an application's own package turns on, whatever its
+/// template: `release-max-level-info` leaves `trace!` and `debug!` events out of
+/// a release build, which is what CI's `size` job measures. An author who wants
+/// `RUST_LOG=debug` to work in a release build deletes it from the manifest. A
+/// library template names none: the level is the application's to choose.
+pub(super) const APPLICATION_FEATURES: &[&str] = &["release-max-level-info"];
+
 /// The profiles every template's workspace root writes. Dependencies are
 /// optimized in debug builds too: wgpu and naga's shader translation, Parley's
 /// shaping and lyon's tessellation set a debug build's frame time, and a

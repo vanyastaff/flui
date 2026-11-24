@@ -103,6 +103,7 @@ returned request or poll `try_result` to obtain the window result."
 //! | `http` | off | the built-in `HttpCapability` provider, each host's own HTTP stack (`ureq` over rustls on Linux and the BSDs); off, an `HttpCapability` request is refused as not registered and no HTTP client or TLS stack is linked |
 //! | `images` | off | `flui::assets` and the widgets' `Image::asset` and `Image::network`, with the decoded-image cache each UI runtime keeps; a network image also needs `http`; off, no image decoder is linked |
 //! | `single-instance` | off | one instance per user session on Linux and Windows (`Application::single_instance`): a later launch hands the running instance its links and files; off, each launch is a process of its own, and `flui build` and `flui run` refuse a desktop build of an application that declares URL schemes or file types |
+//! | `release-max-level-info` | off | a release build holds no `trace!` or `debug!` event, the framework's or the application's own (`tracing`'s `release_max_level_info`); `flui create` writes it into an application's manifest; off, a release build keeps them for `RUST_LOG` to select |
 //! | `unstable-input` | off | `flui::platform::input_capabilities` and `flui::platform::haptics`, the unstable input vocabulary (ADR-0213 §5, ADR-0210 §9) |
 //! | `native` | off | `flui::native`, the operating systems' window extensions (Evolving, ADR-0089 §5) |
 //! | `unstable-windows` | off | `app::open_window`, `app::open_secondary_window` and `app::WindowPolicy`: windows beyond the first (unstable) |
