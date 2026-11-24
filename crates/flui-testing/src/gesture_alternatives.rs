@@ -53,6 +53,7 @@ use flui_platform::{
     EventTime, MotionPreference, SystemPreferences, TargetPlatform, input::pointer::DeviceId,
 };
 use flui_rendering::constraints::BoxConstraints;
+use flui_semantics::MinimumTarget;
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{
     Alternative, CompanionGap, GestureAlternatives, GestureCommand, ShowContextMenuIntent,
@@ -548,12 +549,13 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                 return;
             }
         };
-        let min_target = GestureSettings::default().min_target();
-        if bounds.x1 - bounds.x0 < min_target || bounds.y1 - bounds.y0 < min_target {
+        let minimum = minimum_target();
+        if !minimum.admits(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0) {
             self.failures.push(format!(
-                "  - {label:?}: its companion's node is {}×{}, under the {min_target} minimum target",
+                "  - {label:?}: its companion's node is {}×{}, under the {} minimum target",
                 bounds.x1 - bounds.x0,
-                bounds.y1 - bounds.y0
+                bounds.y1 - bounds.y0,
+                minimum.get()
             ));
         }
         for device in [Device::Mouse, Device::Touch, Device::Virtual] {
@@ -687,12 +689,13 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
                     })?;
                     (node.id(), tree.window_bounds(&node)?)
                 };
-                let min_target = GestureSettings::default().min_target();
-                if bounds.x1 - bounds.x0 < min_target || bounds.y1 - bounds.y0 < min_target {
+                let minimum = minimum_target();
+                if !minimum.admits(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0) {
                     self.failures.push(format!(
-                        "  - {label:?}: the control focus reveals is {}×{}, under the {min_target} minimum target",
+                        "  - {label:?}: the control focus reveals is {}×{}, under the {} minimum target",
                         bounds.x1 - bounds.x0,
-                        bounds.y1 - bounds.y0
+                        bounds.y1 - bounds.y0,
+                        minimum.get()
                     ));
                 }
                 match device {
@@ -857,6 +860,14 @@ fn node_bounds<M>(
     let tree = tree(mounted)?;
     let node = tree.nodes().find(|candidate| candidate.id() == node)?;
     tree.window_bounds(&node)
+}
+
+/// The minimum target a control and its companions are held to: the default
+/// gesture settings' extent, judged by the rule `audit.a11y` applies
+/// ([`MinimumTarget::admits`]).
+fn minimum_target() -> MinimumTarget {
+    MinimumTarget::try_new(GestureSettings::default().min_target())
+        .expect("BUG: the default gesture settings' minimum target is finite and positive")
 }
 
 fn request(action: Action, target: crate::a11y::NodeId, data: Option<ActionData>) -> ActionRequest {

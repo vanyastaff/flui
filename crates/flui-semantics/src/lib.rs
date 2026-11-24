@@ -53,6 +53,7 @@ mod announce;
 mod applicability;
 mod assistive_focus;
 mod attributes;
+mod audit;
 mod collection;
 mod configuration;
 mod document_selection;
@@ -85,6 +86,7 @@ pub use agent::{
 pub use announce::{AnnounceError, Announcements, Announcer};
 pub use applicability::RoleAttribute;
 pub use assistive_focus::{AssistiveFocus, AssistiveFocusChange};
+pub use audit::MinimumTarget;
 pub use collection::{
     CellPosition, SemanticsCollection, SemanticsCollectionKind, SemanticsCollectionOrigin,
     SemanticsIndexOrigin, SetSize, SortDirection, TableShape,
