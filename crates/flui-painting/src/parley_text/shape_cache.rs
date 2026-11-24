@@ -121,11 +121,11 @@ impl Deref for HeldLayout {
 }
 
 /// A paragraph the cache does not hold: what [`ShapeCache::offer`] needs to
-/// keep it once it is laid out.
+/// keep it once it is laid out. A paragraph kept after a registration that
+/// came while it was shaped carries the generation read before it, and the
+/// next [`find`](ShapeCache::find) drops it with the rest.
 pub(super) struct Miss {
     hash: u64,
-    /// The collection generation read before the paragraph was shaped.
-    generation: u64,
 }
 
 /// A kept paragraph's [`ParagraphSpec`], owned.
@@ -328,7 +328,7 @@ impl ShapeCache {
     ) -> Result<(ParagraphLayout, TextLayoutResult), Miss> {
         self.retire_older_than(generation);
         let hash = spec_hash(spec);
-        let miss = Miss { hash, generation };
+        let miss = Miss { hash };
         if self.entries.is_empty() {
             return Err(miss);
         }
@@ -348,20 +348,14 @@ impl ShapeCache {
     /// `miss`. It is kept on its second layout, within the bounds, evicting
     /// the least recently used; its layout is then shared with the cache. An
     /// evicted layout nothing else holds becomes `spare` when there is none.
-    /// A collection whose generation moved while the paragraph was shaped
-    /// (`generation`, read after) keeps nothing.
     pub(super) fn offer(
         &mut self,
         miss: Miss,
-        generation: u64,
         spec: &ParagraphSpec<'_>,
         paragraph: &mut ParagraphLayout,
         metrics: &TextLayoutResult,
         spare: &mut Option<Layout<SpanBrush>>,
     ) {
-        if generation != miss.generation {
-            return;
-        }
         let Some(slot) = self.seen.iter().position(|&seen| seen == miss.hash) else {
             self.seen[self.next_seen] = miss.hash;
             self.next_seen = (self.next_seen + 1) % SEEN;

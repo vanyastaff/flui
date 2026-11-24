@@ -1088,6 +1088,26 @@ fn shape_cache_contract() {
                 "the_least_recently_used_paragraph_leaves_first",
                 sc::the_least_recently_used_paragraph_leaves_first,
             ),
+            (
+                "a_fresh_context_counts_its_first_shaping",
+                sc::a_fresh_context_counts_its_first_shaping,
+            ),
+            (
+                "two_paragraphs_in_turn_are_both_kept",
+                sc::two_paragraphs_in_turn_are_both_kept,
+            ),
+            (
+                "a_kept_ellipsized_paragraph_stays_truncated",
+                sc::a_kept_ellipsized_paragraph_stays_truncated,
+            ),
+            (
+                "the_bytes_bound_evicts_before_the_count",
+                sc::the_bytes_bound_evicts_before_the_count,
+            ),
+            (
+                "a_relayout_builds_into_the_layout_it_replaces",
+                sc::a_relayout_builds_into_the_layout_it_replaces,
+            ),
         ],
     );
 }

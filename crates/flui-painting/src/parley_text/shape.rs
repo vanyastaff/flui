@@ -1207,10 +1207,8 @@ impl TextContext {
         };
         let metrics = layout.metrics();
         validate_layout(&layout, &metrics)?;
-        let generation = self.fonts().generation();
         self.shape_cache.offer(
             miss,
-            generation,
             paragraph,
             &mut layout,
             &metrics,

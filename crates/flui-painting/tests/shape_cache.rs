@@ -6,8 +6,9 @@ use flui_foundation::memory::MemoryPressureLevel;
 use flui_painting::parley_text::ParagraphSpec;
 use flui_painting::styling::Color;
 use flui_painting::testing::text_context_shapings;
-use flui_painting::typography::{FontWeight, TextAlign, TextStyle};
-use flui_painting::{FontCollection, TextContext, TextLayoutResult};
+use flui_painting::typography::{FontWeight, TextAlign, TextSpan, TextStyle};
+
+use flui_painting::{FontCollection, TextContext, TextLayoutResult, TextPainter};
 
 const ROBOTO: &[u8] = include_bytes!("../assets/fonts/Roboto-Regular.ttf");
 const PROBE_MONO: &[u8] = include_bytes!("../assets/fonts/probe-mono-100.ttf");
@@ -286,26 +287,144 @@ pub(crate) fn a_long_paragraph_is_not_kept() {
 /// first, and the one used since stays.
 pub(crate) fn the_least_recently_used_paragraph_leaves_first() {
     let mut context = TextContext::new(&fonts());
-    let rows: Vec<_> = (0..200).map(|row| plain(&format!("Row {row}"))).collect();
-    let first = spec(&rows[0]);
-    let second = spec(&rows[1]);
-    keep(&mut context, &first);
-    keep(&mut context, &second);
-    for row in &rows[2..120] {
-        keep(&mut context, &spec(row));
-    }
-    assert_eq!(lay_out(&mut context, &first).1, 0, "the first row is kept");
-    for row in &rows[120..] {
+    let rows: Vec<_> = (0..130).map(|row| plain(&format!("Row {row}"))).collect();
+    for row in &rows[..128] {
         keep(&mut context, &spec(row));
     }
     assert_eq!(
-        lay_out(&mut context, &second).1,
-        1,
-        "the row used longest ago left"
+        lay_out(&mut context, &spec(&rows[0])).1,
+        0,
+        "the oldest row is used again"
     );
+    keep(&mut context, &spec(&rows[128]));
+    keep(&mut context, &spec(&rows[129]));
+    for kept in [0, 3, 127, 128, 129] {
+        assert_eq!(
+            lay_out(&mut context, &spec(&rows[kept])).1,
+            0,
+            "row {kept} stayed: it was used after rows 1 and 2"
+        );
+    }
+    for left in [1, 2] {
+        assert_eq!(
+            lay_out(&mut context, &spec(&rows[left])).1,
+            1,
+            "row {left} left: the two rows past the count push out the two used longest ago"
+        );
+    }
+}
+
+/// A context that has shaped nothing counts no shaping, and its first layout
+/// counts one.
+pub(crate) fn a_fresh_context_counts_its_first_shaping() {
+    let mut context = TextContext::new(&fonts());
+    assert_eq!(text_context_shapings(&context), 0, "nothing shaped yet");
+    let spans = plain(TEXT);
+    lay_out(&mut context, &spec(&spans));
+    assert_eq!(
+        text_context_shapings(&context),
+        1,
+        "one paragraph shaped once"
+    );
+}
+
+/// Two paragraphs laid out in turn, a label toggling between two strings,
+/// are both kept and both shared from their third layout on.
+pub(crate) fn two_paragraphs_in_turn_are_both_kept() {
+    let mut context = TextContext::new(&fonts());
+    let first = plain("label 1");
+    let second = plain("label 2");
+    for _ in 0..2 {
+        lay_out(&mut context, &spec(&first));
+        lay_out(&mut context, &spec(&second));
+    }
+    assert_eq!(
+        (
+            lay_out(&mut context, &spec(&first)).1,
+            lay_out(&mut context, &spec(&second)).1
+        ),
+        (0, 0),
+        "both strings are kept"
+    );
+}
+
+/// A kept paragraph whose lines were cut at an ellipsis is shared with the
+/// cut: it measures and reports truncation as the shaped one did.
+pub(crate) fn a_kept_ellipsized_paragraph_stays_truncated() {
+    let mut context = TextContext::new(&fonts());
+    let spans = plain(TEXT);
+    let paragraph = ParagraphSpec {
+        max_width: Some(120.0),
+        max_lines: Some(1),
+        ellipsis: Some("…"),
+        ..spec(&spans)
+    };
+    let (shaped, _) = lay_out(&mut context, &paragraph);
+    lay_out(&mut context, &paragraph);
+    let (kept, shapings) = lay_out(&mut context, &paragraph);
+    assert_eq!(shapings, 0, "the ellipsized paragraph is kept");
+    assert!(shaped.truncated, "the fixture is cut at the ellipsis");
+    assert_eq!(
+        (kept.truncated, extent(&kept)),
+        (shaped.truncated, extent(&shaped)),
+        "the kept paragraph is cut where the shaped one was"
+    );
+}
+
+/// The bytes bound evicts before the count does: paragraphs of a few
+/// hundred characters fill it with far fewer than 128 entries, and the
+/// first of them leaves. Each is small enough to be kept on its own.
+pub(crate) fn the_bytes_bound_evicts_before_the_count() {
+    let mut context = TextContext::new(&fonts());
+    let paragraphs: Vec<_> = (0..64)
+        .map(|index| plain(&format!("{index} {}", TEXT.repeat(8))))
+        .collect();
+    let first = spec(&paragraphs[0]);
+    keep(&mut context, &first);
     assert_eq!(
         lay_out(&mut context, &first).1,
         0,
-        "the row used since stayed"
+        "a 370-character paragraph is kept"
+    );
+    for paragraph in &paragraphs[1..] {
+        keep(&mut context, &spec(paragraph));
+    }
+    assert_eq!(
+        lay_out(&mut context, &first).1,
+        1,
+        "64 such paragraphs pass the bytes bound, and the oldest left"
+    );
+}
+
+/// A painter laid out again after its text changed builds into the layout it
+/// replaces: the second layout allocates less than the first did on the
+/// same, already warm, context.
+pub(crate) fn a_relayout_builds_into_the_layout_it_replaces() {
+    let mut context = TextContext::new(&fonts());
+    let painter = |text: &str| {
+        TextPainter::new()
+            .with_text(TextSpan::new(text))
+            .with_text_direction(TextDirection::Ltr)
+    };
+    let mut warm = painter("Warms the context's fonts and scratch.");
+    warm.layout(&mut context, 0.0, 400.0)
+        .expect("the fixture lays out");
+    let mut subject = painter("First text, laid out into a new layout.");
+    let (fresh, ()) = crate::foreign_image::allocations_during(|| {
+        subject
+            .layout(&mut context, 0.0, 400.0)
+            .expect("the fixture lays out");
+    });
+    subject.set_text(Some(
+        TextSpan::new("Second text, into the first one's.").into(),
+    ));
+    let (reused, ()) = crate::foreign_image::allocations_during(|| {
+        subject
+            .layout(&mut context, 0.0, 400.0)
+            .expect("the fixture lays out");
+    });
+    assert!(
+        reused + 8 <= fresh,
+        "a relayout into the replaced layout asked the heap for {reused} blocks, a fresh one {fresh}"
     );
 }
