@@ -63,7 +63,7 @@ fn a_message_box_shares_its_windows_one_dialog_rule_and_answers_only_its_buttons
     let boxes = slots.0.take().expect("scripted boxes");
     let files = slots.1.take().expect("scripted dialogs");
 
-    plugin.dialogs().hold();
+    let _held = plugin.dialogs().hold();
     let open = land_dialog(files.open(OpenRequest::files()));
     let busy = land_dialog(boxes.show(MessageBoxRequest::new("Saved")));
     turn(&mut host);

@@ -17,5 +17,6 @@
 - **`flui-interaction`**: `ClipboardHandle::new` and `PrimarySelectionHandle::new` take the
   provider's `&ProviderContext` in place of a `CompletionSource`; `ProviderContext::new` takes the
   runtime's `RuntimeLocals`.
-- **`flui-testing`**: `ScriptedClipboard` scripts a failing host with `fail_reads_with` and
+- **`flui-interaction`** (`testing`, re-exported by `flui_testing::host`): `ScriptedClipboard`
+  scripts a failing host with `fail_reads_with` and
   `stop_failing_reads`, and counts the reads it was asked with `reads_asked`.

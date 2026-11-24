@@ -17,9 +17,10 @@
   and advances only through the host's scenario driver.
 - `ScriptedHttp::report_to`: a request for a URL nobody scripted is also the scenario's failure
   (bounded by `MAX_REPORTS`); the headless host's own client reports to its scenario.
-- `ScriptedLauncher::on`/`script`, `ScriptedFileDialogs::on`/`open_script`/`save_script`,
-  `ScriptedSystem::on`/`launcher`/`dialogs`, `ScriptedClipboard::on`/`reads`/`service` and
-  `ScriptedPrimarySelection::on`/`reads`/`service`.
+- `ScriptedLauncher::on`/`script`, `ScriptedFileDialogs::on`/`open_script`/`save_script` and
+  `ScriptedSystem::on`/`launcher`/`dialogs`.
+- `flui_interaction::testing` (re-exported by `flui_testing::host`):
+  `ScriptedClipboard::on`/`reads`/`service` and `ScriptedPrimarySelection::on`/`reads`/`service`.
 
 ### Changed
 

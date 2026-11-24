@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use crate::capability::Resolver;
-use crate::capability::scripted::{Answer, Scenario, Script};
+use crate::capability::scripted::{Answer, Scenario, Script, ScriptHold};
 use crate::launch::{ExternalUri, LaunchResult, LauncherBackend};
 
 /// One request a [`ScriptedLauncher`] received.
@@ -68,9 +68,11 @@ impl ScriptedLauncher {
         self.script.answer_next(Answer::value(result));
     }
 
-    /// Hold every later request until [`release`](Self::release).
-    pub fn hold(&self) {
-        self.script.hold();
+    /// Hold every later request while the returned hold lives
+    /// ([`Script::hold`]); [`release`](Self::release) answers a held one.
+    #[must_use = "requests are held only while the hold is alive"]
+    pub fn hold(&self) -> ScriptHold {
+        self.script.hold()
     }
 
     /// Answer the oldest held request with `result`; `false` when none is

@@ -41,7 +41,7 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
     Unsupported,
-    capability::scripted::{Scenario, Script, ServiceState, Track},
+    capability::scripted::{Scenario, Script, ScriptHold, ServiceState, Track},
     capability::{
         CapabilityProvider, CapabilityRegistrar, CompletionSource, ProviderContext, Resolver,
     },
@@ -93,9 +93,9 @@ struct Contents {
     failure: Option<ClipboardError>,
     /// What the standing answer refuses a write with; `None` takes it.
     write_failure: Option<ClipboardError>,
-    /// How many [`ClipboardWriteHold`]s are alive: writes are held while
-    /// any is.
-    write_holds: usize,
+    /// The read script's hold [`hold_reads`](ScriptedClipboard::hold_reads)
+    /// took, one of the script's counted holds.
+    read_hold: Option<ScriptHold>,
     /// One clone per live handle.
     handles: Rc<()>,
 }
@@ -265,17 +265,27 @@ impl ScriptedClipboard {
     }
 
     /// Keep every later read unanswered until
-    /// [`answer_held_reads`](Self::answer_held_reads).
+    /// [`answer_held_reads`](Self::answer_held_reads). It is one hold of the
+    /// [`reads`](Self::reads) script: a hold a test took there itself keeps
+    /// reads held after `answer_held_reads`, until it is dropped too.
     pub fn hold_reads(&self) {
-        self.reads.hold();
+        let fresh = self.contents.borrow().read_hold.is_none();
+        if fresh {
+            let hold = self.reads.hold();
+            self.contents.borrow_mut().read_hold = Some(hold);
+        }
     }
 
-    /// Answer the reads held so far with the clipboard's text now, and answer
-    /// later reads at once again. Returns how many reads it answered.
+    /// Let go of the hold [`hold_reads`](Self::hold_reads) took: when no
+    /// other hold of the read script lives, the reads it kept are answered,
+    /// oldest first, by the script's steps and its standing answer (the
+    /// clipboard's text now), and later reads answer at once again. Returns
+    /// how many held reads went on to be answered.
     pub fn answer_held_reads(&self) -> usize {
-        self.reads.resume();
-        let answer = self.contents.borrow().answer();
-        self.reads.release_held(|_| answer.clone())
+        // Taken out first: releasing answers reads, whose observers are the
+        // test's code, with nothing borrowed.
+        let hold = self.contents.borrow_mut().read_hold.take();
+        hold.map_or(0, ScriptHold::release)
     }
 
     /// Drop the reads held so far unanswered, as a backend torn down
@@ -313,21 +323,15 @@ impl ScriptedClipboard {
     /// Hold every later write, unanswered and off the clipboard, while the
     /// returned hold lives, as a host whose clipboard another application
     /// holds keeps it waiting; reads asked after a held write wait for it.
-    /// Writes stay held while any hold lives; dropping the last answers the
-    /// held writes, in order, with the standing answer.
+    /// It is one hold of the [`writes`](Self::writes) script ([`Script::hold`]):
+    /// writes stay held while it or any other hold of that script lives, a
+    /// test's own included, and when the last is dropped the held writes go
+    /// on, oldest first, to the script's steps and its standing answer.
     #[must_use = "writes are held only while the hold is alive"]
     pub fn hold_writes(&self) -> ClipboardWriteHold {
-        let first = {
-            let mut contents = self.contents.borrow_mut();
-            contents.write_holds = contents.write_holds.saturating_add(1);
-            contents.write_holds == 1
-        };
-        if first {
-            self.writes.hold();
-        }
         ClipboardWriteHold {
+            _hold: self.writes.hold(),
             writes: self.writes.clone(),
-            contents: Rc::clone(&self.contents),
         }
     }
 
@@ -473,12 +477,13 @@ impl Landing {
 }
 
 /// Writes held on a [`ScriptedClipboard`] while this, or another hold of
-/// the same clipboard, lives; when the last drops, the held writes are
-/// answered, in order, with the standing answer.
+/// its write script, lives; when the last drops, the held writes go on,
+/// oldest first, to the script's steps and its standing answer.
 #[must_use = "writes are held only while the hold is alive"]
 pub struct ClipboardWriteHold {
+    /// Held for its `Drop`, which lets go of the script's hold.
+    _hold: ScriptHold,
     writes: Script<ClipboardWriteRequest, ClipboardWritten>,
-    contents: Rc<RefCell<Contents>>,
 }
 
 impl ClipboardWriteHold {
@@ -486,22 +491,6 @@ impl ClipboardWriteHold {
     #[must_use]
     pub fn held(&self) -> usize {
         self.writes.held()
-    }
-}
-
-impl Drop for ClipboardWriteHold {
-    fn drop(&mut self) {
-        let last = {
-            let mut contents = self.contents.borrow_mut();
-            contents.write_holds = contents.write_holds.saturating_sub(1);
-            contents.write_holds == 0
-        };
-        if !last {
-            return;
-        }
-        self.writes.resume();
-        let contents = Rc::clone(&self.contents);
-        let _ = self.writes.release_held(|_| contents.borrow().decide());
     }
 }
 
