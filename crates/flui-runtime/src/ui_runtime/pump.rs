@@ -363,7 +363,7 @@ impl UiRuntime {
                 tracing::trace!(?report, "owner inbox drained");
             }
             self.service_gesture_geometry(&turn);
-            // A wake at an agent wait's deadline may run no frame: the wait still ends.
+            // A turn that runs no frame can still make a wait's condition hold.
             if let Some(agent) = self.agent_side.get() {
                 agent.after_turn(self);
             }
@@ -449,6 +449,16 @@ impl UiRuntime {
             first.contain(|| {
                 self.deliver_sampling_reports_if_unleased();
             });
+            // A host that composes no half of its own has its settled waits answered here,
+            // from the runtime's half alone; a composing host answers them after its own steps
+            // (ADR-0400 §3). A reply's delivery is user code, contained behind the turn's own
+            // failure.
+            if !self.host_composes_half() {
+                first.contain(|| {
+                    let now = flui_foundation::MonotonicClock::now(&self.clock);
+                    self.answer_settled_waits(now, crate::settledness::HostHalf::Absent);
+                });
+            }
         }
         if let Some(failure) = first.into_payload() {
             resume_unwind(failure);

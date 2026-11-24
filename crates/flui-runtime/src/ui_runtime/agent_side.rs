@@ -23,12 +23,14 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::PlatformInput;
 use flui_protocol::events::EventFilter;
 use flui_protocol::record::RecordParams;
+use flui_protocol::wait::SettleScope;
 use flui_view::__runtime::{Reply, WindowCall};
 use flui_view::dev_agent::{AgentEvents, AgentRecording};
 
 use super::agent_inspect::StagedLayerRead;
 use super::{DrainReport, UiRuntime};
 use crate::presentation::PresentationState;
+use crate::settledness::Unsettled;
 
 /// What the UI runtime asks of the development agent at each point its own paths reach it.
 ///
@@ -76,10 +78,12 @@ pub(crate) trait AgentSide {
     );
 
     /// A frame has passed: the readings agents' actions owe, the events the frame produced and
-    /// the waits agents parked.
+    /// the waits agents parked, counted for that frame, those that hold without reading
+    /// settledness evaluated.
     fn after_frame(&self, ui_runtime: &UiRuntime);
 
-    /// An owner turn ended without a frame: the waits agents parked see the window as it is.
+    /// An owner turn ended without a frame: the waits agents parked that hold without reading
+    /// settledness see the window as it is.
     fn after_turn(&self, ui_runtime: &UiRuntime);
 
     /// The frame boundary: input agents injected goes on, one tick.
@@ -87,6 +91,10 @@ pub(crate) trait AgentSide {
 
     /// The earliest deadline of a wait an agent parked on a window that is not closing.
     fn next_wait_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant>;
+
+    /// The host's list after its turn, counting `scope`'s halves: the waits agents parked whose
+    /// answer reads settledness are answered from it (ADR-0400 §3).
+    fn answer_settled(&self, ui_runtime: &UiRuntime, unsettled: &Unsettled, scope: SettleScope);
 
     /// Platform input reached `presentation`: its agent's journal records it.
     fn journal_input(
@@ -201,6 +209,10 @@ impl AgentSide for AgentOwnerSide {
 
     fn next_wait_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant> {
         ui_runtime.next_agent_wait_deadline()
+    }
+
+    fn answer_settled(&self, ui_runtime: &UiRuntime, unsettled: &Unsettled, scope: SettleScope) {
+        ui_runtime.answer_settled_agent_waits(unsettled, scope);
     }
 
     fn journal_input(

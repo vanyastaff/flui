@@ -741,75 +741,77 @@ impl UiRuntime {
         &self,
         floor_owed: &dyn Fn(PresentationAddress) -> bool,
     ) -> Option<web_time::Instant> {
-        [
-            self.next_wake_excluding_agent_waits_owing(floor_owed),
-            self.agent_side
-                .get()
-                .and_then(|agent| agent.next_wait_deadline(self)),
-        ]
-        .into_iter()
-        .flatten()
-        .min()
+        let mut earliest = self
+            .agent_side
+            .get()
+            .and_then(|agent| agent.next_wait_deadline(self));
+        self.visit_armed_deadlines(floor_owed, &mut |_, at| {
+            earliest = Some(earliest.map_or(at, |known| known.min(at)));
+        });
+        earliest
     }
 
-    /// [`Self::next_wake`] without the deadlines of waits an agent parked: what keeps a window
-    /// from being settled.
-    pub(crate) fn next_wake_excluding_agent_waits(&self) -> Option<web_time::Instant> {
-        self.next_wake_excluding_agent_waits_owing(&|_| true)
-    }
-
-    /// [`Self::next_wake_excluding_agent_waits`] with the floors `floor_owed` holds for alone.
-    fn next_wake_excluding_agent_waits_owing(
+    /// Every deadline the runtime wakes for, each with the presentation it belongs to (`None`
+    /// for the runtime's own), the in-flight floor of a presentation only where `floor_owed`
+    /// holds for its address. The one enumeration of them: [`Self::next_wake_owing_floors`] and
+    /// the runtime's half of what keeps it from being idle ([`Self::unsettled`]) both read it,
+    /// so the two cannot disagree. The deadlines of waits an agent parked are not here.
+    pub(super) fn visit_armed_deadlines(
         &self,
         floor_owed: &dyn Fn(PresentationAddress) -> bool,
-    ) -> Option<web_time::Instant> {
+        visit: &mut dyn FnMut(Option<PresentationId>, web_time::Instant),
+    ) {
         let ui_runtime_id = self.id();
-        self.presentations
+        for presentation in self
+            .presentations
             .iter()
             .filter(|presentation| !presentation.closing_requested.get())
-            .flat_map(|presentation| {
-                [
-                    flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures())
-                        .and_then(|deadline| {
-                            flui_interaction::__runtime::wake_instant(
-                                presentation.gestures(),
-                                deadline,
-                            )
-                        }),
-                    presentation.gesture_geometry.borrow().next_wake(),
-                    presentation.text_preparation.borrow().next_wake(),
-                    presentation.haptics().next_wake(),
-                    presentation.frame_rate_hold(),
-                    // The frame an unseen window owes its surface is not here: the
-                    // presentation asks its own window for it (`owed_frame_requests`,
-                    // ADR-0389).
-                    // A presentation at its in-flight limit attempts no frame when its backoff
-                    // ends; the settlement that frees a place wakes it, and the in-flight floor
-                    // bounds the sleep until then (ADR-0305 §5). An unseen one retries once it
-                    // is seen, which wakes it.
-                    presentation.failure_retry_at().filter(|_| {
-                        !presentation.frames_in_flight().is_saturated()
-                            && !presentation.clock().is_hidden()
+        {
+            let deadlines = [
+                flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures())
+                    .and_then(|deadline| {
+                        flui_interaction::__runtime::wake_instant(presentation.gestures(), deadline)
                     }),
-                    presentation.in_flight_floor().filter(|_| {
-                        floor_owed(PresentationAddress {
-                            ui_runtime_id,
-                            presentation_id: presentation.id(),
-                        })
-                    }),
-                ]
-            })
-            .flatten()
-            // A deadline a task sleeps until (`TimerHandle`).
-            .chain(self.owner_frame.next_deadline())
-            .chain(self.drag.next_deadline().map(|deadline| {
-                // A drag's spring-loading deadline is an event time; wakes are instants.
-                let epoch = flui_foundation::MonotonicClock::epoch(&self.clock);
+                presentation.gesture_geometry.borrow().next_wake(),
+                presentation.text_preparation.borrow().next_wake(),
+                presentation.haptics().next_wake(),
+                presentation.frame_rate_hold(),
+                // The frame an unseen window owes its surface is not here: the
+                // presentation asks its own window for it (`owed_frame_requests`,
+                // ADR-0389).
+                // A presentation at its in-flight limit attempts no frame when its backoff
+                // ends; the settlement that frees a place wakes it, and the in-flight floor
+                // bounds the sleep until then (ADR-0305 §5). An unseen one retries once it
+                // is seen, which wakes it.
+                presentation.failure_retry_at().filter(|_| {
+                    !presentation.frames_in_flight().is_saturated()
+                        && !presentation.clock().is_hidden()
+                }),
+                presentation.in_flight_floor().filter(|_| {
+                    floor_owed(PresentationAddress {
+                        ui_runtime_id,
+                        presentation_id: presentation.id(),
+                    })
+                }),
+            ];
+            for at in deadlines.into_iter().flatten() {
+                visit(Some(presentation.id()), at);
+            }
+        }
+        // A deadline a task sleeps until (`TimerHandle`).
+        if let Some(at) = self.owner_frame.next_deadline() {
+            visit(None, at);
+        }
+        if let Some(deadline) = self.drag.next_deadline() {
+            // A drag's spring-loading deadline is an event time; wakes are instants.
+            let epoch = flui_foundation::MonotonicClock::epoch(&self.clock);
+            visit(
+                None,
                 epoch
                     .checked_add(std::time::Duration::from_nanos(deadline.as_nanos()))
-                    .unwrap_or(epoch)
-            }))
-            .min()
+                    .unwrap_or(epoch),
+            );
+        }
     }
 
     /// The earliest instant a presentation that dropped a frame tries it

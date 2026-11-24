@@ -130,6 +130,7 @@ mod pump;
 mod recording;
 mod sampling;
 mod settlement;
+mod unsettled;
 
 pub use crate::runtime_services::RuntimeHostServices;
 pub(crate) use agent::AgentError;
@@ -295,6 +296,10 @@ pub struct UiRuntime {
     /// The development agent's owner side, once [`Self::dev_agent_window`] vended a window here:
     /// until then nothing of the agent's exists to serve (ADR-0402).
     agent_side: Cell<Option<&'static dyn agent_side::AgentSide>>,
+    /// Whether the host answers settledness after each of its turns
+    /// ([`RuntimeHostServices::composes_host_half`]); fixed at construction, so no order of
+    /// events answers a settled wait from the runtime's half on a host that composes one.
+    composes_host_half: bool,
     /// The fan-out of the host's native journal, once the host attached one: the recordings of
     /// the `native` layer join it.
     native_lines: RefCell<Option<agent_record::NativeLines>>,

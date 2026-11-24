@@ -37,7 +37,8 @@ use flui_protocol::{
     inspect::InspectReading, locator::LocateParams, locator::Locator, locator::Matches,
     locator::Pick, locator::Target, motion::MotionParams, motion::MotionState, session::Empty,
     session::Placement, session::Platform, session::WindowParams, tree::ReadParams, tree::Tree,
-    tree::WindowId, wait::WaitOutcome, wait::WaitParams,
+    tree::WindowId, wait::Condition, wait::FramesParams, wait::SettledParams, wait::WaitOutcome,
+    wait::WaitParams,
 };
 use flui_view::__runtime::{LeaseId, Reply, WindowCall};
 
@@ -396,8 +397,6 @@ not_answered!(
     ElementTypeText,
     PerfStart,
     PerfStop,
-    WaitFrames,
-    WaitSettled,
 );
 
 impl Serve for method::WindowPlacement {
@@ -610,10 +609,47 @@ impl Serve for method::WaitUntil {
         record_issued_wait(outcome, issued);
     }
 
-    /// It answers itself: now if the condition holds, else after a frame or at its deadline.
+    /// It answers itself: now if the condition holds without reading settledness, else after a
+    /// frame or turn that makes it hold, or from the host's list after a turn (settledness, its
+    /// deadline, the idle end).
     fn serve(ctx: &mut ServeContext<'_, WaitOutcome>, params: WaitParams) -> Answer<WaitOutcome> {
         ctx.if_panics.set(AgentError::Malformed);
         ctx.runtime.park_agent_wait(ctx.state, params, ctx.park());
+        Answer::Later
+    }
+}
+
+impl Serve for method::WaitSettled {
+    fn record(outcome: &WaitOutcome, issued: &mut IssuedHandles) {
+        record_issued_wait(outcome, issued);
+    }
+
+    /// The wait `Condition::Settled`, with the method's timeout: answered from the host's list
+    /// after its turn (ADR-0400 §3).
+    fn serve(
+        ctx: &mut ServeContext<'_, WaitOutcome>,
+        params: SettledParams,
+    ) -> Answer<WaitOutcome> {
+        let mut wait = WaitParams::new(ctx.window, Condition::Settled);
+        wait.timeout_ms = params.timeout_ms;
+        ctx.if_panics.set(AgentError::Malformed);
+        ctx.runtime.park_agent_wait(ctx.state, wait, ctx.park());
+        Answer::Later
+    }
+}
+
+impl Serve for method::WaitFrames {
+    fn record(outcome: &WaitOutcome, issued: &mut IssuedHandles) {
+        record_issued_wait(outcome, issued);
+    }
+
+    /// The wait `Condition::Frames(frames)`, with the method's timeout: it keeps frames coming
+    /// and counts those presented after the request.
+    fn serve(ctx: &mut ServeContext<'_, WaitOutcome>, params: FramesParams) -> Answer<WaitOutcome> {
+        let mut wait = WaitParams::new(ctx.window, Condition::Frames(params.frames));
+        wait.timeout_ms = params.timeout_ms;
+        ctx.if_panics.set(AgentError::Malformed);
+        ctx.runtime.park_agent_wait(ctx.state, wait, ctx.park());
         Answer::Later
     }
 }

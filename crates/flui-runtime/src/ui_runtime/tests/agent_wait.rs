@@ -8,8 +8,8 @@ use flui_foundation::ManualClock;
 use flui_protocol::method;
 use flui_protocol::{
     error::ErrorCode, error::HandleKind, error::Retry, locator::Locator, tree::WindowId,
-    wait::ClearedBy, wait::Condition, wait::UnsettledReason, wait::WaitEnd, wait::WaitOutcome,
-    wait::WaitParams, wire::ActionName,
+    wait::ClearedBy, wait::Condition, wait::SettleScope, wait::UnsettledReason, wait::WaitEnd,
+    wait::WaitOutcome, wait::WaitParams, wire::ActionName,
 };
 
 use flui_view::dev_agent::{AgentAnswer, AgentWindow};
@@ -179,13 +179,18 @@ fn a_timeout_names_why_the_window_had_not_settled() {
         Condition::All(vec![Condition::Settled, appears("Missing")]),
         Some(0),
     );
-    let _report = ui_runtime.drain_commands();
+    let _ = ui_runtime.drain_owner_inbox();
 
     let outcome = reply
         .try_take()
-        .expect("a zero timeout is up at once")
+        .expect("a zero timeout is up at the end of the turn that parked it")
         .expect("running out is an answer");
     assert_eq!(outcome.end, WaitEnd::Unsatisfied);
+    assert_eq!(
+        outcome.scope,
+        SettleScope::RuntimeOnly,
+        "a runtime whose host composes no half answers from its own"
+    );
     let reasons: Vec<_> = outcome.unsettled.iter().map(|cause| cause.reason).collect();
     assert!(
         reasons.contains(&UnsettledReason::NeedsRedraw),
@@ -214,18 +219,25 @@ fn a_parked_wait_is_not_a_reason_the_window_has_not_settled() {
         .expect("the primary presentation is hosted")
         .clock()
         .now();
-    let before = ui_runtime.unsettled_causes(now);
+    let gathered = || {
+        let mut unsettled = crate::settledness::Unsettled::new(now);
+        ui_runtime.unsettled(now, &mut unsettled);
+        unsettled
+    };
+    let before = gathered();
 
     let _parked = wait(&ui_runtime, &window, appears("Missing"), Some(10));
     let _report = ui_runtime.drain_commands();
 
-    assert!(
-        ui_runtime.next_wake() < ui_runtime.next_wake_excluding_agent_waits(),
+    let after = gathered();
+    assert_eq!(
+        after.next_deadline(),
+        Some(now + Duration::from_millis(10)),
         "the parked wait's deadline is the earliest wake"
     );
     assert_eq!(
-        ui_runtime.unsettled_causes(now),
-        before,
+        after.causes().collect::<Vec<_>>(),
+        before.causes().collect::<Vec<_>>(),
         "what a wait itself holds out for is not why the window is busy"
     );
 }
@@ -321,11 +333,11 @@ fn a_timer_the_window_waits_on_is_named_with_when_it_is_due() {
     // The test window cannot answer the native gesture-geometry query, so the owner keeps
     // its retry as a timer: a window with one is not settled.
     let mut reply = wait(&ui_runtime, &window, Condition::Settled, Some(0));
-    let _report = ui_runtime.drain_commands();
+    let _ = ui_runtime.drain_owner_inbox();
 
     let outcome = reply
         .try_take()
-        .expect("a zero timeout is up at once")
+        .expect("a zero timeout is up at the end of the turn that parked it")
         .expect("running out is an answer");
     assert_eq!(outcome.end, WaitEnd::Unsatisfied);
     let timer = outcome

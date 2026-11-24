@@ -34,6 +34,7 @@ pub struct RuntimeHostServices<'a> {
     pub(crate) process_nonce: ProcessNonce,
     pub(crate) flush_registry: Option<FlushRegistry>,
     pub(crate) close_vetoes: Vec<CloseReason>,
+    pub(crate) composes_host_half: bool,
 }
 
 impl fmt::Debug for RuntimeHostServices<'_> {
@@ -77,6 +78,7 @@ impl<'a> RuntimeHostServices<'a> {
             process_nonce: ProcessNonce::mint(),
             flush_registry: None,
             close_vetoes: Vec::new(),
+            composes_host_half: false,
         }
     }
 
@@ -128,6 +130,19 @@ impl<'a> RuntimeHostServices<'a> {
         self
     }
 
+    /// The host gathers its half of what keeps the application from being idle and hands the
+    /// whole list to [`UiRuntime::answer_settled`](crate::ui_runtime::UiRuntime::answer_settled)
+    /// after every turn (ADR-0400 §3): only that call answers a wait that reads settledness, a
+    /// wait's timeout and the idle end, and every answer counts both halves
+    /// (`SettleScope::Complete`). Without it the runtime answers them itself at the end of each
+    /// turn from its half alone, never idle (`SettleScope::RuntimeOnly`). Fixed for the
+    /// runtime's lifetime.
+    #[must_use]
+    pub fn composes_host_half(mut self) -> Self {
+        self.composes_host_half = true;
+        self
+    }
+
     /// Seed this runtime from the same host's latest accepted observation.
     /// First root construction observes this revision; queued older revisions
     /// cannot replace it after the runtime is installed.
@@ -173,6 +188,8 @@ pub(crate) struct RuntimeServices {
     pub(crate) process_nonce: ProcessNonce,
     /// What every presentation closes and persists through.
     pub(crate) close: CloseServices,
+    /// Whether the host answers settledness ([`RuntimeHostServices::composes_host_half`]).
+    pub(crate) composes_host_half: bool,
 }
 
 impl RuntimeServices {
@@ -195,6 +212,7 @@ impl RuntimeServices {
             process_nonce,
             flush_registry,
             close_vetoes,
+            composes_host_half,
         } = host;
         let close = CloseServices::new(flush_registry, &close_vetoes, Arc::clone(&wake));
         // Frame times come from `clock`, so the scheduler measures frames on it.
@@ -214,6 +232,7 @@ impl RuntimeServices {
             data_transfer,
             process_nonce,
             close,
+            composes_host_half,
         }
     }
 }
