@@ -28,7 +28,7 @@
 //! compiler into plain WGSL at `OUT_DIR/shaders/<same path>.wgsl`, before any
 //! binding is generated, so:
 //!
-//! - the pipelines include that finished WGSL (`shaders::composed_wgsl!`), and
+//! - the pipelines compile that finished WGSL (a constant of `shaders`), and
 //!   no shader composer runs or ships at run time;
 //! - `wgsl_bindgen` reads the composed copy and never resolves an import
 //!   itself. Its workspace root for `effects/mode.wgsl` is the composed
@@ -43,7 +43,9 @@
 //! application. `strip_wgsl_sources` writes each file of `src/shaders/` to
 //! `OUT_DIR/wgsl/<same path>` without its line comments, indentation and blank
 //! lines, and the composed shaders are written the same way; the pipelines
-//! include those copies (`shaders::wgsl_source!`), never a source file.
+//! include those copies through the constants of `shaders`, never a source file.
+//! Both output directories are emptied first, so the copy of a shader that was
+//! renamed or deleted does not outlive it.
 //!
 //! ## Inner-attribute post-processing
 //!
@@ -54,12 +56,17 @@
 //! (where suppression is applied via the wrapping `#[allow(...)]` attribute on
 //! the `mod` item).
 
+// Shared with the crate's tests, which is where it is tested.
+#[path = "src/shaders/strip.rs"]
+mod strip;
+
 use std::{
     env, fs,
     path::{Path, PathBuf},
 };
 
 use regex::Regex;
+use strip::strip_wgsl;
 use wgsl_bindgen::{
     GlamWgslTypeMap,
     OverrideSamplerType,
@@ -155,8 +162,8 @@ const SHADER_CONFIGS: &[ShaderConfig] = &[
 /// `src/shaders/` (`effects/mode` is `effects/mode.wgsl`).
 ///
 /// `compose_wesl_shaders` resolves each one into plain WGSL at
-/// `OUT_DIR/shaders/<path>.wgsl`; the runtime pipelines include that output
-/// through `shaders::composed_wgsl!`, and `wgsl_bindgen` reads it too.
+/// `OUT_DIR/shaders/<path>.wgsl`; the constants of `shaders` include that output
+/// and `wgsl_bindgen` reads it too.
 const WESL_ENTRIES: &[&str] = &[
     "advanced_blend",
     "effects/color_matrix",
@@ -267,9 +274,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // a composed shader, and every output below derives from these sources.
     println!("cargo:rerun-if-changed={}", shader_root.display());
 
-    let composed_root = out_dir.join("shaders");
+    // A copy outlives its source otherwise: a shader that was renamed or deleted
+    // would keep compiling from the copy an earlier build left here.
+    let composed_root = emptied(out_dir.join("shaders"))?;
+    let stripped_root = emptied(out_dir.join("wgsl"))?;
     compose_wesl_shaders(&shader_root, &composed_root)?;
-    strip_wgsl_sources(&shader_root, &out_dir.join("wgsl"))?;
+    strip_wgsl_sources(&shader_root, &stripped_root)?;
 
     for cfg in SHADER_CONFIGS {
         let entry_path = effects_dir.join(cfg.shader_name);
@@ -335,7 +345,9 @@ fn compose_wesl_shaders(
         if let Some(parent) = out_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&out_path, strip_wgsl(&composed.to_string())?)?;
+        let code = strip_wgsl(&composed.to_string())
+            .map_err(|error| format!("composed `{entry}`: {error}"))?;
+        fs::write(&out_path, code)?;
     }
     Ok(())
 }
@@ -451,11 +463,11 @@ fn strip_inner_allow_from_generated(path: &Path) -> Result<(), Box<dyn std::erro
 }
 
 /// Write every `.wgsl` file under `shader_root` to the same relative path under
-/// `stripped_root`, as [`strip_wgsl`] leaves it.
+/// `stripped_root`, as [`strip::strip_wgsl`] leaves it.
 ///
 /// A pipeline hands its shader text to the GPU API as it is, so the text is
 /// linked into every application. The sources carry more comment than code; the
-/// copies carry the code alone, and `shaders::wgsl_source!` includes them.
+/// copies carry the code alone, and the constants of `shaders` include them.
 fn strip_wgsl_sources(
     shader_root: &Path,
     stripped_root: &Path,
@@ -479,27 +491,13 @@ fn strip_wgsl_sources(
     Ok(())
 }
 
-/// `source` without its line comments, indentation and blank lines.
-///
-/// WGSL has no string or character literal, so `//` opens a comment wherever it
-/// stands, and the comment ends at its line's break, which stays where a line
-/// has code. A block comment is refused: one may hold a `//`, so cutting line
-/// comments around it would cut its end.
-fn strip_wgsl(source: &str) -> Result<String, &'static str> {
-    if source.contains("/*") {
-        return Err(
-            "a block comment (`/*`): the shader sources use line comments, which the \
-                    build strips",
-        );
+/// `directory` with nothing in it, whatever an earlier build left there.
+fn emptied(directory: PathBuf) -> Result<PathBuf, std::io::Error> {
+    match fs::remove_dir_all(&directory) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
     }
-    let mut code = String::with_capacity(source.len());
-    for line in source.lines() {
-        let line = line.split_once("//").map_or(line, |(code, _comment)| code);
-        let line = line.trim();
-        if !line.is_empty() {
-            code.push_str(line);
-            code.push('\n');
-        }
-    }
-    Ok(code)
+    fs::create_dir_all(&directory)?;
+    Ok(directory)
 }

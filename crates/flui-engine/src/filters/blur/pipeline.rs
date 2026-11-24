@@ -114,9 +114,7 @@ impl BlurPipeline {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Blur Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                crate::shaders::wgsl_source!("effects/blur.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(crate::shaders::BLUR.into()),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

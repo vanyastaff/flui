@@ -101,8 +101,8 @@ var<uniform> viewport: Viewport;
 // Shared SDF helpers
 // =============================================================================
 //
-// Inlined rather than imported: this project's WGSL sources are `include_str!`
-// constants with no preprocessor, so every shader that needs an SDF carries its
+// Inlined rather than imported: this file reaches the shader compiler with no
+// preprocessor to resolve an import, so a shader that needs an SDF carries its
 // own copy. These three are byte-identical to `rect_instanced.wgsl`'s, so the
 // clip a circle evaluates is literally the same function a rect evaluates — the
 // point of routing both through `ClippableInstance`.

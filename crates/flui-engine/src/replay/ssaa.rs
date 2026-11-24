@@ -110,9 +110,7 @@ impl SsaaDownsamplePipeline {
         let device = gpu.device();
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("SSAA Box Downsample Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                crate::shaders::wgsl_source!("effects/box_downsample.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(crate::shaders::BOX_DOWNSAMPLE.into()),
         });
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

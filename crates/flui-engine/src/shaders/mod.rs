@@ -1,20 +1,22 @@
-//! WGSL shader source bindings for the wgpu backend.
+//! WGSL shader text for the wgpu backend.
 //!
-//! A shader appears here when its source is ASSEMBLED rather than merely read:
-//! every entry below is a concatenation whose piece order is load-bearing, and
-//! the assembly is what earns the indirection. Shaders that are a single file
-//! (`effects/*.wgsl`, the remaining `common/*.wgsl`) are included by their
-//! consumers through [`wgsl_source!`], including `pipelines/effects.rs` for
-//! the shadow pipeline.
+//! Every shader a pipeline compiles is a constant of this module, and nothing
+//! outside it includes a shader file. The text a pipeline hands to the GPU API
+//! is linked into every application, so `build.rs` writes each file of
+//! `src/shaders/` without its comments, indentation and blank lines, and the
+//! two macros below, which stay private to this module, include those copies.
 //!
-//! No pipeline includes a file of `src/shaders/` itself: the text a pipeline
-//! hands to the GPU API is linked into every application, so `build.rs` writes
-//! each file without its comments, indentation and blank lines, and
-//! [`wgsl_source!`] includes that copy.
-//!
-//! A shader that imports a shared module (`import package::color_filter::…;`)
-//! is not read from here at all: `build.rs` resolves it with WESL and its
-//! consumer includes the result through [`composed_wgsl!`].
+//! A constant is one file, an assembly of several whose order is load-bearing,
+//! or a module that imports a shared one (`import package::color_filter::…;`),
+//! which `build.rs` resolves with WESL first. They are declared through
+//! `shader_texts!` and `coverage_shaders!`, which list them for the tests at
+//! the end of this file: a shader added here is checked without being added
+//! to a list.
+
+#[cfg(test)]
+mod strip;
+
+use crate::pipelines::variants::CoverageShaderSources;
 
 /// The code of `src/shaders/$path` (`"effects/blit.wgsl"`), as `build.rs`
 /// strips it of comments, indentation and blank lines, as a `&'static str`
@@ -24,11 +26,10 @@ macro_rules! wgsl_source {
         include_str!(concat!(env!("OUT_DIR"), "/wgsl/", $path))
     };
 }
-pub(crate) use wgsl_source;
 
 /// The plain WGSL `build.rs` composed from the WESL module at `$path` under
-/// `src/shaders/` (`"effects/mode"` is `effects/mode.wgsl`), as a `&'static str`
-/// literal, so it also nests in `concat!`.
+/// `src/shaders/` (`"effects/mode"` is `effects/mode.wgsl`), stripped the same
+/// way, as a `&'static str` literal, so it also nests in `concat!`.
 ///
 /// Only the modules `build.rs` lists in `WESL_ENTRIES` exist; any other path
 /// fails to compile with a missing-file error.
@@ -37,7 +38,31 @@ macro_rules! composed_wgsl {
         include_str!(concat!(env!("OUT_DIR"), "/shaders/", $path, ".wgsl"))
     };
 }
-pub(crate) use composed_wgsl;
+
+/// Declares each shader text as a `pub(crate) const` and lists all of them, by
+/// name, in `TEXTS` for the tests.
+macro_rules! shader_texts {
+    ($($(#[$attribute:meta])* $name:ident = $text:expr;)+) => {
+        $($(#[$attribute])* pub(crate) const $name: &str = $text;)+
+
+        /// Every shader text above, by its constant's name.
+        #[cfg(test)]
+        const TEXTS: &[(&str, &str)] = &[$((stringify!($name), $name)),+];
+    };
+}
+
+/// Declares each coverage-correct shader as a `pub(crate) const` and lists all
+/// of them, by name, in `COVERAGE_SHADERS` for the tests.
+macro_rules! coverage_shaders {
+    ($($(#[$attribute:meta])* $name:ident = $sources:expr;)+) => {
+        $($(#[$attribute])* pub(crate) const $name: CoverageShaderSources = $sources;)+
+
+        /// Every coverage-correct shader above, by its constant's name.
+        #[cfg(test)]
+        const COVERAGE_SHADERS: &[(&str, CoverageShaderSources)] =
+            &[$((stringify!($name), $name)),+];
+    };
+}
 
 // Coverage-correct assemblies
 //
@@ -120,33 +145,35 @@ macro_rules! coverage_correct_shader {
     };
 }
 
-/// Tessellated shape shader — folded, dual-source and isolation assemblies.
-///
-/// Tessellated geometry has no instances to hang a clip slot on, so its clip
-/// arrives in a per-batch uniform rather than per instance; the clip block is
-/// the same either way.
-pub(crate) const SHAPE: crate::pipelines::variants::CoverageShaderSources = coverage_correct_shader!(
-    "shape.wgsl",
-    "@vertex fn vs_isolation(input: VertexInput) -> VertexOutput { return isolateVertex(vertexStage(input)); }\n"
-);
+coverage_shaders! {
+    /// Tessellated shape shader — folded, dual-source and isolation assemblies.
+    ///
+    /// Tessellated geometry has no instances to hang a clip slot on, so its clip
+    /// arrives in a per-batch uniform rather than per instance; the clip block is
+    /// the same either way.
+    SHAPE = coverage_correct_shader!(
+        "shape.wgsl",
+        "@vertex fn vs_isolation(input: VertexInput) -> VertexOutput { return isolateVertex(vertexStage(input)); }\n"
+    );
 
-/// Instanced linear gradient shader — folded, dual-source and isolation assemblies.
-pub(crate) const LINEAR_GRADIENT: crate::pipelines::variants::CoverageShaderSources = coverage_correct_shader!(
-    gradient "gradients/linear.wgsl",
-    "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
-);
+    /// Instanced linear gradient shader — folded, dual-source and isolation assemblies.
+    LINEAR_GRADIENT = coverage_correct_shader!(
+        gradient "gradients/linear.wgsl",
+        "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
+    );
 
-/// Instanced radial gradient shader — folded, dual-source and isolation assemblies.
-pub(crate) const RADIAL_GRADIENT: crate::pipelines::variants::CoverageShaderSources = coverage_correct_shader!(
-    gradient "gradients/radial.wgsl",
-    "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
-);
+    /// Instanced radial gradient shader — folded, dual-source and isolation assemblies.
+    RADIAL_GRADIENT = coverage_correct_shader!(
+        gradient "gradients/radial.wgsl",
+        "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
+    );
 
-/// Instanced sweep gradient shader — folded, dual-source and isolation assemblies.
-pub(crate) const SWEEP_GRADIENT: crate::pipelines::variants::CoverageShaderSources = coverage_correct_shader!(
-    gradient "gradients/sweep.wgsl",
-    "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
-);
+    /// Instanced sweep gradient shader — folded, dual-source and isolation assemblies.
+    SWEEP_GRADIENT = coverage_correct_shader!(
+        gradient "gradients/sweep.wgsl",
+        "@vertex fn vs_isolation(input: VertexInput, instance: InstanceInput) -> VertexOutput { return isolateVertex(vertexStage(input, instance)); }\n"
+    );
+}
 
 // Instanced rendering
 //
@@ -160,129 +187,125 @@ pub(crate) const SWEEP_GRADIENT: crate::pipelines::variants::CoverageShaderSourc
 //
 // Arcs also consume the final clip mask through the shared viewport group.
 //
-// `concat!` takes the `include_str!` calls directly rather than a named
-// `CLIP_SDF` const: it concatenates literals, and a `const` is not one.
+// `concat!` takes the `wgsl_source!` calls directly rather than a named
+// `CLIP_SDF` const: it concatenates literals, which a macro call expands to
+// and a `const` is not.
 
-/// Instanced rectangle rendering shader.
-pub(crate) const RECT_INSTANCED: &str = concat!(
-    wgsl_source!("common/clip.wgsl"),
-    wgsl_source!("rect_instanced.wgsl")
-);
-/// Instanced circle rendering shader.
-pub(crate) const CIRCLE_INSTANCED: &str = concat!(
-    wgsl_source!("common/clip.wgsl"),
-    wgsl_source!("circle_instanced.wgsl")
-);
-/// Instanced arc rendering shader.
-pub(crate) const ARC_INSTANCED: &str = concat!(
-    wgsl_source!("common/clip.wgsl"),
-    wgsl_source!("arc_instanced.wgsl")
-);
-/// Analytical shadow shader with shared final clip coverage.
-pub(crate) const SHADOW: &str = concat!(
-    wgsl_source!("common/clip.wgsl"),
-    wgsl_source!("effects/shadow.wgsl")
-);
-/// Instanced texture rendering shader.
-pub(crate) const TEXTURE_INSTANCED: &str = concat!(
-    wgsl_source!("common/clip.wgsl"),
-    "fn filterSourceTexel(t: vec4<f32>) -> vec4<f32> { return vec4<f32>(t.rgb * t.a, t.a); }\n",
-    wgsl_source!("texture_instanced.wgsl"),
-    "\n@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> { return folded_image(input); }\n"
-);
-/// Image color and independent clip coverage over a cropped attachment.
-pub(crate) const TEXTURE_ISOLATION: &str = concat!(
-    wgsl_source!("common/clip.wgsl"),
-    "fn filterSourceTexel(t: vec4<f32>) -> vec4<f32> { return vec4<f32>(t.rgb * t.a, t.a); }\n",
-    wgsl_source!("texture_instanced.wgsl"),
-    wgsl_source!("texture_isolation.wgsl")
-);
-/// Decoded source filtering preserves floating channels until composition.
-pub(crate) const TEXTURE_FILTERED: &str = concat!(
-    wgsl_source!("common/clip.wgsl"),
-    composed_wgsl!("image_source_filter"),
-    wgsl_source!("texture_instanced.wgsl"),
-    "\n@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> { return folded_image(input); }\n"
-);
-pub(crate) const TEXTURE_FILTERED_ISOLATION: &str = concat!(
-    wgsl_source!("common/clip.wgsl"),
-    composed_wgsl!("image_source_filter"),
-    wgsl_source!("texture_instanced.wgsl"),
-    wgsl_source!("texture_isolation.wgsl")
-);
-/// Instanced glyph rendering shader (the glyph atlas' consumer).
-pub(crate) const GLYPH_INSTANCED: &str = concat!(
-    wgsl_source!("common/clip.wgsl"),
-    wgsl_source!("glyph_instanced.wgsl")
-);
+shader_texts! {
+    /// Instanced rectangle rendering shader.
+    RECT_INSTANCED = concat!(
+        wgsl_source!("common/clip.wgsl"),
+        wgsl_source!("rect_instanced.wgsl")
+    );
+    /// Instanced circle rendering shader.
+    CIRCLE_INSTANCED = concat!(
+        wgsl_source!("common/clip.wgsl"),
+        wgsl_source!("circle_instanced.wgsl")
+    );
+    /// Instanced arc rendering shader.
+    ARC_INSTANCED = concat!(
+        wgsl_source!("common/clip.wgsl"),
+        wgsl_source!("arc_instanced.wgsl")
+    );
+    /// Analytical shadow shader with shared final clip coverage.
+    SHADOW = concat!(
+        wgsl_source!("common/clip.wgsl"),
+        wgsl_source!("effects/shadow.wgsl")
+    );
+    /// Instanced texture rendering shader.
+    TEXTURE_INSTANCED = concat!(
+        wgsl_source!("common/clip.wgsl"),
+        "fn filterSourceTexel(t: vec4<f32>) -> vec4<f32> { return vec4<f32>(t.rgb * t.a, t.a); }\n",
+        wgsl_source!("texture_instanced.wgsl"),
+        "@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> { return folded_image(input); }\n"
+    );
+    /// Image color and independent clip coverage over a cropped attachment.
+    TEXTURE_ISOLATION = concat!(
+        wgsl_source!("common/clip.wgsl"),
+        "fn filterSourceTexel(t: vec4<f32>) -> vec4<f32> { return vec4<f32>(t.rgb * t.a, t.a); }\n",
+        wgsl_source!("texture_instanced.wgsl"),
+        wgsl_source!("texture_isolation.wgsl")
+    );
+    /// Decoded source filtering preserves floating channels until composition.
+    TEXTURE_FILTERED = concat!(
+        wgsl_source!("common/clip.wgsl"),
+        composed_wgsl!("image_source_filter"),
+        wgsl_source!("texture_instanced.wgsl"),
+        "@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> { return folded_image(input); }\n"
+    );
+    /// [`TEXTURE_FILTERED`] over a cropped attachment, as [`TEXTURE_ISOLATION`].
+    TEXTURE_FILTERED_ISOLATION = concat!(
+        wgsl_source!("common/clip.wgsl"),
+        composed_wgsl!("image_source_filter"),
+        wgsl_source!("texture_instanced.wgsl"),
+        wgsl_source!("texture_isolation.wgsl")
+    );
+    /// Instanced glyph rendering shader (the glyph atlas' consumer).
+    GLYPH_INSTANCED = concat!(
+        wgsl_source!("common/clip.wgsl"),
+        wgsl_source!("glyph_instanced.wgsl")
+    );
+
+    // Single files and composed modules, each compiled by one pipeline.
+
+    /// The clip mask's shader (`replay::clip_mask`).
+    CLIP_MASK = wgsl_source!("clip_mask.wgsl");
+    /// The portable coverage composite (`replay::portable_coverage`).
+    PORTABLE_COVERAGE = wgsl_source!("portable_coverage.wgsl");
+    /// Box-filter downsample of the supersampled target (`replay::ssaa`).
+    BOX_DOWNSAMPLE = wgsl_source!("effects/box_downsample.wgsl");
+    /// Fullscreen blit of an intermediate texture onto the surface (`offscreen::blit`).
+    BLIT = wgsl_source!("effects/blit.wgsl");
+    /// Presentation blit with conversion to the surface's gamut and transfer
+    /// function (`offscreen::transform_blit`).
+    PRESENT_TRANSFORM = wgsl_source!("effects/present_transform.wgsl");
+    /// Separable Gaussian blur (`filters::blur`).
+    BLUR = wgsl_source!("effects/blur.wgsl");
+    /// Separable dilate or erode (`filters::morphology`).
+    MORPHOLOGY = wgsl_source!("effects/morphology.wgsl");
+    /// A source resampled through an affine map (`filters::resample`).
+    RESAMPLE = wgsl_source!("effects/resample.wgsl");
+    /// Advanced blend-mode composite (`filters::advanced_blend`).
+    ADVANCED_BLEND = composed_wgsl!("advanced_blend");
+    /// Per-pixel 5×4 colour-matrix filter (`filters::color_matrix`).
+    COLOR_MATRIX = composed_wgsl!("effects/color_matrix");
+    /// Per-pixel sRGB gamma transfer function (`filters::gamma`).
+    GAMMA = composed_wgsl!("effects/gamma");
+    /// Per-pixel `ColorFilter::Mode` (`filters::mode`).
+    MODE = composed_wgsl!("effects/mode");
+}
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ARC_INSTANCED, CIRCLE_INSTANCED, GLYPH_INSTANCED, LINEAR_GRADIENT, RADIAL_GRADIENT,
-        RECT_INSTANCED, SHADOW, SHAPE, SWEEP_GRADIENT, TEXTURE_FILTERED,
-        TEXTURE_FILTERED_ISOLATION, TEXTURE_INSTANCED, TEXTURE_ISOLATION,
-    };
+    use std::path::Path;
 
-    /// Every shader text a pipeline includes, by the name a failure reports.
-    fn included_sources() -> Vec<(&'static str, &'static str)> {
-        let mut sources = vec![
-            ("rect_instanced", RECT_INSTANCED),
-            ("circle_instanced", CIRCLE_INSTANCED),
-            ("arc_instanced", ARC_INSTANCED),
-            ("shadow", SHADOW),
-            ("texture_instanced", TEXTURE_INSTANCED),
-            ("texture_isolation", TEXTURE_ISOLATION),
-            ("texture_filtered", TEXTURE_FILTERED),
-            ("texture_filtered_isolation", TEXTURE_FILTERED_ISOLATION),
-            ("glyph_instanced", GLYPH_INSTANCED),
-            ("clip_mask", wgsl_source!("clip_mask.wgsl")),
-            ("portable_coverage", wgsl_source!("portable_coverage.wgsl")),
-            ("effects/blit", wgsl_source!("effects/blit.wgsl")),
-            ("effects/blur", wgsl_source!("effects/blur.wgsl")),
-            (
-                "effects/box_downsample",
-                wgsl_source!("effects/box_downsample.wgsl"),
-            ),
-            (
-                "effects/morphology",
-                wgsl_source!("effects/morphology.wgsl"),
-            ),
-            (
-                "effects/present_transform",
-                wgsl_source!("effects/present_transform.wgsl"),
-            ),
-            ("effects/resample", wgsl_source!("effects/resample.wgsl")),
-            ("advanced_blend", composed_wgsl!("advanced_blend")),
-            (
-                "effects/color_matrix",
-                composed_wgsl!("effects/color_matrix"),
-            ),
-            ("effects/gamma", composed_wgsl!("effects/gamma")),
-            ("effects/mode", composed_wgsl!("effects/mode")),
-        ];
-        for (name, coverage) in [
-            ("shape", SHAPE),
-            ("gradients/linear", LINEAR_GRADIENT),
-            ("gradients/radial", RADIAL_GRADIENT),
-            ("gradients/sweep", SWEEP_GRADIENT),
-        ] {
-            sources.push((name, coverage.folded));
-            sources.push((name, coverage.second_source));
-            sources.push((name, coverage.isolation));
+    use super::{COVERAGE_SHADERS, TEXTS};
+
+    /// Every text a pipeline can compile, by the name a failure reports.
+    fn shader_texts() -> Vec<(String, &'static str)> {
+        let mut texts: Vec<(String, &'static str)> = TEXTS
+            .iter()
+            .map(|(name, text)| ((*name).to_owned(), *text))
+            .collect();
+        for (name, sources) in COVERAGE_SHADERS {
+            texts.push((format!("{name}.folded"), sources.folded));
+            texts.push((format!("{name}.second_source"), sources.second_source));
+            texts.push((format!("{name}.isolation"), sources.isolation));
         }
-        sources
+        texts
     }
 
     /// The shader text is linked into every application, so it carries code
     /// and nothing for a reader: `build.rs` strips each source and each
-    /// composed shader before a pipeline includes it.
+    /// composed shader, and the pieces an assembly adds are written the same
+    /// way.
     #[test]
-    fn a_pipeline_includes_shader_code_without_comments_or_indentation() {
-        for (name, source) in included_sources() {
-            for line in source.lines() {
+    fn a_pipeline_compiles_shader_code_without_comments_indentation_or_blank_lines() {
+        for (name, text) in shader_texts() {
+            for line in text.lines() {
                 assert!(!line.contains("//"), "{name} keeps a comment: {line:?}");
                 assert_eq!(line, line.trim(), "{name} keeps a line's indentation");
+                assert!(!line.is_empty(), "{name} keeps a blank line");
             }
         }
     }
@@ -290,10 +313,50 @@ mod tests {
     /// Stripping removes nothing a shader needs: each text still parses, on a
     /// host with no GPU to compile it.
     #[test]
-    fn every_included_shader_parses_as_wgsl() {
-        for (name, source) in included_sources() {
-            if let Err(error) = wgpu::naga::front::wgsl::parse_str(source) {
-                panic!("{name} does not parse:\n{}", error.emit_to_string(source));
+    fn every_shader_text_parses_as_wgsl() {
+        for (name, text) in shader_texts() {
+            if let Err(error) = wgpu::naga::front::wgsl::parse_str(text) {
+                panic!("{name} does not parse:\n{}", error.emit_to_string(text));
+            }
+        }
+    }
+
+    /// The constants above are the only way to a shader file: a Rust source
+    /// outside this module that names one includes it with its comments, past
+    /// both tests above.
+    #[test]
+    fn no_source_outside_this_module_names_a_shader_file() {
+        fn rust_sources(directory: &Path, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(directory).expect("a source directory") {
+                let path = entry.expect("a directory entry").path();
+                if path.is_dir() {
+                    rust_sources(&path, found);
+                } else if path.extension().is_some_and(|extension| extension == "rs") {
+                    found.push(path);
+                }
+            }
+        }
+
+        let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let this_module = source_root.join("shaders").join("mod.rs");
+        let mut sources = Vec::new();
+        rust_sources(&source_root, &mut sources);
+        assert!(
+            sources.contains(&this_module),
+            "the walk reaches this module"
+        );
+        for path in sources {
+            if path == this_module {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("a UTF-8 source file");
+            for (index, line) in source.lines().enumerate() {
+                assert!(
+                    !line.contains(".wgsl\""),
+                    "{}:{} names a shader file; compile a constant of `shaders` instead",
+                    path.display(),
+                    index + 1
+                );
             }
         }
     }

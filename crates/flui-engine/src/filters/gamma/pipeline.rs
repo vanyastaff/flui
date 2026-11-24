@@ -111,9 +111,7 @@ impl GammaPipeline {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Gamma Shader"),
-            source: wgpu::ShaderSource::Wgsl(
-                crate::shaders::composed_wgsl!("effects/gamma").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(crate::shaders::GAMMA.into()),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
