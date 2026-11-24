@@ -1,6 +1,6 @@
 //! Removal and unmount of subtrees, including the inherited-dependency and unmount-hook bookkeeping they run.
 
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, RenderId};
 
 use super::render_children::{RenderRelocation, collect_render_frontier, detach_render_relocation};
 use super::{ElementNode, ElementTree};
@@ -41,6 +41,8 @@ pub(super) struct RemovalScratch {
     keyed_descendants: Vec<ElementId>,
     /// The walk's pending ids.
     work_stack: Vec<ElementId>,
+    /// The render objects the subtree's teardown takes out.
+    render_members: Vec<RenderId>,
 }
 
 impl RemovalScratch {
@@ -57,6 +59,8 @@ impl RemovalScratch {
             buffer.clear();
             buffer.shrink_to(Self::KEPT_CAPACITY);
         }
+        self.render_members.clear();
+        self.render_members.shrink_to(Self::KEPT_CAPACITY);
     }
 }
 
@@ -408,6 +412,7 @@ impl ElementTree {
             subtree,
             keyed_descendants,
             work_stack,
+            render_members,
         } = &mut scratch;
         {
             work_stack.push(id);
@@ -433,12 +438,66 @@ impl ElementTree {
         // generation advance, including every node under those boundaries.
         self.preflight_unmount(subtree);
 
+        // The subtree's render objects leave the tree with their topmost one
+        // (`PipelineCell::with_teardown`): every element below still finds its
+        // own render object present when it unmounts.
+        match self.teardown_members(subtree, render_members) {
+            Some(pipeline) => pipeline.with_teardown(render_members, || {
+                self.unmount_snapshot(id, owner, mode, subtree, keyed_descendants);
+            }),
+            None => self.unmount_snapshot(id, owner, mode, subtree, keyed_descendants),
+        }
+        scratch.reset();
+        self.removal_scratch = scratch;
+    }
+
+    /// The pipeline whose teardown `subtree`'s render objects leave the tree
+    /// in, and those render objects in `members`: the pipeline of the first
+    /// element that has a render object, when it has more than one of them.
+    /// A render object on another pipeline leaves the tree on its own.
+    fn teardown_members(
+        &self,
+        subtree: &[ElementId],
+        members: &mut Vec<RenderId>,
+    ) -> Option<flui_rendering::pipeline::PipelineCell> {
+        let mut pipeline: Option<flui_rendering::pipeline::PipelineCell> = None;
+        for &id in subtree {
+            let Some(element) = self.get(id).map(ElementNode::element) else {
+                continue;
+            };
+            let Some(render_id) = element.render_id() else {
+                continue;
+            };
+            let Some(cell) = element.pipeline_owner() else {
+                continue;
+            };
+            match &pipeline {
+                Some(first) if !first.ptr_eq(&cell) => continue,
+                Some(_) => {}
+                None => pipeline = Some(cell),
+            }
+            members.push(render_id);
+        }
+        pipeline.filter(|_| members.len() > 1)
+    }
+
+    /// The teardown of a snapshot [`remove_subtree`](Self::remove_subtree)
+    /// took: the keyed descendants soft-removed, then every other element
+    /// freed deepest first, the root last.
+    fn unmount_snapshot(
+        &mut self,
+        id: ElementId,
+        owner: &mut crate::ElementOwner<'_>,
+        mode: SubtreeRemoval,
+        subtree: &[ElementId],
+        keyed_descendants: &[ElementId],
+    ) {
         // Soft-remove the keyed descendants BEFORE their ancestors are freed,
         // so `remove`'s unlink-from-parent and render detach run against a
         // tree that is still intact. No keyed node here is an ancestor of
         // another — the walk never descended past one — so the order among
         // them does not matter.
-        for &keyed in keyed_descendants.iter() {
+        for &keyed in keyed_descendants {
             self.remove(keyed, owner);
         }
         self.retire_sparse_children(subtree, owner.child_manager_registry);
@@ -465,8 +524,6 @@ impl ElementTree {
                 self.remove(id, owner);
             }
         }
-        scratch.reset();
-        self.removal_scratch = scratch;
     }
 
     /// Fully remove an element that has already been unmounted (e.g.

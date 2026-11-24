@@ -326,3 +326,117 @@ fn a_removal_batch_left_open_by_an_unwind_closes_at_the_next_layout_pass() {
     );
     cell.with(|owner| assert_eq!(owner.render_tree().children(top), [rows[0]]));
 }
+
+/// A row of `top` with a child, each with a grandchild: `row → cell → leaf`. Returns the row,
+/// the cell and the leaf.
+fn row_of_three(cell: &PipelineCell, top: RenderId, log: &DropLog) -> [RenderId; 3] {
+    cell.with_mut(|owner| {
+        let row = owner
+            .insert_child_render_object(top, object("row", log))
+            .expect("live parent");
+        let inner = owner
+            .insert_child_render_object(row, object("cell", log))
+            .expect("live parent");
+        let leaf = owner
+            .insert_child_render_object(inner, object("leaf", log))
+            .expect("live parent");
+        [row, inner, leaf]
+    })
+}
+
+/// In a teardown each member whose parent is a member stays in place when its element lets it
+/// go, deepest first, and the topmost member's removal takes the whole subtree out once,
+/// children dropped first: no parent list under the row is written and no member below it is
+/// marked, as Flutter detaches only the topmost render object.
+#[test]
+fn a_teardown_takes_each_member_out_with_its_topmost_member() {
+    let log = DropLog::default();
+    let (cell, top, _) = parent_of_rows(0, &log);
+    let [row, inner, leaf] = row_of_three(&cell, top, &log);
+    cell.with_mut(|owner| owner.layout_pass().run_layout().expect("layout"));
+    let clean = cell.with(PipelineOwner::dirty_node_count);
+
+    cell.with_teardown(&mut vec![row, inner, leaf], || {
+        for id in [leaf, inner] {
+            assert_eq!(cell.with_mut(|owner| owner.remove_render_object(id)), 0);
+        }
+        cell.with(|owner| {
+            let tree = owner.render_tree();
+            assert_eq!(tree.children(inner), [leaf], "the leaf stays in place");
+            assert_eq!(tree.children(row), [inner], "and so does its parent");
+            assert_eq!(owner.dirty_node_count(), clean, "nothing is marked");
+        });
+        assert!(log.borrow().is_empty(), "nothing is dropped yet");
+        assert_eq!(cell.with_mut(|owner| owner.remove_render_object(row)), 3);
+        assert_eq!(*log.borrow(), ["leaf", "cell", "row"]);
+    });
+    cell.with(|owner| {
+        let tree = owner.render_tree();
+        assert!(![row, inner, leaf].iter().any(|&id| tree.contains(id)));
+        assert_eq!(tree.children(top), []);
+    });
+}
+
+/// A member whose topmost member stays (its element kept it) is removed when the teardown
+/// ends, and a node that is not a member, or a member under a parent that is not, leaves at
+/// once.
+#[test]
+fn a_teardown_removes_at_its_end_the_members_still_in_the_tree() {
+    let log = DropLog::default();
+    let (cell, top, _) = parent_of_rows(0, &log);
+    let [row, inner, leaf] = row_of_three(&cell, top, &log);
+    let [other, other_inner, _] = row_of_three(&cell, top, &log);
+
+    cell.with_teardown(&mut vec![inner, leaf, other], || {
+        assert_eq!(cell.with_mut(|owner| owner.remove_render_object(leaf)), 0);
+        assert_eq!(
+            cell.with_mut(|owner| owner.remove_render_object(other_inner)),
+            2,
+            "not a member: removed at once"
+        );
+        assert_eq!(
+            cell.with_mut(|owner| owner.remove_render_object(other)),
+            1,
+            "a member under a parent that is not one: removed at once"
+        );
+    });
+    cell.with(|owner| {
+        let tree = owner.render_tree();
+        assert!(
+            !tree.contains(inner) && !tree.contains(leaf),
+            "swept at the end"
+        );
+        assert!(tree.contains(row), "not a member");
+        assert_eq!(tree.children(row), []);
+    });
+}
+
+/// A teardown whose scope unwinds closes without removing anything, so the next removal of a
+/// former member leaves at once; one opened inside another runs without one.
+#[test]
+fn a_teardown_that_unwinds_closes_and_one_inside_another_does_not_open() {
+    let log = DropLog::default();
+    let (cell, top, _) = parent_of_rows(0, &log);
+    let [row, inner, leaf] = row_of_three(&cell, top, &log);
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cell.with_teardown(&mut vec![row, inner, leaf], || {
+            assert_eq!(cell.with_mut(|owner| owner.remove_render_object(leaf)), 0);
+            panic!("an unmount hook of the teardown panics");
+        })
+    }));
+    assert!(unwound.is_err());
+    cell.with(|owner| assert!(owner.render_tree().contains(leaf), "nothing removed"));
+    assert_eq!(cell.with_mut(|owner| owner.remove_render_object(leaf)), 1);
+
+    cell.with_teardown(&mut vec![row, inner], || {
+        cell.with_teardown(&mut vec![inner], || {
+            assert_eq!(
+                cell.with_mut(|owner| owner.remove_render_object(inner)),
+                0,
+                "the outer teardown is the open one"
+            );
+        });
+    });
+    cell.with(|owner| assert!(!owner.render_tree().contains(inner)));
+}

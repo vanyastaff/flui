@@ -2,8 +2,8 @@
 # counts, not timings.
 
 [filter_3000_keyed_rows]
-allocated_bytes = 4952190
-allocations = 12192
+allocated_bytes = 4952222
+allocations = 12193
 builds_run = 6021
 damage_full = 0
 damage_rects = 1

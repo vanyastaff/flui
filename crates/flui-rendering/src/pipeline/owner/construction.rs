@@ -91,6 +91,7 @@ impl PipelineOwner {
             subtree_buffers: crate::storage::SubtreeBuffers::default(),
             removed_nodes: Vec::new(),
             removal_batch: super::tree_edit::RemovalBatch::default(),
+            teardown: super::teardown::Teardown::default(),
             abandoned_nodes: Vec::new(),
             retained_pixel_ratio: flui_foundation::geometry::DevicePixelRatio::ONE,
             unrecorded_paint: false,
