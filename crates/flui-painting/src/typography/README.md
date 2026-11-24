@@ -72,6 +72,7 @@ flui::app::register_font(bytes)?; // FontRegistrationError if no face parses
 Below the app, `FontCollection::register_font` is the same door for a collection a caller built
 itself.
 
-With the `bundled-fonts` feature, `flui_painting::fonts` exposes the faces the crate embeds
-(`ROBOTO_REGULAR`, `MATERIAL_ICONS_REGULAR`, `CUPERTINO_ICONS`), so a host with no usable system
-fonts still measures and paints text and icons.
+`flui_painting::fonts` exposes the faces the build embeds, each under its feature: `ROBOTO_REGULAR`
+with the default `bundled-fonts`, so a host with no usable system fonts still measures and paints
+text, and `MATERIAL_ICONS_REGULAR` and `CUPERTINO_ICONS` with `material-icons` and `cupertino-icons`,
+which the Material and Cupertino packages turn on (ADR-0397).

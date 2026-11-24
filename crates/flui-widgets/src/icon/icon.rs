@@ -27,10 +27,11 @@ use flui_view::environment::MediaQuery;
 ///
 /// The codepoint reaches [`RenderIcon`], and the bounded
 /// `size × size` box is exact and font-independent. The glyph comes from
-/// [`IconData::font_family`]. With its default `bundled-fonts` feature,
-/// `flui-painting` embeds the Material Icons (family `"Material Icons"`) and
-/// Cupertino Icons (family `"CupertinoIcons"`) faces and installs each one
-/// in every `FontCollection` (`flui_painting::fonts`), so those families'
+/// [`IconData::font_family`]. The Material Icons (family `"Material Icons"`)
+/// and Cupertino Icons (family `"CupertinoIcons"`) faces are embedded when the
+/// application depends on `flui-material` or `flui-cupertino`, or turns on the
+/// facade's `material-icons` or `cupertino-icons` feature (ADR-0397); every
+/// `FontCollection` then holds the face, so that family's
 /// codepoints shape to real glyphs in measurement and paint alike. Any other
 /// icon font must be registered first with `flui::app::register_font`, which
 /// loads it for measurement, paint and carets alike and lays laid-out text

@@ -98,7 +98,9 @@ flui-view = { workspace = true, features = ["testing"] }
 flui-objects = { workspace = true, features = ["testing"] }
 # A paint oracle: a widget test walks the composited layer tree's display
 # lists to assert what a frame did and did not draw.
-flui-painting = { workspace = true }
+# `tests/text.rs` lays out `Icon`s of the "Material Icons" family and checks
+# their glyphs: the face is embedded only under its feature (ADR-0397).
+flui-painting = { workspace = true, features = ["material-icons"] }
 # Drives a real `AnimationController` in the `FadeTransition` integration test.
 flui-scheduler = { workspace = true }
 # Constructs `PointerEvent`s (make_down_event, behind the `testing` feature) for

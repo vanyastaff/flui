@@ -99,6 +99,8 @@ returned request or poll `try_result` to obtain the window result."
 //! | `animation-diagnostics` | off | structured animation lifecycle events and CPU spans in `flui-animation` |
 //! | `material` | off | `flui::material` and the Material half of [`prelude`] |
 //! | `cupertino` | off | `flui::cupertino` |
+//! | `material-icons` | off | the Material Icons face in the binary, for an application that draws the family `"Material Icons"` with [`widgets::Icon`] without the `material` catalog, which brings the face itself |
+//! | `cupertino-icons` | off | the Cupertino Icons face (family `"CupertinoIcons"`) in the binary, likewise; the `cupertino` catalog brings it itself |
 //! | `system` | off | `flui::services::system`: the launcher, file-dialog, autostart, global-shortcut, progress and user-folder providers |
 //! | `http` | off | the built-in `HttpCapability` provider, each host's own HTTP stack (`ureq` over rustls on Linux and the BSDs); off, an `HttpCapability` request is refused as not registered and no HTTP client or TLS stack is linked |
 //! | `images` | off | `flui::assets` and the widgets' `Image::asset` and `Image::network`, with the decoded-image cache each UI runtime keeps; a network image also needs `http`; off, no image decoder is linked |

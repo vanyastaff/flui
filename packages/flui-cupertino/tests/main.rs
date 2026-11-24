@@ -27,6 +27,9 @@ mod colors;
 #[path = "cupertino_app.rs"]
 mod cupertino_app;
 
+#[path = "icon_face.rs"]
+mod icon_face;
+
 #[path = "nav_bar.rs"]
 mod nav_bar;
 

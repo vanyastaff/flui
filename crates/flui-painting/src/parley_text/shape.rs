@@ -1859,13 +1859,22 @@ mod tests {
         );
     }
 
-    /// On a collection holding only the bundled faces, a glyph the style's
-    /// family lacks measures in Roboto, the collection's last fallback, not as
-    /// `.notdef`: Cyrillic in Material Icons measures exactly as Cyrillic in
-    /// Roboto.
+    /// On a collection holding the bundled Roboto and an icon face, a glyph the
+    /// style's family lacks measures in Roboto, the collection's last fallback,
+    /// not as `.notdef`: Cyrillic in Material Icons measures exactly as Cyrillic
+    /// in Roboto.
     #[test]
     fn a_glyph_the_named_family_lacks_measures_in_roboto_on_the_bundled_collection() {
+        // The icon face is registered here: a collection holds one only where a
+        // package asked for it, and a family the collection lacks would reach
+        // Roboto as a generic, not through the fallback this test is about.
+        const MATERIAL_ICONS: &[u8] =
+            include_bytes!("../../assets/fonts/MaterialIcons-Regular.ttf");
         let fonts = FontCollection::new();
+        fonts
+            .register_font(MATERIAL_ICONS)
+            .expect("the icon face loads");
+        assert!(fonts.holds("Material Icons"), "the icon family is held");
         let width = |family: &str| {
             let style = TextStyle {
                 font_family: Some(family.into()),

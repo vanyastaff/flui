@@ -22,10 +22,11 @@
 //! Measurement, paint and carets all read the one layout shaped on the
 //! collection, so a face registered on it reaches all three together; the
 //! scan is read once, to feed it, and never again.
-//! [`FontCollection::new`] holds the bundled faces alone; without
-//! `bundled-fonts` it starts empty, text shapes with no face until one is
-//! registered, and the first registered family that can set Latin text
-//! becomes every generic family ([`FontCollection::register_font`]).
+//! [`FontCollection::new`] holds the faces the build embeds alone
+//! (`crate::fonts`); without `bundled-fonts` it holds no text face, text
+//! shapes with no face until one is registered, and the first registered
+//! family that can set Latin text becomes every generic family
+//! ([`FontCollection::register_font`]).
 
 use std::borrow::Cow;
 use std::fmt;
@@ -67,13 +68,14 @@ struct FontCollectionInner {
 impl FontCollection {
     /// A new collection.
     ///
-    /// With `bundled-fonts` it holds the embedded Roboto, Material Icons and
-    /// Cupertino Icons faces, and binds the generic families (sans-serif,
-    /// serif, monospace, cursive, fantasy, system-ui) to Roboto, so text shapes the same on
-    /// every host. Without `bundled-fonts` it starts empty: text measures
-    /// with no face until one is registered, and the first registered family
-    /// that can set Latin text then serves as every generic family
-    /// ([`FontCollection::register_font`]).
+    /// With `bundled-fonts` it holds the embedded Roboto and binds the generic
+    /// families (sans-serif, serif, monospace, cursive, fantasy, system-ui) to
+    /// it, so text shapes the same on every host. Without `bundled-fonts` no
+    /// text face is held: text measures with no face until one is registered,
+    /// and the first registered family that can set Latin text then serves as
+    /// every generic family ([`FontCollection::register_font`]). With
+    /// `material-icons` or `cupertino-icons` it also holds that icon face
+    /// (ADR-0397).
     #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(FontCollectionInner::build(None)))
@@ -325,8 +327,12 @@ impl FontCollectionInner {
             shared: false,
             system_fonts: false,
         });
-        #[cfg(feature = "bundled-fonts")]
-        bind_bundled_faces(&mut collection);
+        #[cfg(any(
+            feature = "bundled-fonts",
+            feature = "material-icons",
+            feature = "cupertino-icons"
+        ))]
+        register_embedded_faces(&mut collection);
         if let Some(host) = host {
             // A private build starts at generation zero whatever it holds,
             // so whether the feed changed anything does not matter here.
@@ -728,33 +734,43 @@ fn bind_unbound_generics(
     }
 }
 
-/// Registers the embedded faces, binds every generic family to Roboto and
-/// makes Roboto every script's fallback.
+/// Registers the faces this build embeds (`crate::fonts`).
 ///
-/// fontique has no last resort past a style's families and its script's
-/// fallbacks, so without the fallback a glyph the style's family lacks (a
-/// Cyrillic letter in an icon font) would measure and paint as `.notdef`.
-/// A host feed replaces the fallbacks with the host's order, which ends in
-/// Roboto too (`install_into`).
-#[cfg(feature = "bundled-fonts")]
-fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
-    use parley::fontique::{Blob, FallbackKey};
-
-    use crate::fonts::{CUPERTINO_ICONS, MATERIAL_ICONS_REGULAR, ROBOTO_REGULAR};
+/// With `bundled-fonts` it also binds every generic family to Roboto and
+/// makes Roboto every script's fallback: fontique has no last resort past a
+/// style's families and its script's fallbacks, so without the fallback a
+/// glyph the style's family lacks (a Cyrillic letter in an icon font) would
+/// measure and paint as `.notdef`. A host feed replaces the fallbacks with
+/// the host's order, which ends in Roboto too (`install_into`).
+#[cfg(any(
+    feature = "bundled-fonts",
+    feature = "material-icons",
+    feature = "cupertino-icons"
+))]
+fn register_embedded_faces(collection: &mut parley::fontique::Collection) {
+    use parley::fontique::Blob;
 
     let mut register =
         |bytes: &'static [u8]| collection.register_fonts(Blob::new(Arc::new(bytes)), None);
-    let roboto: Vec<_> = register(ROBOTO_REGULAR)
+    #[cfg(feature = "bundled-fonts")]
+    let roboto: Vec<_> = register(crate::fonts::ROBOTO_REGULAR)
         .into_iter()
         .map(|(family, _)| family)
         .collect();
-    register(MATERIAL_ICONS_REGULAR);
-    register(CUPERTINO_ICONS);
-    for generic in GENERICS {
-        collection.set_generic_families(generic, roboto.iter().copied());
-    }
-    for script in super::fallback_chain::fontique_scripts() {
-        collection.set_fallbacks(FallbackKey::new(script, None), roboto.iter().copied());
+    #[cfg(feature = "material-icons")]
+    register(crate::fonts::MATERIAL_ICONS_REGULAR);
+    #[cfg(feature = "cupertino-icons")]
+    register(crate::fonts::CUPERTINO_ICONS);
+    #[cfg(feature = "bundled-fonts")]
+    {
+        use parley::fontique::FallbackKey;
+
+        for generic in GENERICS {
+            collection.set_generic_families(generic, roboto.iter().copied());
+        }
+        for script in super::fallback_chain::fontique_scripts() {
+            collection.set_fallbacks(FallbackKey::new(script, None), roboto.iter().copied());
+        }
     }
 }
 

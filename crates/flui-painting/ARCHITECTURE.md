@@ -213,8 +213,9 @@ nothing out: it is one fontdb scan of the host with the generic families and
 fallback lists picked for it, a value the app's shared engine services build
 and drop once `FontCollection::with_host_fonts` has fed the collection from it
 (decision 17). No font state is process-global. A registration loads the
-collection (decision 11). The embedded baseline faces (`fonts.rs`,
-`bundled-fonts`) are in every collection, and bind its generics (decision 16).
+collection (decision 11). The embedded faces (`fonts.rs`) are in every collection: with
+`bundled-fonts` the text face, which binds its generics (decision 16), and each icon face with
+its own feature, which the package that draws with the family turns on (ADR-0397).
 
 The raster side is `glyphs` (ADR-0092 §5). What crosses to the engine is the
 `ShapedParagraph`; the engine's atlas registers each run's face in its
@@ -504,7 +505,7 @@ holds, degrading to the sans-serif generic only when none of them is present. Th
 limit is precisely locatable — a family that is present
 but lacks the glyph still stops the walk: `font_family:
 "CupertinoIcons", font_family_fallback: ["Noto Sans"]` on Latin text renders tofu,
-because `CupertinoIcons` IS held. Closing that needs per-run family splitting above
+because `CupertinoIcons` IS held (in a build with `cupertino-icons`). Closing that needs per-run family splitting above
 the style, which is tracked separately.
 
 Locked by the table `family_resolution` (`src/text_layout/context.rs`). Its row
@@ -938,7 +939,8 @@ paint and carets, so one set of lists, FLUI's, decides the face everywhere.
   sans-serif family alone there; unverified, since Android is clippy-only here.
 - A family name fontdb records in another language only (fontique keeps the
   English or first name) is not found by the family rule's exact match.
-- A host copy of a bundled family (Roboto, Material Icons, CupertinoIcons) is
+- A host copy of a family the build embeds (Roboto; Material Icons and
+  CupertinoIcons under their features) is
   not fed, so one family never mixes two copies; an app that wants a host's
   own icon font registers it under another family name.
 - The first frame renders with the bundled faces; the host's arrive when
