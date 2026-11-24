@@ -107,7 +107,9 @@ impl MorphologyPipeline {
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Morphology Shader"),
-            source: wgpu::ShaderSource::Wgsl(crate::shaders::MORPHOLOGY.into()),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                crate::shaders::MORPHOLOGY,
+            )),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

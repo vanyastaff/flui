@@ -40,11 +40,11 @@
 //! ## Shader text for the binary
 //!
 //! A pipeline hands WGSL text to the GPU API, so the text is linked into every
-//! application. `strip_wgsl_sources` writes each file of `src/shaders/` to
+//! application. `stripped::write_copies` writes each file of `src/shaders/` to
 //! `OUT_DIR/wgsl/<same path>` without its line comments, indentation and blank
 //! lines, and the composed shaders are written the same way; the pipelines
 //! include those copies through the constants of `shaders`, never a source file.
-//! Both output directories are emptied first, so the copy of a shader that was
+//! It empties the directory it writes first, so the copy of a shader that was
 //! renamed or deleted does not outlive it.
 //!
 //! ## Inner-attribute post-processing
@@ -56,9 +56,9 @@
 //! (where suppression is applied via the wrapping `#[allow(...)]` attribute on
 //! the `mod` item).
 
-// Shared with the crate's tests, which is where it is tested.
-#[path = "src/shaders/strip.rs"]
-mod strip;
+// Shared with the crate, whose tests are where it is tested.
+#[path = "src/shaders/stripped.rs"]
+mod stripped;
 
 use std::{
     env, fs,
@@ -66,7 +66,6 @@ use std::{
 };
 
 use regex::Regex;
-use strip::strip_wgsl;
 use wgsl_bindgen::{
     GlamWgslTypeMap,
     OverrideSamplerType,
@@ -274,12 +273,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // a composed shader, and every output below derives from these sources.
     println!("cargo:rerun-if-changed={}", shader_root.display());
 
-    // A copy outlives its source otherwise: a shader that was renamed or deleted
-    // would keep compiling from the copy an earlier build left here.
-    let composed_root = emptied(out_dir.join("shaders"))?;
-    let stripped_root = emptied(out_dir.join("wgsl"))?;
+    let composed_root = out_dir.join("shaders");
     compose_wesl_shaders(&shader_root, &composed_root)?;
-    strip_wgsl_sources(&shader_root, &stripped_root)?;
+    // A pipeline hands its shader text to the GPU API as it is, so the text is
+    // linked into every application: the sources carry more comment than code,
+    // the copies the code alone.
+    stripped::write_copies(
+        &out_dir.join("wgsl"),
+        &stripped::read_sources(&shader_root)?,
+    )?;
 
     for cfg in SHADER_CONFIGS {
         let entry_path = effects_dir.join(cfg.shader_name);
@@ -334,6 +336,7 @@ fn compose_wesl_shaders(
     };
     let compiler =
         wesl::Compiler::new_with_resolver(options, wesl::resolver::FileResolver::new(shader_root));
+    let mut composed_sources = Vec::with_capacity(WESL_ENTRIES.len());
     for entry in WESL_ENTRIES {
         let module_path = format!("package::{}", entry.replace('/', "::"))
             .parse::<wesl::syntax::ModulePath>()
@@ -341,15 +344,9 @@ fn compose_wesl_shaders(
         let composed = compiler
             .compile_module(&module_path)
             .map_err(|error| format!("composing `{entry}` with WESL:\n{error}"))?;
-        let out_path = composed_root.join(format!("{entry}.wgsl"));
-        if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let code = strip_wgsl(&composed.to_string())
-            .map_err(|error| format!("composed `{entry}`: {error}"))?;
-        fs::write(&out_path, code)?;
+        composed_sources.push((PathBuf::from(format!("{entry}.wgsl")), composed.to_string()));
     }
-    Ok(())
+    stripped::write_copies(composed_root, &composed_sources)
 }
 
 /// Join a path fragment relative to `base`, treating the empty string as `base`.
@@ -460,44 +457,4 @@ fn strip_inner_allow_from_generated(path: &Path) -> Result<(), Box<dyn std::erro
         .join("\n");
     fs::write(path, patched)?;
     Ok(())
-}
-
-/// Write every `.wgsl` file under `shader_root` to the same relative path under
-/// `stripped_root`, as [`strip::strip_wgsl`] leaves it.
-///
-/// A pipeline hands its shader text to the GPU API as it is, so the text is
-/// linked into every application. The sources carry more comment than code; the
-/// copies carry the code alone, and the constants of `shaders` include them.
-fn strip_wgsl_sources(
-    shader_root: &Path,
-    stripped_root: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    for entry in fs::read_dir(shader_root)? {
-        let entry = entry?;
-        let path = entry.path();
-        let stripped = stripped_root.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            strip_wgsl_sources(&path, &stripped)?;
-        } else if path
-            .extension()
-            .is_some_and(|extension| extension == "wgsl")
-        {
-            let code = strip_wgsl(&fs::read_to_string(&path)?)
-                .map_err(|error| format!("{}: {error}", path.display()))?;
-            fs::create_dir_all(stripped_root)?;
-            fs::write(&stripped, code)?;
-        }
-    }
-    Ok(())
-}
-
-/// `directory` with nothing in it, whatever an earlier build left there.
-fn emptied(directory: PathBuf) -> Result<PathBuf, std::io::Error> {
-    match fs::remove_dir_all(&directory) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
-    fs::create_dir_all(&directory)?;
-    Ok(directory)
 }

@@ -284,7 +284,9 @@ impl PortableCoveragePipeline {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Portable Coverage Composite"),
-            source: wgpu::ShaderSource::Wgsl(crate::shaders::PORTABLE_COVERAGE.into()),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                crate::shaders::PORTABLE_COVERAGE,
+            )),
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Portable Coverage Composite"),

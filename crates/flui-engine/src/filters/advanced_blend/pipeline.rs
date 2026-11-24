@@ -171,7 +171,9 @@ impl AdvancedBlendPipeline {
         // this is plain WGSL; a broken import fails the build, not this call.
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Advanced Blend Shader"),
-            source: wgpu::ShaderSource::Wgsl(crate::shaders::ADVANCED_BLEND.into()),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                crate::shaders::ADVANCED_BLEND,
+            )),
         });
 
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

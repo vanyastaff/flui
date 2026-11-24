@@ -14,7 +14,7 @@
 //! to a list.
 
 #[cfg(test)]
-mod strip;
+mod stripped;
 
 use crate::pipelines::variants::CoverageShaderSources;
 
@@ -282,7 +282,7 @@ mod tests {
     use super::{COVERAGE_SHADERS, TEXTS};
 
     /// Every text a pipeline can compile, by the name a failure reports.
-    fn shader_texts() -> Vec<(String, &'static str)> {
+    fn compiled_texts() -> Vec<(String, &'static str)> {
         let mut texts: Vec<(String, &'static str)> = TEXTS
             .iter()
             .map(|(name, text)| ((*name).to_owned(), *text))
@@ -301,7 +301,7 @@ mod tests {
     /// way.
     #[test]
     fn a_pipeline_compiles_shader_code_without_comments_indentation_or_blank_lines() {
-        for (name, text) in shader_texts() {
+        for (name, text) in compiled_texts() {
             for line in text.lines() {
                 assert!(!line.contains("//"), "{name} keeps a comment: {line:?}");
                 assert_eq!(line, line.trim(), "{name} keeps a line's indentation");
@@ -314,7 +314,7 @@ mod tests {
     /// host with no GPU to compile it.
     #[test]
     fn every_shader_text_parses_as_wgsl() {
-        for (name, text) in shader_texts() {
+        for (name, text) in compiled_texts() {
             if let Err(error) = wgpu::naga::front::wgsl::parse_str(text) {
                 panic!("{name} does not parse:\n{}", error.emit_to_string(text));
             }
@@ -322,10 +322,10 @@ mod tests {
     }
 
     /// The constants above are the only way to a shader file: a Rust source
-    /// outside this module that names one includes it with its comments, past
+    /// outside `shaders` that names one includes it with its comments, past
     /// both tests above.
     #[test]
-    fn no_source_outside_this_module_names_a_shader_file() {
+    fn no_source_outside_shaders_names_a_shader_file() {
         fn rust_sources(directory: &Path, found: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(directory).expect("a source directory") {
                 let path = entry.expect("a directory entry").path();
@@ -338,15 +338,15 @@ mod tests {
         }
 
         let source_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let this_module = source_root.join("shaders").join("mod.rs");
+        let shaders = source_root.join("shaders");
         let mut sources = Vec::new();
         rust_sources(&source_root, &mut sources);
         assert!(
-            sources.contains(&this_module),
+            sources.contains(&shaders.join("mod.rs")),
             "the walk reaches this module"
         );
         for path in sources {
-            if path == this_module {
+            if path.starts_with(&shaders) {
                 continue;
             }
             let source = std::fs::read_to_string(&path).expect("a UTF-8 source file");

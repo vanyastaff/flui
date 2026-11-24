@@ -136,7 +136,9 @@ impl OffscreenRenderer {
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("Blit Shader"),
-                    source: wgpu::ShaderSource::Wgsl(crate::shaders::BLIT.into()),
+                    source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                        crate::shaders::BLIT,
+                    )),
                 });
 
             let vertex_buffer_layout = wgpu::VertexBufferLayout {
