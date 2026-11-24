@@ -15,8 +15,9 @@
 //! its call, and callback invocation and capture cleanup are contained
 //! separately ([`contain_owner_callback`]).
 //!
-//! The payload-to-message rule is the pure, decidable part; it lives here,
-//! compiled under `test` on every host, so the Linux-executed suite pins it.
+//! `panic_payload_message` names a caught payload in the log of the hosts
+//! that report one with its text (Windows' text services, Linux's clipboard
+//! and display sources).
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use flui_foundation::panic::ContainedIvars;
@@ -40,14 +41,7 @@ pub(crate) use flui_foundation::panic::{AfterPanic, os_entry};
 
 /// Fallback text for a panic payload that is neither a `&'static str` nor a
 /// `String` (someone used `std::panic::panic_any` with an arbitrary type).
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    linux_host,
-    all(test, not(target_arch = "wasm32"))
-))]
+#[cfg(any(target_os = "windows", linux_host,))]
 pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
 
 /// Extracts the human-readable message from a caught panic payload.
@@ -55,14 +49,7 @@ pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
 /// `panic!("literal")` produces a `&'static str` payload; `panic!("{x}")`
 /// and every formatted variant produce a `String`; anything else (via
 /// `panic_any`) is opaque and reported as [`OPAQUE_PANIC_PAYLOAD`].
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    linux_host,
-    all(test, not(target_arch = "wasm32"))
-))]
+#[cfg(any(target_os = "windows", linux_host,))]
 #[must_use]
 pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
     flui_foundation::panic::payload_text(payload).unwrap_or(OPAQUE_PANIC_PAYLOAD)
