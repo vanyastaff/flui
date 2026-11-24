@@ -204,22 +204,78 @@ pub fn parse_input_usage(usage: &str) -> InputCommands {
 /// The line that prints the window holding the input focus.
 pub const FOCUS: &str = "dumpsys window windows | grep -m1 'mCurrentFocus='";
 
-/// The window holding the input focus, from the [`FOCUS`] line's `printed`: the window's title,
-/// `package/activity` for an activity's window, `NotificationShade` for the shade; `None` when no
-/// window holds it.
+/// A window's hash, the id `Window{hash uU title}` names it by (`WindowState`'s identity hash):
+/// two windows of one title (an activity's window leaving as it is started again, split screen)
+/// differ in it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WindowHash(String);
+
+impl std::fmt::Display for WindowHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A display's id, as `mDisplayId=` prints it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DisplayId(u32);
+
+impl DisplayId {
+    /// The display of the id `id`.
+    #[must_use]
+    pub const fn new(id: u32) -> Self {
+        Self(id)
+    }
+
+    /// The display an `mDisplayId=` word's `value` names: the digits before any trailing mark
+    /// (`0,`); `None` for a value that starts with no digit (`-1`, `INVALID_DISPLAY`).
+    fn parse(value: &str) -> Option<Self> {
+        let digits = value.split(|c: char| !c.is_ascii_digit()).next()?;
+        digits.parse::<u32>().ok().map(Self)
+    }
+}
+
+impl std::fmt::Display for DisplayId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// A window as `Window{hash uU title}` names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WindowName {
+    /// Its hash, which tells it from another window of its title.
+    pub hash: WindowHash,
+    /// Its title: `package/activity` for an activity's window, `NotificationShade` for the shade.
+    pub title: String,
+}
+
+impl WindowName {
+    /// The window `text` names as `Window{hash uU title}`, wherever in `text` it stands; `None`
+    /// when it names no hash or no title.
+    fn parse(text: &str) -> Option<Self> {
+        let inside = text.split_once("Window{")?.1.rsplit_once('}')?.0;
+        // `Window{<hash> u<user> <title>}`: the title is the rest after the user.
+        let mut words = inside.splitn(3, ' ');
+        let hash = words.next()?;
+        let _user = words.next()?;
+        let title = words.next()?.trim();
+        (!hash.is_empty() && !title.is_empty()).then(|| Self {
+            hash: WindowHash(hash.to_owned()),
+            title: title.to_owned(),
+        })
+    }
+}
+
+/// The window holding the input focus, from a reply holding its `mCurrentFocus=` line ([`FOCUS`],
+/// [`WINDOWS`]); `None` when no window holds it.
 #[must_use]
-pub fn parse_focus(printed: &str) -> Option<String> {
-    let line = printed
+pub fn parse_focus(printed: &str) -> Option<WindowName> {
+    printed
         .lines()
-        .find(|line| line.contains("mCurrentFocus="))?;
-    let window = line.split_once("mCurrentFocus=")?.1.trim();
-    let inside = window.strip_prefix("Window{")?.strip_suffix('}')?;
-    // `Window{<hash> u<user> <title>}`: the title is the rest after the user.
-    let mut words = inside.splitn(3, ' ');
-    let _hash = words.next()?;
-    let _user = words.next()?;
-    let title = words.next()?.trim();
-    (!title.is_empty()).then(|| title.to_owned())
+        .find_map(|line| line.split_once("mCurrentFocus="))
+        .and_then(|(_, window)| WindowName::parse(window.trim()))
 }
 
 /// The line that prints where the windows are: each display's header (`Display: mDisplayId=N`)
@@ -233,7 +289,7 @@ pub const WINDOWS: &str = "dumpsys window displays | grep -E 'Display: mDisplayI
 
 /// The display the lane drives, the default one: the one `input`, `screencap` and
 /// `uiautomator dump` address, whose rotation the lane reads, and where the app's window must be.
-pub const DEFAULT_DISPLAY: &str = "0";
+pub const DEFAULT_DISPLAY: DisplayId = DisplayId::new(0);
 
 /// The most bytes of the [`WINDOWS`] reply the lane reads.
 pub const MAX_WINDOWS_REPLY: usize = 256 * 1024;
@@ -244,14 +300,12 @@ pub const MAX_WINDOWS: usize = 512;
 /// One window as `dumpsys window` lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct WindowFrame {
-    /// Its id, the hash `Window{…}` names it by: two windows of one title (an activity's window
-    /// leaving as it is started again, split screen) differ in it.
-    pub id: String,
-    /// Its title: `package/activity` for an activity's window, `StatusBar` for the status bar.
-    pub title: String,
-    /// The display it is on (its `mDisplayId=`); `None` when the dump named none.
-    pub display: Option<String>,
+pub struct ListedWindow {
+    /// Its hash and title.
+    pub name: WindowName,
+    /// The display it is on (its `mDisplayId=`); `None` when the dump named none, or named it by
+    /// no number.
+    pub display: Option<DisplayId>,
     /// Its frame in display pixels as the display is turned; `None` when no frame was read.
     pub frame: Option<Bounds>,
 }
@@ -264,20 +318,20 @@ pub struct Windows {
     /// (`Surface.ROTATION_0` to `ROTATION_270`).
     pub rotation: u8,
     /// The windows, in the order `dumpsys` lists them, at most [`MAX_WINDOWS`].
-    pub windows: Vec<WindowFrame>,
-    /// The title of the window holding the input focus; `None` when no window holds it.
-    pub focus: Option<String>,
-    /// The id of the window holding the input focus.
-    pub focus_id: Option<String>,
+    pub windows: Vec<ListedWindow>,
+    /// The window holding the input focus; `None` when no window holds it.
+    pub focus: Option<WindowName>,
 }
 
 impl Windows {
-    /// The window holding the input focus, found by its id: a window of the same title is
+    /// The window holding the input focus, found by its hash: a window of the same title is
     /// another window.
     #[must_use]
-    pub fn focused_window(&self) -> Option<&WindowFrame> {
-        let focus = self.focus_id.as_deref()?;
-        self.windows.iter().find(|window| window.id == focus)
+    pub fn focused_window(&self) -> Option<&ListedWindow> {
+        let focus = self.focus.as_ref()?;
+        self.windows
+            .iter()
+            .find(|window| window.name.hash == focus.hash)
     }
 
     /// The frame of the window holding the input focus, when that window is on the default
@@ -285,20 +339,28 @@ impl Windows {
     #[must_use]
     pub fn focused_frame(&self) -> Option<Bounds> {
         self.focused_window()
-            .filter(|window| window.display.as_deref() == Some(DEFAULT_DISPLAY))
+            .filter(|window| window.display == Some(DEFAULT_DISPLAY))
             .and_then(|window| window.frame)
     }
 }
 
-/// The id of the window holding the input focus, from a reply holding its `mCurrentFocus=` line
-/// ([`FOCUS`], [`WINDOWS`]).
-#[must_use]
-pub fn parse_focus_id(printed: &str) -> Option<String> {
-    printed
-        .lines()
-        .find_map(|line| line.split_once("mCurrentFocus="))
-        .and_then(|(_, window)| window_named(window.trim()))
-        .map(|(id, _)| id)
+/// Which display's section of the [`WINDOWS`] reply a line is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Section {
+    /// Before any display's header: a reply that heads no display.
+    Unheaded,
+    /// After the header of a display, `None` when the header named it by no number.
+    Display(Option<DisplayId>),
+}
+
+impl Section {
+    /// Whether the section's lines are the default display's ([`DEFAULT_DISPLAY`]).
+    fn is_default(self) -> bool {
+        match self {
+            Self::Unheaded => true,
+            Self::Display(display) => display == Some(DEFAULT_DISPLAY),
+        }
+    }
 }
 
 /// The windows the [`WINDOWS`] line printed as `printed`: see [`Windows`]. The rotation is the
@@ -312,22 +374,19 @@ pub fn parse_focus_id(printed: &str) -> Option<String> {
 /// how the display is turned.
 pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
     let mut rotation = None;
-    // The display whose section the lines are in; `None` before any display's header.
-    let mut display: Option<String> = None;
-    let mut windows: Vec<WindowFrame> = Vec::new();
+    let mut section = Section::Unheaded;
+    let mut windows: Vec<ListedWindow> = Vec::new();
     let mut in_window = false;
     for line in printed.lines() {
         let line = line.trim();
         if line.starts_with("Display:")
             && let Some(id) = word_value(line, "mDisplayId=")
         {
-            display = Some(display_id(id));
+            section = Section::Display(DisplayId::parse(id));
             continue;
         }
         if rotation.is_none()
-            && display
-                .as_deref()
-                .is_none_or(|display| display == DEFAULT_DISPLAY)
+            && section.is_default()
             && let Some(value) = word_value(line, "mRotation=")
         {
             rotation = match value.trim_end_matches(',') {
@@ -342,11 +401,10 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
         if line.starts_with("Window #") {
             in_window = false;
             if windows.len() < MAX_WINDOWS
-                && let Some((id, title)) = window_named(line)
+                && let Some(name) = WindowName::parse(line)
             {
-                windows.push(WindowFrame {
-                    id,
-                    title,
+                windows.push(ListedWindow {
+                    name,
                     display: None,
                     frame: None,
                 });
@@ -356,7 +414,7 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
         }
         if in_window && let Some(window) = windows.last_mut() {
             if window.display.is_none() {
-                window.display = word_value(line, "mDisplayId=").map(display_id);
+                window.display = word_value(line, "mDisplayId=").and_then(DisplayId::parse);
             }
             if window.frame.is_none() {
                 window.frame = frame_of(line);
@@ -369,29 +427,13 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
         rotation,
         windows,
         focus: parse_focus(printed),
-        focus_id: parse_focus_id(printed),
     })
-}
-
-/// A display's id as an `mDisplayId=` word gives it, the digits before any trailing mark.
-fn display_id(value: &str) -> String {
-    value.chars().take_while(char::is_ascii_digit).collect()
 }
 
 /// The value of the word of `line` that starts with `key`, wherever in the line it stands.
 fn word_value<'l>(line: &'l str, key: &str) -> Option<&'l str> {
     line.split_whitespace()
         .find_map(|word| word.strip_prefix(key))
-}
-
-/// The id and title of the window `Window{hash uU title}` names.
-fn window_named(text: &str) -> Option<(String, String)> {
-    let inside = text.split_once("Window{")?.1.rsplit_once('}')?.0;
-    let mut words = inside.splitn(3, ' ');
-    let id = words.next()?;
-    let _user = words.next()?;
-    let title = words.next()?.trim();
-    (!id.is_empty() && !title.is_empty()).then(|| (id.to_owned(), title.to_owned()))
 }
 
 /// The frame a window's line gives: its `frame=[l,t][r,b]` (Android 11 and later, on the

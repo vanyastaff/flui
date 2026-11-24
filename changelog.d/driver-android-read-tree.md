@@ -11,13 +11,13 @@
   value, the announcer nodes, a toggled state the app's read does not report) is no difference
   (`lane::android::tree::Unobservable`). The roles scenario checks the match itself.
 - **`flui-driver`**: the Android lane locates the app's window from `dumpsys window`: the focused
-  window's frame by the window's id, on the default display, and the default display's rotation,
+  window's frame by the window's hash, on the default display, and the default display's rotation,
   so pressing, typing and capturing go on while an accessibility service runs, and a press goes
   only to the window the lane located. Only the read of the tree takes a `uiautomator dump`, which
   suspends every accessibility service: while any service is on (an empty service list being
   none), on a device or an emulator, or while the settings it reads show neither way, the read
-  answers `not_supported` naming `android_tree_dump` and the services. A window that moved or a
-  display that turned during the dump answers `Error::Busy`. `Window::os_invoke` answers
+  answers `not_supported` naming `android_tree_dump` and the services. A window replaced or
+  moved, or a display that turned, during the dump answers `Error::Busy`. `Window::os_invoke` answers
   `not_supported` naming `os_invoke`, since UI Automator performs no accessibility action.
 
 ### Changed

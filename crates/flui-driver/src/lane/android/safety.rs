@@ -17,7 +17,7 @@
 //!
 //! Before every press, key and text the app's window must hold the input focus
 //! ([`check_focus`]): a press with the shade, the lock screen or another app in front lands
-//! there, and the window holding it must be the one the lane located, by its id. The read of the
+//! there, and the window holding it must be the one the lane located, by its hash. The read of the
 //! tree takes a `uiautomator dump`, which suspends every accessibility service while it runs
 //! (TalkBack, Voice Access and Switch Access among them), so it is refused while one runs
 //! ([`check_dump`]); locating the window, input and capture take no dump.

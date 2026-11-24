@@ -800,12 +800,15 @@ fn an_emulator_running_a_service_refuses_the_tree_too() {
 }
 
 /// The window is located before and after the dump: a window that moved while the device dumped
-/// it, or a dump of another turn than the window's, is no snapshot the mapping holds for, and the
-/// read answers busy rather than match the dump against the wrong place.
+/// it, another window of the app's title that took the focus at the same place (the activity
+/// started again), or a dump of another turn than the window's, is no snapshot the mapping holds
+/// for, and the read answers busy rather than match the dump against the wrong window.
 #[test]
 fn a_window_that_moves_or_turns_during_the_dump_is_busy() {
     let moved = windows_edge_to_edge(1080, 2400)
         .replace("frame=[0,0][1080,2400]", "frame=[40,0][1120,2400]");
+    let replaced = windows_edge_to_edge(1080, 2400).replace("4f2a1b", "5b3c2d");
+    assert_ne!(replaced, windows_edge_to_edge(1080, 2400));
     let turned = CONTROLS.replace("rotation=\"0\"", "rotation=\"1\"");
     assert_ne!(turned, CONTROLS);
     for (case, adb) in [
@@ -813,6 +816,11 @@ fn a_window_that_moves_or_turns_during_the_dump_is_busy() {
             "moved",
             emulator_showing(CONTROLS)
                 .reply_once("shell dumpsys window displays", AdbReply::new(0, moved)),
+        ),
+        (
+            "replaced",
+            emulator_showing(CONTROLS)
+                .reply_once("shell dumpsys window displays", AdbReply::new(0, replaced)),
         ),
         (
             "turned",
@@ -904,7 +912,8 @@ fn a_radio_buttons_selection_is_the_checked_state_the_adapter_publishes() {
 /// that publishes one, have a toggled state the read does not report and the adapter publishes as
 /// checkable and checked: each is matched, and projects its selection as the read does. So does a
 /// node of every other selection role, a tab, a list box option, a menu list option, and a tree
-/// item whose node the adapter publishes with no toggled state at all.
+/// item whose node the adapter publishes with or without a toggled state. A node of one of those
+/// roles that publishes no selection is matched by its toggled state.
 #[test]
 fn a_selection_roles_toggled_state_the_read_does_not_report_is_no_mismatch() {
     let os = edge_cases_read();
@@ -924,6 +933,25 @@ fn a_selection_roles_toggled_state_the_read_does_not_report_is_no_mismatch() {
             "{identifier}"
         );
     }
+    // A tree item the adapter publishes as checkable, as it does one with a toggled state beside
+    // its selection, is matched all the same.
+    let folder = "content-desc=\"Folder\" checkable=\"false\" checked=\"false\"";
+    assert!(EDGE_CASES.contains(folder));
+    let checkable = EDGE_CASES.replace(
+        folder,
+        "content-desc=\"Folder\" checkable=\"true\" checked=\"true\"",
+    );
+    let os =
+        tree::read(&dump(&checkable), PACKAGE, &edge_cases(), MAPPING).expect("the dump matches");
+    assert!(find(&os.roots, "folder").is_some(), "{os:?}");
+    // A node of a selection role that publishes no selection reads no `selected`, and its toggled
+    // state is read as `checked`: none, so the checkable node of the dump is not it.
+    let mut app = edge_cases();
+    let red = &mut app.roots[0].children[8];
+    assert_eq!(red.identifier.as_deref(), Some("red"));
+    red.selected = None;
+    let os = tree::read(&dump(EDGE_CASES), PACKAGE, &app, MAPPING).expect("the rest matches");
+    assert_eq!(find(&os.roots, "red"), None);
 }
 
 /// A list hands Android one row past its viewport, the rest of the rows the app keeps past it to

@@ -81,8 +81,8 @@ pub enum Unobservable {
     /// that no app node fits are left out of the projection.
     Announcers,
     /// A toggled state the app's read does not report: the read follows UI Automation, which
-    /// offers a grid cell, and a list box option, list item, menu list option, tab or tree item
-    /// that publishes a selection, as `SelectionItem`, reading its `selected` and no `checked`,
+    /// offers a node of a selection role other than a radio button (a grid cell, a list item
+    /// that publishes a selection) as `SelectionItem`, reading its `selected` and no `checked`,
     /// while the adapter publishes its toggled state as checkable and checked. The match does not
     /// read the dump's checked state of such a node, and the projection reports its selection as
     /// the read does (the `Toggle::Unread` case).
@@ -216,10 +216,9 @@ fn fits(app: &Node, os: &UiNode, mapping: Mapping) -> bool {
 /// with one as checkable and checked.
 ///
 /// The read follows UI Automation, which offers a node of a selection role as `SelectionItem`
-/// (`agent::offers_selection_item`): a radio button or radio menu item that is on or off, a grid
-/// cell always, and a list box option, list item, menu list option, tab or tree item that
-/// publishes a selection. Such a node reads `selected` and no `checked`: a radio button's
-/// selection is its toggled state, and any other's toggled state the read does not report.
+/// (`agent::offers_selection_item` in `flui-semantics` decides which): such a node reads
+/// `selected` and no `checked`, and no other node reads `selected`. A radio button's selection is
+/// its toggled state; any other's toggled state the read does not report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Toggle {
     /// The read reports it as `checked`: none, or the state.
@@ -234,16 +233,14 @@ enum Toggle {
 
 impl Toggle {
     fn of(app: &Node) -> Self {
+        // The read reports `selected` on a node it offers as `SelectionItem` and on no other, and
+        // then no `checked`: the selection roles are its decision, which the driver does not copy.
         let selection = app.checked.is_none() && app.selected.is_some();
         match app.native_role.as_str() {
             "RadioButton" | "MenuItemRadio" if selection => {
                 Self::RadioSelection(app.selected == Some(true))
             }
-            "GridCell" | "ListBoxOption" | "ListItem" | "MenuListOption" | "Tab" | "TreeItem"
-                if selection =>
-            {
-                Self::Unread
-            }
+            _ if selection => Self::Unread,
             _ => Self::Checked(app.checked),
         }
     }

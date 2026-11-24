@@ -31,8 +31,10 @@ use flui_driver::{Awaited, Endpoint, Error};
 pub(crate) const PACKAGE: &str = "dev.flui.scenario";
 pub(crate) const USAGE: &str = include_str!("android/input_usage.txt");
 pub(crate) const WINDOW: &str = include_str!("android/window.xml");
-/// What `dumpsys window` prints of the windows, as the lane's line keeps it (Android 14's
-/// `DisplayRotation` and `WindowState` dumps): the app's window below a 60-pixel status bar.
+/// What `dumpsys window` prints of the windows, as the lane's line keeps it: the app's window
+/// below a 60-pixel status bar. It is written from the format of AOSP's Android 14
+/// `DisplayRotation` and `WindowState` dumps, not recorded; the run on a device is owed
+/// (`docs/gaps.md`).
 pub(crate) const WINDOWS: &str = include_str!("android/windows.txt");
 
 /// [`WINDOWS`] with the app's window `width` by `height` pixels at the display's top left: an
@@ -432,13 +434,13 @@ fn what_the_device_prints_reads_into_its_facts() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(commands(&older), (false, false, false));
+    let focus = device::parse_focus(FOCUSED).expect("a window holds the focus");
+    assert_eq!(focus.title, "dev.flui.scenario/android.app.NativeActivity");
+    assert_eq!(focus.hash.to_string(), "4f2a1b");
     assert_eq!(
-        device::parse_focus(FOCUSED).as_deref(),
-        Some("dev.flui.scenario/android.app.NativeActivity")
-    );
-    assert_eq!(
-        device::parse_focus("  mCurrentFocus=Window{9e u0 NotificationShade}\n").as_deref(),
-        Some("NotificationShade")
+        device::parse_focus("  mCurrentFocus=Window{9e u0 NotificationShade}\n")
+            .map(|focus| (focus.hash.to_string(), focus.title)),
+        Some(("9e".to_owned(), "NotificationShade".to_owned()))
     );
     assert_eq!(device::parse_focus("  mCurrentFocus=null\n"), None);
     assert!(device::check_component("dev.flui.scenario", "id").is_ok());
@@ -454,18 +456,21 @@ fn the_windows_give_the_rotation_and_the_focused_apps_frame() {
     assert_eq!(windows.rotation, 0);
     assert_eq!(windows.windows.len(), 5);
     // Two windows of the app's title, the one leaving as the activity starts again listed first:
-    // the focused one is found by its id.
-    let titled: Vec<&str> = windows
+    // the focused one is found by its hash.
+    let titled: Vec<String> = windows
         .windows
         .iter()
-        .filter(|window| window.title == "dev.flui.scenario/android.app.NativeActivity")
-        .map(|window| window.id.as_str())
+        .filter(|window| window.name.title == "dev.flui.scenario/android.app.NativeActivity")
+        .map(|window| window.name.hash.to_string())
         .collect();
     assert_eq!(titled, vec!["7e3d2c1", "4f2a1b"]);
-    assert_eq!(windows.focus_id.as_deref(), Some("4f2a1b"));
+    let focus = windows.focus.as_ref().expect("a window holds the focus");
     assert_eq!(
-        windows.focus.as_deref(),
-        Some("dev.flui.scenario/android.app.NativeActivity")
+        (focus.hash.to_string(), focus.title.as_str()),
+        (
+            "4f2a1b".to_owned(),
+            "dev.flui.scenario/android.app.NativeActivity"
+        )
     );
     assert_eq!(
         windows.focused_frame(),
@@ -548,10 +553,20 @@ fn the_windows_give_the_rotation_and_the_focused_apps_frame() {
     assert_ne!(elsewhere, WINDOWS);
     let windows = device::parse_windows(&elsewhere).expect("windows");
     assert_eq!(
-        windows
-            .focused_window()
-            .and_then(|window| window.display.as_deref()),
-        Some("2")
+        windows.focused_window().and_then(|window| window.display),
+        Some(device::DisplayId::new(2))
+    );
+    assert_eq!(windows.focused_frame(), None);
+    // A display named by no number is no display the lane drives.
+    let unnumbered = WINDOWS.replace(
+        "    mDisplayId=0 rootTaskId=13",
+        "    mDisplayId=-1 rootTaskId=13",
+    );
+    assert_ne!(unnumbered, WINDOWS);
+    let windows = device::parse_windows(&unnumbered).expect("windows");
+    assert_eq!(
+        windows.focused_window().map(|window| window.display),
+        Some(None)
     );
     assert_eq!(windows.focused_frame(), None);
     // The focus on a window the list does not hold, or none, frames nothing.
@@ -1588,7 +1603,40 @@ fn a_window_on_another_display_is_refused() {
     assert!(refused.to_string().contains("display 2"), "{refused}");
 }
 
-/// The window holding the focus before a press must be the one the lane located, by its id: a
+/// The windows' reply is read up to its bound, a busy device's many windows included, and one
+/// past it is refused whole: no part of it is parsed.
+#[test]
+fn the_windows_reply_is_read_up_to_its_bound() {
+    let padded = |length: usize| {
+        let mut reply = WINDOWS.to_owned();
+        reply.push_str(&" ".repeat(length - WINDOWS.len()));
+        reply
+    };
+    let bound = device::MAX_WINDOWS_REPLY;
+    let adb = scripted(true, true).reply_once(
+        "shell dumpsys window displays",
+        AdbReply::new(0, padded(bound)),
+    );
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    lane.locate_window(&placement())
+        .expect("a reply at the bound is read");
+    let adb = scripted(true, true).reply_once(
+        "shell dumpsys window displays",
+        AdbReply::new(0, padded(bound + 1)),
+    );
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    let refused = lane
+        .locate_window(&placement())
+        .expect_err("a reply past the bound");
+    assert!(
+        refused
+            .to_string()
+            .contains(&format!("printed more than {bound} bytes")),
+        "{refused}"
+    );
+}
+
+/// The window holding the focus before a press must be the one the lane located, by its hash: a
 /// window of the app's title (the one leaving as the activity starts again) is another window,
 /// and nothing is sent to it.
 #[test]
@@ -1641,13 +1689,14 @@ fn a_service_on_a_device_refuses_the_tree_and_nothing_else() {
     );
     let message = refused.to_string();
     assert!(message.contains("com.example.passwords"), "{message}");
-    // The refusal says what it refuses, the tree, and what goes on: no workaround of locating the
-    // window before the service starts, which the lane no longer needs.
+    // The refusal names what it refuses, the tree, and what goes on whatever services run.
     assert!(
-        message.contains("reads no tree") && message.contains("still locates the window"),
+        message.contains(
+            "the lane reads no tree while one runs; it still locates the window, sends input and \
+             captures"
+        ),
         "{message}"
     );
-    assert!(!message.contains("before the service"), "{message}");
     assert_eq!(adb.commands("exec-out uiautomator"), Vec::<String>::new());
 }
 

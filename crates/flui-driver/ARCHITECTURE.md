@@ -137,8 +137,8 @@ app's trees, frames and input, and this crate composes that with what only the O
   matched node carries the app's role and identifier; what a dump cannot show
   (`tree::Unobservable`) projects as the app published it. Only the read of the tree dumps: the
   window is located from `dumpsys window` (`device::parse_windows`): the focused window by its
-  id, on the default display, located again after the dump, which a moved window or another
-  turn makes `Busy`; so input and capture pause no accessibility service, and no dump runs while
+  hash, on the default display, located again after the dump, which a replaced or moved window
+  or another turn makes `Busy`; so input and capture pause no accessibility service, and no dump runs while
   any service does (`safety::check_dump`). `invoke` is refused, since UI Automator performs no
   accessibility action.
 - **The OS tree is compared with the app's tree of its own revision, on every lane:**

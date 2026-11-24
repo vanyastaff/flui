@@ -400,6 +400,51 @@ fn the_guard_waits_for_getevent_to_name_a_device_and_stops_with_it() {
     }
 }
 
+/// A slow scripted command answers once it has run, within its deadline; past it, it is ended at
+/// the deadline and times out with a `may_have_run` effect, as the host's `adb` does.
+#[test]
+fn a_slow_scripted_command_answers_within_its_deadline_and_times_out_past_it() {
+    let adb = ScriptedAdb::new()
+        .reply_once_after(
+            "shell slow",
+            AdbReply::new(0, "done"),
+            Duration::from_secs(5),
+        )
+        .reply_once_after(
+            "shell quick",
+            AdbReply::new(0, "done"),
+            Duration::from_millis(20),
+        );
+    let mut device = adb.device();
+    let started = Instant::now();
+    let refused = device
+        .run(
+            &AdbCommand::Shell("slow".to_owned()),
+            64,
+            Duration::from_millis(50),
+        )
+        .expect_err("the command outlives its deadline");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the deadline ends the command, not the device"
+    );
+    match &refused {
+        Error::Timeout { effect, .. } => assert_eq!(
+            effect.as_ref().map(|effect| effect.kind),
+            Some(flui_driver::protocol::act::EffectKind::MayHaveRun)
+        ),
+        other => panic!("{other:?}"),
+    }
+    let reply = device
+        .run(
+            &AdbCommand::Shell("quick".to_owned()),
+            64,
+            Duration::from_secs(5),
+        )
+        .expect("the command answers within its deadline");
+    assert_eq!(reply.text(), "done");
+}
+
 #[test]
 fn a_guard_that_hears_no_device_within_its_wait_cannot_arm() {
     let adb = ScriptedAdb::new().stream("shell -tt getevent", Vec::new(), None);
@@ -456,12 +501,22 @@ fn device_output_at_its_edges() {
     );
     assert_eq!(device::parse_focus("  mCurrentFocus=Window{1 u0 }\n"), None);
     assert_eq!(
-        device::parse_focus("  mCurrentFocus=Window{9e u0 Application Error: x}\n").as_deref(),
+        device::parse_focus("  mCurrentFocus=Window{9e u0 Application Error: x}\n")
+            .map(|focus| focus.title)
+            .as_deref(),
         Some("Application Error: x"),
         "a title with spaces is read whole"
     );
     assert_eq!(
-        device::parse_focus(FOCUSED).as_deref(),
+        device::parse_focus("  mCurrentFocus=Window{4f u0 a/.B} 0x1\n")
+            .map(|focus| (focus.hash.to_string(), focus.title)),
+        Some(("4f".to_owned(), "a/.B".to_owned())),
+        "what follows the window's name is not its title"
+    );
+    assert_eq!(
+        device::parse_focus(FOCUSED)
+            .map(|focus| focus.title)
+            .as_deref(),
         Some("dev.flui.scenario/android.app.NativeActivity")
     );
 }

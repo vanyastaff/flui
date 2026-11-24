@@ -1193,8 +1193,10 @@ graph LR
     read of the tree takes one, and on a device or an emulator it is refused while any service is
     on (`enabled_accessibility_services`, a list never set or emptied being none) or touch
     exploration is, naming `android_tree_dump` and the services (`docs/gaps.md`). Input and
-    capture take no dump. The window is the focused one by its id, on the default display, and
-    the focus check before each press, key, text and scroll compares that id.
+    capture take no dump. The window is the focused one by its hash, on the default display, and
+    the focus check before each press, key, text and scroll compares that hash; a read of the
+    tree locates the window again after the dump, and a window replaced, moved or turned in
+    between answers `Busy`.
   - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
     sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,
     which `Lane::read_tree` is handed, of one revision with the OS tree: the root is the decor
@@ -1204,8 +1206,9 @@ graph LR
     content description, toggled state where the app's read reports it (a radio button's
     selection included; a grid cell's and another selection role's it does not), enabled state and
     bounds placed at the surface's origin; two candidates the order does not tell apart are
-    `Ambiguous`, bounds off the display place a node nowhere, and what a dump cannot show (a
-    range's value, the announcers) is no difference (`tree::Unobservable`). `invoke` is refused
+    `Ambiguous`, bounds off the display place a node nowhere, and what a dump cannot show or the
+    read does not report (a range's value, the announcers, a selection role's toggled state) is no
+    difference (`tree::Unobservable`). `invoke` is refused
     naming `os_invoke`: UI Automator performs no action. Held by `android_tree::*` and, through
     the lane on a scripted emulator answering with literal dumps of the headless app's pages, by
     `scenarios::the_android_roles_scenario_passes_through_the_lane_on_the_headless_app` and
