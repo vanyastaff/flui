@@ -222,7 +222,6 @@ pub(crate) fn the_system_text_scale_grows_each_span_once() {
     use flui_platform::SystemPreferences;
     use flui_rendering::storage::IntrinsicDimension;
     use flui_view::ViewExt;
-    use flui_widgets::RichText;
 
     fn fixed(size: f64) -> TextStyle {
         sized(size).with_sizing(TextSizingIntent::Fixed)
@@ -233,7 +232,7 @@ pub(crate) fn the_system_text_scale_grows_each_span_once() {
     let cases = [
         (
             "spans of different sizes, unstyled text and a fixed span",
-            RichText::new(TextSpan::with_children(vec![
+            Text::rich(TextSpan::with_children(vec![
                 TextSpan::new("unstyled "),
                 TextSpan::styled("fixed ", fixed(20.0)),
                 TextSpan::styled("small ", sized(12.0)),
@@ -399,6 +398,42 @@ pub(crate) fn media_text_scaling_changes_the_laid_out_text() {
             && enlarged_size.height > normal_size.height * 1.5,
         "text scaling must enlarge the shaped paragraph: normal={normal_size:?}, enlarged={enlarged_size:?}"
     );
+
+    // A `RichText` reads no `MediaQuery`, as Flutter's reads none: it scales
+    // by the sizing it is given, which `Text` takes from the `MediaQuery`.
+    let rich = |sizing: Option<flui_painting::TextSizing>| {
+        let paragraph = flui_widgets::RichText::new(flui_painting::typography::TextSpan::styled(
+            "accessibility sizing",
+            TextStyle::default().with_font_size(16.0),
+        ));
+        let paragraph = match sizing {
+            Some(sizing) => paragraph.text_sizing(sizing),
+            None => paragraph,
+        };
+        let laid = lay_out(
+            MediaQuery::new(
+                MediaQueryData {
+                    text_sizing: flui_painting::TextSizing::linear(2.0).expect("valid test policy"),
+                    ..MediaQueryData::default()
+                },
+                paragraph,
+            ),
+            loose(1000.0),
+        );
+        laid.size(laid.root())
+    };
+    assert_eq!(
+        rich(None),
+        normal_size,
+        "a RichText under an enlarging MediaQuery keeps its size"
+    );
+    assert_eq!(
+        rich(Some(
+            flui_painting::TextSizing::linear(2.0).expect("valid test policy")
+        )),
+        enlarged_size,
+        "a RichText given the sizing scales by it"
+    );
 }
 
 // ============================================================================
@@ -444,8 +479,8 @@ pub(crate) fn a_text_run_reads_the_ambient_direction_unless_it_names_one() {
         ("Text", Text::new("abc").boxed()),
         ("RichText", RichText::new(TextSpan::new("abc")).boxed()),
         (
-            "a linked RichText",
-            RichText::new(TextSpan::new("abc").with_link("app://abc"))
+            "a linked rich Text",
+            Text::rich(TextSpan::new("abc").with_link("app://abc"))
                 .on_link(|_ctx, _link| {})
                 .boxed(),
         ),
@@ -497,9 +532,9 @@ pub(crate) fn a_text_run_reads_the_ambient_direction_unless_it_names_one() {
         );
     }
 
-    // The run's `RichText` element, which reads it in `build`, is the only reader
-    // of the ambient direction here, so the count of its dependents tells
-    // whether the run took the dependency.
+    // The run's `RichText` element, which reads it as it configures its render
+    // object, is the only reader of the ambient direction here, so the count
+    // of its dependents tells whether the run took the dependency.
     for (name, view, dependents) in [
         ("Text", Text::new("abc").boxed(), 1),
         (
@@ -566,12 +601,12 @@ const HELP: std::ops::Range<usize> = 10..15;
 
 /// `RichText` with one link between plain runs: "plain ", "link" (to
 /// `app://terms`), then " help", whose span asks for the help cursor.
-fn linked_paragraph(opened: &Rc<RefCell<Vec<String>>>) -> flui_widgets::RichText {
+fn linked_paragraph(opened: &Rc<RefCell<Vec<String>>>) -> flui_widgets::Text {
     use flui_painting::typography::TextSpan;
     use flui_platform::CursorIcon;
 
     let opened = Rc::clone(opened);
-    flui_widgets::RichText::new(
+    flui_widgets::Text::rich(
         TextSpan::new("plain ")
             .with_child(TextSpan::new("link").with_link("app://terms"))
             .with_child(TextSpan::new(" help").with_mouse_cursor(CursorIcon::Help)),
@@ -850,7 +885,7 @@ pub(crate) fn a_handled_link_is_a_link_node_assistive_technology_clicks() {
     );
 
     let mut unhandled = lay_out(
-        flui_widgets::RichText::new(
+        flui_widgets::Text::rich(
             TextSpan::new("plain ").with_child(TextSpan::new("link").with_link("app://terms")),
         ),
         loose(10_000.0),
@@ -885,7 +920,7 @@ fn links_between_buttons(
             .boxed(),
         SizedBox::new(width, 100.0)
             .child(
-                flui_widgets::RichText::new(
+                flui_widgets::Text::rich(
                     TextSpan::new("go to ")
                         .with_child(TextSpan::new("first").with_link("app://first"))
                         .with_child(TextSpan::new(" or "))
@@ -1109,7 +1144,7 @@ pub(crate) fn assistive_technology_focuses_a_link() {
 pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
     use flui_painting::typography::TextSpan;
     use flui_platform::input::keyboard::{Key, NamedKey};
-    use flui_widgets::{RichText, SingleChildScrollView, SizedBox};
+    use flui_widgets::{SingleChildScrollView, SizedBox};
 
     const VIEWPORT: f64 = 120.0;
     let filler = "words to scroll past ".repeat(40);
@@ -1120,7 +1155,7 @@ pub(crate) fn tab_to_a_link_below_the_view_scrolls_it_into_view() {
     let mut laid = lay_out(
         SizedBox::new(200.0, VIEWPORT).child(
             SingleChildScrollView::new().child(
-                RichText::new(
+                Text::rich(
                     TextSpan::new("start ")
                         .with_child(TextSpan::new("top").with_link("app://top"))
                         .with_child(TextSpan::new(filler))
@@ -1163,7 +1198,7 @@ pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read()
     use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_testing::a11y::Role;
     use flui_view::ViewExt;
-    use flui_widgets::{Column, RawButton, RichText};
+    use flui_widgets::{Column, RawButton};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
     let after = Rc::new(std::cell::Cell::new(0));
@@ -1173,13 +1208,13 @@ pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read()
             RawButton::new(Text::new("before"))
                 .on_pressed(|_ctx| {})
                 .boxed(),
-            RichText::new(
+            Text::rich(
                 TextSpan::with_children(vec![TextSpan::new("inner").with_link("app://inner")])
                     .with_link("app://outer"),
             )
             .on_link(move |_ctx, link| record.borrow_mut().push(link.to_string()))
             .boxed(),
-            RichText::new(
+            Text::rich(
                 TextSpan::with_children(vec![TextSpan::new("terms").with_link("app://terms")])
                     .with_semantics_label("Read "),
             )
@@ -1224,14 +1259,14 @@ pub(crate) fn a_shadowed_link_takes_no_stop_and_a_textless_label_is_still_read()
 pub(crate) fn select_opens_a_link_and_space_activates_nothing_around_it() {
     use flui_painting::typography::TextSpan;
     use flui_platform::input::keyboard::{Key, NamedKey};
-    use flui_widgets::{RawButton, RichText};
+    use flui_widgets::RawButton;
 
     let opened = Rc::new(RefCell::new(Vec::new()));
     let pressed = Rc::new(std::cell::Cell::new(0));
     let (record, count) = (Rc::clone(&opened), Rc::clone(&pressed));
     let mut laid = lay_out(
         RawButton::new(
-            RichText::new(
+            Text::rich(
                 TextSpan::new("see ").with_child(TextSpan::new("help").with_link("app://help")),
             )
             .on_link(move |_ctx, link| record.borrow_mut().push(link.to_string())),
@@ -1262,7 +1297,7 @@ pub(crate) fn a_link_the_layout_cut_takes_no_focus() {
     use flui_painting::typography::TextSpan;
     use flui_platform::input::keyboard::{Key, NamedKey};
     use flui_view::ViewExt;
-    use flui_widgets::{Column, RawButton, RichText, SizedBox};
+    use flui_widgets::{Column, RawButton, SizedBox};
 
     let opened = Rc::new(RefCell::new(Vec::new()));
     let after = Rc::new(std::cell::Cell::new(0));
@@ -1274,7 +1309,7 @@ pub(crate) fn a_link_the_layout_cut_takes_no_focus() {
                 .boxed(),
             SizedBox::new(80.0, 100.0)
                 .child(
-                    RichText::new(
+                    Text::rich(
                         TextSpan::new("")
                             .with_child(TextSpan::new("shown").with_link("app://shown"))
                             .with_child(TextSpan::new(" and a long run of words before "))
@@ -1305,7 +1340,7 @@ pub(crate) fn a_link_the_layout_cut_takes_no_focus() {
 
 /// `RichText` whose links are `names`, each linking `app://<name>`, between
 /// single spaces.
-fn named_links(opened: &Rc<RefCell<Vec<String>>>, names: &[&str]) -> flui_widgets::RichText {
+fn named_links(opened: &Rc<RefCell<Vec<String>>>, names: &[&str]) -> flui_widgets::Text {
     use flui_painting::typography::TextSpan;
 
     let mut spans = Vec::new();
@@ -1316,7 +1351,7 @@ fn named_links(opened: &Rc<RefCell<Vec<String>>>, names: &[&str]) -> flui_widget
         spans.push(TextSpan::new(*name).with_link(format!("app://{name}")));
     }
     let opened = Rc::clone(opened);
-    flui_widgets::RichText::new(TextSpan::with_children(spans))
+    flui_widgets::Text::rich(TextSpan::with_children(spans))
         .on_link(move |_ctx, link| opened.borrow_mut().push(link.to_string()))
 }
 
@@ -1381,7 +1416,7 @@ pub(crate) fn unmounting_a_linked_paragraph_releases_its_links() {
     let opened = Rc::new(RefCell::new(Vec::new()));
     let record = Rc::clone(&opened);
     let mut laid = lay_out(
-        flui_widgets::RichText::new(
+        flui_widgets::Text::rich(
             flui_painting::typography::TextSpan::new("read ").with_child(
                 flui_painting::typography::TextSpan::new("more").with_link("app://more"),
             ),

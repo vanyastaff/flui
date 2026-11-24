@@ -1745,7 +1745,7 @@ edits but not the caller's own, and `set_value` on a text form field seen by
 
 ### A paragraph's links are focus stops of their own
 
-**Choice:** `RichText` with `on_link` lays its paragraph in a `Stack` (constraints passed
+**Choice:** `Text` with `on_link` lays its paragraph in a `Stack` (constraints passed
 through) beside one zero-size focus stop per link. Each stop hosts a node whose rect is the
 link's glyph bounds from the committed layout, kept within the paragraph's box
 (`Focus::rect_provider`, `RenderParagraph::link_bounds`; a last line's box can end a
@@ -3574,15 +3574,21 @@ replacement; it does not fall through to an ancestor for an unavailable field.
 removal and nested-provider precedence. The runtime's
 `preferred_locales_select_resources_and_direction` exercises loaded resources.
 
-`RichText` reads inherited text sizing and weight adjustment during its stateless
-build, and the ambient `Directionality` when it names no direction of its own (a
-run that names one takes no dependency), and passes them, the resolved direction
-included, with its unchanged authored spans to a private render view
-(`a_text_run_reads_the_ambient_direction_unless_it_names_one`).
-It reads them in `build` rather than through `RenderObjectContext::depend_on`,
-and native settings never enter `RenderObjectContext`. The paragraph update reports layout and semantics invalidation when sizing changes, so the same
-render object produces updated geometry. Weight changes likewise invalidate layout
-and semantics; EditableText forwards the same inherited adjustment to its painter.
+`Text` reads inherited text sizing and weight adjustment during its stateless build,
+as Flutter's `Text` reads `MediaQuery.textScalerOf` and `boldTextOf`
+(`flutter/flutter@3.50.1`, `packages/flutter/lib/src/widgets/text.dart:757` and
+`:729`), and passes them with its spans to `RichText`, the render view of the
+paragraph. `RichText` reads the ambient `Directionality` through
+`RenderObjectContext::depend_on` when it names no direction of its own, as Flutter's
+reads it in `createRenderObject` and `updateRenderObject` (`basic.dart:6665` and
+`:6687`): a direction change reconfigures the same render object, and a run that
+names a direction takes no dependency
+(`a_text_run_reads_the_ambient_direction_unless_it_names_one`). A `RichText` built
+directly reads no `MediaQuery`: unset, its sizing is its presentation's
+(`media_text_scaling_changes_the_laid_out_text`). Native settings never enter
+`RenderObjectContext`. The paragraph update reports layout and semantics invalidation
+when sizing changes, so the same render object produces updated geometry. Weight
+changes likewise invalidate layout and semantics; EditableText forwards the same inherited adjustment to its painter.
 The common shaping policy runs after authored span inheritance (ADR-0174).
 `Text` composes this path after merging its ambient style. `MediaQueryData`
 carries one validated numeric sizing policy rather than a writable scalar.
