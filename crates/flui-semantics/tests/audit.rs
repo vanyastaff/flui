@@ -1,9 +1,10 @@
 //! The accessibility rules over a published tree, through the public API:
-//! an interactive element with no name, and one whose hit region inside its
-//! clip is under the minimum target.
+//! an interactive element with no name, and one whose hit region, inside the
+//! window and the clips that do not scroll, is under the minimum target.
 
 use std::rc::Rc;
 
+use flui_foundation::geometry::AxisDirection;
 use flui_protocol::audit::AuditRule;
 use flui_semantics::{
     MinimumTarget, SemanticsAction, SemanticsConfiguration, SemanticsRole, Toggled,
@@ -20,6 +21,15 @@ fn button(c: &mut SemanticsConfiguration, label: Option<&'static str>) {
     c.add_action(SemanticsAction::Click, Rc::new(|_| {}));
 }
 
+/// Marks the node at `index` as clipping its children.
+fn clipping(f: &mut Fixture, index: u32) {
+    let id = f.id_of(index);
+    f.owner
+        .get_mut(id)
+        .expect("the fixture has the clipping node")
+        .set_clips_children(true);
+}
+
 /// A 400 × 300 window. Index → what it is:
 ///
 /// ```text
@@ -29,11 +39,22 @@ fn button(c: &mut SemanticsConfiguration, label: Option<&'static str>) {
 ///   4 button "Tiny" (10,100 20×20)
 ///   5 button "Roomy" (100,100 48×48)
 ///   6 label "Caption" (200,100 10×10): not interactive
-///   7 scroll view "List" (10,200 200×50), clipping its children →
-///     8 button "Half shown" (10,236 200×60): its hit region is the 14 px
-///     strip inside the scroll view
+///   7 vertical list "List" (10,200 200×50), clipping its children →
+///     8 button "Half shown" (10,226 100×48): half scrolled out, 48 px once
+///       revealed
+///     11 button "Thin half shown" (110,235 100×30): half scrolled out, 30 px
+///        once revealed
+///     12 button "Wide" (180,205 100×48): partly scrolled out, and cut to
+///        30 px across by the list's side, which does not scroll
 ///   9 button "Hidden", no name (300,10 5×5), hidden
 ///  10 button "Beyond" (500,10 10×10), outside the window
+///  13 frame "Frame" (250,200 100×14), clipping its children, not scrolling →
+///     14 button "Cut" (250,200 100×60): cut to 14 px
+///  15 horizontal list "Row" (220,100 100×50), clipping its children →
+///     16 button "Half shown across" (296,100 48×50): half scrolled out, 48 px
+///        once revealed
+///     17 button "Thin across" (300,100 30×50): partly scrolled out, 30 px
+///        once revealed
 /// ```
 fn window() -> Fixture {
     let mut f = Fixture::new();
@@ -58,13 +79,15 @@ fn window() -> Fixture {
         c.set_label("List");
         c.set_scroll_position(0.0);
     });
-    let list = f.id_of(7);
-    f.owner
-        .get_mut(list)
-        .expect("the fixture has the scroll view")
-        .set_clips_children(true);
-    f.add(Some(7), 8, (10.0, 236.0, 200.0, 60.0), |c| {
+    clipping(&mut f, 7);
+    f.add(Some(7), 8, (10.0, 226.0, 100.0, 48.0), |c| {
         button(c, Some("Half shown"));
+    });
+    f.add(Some(7), 11, (110.0, 235.0, 100.0, 30.0), |c| {
+        button(c, Some("Thin half shown"));
+    });
+    f.add(Some(7), 12, (180.0, 205.0, 100.0, 48.0), |c| {
+        button(c, Some("Wide"));
     });
     f.add(Some(1), 9, (300.0, 10.0, 5.0, 5.0), |c| {
         button(c, None);
@@ -73,15 +96,37 @@ fn window() -> Fixture {
     f.add(Some(1), 10, (500.0, 10.0, 10.0, 10.0), |c| {
         button(c, Some("Beyond"));
     });
+    f.add(Some(1), 13, (250.0, 200.0, 100.0, 14.0), |c| {
+        c.set_label("Frame");
+    });
+    clipping(&mut f, 13);
+    f.add(Some(13), 14, (250.0, 200.0, 100.0, 60.0), |c| {
+        button(c, Some("Cut"));
+    });
+    f.add(Some(1), 15, (220.0, 100.0, 100.0, 50.0), |c| {
+        c.set_role(SemanticsRole::ScrollView);
+        c.set_label("Row");
+        c.set_scroll_axis_direction(AxisDirection::LeftToRight);
+        c.set_scroll_position(0.0);
+    });
+    clipping(&mut f, 15);
+    f.add(Some(15), 16, (296.0, 100.0, 48.0, 50.0), |c| {
+        button(c, Some("Half shown across"));
+    });
+    f.add(Some(15), 17, (300.0, 100.0, 30.0, 50.0), |c| {
+        button(c, Some("Thin across"));
+    });
     f.flush();
     f
 }
 
 /// Each rule names exactly the elements that break it, with a detail a person
 /// can act on: an unnamed button and not its named twin; an undersized target
-/// and not its corrected twin; a target drawn large but clipped to an
-/// undersized hit region. A hidden element, a label and an element outside the
-/// window are not judged.
+/// and not its corrected twin. A row partly scrolled out of a list, down or
+/// across, is judged by its size once revealed and reported only when that is
+/// under the minimum. A target a clip that does not scroll cuts, or a list's
+/// side cuts across its axis, is judged by what that clip leaves. A hidden
+/// element, a label and an element outside the window are not judged.
 #[test]
 fn each_rule_finds_the_elements_that_break_it_and_spares_their_twins() {
     let f = window();
@@ -111,10 +156,12 @@ fn each_rule_finds_the_elements_that_break_it_and_spares_their_twins() {
             "no accessible name",
         ),
         (
-            "an undersized target and a clipped one, not their roomy twin",
+            "an undersized target, a thin row scrolled partly out of each list, a row the \
+             vertical list cuts across and a target a fixed clip cuts; not the roomy twin nor \
+             the 48 px rows scrolled half out",
             undersized,
             AuditRule::TargetSize,
-            vec![4, 8],
+            vec![4, 11, 12, 14, 17],
             "under the platform's 44 px minimum target",
         ),
     ];
@@ -133,9 +180,11 @@ fn each_rule_finds_the_elements_that_break_it_and_spares_their_twins() {
     }
 }
 
-/// The clipped target's finding gives the hit region the scroll view leaves,
-/// not its drawn bounds, and says it was clipped; the plain one gives its
-/// bounds.
+/// A finding gives the extent it judged: a row scrolled partly out its whole
+/// size along the scroll axis, with no mention of a clip; a target a clip that
+/// does not scroll cuts, the part that clip leaves and the bounds it was cut
+/// from; a row a list's side cuts, the width the side leaves and its whole
+/// height.
 #[test]
 fn a_target_size_finding_names_the_hit_region_inside_the_clip() {
     let f = window();
@@ -153,15 +202,20 @@ fn a_target_size_finding_names_the_hit_region_inside_the_clip() {
                 |finding| finding.detail.clone(),
             )
     };
-    assert_eq!(
-        detail(4),
-        "this button's hit region is 20 × 20 logical px, under the platform's 44 px minimum target"
-    );
-    assert_eq!(
-        detail(8),
-        "this button's hit region is 200 × 14 logical px, clipped from its 200 × 60 bounds, \
-         under the platform's 44 px minimum target"
-    );
+    let under = "under the platform's 44 px minimum target";
+    for (index, region) in [
+        (4, "20 × 20 logical px"),
+        (11, "100 × 30 logical px"),
+        (12, "30 × 48 logical px, clipped from its 100 × 48 bounds"),
+        (14, "100 × 14 logical px, clipped from its 100 × 60 bounds"),
+        (17, "30 × 50 logical px"),
+    ] {
+        assert_eq!(
+            detail(index),
+            format!("this button's hit region is {region}, {under}"),
+            "{index}"
+        );
+    }
 }
 
 /// An element is interactive by any action that operates it, not only

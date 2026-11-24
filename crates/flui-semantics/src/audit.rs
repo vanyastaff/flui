@@ -9,21 +9,35 @@
 //! - [`SemanticsOwner::audit_unnamed`]: an interactive element with no
 //!   accessible name.
 //! - [`SemanticsOwner::audit_target_size`]: an interactive element whose hit
-//!   region inside its clip is smaller than the platform's minimum target.
+//!   region inside the clips that do not scroll is smaller than the minimum
+//!   target.
 //!
 //! An element is interactive when it advertises an action that operates it
 //! (`invoke`, `toggle`, `set_value`, `select`, `expand`, `collapse`); focus and
 //! reveal alone move the cursor or the viewport, not the control.
 //!
-//! The hit region is the part of the element's bounds the window and every
-//! clipping ancestor leave: the same region the actionability `visible` check
-//! reads, from the published tree rather than from pixels. A target drawn large
-//! but clipped by a scroll view to a sliver is that sliver until it is scrolled
-//! in (ADR-0400 §5). Flutter's `MinimumTapTargetGuideline` judges the same
-//! clipped region, and its tracker records a row partly scrolled under a pinned
-//! app bar failing that way as a defect (flutter/flutter#144121): this rule
-//! reports such a row, by that decision. An element the window does not show at
-//! all has no hit region and is not judged.
+//! The hit region is read from the published tree, never from pixels: the
+//! element's bounds inside the window and every clip that does not scroll
+//! (ADR-0400 §5). A clip that never moves (a clip rect, the window's edge)
+//! keeps what it cuts, so a target it cuts to a sliver is judged by the sliver.
+//! The clip of a scrollable ancestor does not shrink a target along the axis it
+//! scrolls, because scrolling reveals the rest: along that axis the target is
+//! judged by the extent it has once revealed, its bounds' up to what the
+//! scrollable itself shows. Across that axis the scrollable's clip does not
+//! move, so a row a vertical list cuts at its side is judged by the width the
+//! list leaves. Judging the part a scrollable shows is the defect Flutter's
+//! tracker records for its `MinimumTapTargetGuideline`, which fails a row
+//! partly scrolled under a pinned app bar (flutter/flutter#144121).
+//!
+//! A scrollable is a clipping node (AccessKit's `clips_children`) that
+//! publishes a scroll position or extent along an axis (`scroll_x`, `scroll_y`
+//! and their minimum and maximum), as the semantics assembly publishes it: the
+//! assembly folds every clip that does not scroll into the bounds of the nodes
+//! under it, and under a scrollable keeps a node's whole bounds so a reader can
+//! reveal it. This is not the region the actionability `visible` check reads
+//! (`shown_bounds`): a pointer cannot reach what a viewport hides now, while a
+//! target's size is what it offers once shown. An element the window does not
+//! show at all is not judged.
 
 use accesskit_consumer::{NodeRef, TreeState};
 use flui_protocol::{
@@ -105,9 +119,9 @@ impl SemanticsOwner {
         })
     }
 
-    /// Every interactive element the window shows whose hit region inside its
-    /// clip is smaller than `minimum` on either axis, in tree order (module
-    /// docs).
+    /// Every interactive element the window shows whose hit region, inside the
+    /// window and the clips that do not scroll, is smaller than `minimum` on
+    /// either axis, in tree order (module docs).
     ///
     /// # Errors
     ///
@@ -129,11 +143,13 @@ impl SemanticsOwner {
                 if !is_interactive(&wire.actions) {
                     continue;
                 }
-                // No hit region: the window does not show it, so nothing can point at it.
-                let Some(region) = shown_bounds(state, &node, published_ratio) else {
+                // The window shows none of it: nothing can point at it, and it is not judged.
+                if shown_bounds(state, &node, published_ratio).is_none() {
+                    continue;
+                }
+                let Some((width, height)) = target_extent(state, &node, published_ratio) else {
                     continue;
                 };
-                let (width, height) = (region.width(), region.height());
                 if minimum.admits(width, height) {
                     continue;
                 }
@@ -180,6 +196,87 @@ impl SemanticsOwner {
 /// Bounds closer than this, in logical pixels, are the same: a region this
 /// close to its bounds is not reported as clipped.
 const CLIP_EPSILON: f64 = 1e-3;
+
+/// The width and height, in logical pixels, of the hit region `node` has once
+/// every scrollable above it has revealed as much of it as it can (module
+/// docs): `None` when it has no bounds.
+///
+/// Each axis is followed from the node up. A clip that does not scroll along
+/// the axis, and the window at the end, cut what is followed. A clipping
+/// ancestor that scrolls along the axis does not cut it: it caps the extent at
+/// what has been followed so far, and from there its own extent is followed,
+/// since the node shows at most as much as its scrollable does.
+fn target_extent(
+    state: &TreeState,
+    node: &NodeRef<'_>,
+    published_ratio: f64,
+) -> Option<(f64, f64)> {
+    let rect = crate::agent::logical_bounds(node, published_ratio)?;
+    let mut across = AxisExtent::new(rect.left(), rect.right());
+    let mut down = AxisExtent::new(rect.top(), rect.bottom());
+    let clips =
+        std::iter::successors(node.parent(), NodeRef::parent).filter(NodeRef::clips_children);
+    for clip in clips {
+        let Some(bounds) = crate::agent::logical_bounds(&clip, published_ratio) else {
+            continue;
+        };
+        let data = clip.data();
+        let scrolls_across = data.scroll_x().is_some()
+            || data.scroll_x_min().is_some()
+            || data.scroll_x_max().is_some();
+        let scrolls_down = data.scroll_y().is_some()
+            || data.scroll_y_min().is_some()
+            || data.scroll_y_max().is_some();
+        across.pass(bounds.left(), bounds.right(), scrolls_across);
+        down.pass(bounds.top(), bounds.bottom(), scrolls_down);
+    }
+    if let Some(window) = crate::agent::logical_bounds(&state.root(), published_ratio) {
+        across.pass(window.left(), window.right(), false);
+        down.pass(window.top(), window.bottom(), false);
+    }
+    Some((across.extent(), down.extent()))
+}
+
+/// One axis of [`target_extent`]'s walk.
+struct AxisExtent {
+    /// The most the target can show along the axis, set by the scrollables
+    /// passed so far; infinite before the first.
+    cap: f64,
+    /// The span followed now, the target's or a scrollable's, as the clips
+    /// passed since leave it.
+    start: f64,
+    end: f64,
+}
+
+impl AxisExtent {
+    fn new(start: f64, end: f64) -> Self {
+        Self {
+            cap: f64::INFINITY,
+            start,
+            end,
+        }
+    }
+
+    /// Passes a clip spanning `start..end` along the axis, which scrolls
+    /// along it or does not.
+    fn pass(&mut self, start: f64, end: f64, scrolls: bool) {
+        if scrolls {
+            self.cap = self.cap.min(self.length());
+            (self.start, self.end) = (start, end);
+        } else {
+            (self.start, self.end) = (self.start.max(start), self.end.min(end));
+        }
+    }
+
+    fn length(&self) -> f64 {
+        (self.end - self.start).max(0.0)
+    }
+
+    /// The extent the target shows along the axis.
+    fn extent(&self) -> f64 {
+        self.cap.min(self.length())
+    }
+}
 
 /// Whether `actions` include one that operates the control (module docs).
 fn is_interactive(actions: &[ActionName]) -> bool {

@@ -922,20 +922,29 @@ a second place to be wrong.
 (the agent filter, past a scroll view's edge included) and answer the protocol's `AuditFinding`s
 with each element's `ElementRef`. An element is interactive when it advertises `invoke`,
 `toggle`, `set_value`, `select`, `expand` or `collapse`; `unnamed` reports one whose wire name is
-empty. `target_size` judges the part of an element's bounds the window and every clipping
-ancestor leave, the region `visible` reads (`shown_bounds`), against a `MinimumTarget` the caller
-passes; an element the window does not show has no region and is not judged.
+empty. `target_size` judges an element's bounds inside the window and every clip that does not
+scroll, against a `MinimumTarget` the caller passes. A scrollable is a node that clips its
+children (`clips_children`) and publishes a scroll position or extent along an axis (`scroll_x`,
+`scroll_y` and their minimum and maximum). Along the axis it scrolls, its clip does not shrink a
+target: the target counts its whole extent there, up to what the scrollable itself shows. Across
+that axis its clip stays put and cuts like any other. An element the window does not show at all
+is not judged.
 
 **Why.** The rules live with the tree they read (ADR-0400 §5); the development agent's
-`audit.a11y` is their caller. A target drawn large but clipped to a sliver is a sliver to a finger
-until it is scrolled in, so the region inside the clips is judged, not the drawn rectangle.
-Flutter's `MinimumTapTargetGuideline` judges that region too, and its tracker records a row
-partly scrolled under a pinned app bar failing it as a defect (flutter/flutter#144121); this rule
-reports such a row, by ADR-0400 §5's decision. The minimum belongs to the presentation's gesture
-settings in `flui-interaction`, a crate above this one, so it is a parameter, finite and positive
-by construction, and the caller picks the pointer it judges for: the agent the platform's primary
-pointer, the testing kit's gesture-alternatives check a finger (its own minimum, judged by the
-same `MinimumTarget::admits`). `admits` refuses a non-finite extent.
+`audit.a11y` is their caller. Scrolling reveals the rest of a row a viewport cuts, so the part it
+shows now says nothing about the target's size: judging it is the defect Flutter's tracker
+records for `MinimumTapTargetGuideline`, which fails a row partly scrolled under a pinned app bar
+(flutter/flutter#144121). A clip that never moves (a clip rect, the window's edge) leaves a
+sliver for good, so that sliver is judged. The assembly folds every clip that does not scroll
+into the bounds of the nodes below it and keeps a node's whole bounds under a scrollable, which
+publishes that it clips: a clipping node that publishes no scroll position or extent cuts on both
+axes, and a scrollable only across its axis. This is not the region `visible` reads
+(`shown_bounds`): a pointer cannot reach what a viewport hides now. The minimum belongs to the
+presentation's gesture settings in `flui-interaction`, a crate above this one, so it is a
+parameter, finite and positive by construction, and the caller picks the pointer it judges for:
+the agent the platform's primary pointer, the testing kit's gesture-alternatives check a finger
+(its own minimum, judged by the same `MinimumTarget::admits`). `admits` refuses a non-finite
+extent.
 
 **Test.** `audit.rs` in `tests/`.
 
