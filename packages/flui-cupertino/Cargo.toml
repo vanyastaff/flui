@@ -19,9 +19,7 @@ autotests = false
 # The package-author surface (ADR-0088 §4): the widget spine, the value types,
 # `TranslationFraction` through `pipeline`, and the derives' runtime paths.
 # Cupertino names no internal crate in a normal dependency.
-# `cupertino-icons` embeds the "CupertinoIcons" face, the family Cupertino
-# icon data names (ADR-0397).
-flui-sdk = { workspace = true, features = ["cupertino-icons"] }
+flui-sdk = { workspace = true }
 tracing = { workspace = true }
 
 # Test harnesses only; the library build never sees them. Tests name the

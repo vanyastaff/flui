@@ -181,17 +181,19 @@ fn painting_features_of_a_consumer(root: &Path, features: &[&str]) -> Vec<String
 
 /// An icon face is in a consumer's binary only where the catalog that draws
 /// with it, or the facade feature of its name, asks for it (ADR-0397): the
-/// default facade embeds the text face alone.
+/// default facade embeds the text face alone, and the `cupertino` catalog,
+/// which draws no glyph of its family, does not bring the Cupertino face.
 #[test]
 fn an_icon_face_reaches_a_consumer_only_with_its_catalog_or_its_feature() {
     let Some(root) = checkout_root() else { return };
     for (features, material, cupertino) in [
         (&[][..], false, false),
         (&["material"][..], true, false),
-        (&["cupertino"][..], false, true),
+        (&["cupertino"][..], false, false),
         (&["material-icons"][..], true, false),
         (&["cupertino-icons"][..], false, true),
-        (&["material", "cupertino"][..], true, true),
+        (&["material", "cupertino"][..], true, false),
+        (&["cupertino", "cupertino-icons"][..], false, true),
     ] {
         let enabled = painting_features_of_a_consumer(root, features);
         let has = |feature: &str| enabled.iter().any(|name| name == feature);

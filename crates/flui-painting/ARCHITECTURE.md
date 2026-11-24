@@ -939,10 +939,12 @@ paint and carets, so one set of lists, FLUI's, decides the face everywhere.
   sans-serif family alone there; unverified, since Android is clippy-only here.
 - A family name fontdb records in another language only (fontique keeps the
   English or first name) is not found by the family rule's exact match.
-- A host copy of a family the build embeds (Roboto; Material Icons and
-  CupertinoIcons under their features) is
-  not fed, so one family never mixes two copies; an app that wants a host's
-  own icon font registers it under another family name.
+- A host copy of a family the build embeds (Roboto, under `bundled-fonts`) is
+  not fed, so one family never mixes two copies. Material Icons and
+  CupertinoIcons are never fed, embedded or not (`EMBEDDED_ICON_FAMILIES`):
+  an icon draws the face FLUI pins or the one the app registers, never the
+  copy a host happens to have; an app that wants a host's own icon font
+  registers it under another family name.
 - The first frame renders with the bundled faces; the host's arrive when
   the feed lands, and text measured before is laid out again then, as after
   a registration. A family the collection holds when the feed starts is not

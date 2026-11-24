@@ -595,7 +595,11 @@ enum Registration {
 /// Adds `host`'s faces, generics and fallback order to `collection`.
 ///
 /// A source any of whose families the collection holds when the feed starts
-/// is left out, so a host copy never joins a bundled or registered family.
+/// is left out, so a host copy never joins a bundled or registered family,
+/// and so is a source of an icon family FLUI embeds ([`EMBEDDED_ICON_FAMILIES`])
+/// whether or not this build holds that face: an icon's glyph comes from the
+/// face FLUI pins or from the application's `register_font`, never from a
+/// copy the host happens to have (ADR-0397 §2).
 /// Each source is registered on its own, so on a shared collection
 /// fontique's lock is held for one file at a time. A generic the collection
 /// already binds keeps its binding (with `bundled-fonts`, Roboto keeps every
@@ -620,7 +624,11 @@ fn feed_host_faces(
 
     use super::fallback_chain::{install_into, resolve};
 
-    let held: HashSet<String> = collection.family_names().map(str::to_lowercase).collect();
+    let held: HashSet<String> = collection
+        .family_names()
+        .chain(EMBEDDED_ICON_FAMILIES)
+        .map(str::to_lowercase)
+        .collect();
     let mut fed = 0_usize;
     let mut bound = false;
     for source in &host.sources {
@@ -733,6 +741,11 @@ fn bind_unbound_generics(
         }
     }
 }
+
+/// The families of the icon faces FLUI embeds under `material-icons` and
+/// `cupertino-icons`. A host feed never supplies one (ADR-0397 §2), so without
+/// its feature the family is the application's to register.
+const EMBEDDED_ICON_FAMILIES: [&str; 2] = ["Material Icons", "CupertinoIcons"];
 
 /// Registers the faces this build embeds (`crate::fonts`).
 ///
@@ -1197,6 +1210,64 @@ mod tests {
             .width;
         assert!(width > 1.0, "a context still shapes, got {width}");
         assert_eq!(fonts.register_font(ROBOTO), Ok(()));
+    }
+
+    /// A host never supplies an icon family FLUI embeds, whether this build
+    /// holds that face or not: its "Material Icons" and "CupertinoIcons" are
+    /// left out, and a text family beside them is fed. Without the feature
+    /// the family is then absent; with it, it keeps the embedded face alone.
+    /// Fails if the feed treats the icon families like any other family the
+    /// collection does not hold.
+    #[test]
+    fn a_host_never_supplies_an_icon_family_flui_embeds() {
+        use super::EMBEDDED_ICON_FAMILIES;
+
+        const PROBE: &str = "FLUI Probe Sans";
+        let host = HostFaces {
+            sources: EMBEDDED_ICON_FAMILIES
+                .iter()
+                .map(|&family| HostSource {
+                    data: HostData::Blob(Arc::new(renamed(PROBE_SANS, family, None))),
+                    families: vec![family.to_owned()],
+                })
+                .chain(std::iter::once(HostSource {
+                    data: HostData::Blob(Arc::new(renamed(PROBE_SANS, PROBE, None))),
+                    families: vec![PROBE.to_owned()],
+                }))
+                .collect(),
+            sans_serif: PROBE.to_owned(),
+            serif: PROBE.to_owned(),
+            monospace: PROBE.to_owned(),
+            cursive: PROBE.to_owned(),
+            fantasy: PROBE.to_owned(),
+            chain: FallbackChain::from_lists(&[PROBE], &[]),
+            system: crate::SystemFallback::none("en-US"),
+        };
+        let faces_of = |fonts: &FontCollection, family: &str| {
+            let mut collection = fonts.0.collection.clone();
+            collection
+                .family_id(family)
+                .and_then(|id| collection.family(id))
+                .map_or(0, |family| family.fonts().len())
+        };
+        let fed = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
+        let embedded = FontCollection::new();
+        assert_eq!(faces_of(&fed, PROBE), 1, "the text family is fed");
+        // The names are the embedded faces' own, so a face whose family name
+        // drifted from the list is caught where its feature is on.
+        for (family, embeds) in EMBEDDED_ICON_FAMILIES.into_iter().zip([
+            cfg!(feature = "material-icons"),
+            cfg!(feature = "cupertino-icons"),
+        ]) {
+            assert_eq!(embedded.holds(family), embeds, "`{family}` is embedded");
+        }
+        for family in EMBEDDED_ICON_FAMILIES {
+            assert_eq!(
+                faces_of(&fed, family),
+                faces_of(&embedded, family),
+                "`{family}` holds the faces this build embeds and no host copy"
+            );
+        }
     }
 
     /// A host copy of a bundled family never joins it: a host whose "Roboto"

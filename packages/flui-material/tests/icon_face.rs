@@ -39,9 +39,10 @@ fn glyphs_of(text: &str) -> Vec<u16> {
 }
 
 /// A build that depends on this package holds the Material Icons face: a
-/// codepoint of the family shapes to its glyph and not to `.notdef`, which is
-/// what it shapes to once the package's manifest stops turning on
-/// `flui-sdk`'s `material-icons` feature.
+/// codepoint of the family shapes to its glyph and not to `.notdef`. A
+/// workspace build unifies the feature on from other members, so whether the
+/// package's own manifest turns it on is held by the facade's
+/// `an_icon_face_reaches_a_consumer_only_with_its_catalog_or_its_feature`.
 #[test]
 fn an_icon_of_the_family_shapes_to_a_glyph_of_the_embedded_face() {
     let home = glyphs_of("\u{E88A}");

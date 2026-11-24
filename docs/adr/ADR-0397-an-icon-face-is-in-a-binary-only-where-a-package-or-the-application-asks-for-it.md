@@ -20,27 +20,30 @@
 
 ## Context and problem statement
 
-`flui-painting` embeds three faces under its default `bundled-fonts` feature, and every
-`FontCollection` holds all three. What bears on that:
+`flui-painting` embedded three faces under its default `bundled-fonts` feature, and every
+`FontCollection` held all three. What bears on that:
 
 | Fact | Evidence |
 |---|---|
-| The faces are Roboto Regular (305,608 bytes), Material Icons (356,840) and Cupertino Icons (257,628). The two icon faces are 614,468 bytes of every application, 2.7% of the generated counter's 22,886,368-byte Linux binary | `crates/flui-painting/assets/fonts/`; release build of `flui create --template counter`, Linux x86_64, 2026-11-23 |
+| The faces are Roboto Regular (305,608 bytes), Material Icons (356,840) and Cupertino Icons (257,628). The two icon faces are 614,468 bytes of every application, 2.7% of the generated counter's Linux release binary | `crates/flui-painting/assets/fonts/`; `counter_release_bytes` in `perf/size.toml` |
 | Roboto is what makes text measure alike on every host: every generic family is bound to it (flui-painting `ARCHITECTURE.md`, mapping decision 16). An icon face takes no part in that rule | `register_embedded_faces` in `crates/flui-painting/src/text_layout/context.rs` |
-| No spine crate draws with either icon family. `flui-material` draws three glyphs of Material Icons (`BackButton`, the delete icons of `Chip` and `FilterChip`); `flui-cupertino` is where Cupertino icon data belongs | `packages/flui-material/src/back_button.rs`, `chip.rs` |
+| No spine crate draws with either icon family. `flui-material` draws three glyphs of Material Icons (`BackButton`, the delete icons of `Chip` and `FilterChip`); `flui-cupertino` draws no glyph of CupertinoIcons | `packages/flui-material/src/back_button.rs`, `chip.rs`; `packages/flui-cupertino/src/` |
+| A host feed adds the host's faces to a collection once it is built; a family the collection already holds is skipped, and one it lacks is filled from whatever copy the host has | `feed_host_faces` in `crates/flui-painting/src/text_layout/context.rs` |
 | A package builds on `flui-sdk` alone and the process holds no global registry, so a package cannot add a face to collections it never sees from a static | ADR-0088, ADR-0097 |
 | `flui::app::register_font` adds a face to a running application: the collection's generation moves and laid-out text measures again on the next frame | `crates/flui-app/src/app/runner/fonts.rs` |
-| Flutter bundles its Material face only where the application's manifest sets `uses-material-design: true`, takes the Cupertino face from a package the application depends on, and subsets both to the glyphs a release build names | Sources |
+| Flutter bundles its Material face only where the application's manifest sets `uses-material-design: true`, takes the Cupertino face from the `cupertino_icons` package the application depends on (the Cupertino library does not), and subsets both to the glyphs a release build names | Sources |
 
 Which faces does a binary hold, and who decides?
 
 ## Decision drivers
 
 - An application pays for the faces it draws with, and for no other.
-- An author who adds a catalog gets its icons with it: no second step, and nothing in how a widget
-  is written changes.
+- An author who adds a catalog gets the icons its widgets draw: no second step, and nothing in how
+  a widget is written changes.
 - A face a build holds is in every collection before the first frame: no frame of missing glyphs,
   and no second layout when a face arrives.
+- One binary draws an icon the same on every host: a glyph comes from a face the build pins or
+  the application registers, never from what a host happens to have installed.
 - No process-global registry (ADR-0097), and a package names no crate below `flui-sdk` (ADR-0088).
 - One place says which faces a build holds, and the compiler reads it.
 
@@ -48,9 +51,12 @@ Which faces does a binary hold, and who decides?
 
 1. Keep the three faces under `bundled-fonts`.
 2. One Cargo feature per icon face, turned on by the package that draws with the family.
-3. The package holds the bytes and registers the face when its app widget mounts.
+3. The package holds the bytes and registers the face at run time: when its app widget mounts, or
+   through `register_font` before the application starts.
 4. The application declares its faces in its manifest and `flui build` bundles them as assets.
 5. Subset each face at build time to the glyphs the application names.
+6. The catalog draws its own few icons from path data or a subset face of its own, and the full
+   faces leave the framework.
 
 ## Decision
 
@@ -73,53 +79,62 @@ The features are independent: an icon feature without `bundled-fonts` holds that
 text face. A constant whose feature is off does not exist, so code that names it does not
 compile.
 
-### §2. Every collection holds the faces the build embeds
+### §2. Every collection holds the faces the build embeds, and a host never supplies an icon family
 
 `FontCollection::new`, `with_host_fonts` and `with_host_feed` register each embedded face when the
-collection is built. A host feed never adds a host face of a family the collection holds, so an
-embedded icon family is never mixed with a host copy; with the feature off the family is the
-host's to supply, or the application's through `register_font`.
+collection is built. A host feed never adds a host face of a family the collection holds, and
+never adds one of the two icon families (`EMBEDDED_ICON_FAMILIES`), whether or not the build
+embeds that face: with its feature off, the family is the application's to register with
+`register_font`, before the application starts so that the first frame has it.
 
 ### §3. The package that draws with a family turns its feature on
 
 `flui-sdk` passes both features through (`material-icons`, `cupertino-icons`). `flui-material`
-depends on `flui-sdk` with `material-icons` and `flui-cupertino` with `cupertino-icons`, so the
-facade's `material` and `cupertino` features bring the face with the catalog. The facade has the
-same two features for an application that draws a family with `flui::widgets::Icon` and no
-catalog. A third-party package that draws with one of the families turns the SDK feature on in its
-own manifest; a package with its own icon face ships the bytes and documents the
-`register_font` call.
+depends on `flui-sdk` with `material-icons`, so the facade's `material` feature brings the face
+with the catalog whose widgets draw it. `flui-cupertino` draws no glyph of its family and turns
+nothing on: an application that draws `"CupertinoIcons"` names the facade's `cupertino-icons`, as
+a Flutter one depends on `cupertino_icons`. The facade's `material-icons` is the same door for an
+application that draws `"Material Icons"` with `flui::widgets::Icon` and no catalog. A third-party
+package that draws with one of the families turns the SDK feature on in its own manifest; a
+package with its own icon face ships the bytes and documents the `register_font` call.
 
 ### Consequences
 
-- Good, because an application carries only the faces of the catalogs it uses: without a
-  catalog none of the 614,468 bytes of the two icon faces (a generated counter measured 592,128
-  bytes smaller on Linux x86_64 and 600,277 on wasm32), with Material alone not the Cupertino
-  face's 257,628, with Cupertino alone not the Material face's 356,840.
-- Good, because an author adds `material` and its icons draw: the feature rides on the dependency.
+- Good, because an application carries only the faces it asks for: without a catalog or an icon
+  feature none of the 614,468 bytes of the two icon faces (a generated counter measured 592,128
+  bytes smaller on Linux x86_64 and 600,277 on wasm32), and with Material alone not the Cupertino
+  face's 257,628.
+- Good, because an author adds `material` and its widgets' icons draw: the feature rides on the
+  dependency.
 - Good, because which faces a build holds is decided when Cargo resolves features: no start-up
-  order, no registry, no relayout.
-- Bad, because features only add: an application that uses a catalog cannot leave its face out.
-- Bad, because `Icon` with `"Material Icons"` in an application that has neither the catalog nor
-  the facade feature draws the missing-glyph box, where it drew the icon before. `Icon`'s
-  documentation and the feature table of the facade say which feature brings the face.
-- Neutral, because a workspace build that includes the packages unifies both features on, so a
+  order, no registry, no relayout, and no host's copy in between.
+- Bad, because features only add: an application that uses `material` cannot leave its face out.
+- Bad, because `Icon` with an icon family in an application whose build does not embed that face,
+  and which registers none, draws the missing-glyph box on every host, where it drew the icon
+  before. `Icon`'s documentation and the facade's feature table say which feature brings each
+  face; a diagnostic on the shaping path that names the feature is a follow-up.
+- Neutral, because a workspace build that includes the packages unifies `material-icons` on, so a
   test that needs an icon face in a crate below the packages names the feature in its own
-  dev-dependency (`flui-engine` does) or registers the bytes on its collection.
+  dev-dependency (`flui-engine` and `flui-widgets` do). Registering the bytes by hand instead adds
+  a second copy of the family wherever the feature is unified on, so the feature is the form.
 
 ### Confirmation
 
 - The compiler: `flui_painting::fonts::MATERIAL_ICONS_REGULAR` and `CUPERTINO_ICONS` are behind
   `#[cfg(feature = …)]`, and the registration names them under the same `cfg`.
 - `an_icon_face_reaches_a_consumer_only_with_its_catalog_or_its_feature` (the facade's
-  `facade_consumer`): resolves a project outside the workspace that depends on the facade and
-  reads `flui-painting`'s features from its graph. With no feature neither icon feature is on;
-  `material` and `material-icons` turn on the Material one alone, `cupertino` and
-  `cupertino-icons` the Cupertino one alone. A workspace build cannot show this, since its
-  members' features are unified.
-- `an_icon_of_the_family_shapes_to_a_glyph_of_the_embedded_face`, in `tests/icon_face.rs` of
-  `flui-material` and of `flui-cupertino`: in a build that holds the package's face, a codepoint
-  of the family shapes to a glyph on a new collection, with nothing registered by hand.
+  `facade_consumer`, which main's nested suite runs): resolves a project outside the workspace
+  that depends on the facade and reads `flui-painting`'s features from its graph. With no feature
+  neither icon feature is on; `material` and `material-icons` turn on the Material one alone;
+  `cupertino` turns on neither, and `cupertino-icons` the Cupertino one alone. A workspace build
+  cannot show this, since its members' features are unified. It holds §3.
+- `a_host_never_supplies_an_icon_family_flui_embeds` (`flui-painting`, `text_layout::context`): a
+  host feed that offers a face of each icon family and of a text family adds the text face and
+  neither icon face, and a collection holds an icon family exactly when its feature is on. It
+  holds §2.
+- `an_icon_of_the_family_shapes_to_a_glyph_of_the_embedded_face` (`flui-material`'s
+  `tests/icon_face.rs`): in a build that holds the face, a codepoint of the family shapes to a
+  glyph on a new collection, with nothing registered by hand.
 - `a_widget_draws_the_glyph_the_face_names_for_its_icon` (`flui-material`): each icon a widget of
   the package draws by itself is the glyph the embedded face's own ligature names, so a codepoint
   from another numbering of the icon set fails.
@@ -144,13 +159,16 @@ own manifest; a package with its own icon face ships the bytes and documents the
 - Bad, because a feature cannot be turned off by a dependent, and an `Icon` whose family no
   feature brings draws the missing-glyph box.
 
-### 3. The package holds the bytes and registers the face when its app widget mounts
+### 3. The package holds the bytes and registers the face at run time
 
 - Good, because the bytes live in the package that draws with them.
-- Bad, because the face arrives after the collection is built: the first frame can draw missing
-  glyphs, and the registration lays every paragraph out again.
-- Bad, because a `Chip` used without `MaterialApp` above it has nobody to register for it, and a
-  static registry that would is process-global state (ADR-0097).
+- Bad, when the app widget registers it on mount: the face arrives after the collection is built,
+  so the first frame can draw missing glyphs and the registration lays every paragraph out again;
+  and a `Chip` used without `MaterialApp` above it has nobody to register for it, while a static
+  registry that would is process-global state (ADR-0097).
+- Bad, when the application calls `register_font` before it starts: every author who adds
+  `material` writes a second step for icons its own widgets draw (driver 2), and a `Chip` in an
+  application that forgot the call draws boxes.
 
 ### 4. The application declares its faces in its manifest and `flui build` bundles them
 
@@ -168,6 +186,16 @@ own manifest; a package with its own icon face ships the bytes and documents the
   one crate cannot see; Flutter reads it from the compiled program's constants.
 - Neutral, because it composes with option 2 and can follow it: the feature decides whether a
   face is held, a subsetter how much of it.
+
+### 6. The catalog draws its own few icons from path data or a subset face
+
+- Good, because `flui-material` would carry three glyphs instead of a 356,840-byte face.
+- Bad, because the catalog's icons would no longer be the `"Material Icons"` an application's own
+  `Icon` draws: two sources for one icon set, whose weight, optical size and metrics drift apart
+  as soon as either is updated.
+- Bad, because an application that draws any other Material icon still needs the whole face, so
+  option 2's feature remains and the catalog's copy is extra; it is option 5 done by hand for one
+  package.
 
 ## More information
 

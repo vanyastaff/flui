@@ -871,8 +871,10 @@ cupertino = ["dep:flui-cupertino"]
 
 # === Icon faces (ADR-0397) ===
 # Each embeds one icon face for an application that draws with the family
-# through `flui::widgets::Icon` without the catalog: `material` and `cupertino`
-# bring their own.
+# through `flui::widgets::Icon`: `material` brings the Material face, whose
+# glyphs its widgets draw; the Cupertino catalog draws none, so an application
+# that draws "CupertinoIcons" names `cupertino-icons`, as a Flutter one depends
+# on the `cupertino_icons` package.
 material-icons = ["flui-painting/material-icons"]
 cupertino-icons = ["flui-painting/cupertino-icons"]
 

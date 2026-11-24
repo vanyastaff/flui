@@ -75,4 +75,6 @@ itself.
 `flui_painting::fonts` exposes the faces the build embeds, each under its feature: `ROBOTO_REGULAR`
 with the default `bundled-fonts`, so a host with no usable system fonts still measures and paints
 text, and `MATERIAL_ICONS_REGULAR` and `CUPERTINO_ICONS` with `material-icons` and `cupertino-icons`,
-which the Material and Cupertino packages turn on (ADR-0397).
+which the Material package turns on for the glyphs it draws; an application that draws
+`"CupertinoIcons"` names `cupertino-icons` itself (ADR-0397). A host never supplies either icon
+family.

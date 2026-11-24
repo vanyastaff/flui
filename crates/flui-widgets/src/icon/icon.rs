@@ -27,13 +27,17 @@ use flui_view::environment::MediaQuery;
 ///
 /// The codepoint reaches [`RenderIcon`], and the bounded
 /// `size × size` box is exact and font-independent. The glyph comes from
-/// [`IconData::font_family`]. The Material Icons (family `"Material Icons"`)
-/// and Cupertino Icons (family `"CupertinoIcons"`) faces are embedded when the
-/// application depends on `flui-material` or `flui-cupertino`, or turns on the
-/// facade's `material-icons` or `cupertino-icons` feature (ADR-0397); every
-/// `FontCollection` then holds the face, so that family's
-/// codepoints shape to real glyphs in measurement and paint alike. Any other
-/// icon font must be registered first with `flui::app::register_font`, which
+/// [`IconData::font_family`]. Each icon face FLUI ships is embedded only
+/// where something asks for it (ADR-0397): the Material Icons face (family
+/// `"Material Icons"`) when the application depends on `flui-material` or
+/// turns on the facade's `material-icons` feature, the Cupertino Icons face
+/// (family `"CupertinoIcons"`) when it turns on `cupertino-icons`. A build
+/// that embeds a face holds it in every `FontCollection`, so that family's
+/// codepoints shape to real glyphs in measurement and paint alike; a host's
+/// own copy of either family is never used. Any other icon font, or one of
+/// these families in a build that does not embed its face, must be registered
+/// first with `flui::app::register_font` (before the application starts, so
+/// the first frame has it), which
 /// loads it for measurement, paint and carets alike and lays laid-out text
 /// out again on the next frame. Without a registration its codepoints shape
 /// to tofu (the "missing glyph" box).

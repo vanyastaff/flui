@@ -100,8 +100,8 @@ bundled-fonts = []
 
 # material-icons, cupertino-icons: embed that icon face (families
 # "Material Icons" and "CupertinoIcons"), which every `FontCollection` then
-# holds. Off by default: the package that draws with a family turns its
-# feature on through `flui-sdk` (ADR-0397).
+# holds. Off by default: the package or application that draws with a family
+# turns its feature on through `flui-sdk` or the facade (ADR-0397).
 material-icons = []
 cupertino-icons = []
 
