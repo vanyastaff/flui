@@ -58,7 +58,7 @@ mod window;
 #[cfg(any(unix, windows))]
 pub use connection::socket::Endpoint;
 pub use driver::Driver;
-pub use error::{Error, Result};
+pub use error::{Awaited, Error, Result};
 pub use expect::{Expect, SoftExpect, expect, expect_soft};
 pub use flui_protocol::input::{InputPath, InputPolicy};
 pub use flui_protocol::locator::{Locator, Pick, StateFilter, TextMatch};

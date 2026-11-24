@@ -79,6 +79,9 @@ pub struct Driver {
     command_depth: u32,
     /// Events a trace took from the connection that are the caller's to take.
     kept_events: Events,
+    /// The window the driver drives as a [`flui_protocol::client::Connection`], resolved at the
+    /// connection's first call and kept for the session.
+    connection_window: Option<WindowId>,
 }
 
 impl Driver {
@@ -246,6 +249,7 @@ impl Driver {
             trace: None,
             command_depth: 0,
             kept_events: Events::default(),
+            connection_window: None,
         }
     }
 
@@ -871,6 +875,17 @@ impl Driver {
     /// frames move; every other target's is the wall.
     pub(crate) fn virtual_clock(&self) -> bool {
         self.target_isolation == Isolation::InProcess
+    }
+
+    /// The window the connection drives: the first window with content when the connection is
+    /// first used, kept afterwards, so a window the app opens later never takes its place.
+    pub(crate) fn connection_window(&mut self) -> Result<WindowId> {
+        if let Some(window) = self.connection_window {
+            return Ok(window);
+        }
+        let window = self.main_window()?.id();
+        self.connection_window = Some(window);
+        Ok(window)
     }
 
     /// The OS lane the session's OS input goes through, when it has one.

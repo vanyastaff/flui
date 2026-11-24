@@ -12,6 +12,21 @@ use flui_protocol::version::ProtocolVersion;
 /// A driver call's result.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// What a [`Error::Timeout`] waited on.
+///
+/// The two are answered differently: a call the app's agent left unanswered may have run in the
+/// app, and the input it held is released there; a tool on the host that hung (an accessibility
+/// provider, `adb`, `xcrun`, a browser session, a capture) is the lane's failure, kept with its
+/// message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Awaited {
+    /// The app's agent: its reply did not come within the call's budget, or it answered `timeout`.
+    Agent,
+    /// A tool on the host that the lane, a capture or a scripted double drives.
+    Host,
+}
+
 /// Why a driver call failed.
 ///
 /// The variants up to [`Error::Platform`] are the app's answers, one per wire code, each with the
@@ -131,6 +146,8 @@ pub enum Error {
     /// the tree for its effect.
     #[error("timeout: {message}")]
     Timeout {
+        /// What did not answer: the app's agent or a tool on the host.
+        awaited: Awaited,
         /// How much of an acting call may have reached the app.
         effect: Option<Effect>,
         /// For people.
@@ -342,6 +359,7 @@ impl Error {
             ErrorCode::FocusElsewhere => Self::FocusElsewhere { message, retry },
             ErrorCode::OutsideTarget => Self::OutsideTarget { message, retry },
             ErrorCode::Timeout => Self::Timeout {
+                awaited: Awaited::Agent,
                 effect,
                 message,
                 retry,

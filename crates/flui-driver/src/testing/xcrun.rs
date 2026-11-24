@@ -157,6 +157,7 @@ impl Xcrun for ScriptedXcrun {
         };
         match rule.answer {
             Answer::Timeout => Err(Error::Timeout {
+                awaited: crate::error::Awaited::Host,
                 effect: Some(Effect::new(EffectKind::MayHaveRun)),
                 message: format!(
                     "`xcrun {text}` did not end within {} ms",

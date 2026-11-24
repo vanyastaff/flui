@@ -152,6 +152,7 @@ pub(crate) fn unanswered(call: &Call) -> Error {
         Retry::Soon
     };
     Error::Timeout {
+        awaited: crate::error::Awaited::Agent,
         effect,
         message: format!(
             "`{}` had no answer within {} ms",

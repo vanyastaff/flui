@@ -1,45 +1,48 @@
 //! The driver as a [`Connection`] (ADR-0400 §1): one launched or attached target, driven through
-//! its first window, so a scenario written over the connection runs on a device as it runs
-//! headless.
+//! the window that had content when the connection was first used, so a scenario written over
+//! the connection runs on a device as it runs headless. That window stays the connection's for
+//! the session: a window the app opens later is addressed by a call's own parameters.
 //!
 //! A call goes the way [`Driver::call`] sends it, through the session's input policy and lanes.
-//! A call whose answer does not arrive asks the agent to release the window's held input, and
-//! says whether it answered that it did. An OS lane releases what it pressed on every exit of each
-//! send, so between calls it holds nothing.
+//! A call the app's agent left unanswered asks the agent to release the held input of the window
+//! the call addressed, and says whether it answered that it did. A tool on the host that hung is
+//! the lane's failure, answered with its message. An OS lane releases what it pressed on every
+//! exit of each send, so between calls it holds nothing.
 
 use std::any::{Any, TypeId};
 use std::time::Duration;
 
 use flui_protocol::client::{At, CallError, Connection, EndChecks, Performed};
 use flui_protocol::input::ActionSequence;
-use flui_protocol::method::WindowMethod;
+use flui_protocol::method::{Addressed, WindowMethod};
 use flui_protocol::report::{Check, Failure};
 use flui_protocol::tree::WindowId;
 use flui_protocol::wait::{Condition, WaitOutcome};
 
 use crate::compose;
 use crate::driver::Driver;
-use crate::error::{Error, Result};
+use crate::error::{Awaited, Error, Result};
 
 impl Connection for Driver {
     fn call<M: WindowMethod>(&mut self, params: M::Params) -> Result<M::Output, CallError> {
+        let addressed = params.window();
         let answer = typed_call::<M>(self, params);
-        answer.map_err(|error| call_error(self, error))
+        answer.map_err(|error| call_error(self, addressed, error))
     }
 
     fn wait(&mut self, condition: &Condition, limit: Duration) -> Result<WaitOutcome, CallError> {
-        let answer = first_window(self)
-            .and_then(|window| compose::wait_until(self, window, condition.clone(), limit));
-        answer.map_err(|error| call_error(self, error))
+        let window = self.connection_window();
+        let answer =
+            window.and_then(|window| compose::wait_until(self, window, condition.clone(), limit));
+        answer.map_err(|error| call_error(self, None, error))
     }
 
     fn perform(&mut self, actions: &ActionSequence) -> Result<Performed, CallError> {
-        let answer = self
-            .main_window()
-            .and_then(|mut window| window.perform(actions.clone()));
+        let window = self.connection_window();
+        let answer = window.and_then(|window| self.window(window).perform(actions.clone()));
         answer
             .map(Performed::from)
-            .map_err(|error| call_error(self, error))
+            .map_err(|error| call_error(self, None, error))
     }
 
     fn now(&self) -> At {
@@ -48,8 +51,9 @@ impl Connection for Driver {
     }
 
     fn finish(&mut self, checks: &EndChecks) -> Vec<Failure> {
-        let released =
-            first_window(self).and_then(|window| self.window(window).release_input().map(|_| ()));
+        let released = self
+            .connection_window()
+            .and_then(|window| self.window(window).release_input().map(|_| ()));
         let mut failures: Vec<Failure> =
             Failure::try_from_check(Check::from_result("release held input", &released))
                 .into_iter()
@@ -88,16 +92,18 @@ impl Connection for Driver {
     }
 }
 
-/// The window the connection drives: the target's first window with content.
-fn first_window(driver: &mut Driver) -> Result<WindowId> {
-    driver.main_window().map(|window| window.id())
-}
-
-/// What a call that failed with `error` answers: an answer that did not arrive releases the
-/// window's held input first, and says whether the agent answered that it did.
-fn call_error(driver: &mut Driver, error: Error) -> CallError {
-    if let Error::Timeout { .. } = error {
-        let released = first_window(driver)
+/// What a call that failed with `error` answers. A call the app's agent left unanswered releases
+/// the held input of the window it addressed (`addressed`, or the connection's window when it
+/// named none) and says whether the agent answered that it did; every other failure, a host
+/// tool's timeout included, is answered as it stands.
+fn call_error(driver: &mut Driver, addressed: Option<WindowId>, error: Error) -> CallError {
+    if let Error::Timeout {
+        awaited: Awaited::Agent,
+        ..
+    } = error
+    {
+        let window = addressed.map_or_else(|| driver.connection_window(), Ok);
+        let released = window
             .and_then(|window| driver.window(window).release_input())
             .is_ok();
         return CallError::Unanswered {
