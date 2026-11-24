@@ -627,10 +627,8 @@ fn a_trace_of_another_protocol_is_refused_before_any_command() {
     });
     let probe = Probe::default();
     let held = probe.clone();
-    let mut app = Driver::launch(Launch::headless(move || Counter {
-        probe: held.clone(),
-    }))
-    .expect("the headless app starts");
+    let mut app = Driver::launch(Launch::headless(move || Counter { probe: held }))
+        .expect("the headless app starts");
     let speaks = app.protocol();
     let refused = trace::replay(&Trace::open(&dir).expect("it reads"), &mut app)
         .expect_err("a trace of another wire is not replayed");

@@ -730,7 +730,7 @@ mod scripted {
             "actions": [{ "type": "pause", "duration_ms": 1 }],
         }] } });
         let rows = [
-            header.clone(),
+            header,
             json!({ "command": { "seq": 1, "t_ms": 0, "method": "windows.list", "params": {} } })
                 .to_string(),
             json!({ "result": { "seq": 1, "t_ms": 0, "ok": { "windows": ["w1"] } } }).to_string(),
