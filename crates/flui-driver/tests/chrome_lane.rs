@@ -589,6 +589,41 @@ fn an_open_composition_is_cancelled_by_the_release() {
     );
 }
 
+/// A press the browser never answers, released after, is the browser's timeout: a tool on the
+/// host that hung, never the app's agent leaving a call unanswered.
+#[test]
+fn a_press_the_browser_does_not_answer_is_the_hosts_timeout() {
+    let browser = ScriptedBrowser::start(
+        &METHODS,
+        page_agent(),
+        Box::new(|method, params| match method {
+            "input.performActions"
+                if params["actions"][0]["actions"][0]["type"] == "pointerDown" =>
+            {
+                BrowserReply::Silent
+            }
+            _ => BrowserReply::Played,
+        }),
+    )
+    .expect("the stand-in binds");
+    let mut driver = attach(&browser);
+    let timed_out = driver
+        .window(window())
+        .perform(press(LogicalPoint::new(10.0, 10.0)))
+        .expect_err("the press had no answer");
+    assert!(
+        matches!(
+            timed_out,
+            Error::Timeout {
+                awaited: flui_driver::Awaited::Host,
+                ..
+            }
+        ),
+        "{timed_out:?}"
+    );
+    assert!(timed_out.may_have_run(), "{timed_out:?}");
+}
+
 /// A press the browser never answers may have gone down: it is named as possibly held, and the
 /// release still runs.
 #[test]

@@ -6,8 +6,8 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use flui_driver::Error;
 use flui_driver::lane::android::adb::{self, Adb, AdbCommand, Framing, HostAdb};
+use flui_driver::{Awaited, Error};
 
 /// A stand-in for `adb`, answering `devices` and a few shell lines the tests name.
 const STAND_IN: &str = r#"#!/bin/sh
@@ -87,7 +87,13 @@ fn output_past_its_bound_and_a_command_past_its_deadline_are_ended() {
         .run(&shell("sleep"), 4096, Duration::from_millis(300))
         .expect_err("past its deadline");
     assert!(timed_out.may_have_run(), "{timed_out}");
-    assert!(matches!(timed_out, Error::Timeout { .. }));
+    assert!(matches!(
+        timed_out,
+        Error::Timeout {
+            awaited: Awaited::Host,
+            ..
+        }
+    ));
     assert!(
         started.elapsed() < Duration::from_secs(10),
         "ended, not waited out"
