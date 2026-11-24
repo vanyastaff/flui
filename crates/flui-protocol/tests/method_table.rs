@@ -317,11 +317,12 @@ fn only_an_act_or_a_destructive_call_changes_the_app() {
 }
 
 /// A gesture is the agent's on the synthetic and semantic paths (ADR-0400 §2): every acting
-/// `element.*` row is a window method, and what the window may hold it for is its act timeout,
-/// which the conversation counts in the reply's deadline (ADR-0288 §4).
+/// `element.*` row is a window method, and what the window may hold it for is its act timeout and
+/// then the time its input takes to play, which the conversation counts in the reply's deadline
+/// (ADR-0288 §4).
 #[cfg(feature = "serde")]
 #[test]
-fn every_gesture_is_a_window_method_held_for_its_act_timeout() {
+fn every_gesture_is_a_window_method_held_for_its_act_timeout_and_its_play() {
     use std::time::Duration;
 
     use flui_protocol::{
@@ -381,16 +382,19 @@ fn every_gesture_is_a_window_method_held_for_its_act_timeout() {
     ));
     let mut tap = TapParams::new(element);
     assert_eq!(tap.window(), Some(window));
+    // The parameters of a tap are a double tap's too, whose input plays the longer: six ticks of
+    // a frame each, and the 60 ms gap between its taps.
+    let double_tap_plays = Duration::from_millis(6 * 16 + 60);
     assert_eq!(
         tap.holds_for(),
-        Duration::from_millis(GestureOptions::DEFAULT_TIMEOUT_MS),
-        "an act that names no timeout holds for the default"
+        Duration::from_millis(GestureOptions::DEFAULT_TIMEOUT_MS) + double_tap_plays,
+        "an act that names no timeout holds for the default, then plays"
     );
     tap.options.timeout_ms = Some(u64::MAX);
     assert_eq!(
         tap.holds_for(),
-        Duration::from_millis(GestureOptions::MAX_TIMEOUT_MS),
-        "an act holds for a day at most"
+        Duration::from_millis(GestureOptions::MAX_TIMEOUT_MS) + double_tap_plays,
+        "an act holds out for a day at most, then plays"
     );
     assert_eq!(
         tap.options.named_timeout_ms(),
@@ -417,8 +421,8 @@ fn every_gesture_is_a_window_method_held_for_its_act_timeout() {
     .expect("a long press reads");
     assert_eq!(
         long_press.holds_for(),
-        Duration::from_millis(1_800),
-        "a long press holds for its timeout and then its press"
+        Duration::from_millis(1_000 + 800 + 4 * 16),
+        "a long press holds for its timeout, then its press and a frame for each of its ticks"
     );
     let keys: PressKeysParams = serde_json::from_value(serde_json::json!({
         "window": "w3",

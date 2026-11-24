@@ -375,6 +375,52 @@ fn a_plan_names_its_sources_in_order() {
     );
 }
 
+/// A plan says where each tick ends, so a player can hold each until then: a move a step at
+/// least, a pause its duration, presses and releases nothing; the last end is the plan's span.
+#[test]
+fn a_plan_says_where_each_tick_ends() {
+    let cases: [(&str, ActionSequence, &[u64]); 3] = [
+        ("nothing", ActionSequence::default(), &[]),
+        (
+            "a press held",
+            ActionSequence::new(vec![pointer(
+                "p",
+                PointerDevice::Touch,
+                vec![move_to(1.0, 1.0, 0), down(), pause(100), up()],
+            )]),
+            &[16, 16, 116, 116],
+        ),
+        (
+            "two sources, the longer action of a tick setting its end",
+            ActionSequence::new(vec![
+                pointer(
+                    "p",
+                    PointerDevice::Mouse,
+                    vec![pause(0), move_to(5.0, 5.0, 40)],
+                ),
+                InputSource::Keys {
+                    id: "k".to_owned(),
+                    actions: vec![
+                        KeyAction::Pause { duration_ms: 30 },
+                        KeyAction::Pause { duration_ms: 70 },
+                    ],
+                },
+            ]),
+            &[30, 100],
+        ),
+    ];
+    for (case, sequence, ends) in cases {
+        let planned = plan(&sequence).expect("plans");
+        let planned_ends: Vec<u64> = planned.tick_ends().iter().copied().map(millis).collect();
+        assert_eq!(planned_ends, ends, "{case}");
+        assert_eq!(
+            ends.last().copied().unwrap_or(0),
+            millis(planned.span()),
+            "{case}"
+        );
+    }
+}
+
 #[test]
 fn a_long_move_takes_at_most_the_step_bound() {
     let long = millis(STEP) * u64::from(MAX_STEPS) * 4;

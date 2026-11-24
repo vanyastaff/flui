@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+pub mod gestures;
 mod planning;
 
 pub use planning::{
@@ -600,9 +601,9 @@ pub struct GestureOptions {
     )]
     pub force: bool,
     /// How long locating and actionability may take, in milliseconds; 5000 when absent and at
-    /// most 24 hours ([`Self::named_timeout_ms`]). A window that serves the gesture may hold the
-    /// act this long, which the conversation counts in the reply's deadline (ADR-0288 §4). No
-    /// app's agent serves a gesture yet: the driver composes each one, locating and checking
+    /// most 24 hours ([`Self::named_timeout_ms`]). A window that serves the gesture holds the act
+    /// this long at most, then plays it, and the conversation counts both in the reply's deadline
+    /// (ADR-0288 §4); the driver composing a gesture on the `os` path locates and checks
     /// actionability for this long.
     #[cfg_attr(
         feature = "serde",

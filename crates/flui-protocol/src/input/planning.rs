@@ -1,7 +1,7 @@
 //! [`plan`]: an action sequence planned once into timed input (ADR-0400 §2), which the driver's
-//! OS lane turns into the events it sends. The runtime's agent still plans `input.inject` with a
-//! planner of its own, whose bounds and refusals are its own, until it plays this plan as
-//! ADR-0400 §2 decides (`docs/gaps.md` keeps that gap). The timeline's rules are [`plan`]'s.
+//! OS lane turns into the events it sends and the runtime's agent plays at its frame boundaries,
+//! for `input.inject` and for every gesture it answers. The timeline's rules, bounds and refusals
+//! are [`plan`]'s.
 
 use std::fmt;
 use std::time::Duration;
@@ -135,6 +135,8 @@ pub struct TimedInput {
 pub struct Plan {
     sources: Vec<PlannedSource>,
     inputs: Vec<TimedInput>,
+    /// When each tick ends.
+    ends: Vec<Duration>,
     span: Duration,
 }
 
@@ -150,6 +152,14 @@ impl Plan {
     #[must_use]
     pub fn inputs(&self) -> &[TimedInput] {
         &self.inputs
+    }
+
+    /// When each tick ends, from the sequence's start, one per tick in order: tick `n` starts
+    /// where tick `n - 1` ends (the first at zero), and its inputs are at or after its start. A
+    /// player that holds each tick until its end plays the plan's timeline.
+    #[must_use]
+    pub fn tick_ends(&self) -> &[Duration] {
+        &self.ends
     }
 
     /// How long playing the plan takes: the end of its last tick.
@@ -278,6 +288,7 @@ pub fn plan(sequence: &ActionSequence) -> Result<Plan, PlanError> {
     }
     let mut positions: Vec<Option<LogicalPoint>> = vec![None; sequence.sources.len()];
     let mut inputs = Vec::new();
+    let mut ends = Vec::with_capacity(ticks);
     let mut start = Duration::ZERO;
     for tick in 0..ticks {
         let mut lasts = Duration::ZERO;
@@ -389,6 +400,7 @@ pub fn plan(sequence: &ActionSequence) -> Result<Plan, PlanError> {
             }
         }
         let end = lay_strokes(&strokes, start, tick, lasts, &mut inputs);
+        ends.push(end);
         start = end;
     }
     if start > MAX_SPAN {
@@ -397,6 +409,7 @@ pub fn plan(sequence: &ActionSequence) -> Result<Plan, PlanError> {
     Ok(Plan {
         sources,
         inputs,
+        ends,
         span: start,
     })
 }

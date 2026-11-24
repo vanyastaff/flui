@@ -6,6 +6,7 @@ mod client;
 mod envelope;
 mod framing;
 mod geometry;
+mod gestures;
 mod input_plan;
 mod method_table;
 mod native_recording_bounds;
