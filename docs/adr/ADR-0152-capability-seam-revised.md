@@ -613,7 +613,8 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   a `Resolver`. AppKit and UIKit answer at once, Win32 from a clipboard thread of its own
   (ADR-0337 §3), the web when `navigator.clipboard.readText()` settles (falling back to what the
   page wrote when the browser refuses). Android reads and writes `ClipboardManager` through JNI.
-- **The scripted double.** `flui_testing::clipboard::ScriptedClipboard` holds, answers, fails, drops or
+- **The scripted double.** `flui_interaction::testing::ScriptedClipboard`, beside the contract it
+  doubles (ADR-0264), holds, answers, fails, drops or
   refuses reads, and counts the reads it was asked and the live handles;
   `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin` mount a tree over another
   registry. `CompletionSource` is public, so the contract needs no
