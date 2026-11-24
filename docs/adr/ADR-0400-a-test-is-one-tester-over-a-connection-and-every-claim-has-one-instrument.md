@@ -110,9 +110,9 @@ pub trait Connection {
     /// connection's clock.
     fn wait(&mut self, condition: &Condition, limit: Duration) -> Result<WaitOutcome, CallError>;
     fn perform(&mut self, actions: &ActionSequence) -> Result<Performed, CallError>;
-    fn now(&self) -> At; // frame number, time, and whether the clock is virtual
+    fn now(&self) -> ClockReading; // frame number, time, and whether the clock is virtual
     /// The end of a test: what this connection can check and release (§7).
-    fn finish(&mut self, checks: &EndChecks) -> Vec<Failure>;
+    fn finish(&mut self, checks: &EndChecks) -> Vec<UnpassedCheck>;
 }
 
 // flui_testing

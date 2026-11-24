@@ -14,7 +14,7 @@ use crate::audit::AuditRule;
 use crate::error::{ErrorCode, ErrorObject};
 use crate::input::{ActionSequence, InputPath};
 use crate::method::WindowMethod;
-use crate::report::{CheckFailure, Failure};
+use crate::report::{CheckFailure, UnpassedCheck};
 use crate::wait::{Condition, WaitOutcome};
 
 /// A connection to one window of an application: see the [module docs](self).
@@ -43,12 +43,12 @@ pub trait Connection {
     fn perform(&mut self, actions: &ActionSequence) -> Result<Performed, CallError>;
 
     /// Where the connection's clock stands.
-    fn now(&self) -> At;
+    fn now(&self) -> ClockReading;
 
     /// The end of a test (ADR-0400 §7): the connection performs and releases what it can of
     /// `checks`, and hands back every check that did not pass, a check it cannot make among
     /// them as cannot-verify. An empty list is a clean end.
-    fn finish(&mut self, checks: &EndChecks) -> Vec<Failure>;
+    fn finish(&mut self, checks: &EndChecks) -> Vec<UnpassedCheck>;
 }
 
 /// Why a call has no answer to hand back.
@@ -126,7 +126,7 @@ impl CheckFailure for CallError {
 /// Where a connection's clock stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct At {
+pub struct ClockReading {
     /// The frame the window last presented, when the connection knows it exactly.
     pub frame: Option<u64>,
     /// How long the connection has been open, on its clock.
@@ -135,7 +135,7 @@ pub struct At {
     pub virtual_clock: bool,
 }
 
-impl At {
+impl ClockReading {
     /// `time` on a clock that is virtual or not, at no frame the connection knows.
     #[must_use]
     pub const fn new(time: Duration, virtual_clock: bool) -> Self {
@@ -146,7 +146,7 @@ impl At {
         }
     }
 
-    /// At `frame`.
+    /// The same reading, at `frame`.
     #[must_use]
     pub const fn frame(mut self, frame: u64) -> Self {
         self.frame = Some(frame);

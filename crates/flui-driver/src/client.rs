@@ -12,10 +12,10 @@
 use std::any::{Any, TypeId};
 use std::time::Duration;
 
-use flui_protocol::client::{At, CallError, Connection, EndChecks, Performed};
+use flui_protocol::client::{CallError, ClockReading, Connection, EndChecks, Performed};
 use flui_protocol::input::ActionSequence;
 use flui_protocol::method::{Addressed, WindowMethod};
-use flui_protocol::report::{Check, Failure};
+use flui_protocol::report::{Check, UnpassedCheck};
 use flui_protocol::tree::WindowId;
 use flui_protocol::wait::{Condition, WaitOutcome};
 
@@ -45,17 +45,17 @@ impl Connection for Driver {
             .map_err(|error| call_error(self, None, error))
     }
 
-    fn now(&self) -> At {
+    fn now(&self) -> ClockReading {
         // The driver reads no frame number it could hold exact.
-        At::new(self.clock(), self.virtual_clock())
+        ClockReading::new(self.clock(), self.virtual_clock())
     }
 
-    fn finish(&mut self, checks: &EndChecks) -> Vec<Failure> {
+    fn finish(&mut self, checks: &EndChecks) -> Vec<UnpassedCheck> {
         let released = self
             .connection_window()
             .and_then(|window| self.window(window).release_input().map(|_| ()));
-        let mut failures: Vec<Failure> =
-            Failure::try_from_check(Check::from_result("release held input", &released))
+        let mut unpassed: Vec<UnpassedCheck> =
+            UnpassedCheck::try_from_check(Check::from_result("release held input", &released))
                 .into_iter()
                 .collect();
         // A device has no exact frame to settle at or audit, and no ledger or runtime state to
@@ -82,13 +82,13 @@ impl Connection for Driver {
                 "a device reads no timer, ticker or background work",
             ),
         ];
-        failures.extend(
+        unpassed.extend(
             unread
                 .into_iter()
                 .filter(|(asked, ..)| *asked)
-                .map(|(_, name, reason)| Failure::cannot_verify(name, reason, None)),
+                .map(|(_, name, reason)| UnpassedCheck::cannot_verify(name, reason, None)),
         );
-        failures
+        unpassed
     }
 }
 

@@ -126,9 +126,9 @@ impl Check {
 /// ([`Connection::finish`](crate::client::Connection::finish)). A passed check is not one, so a
 /// list of them is empty exactly when nothing failed and nothing went unchecked.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Failure(Check);
+pub struct UnpassedCheck(Check);
 
-impl Failure {
+impl UnpassedCheck {
     /// The check `name` that did not hold, and what was wrong.
     #[must_use]
     pub fn failed(name: impl Into<String>, reason: impl Into<String>) -> Self {

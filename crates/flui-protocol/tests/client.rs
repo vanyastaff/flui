@@ -1,10 +1,10 @@
 //! The client vocabulary of ADR-0400 §1 and §7: what a call's failure says to a report, what a
-//! test's end asks by default, and that a failure is never a pass.
+//! test's end asks by default, and that a passed check is never an unpassed one.
 
 use flui_protocol::audit::AuditRule;
 use flui_protocol::client::{CallError, EndChecks};
 use flui_protocol::error::{ErrorCode, ErrorObject};
-use flui_protocol::report::{Check, CheckFailure, Failure, Outcome};
+use flui_protocol::report::{Check, CheckFailure, Outcome, UnpassedCheck};
 
 #[test]
 fn a_call_s_failure_is_cannot_verify_only_when_the_target_lacks_something() {
@@ -39,7 +39,19 @@ fn a_call_s_failure_is_cannot_verify_only_when_the_target_lacks_something() {
         assert_eq!(error.is_cannot_verify(), capability.is_some(), "{case}");
         assert_eq!(error.missing_capability().as_deref(), capability, "{case}");
         let check = Check::from_result::<(), _>(case, &Err(error));
-        assert_ne!(check.outcome, Outcome::Passed, "{case}");
+        match capability {
+            Some(lacking) => assert!(
+                matches!(
+                    &check.outcome,
+                    Outcome::CannotVerify { capability: Some(named), .. } if named == lacking
+                ),
+                "{case}: {check:?}"
+            ),
+            None => assert!(
+                matches!(check.outcome, Outcome::Failed { .. }),
+                "{case}: {check:?}"
+            ),
+        }
     }
 }
 
@@ -62,18 +74,18 @@ fn a_test_s_end_asks_every_check_by_default() {
 }
 
 #[test]
-fn a_failure_is_never_a_pass() {
+fn a_passed_check_is_never_unpassed() {
     assert_eq!(
-        Failure::try_from_check(Check::new("held", Outcome::Passed)),
+        UnpassedCheck::try_from_check(Check::new("held", Outcome::Passed)),
         None
     );
-    let failed = Failure::failed("released", "a key stays down");
+    let failed = UnpassedCheck::failed("released", "a key stays down");
     assert_eq!(
-        Failure::try_from_check(failed.check().clone()),
+        UnpassedCheck::try_from_check(failed.check().clone()),
         Some(failed.clone())
     );
     assert!(matches!(
-        Failure::cannot_verify("ledger", "no ledger", None)
+        UnpassedCheck::cannot_verify("ledger", "no ledger", None)
             .into_check()
             .outcome,
         Outcome::CannotVerify { .. }
