@@ -222,6 +222,14 @@ pub(crate) fn reconcile_children_by_id(
         new_bottom -= 1;
     }
 
+    // The removals of phases 3 and 5b each run in a removal batch of the
+    // parent's pipeline when they may remove anything: a parent dropping `k`
+    // of `n` render children compacts its render child list once, not once
+    // per child.
+    let pipeline = tree
+        .get(parent_id)
+        .and_then(|node| node.element().pipeline_owner());
+
     // ── Phase 3: index the remaining old middle by key hash; remove any
     // keyless old middle child (it can only match positionally, which
     // the top/bottom scans already exhausted).
@@ -234,32 +242,35 @@ pub(crate) fn reconcile_children_by_id(
     // keeps phase 4 linear rather than O(n*m) — no per-claim scan of
     // `old_slots`). The index's positions are offsets from `old_top`.
     let mut old_keyed = KeyHashIndex::over(old_bottom - old_top);
-    for (idx, slot) in old_slots
-        .iter_mut()
-        .enumerate()
-        .take(old_bottom)
-        .skip(old_top)
-    {
-        let Some(old_id) = *slot else {
-            continue;
-        };
-        if let Some(hash) = key_hash_of(tree, old_id) {
-            // Keyed: defer the claim to phase 4. FIFO bucket order
-            // preserves first-wins across true duplicate keys.
-            old_keyed.insert(hash, idx - old_top);
-        } else {
-            // Keyless middle child with no positional match: remove.
-            // Capture the view type BEFORE the slab frees the slot so the
-            // `Unmount` disposition carries a stable identifier; the slot
-            // is its OLD index (`idx`), the position it is leaving.
-            let view_type = view_type_of(tree, old_id);
-            *slot = None;
-            remove_child(tree, parent_id, old_id, owner);
-            if let Some(view_type) = view_type {
-                emit_event(&ReconcileEvent::unmount(parent_id, idx, view_type, None));
+    let middle_left = old_top < old_bottom;
+    batched_removals(pipeline.as_ref().filter(|_| middle_left), || {
+        for (idx, slot) in old_slots
+            .iter_mut()
+            .enumerate()
+            .take(old_bottom)
+            .skip(old_top)
+        {
+            let Some(old_id) = *slot else {
+                continue;
+            };
+            if let Some(hash) = key_hash_of(tree, old_id) {
+                // Keyed: defer the claim to phase 4. FIFO bucket order
+                // preserves first-wins across true duplicate keys.
+                old_keyed.insert(hash, idx - old_top);
+            } else {
+                // Keyless middle child with no positional match: remove.
+                // Capture the view type BEFORE the slab frees the slot so the
+                // `Unmount` disposition carries a stable identifier; the slot
+                // is its OLD index (`idx`), the position it is leaving.
+                let view_type = view_type_of(tree, old_id);
+                *slot = None;
+                remove_child(tree, parent_id, old_id, owner);
+                if let Some(view_type) = view_type {
+                    emit_event(&ReconcileEvent::unmount(parent_id, idx, view_type, None));
+                }
             }
         }
-    }
+    });
 
     // ── Phase 4: sync the new middle front-to-back. A keyed new view
     // claims its old match from `old_keyed`; everything else inserts a
@@ -375,20 +386,23 @@ pub(crate) fn reconcile_children_by_id(
     }
 
     // ── Phase 5b: remove any old child never claimed.
-    for (idx, slot) in old_slots.iter_mut().enumerate() {
-        if let Some(old_id) = slot.take() {
-            // Capture identity before the slab frees the slot; the event
-            // slot is the child's OLD index (`idx`).
-            let view_type = view_type_of(tree, old_id);
-            let key_hash = key_hash_of(tree, old_id);
-            remove_child(tree, parent_id, old_id, owner);
-            if let Some(view_type) = view_type {
-                emit_event(&ReconcileEvent::unmount(
-                    parent_id, idx, view_type, key_hash,
-                ));
+    let unclaimed_left = old_slots.iter().any(Option::is_some);
+    batched_removals(pipeline.as_ref().filter(|_| unclaimed_left), || {
+        for (idx, slot) in old_slots.iter_mut().enumerate() {
+            if let Some(old_id) = slot.take() {
+                // Capture identity before the slab frees the slot; the event
+                // slot is the child's OLD index (`idx`).
+                let view_type = view_type_of(tree, old_id);
+                let key_hash = key_hash_of(tree, old_id);
+                remove_child(tree, parent_id, old_id, owner);
+                if let Some(view_type) = view_type {
+                    emit_event(&ReconcileEvent::unmount(
+                        parent_id, idx, view_type, key_hash,
+                    ));
+                }
             }
         }
-    }
+    });
 
     debug_assert_eq!(
         result.len(),
@@ -706,4 +720,17 @@ fn view_at(new_views: &crate::view::ChildViews, index: usize) -> &crate::BoxedVi
     new_views
         .get(index)
         .expect("BUG: a reconcile index stays below the new view count")
+}
+
+/// Runs `remove` in a removal batch of `pipeline`
+/// ([`PipelineCell::with_batched_removals`](flui_rendering::pipeline::PipelineCell::with_batched_removals)),
+/// or directly when the parent has none or nothing is left to remove.
+fn batched_removals<R>(
+    pipeline: Option<&flui_rendering::pipeline::PipelineCell>,
+    remove: impl FnOnce() -> R,
+) -> R {
+    match pipeline {
+        Some(pipeline) => pipeline.with_batched_removals(remove),
+        None => remove(),
+    }
 }

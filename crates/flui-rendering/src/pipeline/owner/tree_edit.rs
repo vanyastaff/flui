@@ -11,7 +11,7 @@ use flui_foundation::{CreationSite, RenderId, SlotSet};
 use crate::{
     RenderUpdateImpact,
     parent_data::ParentData,
-    storage::{RenderNode, RenderTree},
+    storage::{ParentEdge, RenderNode, RenderTree},
 };
 
 use super::PipelineOwner;
@@ -166,8 +166,11 @@ impl PipelineOwner {
     /// `Drop` on render objects remains strictly node-local (decoded
     /// images, shaped text, GPU handles).
     ///
-    /// Returns the number of nodes removed. Must not run mid-phase —
-    /// the layout/paint walks hold raw borrows into the slab.
+    /// Returns the number of nodes removed. Inside a removal batch
+    /// ([`PipelineCell::with_batched_removals`](crate::pipeline::PipelineCell::with_batched_removals))
+    /// the subtree is queued instead, whole and attached, and the call
+    /// returns 0: the batch's end removes every queued subtree. Must not run
+    /// mid-phase — the layout/paint walks hold raw borrows into the slab.
     pub fn remove_render_object(&mut self, id: RenderId) -> usize {
         debug_assert!(
             !self.scheduler.debug_doing_layout() && !self.scheduler.debug_doing_paint(),
@@ -175,16 +178,115 @@ impl PipelineOwner {
              the walks hold borrows into the slab; defer removal to \
              between-frame work",
         );
+        if self.removal_batch.depth > 0 {
+            self.removal_batch.queued.push(id);
+            return 0;
+        }
 
+        let mut removed_nodes = std::mem::take(&mut self.removed_nodes);
+        if let Some(parent_id) =
+            self.take_render_subtree(id, ParentEdge::Detach, &mut removed_nodes)
+        {
+            self.note_render_child_membership_changed(parent_id);
+        }
+        let count = removed_nodes.len();
+        tracing::debug!(?id, count, "remove_render_object: subtree disposed");
+        // Destructors run last, against a committed tree and owner (ADR-0252,
+        // ADR-0287): one that panics leaves nothing half-removed.
+        // `clear` drops every node even when one panics; the buffer is kept
+        // only when none did.
+        removed_nodes.clear();
+        self.removed_nodes = removed_nodes;
+        count
+    }
+
+    /// Opens a removal batch: until the matching
+    /// [`end_removal_batch`](Self::end_removal_batch),
+    /// [`remove_render_object`](Self::remove_render_object) queues.
+    pub(crate) fn begin_removal_batch(&mut self) {
+        self.removal_batch.depth += 1;
+    }
+
+    /// Closes the innermost removal batch; closing the outermost removes every
+    /// queued subtree. Returns the number of nodes removed.
+    pub(crate) fn end_removal_batch(&mut self) -> usize {
+        self.removal_batch.depth = self.removal_batch.depth.saturating_sub(1);
+        if self.removal_batch.depth > 0 {
+            return 0;
+        }
+        self.remove_queued_render_objects()
+    }
+
+    /// Closes every removal batch still open and removes what they queued.
+    ///
+    /// A batch whose end never ran (its scope unwound before the end) leaves
+    /// its subtrees attached; the layout pass calls this first, so no frame
+    /// lays out, paints or publishes a node whose element is gone.
+    pub(super) fn close_removal_batches(&mut self) -> usize {
+        self.removal_batch.depth = 0;
+        if self.removal_batch.queued.is_empty() {
+            return 0;
+        }
+        self.remove_queued_render_objects()
+    }
+
+    /// Removes every queued subtree as [`remove_render_object`](Self::remove_render_object)
+    /// removes one, except that each former parent's child list is compacted
+    /// once, after the last of them: `k` removals from a parent of `n`
+    /// children cost `O(n + k)`, not `O(k·n)`.
+    fn remove_queued_render_objects(&mut self) -> usize {
+        let mut queued = std::mem::take(&mut self.removal_batch.queued);
+        let mut parents = std::mem::take(&mut self.removal_batch.parents);
+        let mut removed_nodes = std::mem::take(&mut self.removed_nodes);
+        // A root queued under another root that went first finds its subtree
+        // gone and takes nothing.
+        for &id in &queued {
+            if let Some(parent_id) =
+                self.take_render_subtree(id, ParentEdge::Compact, &mut removed_nodes)
+            {
+                parents.insert(parent_id);
+            }
+        }
+        for &parent_id in parents.as_slice() {
+            // A parent removed by a later root of the batch went with its list.
+            if self.render_tree.drop_removed_children(parent_id) {
+                self.note_render_child_membership_changed(parent_id);
+            }
+        }
+        let count = removed_nodes.len();
+        tracing::debug!(
+            roots = queued.len(),
+            count,
+            "remove_render_object: batch disposed"
+        );
+        queued.clear();
+        parents.clear();
+        self.removal_batch.queued = queued;
+        self.removal_batch.parents = parents;
+        // Destructors last, against a committed tree and owner, as above.
+        removed_nodes.clear();
+        self.removed_nodes = removed_nodes;
+        count
+    }
+
+    /// Steps 1–5 of [`remove_render_object`](Self::remove_render_object) for
+    /// the subtree at `id`: its nodes go into `removed_nodes`, undropped.
+    /// Returns the former parent of `id`, whose membership changed, or `None`
+    /// for a root or a stale `id`. Under [`ParentEdge::Compact`] the parent's
+    /// list still names `id` and the caller compacts it.
+    fn take_render_subtree(
+        &mut self,
+        id: RenderId,
+        edge: ParentEdge,
+        removed_nodes: &mut Vec<RenderNode>,
+    ) -> Option<RenderId> {
         let former_parent = self.render_tree.parent(id);
         let subtree = self
             .render_tree
             .collect_subtree(id, std::mem::take(&mut self.subtree_buffers));
         if subtree.ids().is_empty() {
-            self.subtree_buffers = self
-                .render_tree
-                .take_subtree(subtree, &mut self.removed_nodes);
-            return 0;
+            self.subtree_buffers = self.render_tree.take_subtree(subtree, edge, removed_nodes);
+            return None;
         }
 
         // Withdraw the entire subtree before any user-owned parent data or
@@ -221,23 +323,11 @@ impl PipelineOwner {
             }
         }
 
-        let mut removed_nodes = std::mem::take(&mut self.removed_nodes);
-        self.subtree_buffers = self.render_tree.take_subtree(subtree, &mut removed_nodes);
-        let count = removed_nodes.len();
+        self.subtree_buffers = self.render_tree.take_subtree(subtree, edge, removed_nodes);
         if self.root_id == Some(id) {
             self.root_id = None;
         }
-        if let Some(parent_id) = former_parent {
-            self.note_render_child_membership_changed(parent_id);
-        }
-        tracing::debug!(?id, count, "remove_render_object: subtree disposed");
-        // Destructors run last, against a committed tree and owner (ADR-0252,
-        // ADR-0287): one that panics leaves nothing half-removed.
-        // `clear` drops every node even when one panics; the buffer is kept
-        // only when none did.
-        removed_nodes.clear();
-        self.removed_nodes = removed_nodes;
-        count
+        former_parent
     }
 
     /// Adopt an existing render node and invalidate every parent phase whose
@@ -366,4 +456,19 @@ impl ParentDataSlot<'_> {
     pub fn clear(&mut self) -> bool {
         self.node.clear_parent_data()
     }
+}
+
+/// The render subtrees a removal batch queued, and the scratch its end
+/// compacts parents with. One owner for the batch's state: its depth, its
+/// queue and its parents change only in the methods above.
+#[derive(Debug, Default)]
+pub(super) struct RemovalBatch {
+    /// Batches open; [`PipelineOwner::remove_render_object`] queues while it
+    /// is above zero.
+    depth: u32,
+    /// The roots queued, in the order their removals were asked for.
+    queued: Vec<RenderId>,
+    /// The former parents of the roots an end took, each once; empty
+    /// between ends and kept for its capacity.
+    parents: SlotSet<RenderId>,
 }

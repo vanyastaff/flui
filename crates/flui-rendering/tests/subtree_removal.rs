@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_foundation::RenderId;
-use flui_rendering::pipeline::PipelineOwner;
+use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_rendering::storage::RenderTree;
 use flui_rendering::testing::raw_tree::{self, RawTree};
 
@@ -197,4 +197,125 @@ fn removing_a_subtree_forgets_the_records_of_exactly_its_nodes() {
         assert!(owner.render_tree().contains(kept), "{shape:?}");
         assert_eq!(owner.render_tree().children(top), [kept], "{shape:?}");
     }
+}
+
+/// A parent of `count` children labelled `row`, under a cell; returns the cell, the parent and
+/// its children in order.
+fn parent_of_rows(count: usize, log: &DropLog) -> (PipelineCell, RenderId, Vec<RenderId>) {
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let top = owner.insert(object("top", log));
+    owner.set_root_id(Some(top));
+    let rows = (0..count)
+        .map(|_| {
+            owner
+                .insert_child_render_object(top, object("row", log))
+                .expect("live parent")
+        })
+        .collect::<Vec<RenderId>>();
+    (PipelineCell::new(owner), top, rows)
+}
+
+/// A removal batch leaves each queued subtree whole and attached until it ends, then takes all
+/// of them, descendants included, and the parent keeps its other children in their order: the
+/// odd half of 3000 rows, one of them with a child of its own queued before it, as a filtering
+/// list unmounts them.
+#[test]
+fn a_removal_batch_takes_its_queue_at_the_end_and_keeps_the_order_of_the_rest() {
+    const ROWS: usize = 3_000;
+    let log = DropLog::default();
+    let (cell, top, rows) = parent_of_rows(ROWS, &log);
+    let nested = cell.with_mut(|owner| {
+        owner
+            .insert_child_render_object(rows[1], object("nested", &log))
+            .expect("live parent")
+    });
+    let kept = rows.iter().copied().step_by(2).collect::<Vec<RenderId>>();
+    let dropped = rows
+        .iter()
+        .copied()
+        .skip(1)
+        .step_by(2)
+        .collect::<Vec<RenderId>>();
+    cell.with_mut(|owner| owner.layout_pass().run_layout().expect("layout"));
+    let clean = cell.with(PipelineOwner::dirty_node_count);
+
+    cell.with_batched_removals(|| {
+        cell.with_mut(|owner| {
+            assert_eq!(owner.remove_render_object(nested), 0, "queued, not removed");
+        });
+        for &id in &dropped {
+            cell.with_mut(|owner| {
+                assert_eq!(owner.remove_render_object(id), 0, "queued, not removed");
+            });
+        }
+        cell.with(|owner| {
+            assert_eq!(
+                owner.render_tree().children(top),
+                rows,
+                "every row still listed"
+            );
+            assert!(
+                owner.render_tree().contains(nested),
+                "a queued node stays in the tree"
+            );
+        });
+        assert!(
+            log.borrow().is_empty(),
+            "no destructor runs inside the batch"
+        );
+    });
+
+    cell.with(|owner| {
+        let tree = owner.render_tree();
+        assert_eq!(
+            tree.children(top),
+            kept,
+            "the rows that stay, in their order"
+        );
+        assert!(dropped.iter().all(|&id| !tree.contains(id)));
+        assert!(!tree.contains(nested), "a queued descendant goes too");
+        assert_eq!(tree.len(), 1 + kept.len());
+        assert!(
+            owner.dirty_node_count() > clean,
+            "the parent that lost children is marked"
+        );
+    });
+    assert_eq!(
+        log.borrow().len(),
+        dropped.len() + 1,
+        "each removed node dropped once"
+    );
+}
+
+/// A batch whose scope unwinds stays open with its queue attached, and the next layout pass
+/// closes it first: the frame never lays out a node whose removal was asked for, and a removal
+/// after it is immediate again.
+#[test]
+fn a_removal_batch_left_open_by_an_unwind_closes_at_the_next_layout_pass() {
+    let log = DropLog::default();
+    let (cell, top, rows) = parent_of_rows(3, &log);
+
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        cell.with_batched_removals(|| {
+            cell.with_mut(|owner| owner.remove_render_object(rows[1]));
+            panic!("a hook of the batch panics");
+        })
+    }));
+    assert!(unwound.is_err());
+    cell.with(|owner| {
+        assert_eq!(owner.render_tree().children(top), rows, "still attached");
+    });
+
+    cell.with_mut(|owner| drop(owner.layout_pass()));
+    cell.with(|owner| {
+        assert_eq!(owner.render_tree().children(top), [rows[0], rows[2]]);
+        assert!(!owner.render_tree().contains(rows[1]));
+    });
+    assert_eq!(*log.borrow(), ["row"]);
+
+    assert_eq!(
+        cell.with_mut(|owner| owner.remove_render_object(rows[2])),
+        1
+    );
+    cell.with(|owner| assert_eq!(owner.render_tree().children(top), [rows[0]]));
 }

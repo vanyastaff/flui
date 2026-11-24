@@ -207,3 +207,112 @@ fn render_ancestry(laid: &LaidOut, id: RenderId) -> Vec<RenderId> {
             .collect::<Vec<RenderId>>()
     })
 }
+
+/// A row of [`a_column_dropping_most_of_its_keyed_rows_keeps_the_rest_in_slot_order`]: keyed by
+/// its id, as wide as its id plus one so the reading names it.
+#[derive(Clone, Debug, PartialEq, StatelessView)]
+struct KeyedRow {
+    #[view(key)]
+    key: flui_foundation::ValueKey<u32>,
+}
+
+impl StatelessView for KeyedRow {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(f64::from(*self.key.value()) + 1.0, KEYED_ROW_HEIGHT)
+    }
+}
+
+const KEYED_ROW_HEIGHT: f64 = 2.0;
+
+/// The column of [`KeyedRow`]s with `ids`, in that order, beside an unkeyed box at the top.
+fn keyed_column(ids: &[u32]) -> Column {
+    let mut children = vec![SizedBox::new(500.0, KEYED_ROW_HEIGHT).boxed()];
+    children.extend(ids.iter().map(|&id| {
+        KeyedRow {
+            key: flui_foundation::ValueKey::new(id),
+        }
+        .boxed()
+    }));
+    Column::new(children).cross_axis_alignment(flui_objects::CrossAxisAlignment::Start)
+}
+
+/// A column that drops many of its keyed rows in one update (a search filter) keeps each row
+/// that stays, the same render object, at its new slot, and lays the rows out in that order;
+/// rows inserted between the kept ones in the same update land at their slots too. A second
+/// update that also drops the unkeyed box at the top keeps them the same way.
+pub(crate) fn a_column_dropping_most_of_its_keyed_rows_keeps_the_rest_in_slot_order() {
+    const ROWS: u32 = 400;
+    let all: Vec<u32> = (0..ROWS).collect();
+    let mut laid = lay_out(keyed_column(&all), tight(1_000.0, 2_000.0));
+    let root = laid.root();
+    let before = laid.children(root);
+    assert_eq!(before.len(), 1 + all.len());
+    let render_of = |id: u32| before[1 + id as usize];
+
+    // The even rows stay, every third of them gains a new row after it.
+    let mut ids = Vec::new();
+    let mut kept = Vec::new();
+    for id in (0..ROWS).filter(|id| id % 2 == 0) {
+        ids.push(id);
+        kept.push(id);
+        if id % 3 == 0 {
+            ids.push(ROWS + id);
+        }
+    }
+    laid.pump_widget(keyed_column(&ids));
+    assert_eq!(laid.root(), root);
+    let after = laid.children(root);
+    assert_eq!(after.len(), 1 + ids.len(), "one render child per row");
+    for (slot, &id) in ids.iter().enumerate() {
+        let child = after[1 + slot];
+        if id < ROWS {
+            assert_eq!(child, render_of(id), "row {id} keeps its render object");
+        }
+        assert_eq!(
+            laid.size(child),
+            size(f64::from(id) + 1.0, KEYED_ROW_HEIGHT),
+            "row {id} at slot {slot}"
+        );
+        assert_eq!(
+            laid.offset(child),
+            offset(0.0, KEYED_ROW_HEIGHT * (slot + 1) as f64),
+            "row {id} at slot {slot}"
+        );
+    }
+    assert!(
+        before[1..]
+            .iter()
+            .enumerate()
+            .filter(|(id, _)| id % 2 == 1)
+            .all(|(_, render)| !after.contains(render)),
+        "no odd row is listed"
+    );
+
+    // The same filter dropping the unkeyed top box as well.
+    laid.pump_widget(
+        Column::new(
+            kept.iter()
+                .map(|&id| {
+                    KeyedRow {
+                        key: flui_foundation::ValueKey::new(id),
+                    }
+                    .boxed()
+                })
+                .collect::<Vec<BoxedView>>(),
+        )
+        .cross_axis_alignment(flui_objects::CrossAxisAlignment::Start),
+    );
+    let last = laid.children(root);
+    assert_eq!(last.len(), kept.len());
+    for (slot, &id) in kept.iter().enumerate() {
+        assert_eq!(
+            last[slot],
+            render_of(id),
+            "row {id} keeps its render object"
+        );
+        assert_eq!(
+            laid.offset(last[slot]),
+            offset(0.0, KEYED_ROW_HEIGHT * slot as f64)
+        );
+    }
+}

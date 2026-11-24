@@ -351,7 +351,12 @@ mapped every consumer family of such a seam, including the hard cases
   same propagation and is stamped at adoption time.
 - *Remove* — `render_custody::unmount` → `remove_render_object_from_tree`
   (the dispose cascade), with keyed soft-remove relocation tokens for
-  children that are merely leaving view rather than dying.
+  children that are merely leaving view rather than dying. A reconcile
+  runs the removals of its dense children in one removal batch of the
+  parent's pipeline (`PipelineCell::with_batched_removals`): each
+  removed subtree stays attached until the batch ends, and the end
+  compacts each render parent's child list once, so dropping `k` of `n`
+  children costs `O(n + k)`, not `O(k·n)`.
 - *Move/reorder* — no per-child mutation at all: a post-build batch pass,
   `ElementTree::reorder_render_children_after_build`, settles render
   children into slot order after a build.

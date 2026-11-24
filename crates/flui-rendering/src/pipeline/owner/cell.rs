@@ -204,6 +204,32 @@ impl PipelineCell {
         result
     }
 
+    /// Runs `f`, during which every
+    /// [`remove_render_object`](PipelineOwner::remove_render_object) on this
+    /// owner queues its subtree, and then removes them all, compacting each
+    /// parent's child list once. A reconcile that drops `k` of a parent's `n`
+    /// children pays `O(n + k)` for the lists instead of `O(k·n)`.
+    ///
+    /// Until `f` returns the queued subtrees stay whole and attached: a hook
+    /// that `f` runs finds them where they were. Batches nest; the outermost
+    /// removes. Run while the owner is checked out (a build during layout),
+    /// `f` runs unbatched. If `f` unwinds, the batch stays open and its
+    /// subtrees wait for the next [`layout_pass`](PipelineOwner::layout_pass),
+    /// which closes every open batch first: correctness needs no destructor.
+    pub fn with_batched_removals<R>(&self, f: impl FnOnce() -> R) -> R {
+        let opened = self
+            .0
+            .owner
+            .try_borrow_mut()
+            .map(|mut owner| owner.begin_removal_batch())
+            .is_ok();
+        let result = f();
+        if opened {
+            self.with_mut(PipelineOwner::end_removal_batch);
+        }
+        result
+    }
+
     /// A watch on the leader that publishes under `link` in this pipeline's
     /// frames, delivered through `lane`, the post-frame lane of the frames
     /// that paint them.

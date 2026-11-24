@@ -104,6 +104,20 @@ impl NodeLinks {
         self.children.clear();
     }
 
+    /// Takes the child list out, leaving it empty, for an edit that reads
+    /// the tree while it rewrites the list; [`Self::restore_children`] puts
+    /// it back.
+    #[inline]
+    pub(crate) fn take_children(&mut self) -> Vec<RenderId> {
+        std::mem::take(&mut self.children)
+    }
+
+    /// Puts back a list [`Self::take_children`] took.
+    #[inline]
+    pub(crate) fn restore_children(&mut self, children: Vec<RenderId>) {
+        self.children = children;
+    }
+
     // ========================================================================
     // Depth Access
     // ========================================================================
