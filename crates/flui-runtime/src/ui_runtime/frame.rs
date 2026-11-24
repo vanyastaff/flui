@@ -1510,6 +1510,9 @@ impl UiRuntime {
         }
     }
 
+    /// Trace `snapshot` as a `flui.frame` `frame_telemetry` event. Its ids are primitives
+    /// (ADR-0242 §7): the runtime and the presentation as their packed `as_u64`, the frame as
+    /// its number, so a reader such as `flui-devtools`' capture rebuilds the typed ids from them.
     fn emit_frame_telemetry(presentation: &PresentationState, snapshot: &FrameSnapshot) {
         if !tracing::enabled!(target: "flui.frame", tracing::Level::TRACE) {
             return;
@@ -1530,8 +1533,8 @@ impl UiRuntime {
             target: "flui.frame",
             event = "frame_telemetry",
             ui_runtime_id = snapshot.address.ui_runtime_id.as_u64(),
-            presentation = %snapshot.address.presentation_id,
-            frame_id = %snapshot.frame_id,
+            presentation = snapshot.address.presentation_id.as_u64(),
+            frame_id = snapshot.frame_id.get(),
             present_outcome = outcome,
             segment_us = Self::duration_micros_saturated(snapshot.segment_span()),
             build_us = Self::duration_micros_saturated(snapshot.phase_duration(FramePhase::Build)),
@@ -1585,8 +1588,8 @@ impl UiRuntime {
             target: "flui.frame",
             event = "frame_gpu_time",
             ui_runtime_id = snapshot.address.ui_runtime_id.as_u64(),
-            presentation = %snapshot.address.presentation_id,
-            frame_id = %snapshot.frame_id,
+            presentation = snapshot.address.presentation_id.as_u64(),
+            frame_id = snapshot.frame_id.get(),
             epoch = snapshot.epoch.get(),
             gpu_us = Self::duration_micros_saturated(gpu),
             "frame GPU time"

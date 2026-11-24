@@ -37,7 +37,7 @@ flui-rendering = { workspace = true }
 flui-semantics = { workspace = true }
 flui-painting = { workspace = true }
 flui-objects = { workspace = true }
-# `hooks::FrameSnapshot`, which `flui-devtools`' timeline records. Already in
+# `scheduler`'s async and frame vocabulary (`AsyncDriver`, `Instant`, `PostFrameHandle`, …). Already in
 # this crate's closure through `flui-view`, so reach does not change.
 flui-scheduler = { workspace = true }
 # `hooks::Scene`, the plugin ABI of flui-hot-reload's dlopen path, and

@@ -2,11 +2,14 @@
 //!
 //! Implementation notes: the shell composes `flui-widgets`' design-neutral
 //! `WidgetsApp` (ADR-0042 §5, ADR-0028), which knows nothing about it. The
-//! theme is resolved in this widget's own `build`, so the `MediaQuery`
-//! dependency that dynamic-color resolution registers rebuilds the shell when
-//! the platform brightness changes, and the published [`CupertinoTheme`] and
-//! the page transition sit above the `WidgetsApp` so its navigator and a
-//! `Router` read them.
+//! shell publishes the authored theme, not a resolution of it, so each
+//! reader resolves it for its own context: a nested `MediaQuery` that
+//! changes brightness or contrast changes the theme below it. The shell also
+//! resolves the theme in its own `build` for the application text style, so
+//! the dependencies that resolution registers rebuild the shell when the
+//! platform brightness, contrast or accent changes. The published
+//! [`CupertinoTheme`] and the page transition sit above the `WidgetsApp` so
+//! its navigator and a `Router` read them.
 
 use std::fmt;
 use std::rc::Rc;
@@ -27,16 +30,16 @@ use crate::theme::{CupertinoTheme, CupertinoThemeData};
 /// `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/route.dart:48`).
 const PAGE_BARRIER: Color = Color::from_argb(0x1800_0000);
 
-/// An iOS-style application shell: `WidgetsApp` under a published,
-/// brightness-resolved [`CupertinoTheme`].
+/// An iOS-style application shell: `WidgetsApp` under a published
+/// [`CupertinoTheme`].
 ///
 /// # Brightness
 ///
 /// There is no `ThemeMode` (ADR-0042 §2). The theme's optional
-/// [`brightness`](CupertinoThemeData::with_brightness) override wins when
-/// set; otherwise every dynamic color resolves against the ambient
-/// `MediaQueryData::platform_brightness`, and a platform-brightness change
-/// re-resolves the theme.
+/// [`brightness`](CupertinoThemeData::brightness) override wins when
+/// set; otherwise every dynamic color resolves against the
+/// `MediaQueryData::platform_brightness` of the context that reads the
+/// theme, and a platform-brightness change re-resolves it.
 ///
 /// # Page transition
 ///
@@ -50,8 +53,9 @@ const PAGE_BARRIER: Color = Color::from_argb(0x1800_0000);
 ///
 /// # Not implemented
 ///
-/// - `CupertinoUserInterfaceLevel`: FLUI has no elevation ambient, so dynamic
-///   colors resolve their base-elevation variant.
+/// - No [`CupertinoUserInterfaceLevel`](crate::CupertinoUserInterfaceLevel)
+///   is installed: without one a subtree is at the base level, the level
+///   Flutter's app installs.
 /// - `DefaultSelectionStyle` is not installed.
 /// - `CupertinoScrollBehavior`: the app installs no `ScrollConfiguration`, so
 ///   scroll views follow `DefaultScrollBehavior`.
@@ -70,11 +74,10 @@ const PAGE_BARRIER: Color = Color::from_argb(0x1800_0000);
 /// use flui_cupertino::{CupertinoApp, CupertinoThemeData};
 /// use flui_sdk::platform::Brightness;
 ///
-/// flui::run_app(
-///     CupertinoApp::new(MyHome::new())
-///         // Optional: pin brightness instead of following the platform.
-///         .theme(CupertinoThemeData::default().with_brightness(Brightness::Dark)),
-/// )?;
+/// // Optional: pin brightness instead of following the platform.
+/// let mut theme = CupertinoThemeData::default();
+/// theme.brightness = Some(Brightness::Dark);
+/// flui::run_app(CupertinoApp::new(MyHome::new()).theme(theme))?;
 /// ```
 #[derive(Clone, StatelessView)]
 pub struct CupertinoApp {
@@ -215,13 +218,11 @@ impl CupertinoApp {
 
 impl StatelessView for CupertinoApp {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        // The theme (or the default) is resolved HERE, in this element's own context, so the
-        // MediaQuery dependency registered by dynamic-color resolution
-        // re-runs this build when the ambient platform brightness changes.
-        let effective = self.theme.clone().unwrap_or_default().resolve_from(ctx);
-
-        // The resolved theme's text style is the application-level text style.
-        let text_style = effective.text_theme().text_style();
+        let theme = self.theme.clone().unwrap_or_default();
+        // Resolved in this element's own context for the application-level
+        // text style; the dependencies it registers re-run this build when
+        // the ambient brightness, contrast or accent changes.
+        let text_style = theme.resolve(ctx).text_theme.text_style;
 
         let app = match &self.routing {
             Routing::Home(home) => self
@@ -244,10 +245,11 @@ impl StatelessView for CupertinoApp {
         };
 
         // The published theme and the page transition sit ABOVE the
-        // WidgetsApp, so its navigator and a Router's read them.
+        // WidgetsApp, so its navigator and a Router's read them. The theme
+        // is the authored data: each reader resolves it for its own context.
         let app = PageTransitions::new(app)
             .page(Rc::new(ParallaxPageTransition::new().barrier(PAGE_BARRIER)));
-        CupertinoTheme::new(effective, app)
+        CupertinoTheme::new(theme, app)
     }
 }
 

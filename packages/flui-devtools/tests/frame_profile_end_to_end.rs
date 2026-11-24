@@ -1,7 +1,7 @@
 //! The framework's half of the profiler's wiring contract.
 //!
-//! `frame_timing_layer`'s unit tests emit the frame and phase spans
-//! themselves, so they can only prove that the layer maps the right names.
+//! The profiler's unit tests emit the frame and phase spans themselves, so
+//! they can only prove that the capture reads the right names.
 //! This test drives a real tree through a headless UI runtime's frames, which
 //! run the same `UpdateScheduler::drive_frame` the desktop, Android and web
 //! runners run, and reads the profile back. If the scheduler stops opening
@@ -16,8 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_devtools::profiler::{FramePhase, FrameStats};
-use flui_devtools::{FrameTimingLayer, Profiler};
+use flui_devtools::{Capture, FrameStats, Phase, PhaseTiming, Profiler, ProfilerConfig};
 use flui_objects::RenderSizedBox;
 use flui_sdk::animation::Vsync;
 use flui_sdk::geometry::Size;
@@ -63,8 +62,15 @@ fn leaf(vsync: Vsync) -> LaidOut {
     lay_out_animated(Leaf, BoxConstraints::tight(Size::new(64.0, 64.0)), vsync)
 }
 
-fn phases(stats: &FrameStats) -> Vec<FramePhase> {
-    stats.phases.iter().map(|info| info.phase).collect()
+/// A capture and the default profiler over it.
+fn profiled() -> (Capture, Profiler) {
+    let capture = Capture::new();
+    let profiler = Profiler::over(&capture, ProfilerConfig::default());
+    (capture, profiler)
+}
+
+fn phases(stats: &FrameStats) -> Vec<Phase> {
+    stats.phases().iter().map(PhaseTiming::phase).collect()
 }
 
 #[test]
@@ -74,9 +80,8 @@ fn a_real_frame_reaches_the_profiler_with_its_phases() {
     // is the documented way to capture under a thread-local subscriber.
     flui_testing::log_capture::disarm_interest_cache();
 
-    let profiler = Arc::new(Profiler::new());
-    let subscriber =
-        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    let (capture, profiler) = profiled();
+    let subscriber = tracing_subscriber::registry().with(capture.layer());
 
     let mounted = tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
         // Mounting is a frame the runtime drives: it builds, lays out and
@@ -100,8 +105,8 @@ fn a_real_frame_reaches_the_profiler_with_its_phases() {
         mounted
     });
 
-    let seen: Vec<FramePhase> = mounted.iter().flat_map(phases).collect();
-    for phase in [FramePhase::Build, FramePhase::Layout, FramePhase::Paint] {
+    let seen: Vec<Phase> = mounted.iter().flat_map(phases).collect();
+    for phase in [Phase::Build, Phase::Layout, Phase::Paint] {
         assert!(
             seen.contains(&phase),
             "the mount's pipeline span must land as {phase:?}; saw {seen:?}"
@@ -114,13 +119,13 @@ fn a_real_frame_reaches_the_profiler_with_its_phases() {
     );
     for (index, frame) in history.iter().enumerate() {
         assert!(
-            frame.total_time_ms() > 0.0,
+            frame.duration_ms() > 0.0,
             "frame {index}: a driven frame takes time; got {frame:?}"
         );
     }
     let painted = phases(history.last().expect("a profiled frame"));
     assert!(
-        painted.contains(&FramePhase::Paint),
+        painted.contains(&Phase::Paint),
         "the dirtied frame's `paint` span must land as Paint; saw {painted:?}"
     );
 }
@@ -137,9 +142,8 @@ fn a_real_animation_reaches_the_profiler_with_its_work() {
     for source in ["time", "spring", "repeat"] {
         // A profiler follows the first runtime it sees, and each source
         // mounts a runtime of its own.
-        let profiler = Arc::new(Profiler::new());
-        let subscriber =
-            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        let (capture, profiler) = profiled();
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
             let vsync = Vsync::new();
             let mut laid = leaf(vsync.clone());
@@ -189,27 +193,21 @@ fn a_real_animation_reaches_the_profiler_with_its_work() {
             assert!(controller.is_animating());
             let frame = profiler.frame_stats().expect("real pumped frame");
             for phase in [
-                "Animation tick",
-                "Animation sampling",
-                "Animation listeners",
+                Phase::AnimationTick,
+                Phase::AnimationSampling,
+                Phase::AnimationListeners,
             ] {
                 assert!(
-                    frame.phase(FramePhase::Custom(phase)).is_some(),
-                    "a real progressing animation must profile {phase}: {frame:?}"
+                    frame.phase(phase).is_some(),
+                    "a real progressing animation must profile {phase:?}: {frame:?}"
                 );
             }
             laid.pump_for(Duration::from_secs(5));
             assert!(run.is_complete());
             laid.pump_for(Duration::from_millis(50));
             let idle = profiler.frame_stats().expect("idle frame");
-            assert!(
-                idle.phase(FramePhase::Custom("Animation sampling"))
-                    .is_none()
-            );
-            assert!(
-                idle.phase(FramePhase::Custom("Animation listeners"))
-                    .is_none()
-            );
+            assert!(idle.phase(Phase::AnimationSampling).is_none());
+            assert!(idle.phase(Phase::AnimationListeners).is_none());
         });
     }
 }
@@ -218,9 +216,8 @@ fn a_nested_runtime_cannot_blend_its_animation_into_the_owning_frame() {
     use flui_sdk::animation::{Animation, AnimationController};
     use std::{cell::RefCell, rc::Rc};
     flui_testing::log_capture::disarm_interest_cache();
-    let profiler = Arc::new(Profiler::new());
-    let subscriber =
-        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    let (capture, profiler) = profiled();
+    let subscriber = tracing_subscriber::registry().with(capture.layer());
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
         let mut outer = leaf(Vsync::new());
         let inner_vsync = Vsync::new();
@@ -253,17 +250,13 @@ fn a_nested_runtime_cannot_blend_its_animation_into_the_owning_frame() {
             "the nested frame is dropped whole"
         );
         let owning = history.last().expect("outer frame");
-        assert!(owning.phase(FramePhase::Custom("Animation tick")).is_some());
+        assert!(owning.phase(Phase::AnimationTick).is_some());
         assert!(
-            owning
-                .phase(FramePhase::Custom("Animation sampling"))
-                .is_none(),
+            owning.phase(Phase::AnimationSampling).is_none(),
             "inner sampling must not blend into an idle outer frame: {owning:?}"
         );
         assert!(
-            owning
-                .phase(FramePhase::Custom("Animation listeners"))
-                .is_none(),
+            owning.phase(Phase::AnimationListeners).is_none(),
             "inner delivery must not blend into an idle outer frame: {owning:?}"
         );
     });
@@ -276,9 +269,8 @@ fn a_runtime_driven_fade_reaches_the_profiler() {
     use std::rc::Rc;
 
     flui_testing::log_capture::disarm_interest_cache();
-    let profiler = Arc::new(Profiler::new());
-    let subscriber =
-        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    let (capture, profiler) = profiled();
+    let subscriber = tracing_subscriber::registry().with(capture.layer());
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
         let registry = Vsync::new();
         let owner =
@@ -297,35 +289,42 @@ fn a_runtime_driven_fade_reaches_the_profiler() {
         assert!(laid.did_paint_last_frame());
         let frame = profiler.frame_stats().expect("runtime frame");
         for phase in [
-            "Animation tick",
-            "Animation sampling",
-            "Animation listeners",
-            "Compositing",
+            Phase::AnimationTick,
+            Phase::AnimationSampling,
+            Phase::AnimationListeners,
+            Phase::Compositing,
         ] {
-            assert!(
-                frame.phase(FramePhase::Custom(phase)).is_some(),
-                "runtime {phase}: {frame:?}"
-            );
+            assert!(frame.phase(phase).is_some(), "runtime {phase:?}: {frame:?}");
         }
-        assert!(frame.phase(FramePhase::Paint).is_some());
+        assert!(frame.phase(Phase::Paint).is_some());
         laid.pump_for(Duration::from_millis(50));
         assert!(run.is_complete());
     });
 }
 
 fn zero_history_capacity_keeps_counters_without_frames() {
-    let profiler = Profiler::with_config(flui_devtools::ProfilerConfig {
-        max_frame_history: 0,
-        jank_line: flui_devtools::JankLine::Fixed(-1.0),
-    });
+    let capture = Capture::new();
+    let profiler = Profiler::over(
+        &capture,
+        ProfilerConfig {
+            max_frame_history: 0,
+            // Every frame takes some time, so every frame is jank.
+            jank_line: flui_devtools::JankLine::Fixed(Duration::ZERO),
+            ..ProfilerConfig::default()
+        },
+    );
+    flui_testing::log_capture::disarm_interest_cache();
+    let dispatch = Dispatch::new(tracing_subscriber::registry().with(capture.layer()));
     for _ in 0..2 {
-        profiler.begin_frame();
-        let phase = profiler.profile_phase(FramePhase::Build);
-        drop(phase);
-        profiler.end_frame();
-        assert!(profiler.frame_history().is_empty());
+        tracing::dispatcher::with_default(&dispatch, || {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            drop(tracing::debug_span!(target: "flui.frame", "build").entered());
+        });
+        assert_eq!(profiler.frame_history(), []);
         assert!(profiler.frame_stats().is_none());
+        assert!(profiler.frame_rate().is_none());
     }
+    assert_eq!(capture.frames().len(), 2, "both frames were captured");
     assert_eq!(profiler.jank_percentage(), 100.0);
 }
 
@@ -356,11 +355,11 @@ fn retained_rendering_spans_cannot_charge_a_later_frame() {
         }
     }
     flui_testing::log_capture::disarm_interest_cache();
-    let profiler = Arc::new(Profiler::new());
+    let (capture, profiler) = profiled();
     let armed = Arc::new(AtomicBool::new(false));
     let retained = Arc::new(Mutex::new(Vec::new()));
     let subscriber = tracing_subscriber::registry()
-        .with(FrameTimingLayer::new(Arc::clone(&profiler)))
+        .with(capture.layer())
         .with(Retain {
             armed: Arc::clone(&armed),
             spans: Arc::clone(&retained),
@@ -378,16 +377,16 @@ fn retained_rendering_spans_cannot_charge_a_later_frame() {
         armed.store(false, Ordering::Relaxed);
         let original = profiler.frame_stats().expect("rendered frame");
         let current_is_complete = [
-            FramePhase::Build,
-            FramePhase::Layout,
-            FramePhase::Paint,
-            FramePhase::Custom("Compositing"),
+            Phase::Build,
+            Phase::Layout,
+            Phase::Paint,
+            Phase::Compositing,
         ]
         .into_iter()
         .all(|phase| {
             original
                 .phase(phase)
-                .is_some_and(|info| info.duration <= original.total_time)
+                .is_some_and(|info| info.duration() <= original.duration())
         });
         for name in ["build", "layout", "paint", "compositing"] {
             assert!(
@@ -401,7 +400,7 @@ fn retained_rendering_spans_cannot_charge_a_later_frame() {
                 "retained real {name} producer"
             );
         }
-        std::thread::sleep(original.total_time + Duration::from_millis(20));
+        std::thread::sleep(original.duration() + Duration::from_millis(20));
         laid.post_frame_handle()
             .schedule(move |_| {
                 let spans = std::mem::take(&mut *retained.lock().expect("retained phases"));
@@ -411,10 +410,7 @@ fn retained_rendering_spans_cannot_charge_a_later_frame() {
         laid.pump_for(Duration::from_millis(16));
         let later = profiler.frame_stats().expect("later idle frame");
         assert_eq!(
-            (
-                current_is_complete,
-                later.phase(FramePhase::Paint).is_none()
-            ),
+            (current_is_complete, later.phase(Phase::Paint).is_none()),
             (true, true),
             "original: {original:?}; later: {later:?}"
         );
@@ -425,10 +421,10 @@ fn application_frame_names_do_not_hide_real_animation_work() {
     use flui_sdk::animation::{Animation, AnimationController};
 
     flui_testing::log_capture::disarm_interest_cache();
-    let profiler = Arc::new(Profiler::new());
+    let (capture, profiler) = profiled();
     let subscriber = tracing_subscriber::registry()
         .with(tracing_subscriber::layer::Identity::new())
-        .with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        .with(capture.layer());
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
         let mut laid = leaf(Vsync::new());
         let controller = AnimationController::builder(Duration::from_millis(100)).build();
@@ -451,11 +447,8 @@ fn application_frame_names_do_not_hide_real_animation_work() {
             .expect("the presentation is alive");
         laid.pump_for(Duration::from_millis(16));
         let frame = profiler.frame_stats().expect("scheduler frame");
-        for phase in ["Animation sampling", "Animation listeners"] {
-            assert!(
-                frame.phase(FramePhase::Custom(phase)).is_some(),
-                "{phase}: {frame:?}"
-            );
+        for phase in [Phase::AnimationSampling, Phase::AnimationListeners] {
+            assert!(frame.phase(phase).is_some(), "{phase:?}: {frame:?}");
         }
         let previous_frames = profiler.frame_history().len();
         {
@@ -487,9 +480,8 @@ fn retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame() {
         }
     }
     flui_testing::log_capture::disarm_interest_cache();
-    let profiler = Arc::new(Profiler::new());
-    let subscriber =
-        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    let (capture, profiler) = profiled();
+    let subscriber = tracing_subscriber::registry().with(capture.layer());
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
         let vsync = Vsync::new();
         let mut laid = leaf(vsync.clone());
@@ -509,9 +501,9 @@ fn retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame() {
         assert!(!run.is_complete());
         assert!((controller.value() - 0.5).abs() < 1e-9);
         let frame = profiler.frame_stats().expect("sampled frame");
-        let sampling = frame.phase(FramePhase::Custom("Animation sampling"));
+        let sampling = frame.phase(Phase::AnimationSampling);
         let current_is_correct = sampling.is_some_and(|phase| {
-            phase.duration >= source_time.get() && phase.duration <= frame.total_time
+            phase.duration() >= source_time.get() && phase.duration() <= frame.duration()
         });
         assert!(retained.borrow().is_some());
         controller.stop().expect("stop before the next frame");
@@ -530,8 +522,7 @@ fn retained_sampling_spans_end_at_exit_and_do_not_charge_a_later_frame() {
         assert_eq!(
             (
                 current_is_correct,
-                next.phase(FramePhase::Custom("Animation sampling"))
-                    .is_none()
+                next.phase(Phase::AnimationSampling).is_none()
             ),
             (true, true),
             "current: {frame:?}; later: {next:?}"
@@ -602,7 +593,7 @@ fn a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame() {
     }
 
     flui_testing::log_capture::disarm_interest_cache();
-    let profiler = Arc::new(Profiler::new());
+    let (capture, profiler) = profiled();
     let boundary = Boundary {
         before: true,
         armed: Arc::new(AtomicBool::new(false)),
@@ -613,7 +604,7 @@ fn a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame() {
     // enclose the producer's first enter/exit, including profiler callbacks.
     let subscriber = tracing_subscriber::registry()
         .with(boundary.clone())
-        .with(FrameTimingLayer::new(Arc::clone(&profiler)))
+        .with(capture.layer())
         .with(Boundary {
             before: false,
             ..boundary.clone()
@@ -651,31 +642,33 @@ fn a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame() {
         assert_eq!(calls.get(), 1);
         let frame = profiler.frame_stats().expect("same scheduler frame");
         let sampling = frame
-            .phase(FramePhase::Custom("Animation sampling"))
+            .phase(Phase::AnimationSampling)
             .expect("real sampling");
         let envelope = *boundary.elapsed.lock().expect("producer extent");
         assert!(
-            sampling.duration <= envelope,
+            sampling.duration() <= envelope,
             "sampling includes a closed span's listener visit: {sampling:?}; producer: {envelope:?}"
         );
         assert!(
             frame
-                .phase(FramePhase::Custom("Animation listeners"))
+                .phase(Phase::AnimationListeners)
                 .expect("real listener work")
-                .duration
+                .duration()
                 > envelope
         );
     });
 }
 
 fn animation_phase_names_and_inclusive_extents_are_respected() {
-    fn phase_span(name: &str) -> tracing::Span {
-        match name {
-            "Animation tick" => tracing::debug_span!(target: "flui.animation", "animation_tick"),
-            "Animation sampling" => {
+    fn phase_span(phase: Phase) -> tracing::Span {
+        match phase {
+            Phase::AnimationTick => {
+                tracing::debug_span!(target: "flui.animation", "animation_tick")
+            }
+            Phase::AnimationSampling => {
                 tracing::debug_span!(target: "flui.animation", "animation_sampling")
             }
-            "Animation listeners" => {
+            Phase::AnimationListeners => {
                 tracing::debug_span!(target: "flui.animation", "animation_listeners")
             }
             _ => unreachable!(),
@@ -683,32 +676,30 @@ fn animation_phase_names_and_inclusive_extents_are_respected() {
     }
     // Consumer-only spans pin filtering and inclusive timing. The real
     // controller and mounted FadeTransition rows pin the producer separately.
-    for name in [
-        "Animation tick",
-        "Animation sampling",
-        "Animation listeners",
+    for phase in [
+        Phase::AnimationTick,
+        Phase::AnimationSampling,
+        Phase::AnimationListeners,
     ] {
         flui_testing::log_capture::disarm_interest_cache();
-        let profiler = Arc::new(Profiler::new());
-        let subscriber =
-            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        let (capture, profiler) = profiled();
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
             let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
-            let _outer = phase_span(name).entered();
-            let _nested = phase_span(name).entered();
+            let _outer = phase_span(phase).entered();
+            let _nested = phase_span(phase).entered();
             std::thread::sleep(Duration::from_millis(20));
         });
         let frame = profiler.frame_stats().expect("consumer frame");
-        let measured = frame.phase(FramePhase::Custom(name)).expect("phase extent");
+        let measured = frame.phase(phase).expect("phase extent");
         assert!(
-            measured.duration <= frame.total_time,
-            "overlapping {name} spans cannot exceed their enclosing frame: {frame:?}"
+            measured.duration() <= frame.duration(),
+            "overlapping {phase:?} spans cannot exceed their enclosing frame: {frame:?}"
         );
     }
     flui_testing::log_capture::disarm_interest_cache();
-    let profiler = Arc::new(Profiler::new());
-    let subscriber =
-        tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+    let (capture, profiler) = profiled();
+    let subscriber = tracing_subscriber::registry().with(capture.layer());
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
         let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
         let _foreign = tracing::debug_span!(target: "application", "animation_sampling").entered();
@@ -717,27 +708,26 @@ fn animation_phase_names_and_inclusive_extents_are_respected() {
         profiler
             .frame_stats()
             .expect("filtered frame")
-            .phase(FramePhase::Custom("Animation sampling"))
+            .phase(Phase::AnimationSampling)
             .is_none()
     );
 }
 
 #[cfg(feature = "timeline")]
 fn a_guard_before_clear_cannot_update_a_new_event() {
-    use flui_devtools::timeline::{EventCategory, Timeline};
+    use flui_devtools::Timeline;
     let timeline = Timeline::new();
-    let old = timeline.record_event("old", EventCategory::Custom);
+    let old = timeline.record_event("old");
     timeline.clear();
     let duration = Duration::from_secs(123_456_789);
     timeline.record_completed_event(
         "new",
-        EventCategory::Custom,
         web_time::Instant::now(),
         duration,
         serde_json::Value::Null,
     );
     drop(old);
-    let events = timeline.get_events();
+    let events = timeline.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].name, "new");
     assert_eq!(events[0].duration_micros, duration.as_micros());
@@ -745,14 +735,14 @@ fn a_guard_before_clear_cannot_update_a_new_event() {
 
 #[cfg(feature = "timeline")]
 fn a_guard_after_clear_updates_its_own_event() {
-    use flui_devtools::timeline::{EventCategory, Timeline};
+    use flui_devtools::Timeline;
     let timeline = Timeline::new();
-    timeline.record_instant("old", EventCategory::Custom);
+    timeline.record_instant("old");
     timeline.clear();
-    let current = timeline.record_event("current", EventCategory::Custom);
+    let current = timeline.record_event("current");
     std::thread::sleep(Duration::from_millis(1));
     drop(current);
-    let events = timeline.get_events();
+    let events = timeline.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].name, "current");
     assert!(events[0].duration_micros > 0);
@@ -760,25 +750,24 @@ fn a_guard_after_clear_updates_its_own_event() {
 
 #[cfg(feature = "timeline")]
 fn completed_event_duration_preserves_large_values() {
-    use flui_devtools::timeline::{EventCategory, Timeline};
+    use flui_devtools::Timeline;
     let timeline = Timeline::new();
     let duration = Duration::new(18_446_744_073_710, 123_456_000);
     timeline.record_completed_event(
         "large",
-        EventCategory::Custom,
         web_time::Instant::now(),
         duration,
         serde_json::Value::Null,
     );
-    assert_eq!(timeline.get_events()[0].duration(), duration);
-    let mut event = timeline.get_events().remove(0);
+    assert_eq!(timeline.events()[0].duration(), duration);
+    let mut event = timeline.events().remove(0);
     event.duration_micros = u128::MAX;
     assert_eq!(event.duration(), Duration::MAX);
 }
 
 #[cfg(feature = "timeline")]
 fn run_reentrant_name_case(kind: &str) {
-    use flui_devtools::timeline::{EventCategory, Timeline};
+    use flui_devtools::Timeline;
     struct Name(Timeline);
     impl From<Name> for String {
         fn from(name: Name) -> Self {
@@ -787,24 +776,23 @@ fn run_reentrant_name_case(kind: &str) {
         }
     }
     let timeline = Timeline::new();
-    timeline.record_instant("removed", EventCategory::Custom);
+    timeline.record_instant("removed");
     let name = Name(timeline.clone());
     match kind {
-        "guard" => drop(timeline.record_event(name, EventCategory::Custom)),
-        "instant" => timeline.record_instant(name, EventCategory::Custom),
+        "guard" => drop(timeline.record_event(name)),
+        "instant" => timeline.record_instant(name),
         "completed" => timeline.record_completed_event(
             name,
-            EventCategory::Custom,
             web_time::Instant::now(),
             Duration::from_secs(7),
             serde_json::Value::Null,
         ),
         _ => panic!("unknown name case"),
     }
-    let events = timeline.get_events();
+    let events = timeline.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].name, "reentrant");
-    timeline.record_instant("next", EventCategory::Custom);
+    timeline.record_instant("next");
     assert_eq!(timeline.event_count(), 2);
 }
 
@@ -951,9 +939,8 @@ fn a_real_frame_is_judged_against_the_period_its_scheduler_reports() {
 
     flui_testing::log_capture::disarm_interest_cache();
     for (period, janky) in [(RefreshPeriod::MIN, true), (RefreshPeriod::MAX, false)] {
-        let profiler = Arc::new(Profiler::new());
-        let subscriber =
-            tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
+        let (capture, profiler) = profiled();
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
             let mut host = HeadlessHost::new(HeadlessWindow::new(64, 64));
             let display = WindowDisplay::new(
@@ -975,14 +962,14 @@ fn a_real_frame_is_judged_against_the_period_its_scheduler_reports() {
             .frame_stats()
             .expect("one driven frame is one profiled frame");
         assert!(
-            frame.total_time >= WORK,
+            frame.duration() >= WORK,
             "the frame did its work: {frame:?}"
         );
         assert_eq!(
             frame.is_jank(),
             janky,
             "a {period:?} display judged a real frame that took {:.3} ms",
-            frame.total_time_ms()
+            frame.duration_ms()
         );
     }
 }
@@ -994,8 +981,7 @@ fn a_real_frame_is_judged_against_the_period_its_scheduler_reports() {
 /// `presentation` span, because every span would then fall into the unknown partition.
 #[cfg(feature = "timeline")]
 fn a_real_runtime_frame_is_partitioned_and_exported() {
-    use flui_devtools::timeline::Timeline;
-    use flui_devtools::{Capture, Phase};
+    use flui_devtools::{Timeline, TimelineEventKind};
     use flui_sdk::animation::Vsync;
     use flui_sdk::rendering::BoxConstraints;
     use flui_sdk::widgets::SizedBox;
@@ -1012,6 +998,31 @@ fn a_real_runtime_frame_is_partitioned_and_exported() {
         );
         laid.pump_for(Duration::from_millis(16));
     });
+    timeline.record_instant("app work");
+
+    // Each event says what it is: the capture's phases, segments and frames, and the
+    // application's own event.
+    let layouts = timeline.events_of(TimelineEventKind::Phase(Phase::Layout));
+    assert!(
+        !layouts.is_empty() && layouts.iter().all(|event| event.name == "Layout"),
+        "the captured layout is a Layout phase event: {layouts:?}"
+    );
+    for kind in [TimelineEventKind::Frame, TimelineEventKind::Segment] {
+        assert!(
+            !timeline.events_of(kind).is_empty(),
+            "the capture's {kind:?} spans are {kind:?} events"
+        );
+    }
+    let custom: Vec<String> = timeline
+        .events_of(TimelineEventKind::Custom)
+        .into_iter()
+        .map(|event| event.name)
+        .collect();
+    assert_eq!(
+        custom,
+        ["app work"],
+        "only the application's event is Custom"
+    );
 
     let frames = capture.frames();
     assert!(!frames.is_empty(), "a driven frame is captured");
@@ -1092,6 +1103,20 @@ fn a_real_runtime_frame_is_partitioned_and_exported() {
             .any(|event| event["ph"] == "C" && event["name"] == "frame_ms"),
         "every frame is a frame_ms counter"
     );
+    for (name, cat) in [
+        ("Frame", "Frame"),
+        ("Presentation", "Segment"),
+        ("Layout", "Layout"),
+        ("app work", "Custom"),
+    ] {
+        assert!(
+            events.iter().any(|event| event["ph"] == "X"
+                && event["name"] == name
+                && event["cat"] == cat
+                && event["args"]["category"] == cat),
+            "the {name} event's category is its kind's label, {cat}"
+        );
+    }
     assert!(
         events
             .iter()

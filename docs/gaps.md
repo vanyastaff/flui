@@ -377,13 +377,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The Web (a `requestAnimationFrame` timestamp is a frame's start) and X11 (the Present extension reports a completion to the GPU driver's connection) have no presentation time a toolkit can read, and their windows say so. A compositing X11 window manager that synchronises frames sends one in `_NET_WM_FRAME_TIMINGS`, which the X11 window does not read yet ([Live resize](#live-resize-is-unaudited-and-unscheduled)).
 - Animations still tick on the vsync instant, never the presentation time (ADR-0347 decision 2). A presentation report names the frame it describes (ADR-0347 decision 6), but the frame telemetry does not yet match a report to the produced frame it names, so its input-to-present histogram still ends at the submit.
 
-### Development tooling reads frame snapshots nothing public produces
-
-> **Environments:** all · **Who it hurts:** Authors of a development tool or a profiler built on `flui-sdk`, which cannot read a frame's timings from a running application · **Parity:** none (not platform-specific)
-
-- `flui_sdk::hooks::FrameSnapshot` (the scheduler's record of one produced frame) and `flui-devtools`' `Timeline::record_frame_snapshots` have no public producer. A UI runtime builds each snapshot crate-privately, in `record_submit_telemetry` (`crates/flui-runtime/src/ui_runtime/frame.rs`), and emits it as tracing telemetry; neither `flui-runtime`, `flui-app` nor the facade hands it out, so the timeline bridge is reachable from tests only.
-- What closes it: a public snapshot source, a frame-telemetry capability on the UI runtime or on `LifecycleContext` (ADR-0088 §4), from which `flui-devtools` takes its snapshots. Until then `hooks::FrameSnapshot` is an Evolving item with no production caller.
-
 ### No HDR, wide gamut or colour management
 
 > **Environments:** all · **Who it hurts:** Photo, video and design apps; every app on an HDR display · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)
@@ -688,6 +681,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
   - **The root's environment:** each rebuild of `MediaQueryRoot` copies the whole `MediaQueryData` (224 bytes) into a fresh `MediaQuery` view, one `Rc` (`crates/flui-runtime/src/media_query_root.rs`), so every field the data gains costs each full reassemble its size (`full_reassemble.toml`); the root could hand on a shared snapshot that a preference change replaces.
 - The entry closes when a label change allocates at most 40 times a frame, held by those rows. It is measured after the retained scene lands; until then a bless on `main` (`FLUI_PERF_BASELINE=bless`) ratchets each row a change lowered.
 
+### The pipeline owner is copied whole through its phases every frame
+
+> **Environments:** all · **Who it hurts:** Every app, on each frame that lays out or paints · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- The phases of a frame are typestates of the owner itself: `PipelineOwner<Idle>` becomes `PipelineOwner<Layout>`, then `PaintPhase` and `Semantics`, by value (`rebind_phase`, the "Phase ORDERING lives in the type system" decision of [`crates/flui-rendering/ARCHITECTURE.md`](../crates/flui-rendering/ARCHITECTURE.md)). `PipelineOwner::in_place` (`crates/flui-rendering/src/pipeline/owner/construction.rs`) also builds a vacant owner to stand in its slot while the frame runs. Each move copies the whole struct.
+- Under callgrind, the four frames of `perf_scaling_a_label_change_costs_the_same_on_any_tree_size` (small tree) spend about 4% of their instructions in those copies (`memcpy` called from `in_place`, `run_frame_contained`, `over`, `into_layout`, `into_idle` and `Semantics::finish`).
+- Keeping the ordering in types without the moves needs that decision changed, for example to a phase token that borrows `&mut PipelineOwner` for one phase and hands the next token on. The entry closes when a frame moves no owner, and the decision in `ARCHITECTURE.md` states the new shape.
+
 ### Accepted ADR sections not built yet
 
 > **Environments:** all · **Who it hurts:** Anyone who reads an accepted ADR as the code's current shape · **Parity:** [Quality bar](platform-parity.md#quality-bar)
@@ -731,6 +732,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - **ADR-0377 §5.** The calls into the Android SDK are hand-written signature strings, not typed bindings ([JNI calls are hand-written signature strings](#jni-calls-are-hand-written-signature-strings)).
 - **ADR-0393.** `ReloadEvent` is `Unchanged` or `Patched` and carries no `CodeVersion`, and `DevReloadHook` has no `run_entry` or `applied` (`crates/flui-view/src/dev_reload.rs`). The loop holds no application scope, and `Application::run` has no hand-over a restart could open (`crates/flui-app/src/app/launch.rs`). The loop keeps one epoch and one tier for all its UI runtimes in place of the versions of §3, maps `Patched` to a reassemble and restarts nothing (`Slot` and `reload_tier` in `crates/flui-app/src/app/hot_reload.rs`). `flui_runtime::reload::ReloadTier` still has `Restart` and `ProcessRestart`, and `Presentation::apply_hot_reload` given `Restart` logs and reassembles (`crates/flui-runtime/src/presentation.rs`); `packages/flui-hot-reload` keeps `HotReloadTier`, a second statement of it (`src/engine.rs`). `flui run` places no edit by its shape and stamps no build: an edit to the worker crate reloads whatever its shape, an edit to the types crate restarts the host process, on Windows the process is stopped before the new build starts, because it runs from the target directory the build writes, and the report names no tier, reason or outcome (`crates/flui-cli/src/commands/run.rs`).
 - **ADR-0395 §3.** Only a desktop `flui run` of an application on Linux or macOS shows its rebuilds: on Windows the app is stopped while it builds (`crates/flui-cli/src/commands/run/process_restart.rs`), so the run sends no report there, and the Android and browser sessions and the worker-host reload (`crates/flui-cli/src/commands/run.rs`) rebuild without calling `build.report`.
+- **ADR-0396 §1 and §3–§6.** There is no `flui_testing::perf::measure`: each perf target's `perf_measured` is the window (`crates/flui-widgets/tests/perf.rs`). Instructions are not in the files: `perf-gates` still counts the `perf_scaling_` scenarios under callgrind in a shell loop and holds the large tree within 5% of the small one, with no absolute count. No nightly run records frame times. `flui-rendering` and `flui-view` have no `perf` target, the acceptance application has no perf scenario, and `packages/flui-material/benches/app_scenarios.rs`, written for one audit, is still on `main`. The 36 criterion targets name no question in their headers.
 
 ### A clip in a node's own content under an ancestor's scale below 1
 
@@ -783,7 +785,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 
 > **Environments:** all · **Who it hurts:** Every frame that looks up an id in a std `HashMap` · **Parity:** none (performance)
 
-- `flui-view`, `flui-widgets`, `flui-layer`, `flui-painting`, `flui-engine`, `flui-interaction`, `flui-semantics`, `flui-runtime`, `flui-testing` and `flui-native` hash ids and fingerprints with `rustc_hash` and hold that with `#![warn(clippy::disallowed_types)]` at their roots (`clippy.toml`, `disallowed-types`). Every other crate still builds std `HashMap`/`HashSet` with a random SipHash seed, which costs time on every lookup and gives a run-to-run iteration order: `rg -w 'HashMap|HashSet' crates packages --type rust` lists them, `flui-system` the most.
+- `flui-view`, `flui-widgets`, `flui-layer`, `flui-painting`, `flui-engine`, `flui-interaction`, `flui-semantics`, `flui-runtime`, `flui-testing`, `flui-native` and `flui-devtools` hash ids and fingerprints with `rustc_hash` and hold that with `#![warn(clippy::disallowed_types)]` at their roots (`clippy.toml`, `disallowed-types`). Every other crate still builds std `HashMap`/`HashSet` with a random SipHash seed, which costs time on every lookup and gives a run-to-run iteration order: `rg -w 'HashMap|HashSet' crates packages --type rust` lists them, `flui-system` the most.
 - A crate leaves this entry when it opts into the lint at its root; a table whose keys come from outside the process keeps SipHash under `#[expect(clippy::disallowed_types, reason = "…")]`. The entry closes when the workspace default in `Cargo.toml` turns from `allow` to the lint's own level and the root attributes go.
 
 ### Only Win32 says when the user places a window, and not for every placement

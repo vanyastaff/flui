@@ -81,7 +81,8 @@ impl ParagraphLayout {
 
     /// Places the kept lines' clusters where paint puts their glyphs.
     fn place_lines(&self) -> Vec<PlacedLine> {
-        self.layout
+        self.shaping
+            .layout
             .lines()
             .take(self.kept())
             .map(|line| {
@@ -119,7 +120,9 @@ impl ParagraphLayout {
 
     /// `offset` clamped to the kept text and snapped down to a char boundary.
     fn clamp_offset(&self, offset: usize) -> usize {
-        self.text.floor_char_boundary(offset.min(self.kept_text))
+        self.shaping
+            .text
+            .floor_char_boundary(offset.min(self.kept_text))
     }
 
     /// The caret before the text at `offset`: its x and the index of its line.
@@ -218,7 +221,7 @@ impl ParagraphLayout {
             (cluster.range.end, TextAffinity::Upstream)
         };
         let offset = self.clamp_offset(offset);
-        let (start, end) = grapheme_bounds(&self.text[..self.kept_text], offset);
+        let (start, end) = grapheme_bounds(&self.shaping.text[..self.kept_text], offset);
         if start == end {
             return TextPosition::new(offset, affinity);
         }
@@ -373,7 +376,7 @@ impl ParagraphLayout {
     fn line_run(&self, clusters: &[&Placed]) -> TextLineRun {
         let start = clusters[0].range.start;
         let end = clusters[clusters.len() - 1].range.end;
-        let characters = graphemes(&self.text[start..end])
+        let characters = graphemes(&self.shaping.text[start..end])
             .map(|grapheme| {
                 let range = start + grapheme.start..start + grapheme.end;
                 let (mut left, mut right) = (f32::INFINITY, f32::NEG_INFINITY);
@@ -416,13 +419,14 @@ impl ParagraphLayout {
     /// line box of the paragraph's line height.
     pub(crate) fn line_metrics(&self) -> Vec<LineMetrics> {
         let mut metrics: Vec<LineMetrics> = self
+            .shaping
             .layout
             .lines()
             .take(self.kept())
             .enumerate()
             .map(|(number, line)| {
                 let m = line.metrics();
-                let hang = if self.layout.is_rtl() {
+                let hang = if self.shaping.layout.is_rtl() {
                     m.hanging_advance
                 } else {
                     0.0
@@ -430,11 +434,11 @@ impl ParagraphLayout {
                 let range = line.text_range();
                 let with_newline = range.end.min(self.kept_text);
                 let start = range.start.min(with_newline);
-                let text = &self.text[start..with_newline];
+                let text = &self.shaping.text[start..with_newline];
                 let without_newline = text.trim_end_matches(is_break);
                 let end_index = start + without_newline.len();
                 let visible_end = start + without_newline.trim_end().len();
-                let ends_paragraph = !self.ellipsized && range.end >= self.text.len();
+                let ends_paragraph = !self.ellipsized && range.end >= self.shaping.text.len();
                 LineMetrics::new(
                     line.break_reason() == BreakReason::Explicit || ends_paragraph,
                     f64::from(m.baseline - m.block_min_coord),
@@ -476,7 +480,7 @@ impl ParagraphLayout {
     /// The word at `position` in the kept text (see
     /// [`word_at`] for the tie-break).
     pub(crate) fn word_boundary(&self, position: TextPosition) -> TextRange {
-        let (start, end) = word_at(&self.text[..self.kept_text], position.offset);
+        let (start, end) = word_at(&self.shaping.text[..self.kept_text], position.offset);
         TextRange::new(start, end)
     }
 }
@@ -527,7 +531,7 @@ mod tests {
                 })
                 .expect("valid fixture shapes");
             let mut marked = BTreeSet::new();
-            for line in paragraph.layout.lines() {
+            for line in paragraph.shaping.layout.lines() {
                 for run in line.runs() {
                     for cluster in run.clusters() {
                         if cluster.is_word_boundary() {

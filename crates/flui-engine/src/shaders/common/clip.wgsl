@@ -30,8 +30,8 @@ fn finalClipCoverage(attachment_pos: vec2<f32>) -> f32 {
 // silently: the same `ClipRRect` would round a rect and a gradient by
 // different amounts, with nothing failing.
 //
-// `common/sdf.wgsl` is a broader reference library with no `include_str!`
-// consumer — do not confuse the two. This file is the one that ships.
+// `common/sdf.wgsl` is a broader reference library that no constant of `shaders`
+// includes — do not confuse the two. This file is the one that ships.
 
 /// Mask selecting the distance-function selector out of the packed clip lane.
 const CLIP_KIND_MASK: u32 = 3u;

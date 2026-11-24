@@ -70,6 +70,18 @@ fn cupertino_activity_indicator_ticks_step() {
             "activity_indicator::inactive loading stays visible and resumes",
             activity_indicator::inactive_loading_stays_visible_and_resumes,
         ),
+        (
+            "activity_indicator::radius and color size and tint the ticks",
+            activity_indicator::radius_and_color_size_and_tint_the_ticks,
+        ),
+        (
+            "activity_indicator::animating starts and stops a mounted indicator",
+            activity_indicator::animating_starts_and_stops_a_mounted_indicator,
+        ),
+        (
+            "activity_indicator::partially revealed shows still ticks for its progress",
+            activity_indicator::partially_revealed_shows_still_ticks_for_its_progress,
+        ),
     ]);
 }
 
@@ -84,6 +96,10 @@ fn component_contracts() {
         (
             "bottom_tab_bar::each item is one node its click reaches on_tap",
             bottom_tab_bar::each_item_is_one_node_its_click_reaches_on_tap,
+        ),
+        (
+            "bottom_tab_bar::the default border is a hairline and border replaces it",
+            bottom_tab_bar::the_default_border_is_a_hairline_and_border_replaces_it,
         ),
         (
             "button::tap callback writes a signal and rebuilds its reader",
@@ -122,6 +138,22 @@ fn component_contracts() {
             button::disabled_button_announces_disabled,
         ),
         (
+            "button::the activation key presses a focused button and a disabled one takes no focus",
+            button::the_activation_key_presses_a_focused_button_and_a_disabled_one_takes_no_focus,
+        ),
+        (
+            "button::the press fade follows the held contact and a cancelled press restores it",
+            button::the_press_fade_follows_the_held_contact_and_a_cancelled_press_restores_it,
+        ),
+        (
+            "button::a contactless activation runs the handler without a fade",
+            button::a_contactless_activation_runs_the_handler_without_a_fade,
+        ),
+        (
+            "button::a plain button paints its resolved colour with its own alpha",
+            button::a_plain_button_paints_its_resolved_colour_with_its_own_alpha,
+        ),
+        (
             "nav_bar::leading middle and trailing all mount",
             nav_bar::leading_middle_and_trailing_all_mount,
         ),
@@ -130,8 +162,24 @@ fn component_contracts() {
             nav_bar::the_middle_announces_as_a_level_one_heading,
         ),
         (
-            "page_scaffold::content is padded below the nav bar plus the top inset",
-            page_scaffold::content_is_padded_below_the_nav_bar_plus_the_top_inset,
+            "nav_bar::the default border is one device pixel",
+            nav_bar::the_default_border_is_one_device_pixel,
+        ),
+        (
+            "nav_bar::the middle is centred until it would reach a side",
+            nav_bar::the_middle_is_centred_until_it_would_reach_a_side,
+        ),
+        (
+            "nav_bar::a translucent bar blurs its backdrop and an opaque one does not",
+            nav_bar::a_translucent_bar_blurs_its_backdrop_and_an_opaque_one_does_not,
+        ),
+        (
+            "nav_bar::a bar whose background crosses full opacity keeps its slots state",
+            nav_bar::a_bar_whose_background_crosses_full_opacity_keeps_its_slots_state,
+        ),
+        (
+            "page_scaffold::content runs under a translucent bar and below an opaque one",
+            page_scaffold::content_runs_under_a_translucent_bar_and_below_an_opaque_one,
         ),
         (
             "tab_scaffold::tab controller relays keep failure custody",
@@ -140,7 +188,8 @@ fn component_contracts() {
     ]);
 }
 
-/// Theme and colour resolution through a mounted context, including the live brightness republish.
+/// Theme and colour resolution through a mounted context, including the live brightness
+/// republish and the interface level.
 #[test]
 fn theme_and_color_resolution() {
     common::run_cases(&[
@@ -165,6 +214,18 @@ fn theme_and_color_resolution() {
             colors::static_color_resolves_to_itself_through_a_real_context,
         ),
         (
+            "colors::palette constants resolve to flutters values",
+            colors::palette_constants_resolve_to_flutters_values,
+        ),
+        (
+            "colors::an elevated level picks the elevated variants",
+            colors::an_elevated_level_picks_the_elevated_variants,
+        ),
+        (
+            "colors::a theme below an elevated level resolves apart",
+            colors::a_theme_below_an_elevated_level_resolves_apart,
+        ),
+        (
             "theme::explicit theme brightness overrides media query",
             theme::explicit_theme_brightness_overrides_media_query,
         ),
@@ -183,6 +244,18 @@ fn theme_and_color_resolution() {
         (
             "cupertino_app::a live brightness republish re resolves the theme",
             cupertino_app::a_live_brightness_republish_re_resolves_the_theme,
+        ),
+        (
+            "cupertino_app::a nested media query resolves the app theme below it",
+            cupertino_app::a_nested_media_query_resolves_the_app_theme_below_it,
+        ),
+        (
+            "theme::every text role set on the theme reaches a reader",
+            theme::every_text_role_set_on_the_theme_reaches_a_reader,
+        ),
+        (
+            "theme::readers under one context share one resolution",
+            theme::readers_under_one_context_share_one_resolution,
         ),
     ]);
 }
@@ -222,6 +295,10 @@ fn navigation_contracts() {
         (
             "tab_scaffold::controller mutation during build is refused",
             tab_scaffold::controller_mutation_during_build_is_refused,
+        ),
+        (
+            "tab_scaffold::a swapped in controller refuses writes during build",
+            tab_scaffold::a_swapped_in_controller_refuses_writes_during_build,
         ),
         (
             "tab_scaffold::tapping a tab item switches the active tab",

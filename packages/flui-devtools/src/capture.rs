@@ -5,10 +5,9 @@
 //! `flui-devtools` is a package: nothing in the framework may depend on it, so the framework
 //! emits `tracing` spans and the tools read them. [`CaptureLayer`] is the one reader. It
 //! recognizes a frame, the spans of its presentations and its [`Phase`]s, measures each from its
-//! outermost entered visit, and keeps them in a [`Capture`]. The [`Profiler`]
-//! ([`FrameTimingLayer`]), the [`Timeline`](crate::timeline::Timeline)
-//! and the Chrome/Perfetto export read that capture; none of them has a recorder of its own for
-//! framework spans.
+//! outermost entered visit, and keeps them in a [`Capture`]. The
+//! [`Profiler`](crate::Profiler), the [`Timeline`](crate::Timeline) and the Chrome/Perfetto
+//! export read that capture; none of them has a recorder of its own for framework spans.
 //!
 //! # Partitions
 //!
@@ -26,13 +25,28 @@
 //! fabricated measurement. A phase is recognized by [`Phase::of`], so an application span named
 //! `paint` is not captured. A phase reentered inside the same phase is covered by the outer
 //! extent, and a span retained after it closed cannot restart a measurement.
+//!
+//! # Produced frames
+//!
+//! Beside the spans, the layer reads the two `TRACE` events the runtime traces for each frame a
+//! presentation produces: `frame_telemetry` (its outcome, phase durations, produce-to-present
+//! span and inputs) and `frame_gpu_time` (its GPU time, which arrives later and is joined to the
+//! frame by runtime, presentation and frame number). Each is a [`ProducedFrame`], kept in its
+//! runtime's ring. They are the only events the layer admits.
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+mod telemetry;
+
+pub use telemetry::{FrameOutcome, ProducedFrame};
+
+use std::collections::VecDeque;
+use std::num::NonZeroU64;
+use std::sync::{Arc, Weak};
 use std::thread::ThreadId;
 
-use flui_sdk::foundation::{PresentationId, UiRuntimeId};
+use flui_sdk::foundation::panic::{FirstPanic, payload_text};
+use flui_sdk::foundation::{AtomicIdMint, PresentationId, UiRuntimeId};
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::{Metadata, Subscriber};
@@ -58,18 +72,20 @@ fn is_segment(metadata: &Metadata<'_>) -> bool {
     metadata.is_span() && metadata.target() == FRAME_TARGET && metadata.name() == SEGMENT_SPAN
 }
 
-/// The spans a capture layer admits: frames, segments, phases, and the animation controller
-/// identities that keep an animation span's ancestry visible to the layer.
+/// What a capture layer admits: frames, segments, phases, and the animation controller
+/// identities that keep an animation span's ancestry visible to the layer; and of the events
+/// only the frame telemetry, with the `enabled!` gate the runtime asks before tracing it.
 fn is_captured(metadata: &Metadata<'_>) -> bool {
-    metadata.is_span()
+    let span = metadata.is_span()
         && (is_frame(metadata)
             || is_segment(metadata)
             || Phase::of(metadata).is_some()
             || (metadata.target() == "flui.animation.diagnostics"
-                && metadata.name() == "animation_controller"))
+                && metadata.name() == "animation_controller"));
+    span || telemetry::is_telemetry(metadata) || telemetry::is_telemetry_gate(metadata)
 }
 
-/// The filter a capture layer carries.
+/// The filter a capture layer carries: the framework's frame spans and its frame telemetry.
 pub type FrameSpanFilter = FilterFn<fn(&Metadata<'_>) -> bool>;
 
 /// Whose spans these are: the UI runtime that drove the frame and, for a span that ran for one
@@ -191,15 +207,9 @@ pub struct CapturedFrame {
     period: Option<Duration>,
     spans: Vec<CapturedSpan>,
     outermost: bool,
-    id: u64,
 }
 
 impl CapturedFrame {
-    /// The span id the frame ran under: it tells an opening and a closing apart from another
-    /// frame's while both are live.
-    pub(crate) const fn id(&self) -> u64 {
-        self.id
-    }
     /// The frame span itself.
     #[must_use]
     pub const fn span(&self) -> &CapturedSpan {
@@ -228,85 +238,80 @@ impl CapturedFrame {
 
 type FrameSink = Arc<dyn Fn(&Capture, &CapturedFrame) + Send + Sync>;
 
-/// A frame the moment it is first entered, before any of its work has run.
-#[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
-pub struct FrameOpening {
-    runtime: Option<UiRuntimeId>,
-    outermost: bool,
-    id: u64,
+/// Names one sink among its capture's sinks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SinkId(NonZeroU64);
+
+/// A frame sink's registration on a [`Capture`], made by [`Capture::on_frame`]. The sink runs
+/// on every frame the capture closes until this handle drops, and is removed then.
+///
+/// The handle holds its capture weakly: it never keeps a capture alive, and once the capture is
+/// gone dropping it does nothing. A removal that lands while a frame is being delivered does
+/// not change that delivery, which runs the sinks it started with; no later delivery calls the
+/// removed sink.
+///
+/// It is not `flui_foundation`'s `Subscription`, which belongs to one owner thread (`Rc`). A
+/// frame closes on whichever thread closes its tracing span, so a capture's sinks are shared by
+/// every thread that emits, and this handle is `Send + Sync`.
+#[must_use = "the sink is removed when this handle drops"]
+pub struct CaptureSubscription {
+    capture: Weak<Shared>,
+    sink: SinkId,
 }
 
-impl FrameOpening {
-    /// The span id the frame ran under: it tells an opening and a closing apart from another
-    /// frame's while both are live.
-    pub(crate) const fn id(&self) -> u64 {
-        self.id
-    }
-    /// The runtime driving the frame, if its span named one by now.
-    #[must_use]
-    pub const fn runtime(&self) -> Option<UiRuntimeId> {
-        self.runtime
-    }
-
-    /// Whether the frame was opened outside every other frame.
-    #[must_use]
-    pub const fn is_outermost(&self) -> bool {
-        self.outermost
+impl Drop for CaptureSubscription {
+    fn drop(&mut self) {
+        let Some(shared) = self.capture.upgrade() else {
+            return;
+        };
+        let removed = {
+            let mut sinks = shared.sinks.lock();
+            sinks
+                .iter()
+                .position(|(id, _)| *id == self.sink)
+                .map(|at| sinks.remove(at))
+        };
+        // The sink's captures' `Drop` is user code: it runs after the lock is released, and
+        // only here when no delivery still holds the sink.
+        drop(removed);
     }
 }
 
-type FrameOpenSink = Arc<dyn Fn(&Capture, &FrameOpening) + Send + Sync>;
+impl std::fmt::Debug for CaptureSubscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CaptureSubscription")
+            .field("live", &(self.capture.strong_count() > 0))
+            .finish_non_exhaustive()
+    }
+}
 
-/// Calls every sink with `value`. A sink is user code: one that panics must not take the value from
-/// the sinks after it, so the first panic is kept and resumed after the last sink has run.
-type Sink<T> = Arc<dyn Fn(&Capture, &T) + Send + Sync>;
-
-type Payload = Box<dyn std::any::Any + Send>;
-
-/// Calls every sink with `value`, returning the first panic once the last sink has run.
-fn deliver_contained<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) -> Option<Payload> {
-    let mut first_panic = None;
+/// Calls every sink with `frame`, in the order they were registered.
+///
+/// A sink is user code, and so is the `Drop` of one removed while this delivery ran, whose last
+/// reference this delivery holds. Each runs under one [`FirstPanic`], so a sink that panics
+/// does not take the frame from the sinks after it. The delivery runs inside a tracing layer:
+/// unwinding out of it would stop the layers after this one from seeing the span exit, so the
+/// first panic is reported as an error event, itself contained because a subscriber is user
+/// code too, and not raised. Every payload is destroyed under containment (ADR-0281 §3).
+fn deliver(capture: &Capture, sinks: Vec<FrameSink>, frame: &CapturedFrame) {
+    let mut failures = FirstPanic::new();
     for sink in sinks {
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a sink's panic must not stop the remaining sinks"
-        )]
-        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            sink(capture, value);
-        })) {
-            if first_panic.is_none() {
-                first_panic = Some(payload);
-            } else {
-                // A later failure: destroyed under containment (ADR-0281 §2).
-                flui_sdk::foundation::panic::discard_payload(payload);
-            }
-        }
+        failures.contain(|| sink(capture, frame));
+        failures.retire(sink);
     }
-    first_panic
-}
-
-/// Calls every sink with `value`. A sink is user code, and the callback runs inside a tracing
-/// layer: unwinding out of it would stop the layers after this one from seeing the span exit, so
-/// the first failure is reported as an error event and not raised.
-fn deliver<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) {
-    if let Some(payload) = deliver_contained(capture, sinks, value) {
-        let text = flui_sdk::foundation::panic::payload_text(&*payload)
+    let Some(text) = failures.held().map(|payload| {
+        payload_text(payload)
             .unwrap_or("a non-text panic payload")
-            .to_owned();
-        // A subscriber is user code too.
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: a subscriber's panic while reporting must not unwind the capture"
-        )]
-        if let Err(failed) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tracing::error!(target: "flui.devtools", "a capture sink panicked: {text}");
-        })) {
-            flui_sdk::foundation::panic::discard_payload(failed);
-        }
-        // Reported, not raised: destroyed under containment (ADR-0281 §2).
-        flui_sdk::foundation::panic::discard_payload(payload);
-    }
+            .to_owned()
+    }) else {
+        return;
+    };
+    failures.contain(|| {
+        tracing::error!(target: "flui.devtools", "a capture frame sink panicked: {text}");
+    });
+    // Reported, not raised: dropping the collector destroys the held payload, and any the
+    // report raised, with `discard_payload`.
+    drop(failures);
 }
 
 /// What one runtime has captured.
@@ -314,15 +319,46 @@ fn deliver<T>(capture: &Capture, sinks: Vec<Sink<T>>, value: &T) {
 struct Ring {
     spans: VecDeque<CapturedSpan>,
     frames: VecDeque<CapturedFrame>,
+    produced: VecDeque<ProducedFrame>,
 }
 
+/// Which capture a value in a span's extensions belongs to: two captures on one registry see
+/// the same spans, and a span can outlive the capture that filed state in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CaptureId(NonZeroU64);
+
+/// The identities of every capture the process creates. A private ID counter: it mints and
+/// never wraps, so a capture created after another was dropped never reads the state the
+/// dropped one left in a long-lived span.
+static CAPTURE_IDS: AtomicIdMint<NonZeroU64> = AtomicIdMint::new();
+
 struct Shared {
+    id: CaptureId,
     epoch: Instant,
     max_frames: usize,
     max_spans: usize,
-    rings: Mutex<HashMap<Option<UiRuntimeId>, Ring>>,
-    sinks: Mutex<Vec<FrameSink>>,
-    openers: Mutex<Vec<FrameOpenSink>>,
+    rings: Mutex<FxHashMap<Option<UiRuntimeId>, Ring>>,
+    sinks: Mutex<Vec<(SinkId, FrameSink)>>,
+    sink_ids: AtomicIdMint<NonZeroU64>,
+}
+
+/// How much of each runtime a [`Capture`] keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureLimits {
+    /// Frames kept per runtime, and as many of its [`ProducedFrame`]s.
+    pub frames: usize,
+    /// Spans kept per runtime, which also bound the child spans the retained frames hold.
+    pub spans: usize,
+}
+
+impl Default for CaptureLimits {
+    /// 600 frames and 20,000 spans.
+    fn default() -> Self {
+        Self {
+            frames: 600,
+            spans: 20_000,
+        }
+    }
 }
 
 /// The spans of every frame the framework has driven under a [`CaptureLayer`], bounded per
@@ -350,24 +386,37 @@ impl Default for Capture {
 }
 
 impl Capture {
-    /// A capture keeping the last 600 frames and 20,000 spans of each runtime.
+    /// A capture keeping the last [`CaptureLimits::default`] frames and spans of each runtime.
+    ///
+    /// # Panics
+    ///
+    /// After 2^64 - 1 captures in one process, as [`Self::bounded`] says.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_capacity(600, 20_000)
+        Self::bounded(CaptureLimits::default())
     }
 
-    /// A capture keeping the last `max_frames` frames and `max_spans` spans of each runtime. A
-    /// capture of one runtime never evicts another's.
+    /// A capture keeping the last `limits.frames` frames and `limits.spans` spans of each
+    /// runtime. A capture of one runtime never evicts another's.
+    ///
+    /// # Panics
+    ///
+    /// After 2^64 - 1 captures in one process, which a process creating one a nanosecond
+    /// reaches in 584 years; the identity mint never wraps, so no two captures share one.
     #[must_use]
-    pub fn with_capacity(max_frames: usize, max_spans: usize) -> Self {
+    pub fn bounded(limits: CaptureLimits) -> Self {
+        let id = CAPTURE_IDS
+            .next()
+            .expect("BUG: a process creates fewer than 2^64 - 1 captures");
         Self {
             shared: Arc::new(Shared {
+                id: CaptureId(id),
                 epoch: Instant::now(),
-                max_frames,
-                max_spans,
-                rings: Mutex::new(HashMap::new()),
+                max_frames: limits.frames,
+                max_spans: limits.spans,
+                rings: Mutex::new(FxHashMap::default()),
                 sinks: Mutex::new(Vec::new()),
-                openers: Mutex::new(Vec::new()),
+                sink_ids: AtomicIdMint::new(),
             }),
         }
     }
@@ -379,13 +428,42 @@ impl Capture {
     }
 
     /// What identifies this capture in the extensions of the spans it watches.
-    fn owner(&self) -> usize {
-        Arc::as_ptr(&self.shared) as usize
+    fn owner(&self) -> CaptureId {
+        self.shared.id
     }
 
-    /// The layer that fills this capture, behind its own filter: it admits the frame, segment
-    /// and phase spans and no events. A log layer with an `INFO` filter beside it does not
-    /// starve it, and installing it does not switch `DEBUG` on for the rest of the process.
+    /// The layer that fills this capture: the one `tracing` layer every devtools reader of
+    /// framework spans is fed through.
+    ///
+    /// It reads these spans:
+    ///
+    /// | span | opened by | read as |
+    /// |------|-----------|---------|
+    /// | `frame` (target `flui.frame`) | `UpdateScheduler::drive_frame` (`flui-scheduler`) | the frame; its `runtime` field names the runtime that drove it, its `period_us` field the display period the jank line follows |
+    /// | `presentation` (target `flui.frame`) | the UI runtime, around one presentation's segment | the [`Partition`] of the spans inside it, from its `presentation` field |
+    /// | `build`, `layout`, `compositing`, `paint`, `semantics`, `commit`, `submit` (target `flui.frame`) | the build owner, the pipeline owner and the runtime | [`Phase::Build`] … [`Phase::Submit`] |
+    /// | `animation_tick`, `animation_sampling`, `animation_listeners` (target `flui.animation`) | `flui-animation`, when the `profiling` feature turns its instrumentation on (ADR-0202) | [`Phase::AnimationTick`], [`Phase::AnimationSampling`], [`Phase::AnimationListeners`] |
+    ///
+    /// And these `TRACE` events:
+    ///
+    /// | event (target `flui.frame`) | traced by | read as |
+    /// |------|-----------|---------|
+    /// | `frame_telemetry` | the UI runtime, for each frame it records for a presentation | a [`ProducedFrame`] of the runtime its `ui_runtime_id` names |
+    /// | `frame_gpu_time` | the UI runtime, once a frame's GPU time arrives (ADR-0388) | the [`ProducedFrame::gpu_time`] of the frame its `ui_runtime_id`, `presentation` and `frame_id` name |
+    ///
+    /// The layer carries its own per-layer filter, which admits those spans, the animation
+    /// controller spans that keep an animation span's ancestry visible, and of the events only
+    /// those two, with the `enabled!` gate at `flui.frame` `TRACE` the runtime asks before it
+    /// builds them. A log layer with an `INFO` filter beside it (FLUI's default) therefore does
+    /// not starve it: the registry records a `DEBUG` frame span or a `TRACE` telemetry event for
+    /// this layer while the log layer never sees it. And installing it does not switch `DEBUG` on
+    /// for the rest of the process: an unfiltered layer would declare interest in every callsite,
+    /// and every event in the application would pay the dispatch cost once profiling started.
+    ///
+    /// The `tests/frame_profile_end_to_end.rs` suite drives real frames through a headless UI
+    /// runtime and reads them back, and `tests/produced_frames.rs` reads their telemetry: they
+    /// are the evidence that the framework still opens the spans and traces the events these
+    /// tables name.
     #[must_use]
     pub fn layer<S>(&self) -> Filtered<CaptureLayer, FrameSpanFilter, S>
     where
@@ -397,28 +475,46 @@ impl Capture {
         .with_filter(filter())
     }
 
-    /// Call `sink` with every frame as it closes. It runs on the thread that closed the frame,
-    /// after the frame is stored and with no lock held.
+    /// Call `sink` with every frame as it closes, until the returned handle drops. It runs on the
+    /// thread that closed the frame, after the frame is stored and with no lock held.
     ///
-    /// The sink is handed this capture, so it never needs to own a handle: a sink that closes over
-    /// a clone of its own capture would keep the capture alive for as long as the sink exists.
+    /// The sink is handed this capture, so it never needs a clone of it: a sink that closes over a
+    /// clone of its own capture would keep the capture alive for as long as the sink exists.
     ///
-    /// Every sink sees every frame. A sink that panics does not stop the sinks after it; the first
-    /// panic is resumed once the last has run.
-    pub fn on_frame(&self, sink: impl Fn(&Capture, &CapturedFrame) + Send + Sync + 'static) {
-        self.shared.sinks.lock().push(Arc::new(sink));
+    /// Every sink registered when a frame closes sees that frame, in the order the sinks were
+    /// registered. A sink that panics does not stop the sinks after it, and the capture keeps
+    /// working for the next frame. The first panic of a frame is reported as an error event on
+    /// target `flui.devtools` and is not raised: the sinks run inside a tracing layer, and
+    /// unwinding out of it would stop the layers after it from seeing the frame span's exit.
+    ///
+    /// # Panics
+    ///
+    /// After 2^64 - 1 sinks on one capture; the sink identities never wrap.
+    pub fn on_frame(
+        &self,
+        sink: impl Fn(&Capture, &CapturedFrame) + Send + Sync + 'static,
+    ) -> CaptureSubscription {
+        let id = SinkId(
+            self.shared
+                .sink_ids
+                .next()
+                .expect("BUG: a capture registers fewer than 2^64 - 1 sinks"),
+        );
+        self.shared.sinks.lock().push((id, Arc::new(sink)));
+        CaptureSubscription {
+            capture: Arc::downgrade(&self.shared),
+            sink: id,
+        }
     }
 
-    /// Call `sink` when a frame is first entered, before any of its work runs.
-    ///
-    /// The runtime is the one the frame's span named when it opened. Like [`Self::on_frame`], a
-    /// sink that panics does not stop the sinks after it.
-    pub fn on_frame_open(&self, sink: impl Fn(&Capture, &FrameOpening) + Send + Sync + 'static) {
-        self.shared.openers.lock().push(Arc::new(sink));
+    /// How many sinks are registered, for the tests that pin their removal.
+    #[cfg(test)]
+    pub(crate) fn sink_count(&self) -> usize {
+        self.shared.sinks.lock().len()
     }
 
-    /// The runtimes that have captured a frame; `None` is frames that did not say which runtime
-    /// drove them.
+    /// The runtimes that have captured a frame or a produced frame; `None` is frames that did not
+    /// say which runtime drove them.
     #[must_use]
     pub fn runtimes(&self) -> Vec<Option<UiRuntimeId>> {
         let rings = self.shared.rings.lock();
@@ -484,9 +580,87 @@ impl Capture {
             .map_or_default(|ring| ring.frames.iter().cloned().collect())
     }
 
+    /// Every frame a presentation produced, from its runtime's frame telemetry, in the order the
+    /// capture received them.
+    #[must_use]
+    pub fn produced_frames(&self) -> Vec<ProducedFrame> {
+        let mut produced: Vec<_> = self
+            .shared
+            .rings
+            .lock()
+            .values()
+            .flat_map(|ring| ring.produced.iter().cloned())
+            .collect();
+        produced.sort_by_key(ProducedFrame::received);
+        produced
+    }
+
+    /// The frames `runtime`'s presentations produced, in the order the capture received them.
+    #[must_use]
+    pub fn produced_frames_of(&self, runtime: UiRuntimeId) -> Vec<ProducedFrame> {
+        self.shared
+            .rings
+            .lock()
+            .get(&Some(runtime))
+            .map_or_default(|ring| ring.produced.iter().cloned().collect())
+    }
+
+    /// Calls `visit` with every retained frame, in no order and without copying it, while the
+    /// capture's rings are locked: `visit` must not call back into this capture.
+    #[cfg(feature = "timeline")]
+    pub(crate) fn visit_frames(&self, mut visit: impl FnMut(&CapturedFrame)) {
+        for ring in self.shared.rings.lock().values() {
+            ring.frames.iter().for_each(&mut visit);
+        }
+    }
+
+    /// Calls `visit` with every retained produced frame, in no order and without copying it,
+    /// while the capture's rings are locked: `visit` must not call back into this capture.
+    #[cfg(feature = "timeline")]
+    pub(crate) fn visit_produced_frames(&self, mut visit: impl FnMut(&ProducedFrame)) {
+        for ring in self.shared.rings.lock().values() {
+            ring.produced.iter().for_each(&mut visit);
+        }
+    }
+
     /// Forget everything captured so far. Sinks stay registered.
     pub fn clear(&self) {
         self.shared.rings.lock().clear();
+    }
+
+    /// Files a telemetry event: a produced frame in its runtime's ring, bounded like its frames,
+    /// or a GPU time on the frame it names. A GPU time whose frame the ring no longer holds (or
+    /// never held, because the capture started after it) is dropped, and a frame keeps the
+    /// first time it was given.
+    fn record_telemetry(&self, telemetry: telemetry::Telemetry) {
+        let mut rings = self.shared.rings.lock();
+        match telemetry {
+            telemetry::Telemetry::Frame(frame) => {
+                let ring = rings.entry(Some(frame.runtime)).or_default();
+                ring.produced.push_back(frame);
+                while ring.produced.len() > self.shared.max_frames {
+                    ring.produced.pop_front();
+                }
+            }
+            telemetry::Telemetry::GpuTime {
+                runtime,
+                presentation,
+                number,
+                gpu,
+            } => {
+                let frame = rings.get_mut(&Some(runtime)).and_then(|ring| {
+                    ring.produced
+                        .iter_mut()
+                        .rev()
+                        .find(|frame| frame.presentation == presentation && frame.number == number)
+                });
+                if let Some(frame) = frame
+                    && frame.gpu_time.is_none()
+                {
+                    frame.gpu_time = Some(gpu);
+                }
+            }
+        }
     }
 
     fn publish(&self, frame: CapturedFrame) {
@@ -519,8 +693,15 @@ impl Capture {
                 excess -= dropped;
             }
         }
-        // Cloned out so a sink that reads the capture, or adds a sink, does not deadlock.
-        let sinks: Vec<_> = self.shared.sinks.lock().clone();
+        // Cloned out so a sink that reads the capture, adds a sink or removes one does not
+        // deadlock, and so a removal during this delivery leaves it as it started.
+        let sinks: Vec<FrameSink> = self
+            .shared
+            .sinks
+            .lock()
+            .iter()
+            .map(|(_, sink)| Arc::clone(sink))
+            .collect();
         deliver(self, sinks, &frame);
     }
 }
@@ -534,7 +715,6 @@ struct FrameState {
     period: Option<Duration>,
     outermost: bool,
     ended: Vec<Ended>,
-    id: u64,
 }
 
 /// A phase or segment that ended inside a frame, until the frame closes and names its runtime.
@@ -549,7 +729,7 @@ struct Ended {
 }
 
 /// A phase or segment span's outermost entered visit, parked in its extensions.
-struct Visit_ {
+struct SpanVisit {
     start: Instant,
     thread: ThreadId,
     entries: usize,
@@ -567,6 +747,16 @@ struct Fields {
     runtime: Option<u64>,
     presentation: Option<u64>,
     period_us: Option<u64>,
+}
+
+impl Fields {
+    /// The display period `period_us` reported. A zero period is no period: no display
+    /// refreshes in no time, and a zero jank line would make every frame jank.
+    fn period(&self) -> Option<Duration> {
+        self.period_us
+            .map(Duration::from_micros)
+            .filter(|period| !period.is_zero())
+    }
 }
 
 impl Visit for Fields {
@@ -597,9 +787,9 @@ impl std::fmt::Debug for CaptureLayer {
 ///
 /// A span's extensions hold one value per type, and two capture layers on one registry see the
 /// same spans, so each layer's state is filed under the capture that owns it.
-struct Slots<T>(Vec<(usize, T)>);
+struct Slots<T>(Vec<(CaptureId, T)>);
 
-fn slot_has<'a, T, S>(span: &SpanRef<'a, S>, owner: usize) -> bool
+fn slot_has<'a, T, S>(span: &SpanRef<'a, S>, owner: CaptureId) -> bool
 where
     T: Send + Sync + 'static,
     S: LookupSpan<'a>,
@@ -609,7 +799,7 @@ where
 
 fn slot_read<'a, T, R, S>(
     span: &SpanRef<'a, S>,
-    owner: usize,
+    owner: CaptureId,
     read: impl FnOnce(&T) -> R,
 ) -> Option<R>
 where
@@ -627,7 +817,7 @@ where
 
 fn slot_modify<'a, T, R, S>(
     span: &SpanRef<'a, S>,
-    owner: usize,
+    owner: CaptureId,
     modify: impl FnOnce(&mut T) -> R,
 ) -> Option<R>
 where
@@ -644,7 +834,7 @@ where
 }
 
 /// Files `value` under `owner`, replacing what that owner had.
-fn slot_put<'a, T, S>(span: &SpanRef<'a, S>, owner: usize, value: T)
+fn slot_put<'a, T, S>(span: &SpanRef<'a, S>, owner: CaptureId, value: T)
 where
     T: Send + Sync + 'static,
     S: LookupSpan<'a>,
@@ -658,7 +848,7 @@ where
     }
 }
 
-fn slot_take<'a, T, S>(span: &SpanRef<'a, S>, owner: usize) -> Option<T>
+fn slot_take<'a, T, S>(span: &SpanRef<'a, S>, owner: CaptureId) -> Option<T>
 where
     T: Send + Sync + 'static,
     S: LookupSpan<'a>,
@@ -684,7 +874,7 @@ where
 }
 
 /// The nearest enclosing frame that is still open, past any that has closed.
-fn enclosing_open_frame<'a, S>(span: &SpanRef<'a, S>, owner: usize) -> Option<SpanRef<'a, S>>
+fn enclosing_open_frame<'a, S>(span: &SpanRef<'a, S>, owner: CaptureId) -> Option<SpanRef<'a, S>>
 where
     S: LookupSpan<'a>,
 {
@@ -695,7 +885,7 @@ where
 
 /// The presentation segment a span runs in, looked for up to the frame that owns it: an enclosing
 /// frame is another runtime's, and its presentation is not this span's.
-fn presentation_of<'a, S>(span: &SpanRef<'a, S>, owner: usize) -> Option<u64>
+fn presentation_of<'a, S>(span: &SpanRef<'a, S>, owner: CaptureId) -> Option<u64>
 where
     S: LookupSpan<'a>,
 {
@@ -724,10 +914,9 @@ where
                     thread: std::thread::current().id(),
                     entries: 0,
                     runtime: fields.runtime,
-                    period: fields.period_us.map(Duration::from_micros),
+                    period: fields.period(),
                     outermost,
                     ended: Vec::new(),
-                    id: id.into_u64(),
                 },
             );
         } else if is_segment(metadata) {
@@ -745,8 +934,8 @@ where
             if fields.runtime.is_some() {
                 state.runtime = fields.runtime;
             }
-            if let Some(micros) = fields.period_us {
-                state.period = Some(Duration::from_micros(micros)).filter(|d| !d.is_zero());
+            if fields.period_us.is_some() {
+                state.period = fields.period();
             }
         });
     }
@@ -756,26 +945,13 @@ where
         let metadata = span.metadata();
         let owner = self.capture.owner();
         if is_frame(metadata) {
-            let opening = slot_modify(&span, owner, |state: &mut FrameState| {
+            slot_modify(&span, owner, |state: &mut FrameState| {
                 state.entries += 1;
                 if state.entries == 1 {
                     state.start = Some(Instant::now());
                     state.thread = std::thread::current().id();
-                    Some(FrameOpening {
-                        runtime: state.runtime.and_then(UiRuntimeId::from_u64),
-                        outermost: state.outermost,
-                        id: state.id,
-                    })
-                } else {
-                    None
                 }
-            })
-            .flatten();
-            if let Some(opening) = opening {
-                // Cloned out so a sink that reads the capture, or adds a sink, does not deadlock.
-                let openers: Vec<_> = self.capture.shared.openers.lock().clone();
-                deliver(&self.capture, openers, &opening);
-            }
+            });
             return;
         }
         if !is_segment(metadata) && Phase::of(metadata).is_none() {
@@ -802,18 +978,18 @@ where
             .take_while(|ancestor| !is_frame(ancestor.metadata()))
             .any(|ancestor| {
                 (ancestor.metadata().target(), ancestor.metadata().name()) == key
-                    && slot_has::<Visit_, S>(&ancestor, owner)
+                    && slot_has::<SpanVisit, S>(&ancestor, owner)
             });
         if covered {
             return;
         }
         // Re-entered without closing: the visit already running measures the full extent.
-        let reentered = slot_modify(&span, owner, |visit: &mut Visit_| visit.entries += 1);
+        let reentered = slot_modify(&span, owner, |visit: &mut SpanVisit| visit.entries += 1);
         if reentered.is_none() {
             slot_put(
                 &span,
                 owner,
-                Visit_ {
+                SpanVisit {
                     start: Instant::now(),
                     thread: std::thread::current().id(),
                     entries: 1,
@@ -842,13 +1018,13 @@ where
             return;
         }
         // The outermost exit ends the visit: a clone retained by user code cannot extend it.
-        let last = slot_modify(&span, owner, |visit: &mut Visit_| {
+        let last = slot_modify(&span, owner, |visit: &mut SpanVisit| {
             visit.entries = visit.entries.saturating_sub(1);
             visit.entries == 0
         });
         let visit = match last {
             Some(true) => {
-                let visit = slot_take::<Visit_, S>(&span, owner);
+                let visit = slot_take::<SpanVisit, S>(&span, owner);
                 slot_put(&span, owner, Closed);
                 visit
             }
@@ -873,6 +1049,20 @@ where
             slot_modify(&frame, owner, |state: &mut FrameState| {
                 state.ended.push(ended);
             });
+        }
+    }
+
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        // The filter admits no other event; checking again keeps a layer used without it (or
+        // with a filter of the caller's own) from reading another event's fields as telemetry.
+        if !telemetry::is_telemetry(event.metadata()) {
+            return;
+        }
+        let received = Instant::now().saturating_duration_since(self.capture.shared.epoch);
+        let mut fields = telemetry::TelemetryFields::default();
+        event.record(&mut fields);
+        if let Some(telemetry) = fields.into_telemetry(received, std::thread::current().id()) {
+            self.capture.record_telemetry(telemetry);
         }
     }
 }
@@ -907,20 +1097,13 @@ impl CaptureLayer {
             period: state.period,
             spans: state.ended.iter().map(span_of).collect(),
             outermost: state.outermost,
-            id: state.id,
         };
         self.capture.publish(frame);
     }
 }
 
-impl CaptureLayer {
-    pub(crate) fn new(capture: Capture) -> Self {
-        Self { capture }
-    }
-}
-
 /// The filter a capture layer carries.
-pub(crate) fn filter() -> FrameSpanFilter {
+fn filter() -> FrameSpanFilter {
     filter_fn(is_captured as fn(&Metadata<'_>) -> bool)
 }
 
@@ -1083,12 +1266,15 @@ mod tests {
     /// The span budget bounds what the retained frames hold, not only the flat span list.
     #[test]
     fn the_span_capacity_bounds_the_retained_frames_contents() {
-        let capture = Capture::with_capacity(10, 2);
+        let capture = Capture::bounded(CaptureLimits {
+            frames: 10,
+            spans: 2,
+        });
         let delivered = Arc::new(Mutex::new(Vec::new()));
-        {
+        let _sink = {
             let delivered = Arc::clone(&delivered);
-            capture.on_frame(move |_, frame| delivered.lock().push(frame.spans().len()));
-        }
+            capture.on_frame(move |_, frame| delivered.lock().push(frame.spans().len()))
+        };
         let subscriber = tracing_subscriber::registry().with(capture.layer());
         flui_testing::log_capture::disarm_interest_cache();
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
@@ -1112,7 +1298,10 @@ mod tests {
 
     #[test]
     fn a_runtime_never_evicts_another_runtimes_frames() {
-        let capture = Capture::with_capacity(2, 100);
+        let capture = Capture::bounded(CaptureLimits {
+            frames: 2,
+            spans: 100,
+        });
         let subscriber = tracing_subscriber::registry().with(capture.layer());
         flui_testing::log_capture::disarm_interest_cache();
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
@@ -1207,7 +1396,7 @@ mod tests {
         let capture = Capture::new();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink_seen = Arc::clone(&seen);
-        capture.on_frame(move |from, frame| {
+        let _sink = capture.on_frame(move |from, frame| {
             sink_seen
                 .lock()
                 .push((frame.spans().len(), from.frames().len()));
@@ -1223,34 +1412,19 @@ mod tests {
         );
     }
 
-    /// A sink needs no handle of its own, so dropping the last handle frees the capture.
+    /// A sink needs no capture of its own, and its handle holds the capture weakly, so dropping
+    /// the last capture frees it while the sink is still registered.
     #[test]
     fn a_capture_with_sinks_is_freed_with_its_last_handle() {
         let capture = Capture::new();
-        capture.on_frame(|from, _| {
+        let sink = capture.on_frame(|from, _| {
             let _ = from.frames();
         });
         let weak = Arc::downgrade(&capture.shared);
         drop(capture);
 
         assert!(weak.upgrade().is_none());
-    }
-
-    #[test]
-    fn a_panicking_sink_does_not_take_the_frame_from_the_sinks_after_it() {
-        let capture = Capture::new();
-        let seen = Arc::new(Mutex::new(0_usize));
-        capture.on_frame(|_, _| panic!("a sink that fails"));
-        let counted = Arc::clone(&seen);
-        capture.on_frame(move |_, _| *counted.lock() += 1);
-        let subscriber = tracing_subscriber::registry().with(capture.layer());
-        flui_testing::log_capture::disarm_interest_cache();
-
-        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-            frame_of(runtime(1), &[]);
-        });
-
-        assert_eq!(*seen.lock(), 1, "the later sink saw the frame");
+        drop(sink);
     }
 
     /// The enclosing frame belongs to another runtime's pump: it cannot stand in for the inner
@@ -1280,49 +1454,6 @@ mod tests {
         );
     }
 
-    /// An opener runs while the outermost frame is still open, knowing the runtime that drives it.
-    /// One that panics does not stop the ones after it, and nothing unwinds out of the layer: the
-    /// frame is entered and left in balance, so the next frame is outermost again.
-    #[test]
-    fn a_panicking_frame_opener_is_contained_and_leaves_the_next_frame_outermost() {
-        let capture = Capture::new();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let closed = Arc::new(Mutex::new(Vec::new()));
-        capture.on_frame_open(|_, _| panic!("opener failure"));
-        {
-            let seen = Arc::clone(&seen);
-            capture.on_frame_open(move |capture, opening| {
-                seen.lock().push((
-                    opening.runtime(),
-                    opening.is_outermost(),
-                    capture.frames().len(),
-                ));
-            });
-        }
-        {
-            let closed = Arc::clone(&closed);
-            capture.on_frame(move |_, frame| closed.lock().push(frame.is_outermost()));
-        }
-        let subscriber = tracing_subscriber::registry().with(capture.layer());
-        flui_testing::log_capture::disarm_interest_cache();
-        let dispatch = Dispatch::new(subscriber);
-        for _ in 0..2 {
-            tracing::dispatcher::with_default(&dispatch, || {
-                let frame = tracing::debug_span!(
-                    target: "flui.frame",
-                    "frame",
-                    runtime = runtime(7).as_u64()
-                );
-                drop(frame.entered());
-            });
-        }
-        assert_eq!(
-            *seen.lock(),
-            [(Some(runtime(7)), true, 0), (Some(runtime(7)), true, 1)]
-        );
-        assert_eq!(*closed.lock(), [true, true], "both frames were captured");
-    }
-
     /// A subscriber that fails reporting the failure, with a payload whose destructor panics too,
     /// still does not unwind out of the capture layer.
     #[test]
@@ -1341,7 +1472,7 @@ mod tests {
         }
 
         let capture = Capture::new();
-        capture.on_frame(|_, _| panic!("a sink that fails"));
+        let _sink = capture.on_frame(|_, _| panic!("a sink that fails"));
         let subscriber = tracing_subscriber::registry()
             .with(capture.layer())
             .with(BadReporter);
@@ -1357,7 +1488,7 @@ mod tests {
     #[test]
     fn a_panicking_sink_does_not_stop_another_capture_on_the_registry() {
         let (first, second) = (Capture::new(), Capture::new());
-        first.on_frame(|_, _| panic!("a sink that fails"));
+        let _sink = first.on_frame(|_, _| panic!("a sink that fails"));
         let subscriber = tracing_subscriber::registry()
             .with(first.layer())
             .with(second.layer());
@@ -1423,6 +1554,196 @@ mod tests {
             .find(|span| span.phase() == Some(Phase::Layout))
             .expect("the inner layout");
         assert_eq!(layout.partition().presentation(), None);
+    }
+
+    /// A `frame_telemetry` event in the runtime's shape, with `frame` as its number.
+    fn telemetry_of(runtime: u64, presentation: u64, frame: u64) {
+        tracing::trace!(
+            target: "flui.frame",
+            event = "frame_telemetry",
+            ui_runtime_id = runtime,
+            presentation = presentation,
+            frame_id = frame,
+            present_outcome = "presented",
+            segment_us = 900_u64,
+            build_us = 100_u64,
+            layout_us = 200_u64,
+            paint_us = 300_u64,
+            composite_us = 40_u64,
+            produce_to_present_us = 1_500_u64,
+            input_count = 2_u64,
+            input_latency_max_us = 700_u64,
+            input_epochs_overflowed = false,
+            produces_deferred = 0_u64,
+            frames_dropped = 0_u64,
+            "frame telemetry"
+        );
+    }
+
+    /// A `frame_gpu_time` event in the runtime's shape.
+    fn gpu_time_of(runtime: u64, presentation: u64, frame: u64, gpu_us: u64) {
+        tracing::trace!(
+            target: "flui.frame",
+            event = "frame_gpu_time",
+            ui_runtime_id = runtime,
+            presentation = presentation,
+            frame_id = frame,
+            epoch = 1_u64,
+            gpu_us = gpu_us,
+            "frame GPU time"
+        );
+    }
+
+    /// The capture reads each telemetry event as the produced frame it names, and joins a GPU
+    /// time to the frame of the same runtime, presentation and number, never to a frame of the
+    /// same number elsewhere.
+    #[test]
+    fn telemetry_events_are_produced_frames_with_their_gpu_time() {
+        let (r1, r2, p1) = (runtime(1), runtime(2), presentation(1));
+        let capture = capturing(|| {
+            telemetry_of(r1.as_u64(), p1.as_u64(), 1);
+            telemetry_of(r2.as_u64(), p1.as_u64(), 1);
+            gpu_time_of(r2.as_u64(), p1.as_u64(), 1, 420);
+            // No frame has this number: nothing is invented for it.
+            gpu_time_of(r1.as_u64(), p1.as_u64(), 9, 1);
+        });
+
+        let first = capture.produced_frames_of(r1);
+        assert_eq!(first.len(), 1);
+        let frame = &first[0];
+        assert_eq!(frame.partition(), Partition::new(Some(r1), Some(p1)));
+        assert_eq!(frame.number().get(), 1);
+        assert_eq!(frame.outcome(), FrameOutcome::Presented);
+        assert_eq!(frame.segment(), Duration::from_micros(900));
+        assert_eq!(
+            [
+                frame.build(),
+                frame.layout(),
+                frame.paint(),
+                frame.composite()
+            ],
+            [100, 200, 300, 40].map(Duration::from_micros)
+        );
+        assert_eq!(frame.produce_to_present(), Duration::from_micros(1_500));
+        assert_eq!(frame.input_count(), 2);
+        assert_eq!(frame.input_latency_max(), Duration::from_micros(700));
+        assert_eq!(
+            frame.gpu_time(),
+            None,
+            "the other runtime's time is not this frame's"
+        );
+        assert_eq!(
+            capture.produced_frames_of(r2)[0].gpu_time(),
+            Some(Duration::from_micros(420))
+        );
+        assert_eq!(capture.runtimes(), [Some(r1), Some(r2)]);
+    }
+
+    /// A number that is no valid id, or an id written as text, is refused: the event is skipped,
+    /// not filed under an id nobody minted.
+    #[test]
+    fn telemetry_naming_no_valid_id_is_skipped() {
+        let (r1, p1) = (runtime(1), presentation(1));
+        let capture = capturing(|| {
+            telemetry_of(0, p1.as_u64(), 1);
+            telemetry_of(r1.as_u64(), 0, 1);
+            telemetry_of(r1.as_u64(), p1.as_u64(), 0);
+            tracing::trace!(
+                target: "flui.frame",
+                event = "frame_telemetry",
+                ui_runtime_id = r1.as_u64(),
+                presentation = %p1,
+                frame_id = 1_u64,
+                "frame telemetry"
+            );
+        });
+
+        assert!(
+            capture.produced_frames().is_empty(),
+            "{:?}",
+            capture.produced_frames()
+        );
+    }
+
+    /// The runtime asks `enabled!(flui.frame, TRACE)` before it builds a frame's telemetry: the
+    /// capture's filter must admit that hint, or a capture with no other layer beside it never
+    /// gets the events it reads. It admits no other hint and no other `flui.frame` event.
+    #[test]
+    fn the_filter_admits_the_telemetry_gate_and_no_other_trace_callsite() {
+        /// A callsite's target (`flui.frame` or another), whether it is an event, and whether the
+        /// capture's filter admits it.
+        type Verdict = (&'static str, bool, bool);
+
+        /// Records the capture filter's verdict on each callsite this thread asks about: a callsite
+        /// registered on another thread reaches every dispatcher there.
+        struct Verdicts(ThreadId, Arc<Mutex<Vec<Verdict>>>);
+        impl<S: Subscriber> Layer<S> for Verdicts {
+            fn enabled(&self, metadata: &Metadata<'_>, _: Context<'_, S>) -> bool {
+                let target = match metadata.target() {
+                    FRAME_TARGET => FRAME_TARGET,
+                    _ => "other",
+                };
+                if std::thread::current().id() != self.0 {
+                    return true;
+                }
+                self.1
+                    .lock()
+                    .push((target, metadata.is_event(), is_captured(metadata)));
+                true
+            }
+        }
+
+        let verdicts = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(Verdicts(std::thread::current().id(), Arc::clone(&verdicts)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            // Creating the dispatch asked it about every callsite registered so far.
+            verdicts.lock().clear();
+            let _ = tracing::enabled!(target: "flui.frame", tracing::Level::TRACE);
+            let _ = tracing::enabled!(target: "my_app", tracing::Level::TRACE);
+            let _ = tracing::event_enabled!(
+                target: "flui.frame",
+                tracing::Level::TRACE,
+                event = "tree_revision_advanced"
+            );
+        });
+
+        let mut seen = verdicts.lock().clone();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen,
+            [
+                (FRAME_TARGET, false, true),
+                (FRAME_TARGET, true, false),
+                ("other", false, false)
+            ],
+            "(target, is an event, admitted): only the hint at flui.frame TRACE"
+        );
+    }
+
+    /// The produced frames of a runtime are bounded like its frames.
+    #[test]
+    fn produced_frames_are_bounded_per_runtime() {
+        let capture = Capture::bounded(CaptureLimits {
+            frames: 2,
+            spans: 10,
+        });
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            for frame in 1..=5 {
+                telemetry_of(runtime(1).as_u64(), presentation(1).as_u64(), frame);
+            }
+        });
+
+        let numbers: Vec<u64> = capture
+            .produced_frames()
+            .iter()
+            .map(|frame| frame.number().get())
+            .collect();
+        assert_eq!(numbers, [4, 5]);
     }
 
     /// A frame whose task panics before the pipeline runs still says whose frame it was.

@@ -39,7 +39,7 @@
 //! crate that dev-depends on `flui-testing` a dependent of the widget catalog,
 //! widening every change's CI scope.
 
-// A scenario's `baseline::Held` writes a bless when it drops; `let _ =` would
+// A scenario's `perf::Held` writes a bless when it drops; `let _ =` would
 // drop it before the scenario's budget assertions run.
 #![deny(let_underscore_drop)]
 
@@ -219,7 +219,7 @@ fn mount() -> Mounted {
 /// scenario's baseline file ([`baseline::hold`]). Called before a scenario
 /// asserts, so a failing budget still reports its numbers; the scenario keeps
 /// the returned hold to its end, so a bless waits for its assertions.
-fn hold_report(scenario: &str, report: &FrameReport, heap: HeapCounts) -> baseline::Held {
+fn hold_report(scenario: &str, report: &FrameReport, heap: HeapCounts) -> flui_testing::perf::Held {
     let mut counts: Vec<(&str, u64)> = report.counters().into_iter().collect();
     counts.extend(heap_counts(heap));
     baseline::hold(scenario, &counts)
@@ -521,8 +521,12 @@ impl StatelessView for ButtonColumn {
 }
 
 /// Mounts [`ButtonColumn`] on a headless host, settles it, and returns the
-/// heap counts of [`SCALING_FRAMES`] label changes.
-fn label_change_heap(buttons: usize) -> HeapCounts {
+/// heap counts of [`SCALING_FRAMES`] label changes, each to one of two
+/// strings in turn. With `warm`, the label first toggles between them for as
+/// many frames, so the text context has kept both laid out and the measured
+/// changes share those layouts; without, the measured changes include each
+/// string's first and second layout.
+fn label_change_heap(buttons: usize, warm: bool) -> HeapCounts {
     let label = SharedSignal::new(String::from("label 0"));
     let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
     host.attach(&ButtonColumn {
@@ -536,6 +540,12 @@ fn label_change_heap(buttons: usize) -> HeapCounts {
     let texts: Vec<String> = (0..SCALING_FRAMES)
         .map(|frame| format!("label {}", frame % 2 + 1))
         .collect();
+    if warm {
+        for text in &texts {
+            label.set(text.clone());
+            let _ = host.pump(FRAME);
+        }
+    }
     let ((), heap) = perf_measured(|| {
         for text in texts {
             label.set(text);
@@ -558,11 +568,11 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
         if only.as_deref().is_some_and(|selected| selected != name) {
             continue;
         }
-        measured.push((name, buttons, label_change_heap(buttons)));
+        measured.push((name, buttons, label_change_heap(buttons, false)));
     }
     // Both sizes are measured before either is held; a check stops at the
     // first size whose counts fail.
-    let _baseline: Vec<baseline::Held> = measured
+    let _baseline: Vec<flui_testing::perf::Held> = measured
         .iter()
         .map(|(name, _, heap)| baseline::hold(&format!("label_change_{name}"), &heap_counts(*heap)))
         .collect();
@@ -581,6 +591,18 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
              and {large:?} over {large_rows}"
         );
     }
+}
+
+/// A label toggling between two strings the text context has kept: each
+/// change shares a kept layout instead of shaping (flui-painting's shape
+/// cache). Held to its own file, so a change that stops the label's layouts
+/// from being shared raises its counts even where the first window above,
+/// which pays for keeping them, stays put.
+#[test]
+fn perf_a_label_toggling_between_kept_strings_shares_their_layouts() {
+    let (_, buttons) = SCALING_SIZES[0];
+    let heap = label_change_heap(buttons, true);
+    let _baseline = baseline::hold("label_change_kept", &heap_counts(heap));
 }
 
 /// What a `RawButton` adds to the `Text` it holds, per button: the four

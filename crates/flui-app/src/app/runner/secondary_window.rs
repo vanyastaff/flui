@@ -251,6 +251,7 @@ struct SecondaryWindowInstallConfig {
     motion_override: flui_animation::MotionOverride,
     error_view_builder: Option<flui_view::ErrorViewBuilder>,
     input_tap: Option<flui_runtime::InputTapFactory>,
+    dev_tree_observer: Option<crate::app::dev_tree_observer::DevTreeObserver>,
 }
 
 /// A resolved `Pending`-arm window waiting for installation.
@@ -856,6 +857,7 @@ pub(super) fn open_secondary_window_impl(
         motion_override: config.motion_override,
         error_view_builder: config.error_view_builder,
         input_tap: config.input_tap,
+        dev_tree_observer: config.dev_tree_observer,
     };
 
     match open {
@@ -996,6 +998,7 @@ where
                 motion_override: config.motion_override,
                 error_view_builder: config.error_view_builder,
                 input_tap: config.input_tap.clone(),
+                dev_tree_observer: config.dev_tree_observer.clone(),
             };
             let reload = crate::app::hot_reload::WorkerReload::from_config(&config);
             let host = APP_RUNTIME.with(|slot| slot.borrow().main_host_lifecycle);
@@ -1170,6 +1173,9 @@ fn finish_open_secondary_window(
                 }
                 ui_runtime.set_motion_override(config.motion_override);
                 ui_runtime.set_error_view_builder(config.error_view_builder);
+                if let Some(factory) = &config.dev_tree_observer {
+                    factory.install_on(&ui_runtime);
+                }
                 // No frame-failure handler is installed here. Under
                 // `open_secondary_window`'s current contract this ui_runtime has no
                 // root widget or renderer, so secondary handler ownership is
@@ -1353,6 +1359,7 @@ mod tests {
                     motion_override: AppConfig::new().motion_override,
                     error_view_builder: None,
                     input_tap: None,
+                    dev_tree_observer: None,
                 };
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                     queue.borrow_mut().push(PendingCompletion {
@@ -1590,6 +1597,7 @@ mod tests {
                         motion_override: AppConfig::new().motion_override,
                         error_view_builder: None,
                         input_tap: None,
+                        dev_tree_observer: None,
                     };
                     PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                         queue.borrow_mut().push(PendingCompletion {
@@ -1673,6 +1681,7 @@ mod tests {
                         motion_override: AppConfig::new().motion_override,
                         error_view_builder: None,
                         input_tap: None,
+                        dev_tree_observer: None,
                     };
                     let stage = if first {
                         let receipt = super::super::owner_dispatch::prepare_ui_runtime_alongside(
@@ -1764,6 +1773,7 @@ mod tests {
                     motion_override: AppConfig::new().motion_override,
                     error_view_builder: None,
                     input_tap: None,
+                    dev_tree_observer: None,
                 };
                 PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| queue.borrow_mut().push(
                     PendingCompletion {

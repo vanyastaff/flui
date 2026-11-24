@@ -1976,7 +1976,7 @@ name = "flui-devtools"
 version = "0.2.0-dev"
 dependencies = [
  "criterion",
- "flui-foundation",
+ "flui-app",
  "flui-log",
  "flui-objects",
  "flui-platform",
@@ -1986,6 +1986,7 @@ dependencies = [
  "flui-testing",
  "flui-view",
  "parking_lot",
+ "rustc-hash 2.1.3",
  "serde",
  "serde_json",
  "tracing",
@@ -2066,6 +2067,7 @@ dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
  "static_assertions",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
  "trybuild",
@@ -2081,6 +2083,7 @@ name = "flui-foundation"
 version = "0.2.0-dev"
 dependencies = [
  "criterion",
+ "dhat",
  "flui-foundation",
  "flui-macros",
  "glam",

@@ -2,10 +2,15 @@
 //!
 //! The iOS-style (Cupertino) widget catalog for FLUI.
 //!
-//! - Color and theme: [`CupertinoColors`], [`CupertinoColor`] and
-//!   [`CupertinoDynamicColor`] (the brightness- and contrast-adaptive color
-//!   system), [`CupertinoTextThemeData`], [`CupertinoThemeData`] and the
-//!   [`CupertinoTheme`] inherited widget that publishes it to a subtree.
+//! - Color and theme: [`CupertinoColors`] (UIKit's palette), [`CupertinoColor`]
+//!   and [`CupertinoDynamicColor`] (the brightness-, contrast- and level-adaptive
+//!   color system), [`CupertinoUserInterfaceLevel`] (the base or elevated
+//!   level a subtree's colors resolve for), [`CupertinoThemeData`] and
+//!   [`CupertinoTextThemeData`] (what an
+//!   author writes), the [`CupertinoTheme`] inherited widget that publishes
+//!   them to a subtree, and [`ResolvedCupertinoTheme`] with
+//!   [`ResolvedCupertinoTextTheme`] (what widgets read, resolved for their
+//!   context).
 //! - Application shell: [`CupertinoApp`] (ADR-0042) over `flui-widgets`'
 //!   design-neutral `WidgetsApp`, which also installs the iOS parallax page
 //!   slide for its routes.
@@ -13,7 +18,9 @@
 //!   [`CupertinoPageControl`], [`CupertinoNavigationBar`] with
 //!   [`CupertinoPageScaffold`], and [`CupertinoTabBar`] with
 //!   [`CupertinoTabScaffold`] and [`CupertinoTabController`] (the lazy-build,
-//!   state-retaining tabbed root layout).
+//!   state-retaining tabbed root layout). Both bars are
+//!   [`ObstructingPreferredSizeView`]s: a scaffold lets content run under a
+//!   bar whose background is translucent, which the bar blurs.
 //!
 //! Every item is exported at the crate root; the modules are private. The
 //! constant tables (the dynamic-color statics, the default text styles, the
@@ -22,11 +29,12 @@
 //! it leaves out of Flutter's counterpart.
 //!
 //! Other Cupertino components (`CupertinoTextField`, pickers, action sheets,
-//! `CupertinoSliverNavigationBar` and large titles) are not provided. The
-//! interface-elevation axis of [`CupertinoDynamicColor`] is not resolved:
-//! the elevated variants are stored and resolution uses base elevation,
-//! because FLUI has no interface-level ambient. Brightness and contrast
-//! resolve from the ambient theme and media data.
+//! `CupertinoSliverNavigationBar` and large titles) are not provided, so
+//! nothing in this package installs an elevated
+//! [`CupertinoUserInterfaceLevel`]; an application wraps what it presents
+//! above its main content in one. A dynamic color takes its brightness from
+//! the ambient theme, its contrast from the media data and its level from
+//! the nearest `CupertinoUserInterfaceLevel`.
 //!
 //! ## ADR-0088: built on `flui-sdk` alone
 //!
@@ -38,26 +46,46 @@
 //! independent (ADR-0028), and the kind rule (ADR-0081 §3, ADR-0088 §2)
 //! refuses that edge in any dependency kind. It adds no render object of its
 //! own: components compose existing widgets (`FadeTransition`,
-//! `DecoratedBox`, `Stack`/`Positioned`, `Offstage`, `HeroMode`, …) and name
-//! no render-layer value.
+//! `DecoratedBox`, `BackdropFilter`, `Stack`/`Positioned`, `Offstage`,
+//! `HeroMode`, …), and the navigation bar lays out its slots with a private
+//! `MultiChildLayoutDelegate` under `CustomMultiChildLayout`.
 //!
 //! ## Example
 //!
 //! ```rust
-//! use flui_cupertino::{CupertinoTheme, CupertinoThemeData};
-//! use flui_sdk::widgets::SizedBox;
+//! use flui_cupertino::{CupertinoColors, CupertinoTheme, CupertinoThemeData};
+//! use flui_sdk::platform::Brightness;
+//! use flui_sdk::view::prelude::*;
+//! use flui_sdk::widgets::Text;
 //!
-//! let _themed = CupertinoTheme::new(CupertinoThemeData::default(), SizedBox::shrink());
+//! #[derive(Clone, StatelessView)]
+//! struct Greeting;
+//!
+//! impl StatelessView for Greeting {
+//!     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+//!         // Every colour of the resolved theme is concrete for this context.
+//!         let theme = CupertinoTheme::of(ctx);
+//!         Text::new("Hello").style(theme.text_theme.nav_title_text_style.clone())
+//!     }
+//! }
+//!
+//! let mut data = CupertinoThemeData::default();
+//! data.brightness = Some(Brightness::Dark);
+//! data.primary_color = Some(CupertinoColors::SYSTEM_RED.into());
+//! let _themed = CupertinoTheme::new(data, Greeting);
 //! ```
 
 #![deny(missing_docs)]
 
 mod activity_indicator;
 mod app;
+mod bar_background;
 mod bottom_tab_bar;
 mod button;
 mod colors;
+mod interface_level;
 mod nav_bar;
+mod navigation_toolbar;
 mod page_control;
 mod page_scaffold;
 mod tab_scaffold;
@@ -69,9 +97,10 @@ pub use app::CupertinoApp;
 pub use bottom_tab_bar::{CupertinoTabBar, CupertinoTabBarItem};
 pub use button::{CupertinoButton, CupertinoButtonSize, CupertinoButtonState};
 pub use colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
+pub use interface_level::{CupertinoUserInterfaceLevel, CupertinoUserInterfaceLevelData};
 pub use nav_bar::CupertinoNavigationBar;
 pub use page_control::CupertinoPageControl;
-pub use page_scaffold::CupertinoPageScaffold;
+pub use page_scaffold::{CupertinoPageScaffold, ObstructingPreferredSizeView};
 pub use tab_scaffold::{CupertinoTabController, CupertinoTabScaffold, CupertinoTabScaffoldState};
-pub use text_theme::CupertinoTextThemeData;
-pub use theme::{CupertinoTheme, CupertinoThemeData};
+pub use text_theme::{CupertinoTextThemeData, ResolvedCupertinoTextTheme};
+pub use theme::{CupertinoTheme, CupertinoThemeData, ResolvedCupertinoTheme};

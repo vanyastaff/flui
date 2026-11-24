@@ -181,7 +181,7 @@ pure Rust performance gain and changes nothing an author writes.
   the chunk busy frames need, a spike's chunk is released after the window, the last block
   frees, grows and shrinks in place, and zero-size and over-aligned layouts are honoured.
 - A `compile_fail` doctest on `FrameArena`: a `FrameVec` alive across `reset` is error E0502.
-- The perf baseline (`FLUI_PERF_BASELINE=check` in `perf-gates`): each moving pull request lowers `allocations` in the scenarios it touches,
+- The perf baseline (`FLUI_PERF_BASELINE=check` in CI's `test` job): each moving pull request lowers `allocations` in the scenarios it touches,
   no scenario's count rises, and `idle_frame_retained_scene` stays at zero.
 
 ## Pros and cons of the options

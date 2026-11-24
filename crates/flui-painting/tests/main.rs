@@ -178,7 +178,8 @@ mod foreign_image;
 
 /// The image decode property bounds the largest block a decode asks for.
 #[global_allocator]
-static ALLOCATOR: foreign_image::LargestAllocation = foreign_image::LargestAllocation;
+static ALLOCATOR: flui_foundation::testing::heap::CountingAllocator =
+    flui_foundation::testing::heap::CountingAllocator;
 #[path = "host_faces_oracle.rs"]
 mod host_faces_oracle;
 #[path = "image_decode.rs"]
@@ -195,6 +196,8 @@ mod path_geometry;
 mod recording;
 #[path = "rich_text_example.rs"]
 mod rich_text_example;
+#[path = "shape_cache.rs"]
+mod shape_cache;
 #[path = "shapes_contract.rs"]
 mod shapes_contract;
 #[path = "text_boundaries.rs"]
@@ -951,6 +954,10 @@ fn text_decorations_contract() {
                 td::a_decoration_takes_its_glyphs_colour_unless_it_names_one,
             ),
             (
+                "a_recoloured_decoration_takes_its_glyphs_new_colour",
+                td::a_recoloured_decoration_takes_its_glyphs_new_colour,
+            ),
+            (
                 "a_child_clears_an_inherited_decoration",
                 td::a_child_clears_an_inherited_decoration,
             ),
@@ -1043,6 +1050,87 @@ fn image_decode_contract() {
             (
                 "arbitrary_bytes_decode_or_fail_typed",
                 image_decode::arbitrary_bytes_decode_or_fail_typed,
+            ),
+        ],
+    );
+}
+
+/// A text context keeps a paragraph laid out a second time, by every field of
+/// its spec, and a third layout shares the kept layout instead of shaping;
+/// registrations and memory pressure drop what it keeps.
+#[test]
+fn shape_cache_contract() {
+    use shape_cache as sc;
+    run_cases(
+        "shape_cache",
+        &[
+            (
+                "a_paragraph_laid_out_a_third_time_is_not_shaped",
+                sc::a_paragraph_laid_out_a_third_time_is_not_shaped,
+            ),
+            (
+                "a_paragraph_seen_once_is_not_kept",
+                sc::a_paragraph_seen_once_is_not_kept,
+            ),
+            (
+                "every_field_of_the_spec_keys_a_kept_paragraph",
+                sc::every_field_of_the_spec_keys_a_kept_paragraph,
+            ),
+            (
+                "a_registered_face_drops_the_kept_paragraphs",
+                sc::a_registered_face_drops_the_kept_paragraphs,
+            ),
+            (
+                "reclaim_drops_the_kept_paragraphs",
+                sc::reclaim_drops_the_kept_paragraphs,
+            ),
+            (
+                "a_long_paragraph_is_not_kept",
+                sc::a_long_paragraph_is_not_kept,
+            ),
+            (
+                "a_paragraph_whose_painting_passes_the_entry_size_is_not_kept",
+                sc::a_paragraph_whose_painting_passes_the_entry_size_is_not_kept,
+            ),
+            (
+                "the_least_recently_used_paragraph_leaves_first",
+                sc::the_least_recently_used_paragraph_leaves_first,
+            ),
+            (
+                "a_fresh_context_counts_its_first_shaping",
+                sc::a_fresh_context_counts_its_first_shaping,
+            ),
+            (
+                "two_paragraphs_in_turn_are_both_kept",
+                sc::two_paragraphs_in_turn_are_both_kept,
+            ),
+            (
+                "a_kept_ellipsized_paragraph_stays_truncated",
+                sc::a_kept_ellipsized_paragraph_stays_truncated,
+            ),
+            (
+                "the_bytes_bound_evicts_before_the_count",
+                sc::the_bytes_bound_evicts_before_the_count,
+            ),
+            (
+                "a_relayout_builds_into_the_layout_it_replaces",
+                sc::a_relayout_builds_into_the_layout_it_replaces,
+            ),
+            (
+                "a_paragraph_back_after_forty_others_is_kept",
+                sc::a_paragraph_back_after_forty_others_is_kept,
+            ),
+            (
+                "an_evicted_layout_is_built_into",
+                sc::an_evicted_layout_is_built_into,
+            ),
+            (
+                "the_painters_of_a_kept_paragraph_share_its_glyphs",
+                sc::the_painters_of_a_kept_paragraph_share_its_glyphs,
+            ),
+            (
+                "a_kept_paragraph_under_another_root_colour_is_painted_apart",
+                sc::a_kept_paragraph_under_another_root_colour_is_painted_apart,
             ),
         ],
     );

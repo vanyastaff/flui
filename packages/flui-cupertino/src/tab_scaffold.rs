@@ -23,6 +23,7 @@ use flui_sdk::widgets::{
 use crate::CupertinoColor;
 use crate::CupertinoTabBar;
 use crate::CupertinoTheme;
+use crate::ObstructingPreferredSizeView;
 
 /// Coordinates tab selection between a [`CupertinoTabBar`] and a
 /// [`CupertinoTabScaffold`]. A `ChangeNotifier` wrapping
@@ -44,8 +45,10 @@ use crate::CupertinoTheme;
 pub struct CupertinoTabController {
     index: Rc<Cell<usize>>,
     notifier: ChangeNotifier,
-    /// The build phase of the scaffold that uses this controller, bound in
-    /// its `init_state` (ADR-0074 §5.2).
+    /// The build phase of the element tree of the scaffold that uses this
+    /// controller, bound as that scaffold's state is created and rebound when
+    /// a scaffold takes the controller over (ADR-0074 §5.2). A controller no
+    /// scaffold has used yet has none and accepts every write.
     build_phase: Rc<RefCell<Option<BuildPhase>>>,
 }
 
@@ -129,9 +132,15 @@ type TabBuilder = Rc<dyn Fn(&dyn BuildContext, usize) -> BoxedView>;
 ///   with `Offstage`, not unmounted, so its state (a counter, a scroll
 ///   position, a nested navigator stack) survives a switch away and back,
 ///   and its animations stop advancing while it is hidden.
-/// - Content is padded up by the bar's height plus `MediaQuery`
-///   `padding.bottom`, unless the on-screen keyboard inset is already taller
-///   than the bar, in which case it is not padded twice.
+/// - The obstructed height is the bar's height plus `MediaQuery`
+///   `padding.bottom`. A bar whose
+///   [`should_fully_obstruct`](crate::ObstructingPreferredSizeView::should_fully_obstruct)
+///   answer is `true` pads the content up by it and consumes the bottom
+///   padding; one that answers `false` (the default, translucent bar) lets the
+///   content run under the bar and publishes the height as the content's
+///   `MediaQuery` `padding.bottom`. Neither applies while the on-screen
+///   keyboard inset is already taller than the bar, so the content is not
+///   padded twice.
 /// - [`resize_to_avoid_bottom_inset`](Self::resize_to_avoid_bottom_inset)
 ///   defaults to `true`, with the same contract as
 ///   [`CupertinoPageScaffold`](crate::CupertinoPageScaffold)'s.
@@ -230,11 +239,14 @@ impl AnimatedView for CupertinoTabScaffold {
 impl StatefulView for CupertinoTabScaffold {
     type State = CupertinoTabScaffoldState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    /// The controller is bound to the build phase as the state is born, so
+    /// the scaffold's first build already refuses its writes.
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let build_phase = ctx.build_phase();
+        self.controller.bind_build_phase(build_phase.clone());
         CupertinoTabScaffoldState {
             should_build_tab: RefCell::new(Vec::new()),
-            controller: self.controller.clone(),
-            build_phase: None,
+            build_phase,
         }
     }
 }
@@ -245,9 +257,9 @@ impl StatefulView for CupertinoTabScaffold {
 /// built once.
 pub struct CupertinoTabScaffoldState {
     should_build_tab: RefCell<Vec<bool>>,
-    /// The controller bound to `build_phase`, rebound when the view swaps it.
-    controller: CupertinoTabController,
-    build_phase: Option<BuildPhase>,
+    /// The build phase of this scaffold's element tree, which the view's
+    /// controller is bound to.
+    build_phase: BuildPhase,
 }
 
 impl std::fmt::Debug for CupertinoTabScaffoldState {
@@ -258,26 +270,21 @@ impl std::fmt::Debug for CupertinoTabScaffoldState {
 }
 
 impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let phase = ctx.build_phase();
-        self.controller.bind_build_phase(phase.clone());
-        self.build_phase = Some(phase);
-    }
-
     fn did_update_view(
         &mut self,
         _old_view: &CupertinoTabScaffold,
         new_view: &CupertinoTabScaffold,
     ) {
-        self.controller = new_view.controller.clone();
-        if let Some(phase) = &self.build_phase {
-            self.controller.bind_build_phase(phase.clone());
-        }
+        // A swapped-in controller is bound before the build that reads it.
+        new_view
+            .controller
+            .bind_build_phase(self.build_phase.clone());
     }
 
     fn build(&self, view: &CupertinoTabScaffold, ctx: &dyn BuildContext) -> impl IntoView {
         let current_index = view.controller.index();
         let tab_count = view.tab_bar.items().len();
+        let theme = CupertinoTheme::of(ctx);
 
         // The bar may change size while keeping its controller. Validate the
         // selection against this build's count; an invalid configuration must
@@ -330,7 +337,7 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         // double-pad.
         if !view.resize_to_avoid_bottom_inset || tab_bar_height > media.view_insets.bottom {
             let bottom_padding = tab_bar_height + media.padding().bottom;
-            if view.tab_bar.opaque(ctx) {
+            if view.tab_bar.should_fully_obstruct(ctx) {
                 // Opaque: directly stop content higher, and the bar's own
                 // height is fully consumed out of the republished padding.
                 content_padding_bottom = bottom_padding;
@@ -350,8 +357,7 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
 
         let background = view
             .background_color
-            .unwrap_or_else(|| CupertinoTheme::of(ctx).scaffold_background_color())
-            .resolve(ctx);
+            .map_or(theme.scaffold_background_color, |color| color.resolve(ctx));
 
         // The tab bar's own `current_index`/`on_tap` are overridden here via
         // `Clone` + builder methods; the tab bar has no `copy_with`. The

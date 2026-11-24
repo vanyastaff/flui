@@ -12,73 +12,30 @@
 //! - the heap one laid-out `TextPainter` keeps, per paragraph shape: 1,000
 //!   painters laid out and held, the live-bytes delta divided by 1,000.
 //!
-//! Heap figures come from a counting global allocator: live bytes are
-//! allocations minus deallocations. Run with
+//! Heap figures come from the counting global allocator, on the bench's own
+//! thread: live bytes are allocations minus deallocations. Run with
 //! `cargo bench -p flui-painting --bench text_startup`.
 
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::hint::black_box;
-use std::sync::atomic::{AtomicIsize, Ordering};
 
 use criterion::{BatchSize, Criterion};
 use flui_foundation::TextDirection;
+use flui_foundation::testing::heap::{CountingAllocator, HeapCounts};
 use flui_painting::testing::feed_with_host;
 use flui_painting::typography::TextSpan;
 use flui_painting::{FontCollection, HostFonts, TextContext, TextPainter};
 
-/// The system allocator, counting the bytes it holds out.
-struct Counting;
-
-static LIVE: AtomicIsize = AtomicIsize::new(0);
-
-// SAFETY: `System` upholds `GlobalAlloc`'s contract; this wrapper forwards every call
-// with the caller's arguments unchanged and adds no invariant of its own. The
-// counter allocates nothing. `realloc` is forwarded rather than left to the
-// default so a grown `Vec` is counted by its size change, not as a second
-// allocation. The measured region is single-threaded, so `Relaxed` loads see
-// every bump.
-#[expect(unsafe_code, reason = "a counting global allocator over `System`")]
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        // SAFETY: the caller upholds `GlobalAlloc::alloc`'s contract, which
-        // `System` shares.
-        let ptr = unsafe { System.alloc(layout) };
-        if !ptr.is_null() {
-            LIVE.fetch_add(signed(layout.size()), Ordering::Relaxed);
-        }
-        ptr
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr` came from `alloc` above with this `layout`.
-        unsafe { System.dealloc(ptr, layout) };
-        LIVE.fetch_sub(signed(layout.size()), Ordering::Relaxed);
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // SAFETY: the caller upholds `GlobalAlloc::realloc`'s contract.
-        let new = unsafe { System.realloc(ptr, layout, new_size) };
-        if !new.is_null() {
-            LIVE.fetch_add(signed(new_size) - signed(layout.size()), Ordering::Relaxed);
-        }
-        new
-    }
-}
-
 #[global_allocator]
-static ALLOCATOR: Counting = Counting;
+static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-fn signed(size: usize) -> isize {
-    isize::try_from(size).expect("an allocation fits isize")
-}
-
-fn live() -> isize {
-    LIVE.load(Ordering::Relaxed)
+/// This thread's live heap bytes, wrapping: only the difference of two readings means anything.
+fn live() -> i64 {
+    HeapCounts::now().live_bytes.cast_signed()
 }
 
 /// Bytes as mebibytes, for the report.
 #[expect(clippy::cast_precision_loss, reason = "a report figure")]
-fn mib(bytes: isize) -> f64 {
+fn mib(bytes: i64) -> f64 {
     bytes as f64 / (1024.0 * 1024.0)
 }
 
@@ -107,7 +64,7 @@ fn painter(text: &str) -> TextPainter {
 /// Live bytes one laid-out painter of `text` keeps, averaged over
 /// [`PAINTERS`] held at once. One painter is laid out first, so the
 /// context's own caches are warm and not counted.
-fn per_painter(context: &mut TextContext, text: &str) -> isize {
+fn per_painter(context: &mut TextContext, text: &str) -> i64 {
     painter(text)
         .layout(context, 0.0, WIDTH)
         .expect("benchmark text has valid layout inputs");
@@ -123,7 +80,7 @@ fn per_painter(context: &mut TextContext, text: &str) -> isize {
     }
     let after = live();
     drop(black_box(held));
-    (after - before - vec_bytes) / isize::try_from(PAINTERS).expect("small")
+    (after - before - vec_bytes) / i64::try_from(PAINTERS).expect("small")
 }
 
 fn main() {

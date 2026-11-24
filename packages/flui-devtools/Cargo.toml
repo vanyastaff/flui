@@ -22,8 +22,8 @@ autotests = false
 all-features = true
 
 [dependencies]
-# The package-author surface (ADR-0088 §4): `hooks::FrameSnapshot` for the
-# timeline's scheduler bridge and `foundation::observe` for the inspector's
+# The package-author surface (ADR-0088 §4): `foundation`'s ids for the capture's
+# partitions and the timeline's events, and `foundation::observe` for the inspector's
 # ADR-0040 seam. Devtools names no internal crate in a normal dependency.
 # Optional and owned by the three features that reach the framework: with
 # none of them on (`--no-default-features`, or `serde` alone) the crate names
@@ -44,6 +44,10 @@ serde_json = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 
+# `profiling` and `inspector`: the tables keyed by ids the process mints (the capture's
+# runtimes, the overlay's pointers) hash with FxHash, not SipHash.
+rustc-hash = { workspace = true, optional = true }
+
 [features]
 # Everything on: a crate that exists only to provide these three modules
 # gives its user nothing with an empty default. Release builds stay at zero
@@ -51,7 +55,7 @@ tracing-subscriber = { workspace = true, optional = true }
 default = ["profiling", "timeline", "inspector"]
 
 # Frame profiler. `tracing-subscriber` is what lets it be *fed*: an official
-# package cannot be called by the framework, so `FrameTimingLayer` subscribes
+# package cannot be called by the framework, so `Capture::layer` subscribes
 # to the frame spans the framework already emits.
 profiling = [
     "dep:flui-sdk",
@@ -59,6 +63,7 @@ profiling = [
     "dep:parking_lot",
     "dep:tracing",
     "dep:tracing-subscriber",
+    "dep:rustc-hash",
     "flui-sdk/animation-diagnostics",
 ]
 
@@ -70,7 +75,7 @@ profiling = [
 # own it compiles nothing, so the `serde` edge belongs to `timeline`.
 serde = []
 
-# Event timeline with Chrome-trace export and the FrameSnapshot bridge.
+# Event timeline with Chrome-trace and JSON export.
 timeline = [
     "dep:flui-sdk",
     "dep:web-time",
@@ -83,7 +88,7 @@ timeline = [
 # Counting/logging tree observer over the ADR-0040 observation seam, which
 # it reaches as `flui_sdk::foundation::observe`: its surface has no access
 # to the trees themselves.
-inspector = ["dep:flui-sdk", "dep:tracing"]
+inspector = ["dep:flui-sdk", "dep:tracing", "dep:rustc-hash"]
 
 # The complete inventory, kept as an explicit name for `cargo hack` runs.
 full = ["profiling", "timeline", "inspector"]
@@ -95,10 +100,8 @@ full = ["profiling", "timeline", "inspector"]
 flui-testing = { workspace = true }
 # The display whose refresh period the jank test puts its window on, as a runner does.
 flui-platform = { workspace = true }
-# The frame-snapshot test's address and epochs.
-flui-foundation = { workspace = true }
 # The capture unit test that drives a scheduler frame by hand, and the
-# frame-snapshot test's frame clock.
+# timeline tests' instants.
 flui-scheduler = { workspace = true }
 # The end-to-end tests' one-leaf tree: a `RenderView` over `RenderSizedBox`,
 # and the pipeline owner the inspector tests lay it out with. Neither is SDK surface.
@@ -112,7 +115,12 @@ flui-log = { workspace = true }
 # The observer-overhead bench.
 criterion = { workspace = true }
 
-# The inspector integration tests, as modules of one binary (tests/main.rs).
+# The inspector test that installs the counters through `AppConfig::dev_tree_observer` and runs
+# the application on the headless platform (`flui_app::testing`, a desktop-only kit).
+[target.'cfg(not(any(target_os = "android", target_os = "ios", target_arch = "wasm32")))'.dev-dependencies]
+flui-app = { workspace = true, features = ["testing"] }
+
+# The integration tests, as modules of one binary (tests/main.rs).
 [[test]]
 name = "devtools_it"
 path = "tests/main.rs"

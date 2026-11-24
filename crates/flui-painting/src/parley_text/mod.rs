@@ -12,13 +12,17 @@
 //!
 //! - `shape` — [`ParagraphSpec`] in, [`ParagraphLayout`] out, through
 //!   `TextContext::shape`.
+//! - `shape_cache` — the laid-out paragraphs a [`TextContext`](crate::TextContext)
+//!   keeps by their whole spec, shared with the next layout of the same one.
 //! - `caret` — the caret, selection, hit-test, line and word queries on a
 //!   [`ParagraphLayout`], in the painted box's coordinates.
 
 mod caret;
 mod shape;
+mod shape_cache;
 
 #[cfg(test)]
 pub(crate) use shape::holds_exactly;
 pub(crate) use shape::{DecoratedStretch, LinePlacement, SpanBrush, span_paint_color};
 pub use shape::{ParagraphLayout, ParagraphSpec};
+pub(crate) use shape_cache::ShapeCache;

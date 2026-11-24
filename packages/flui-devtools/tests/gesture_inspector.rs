@@ -9,9 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_devtools::gesture_inspector::{
-    ContestReport, GestureInspector, InspectedMember, MemberReport, Verdict,
-};
+use flui_devtools::{ContestReport, GestureInspector, InspectedMember, MemberReport, Verdict};
 use flui_sdk::foundation::ManualClock;
 use flui_sdk::foundation::geometry::Offset;
 use flui_sdk::interaction::{
@@ -24,7 +22,7 @@ use flui_testing::recording::{
 };
 use flui_testing::replay::{PointerScript, TouchScript};
 
-use flui_devtools::gesture_overlay::{GestureInspectorOverlay, GestureOverlayController};
+use flui_devtools::{GestureInspectorOverlay, GestureOverlayController};
 use flui_sdk::foundation::RebuildReason;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
@@ -325,6 +323,10 @@ fn gesture_overlay_contract() {
             "the_overlay_observes_only_while_mounted_and_shown",
             the_overlay_observes_only_while_mounted_and_shown,
         ),
+        (
+            "a_replaced_controller_hands_the_overlay_to_the_new_one",
+            a_replaced_controller_hands_the_overlay_to_the_new_one,
+        ),
     ]);
 }
 
@@ -355,6 +357,8 @@ struct Fixture {
     rebuild: Rc<RefCell<Option<RebuildHandle>>>,
     controller: GestureOverlayController,
     app_builds: Rc<Cell<u32>>,
+    /// The controller the root hands the overlay instead of `controller`, once set.
+    replacement: Rc<RefCell<Option<GestureOverlayController>>>,
 }
 
 impl Fixture {
@@ -364,6 +368,7 @@ impl Fixture {
             rebuild: Rc::default(),
             controller: GestureOverlayController::new(shown),
             app_builds: Rc::default(),
+            replacement: Rc::default(),
         }
     }
 
@@ -417,7 +422,9 @@ impl ViewState<Root> for RootState {
             builds: Rc::clone(&self.fixture.app_builds),
         };
         if self.fixture.mounted.get() {
-            GestureInspectorOverlay::new(self.fixture.controller.clone(), app).boxed()
+            let controller = self.fixture.replacement.borrow().clone();
+            let controller = controller.unwrap_or_else(|| self.fixture.controller.clone());
+            GestureInspectorOverlay::new(controller, app).boxed()
         } else {
             app.boxed()
         }
@@ -543,4 +550,30 @@ fn the_overlay_observes_only_while_mounted_and_shown() {
         fixture.controller.is_observing(),
         "remounted shown, it observes"
     );
+}
+
+fn a_replaced_controller_hands_the_overlay_to_the_new_one() {
+    let fixture = Fixture::new(true);
+    let mut host = fixture.host();
+    assert!(fixture.controller.is_observing());
+    let replacement = GestureOverlayController::new(false);
+    *fixture.replacement.borrow_mut() = Some(replacement.clone());
+    fixture.mount(&mut host, true);
+    assert!(
+        !fixture.controller.is_observing() && !replacement.is_observing(),
+        "the old controller's observer is released, and the new one is hidden"
+    );
+
+    fixture.controller.toggle();
+    fixture.controller.toggle();
+    let _ = host.pump(Duration::from_millis(16));
+    assert!(
+        !fixture.controller.is_observing(),
+        "the old controller no longer drives the overlay"
+    );
+    replacement.set_shown(true);
+    let _ = host.pump(Duration::from_millis(16));
+    assert!(replacement.is_observing(), "the new controller shows it");
+    tap(&mut host, 50.0, 50.0);
+    assert_eq!(contest_headers(&host).len(), 1);
 }

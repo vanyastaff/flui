@@ -7,15 +7,25 @@ and callbacks are owner-local; the package does not own a reactive graph.
 
 ### Button fade ownership follows its presentation clock
 
-The button owns one controller across both legs of its tap fade. A scope
-replacement transfers that owner without restarting its displayed sample.
-The press leg's completion starts the release once; disposal withdraws the
-active owner before retained callbacks can attempt another run.
+The button owns one controller, made at the first press that fades, across
+both legs of its press fade. The fade follows the press: the tap's down
+holds the button and its up or cancel releases it. A leg that is running is
+never cut short; the leg that completes starts the next only when the held
+side changed meanwhile, and a leg that ends cancelled starts nothing, so a
+press never starts a stale release. A key activation or an assistive click
+has no contact: it runs the handler and leaves the opacity as it is. A
+scope replacement transfers the owner without restarting its displayed
+sample; disposal withdraws the active owner, whose running leg then ends
+cancelled.
 
 `an_active_button_press_fade_migrates_and_retires` and
 `an_active_button_release_fade_migrates_and_retires` exercise pointer taps,
 mid-leg registry replacement, continuous compositing alpha, progress from the
 new clock, resting frame demand and unmount during another active fade.
+`the_press_fade_follows_the_held_contact_and_a_cancelled_press_restores_it`
+holds, releases, moves out and cancels a press, and
+`a_contactless_activation_runs_the_handler_without_a_fade` clicks it through the
+accessibility tree.
 
 ### Typography defaults select numeric growth independently of authored fonts
 
@@ -30,19 +40,58 @@ styles through a mounted CupertinoTheme and checks actual painted glyph sizes
 and restored layout through MediaQuery publication. It does not establish
 UIKit font identity, optical sizing or native execution.
 
-### Palette resolution shares brightness precedence and contrast dependencies
+### Palette resolution shares brightness precedence and selective dependencies
 
-Standalone dynamic colors, theme materialization and text roles use one private
-color resolver. A theme's explicit brightness wins even before that theme is
-installed as an ancestor; contrast follows the nearest `MediaQuery`. Static
-colors remain authored values. Dynamic colors subscribe only to relevant media
-fields, so unrelated window size changes do not rerun their resolution.
+`CupertinoColors` is UIKit's palette as Flutter carries it, every value
+Flutter's. Standalone dynamic colors, theme resolution and text roles pick a
+variant through one private color resolver, from the effective brightness, the
+interface level and the contrast preference. A theme's explicit brightness wins
+even before that theme is installed as an ancestor; the level follows the
+nearest `CupertinoUserInterfaceLevel`, base without one; contrast follows the
+nearest `MediaQuery`. Static colors remain authored values. A standalone
+dynamic color subscribes only to the inputs it varies along, so unrelated
+window size or level changes do not rerun its resolution; a theme reads
+brightness, level, contrast and the system accent once for all its colors.
+Nothing in this package installs an elevated level: the dialogs and sheets
+that do in Flutter are not in this catalog, and an application installs one
+over what it presents above its main content.
 
 `retained_colors_follow_contrast_and_explicit_brightness` and
 `authored_and_nested_colors_ignore_outer_contrast` pin retained-tree behavior.
-`explicit_app_brightness_applies_to_live_contrast_colors` checks the app's
-published palette and text roles during live contrast changes. Elevation
-variants remain stored but unresolved; no interface-level source is implemented.
+`explicit_app_brightness_applies_to_live_contrast_colors` checks the palette and
+text roles an app's descendants read during live contrast changes.
+`palette_constants_resolve_to_flutters_values` holds a sample of the palette to
+Flutter's values, `an_elevated_level_picks_the_elevated_variants` the level's
+selection, its live change and its selective dependency, and
+`a_theme_below_an_elevated_level_resolves_apart` the theme resolution keyed by
+the level.
+
+### A theme is resolved once per set of inputs and read by field
+
+`CupertinoThemeData` is what an author writes, each `None` the iOS default;
+`ResolvedCupertinoTheme` is what widgets read, its colors concrete and its nine
+text roles built. They are two types because a concrete color is a different
+type from a dynamic one: a resolved theme cannot be resolved again or compared
+with its source by mistake.
+
+`CupertinoTheme` keeps the resolutions its readers asked for in a cache its
+view value owns, so a clone of the view shares it. The key is every input
+resolution reads: the effective brightness, the interface level, the contrast
+preference and the system accent when it applies. Resolution under a key reads
+nothing else from the context, so the key is complete by construction. The
+cache holds eight entries, the brightness, level and contrast combinations,
+and evicts the oldest. Readers under the same inputs share one `Rc`;
+`CupertinoTheme::of` without an ancestor theme resolves the default afresh.
+The default roles share one process-wide copy of their family names, which is
+immutable data.
+
+`CupertinoApp` publishes the authored data, not a resolution of it, so a nested
+`MediaQuery` that changes brightness or contrast changes the theme below it.
+
+`readers_under_one_context_share_one_resolution`,
+`a_nested_media_query_resolves_the_app_theme_below_it` and
+`every_text_role_set_on_the_theme_reaches_a_reader` pin the sharing, the nested
+resolution and the nine settable roles.
 
 ### Event callbacks borrow the originating dispatch's write context
 
@@ -52,8 +101,9 @@ forward their context without opening a new writer. `CupertinoTabScaffold`
 updates its controller before forwarding the same context and selected
 index to the caller. Tab builders remain read-only queries.
 
-The button's press animation starts before its callback. The integration
-test `tap_callback_writes_a_signal_and_rebuilds_its_reader` drives the mounted
+The button's press animation starts before its callback, and the callback
+runs with no borrow of the button's state held. The integration test
+`tap_callback_writes_a_signal_and_rebuilds_its_reader` drives the mounted
 button through pointer dispatch and checks the signal and subsequent rebuild.
 
 ### Tab selection uses the current bar's bounds
@@ -82,10 +132,26 @@ behaviours and its semantics are one interactive node (ADR-0322 §1), as
 that enabled state, including for disabled buttons whose text label merges
 into the node, and its press group offers the tap as the click and the long
 press as the context menu. No separate accessibility state is introduced.
+The same node hosts the button's focus node, draws the inherited focus ring
+and binds `ActivateIntent` and `ButtonActivateIntent` to the press, as
+`InkWell` does; the switch keeps a disabled button from taking focus and
+leaves its bindings declared and switched off.
 
 The `component_contracts` family checks the labelled tap button,
 `long_press_only_button_announces_enabled`, and
-`disabled_button_announces_disabled` through the emitted accessibility tree.
+`disabled_button_announces_disabled` through the emitted accessibility tree,
+and `the_activation_key_presses_a_focused_button_and_a_disabled_one_takes_no_focus`
+through a `Tester`'s Tab and Enter.
+
+### A button's fill keeps its resolved alpha
+
+A plain or filled button paints its colour as the ambient brightness and
+contrast resolve it, alpha included; only a tinted button replaces the alpha,
+with its fixed light or dark opacity. Flutter multiplies the fill by the
+unresolved colour's opacity, the light variant's, which paints a dark-mode
+`SEPARATOR` fill at alpha 73 instead of 153.
+`a_plain_button_paints_its_resolved_colour_with_its_own_alpha` checks both
+brightnesses.
 
 ### The app plays the shared parallax slide for its routes
 
@@ -118,3 +184,90 @@ slide and its chrome through `CupertinoApp::router`.
 the window, the announced value, right-to-left order and reduced motion are the indicator's, so
 the two cannot drift apart. `the_control_draws_ios_dots_and_turns_its_pager` pins the look and
 the paging through this package's public entry point.
+
+### A bar's background decides what it obstructs
+
+`CupertinoNavigationBar` and `CupertinoTabBar` implement
+`ObstructingPreferredSizeView`: a bar fully obstructs when its background,
+resolved for the context, is fully opaque. The scaffolds ask on every build,
+so a theme or brightness change that makes the bar translucent moves the
+content under it on the next frame. Under a bar that fully obstructs, the
+content is padded clear of it and the obstructed edge's `MediaQuery` padding
+is consumed; under one that does not, the content runs under the bar and reads
+the bar's height plus the safe-area inset as that edge's padding.
+`CupertinoPageScaffold` takes any implementor and erases it into a
+`BoxedView`; beside it the scaffold keeps a function made for the bar's type
+that finds the bar again in that view and asks it, so the scaffold holds one
+copy of the bar and needs no `Clone` bound. `CupertinoTabScaffold` holds its
+concrete `CupertinoTabBar` and asks it directly.
+
+A translucent bar blurs its backdrop with a sigma-10 Gaussian blur. The
+filter is mounted under every bar and switched off while the background is
+fully opaque, as Flutter's navigation bar keeps a disabled filter: a bar whose
+background crosses full opacity keeps its subtree's shape, so its slots keep
+their elements, a leading button its press fade and focus. Flutter's tab bar
+adds the filter only when translucent; here both bars keep it. Flutter clips
+the filter with a `ClipRect`; FLUI's `BackdropFilter` already covers only its
+child's laid-out box, so the bars add no clip.
+
+The bars' default border is one device pixel: `1 / device_pixel_ratio`
+logical pixels under the ambient `MediaQuery`. Flutter writes width `0.0` for
+a hairline; `flui-painting` paints nothing for a side of width `0.0`. The
+default is a state of the bar's border, resolved in `build`, beside an
+authored border and a removed one.
+
+The navigation bar lays out its slots with a private toolbar delegate:
+`leading` at the start edge, `trailing` at the end, and `middle` centred on
+the full width while it keeps 6 points from both, otherwise moved toward the
+side with room and limited to the space between them. Flutter's
+`NavigationToolbar` keeps that spacing from `leading` only; here it holds on
+both sides.
+
+`the_default_border_is_one_device_pixel`,
+`the_default_border_is_a_hairline_and_border_replaces_it`,
+`the_middle_is_centred_until_it_would_reach_a_side`,
+`a_translucent_bar_blurs_its_backdrop_and_an_opaque_one_does_not`,
+`a_bar_whose_background_crosses_full_opacity_keeps_its_slots_state` and
+`content_runs_under_a_translucent_bar_and_below_an_opaque_one` pin the
+hairline, the layout, the blur and the obstruction.
+
+### States are born bound
+
+A state reads what it is driven by in `create_state`, which receives the same
+`LifecycleContext` as `init_state`: the button's ambient clock, the activity
+indicator's controller on the ambient `VsyncScope`, and the tab scaffold's
+build phase, to which it binds the view's controller there. None of them
+implements `init_state`. The button keeps its clock as an `Option` because
+"no `VsyncScope` above" is a state it can be in, not a slot waiting for
+`init_state`. `did_change_dependencies` rebinds the clocks and
+`did_update_view` binds a controller a rebuild swaps in.
+
+The tab scaffold's phase is its element tree's, so a controller shared by two
+scaffolds of one tree, or left behind by a disposed one, still refuses writes
+during any build of that tree. A controller holds one phase: shared by
+scaffolds of two trees, it checks the tree that bound it last.
+
+`controller_mutation_during_build_is_refused` and
+`a_swapped_in_controller_refuses_writes_during_build` pin the binding at birth
+and on a swap.
+
+### The activity indicator's run follows its view
+
+`CupertinoActivityIndicator` takes a radius (a square of twice it), a colour and
+`animating`, and `partially_revealed(progress)` shows the first
+`ceil(8 · progress)` ticks clockwise at alpha 147 and never animates, as
+Flutter's `i < 8 · progress`. Flutter asserts a positive radius and a progress
+in `0..=1`; here an invalid radius keeps the default 10, a progress above 1 is
+read as 1, and one below 0 or NaN as 0, so neither reaches paint. A partially
+revealed indicator publishes its progress as a percentage with a 0–100 range,
+as a determinate progress bar does.
+
+`ViewState::apply_view` starts and stops the run: it runs before the first
+build and after each view or dependency change, so one place holds the rule
+that the controller runs exactly while the view animates and a clock is
+present. Flutter's `stop` freezes the ticks mid-cycle; here a stopped indicator
+paints the rest pose that reduced motion and a disabled `TickerMode` paint.
+
+`radius_and_color_size_and_tint_the_ticks`,
+`animating_starts_and_stops_a_mounted_indicator` and
+`partially_revealed_shows_still_ticks_for_its_progress` pin the options.

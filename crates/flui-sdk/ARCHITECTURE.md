@@ -22,8 +22,7 @@ does.
   module or submodule the facade does not have (`pipeline`, `hooks`, `interaction::text_input`),
   or inside a whole-crate module (`foundation`, `animation`, `view`, `widgets`) whose shared
   items keep the facade's paths. The facade's own `foundation` is curated, so the SDK's whole
-  `foundation` holds more than the facade's does; the facade's `scheduler` is curated and lacks
-  `FrameSnapshot`, which sits in `hooks`.
+  `foundation` holds more than the facade's does.
 - **The composition-root seam is private.** The SDK's `view` module shadows
   `flui_view::__runtime`, and its `animation` module shadows `flui_animation::__runtime`.
   `trybuild_ui::ui_tests` in `tests/compiler_guards.rs` checks the exact E0603 diagnostic
@@ -37,8 +36,8 @@ does.
   removing one fails to build.
 - **Evolving surface under the ceiling.** `pipeline` and `hooks` are Evolving. ADR-0088 §4
   revisits the crate when its Evolving surface beyond the hooks passes about thirty items; today
-  that is the one item of `pipeline`. `hooks` holds development hooks (the frame snapshot
-  devtools reads and the plugin ABI hot reload mounts) and sits outside the count.
+  that is the one item of `pipeline`. `hooks` holds development hooks (the plugin ABI hot reload
+  mounts) and sits outside the count.
 - **Own version.** `version = "0.N"`, not the workspace's: an evolving crate neither inherits
   the version nor leaves major 0.
 - **One train per graph.** The guard is not here: `flui-foundation` declares
@@ -87,9 +86,8 @@ crate.
     `interaction::drag`, drag and drop (ADR-0211).
 - **Evolving modules**, absent from the facade:
   - `pipeline`: render internals (`ScrollDirection`).
-  - `hooks`: `FrameSnapshot`, which [no public API produces](../../docs/gaps.md#development-tooling-reads-frame-snapshots-nothing-public-produces),
-    and the plugin ABI of `flui-hot-reload`'s dlopen path (ADR-0311 §6), which leaves with that
-    path (ADR-0311 §7).
+  - `hooks`: the plugin ABI of `flui-hot-reload`'s dlopen path (ADR-0311 §6), which leaves with
+    that path (ADR-0311 §7).
   - `interaction::text_input`: what a text widget's store is built from, the lock arbiter, the
     composition ledger, `committed_text` and the edit count (ADR-0151 §6).
 
@@ -111,8 +109,8 @@ pointer events and `GestureEndReason` (ADR-0112) in `interaction`, and
   (ADR-0195) through `view::environment::MediaQuery::motion_of`.
 - **`flui-devtools`** (`packages/flui-devtools`) builds on this crate alone: its normal
   dependencies are `flui-sdk` plus `parking_lot`, `serde`, `serde_json`, `tracing`,
-  `tracing-subscriber` and `web-time`. Its timeline turns `hooks::FrameSnapshot` into
-  Chrome-trace events, and its inspector's observation seam (ADR-0040) is
+  `tracing-subscriber` and `web-time`. Its capture reads the frame spans and frame telemetry the
+  framework traces, its ids are `foundation`'s, and its inspector's observation seam (ADR-0040) is
   `foundation::observe` and `foundation::RebuildReason`.
 - **`flui-hot-reload`** (`packages/flui-hot-reload`) builds on this crate alone (ADR-0311 §6):
   its normal dependencies are `flui-sdk`, `tracing` and, behind `app-plugin`, `parking_lot`,

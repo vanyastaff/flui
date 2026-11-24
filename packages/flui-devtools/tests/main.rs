@@ -1,11 +1,15 @@
-//! flui-devtools' inspector integration tests, compiled as modules of one
-//! binary. The frame-profile test and the agent endpoint keep their own
-//! `[[test]]` targets: they write process-global state (see `Cargo.toml`).
+//! flui-devtools' integration tests, compiled as modules of one binary. The
+//! frame-profile test keeps its own `[[test]]` target: it re-runs itself in a
+//! child process (see `Cargo.toml`).
 
 #![allow(
     clippy::disallowed_methods,
     reason = "test code catches a panic to assert on it (ADR-0303 §5)"
 )]
-mod frame_snapshots;
+mod capture_sinks;
+mod dev_tree_observer;
 mod gesture_inspector;
+mod produced_frames;
+mod profiler;
+mod timeline;
 mod tree_observer_inspector;

@@ -66,9 +66,9 @@ impl OffscreenRenderer {
             });
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("Present Transform Shader"),
-                source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../shaders/effects/present_transform.wgsl").into(),
-                ),
+                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
+                    crate::shaders::PRESENT_TRANSFORM,
+                )),
             });
             let vertex_layout = wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<FullscreenVertex>() as wgpu::BufferAddress,

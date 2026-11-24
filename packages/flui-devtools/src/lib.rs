@@ -3,16 +3,18 @@
 //! framework already exposes, so nothing here reaches into a widget, element
 //! or render tree:
 //!
-//! - **`profiling`** — [`Profiler`] with per-phase frame statistics, fed by
-//!   [`FrameTimingLayer`], a `tracing` layer that subscribes to the `frame`
-//!   span `UpdateScheduler::drive_frame` opens and the `build`/`layout`/
-//!   `paint`/`compositing` spans the pipeline emits inside it.
-//! - **`timeline`** — [`timeline::Timeline`], an event recorder with Chrome
-//!   trace export and a bridge from the scheduler's `FrameSnapshot`s.
-//! - **`inspector`** — [`gesture_inspector::GestureInspector`], which reports
+//! - **`profiling`** — [`Capture`], the one recorder of the framework's frame
+//!   spans and frame telemetry (its [`layer`](Capture::layer) subscribes to the `frame` span
+//!   `UpdateScheduler::drive_frame` opens, the [`Phase`] spans the pipeline
+//!   emits inside it, and the `frame_telemetry` events the runtime traces for each
+//!   [`ProducedFrame`]), and [`Profiler`], per-frame statistics read from a capture.
+//! - **`timeline`** — [`Timeline`], an event recorder with Chrome
+//!   trace export; over a capture it shows the framework's frames, phases and produced frames
+//!   beside the application's events.
+//! - **`inspector`** — [`GestureInspector`], which reports
 //!   what a gesture arena decided per contest through `GestureObserver`, and
-//!   [`gesture_overlay::GestureInspectorOverlay`], a debug overlay that draws
-//!   those contests over the app, and [`inspector::InspectorCounters`], a counting
+//!   [`GestureInspectorOverlay`], a debug overlay that draws
+//!   those contests over the app, and [`InspectorCounters`], a counting
 //!   `TreeObserver` over the ADR-0040 observation seam: mounts, moves,
 //!   rebuilds per cause, unmounts.
 //!
@@ -27,41 +29,51 @@
 //! # Profiling a running app
 //!
 //! ```no_run
-//! use std::sync::Arc;
-//!
-//! use flui_devtools::{FrameTimingLayer, Profiler};
+//! use flui_devtools::{Capture, Profiler, ProfilerConfig};
 //! use flui_log::config::LogConfig;
 //! use flui_log::ownership::{InstallPolicy, LogBridgePolicy, install_subscriber};
 //! use tracing_subscriber::layer::SubscriberExt;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let profiler = Arc::new(Profiler::new());
-//! // FLUI's own log subscriber, with the profiler layer beside it. The layer
+//! let capture = Capture::new();
+//! // FLUI's own log subscriber, with the capture layer beside it. The layer
 //! // carries its own filter, so the log filter's level does not affect it.
-//! let subscriber = LogConfig::default()
-//!     .subscriber()?
-//!     .with(FrameTimingLayer::new(Arc::clone(&profiler)));
+//! let subscriber = LogConfig::default().subscriber()?.with(capture.layer());
 //! install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::Auto)?;
+//! let profiler = Profiler::over(&capture, ProfilerConfig::default());
 //! // ...run the app; `flui-app` inherits an installed subscriber...
 //! if let Some(frame) = profiler.frame_stats() {
-//!     println!("last frame: {:.2} ms", frame.total_time_ms());
+//!     println!("{frame}");
+//! }
+//! if let Some(rate) = profiler.frame_rate() {
+//!     println!("{rate:.1} frames per second");
 //! }
 //! # Ok(())
 //! # }
 //! ```
 //!
+//! # Frame telemetry and build levels
+//!
+//! The spans a capture reads are `DEBUG`; the `frame_telemetry` and `frame_gpu_time` events
+//! behind each [`ProducedFrame`] are `TRACE`. Today the framework sets no `max_level_*` feature
+//! (ADR-0242 §7), so a release build still traces them for a capture that asks. A build that
+//! caps `tracing` below `TRACE` (a `max_level_*` or `release_max_level_*` feature) compiles the
+//! two events out, and its capture then records no produced frames; one capped below `DEBUG`
+//! loses the spans too.
+//!
 //! # Feature flags
 //!
 //! The first three are on by default; disable what you do not need.
 //!
-//! - `profiling`: [`Profiler`] and [`FrameTimingLayer`] (`tracing` +
-//!   `tracing-subscriber`).
-//! - `timeline`: [`timeline`] (`flui_sdk::hooks::FrameSnapshot` for the
-//!   scheduler bridge, `serde` for the exporters).
-//! - `inspector`: [`inspector`] (`flui_sdk::foundation::observe` for the
-//!   seam), [`gesture_overlay`] (`flui_sdk::widgets`) and [`gesture_inspector`] (`flui_sdk::interaction`'s arena
+//! - `profiling`: [`Capture`] and [`Profiler`] (`tracing` + `tracing-subscriber`).
+//! - `timeline`: [`Timeline`], [`TimelineEvent`] and [`TimelineEventKind`]
+//!   (`serde` for the exporters); with `profiling`, [`Timeline::over`] reads a capture.
+//! - `inspector`: [`InspectorCounters`] (`flui_sdk::foundation::observe` for the
+//!   seam), [`GestureInspectorOverlay`] (`flui_sdk::widgets`) and [`GestureInspector`] (`flui_sdk::interaction`'s arena
 //!   observation).
 //! - `full`: all of the above, as one name for feature-matrix runs.
+//!
+//! [`Phase`] comes with `profiling` or `timeline`.
 
 #![cfg_attr(
     test,
@@ -73,49 +85,45 @@
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
+// A table keyed by ids the process mints hashes with FxHash, not SipHash.
+#![warn(clippy::disallowed_types)]
 
-/// The one capture of frame spans every profiling tool reads.
+// Reads the framework's own frame spans: the only seam layering permits, since nothing in the
+// framework may depend on this crate.
 #[cfg(feature = "profiling")]
-pub mod capture;
-/// Feeds the profiler from the framework's own frame spans — the only seam
-/// layering permits, since nothing in the framework may depend on this crate.
-#[cfg(feature = "profiling")]
-pub mod frame_timing_layer;
+mod capture;
 #[cfg(feature = "inspector")]
-pub mod gesture_inspector;
+mod gesture_inspector;
 #[cfg(feature = "inspector")]
-pub mod gesture_overlay;
+mod gesture_overlay;
 #[cfg(feature = "inspector")]
-pub mod inspector;
-/// Which spans are frame phases.
+mod inspector;
+#[cfg(any(feature = "profiling", feature = "timeline"))]
+mod phase;
 #[cfg(feature = "profiling")]
-pub mod phase;
-#[cfg(feature = "profiling")]
-pub mod profiler;
+mod profiler;
 #[cfg(feature = "timeline")]
-pub mod timeline;
+mod timeline;
 
 #[cfg(feature = "profiling")]
-pub use capture::{Capture, CaptureLayer, CapturedFrame, CapturedSpan, FrameOpening, Partition};
-#[cfg(feature = "profiling")]
-pub use frame_timing_layer::FrameTimingLayer;
-#[cfg(feature = "profiling")]
+pub use capture::{
+    Capture, CaptureLayer, CaptureLimits, CaptureSubscription, CapturedFrame, CapturedSpan,
+    FrameOutcome, FrameSpanFilter, Partition, ProducedFrame,
+};
+#[cfg(feature = "inspector")]
+pub use gesture_inspector::{
+    CompositionStep, ContestReport, DEFAULT_MAX_CONTESTS, DeadlineReport, GestureInspector,
+    InspectedComposition, InspectedMember, MemberReport, Verdict,
+};
+#[cfg(feature = "inspector")]
+pub use gesture_overlay::{
+    CONTEST_FADE, GestureInspectorOverlay, GestureInspectorOverlayState, GestureOverlayController,
+};
+#[cfg(feature = "inspector")]
+pub use inspector::{InspectorCounters, InspectorSnapshot};
+#[cfg(any(feature = "profiling", feature = "timeline"))]
 pub use phase::Phase;
 #[cfg(feature = "profiling")]
-pub use profiler::{JankLine, Profiler, ProfilerConfig};
-
-/// Prelude module for convenient imports
-///
-/// ```rust
-/// use flui_devtools::prelude::*;
-/// ```
-pub mod prelude {
-    #[cfg(feature = "profiling")]
-    pub use crate::frame_timing_layer::FrameTimingLayer;
-    #[cfg(feature = "inspector")]
-    pub use crate::inspector::{InspectorCounters, InspectorSnapshot};
-    #[cfg(feature = "profiling")]
-    pub use crate::profiler::{FramePhase, FrameStats, JankLine, Profiler, ProfilerConfig};
-    #[cfg(feature = "timeline")]
-    pub use crate::timeline::{Timeline, TimelineEvent};
-}
+pub use profiler::{FrameStats, JankLine, PhaseTiming, Profiler, ProfilerConfig};
+#[cfg(feature = "timeline")]
+pub use timeline::{EventGuard, Timeline, TimelineEvent, TimelineEventKind};

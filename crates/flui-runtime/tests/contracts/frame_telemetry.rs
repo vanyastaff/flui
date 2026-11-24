@@ -92,14 +92,17 @@ fn frames_of_two_ui_runtimes_name_their_runtime() {
         Some(second.id().as_u64().to_string().as_str()),
         "the second runtime's frame names the second runtime"
     );
+    // The ids are the packed numbers a reader rebuilds the typed ids from (ADR-0242 §7), not
+    // their display text.
     assert_eq!(
         first_event.1.as_deref(),
-        Some(first.presentation_id().to_string().as_str())
+        Some(first.presentation_id().as_u64().to_string().as_str())
     );
     assert_eq!(
         second_event.1.as_deref(),
-        Some(second.presentation_id().to_string().as_str())
+        Some(second.presentation_id().as_u64().to_string().as_str())
     );
+    assert_eq!(first_event.2.as_deref(), Some("1"), "a frame is its number");
 }
 
 /// A sink that presents each frame and, like a GPU slot, hands back its first frame's
@@ -208,6 +211,11 @@ fn a_frames_gpu_time_is_traced_once_it_arrives() {
     assert_eq!(
         timed[0].field("ui_runtime_id"),
         Some(runtime.id().as_u64().to_string().as_str())
+    );
+    assert_eq!(
+        timed[0].field("presentation"),
+        Some(runtime.presentation_id().as_u64().to_string().as_str()),
+        "the presentation is its packed number"
     );
     assert_eq!(
         timed[1].field("gpu_us"),

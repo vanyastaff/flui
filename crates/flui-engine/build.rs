@@ -28,7 +28,7 @@
 //! compiler into plain WGSL at `OUT_DIR/shaders/<same path>.wgsl`, before any
 //! binding is generated, so:
 //!
-//! - the pipelines include that finished WGSL (`shaders::composed_wgsl!`), and
+//! - the pipelines compile that finished WGSL (a constant of `shaders`), and
 //!   no shader composer runs or ships at run time;
 //! - `wgsl_bindgen` reads the composed copy and never resolves an import
 //!   itself. Its workspace root for `effects/mode.wgsl` is the composed
@@ -36,6 +36,16 @@
 //!
 //! Only the uniform structs + bind-group layout are taken from the generated
 //! bindings.
+//!
+//! ## Shader text for the binary
+//!
+//! A pipeline hands WGSL text to the GPU API, so the text is linked into every
+//! application. `stripped::write_copies` writes each file of `src/shaders/` to
+//! `OUT_DIR/wgsl/<same path>` without its line comments, indentation and blank
+//! lines, and the composed shaders are written the same way; the pipelines
+//! include those copies through the constants of `shaders`, never a source file.
+//! It empties the directory it writes first, so the copy of a shader that was
+//! renamed or deleted does not outlive it.
 //!
 //! ## Inner-attribute post-processing
 //!
@@ -45,6 +55,10 @@
 //! `include!` compiles cleanly inside the `<name>_gen` inline module
 //! (where suppression is applied via the wrapping `#[allow(...)]` attribute on
 //! the `mod` item).
+
+// Shared with the crate, whose tests are where it is tested.
+#[path = "src/shaders/stripped.rs"]
+mod stripped;
 
 use std::{
     env, fs,
@@ -147,8 +161,8 @@ const SHADER_CONFIGS: &[ShaderConfig] = &[
 /// `src/shaders/` (`effects/mode` is `effects/mode.wgsl`).
 ///
 /// `compose_wesl_shaders` resolves each one into plain WGSL at
-/// `OUT_DIR/shaders/<path>.wgsl`; the runtime pipelines include that output
-/// through `shaders::composed_wgsl!`, and `wgsl_bindgen` reads it too.
+/// `OUT_DIR/shaders/<path>.wgsl`; the constants of `shaders` include that output
+/// and `wgsl_bindgen` reads it too.
 const WESL_ENTRIES: &[&str] = &[
     "advanced_blend",
     "effects/color_matrix",
@@ -261,6 +275,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let composed_root = out_dir.join("shaders");
     compose_wesl_shaders(&shader_root, &composed_root)?;
+    // A pipeline hands its shader text to the GPU API as it is, so the text is
+    // linked into every application: the sources carry more comment than code,
+    // the copies the code alone.
+    stripped::write_copies(
+        &out_dir.join("wgsl"),
+        &stripped::read_sources(&shader_root)?,
+    )?;
 
     for cfg in SHADER_CONFIGS {
         let entry_path = effects_dir.join(cfg.shader_name);
@@ -315,6 +336,7 @@ fn compose_wesl_shaders(
     };
     let compiler =
         wesl::Compiler::new_with_resolver(options, wesl::resolver::FileResolver::new(shader_root));
+    let mut composed_sources = Vec::with_capacity(WESL_ENTRIES.len());
     for entry in WESL_ENTRIES {
         let module_path = format!("package::{}", entry.replace('/', "::"))
             .parse::<wesl::syntax::ModulePath>()
@@ -322,13 +344,9 @@ fn compose_wesl_shaders(
         let composed = compiler
             .compile_module(&module_path)
             .map_err(|error| format!("composing `{entry}` with WESL:\n{error}"))?;
-        let out_path = composed_root.join(format!("{entry}.wgsl"));
-        if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&out_path, composed.to_string())?;
+        composed_sources.push((PathBuf::from(format!("{entry}.wgsl")), composed.to_string()));
     }
-    Ok(())
+    stripped::write_copies(composed_root, &composed_sources)
 }
 
 /// Join a path fragment relative to `base`, treating the empty string as `base`.

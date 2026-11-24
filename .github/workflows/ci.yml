@@ -648,6 +648,33 @@ jobs:
       - name: Require the AT-SPI bus
         run: echo "FLUI_REQUIRE_ATSPI=1" >> "$GITHUB_ENV"
 
+      # A test process that dies on a signal leaves nextest only "aborted
+      # with signal 11", and a crash inside the software Vulkan driver does
+      # not reproduce off the runner. From here on the kernel hands the core
+      # of every process that dies on SIGILL, SIGBUS, SIGFPE or SIGSEGV to
+      # this script, which keeps it with the path of its executable; the last
+      # steps of the job print every thread's stack from each one. A core goes
+      # to a pipe whatever the process's RLIMIT_CORE, and other signals (a
+      # test of an abort) keep nothing.
+      - name: Keep the core of a process that crashes
+        run: |
+          set -euo pipefail
+          cores="$RUNNER_TEMP/cores"
+          mkdir -p "$cores"
+          sudo tee /usr/local/sbin/flui-keep-core > /dev/null << EOF
+          #!/bin/sh
+          # Arguments: the signal, the process id, the executable's path with ! for /.
+          case "\$1" in
+            4|7|8|11)
+              umask 022
+              echo "\$3" | tr '!' '/' > "$cores/core.\$2.exe"
+              exec cat > "$cores/core.\$2" ;;
+            *) exec cat > /dev/null ;;
+          esac
+          EOF
+          sudo chmod 755 /usr/local/sbin/flui-keep-core
+          echo '|/usr/local/sbin/flui-keep-core %s %p %E' | sudo tee /proc/sys/kernel/core_pattern
+
       # The native Wayland host's tests (a step apart from the Xvfb suite)
       # need a compositor: a headless Weston on a socket
       # of its own. `FLUI_REQUIRE_WAYLAND` turns a missing compositor into a
@@ -683,12 +710,42 @@ jobs:
       # (groups `nested-cargo` and `trybuild` in .config/nextest.toml) run on
       # main in test-nested and test-trybuild. nextest gives each test its own
       # process, so a test that mutates a genuinely process-global resource
-      # needs a lock scoped to its module (AGENTS.md).
+      # needs a lock scoped to its module (AGENTS.md). The perf scenarios hold
+      # their counts to the baseline files beside them (ADR-0396 §2), which
+      # are blessed with these features and this opt-level
+      # (`flui_testing::perf::BLESS_COMMAND`), and write each record to
+      # FLUI_PERF_OUT for the step after this one.
       - name: cargo nextest run (the workspace but flui-native)
         run: >-
           cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast
           --lib --bins --tests --features "$TEST_FEATURES"
           -E 'not (group(nested-cargo) | group(trybuild))'
+        env:
+          FLUI_PERF_BASELINE: check
+          FLUI_PERF_OUT: ${{ runner.temp }}/perf-records
+
+      # The scenarios hold only what they ran: a baseline file with no record
+      # is a scenario that no longer runs or no longer reaches its hold, and
+      # fails here. A record that differs from its file in a cost that fell
+      # passed the step above; its diff is printed so a bless on main follows.
+      - name: Every perf baseline file was held, and what moved
+        if: ${{ !cancelled() }}
+        env:
+          RECORDS: ${{ runner.temp }}/perf-records
+        run: |
+          set -euo pipefail
+          counts() { grep -v '^#' "$1" | sed '/^$/d'; }
+          failed=0
+          for file in crates/*/perf/baseline/*.toml packages/*/perf/baseline/*.toml; do
+            record="$RECORDS/$(basename "$file")"
+            if [ ! -f "$record" ]; then
+              echo "::error::no scenario reached its baseline hold for $file in this run: it stopped running, failed before holding, or the mode variable is unset"
+              failed=1
+            elif ! diff -u --label "$file" --label "this run" <(counts "$file") <(counts "$record"); then
+              echo "::notice::$(basename "$file" .toml) moved: the step above judged it (a cost that fell passes there and is lowered by a bless on main)"
+            fi
+          done
+          exit "$failed"
 
       # flui-native with every feature (the test kits and the native capture
       # are off under `default = ["desktop"]`). The Xvfb runs with
@@ -805,6 +862,38 @@ jobs:
           path: "**/*.snap.new"
           if-no-files-found: ignore
           retention-days: 7
+
+      # The cores "Keep the core of a process that crashes" kept, read with
+      # gdb. Ubuntu's debuginfod serves the symbols of Mesa and the other
+      # archive libraries, so a frame inside the driver is named too.
+      - name: Did a process crash
+        id: crashed
+        if: failure()
+        run: |
+          if compgen -G "$RUNNER_TEMP/cores/core.*.exe" > /dev/null; then
+            echo "cores=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install gdb (a process crashed)
+        if: failure() && steps.crashed.outputs.cores == 'yes'
+        uses: ./.github/actions/apt-install
+        with:
+          packages: gdb
+          commands: gdb
+
+      - name: Every thread's stack of each crashed process
+        if: failure() && steps.crashed.outputs.cores == 'yes'
+        env:
+          DEBUGINFOD_URLS: https://debuginfod.ubuntu.com
+        run: |
+          for exe_file in "$RUNNER_TEMP"/cores/core.*.exe; do
+            core="${exe_file%.exe}"
+            exe="$(cat "$exe_file")"
+            echo "::error::$exe crashed; its stacks follow ($(basename "$core"))"
+            timeout 900 gdb -batch -nx -ex 'set debuginfod enabled on' -ex 'set pagination off' \
+              -ex 'thread apply all bt' "$exe" "$core" 2>&1 \
+              | grep -v '^Download' || true
+          done
 
   # ─────────────────────────────────────────────────────────────────────────
   # Nested cargo tests run in two parallel jobs: generated projects and
@@ -1089,15 +1178,11 @@ jobs:
         run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # perf-gates — what a frame costs, by counts that do not depend on the
-  # runner: with FLUI_PERF_BASELINE=check every perf scenario holds its frame
-  # counters and allocations to crates/flui-widgets/perf/baseline/ (the
-  # comparison is the perf target's `baseline` module), and each
-  # `perf_scaling_` scenario runs on its small and large tree under callgrind,
-  # failing when the large one costs more than 5% over the small. The
-  # scenarios' own assertions (equal allocations on both sizes) run on every
-  # PR with flui-widgets' suite; the baseline comparison and callgrind run in
-  # `full`.
+  # perf-gates — what a frame costs in instructions, which need valgrind:
+  # each `perf_scaling_` scenario runs on its small and large tree under
+  # callgrind and fails when the large one costs more than 5% over the small.
+  # The scenarios' counts and allocations are held to their baseline files by
+  # the `test` job on every pull request (ADR-0396 §2).
   # ─────────────────────────────────────────────────────────────────────────
   perf-gates:
     name: perf-gates
@@ -1121,47 +1206,10 @@ jobs:
           shared-key: workspace-perf-v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
-        with:
-          tool: cargo-nextest@0.9
-
       - name: Install valgrind
         uses: ./.github/actions/apt-install
         with:
           packages: valgrind
-
-      # flui-widgets alone, with its default features: the heap counters move
-      # with the features a workspace run unifies into it. Each scenario also
-      # writes its counts to FLUI_PERF_OUT, which a run with no mode does not.
-      - name: cargo nextest run the perf scenarios against their baseline
-        run: cargo nextest run --locked -p flui-widgets --test perf --no-fail-fast -E 'test(/^perf_/)'
-        env:
-          FLUI_PERF_BASELINE: check
-          FLUI_PERF_OUT: ${{ runner.temp }}/perf-records
-
-      # The scenarios hold only what they ran: a baseline file with no record
-      # is a scenario that no longer runs or no longer reaches `baseline::hold`,
-      # and fails here. A record that differs from its file in a cost that fell
-      # passed the check above; its diff is printed so a bless on main follows.
-      - name: Every baseline file was held, and what moved
-        if: ${{ !cancelled() }}
-        env:
-          RECORDS: ${{ runner.temp }}/perf-records
-        run: |
-          set -euo pipefail
-          counts() { grep -v '^#' "$1" | sed '/^$/d'; }
-          failed=0
-          for file in crates/flui-widgets/perf/baseline/*.toml; do
-            record="$RECORDS/$(basename "$file")"
-            if [ ! -f "$record" ]; then
-              echo "::error::no scenario reached baseline::hold for $file in this run: it stopped running, failed before holding, or the mode variable is unset"
-              failed=1
-            elif ! diff -u --label "$file" --label "this run" <(counts "$file") <(counts "$record"); then
-              echo "::notice::$(basename "$file" .toml) moved: the check step judged it (a cost that fell passes there and is lowered by a bless on main)"
-            fi
-          done
-          exit "$failed"
 
       # Instructions are collected only while `perf_measured` runs, so a count
       # of zero means the window was renamed or skipped and fails. The libtest

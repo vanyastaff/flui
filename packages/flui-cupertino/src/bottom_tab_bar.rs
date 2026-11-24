@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use flui_sdk::geometry::Size;
-use flui_sdk::painting::styling::{Border, BorderSide, BorderStyle, BoxDecoration, Color};
+use flui_sdk::painting::styling::{Border, BorderSide, BorderStyle, Color};
 use flui_sdk::rendering::HitTestBehavior;
 use flui_sdk::rendering::objects::{CrossAxisAlignment, MainAxisAlignment};
 use flui_sdk::semantics::SemanticsRole;
@@ -15,13 +15,14 @@ use flui_sdk::view::environment::MediaQuery;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::__private::node::{ControlTap, Description, InteractiveNode};
 use flui_sdk::widgets::{
-    Column, DecoratedBox, DefaultTextStyle, Expanded, IconTheme, IconThemeData, Padding,
-    PreferredSizeView, Row, Semantics, SizedBox, Text,
+    Column, DefaultTextStyle, Expanded, IconTheme, IconThemeData, Padding, PreferredSizeView, Row,
+    Semantics, SizedBox, Text,
 };
 
-use crate::CupertinoTheme;
+use crate::bar_background::{BarBorder, bar_background, hairline_width};
 use crate::colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
-use crate::nav_bar::HAIRLINE_BORDER_WIDTH;
+use crate::page_scaffold::ObstructingPreferredSizeView;
+use crate::{CupertinoTheme, ResolvedCupertinoTheme};
 
 /// The standard iOS 10 tab bar height (`_kTabBarHeight`).
 pub(crate) const TAB_BAR_HEIGHT: f64 = 50.0;
@@ -101,19 +102,23 @@ type TabTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, usize)>;
 /// An iOS-style bottom tab bar.
 ///
 /// - The default height is `50.0` ([`height`](Self::height)).
-/// - The default top border is a one-logical-pixel line, `0x4D000000` in
-///   light and `0x29000000` in dark, resolved against the ambient
-///   brightness on each build. See [`CupertinoNavigationBar`](crate::CupertinoNavigationBar)
-///   for why the width is one pixel and not `0.0`.
+/// - The default top border is a one-device-pixel line
+///   (`1 / device_pixel_ratio` logical pixels under the ambient
+///   `MediaQuery`, one logical pixel without one), `0x4D000000` in light and
+///   `0x29000000` in dark, resolved against the ambient brightness on each
+///   build.
 /// - `inactive_color` defaults to `CupertinoColors::INACTIVE_GRAY` and
 ///   `active_color` to the theme's primary color; each item's icon and label
 ///   take the color for `current_index`.
 /// - The bar pads itself against the bottom safe-area inset
 ///   (`MediaQuery` `padding.bottom` is added to its height and to the label
 ///   row's bottom padding).
-/// - [`opaque`](Self::opaque) reports whether the resolved background is
-///   fully opaque; [`CupertinoTabScaffold`](crate::CupertinoTabScaffold)
-///   uses it to decide whether content extends under the bar.
+/// - Behind a background that is not fully opaque (the theme's default is
+///   translucent) the bar blurs what lies under it, a Gaussian blur of sigma
+///   10 over the bar's box, and
+///   [`should_fully_obstruct`](ObstructingPreferredSizeView::should_fully_obstruct)
+///   answers `false`; [`CupertinoTabScaffold`](crate::CupertinoTabScaffold)
+///   reads that answer to decide whether content extends under the bar.
 /// - [`new`](Self::new) asserts, in debug builds only, that there are at
 ///   least two items, as Apple's Human Interface Guidelines require.
 /// - There is no `copy_with`; the bar is `Clone` and its builder methods
@@ -121,9 +126,7 @@ type TabTapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventContext<'_>, usize)>;
 ///
 /// # Not implemented
 ///
-/// The bar paints no blur: a translucent `background_color` is honoured by
-/// [`opaque`](Self::opaque) and painted, with the page showing through
-/// unblurred. Each item's `Semantics` sets `selected` but carries no
+/// Each item's `Semantics` sets `selected` but carries no
 /// localized hint of tab index and count, since the package has no
 /// localizations. The bar has no mouse-region or text-field tap-region
 /// wrappers.
@@ -149,14 +152,7 @@ pub struct CupertinoTabBar {
     inactive_color: CupertinoColor,
     icon_size: f64,
     height: f64,
-    border: Option<Border>,
-    /// Whether `border` still holds the un-overridden default. If so,
-    /// `build` resolves [`default_border_color`]'s light/dark variant fresh
-    /// against the ambient brightness every time, rather than using a color
-    /// baked in once at construction — see that function's doc for why this
-    /// component's default border (unlike `CupertinoNavigationBar`'s) is
-    /// genuinely brightness-dependent.
-    border_is_default: bool,
+    border: BarBorder,
 }
 
 impl CupertinoTabBar {
@@ -181,8 +177,7 @@ impl CupertinoTabBar {
             inactive_color: CupertinoColor::Dynamic(CupertinoColors::INACTIVE_GRAY),
             icon_size: 30.0,
             height: TAB_BAR_HEIGHT,
-            border: None,
-            border_is_default: true,
+            border: BarBorder::Hairline,
         }
     }
 
@@ -266,8 +261,7 @@ impl CupertinoTabBar {
     /// the hairline border.
     #[must_use]
     pub fn border(mut self, border: Option<Border>) -> Self {
-        self.border = border;
-        self.border_is_default = false;
+        self.border = BarBorder::authored(border);
         self
     }
 
@@ -279,16 +273,10 @@ impl CupertinoTabBar {
         self.on_tap.clone()
     }
 
-    /// Whether the resolved background is fully opaque. Consumed by
-    /// [`crate::CupertinoTabScaffold`]'s content-padding math.
-    #[must_use]
-    pub fn opaque(&self, ctx: &dyn BuildContext) -> bool {
-        let theme = CupertinoTheme::of(ctx);
-        let background = self
-            .background_color
-            .unwrap_or_else(|| theme.bar_background_color())
-            .resolve(ctx);
-        background.is_opaque()
+    /// The authored background resolved against `ctx`, or the theme's.
+    fn background(&self, theme: &ResolvedCupertinoTheme, ctx: &dyn BuildContext) -> Color {
+        self.background_color
+            .map_or(theme.bar_background_color, |color| color.resolve(ctx))
     }
 }
 
@@ -304,18 +292,14 @@ impl std::fmt::Debug for CupertinoTabBar {
 impl StatelessView for CupertinoTabBar {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = CupertinoTheme::of(ctx);
-        let background = self
-            .background_color
-            .unwrap_or_else(|| theme.bar_background_color())
-            .resolve(ctx);
+        let background = self.background(&theme, ctx);
         let inactive = self.inactive_color.resolve(ctx);
         let active = self
             .active_color
-            .unwrap_or_else(|| theme.primary_color())
-            .resolve(ctx);
+            .map_or(theme.primary_color, |color| color.resolve(ctx));
         let bottom_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding().bottom);
 
-        let tab_label_style = theme.text_theme().tab_label_text_style();
+        let tab_label_style = &theme.text_theme.tab_label_text_style;
 
         let item_views: Vec<BoxedView> = self
             .items
@@ -378,28 +362,37 @@ impl StatelessView for CupertinoTabBar {
                     .child(Row::new(item_views).cross_axis_alignment(CrossAxisAlignment::End)),
             );
 
-        let resolved_border = if self.border_is_default {
-            Some(Border::new(
+        let border = self.border.resolve(|| {
+            Border::new(
                 Some(BorderSide::new(
                     CupertinoColor::Dynamic(default_border_color()).resolve(ctx),
-                    HAIRLINE_BORDER_WIDTH,
+                    hairline_width(ctx),
                     BorderStyle::Solid,
                 )),
                 None,
                 None,
                 None,
-            ))
-        } else {
-            self.border
-        };
+            )
+        });
 
-        DecoratedBox::new(BoxDecoration::with_color(background).set_border(resolved_border))
-            .child(SizedBox::height(self.height + bottom_inset).child(toolbar))
+        bar_background(
+            background,
+            border,
+            SizedBox::height(self.height + bottom_inset).child(toolbar),
+        )
     }
 }
 
 impl PreferredSizeView for CupertinoTabBar {
     fn preferred_size(&self) -> Size {
         Size::new(f64::INFINITY, self.height)
+    }
+}
+
+impl ObstructingPreferredSizeView for CupertinoTabBar {
+    /// `true` when the bar's background, resolved under `ctx`, is fully
+    /// opaque.
+    fn should_fully_obstruct(&self, ctx: &dyn BuildContext) -> bool {
+        self.background(&CupertinoTheme::of(ctx), ctx).is_opaque()
     }
 }

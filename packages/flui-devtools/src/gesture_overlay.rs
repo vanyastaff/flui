@@ -5,14 +5,14 @@
 //! drawn beside the point its contact went down: the contest's sequence and
 //! outcome, then one line per member with its composition path, claim,
 //! verdict and rejection reason, and the deadlines that elapsed for it. A
-//! contest stays until it settles, then fades out over [`FADE`].
+//! contest stays until it settles, then fades out over [`CONTEST_FADE`].
 //!
 //! Toggling the controller rebuilds only the overlay's own layer, never the
 //! application below it. While the overlay is hidden, or not mounted, no
 //! observer is registered on the arena, so it costs the input path nothing.
 //!
 //! ```no_run
-//! use flui_devtools::gesture_overlay::{GestureInspectorOverlay, GestureOverlayController};
+//! use flui_devtools::{GestureInspectorOverlay, GestureOverlayController};
 //! use flui_sdk::widgets::Text;
 //!
 //! let controller = GestureOverlayController::new(true);
@@ -22,13 +22,13 @@
 //! ```
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_sdk::foundation::geometry::Offset;
-use flui_sdk::foundation::{ChangeNotifier, RebuildReason};
+use flui_sdk::foundation::{ChangeNotifier, RebuildReason, Subscription};
 use flui_sdk::interaction::{EventTime, GestureArena, PointerEventExt, PointerId};
 use flui_sdk::painting::styling::Color;
 use flui_sdk::painting::typography::TextStyle;
@@ -41,13 +41,12 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, Column, IgnorePointer, Listener, Padding, Positioned, SizedBox, Stack, Text,
 };
+use rustc_hash::FxHashSet;
 
-use crate::gesture_inspector::{
-    ContestReport, DEFAULT_CONTEST_CAPACITY, GestureInspector, Verdict,
-};
+use crate::gesture_inspector::{ContestReport, DEFAULT_MAX_CONTESTS, GestureInspector, Verdict};
 
 /// How long a settled contest stays on screen, fading out.
-pub const FADE: Duration = Duration::from_millis(1500);
+pub const CONTEST_FADE: Duration = Duration::from_millis(1500);
 
 /// Where a contest is drawn relative to its contact's Down position.
 const LABEL_OFFSET: f64 = 12.0;
@@ -198,12 +197,12 @@ impl ViewState<GestureInspectorOverlay> for GestureInspectorOverlayState {
                 {
                     let mut positions = positions.borrow_mut();
                     // Ordered like the inspector's contests, which keeps the
-                    // newest `DEFAULT_CONTEST_CAPACITY`: the position dropped
+                    // newest `DEFAULT_MAX_CONTESTS`: the position dropped
                     // is the one whose contest the inspector dropped, and a
                     // burst of downs between builds cannot outgrow it.
                     positions.retain(|(known, _)| *known != pointer);
                     positions.push_back((pointer, at));
-                    if positions.len() > DEFAULT_CONTEST_CAPACITY {
+                    if positions.len() > DEFAULT_MAX_CONTESTS {
                         positions.pop_front();
                     }
                 }
@@ -228,11 +227,11 @@ struct OverlayLayer {
 }
 
 struct OverlayLayerState {
-    /// The controller the layer was created with, until `init_state` moves
-    /// it into `live`.
-    controller: GestureOverlayController,
-    live: Option<Rc<Live>>,
-    listener: Option<flui_sdk::foundation::Subscription>,
+    /// What the observer, the controller's listener and the fade loop share; the controller
+    /// the layer follows lives there, once.
+    live: Rc<Live>,
+    /// The controller's listener, replaced when the view brings another controller.
+    listener: Subscription,
 }
 
 /// What the observer, the controller's listener and the fade loop share.
@@ -258,8 +257,7 @@ impl Live {
                     live.keep_fading();
                 }
             });
-            match GestureInspector::observing(&self.arena, DEFAULT_CONTEST_CAPACITY, Some(changed))
-            {
+            match GestureInspector::observing(&self.arena, DEFAULT_MAX_CONTESTS, Some(changed)) {
                 Ok(inspector) => {
                     *self.inspector.borrow_mut() = Some(inspector);
                     let observing = &self.controller.borrow().inner.observing;
@@ -296,8 +294,8 @@ impl Live {
     }
 
     /// The pointers of every contest the inspector still retains.
-    fn retained_pointers(&self) -> HashSet<PointerId> {
-        let mut pointers = HashSet::new();
+    fn retained_pointers(&self) -> FxHashSet<PointerId> {
+        let mut pointers = FxHashSet::default();
         if let Some(inspector) = self.inspector.borrow().as_ref() {
             inspector.visit_contests(|contest| {
                 pointers.insert(contest.pointer);
@@ -351,19 +349,19 @@ fn settled_at(contest: &ContestReport) -> Option<EventTime> {
 }
 
 /// The contest's opacity at `now`: whole while it is undecided, fading over
-/// [`FADE`] once it settled, `None` once faded out.
+/// [`CONTEST_FADE`] once it settled, `None` once faded out.
 fn opacity(contest: &ContestReport, now: EventTime) -> Option<f64> {
     if contest.winner.is_none() && contest.cancelled.is_none() {
         return Some(1.0);
     }
     let elapsed = now.saturating_duration_since(settled_at(contest)?);
-    (elapsed < FADE).then(|| 1.0 - elapsed.as_secs_f64() / FADE.as_secs_f64())
+    (elapsed < CONTEST_FADE).then(|| 1.0 - elapsed.as_secs_f64() / CONTEST_FADE.as_secs_f64())
 }
 
 impl fmt::Debug for OverlayLayerState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("OverlayLayerState")
-            .field("live", &self.live.is_some())
+            .field("observing", &self.live.inspector.borrow().is_some())
             .finish_non_exhaustive()
     }
 }
@@ -371,77 +369,62 @@ impl fmt::Debug for OverlayLayerState {
 impl StatefulView for OverlayLayer {
     type State = OverlayLayerState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
-        OverlayLayerState {
-            controller: self.controller.clone(),
-            live: None,
-            listener: None,
-        }
-    }
-}
-
-impl OverlayLayerState {
-    fn listen(&mut self, controller: &GestureOverlayController) {
-        let Some(live) = &self.live else {
-            return;
-        };
-        let weak: Weak<Live> = Rc::downgrade(live);
-        let listener = controller.inner.changed.listen(Rc::new(move || {
-            if let Some(live) = weak.upgrade() {
-                let shown = live.controller.borrow().is_shown();
-                live.sync(shown);
-            }
-        }));
-        self.listener = Some(listener);
-    }
-
-    fn unlisten(&mut self) {
-        drop(self.listener.take());
-    }
-}
-
-impl ViewState<OverlayLayer> for OverlayLayerState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let controller = self.controller.clone();
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let live = Rc::new(Live {
             arena: GestureArenaScope::of(ctx),
-            controller: RefCell::new(controller.clone()),
+            controller: RefCell::new(self.controller.clone()),
             rebuild: ctx.rebuild_handle(),
             post_frame: ctx.post_frame_handle(),
             inspector: RefCell::new(None),
             frame_pending: Cell::new(false),
         });
-        self.live = Some(Rc::clone(&live));
-        self.listen(&controller);
-        live.sync(controller.is_shown());
+        let listener = Live::listen(&live, &self.controller);
+        OverlayLayerState { live, listener }
+    }
+}
+
+impl Live {
+    /// A listener on `controller` that brings the observer in line with it.
+    fn listen(live: &Rc<Self>, controller: &GestureOverlayController) -> Subscription {
+        let weak: Weak<Self> = Rc::downgrade(live);
+        controller.inner.changed.listen(Rc::new(move || {
+            if let Some(live) = weak.upgrade() {
+                let shown = live.controller.borrow().is_shown();
+                live.sync(shown);
+            }
+        }))
+    }
+}
+
+impl ViewState<OverlayLayer> for OverlayLayerState {
+    fn init_state(&mut self, _ctx: &dyn LifecycleContext) {
+        // The observer attaches once the layer is mounted, where its rebuild requests land.
+        let shown = self.live.controller.borrow().is_shown();
+        self.live.sync(shown);
     }
 
     fn did_update_view(&mut self, old_view: &OverlayLayer, new_view: &OverlayLayer) {
         if old_view.controller.same(&new_view.controller) {
             return;
         }
-        let Some(live) = self.live.clone() else {
-            return;
-        };
-        self.unlisten();
-        live.sync(false);
-        *live.controller.borrow_mut() = new_view.controller.clone();
-        self.controller = new_view.controller.clone();
-        self.listen(&new_view.controller);
-        live.sync(new_view.controller.is_shown());
+        std::mem::replace(&mut self.listener, Subscription::inert()).detach();
+        self.live.sync(false);
+        // `replace` ends its borrow before the outgoing controller drops.
+        drop(self.live.controller.replace(new_view.controller.clone()));
+        self.listener = Live::listen(&self.live, &new_view.controller);
+        self.live.sync(new_view.controller.is_shown());
     }
 
     fn dispose(&mut self) {
-        self.unlisten();
-        if let Some(live) = self.live.take() {
-            live.sync(false);
-        }
+        std::mem::replace(&mut self.listener, Subscription::inert()).detach();
+        self.live.sync(false);
     }
 
     fn build(&self, view: &OverlayLayer, _ctx: &dyn BuildContext) -> impl IntoView {
-        let Some(live) = self.live.as_ref().filter(|_| view.controller.is_shown()) else {
+        let live = &self.live;
+        if !view.controller.is_shown() {
             return SizedBox::shrink().boxed();
-        };
+        }
         // A position outlives its contest only until the next build: the
         // inspector keeps a bounded number of contests, so the map is bounded
         // by it too.

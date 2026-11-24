@@ -15,7 +15,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use flui_devtools::inspector::InspectorCounters;
+use flui_devtools::InspectorCounters;
 use flui_objects::RenderSizedBox;
 use flui_sdk::foundation::observe::TreeObserver;
 use flui_sdk::foundation::{ElementId, ValueKey, ViewKey};

@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use flui_devtools::inspector::InspectorCounters;
+use flui_devtools::InspectorCounters;
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_sdk::foundation::observe::TreeObserver;
@@ -239,6 +239,34 @@ fn inspector_counts_mounts_moves_rebuilds_and_unmounts_exactly() {
     );
 }
 
+/// A build is counted under each cause it carries, the last cause
+/// `RebuildReason` declares included.
+fn every_rebuild_cause_is_counted() {
+    let counters = Arc::new(InspectorCounters::new());
+    let mut owner = BuildOwner::new();
+    owner.set_tree_observer(Arc::clone(&counters) as Arc<dyn TreeObserver>);
+    let mut tree = ElementTree::new();
+    let root_id = mount_root_with_pipeline(&mut tree, &MultiBox::keyed(&[1]).boxed(), &mut owner);
+    owner.schedule_build_for(root_id, 0, RebuildReason::InitialMount);
+    owner.build_scope(&mut tree);
+
+    tree.update(
+        root_id,
+        &MultiBox::keyed(&[1]),
+        &mut owner.element_owner_mut(),
+    );
+    owner.schedule_build_for(root_id, 0, RebuildReason::SignalChange);
+    owner.build_scope(&mut tree);
+
+    assert_eq!(
+        counters
+            .snapshot()
+            .rebuilds_for(RebuildReason::SignalChange),
+        1,
+        "the signal-driven build is counted under its cause",
+    );
+}
+
 /// A panicking observer is detached and the frame survives; `detached()`
 /// is NOT called on the panicking observer.
 fn panicking_observer_is_detached_and_the_tree_survives() {
@@ -269,13 +297,18 @@ fn panicking_observer_is_detached_and_the_tree_survives() {
 }
 
 /// The tree-observation contract as one table: exact counts through mount,
-/// reorder, shrink and detach, then a panicking observer being contained.
+/// reorder, shrink and detach, every rebuild cause counted, then a panicking
+/// observer being contained.
 #[test]
 fn tree_observation_contract() {
     let cases: &[(&str, fn())] = &[
         (
             "inspector counts mounts, moves, rebuilds and unmounts exactly",
             inspector_counts_mounts_moves_rebuilds_and_unmounts_exactly,
+        ),
+        (
+            "every rebuild cause is counted",
+            every_rebuild_cause_is_counted,
         ),
         (
             "a panicking observer is detached and the tree survives",

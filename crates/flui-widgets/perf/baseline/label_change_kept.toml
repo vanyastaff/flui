@@ -1,0 +1,7 @@
+# Written by `FLUI_PERF_BASELINE=bless CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo nextest run --locked --no-fail-fast --workspace --exclude flui-native --features flui/material,flui/cupertino,flui/native --test perf`;
+# counts, not timings.
+
+[label_change_kept]
+allocated_bytes = 16220
+allocations = 112
+reallocations = 0
