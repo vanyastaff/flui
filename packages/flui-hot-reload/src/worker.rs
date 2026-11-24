@@ -11,6 +11,7 @@ use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use crate::LoadError;
 use crate::dynlib::{self, DynLib};
 
 /// Default fingerprint when the worker omits `flui_worker_fingerprint`.
@@ -204,50 +205,47 @@ pub struct WorkerPlugin {
 impl WorkerPlugin {
     /// Load a worker from `lib_path` and call its `flui_worker_init` hook.
     ///
-    /// Returns `None` when the file is missing, unloadable, lacks worker
-    /// symbols, or fails the ABI-token handshake (built by a different
-    /// compiler or source revision than this host — see [`crate::abi_token`]).
-    pub fn load(lib_path: impl AsRef<Path>) -> Option<Self> {
+    /// # Errors
+    ///
+    /// The [`LoadError`] that says why: the file is missing or the platform
+    /// loader refused it, it lacks a worker symbol, it fails the ABI-token
+    /// handshake (built by a different compiler or source revision than this
+    /// host — see [`crate::abi_token`]), or its init panicked.
+    pub fn load(lib_path: impl AsRef<Path>) -> Result<Self, LoadError> {
         let lib_path = lib_path.as_ref();
         let lib = DynLib::open(lib_path)?;
+        let missing = |symbol: &str| LoadError::MissingSymbol {
+            path: lib_path.to_path_buf(),
+            symbol: symbol.to_owned(),
+        };
 
         // SAFETY: `lib` was just opened and outlives this block. `flui_worker_init`
         // is the worker ABI symbol this crate defines, so a library built by the
-        // matching macro exports it with `WorkerInitFn`'s signature; the pointer
-        // is null-checked before the transmute.
+        // matching macro exports it with `WorkerInitFn`'s signature; `symbol`
+        // answers `None` for a null address.
         #[expect(unsafe_code, reason = "calls the worker init symbol")]
         unsafe {
-            let init_ptr = lib.symbol("flui_worker_init")?;
-            if init_ptr.is_null() {
-                return None;
-            }
+            let init_ptr = lib
+                .symbol("flui_worker_init")
+                .ok_or_else(|| missing("flui_worker_init"))?;
             let init_fn: WorkerInitFn = std::mem::transmute(init_ptr);
 
             // ABI handshake before calling anything else in the image: build
             // pointers registered by init are transmuted to typed fn pointers
             // whose argument types are `repr(Rust)`, so layout agreement must
             // be established first.
-            let Some(token_ptr) = lib.symbol("flui_worker_abi_token") else {
-                tracing::error!(
-                    path = %lib_path.display(),
-                    "worker refused: no ABI-token symbol — rebuild it against \
-                     this tree (the ownership-safe worker ABI requires it)"
-                );
-                return None;
-            };
+            let token_ptr = lib
+                .symbol("flui_worker_abi_token")
+                .ok_or_else(|| missing("flui_worker_abi_token"))?;
             let token_fn: WorkerAbiTokenFn = std::mem::transmute(token_ptr);
             let worker_token = token_fn();
             let host_token = crate::abi_token();
             if worker_token != host_token {
-                tracing::error!(
-                    worker_token,
-                    host_token,
-                    path = %lib_path.display(),
-                    "worker refused: ABI token mismatch — host and worker were \
-                     built by different compilers or source revisions; rebuild \
-                     both from one worktree with one toolchain"
-                );
-                return None;
+                return Err(LoadError::AbiMismatch {
+                    path: lib_path.to_path_buf(),
+                    host: host_token,
+                    plugin: worker_token,
+                });
             }
 
             let version = lib.symbol("flui_worker_version").map_or(0, |ptr| {
@@ -261,14 +259,9 @@ impl WorkerPlugin {
 
             // Before the image is admitted: an image whose init panicked is
             // refused and closes when `lib` drops here.
-            let Some(registered) = run_init(init_fn) else {
-                tracing::error!(
-                    path = %lib_path.display(),
-                    "worker refused: its flui_worker_init panicked (the worker's \
-                     stderr or logcat has the panic); fix it and save again"
-                );
-                return None;
-            };
+            let registered = run_init(init_fn).ok_or_else(|| LoadError::InitFailed {
+                path: lib_path.to_path_buf(),
+            })?;
             let mtime = dynlib::file_revision(lib_path);
             let plugin = WorkerPlugin {
                 lib: ManuallyDrop::new(lib),
@@ -282,7 +275,7 @@ impl WorkerPlugin {
                 path = %lib_path.display(),
                 "Worker plugin loaded"
             );
-            Some(plugin)
+            Ok(plugin)
         }
     }
 

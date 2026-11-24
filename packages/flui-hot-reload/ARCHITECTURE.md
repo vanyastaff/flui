@@ -235,3 +235,14 @@ left unmounted mounts again on the next build.
 cargo-built fixture), `a_scene_plugin_answering_null_skips_the_frame` and
 `a_worker_whose_init_fails_is_refused_with_its_registrations` (`rustc`-built
 fixtures) pin it.
+
+### A refused library says why, once per build
+
+`DynLib::open`, `ScenePlugin::load` and `WorkerPlugin::load` answer
+`Result<_, LoadError>`. `LoadError::Open` carries the platform loader's own
+text (`dlerror`, or the Windows error message), and the other variants name the
+missing symbol, both ABI tokens, or the worker's failed init. The drivers load
+through `LoadRefusal`, which logs a refusal once per artifact revision, a file
+not built yet at `debug` and any other at `warn`, and stays quiet on the
+retries of the same revision. Pinned by `a_refused_library_says_why` and
+`a_refused_artifact_is_reopened_once_it_changes_or_after_a_wait`.

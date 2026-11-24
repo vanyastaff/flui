@@ -2113,6 +2113,7 @@ dependencies = [
  "libc",
  "parking_lot",
  "pollster",
+ "thiserror 2.0.21",
  "tracing",
  "tracing-subscriber",
  "windows 0.62.2",

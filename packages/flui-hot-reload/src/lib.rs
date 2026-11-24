@@ -83,7 +83,7 @@
 //! use flui_hot_reload::ScenePlugin;
 //! use std::path::Path;
 //!
-//! if let Some(plugin) = ScenePlugin::load(Path::new("/path/to/libflui_scene.so")) {
+//! if let Ok(plugin) = ScenePlugin::load(Path::new("/path/to/libflui_scene.so")) {
 //!     // SAFETY: see `ScenePlugin::build_scene` — host and plugin must agree
 //!     // on `Scene`'s layout, and the scene must drop before `unload()`.
 //!     // `None` means "skip this frame" (an app_plugin! wrong-thread
@@ -130,7 +130,12 @@ pub mod strategy;
 pub mod engine;
 
 mod abi;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod load_error;
 pub use abi::abi_token;
+#[cfg(not(target_arch = "wasm32"))]
+pub use load_error::LoadError;
 
 /// Canonical scene payload shared by plugin factories and the host ABI.
 pub use flui_sdk::hooks::Scene;
