@@ -142,6 +142,11 @@ fn capability_seam() {
                     as fn(),
             ),
             (
+                "capability_seam::a_tests_script_hold_and_the_clipboards_hold_share_one_count",
+                capability_seam::a_tests_script_hold_and_the_clipboards_hold_share_one_count
+                    as fn(),
+            ),
+            (
                 "capability_seam::a_concealed_write_reaches_the_host_marked",
                 capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
             ),

@@ -115,8 +115,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   It refuses a second contact, a sequence that ends with a key down (which would never be sent),
   the keys and chords that leave the app or change the device (the fallbacks of AOSP's
   `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
-  the mouse included, going down at the display's edge; before each press, key and text the
-  app's window must hold the focus.
+  the mouse included, going down at the display's edge; before each press, key, text and scroll
+  one `dumpsys window` must show the window the lane located holding the focus, compared by its
+  hash, frame and rotation: another window of the app's title is `NotForeground`, the same
+  window moved or turned is `Busy` until the lane locates it again.
 - **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is

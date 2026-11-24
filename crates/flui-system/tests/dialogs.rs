@@ -414,7 +414,7 @@ fn a_window_shows_one_dialog_at_a_time() {
     let other_window = host.open_window(HeadlessWindow::new(10, 10));
     let elsewhere = acquire_in::<FileDialogCapability>(&mut host, other_window)
         .expect("the scripted plugin provides dialogs");
-    dialogs.hold();
+    let _held = dialogs.hold();
 
     let first = land(first_widget.open(OpenRequest::files()));
     let second = land(second_widget.save(SaveRequest::new()));
@@ -461,7 +461,7 @@ fn a_dialog_ends_with_its_window() {
     let window = host.open_window(HeadlessWindow::new(10, 10));
     let handle = acquire_in::<FileDialogCapability>(&mut host, window)
         .expect("the scripted plugin provides dialogs");
-    dialogs.hold();
+    let _held = dialogs.hold();
 
     let held = land(handle.open(OpenRequest::files()));
     turn(&mut host);
@@ -498,7 +498,7 @@ fn a_dialog_of_the_last_window_ends_with_its_runtime() {
     let (dialogs, plugin) = scripted();
     let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides dialogs");
-    dialogs.hold();
+    let _held = dialogs.hold();
 
     let held = land(handle.save(SaveRequest::new()));
     turn(&mut host);
@@ -522,7 +522,7 @@ fn a_dropped_dialog_is_dismissed_and_frees_its_window() {
     let (dialogs, plugin) = scripted();
     let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides dialogs");
-    dialogs.hold();
+    let _held = dialogs.hold();
 
     drop(handle.open(OpenRequest::files()));
     assert_eq!(dialogs.dismissed(), 1, "the system's dialog was taken down");

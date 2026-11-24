@@ -58,7 +58,7 @@ mod script;
 mod track;
 
 pub use events::{EventSubscription, Events, StreamEnd, StreamItem};
-pub use script::{Answer, Expect, MAX_RECORDED_REQUESTS, RequestTicket, Script};
+pub use script::{Answer, Expect, MAX_RECORDED_REQUESTS, RequestTicket, Script, ScriptHold};
 pub use track::{ServiceState, Track};
 
 use std::borrow::Cow;

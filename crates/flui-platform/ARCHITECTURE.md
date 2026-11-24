@@ -513,6 +513,12 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   position and identity, never by value: how far the owner-thread failures and the cross-thread
   reports had been read, and the ids of the debts and scheduled changes it listed; a failure
   recorded after it is new even when it equals one it returned.
+- **A hold has one owner: the script's count.** `Script::hold` hands out a `ScriptHold`, and the
+  script holds every request that reaches it while any lives, whoever took it (a test, or a
+  double such as the scripted clipboard's `hold_writes`). Nobody lets go of another's hold: the
+  last one dropped or `release`d sends the requests the holds kept, oldest first, on to the steps
+  and the standing answer, as if they arrived then. A request a step held is not one of them.
+  `release_oldest`, `release_held` and `abandon_held` answer any held request.
 - **Reports from other threads are bounded.** A `FailureReport` keeps `MAX_REPORTS` and counts
   the rest as one `ReportsDropped`; once the scenario has ended, `report` answers `false` and
   nothing accumulates. A script keeps its first `MAX_RECORDED_REQUESTS` requests and counts
@@ -557,6 +563,7 @@ is no request it could find unexpected.
 `a_script_dropped_with_debts_hands_them_to_the_scenario`,
 `a_scenario_dropped_unverified_with_debts_fails_the_test`,
 `a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest`,
+`a_scripts_last_hold_sends_on_only_what_the_holds_kept`,
 `a_scenario_drives_one_host_at_a_time`,
 `the_host_waits_for_a_scheduled_change_as_for_any_deadline`
 (`crates/flui-testing/tests/scenario.rs`);

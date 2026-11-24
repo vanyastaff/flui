@@ -1193,10 +1193,11 @@ graph LR
     read of the tree takes one, and on a device or an emulator it is refused while any service is
     on (`enabled_accessibility_services`, a list never set or emptied being none) or touch
     exploration is, naming `android_tree_dump` and the services (`docs/gaps.md`). Input and
-    capture take no dump. The window is the focused one by its hash, on the default display, and
-    the focus check before each press, key, text and scroll compares that hash; a read of the
-    tree locates the window again after the dump, and a window replaced, moved or turned in
-    between answers `Busy`.
+    capture take no dump. The window is the focused one by its hash, on the default display, read
+    with the rotation from one `dumpsys window`; the focus check before each press, key, text and
+    scroll reads it again and compares hash, frame and rotation (another window `NotForeground`,
+    the same one moved or turned `Busy`); a read of the tree locates the window again after the
+    dump, and a window replaced, moved or turned in between answers `Busy`.
   - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
     sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,
     which `Lane::read_tree` is handed, of one revision with the OS tree: the root is the decor

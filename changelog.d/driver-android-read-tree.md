@@ -10,10 +10,12 @@
   order does not tell apart answer `Error::Ambiguous`, and what a dump cannot show (a range's
   value, the announcer nodes, a toggled state the app's read does not report) is no difference
   (`lane::android::tree::Unobservable`). The roles scenario checks the match itself.
-- **`flui-driver`**: the Android lane locates the app's window from `dumpsys window`: the focused
-  window's frame by the window's hash, on the default display, and the default display's rotation,
-  so pressing, typing and capturing go on while an accessibility service runs, and a press goes
-  only to the window the lane located. Only the read of the tree takes a `uiautomator dump`, which
+- **`flui-driver`**: the Android lane locates the app's window from one `dumpsys window`: the
+  focused window's frame by the window's hash, on the default display, and the default display's
+  rotation, so pressing, typing and capturing go on while an accessibility service runs. A press,
+  key, text or scroll goes only to the window the lane located, at the frame and turn it located
+  it at: another window of the app's title answers `Error::NotForeground`, the same window moved
+  or turned `Error::Busy`. Only the read of the tree takes a `uiautomator dump`, which
   suspends every accessibility service: while any service is on (an empty service list being
   none), on a device or an emulator, or while the settings it reads show neither way, the read
   answers `not_supported` naming `android_tree_dump` and the services. A window replaced or

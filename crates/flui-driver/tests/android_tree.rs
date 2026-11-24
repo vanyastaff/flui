@@ -815,12 +815,12 @@ fn a_window_that_moves_or_turns_during_the_dump_is_busy() {
         (
             "moved",
             emulator_showing(CONTROLS)
-                .reply_once("shell dumpsys window displays", AdbReply::new(0, moved)),
+                .reply_once("shell dumpsys window |", AdbReply::new(0, moved)),
         ),
         (
             "replaced",
             emulator_showing(CONTROLS)
-                .reply_once("shell dumpsys window displays", AdbReply::new(0, replaced)),
+                .reply_once("shell dumpsys window |", AdbReply::new(0, replaced)),
         ),
         (
             "turned",
@@ -832,11 +832,7 @@ fn a_window_that_moves_or_turns_during_the_dump_is_busy() {
             .read_tree(&placement(), &controls())
             .expect_err("the window did not hold still");
         assert!(matches!(refused, Error::Busy { .. }), "{case}: {refused:?}");
-        assert_eq!(
-            adb.commands("shell dumpsys window displays").len(),
-            2,
-            "{case}"
-        );
+        assert_eq!(adb.commands("shell dumpsys window |").len(), 2, "{case}");
     }
 }
 
@@ -1340,7 +1336,7 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
 
     // A tree that moves on every reading, as one republishing every frame does, is read again
     // for as long as the bound in time allows, however many readings that is, then busy.
-    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect());
+    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect::<Vec<u64>>());
     let started = std::time::Instant::now();
     let moving = driver
         .main_window()
@@ -1376,7 +1372,7 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
 
     // And a tree that keeps moving on such a device is read at least three times before it is
     // busy, the bound counted from the end of the first reading.
-    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect());
+    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect::<Vec<u64>>());
     let _slow = (0..3).fold(adb.clone(), |adb, _| {
         adb.reply_once_after("exec-out uiautomator", AdbReply::new(0, CONTROLS), slow)
     });
@@ -1389,7 +1385,7 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
 
     // Only the first dump slow: the bound, counted from its end, leaves room for readings past
     // the third.
-    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect());
+    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect::<Vec<u64>>());
     let _slow =
         adb.clone()
             .reply_once_after("exec-out uiautomator", AdbReply::new(0, CONTROLS), slow);
@@ -1399,6 +1395,40 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
         .expect_err("the tree never held still");
     assert!(matches!(moving, Error::Busy { .. }), "{moving:?}");
     assert!(adb.commands("exec-out uiautomator dump").len() > 3);
+
+    // Any other answer of the lane while the tree moves is no match made against a tree the app
+    // no longer showed: it is the answer, after one reading. A service on refuses the dump.
+    let service = "com.example.passwords/.AutofillService\n0\n";
+    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect::<Vec<u64>>());
+    let _service_on = adb
+        .clone()
+        .reply_once("shell settings get secure", AdbReply::new(0, service));
+    let refused = driver
+        .main_window()
+        .and_then(|mut window| window.os_tree())
+        .expect_err("a service is on");
+    assert_eq!(
+        refused.missing_capability().as_deref(),
+        Some("android_tree_dump"),
+        "{refused:?}"
+    );
+    assert_eq!(adb.commands("shell settings get secure").len(), 1);
+    // And the lane's own busy, a window that moved during its dump, is its answer too.
+    let moved = windows_edge_to_edge(1080, 2400)
+        .replace("frame=[0,0][1080,2400]", "frame=[40,0][1120,2400]");
+    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect::<Vec<u64>>());
+    let _moved = adb
+        .clone()
+        .reply_once("shell dumpsys window |", AdbReply::new(0, moved));
+    let busy = driver
+        .main_window()
+        .and_then(|mut window| window.os_tree())
+        .expect_err("the window moved during the dump");
+    assert!(
+        matches!(&busy, Error::Busy { message, .. } if message.contains("dumped it")),
+        "{busy:?}"
+    );
+    assert_eq!(adb.commands("exec-out uiautomator dump").len(), 1);
 }
 
 /// `xml` without the app's view, as a dump taken before the app serves its tree shows it.

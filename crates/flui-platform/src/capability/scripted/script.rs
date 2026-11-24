@@ -155,8 +155,9 @@ impl<R, A> fmt::Debug for Answer<R, A> {
 ///
 /// A request is answered by, in this order:
 ///
-/// 1. nothing yet, while the script [holds](Self::hold): it waits for the
-///    test to release it;
+/// 1. nothing yet, while a [hold](Self::hold) of the script lives: it waits
+///    until the last hold is dropped, then goes down this list, or until the
+///    test releases it;
 /// 2. the earliest step ([`expect`](Self::expect),
 ///    [`expect_held`](Self::expect_held)) whose [`Expect`] accepts it, which
 ///    it uses up; a step that accepts nothing stays and is
@@ -187,7 +188,8 @@ struct ScriptState<R, A> {
     otherwise: Option<Standing<R, A>>,
     /// Heard in the order they were added.
     observers: Vec<Observer<R, A>>,
-    holding: bool,
+    /// How many [`ScriptHold`]s are alive: requests are held while any is.
+    holds: usize,
     /// Requests not answered yet, oldest first.
     waiting: VecDeque<Waiting<R, A>>,
     /// The first [`MAX_RECORDED_REQUESTS`] requests, oldest first.
@@ -213,8 +215,13 @@ struct Waiting<R, A> {
 }
 
 enum Until<R, A> {
-    /// Until the test releases or abandons it.
+    /// Until the test releases or abandons it: a step held it, or the code
+    /// that was to answer it panicked.
     Released,
+    /// Until the last [`ScriptHold`] is dropped, which sends it on to the
+    /// steps and the standing answer, or until the test releases or abandons
+    /// it.
+    Lifted,
     /// Until the scenario's clock reaches the instant scheduled for it.
     Due {
         reply: Reply<R, A>,
@@ -223,13 +230,25 @@ enum Until<R, A> {
     },
 }
 
+impl<R, A> Until<R, A> {
+    /// Whether the request waits for the test (or a hold), not the clock.
+    fn is_held(&self) -> bool {
+        matches!(self, Self::Released | Self::Lifted)
+    }
+}
+
 impl<R, A> ScriptState<R, A> {
-    fn take_released(&mut self) -> VecDeque<Waiting<R, A>> {
-        let (released, kept): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut self.waiting)
+    /// Take the waiting requests `taken` selects, oldest first.
+    fn take_waiting(&mut self, taken: impl Fn(&Until<R, A>) -> bool) -> VecDeque<Waiting<R, A>> {
+        let (taken, kept): (VecDeque<_>, VecDeque<_>) = std::mem::take(&mut self.waiting)
             .into_iter()
-            .partition(|waiting| matches!(waiting.until, Until::Released));
+            .partition(|waiting| taken(&waiting.until));
         self.waiting = kept;
-        released
+        taken
+    }
+
+    fn take_released(&mut self) -> VecDeque<Waiting<R, A>> {
+        self.take_waiting(Until::is_held)
     }
 }
 
@@ -254,7 +273,7 @@ where
                 steps: VecDeque::new(),
                 otherwise: None,
                 observers: Vec::new(),
-                holding: false,
+                holds: 0,
                 waiting: VecDeque::new(),
                 received: Vec::new(),
                 received_count: 0,
@@ -369,15 +388,28 @@ where
         self.otherwise(move |_| value.clone());
     }
 
-    /// Hold every later request, steps and standing answer aside, until
-    /// [`resume`](Self::resume).
-    pub fn hold(&self) {
-        self.cell.state.borrow_mut().holding = true;
-    }
-
-    /// Answer later requests again; the ones held so far stay held.
-    pub fn resume(&self) {
-        self.cell.state.borrow_mut().holding = false;
+    /// Hold every later request, steps and standing answer aside, while the
+    /// returned hold, or another hold of this script, lives.
+    ///
+    /// The script counts its holds, so whoever took one (a test, a double's
+    /// own method) lets go of its own and never of another's. When the last
+    /// is dropped or [released](ScriptHold::release), the requests the holds
+    /// kept go on, oldest first, to the steps and the standing answer, as if
+    /// they arrived then. A request a step holds is not one of them: it
+    /// waits for [`release_oldest`](Self::release_oldest),
+    /// [`release_held`](Self::release_held) or
+    /// [`abandon_held`](Self::abandon_held), which also answer requests a
+    /// hold keeps.
+    #[must_use = "requests are held only while the hold is alive"]
+    pub fn hold(&self) -> ScriptHold {
+        {
+            let mut state = self.cell.state.borrow_mut();
+            state.holds = state.holds.saturating_add(1);
+        }
+        let script: Rc<dyn Lift> = Rc::clone(&self.cell) as Rc<dyn Lift>;
+        ScriptHold {
+            script: Some(Rc::downgrade(&script)),
+        }
     }
 
     /// Answer the oldest held request with `value`; `false` when none is
@@ -388,7 +420,7 @@ where
             let position = state
                 .waiting
                 .iter()
-                .position(|waiting| matches!(waiting.until, Until::Released));
+                .position(|waiting| waiting.until.is_held());
             position.and_then(|position| state.waiting.remove(position))
         };
         let Some(waiting) = released else {
@@ -451,7 +483,7 @@ where
             .borrow()
             .waiting
             .iter()
-            .filter(|waiting| matches!(waiting.until, Until::Released))
+            .filter(|waiting| waiting.until.is_held())
             .count()
     }
 
@@ -530,15 +562,29 @@ where
     }
 
     fn dispatch(&self, id: EntryId, request: Rc<R>, resolver: Resolver<A>, first: &mut FirstPanic) {
-        let candidates = {
+        {
             let mut state = self.cell.state.borrow_mut();
             state.received_count = state.received_count.saturating_add(1);
             if state.received.len() < MAX_RECORDED_REQUESTS {
                 state.received.push(Rc::clone(&request));
             }
-            if state.holding {
+        }
+        self.route(id, request, resolver, first);
+    }
+
+    /// Answer a request that reached the script, or keep it while a hold
+    /// lives (see the [type docs](Self)).
+    fn route(&self, id: EntryId, request: Rc<R>, resolver: Resolver<A>, first: &mut FirstPanic) {
+        let candidates = {
+            let state = self.cell.state.borrow();
+            if state.holds > 0 {
                 drop(state);
-                self.hold_request(id, request, resolver);
+                self.keep(Waiting {
+                    id,
+                    request,
+                    resolver,
+                    until: Until::Lifted,
+                });
                 return;
             }
             state
@@ -707,6 +753,104 @@ impl fmt::Debug for RequestTicket {
     }
 }
 
+/// One hold of a [`Script`]: the script holds every request that reaches it
+/// while this, or another of its holds, lives ([`Script::hold`]).
+///
+/// Dropping or [releasing](Self::release) the last hold sends the requests
+/// the holds kept on to the script's steps and standing answer, oldest
+/// first. A hold does not keep the script alive: one dropped after its
+/// script does nothing. Owner-thread only.
+#[must_use = "requests are held only while the hold is alive"]
+pub struct ScriptHold {
+    /// `None` once released.
+    script: Option<std::rc::Weak<dyn Lift>>,
+}
+
+impl ScriptHold {
+    /// Let go of this hold now. Returns how many held requests went on to
+    /// the steps and the standing answer: none while another hold of the
+    /// script lives.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of the code the test supplied that ran for those
+    /// requests (a matcher, a computed or standing answer, an observer),
+    /// once every one of them has been answered or held again.
+    pub fn release(mut self) -> usize {
+        let mut first = FirstPanic::new();
+        let sent = self.lift(&mut first);
+        first.resume();
+        sent
+    }
+
+    fn lift(&mut self, first: &mut FirstPanic) -> usize {
+        self.script
+            .take()
+            .and_then(|script| script.upgrade())
+            .map_or(0, |script| script.lift(first))
+    }
+}
+
+impl Drop for ScriptHold {
+    fn drop(&mut self) {
+        let mut first = FirstPanic::new();
+        let _ = self.lift(&mut first);
+        // A hold dropped while its thread unwinds must not raise a second
+        // panic from a destructor: that one is discarded, and the first goes
+        // on.
+        if std::thread::panicking() {
+            if let Some(payload) = first.into_payload() {
+                flui_foundation::panic::discard_payload(payload);
+            }
+        } else {
+            first.resume();
+        }
+    }
+}
+
+impl fmt::Debug for ScriptHold {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ScriptHold")
+            .field("released", &self.script.is_none())
+            .finish_non_exhaustive()
+    }
+}
+
+/// A script as a [`ScriptHold`] reaches it, whatever its types.
+trait Lift {
+    /// One hold let go: when it was the last, send the requests the holds
+    /// kept on to the steps and the standing answer, and return how many.
+    fn lift(self: Rc<Self>, first: &mut FirstPanic) -> usize;
+}
+
+impl<R: fmt::Debug + 'static, A: 'static> Lift for ScriptCell<R, A> {
+    fn lift(self: Rc<Self>, first: &mut FirstPanic) -> usize {
+        let lifted = {
+            let mut state = self.state.borrow_mut();
+            state.holds = state.holds.saturating_sub(1);
+            if state.holds > 0 {
+                return 0;
+            }
+            state.take_waiting(|until| matches!(until, Until::Lifted))
+        };
+        let count = lifted.len();
+        let script = Script { cell: self };
+        // Routed with no borrow held: a step, a standing answer or an
+        // observer is the test's code. One that takes a hold again holds the
+        // requests after it, in order.
+        for Waiting {
+            id,
+            request,
+            resolver,
+            ..
+        } in lifted
+        {
+            script.route(id, request, resolver, first);
+        }
+        count
+    }
+}
+
 /// A script as a [`RequestTicket`] reaches it, whatever its types.
 trait Withdraw {
     /// Withdraw the request `id` if it still waits.
@@ -766,7 +910,7 @@ impl<R: fmt::Debug + 'static, A: 'static> Audit for ScriptCell<R, A> {
             let unanswered: Vec<(EntryId, Rc<R>)> = state
                 .waiting
                 .iter()
-                .filter(|waiting| matches!(waiting.until, Until::Released))
+                .filter(|waiting| waiting.until.is_held())
                 .map(|waiting| (waiting.id, Rc::clone(&waiting.request)))
                 .collect();
             let unconsumed: Vec<(EntryId, Cow<'static, str>)> = state
@@ -816,13 +960,13 @@ impl<R: fmt::Debug + 'static, A: 'static> Drop for ScriptCell<R, A> {
 
 impl<R: fmt::Debug + 'static, A: 'static> fmt::Debug for Script<R, A> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let (steps, waiting, received, holding) = {
+        let (steps, waiting, received, holds) = {
             let state = self.cell.state.borrow();
             (
                 state.steps.len(),
                 state.waiting.len(),
                 state.received_count,
-                state.holding,
+                state.holds,
             )
         };
         f.debug_struct("Script")
@@ -830,7 +974,7 @@ impl<R: fmt::Debug + 'static, A: 'static> fmt::Debug for Script<R, A> {
             .field("steps", &steps)
             .field("waiting", &waiting)
             .field("received", &received)
-            .field("holding", &holding)
+            .field("holds", &holds)
             .finish_non_exhaustive()
     }
 }
