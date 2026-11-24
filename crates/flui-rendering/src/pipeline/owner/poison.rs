@@ -274,8 +274,15 @@ impl LayoutPoison {
 
     /// Drops records for removed nodes. Ids are generational, so a stale
     /// record could never alias a new node; this keeps the map from
-    /// accumulating dead entries across tree churn.
+    /// accumulating dead entries across tree churn. It costs the smaller of
+    /// `removed` and the map: a `retain` walks every bucket the map grew.
     pub(super) fn evict(&mut self, removed: &FxHashSet<RenderId>) {
-        self.entries.retain(|id, _| !removed.contains(id));
+        if removed.len() < self.entries.len() {
+            for id in removed {
+                self.entries.remove(id);
+            }
+        } else if !self.entries.is_empty() {
+            self.entries.retain(|id, _| !removed.contains(id));
+        }
     }
 }

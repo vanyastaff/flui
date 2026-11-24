@@ -150,3 +150,35 @@ fn a_panicking_key_read_during_retain_moves_nothing() {
         assert_eq!(index.find(&entries, id, |e| *e), Some(position), "{id:?}");
     }
 }
+
+#[test]
+fn swap_remove_moves_the_last_entry_and_keeps_the_index_in_step() {
+    let mut entries: Vec<RenderId> = (1..=4).map(RenderId::new).collect();
+    let mut index = SlotIndex::<RenderId>::default();
+    index.reindex(entries.iter().copied());
+    let [first, .., last] = [1, 2, 3, 4].map(RenderId::new);
+    let stale = RenderId::new_gen(
+        first.index(),
+        first.generation().next().expect("a later generation"),
+    );
+    assert_eq!(
+        index.swap_remove(&mut entries, stale, |e| *e),
+        None,
+        "another generation"
+    );
+    assert_eq!(index.swap_remove(&mut entries, first, |e| *e), Some(first));
+    assert_eq!(entries, [4, 2, 3].map(RenderId::new));
+    assert_eq!(
+        index.swap_remove(&mut entries, first, |e| *e),
+        None,
+        "removed once"
+    );
+    assert_eq!(
+        index.swap_remove(&mut entries, RenderId::new(3), |e| *e),
+        Some(RenderId::new(3))
+    );
+    for (position, &id) in entries.iter().enumerate() {
+        assert_eq!(index.find(&entries, id, |e| *e), Some(position), "{id:?}");
+    }
+    assert_eq!(index.find(&entries, last, |e| *e), Some(0));
+}

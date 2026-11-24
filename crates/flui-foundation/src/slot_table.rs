@@ -138,6 +138,31 @@ impl<K: SlotKey> SlotIndex<K> {
         }
     }
 
+    /// Removes the entry that carries `key` and returns it, moving the last
+    /// entry into its place and keeping this index in step; `None` when
+    /// `key` is not listed. Costs O(1), and changes the list's order, which
+    /// an owner that sorts before it reads, or keeps no order, allows.
+    ///
+    /// `key_of` is read before anything moves, so a `key_of` that panics
+    /// leaves the list and the index as they were.
+    pub fn swap_remove<E>(
+        &mut self,
+        entries: &mut Vec<E>,
+        key: K,
+        key_of: impl Fn(&E) -> K,
+    ) -> Option<E> {
+        let position = self.find(entries, key, &key_of)?;
+        let moved = entries
+            .last()
+            .filter(|_| position + 1 < entries.len())
+            .map(&key_of);
+        self.remove(key);
+        if let Some(moved) = moved {
+            self.insert(moved, position);
+        }
+        Some(entries.swap_remove(position))
+    }
+
     /// Keeps the entries of `entries` for which `keep` returns `true`, in
     /// order, and keeps this index in step.
     ///
@@ -232,15 +257,9 @@ impl<K: SlotKey> SlotSet<K> {
 
     /// Removes `key`; `true` when it was a member.
     pub fn remove(&mut self, key: K) -> bool {
-        let Some(position) = self.index.find(&self.keys, key, |k| *k) else {
-            return false;
-        };
-        self.index.remove(key);
-        self.keys.swap_remove(position);
-        if let Some(&moved) = self.keys.get(position) {
-            self.index.insert(moved, position);
-        }
-        true
+        self.index
+            .swap_remove(&mut self.keys, key, |k| *k)
+            .is_some()
     }
 
     /// The number of members.
