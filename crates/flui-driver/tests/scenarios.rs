@@ -10,7 +10,8 @@
 //!   through the OS accessibility API;
 //! - [`roles`]: each role of the role table publishes the wire role UI Automation folds it to,
 //!   and through an OS lane reads back as the native role of the accessibility API the lane reads
-//!   through (UI Automation's control type, the `AXRole`, the AT-SPI role, Android's class name);
+//!   through (UI Automation's control type, the `AXRole`, the AT-SPI role, Android's class name,
+//!   the role the iOS Simulator's bridge gives the traits `accesskit_ios` sets);
 //! - [`input`], [`macos_input`], [`android_input`] and [`ios_input`]: the pointers, the wheel and
 //!   keys reach the app, read back from its journal, and a press beside a control leaves it alone;
 //!   on Android a touchpad's pinch too (`android_device` runs it through the Android lane, and
@@ -27,6 +28,8 @@ use flui_driver::lane::AccessibilityApi;
 use flui_driver::lane::android::roles as android_roles;
 use flui_driver::lane::android::{self, AndroidLane};
 use flui_driver::lane::atspi::roles as atspi_roles;
+use flui_driver::lane::ios_simulator;
+use flui_driver::lane::ios_simulator::roles as ios_roles;
 use flui_driver::lane::macos::roles as ax_roles;
 use flui_driver::lane::windows::roles::{ROLES, expected_wire_role};
 use flui_driver::protocol::geometry::LogicalPoint;
@@ -38,6 +41,7 @@ use flui_driver::protocol::semantics::SemanticsRole;
 use flui_driver::protocol::tree::Node;
 use flui_driver::protocol::wire::Role;
 use flui_driver::report::Check;
+use flui_driver::testing::ScriptedSimulatorScreen;
 use flui_driver::{
     Driver, Error, InputPath, Launch, Locator, Outcome, Report, Result, Verdict, expect,
 };
@@ -273,6 +277,13 @@ pub fn roles(driver: &mut Driver, report: &mut Report) -> Result<()> {
                 .iter()
                 .filter(|row| row.named)
                 .map(|row| (row.role, row.class.to_owned()))
+                .collect::<Vec<(SemanticsRole, String)>>(),
+        ),
+        AccessibilityApi::SimulatorAx => (
+            "the Simulator's accessibility bridge",
+            ios_roles::ROLES
+                .iter()
+                .map(|row| (row.role, row.native()))
                 .collect::<Vec<(SemanticsRole, String)>>(),
         ),
         other => {
@@ -945,6 +956,112 @@ fn the_android_accessibility_scenario_passes_through_the_lane_but_its_activation
         ),
         other => panic!("one activation row: {other:#?}"),
     }
+}
+
+/// `driver`, a headless app, driven through the iOS Simulator lane on a scripted Simulator whose
+/// window shows `app` as `accesskit_ios` serves it and the Simulator's bridge shows it on the Mac
+/// (`ios_simulator_tree::served`), and the window, with the directory the lane's hold lives in.
+fn through_simulator(
+    driver: Driver,
+    app: &flui_driver::protocol::tree::Tree,
+) -> (tempfile::TempDir, Driver, ScriptedSimulatorScreen) {
+    let screen = ScriptedSimulatorScreen::new(
+        crate::ios_simulator_tree::TITLE,
+        crate::ios_simulator_tree::served(app, true),
+    );
+    let (dir, lane) = crate::ios_simulator_lane::connect(&crate::ios_simulator_lane::scripted());
+    let driver = driver
+        .with_lane(lane.read_through(screen.accessibility()))
+        .expect("the lane starts");
+    (dir, driver, screen)
+}
+
+/// The headless half of the iOS roles scenario: each role publishes the AccessKit role the iOS
+/// table composes with `accesskit_ios`'s traits and the bridge's roles, and the scenario passes
+/// through the iOS Simulator lane reading the screen the Simulator would show for the app's tree.
+/// On a Simulator it reads the Mac's accessibility API on the device's window
+/// (`ios_simulator::the_ios_roles_scenario_runs_through_the_simulators_window`).
+#[test]
+fn the_ios_roles_scenario_passes_through_the_lane_on_the_headless_app() {
+    let mut driver = headless(|| Roles);
+    let app = driver
+        .main_window()
+        .and_then(|mut window| window.read())
+        .expect("the app's tree");
+    let mut nodes = Vec::new();
+    collect_nodes(&app.roots, &mut nodes);
+    for row in ios_roles::ROLES {
+        let label = role_label(row.role);
+        let node = nodes
+            .iter()
+            .find(|node| {
+                node.name.as_deref() == Some(&label) || node.description.as_deref() == Some(&label)
+            })
+            .unwrap_or_else(|| panic!("{label:?} is published"));
+        assert_eq!(node.native_role, row.accesskit, "{label}");
+    }
+    let (_dir, driver, _screen) = through_simulator(driver, &app);
+    let report = run("ios-roles", driver, roles);
+    passed(&report);
+    assert_eq!(report.lane(), Some(ios_simulator::LANE));
+    assert!(
+        report
+            .checks()
+            .iter()
+            .any(|check| check.name
+                == "the Simulator's accessibility bridge reads button as AXButton"),
+        "{:#?}",
+        report.checks()
+    );
+}
+
+/// The headless half of the iOS accessibility scenario: through the iOS Simulator lane, reading
+/// the screen the Simulator would show, the OS tree shows the button with the app's identifier
+/// and projects to what the app published, and the activation presses the button's element
+/// through the bridge. The scripted window does not reach the headless app, so the count the
+/// activation would raise stays where it was and that row fails on its effect alone; on a
+/// Simulator the press reaches the app
+/// (`ios_simulator::the_ios_accessibility_scenario_runs_through_the_simulators_window`).
+#[test]
+fn the_ios_accessibility_scenario_passes_through_the_lane_but_the_activations_effect() {
+    // The window as the scenario reads it: after one like through the semantic path.
+    let mut shown = headless(|| Controls);
+    let app = (|| -> Result<flui_driver::protocol::tree::Tree> {
+        let mut window = shown.main_window()?;
+        window
+            .locate(Locator::identifier("like"))
+            .require(InputPath::Semantic)
+            .tap()?;
+        expect(window.locate(Locator::identifier("likes"))).to_have_name("Likes: 1")?;
+        window.read()
+    })()
+    .expect("the app's tree after one like");
+    let (_dir, driver, screen) = through_simulator(headless(|| Controls), &app);
+    let report = run("ios-a11y", driver, accessibility);
+    let (activation, rest): (Vec<&Check>, Vec<&Check>) = report
+        .checks()
+        .iter()
+        .partition(|check| check.name == "like is invoked through the OS accessibility API");
+    let failed: Vec<&&Check> = rest
+        .iter()
+        .filter(|check| check.outcome != Outcome::Passed)
+        .collect();
+    assert_eq!(failed, Vec::<&&Check>::new());
+    // Five checks and the scenario's own row.
+    assert_eq!(rest.len(), 6, "{rest:#?}");
+    match activation.as_slice() {
+        [check] => assert!(
+            matches!(&check.outcome, Outcome::Failed { reason } if reason.contains("Likes: 2")),
+            "{check:?}"
+        ),
+        other => panic!("one activation row: {other:#?}"),
+    }
+    let pressed = screen.presses();
+    assert!(
+        matches!(pressed.as_slice(), [like] if like.native_role == "AXButton"
+            && like.name.as_deref() == Some("Like")),
+        "the activation pressed the button's element: {pressed:?}"
+    );
 }
 
 /// The iOS input scenario on the headless target, synthetic; through the iOS Simulator lane,

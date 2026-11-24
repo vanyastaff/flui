@@ -20,6 +20,7 @@ mod ios_simulator;
 #[cfg(unix)]
 mod ios_simulator_host;
 mod ios_simulator_lane;
+mod ios_simulator_tree;
 #[cfg(unix)]
 mod launch;
 #[cfg(target_os = "macos")]

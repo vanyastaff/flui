@@ -749,8 +749,8 @@ impl Lane for AndroidLane {
         tree::read(&dump, &self.package, app, mapping).map_err(tree::TreeError::into_error)
     }
 
-    fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
-        let _ = placement;
+    fn invoke(&mut self, placement: &Placement, identifier: &str, app: &Tree) -> Result<()> {
+        let _ = (placement, app);
         Err(Error::not_supported(
             "os_invoke",
             format!(

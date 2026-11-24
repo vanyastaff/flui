@@ -572,7 +572,7 @@ pub trait Lane: Send {
     fn send(&mut self, event: &OsEvent) -> Result<()>; // one event: a single-step move, a press, a pause
     fn release_all(&mut self) -> Result<()>;
     fn read_tree(&mut self, placement: &Placement, app: &Tree) -> Result<Tree>; // not_supported by default
-    fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()>; // not_supported by default
+    fn invoke(&mut self, placement: &Placement, identifier: &str, app: &Tree) -> Result<()>; // not_supported by default
     fn capture_window(&mut self, placement: &Placement) -> Result<pixels::Image>; // not_supported by default
 }
 ```
@@ -595,7 +595,7 @@ event is sent.
 | x11 | XTEST (`x11rb`): keys by the server's keymap, a character on no key through a spare key mapped for the text; touch and pen refused | AT-SPI (`atspi`), the role table `lane::atspi::roles` | `GetImage` on the window | process group plus `PR_SET_PDEATHSIG`, from a thread the session keeps |
 | wayland | libei (`reis`) from a compositor's EIS socket or the RemoteDesktop portal (asked over zbus); keys and text through EI's text interface; portal refusal is cannot-verify | AT-SPI | none: the ScreenCast portal's PipeWire stream needs a C library no Linux build links (`docs/gaps.md`) | same as x11 |
 | android | `adb shell input`: a contact held between events through `motionevent` on the touch screen or the mouse (primary button only), keys sent at their release as `keyevent` or `keycombination`, printable ASCII as `input text`, a scroll as `input mouse scroll` in detents; one pointer and no hover, so a second contact is refused. A pen goes through a `uinput` device the lane registers and syncs with (`uinput -` reading JSON lines). `uinput` without root works only on some devices, so it is a probed capability (`uinput_device`): the probe registers, syncs and removes a test device once per session, and the pen answers `not_supported` where it fails; a touchpad's gesture goes through no OS lane (`steps::os_events` refuses it). Which `input` commands exist is read from the device's usage. The app's window and the display's rotation come from `uiautomator dump` | `uiautomator dump`, matched to the app's own tree by structure, role (the class table `lane::android::roles`), content description, state and bounds, since `accesskit_android` sets no `viewIdResourceName`; no dump while a screen reader runs; no activation, since UI Automator performs no action (recorded in `docs/gaps.md`) | `exec-out screencap` raw, cut to the window; a pixel format other than RGBA or RGBX is captured again with `-p` and decoded | `adb install`, `am start -W` with extras, `adb forward tcp:0 localabstract:…`, `am force-stop` and the forward removed when the lane ends |
-| ios_simulator | none (D23): every input event is refused as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything is sent, until a supported channel exists | none: UIKit serves `accesskit_ios`'s tree inside the simulator, which no public host API reads (recorded in gaps) | `simctl io <udid> screenshot`, its file length and declared size checked against the window before decoding | `simctl install`, `simctl launch --terminate-running-process` with the endpoint and token as `SIMCTL_CHILD_` launch values, `simctl terminate` when the lane ends |
+| ios_simulator | none (D23): every input event is refused as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything is sent, until a supported channel exists | AX via `objc2-application-services` on the Simulator's window (Simulator.app, DeviceHub from Xcode 27), which bridges the iOS app's elements under a group that is the device's screen; the window found by its title among the windows on screen, the screen by the app's window's shape, each element's frame placed on the window by the screen's scale, and the elements matched to the app's own tree by role (the trait table `lane::ios_simulator::roles`), label, state and bounds, an ambiguity refused; activation through `AXPress`; the client shared with the macOS lane (`lane::ax`) | `simctl io <udid> screenshot`, its file length and declared size checked against the window before decoding | `simctl install`, `simctl launch --terminate-running-process` with the endpoint and token as `SIMCTL_CHILD_` launch values, `simctl terminate` when the lane ends |
 | chrome | BiDi `input.performActions` (trusted input: mouse, pen, touch, wheel, keys), one command of one instant action an event; IME through `goog:cdp.sendCommand` `Input.imeSetComposition`/`insertText`, the one lane that composes | none yet: the canvas mirrors its tree as an ARIA DOM, which the lane does not read; Chrome's accessibility tree over it (`Accessibility.getFullAXTree` through `goog:cdp`) is where it would | `browsingContext.captureScreenshot` clipped to the canvas | ChromeDriver from `CHROMEDRIVER` (or `CHROMEWEBDRIVER`'s directory) or a cached copy whose SHA-256 matches its record, fetched from Chrome for Testing only when the launch allows it; Chrome always headless; the page served by a loopback server of the lane's own |
 
 ### Determinism of OS lanes
@@ -1124,12 +1124,15 @@ fixture, with an identifier on every interactive widget.
   restore token reduces it). Headless Wayland CI (weston) has no portal, so x11 stays the CI lane.
 - **Presented-frame copy costs a copy per armed frame.** It is one-shot and never runs unrequested.
   The fallback is labelled `rendered`.
-- **iOS and web have no OS accessibility tree for FLUI nodes the driver can read.**
-  UIKit serves `accesskit_ios`'s tree inside the simulator, where no public host API reads it,
-  and the Chrome lane reads none of a page's. Android serves its tree without the identifier, so
-  the Android lane matches the dump to the app's own tree instead (`lane::android::tree`). R17's
-  cross-check runs on the desktops and Android; the selector still works on iOS and web through
-  the agent.
+- **The web has no OS accessibility tree for FLUI nodes the driver can read, and iOS one only on
+  a Simulator.** The Chrome lane reads none of a page's. The Simulator bridges `accesskit_ios`'s
+  tree into the Mac's accessibility API on the device's window, through Apple's private
+  translation framework, which the public API serves without documenting it: Apple can change
+  what it serves, and only a run on a Mac pins the roles it gives (`lane::ios_simulator::roles`).
+  Android serves its tree without the identifier and the bridge with one no run has confirmed, so
+  both lanes match the OS tree to the app's own (`lane::android::tree`,
+  `lane::ios_simulator::tree`). R17's cross-check runs on the desktops, Android and the iOS
+  Simulator; the selector still works on a device and the web through the agent.
 - **Tier H publishing.** `flui-driver` is the first published tier-H crate besides the facade. If
   `cargo xtask workspace` refuses an Evolving kind in tier H, the task amends ADR-0081's kind table
   in ADR-0238 rather than bending the crate.

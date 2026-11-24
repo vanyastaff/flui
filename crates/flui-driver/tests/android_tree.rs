@@ -730,7 +730,7 @@ fn an_activation_through_the_accessibility_api_is_refused_naming_os_invoke() {
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
     let before = adb.log().len();
     let refused = lane
-        .invoke(&placement(), "like")
+        .invoke(&placement(), "like", &controls())
         .expect_err("the lane activates nothing");
     assert_eq!(refused.missing_capability().as_deref(), Some("os_invoke"));
     assert!(refused.to_string().contains("ACTION_CLICK"), "{refused}");

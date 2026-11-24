@@ -66,10 +66,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   device or button it lacks, a chord the OS shell takes. Nothing is pressed, so nothing is
   released.
 - **A lane imports no other lane.** What more than one lane uses is a module of `lane`:
-  `lane::walk` (the bounded accessibility walk), `lane::pacing` (the guard-watched slices of a
-  pause and the echo deadline), `lane::screen` (a window's geometry from its device origin) and
-  `lane::tool` (a host tool, `adb` or `xcrun`, run to its end within a deadline and a bound on
-  what it prints).
+  `lane::walk` (the bounded accessibility walk), `lane::ax` (the macOS accessibility API's
+  client, which the macOS lane and the iOS Simulator lane read through, on macOS),
+  `lane::pacing` (the guard-watched slices of a pause and the echo deadline), `lane::screen` (a
+  window's geometry from its device origin) and `lane::tool` (a host tool, `adb` or `xcrun`, run
+  to its end within a deadline and a bound on what it prints).
 - **A lane's OS code builds on its OS only; its tables build everywhere.** `lane::windows` keeps
   the key, role, coordinate and activity tables, the safety rules and the contact frames pure, so
   Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
@@ -81,7 +82,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   server, AT-SPI or libei are Linux only (libei with the `wayland` feature). `lane::android` is
   host code that drives `adb`, so all of it builds on every host, and its tests script the device
   (`testing::ScriptedAdb`); `lane::ios_simulator` drives `xcrun` the same way
-  (`testing::ScriptedXcrun`), and only starting an app needs a Unix host, whose socket the
+  (`testing::ScriptedXcrun`) and reads the Simulator's window through `HostAccessibility`
+  (`testing::ScriptedSimulatorScreen`; the Mac's `MacAccessibility` alone is
+  `cfg(target_os = "macos")`), and only starting an app needs a Unix host, whose socket the
   simulator reaches. `lane::chrome` (feature `chrome`) is host code on every desktop: its
   keys, actions, input-method steps and screenshot decoding are pure tables, and what reaches a
   browser goes through its session.
@@ -128,6 +131,18 @@ app's trees, frames and input, and this crate composes that with what only the O
   nothing runs as an app that already exited. The launch values reach the app as
   `SIMCTL_CHILD_` variables in `simctl`'s environment, never in a command's text or debug form,
   and no such variable inherited from the driver's environment reaches it.
+- **The iOS Simulator lane reads what the Simulator serves the Mac, and matches it.** The
+  Simulator vends the iOS app's elements to AppKit as elements of the device's window (Apple's
+  private translation framework), which the public `AXUIElement` API reads; the lane takes no
+  private framework. It finds the window by its title (`<device> – <runtime>`) among the windows
+  on screen, not the Simulator's process by name, and the screen as the window's one group of
+  the app's window's shape; two are refused. The bridge's identifier is unconfirmed, so
+  `Lane::read_tree` and `Lane::invoke` are handed the app's own tree and `lane::ios_simulator::tree`
+  matches each element among the descendants of the node its nearest matched ancestor fits (the
+  bridge serves only the elements VoiceOver reads) by the role `lane::ios_simulator::roles` gives
+  `accesskit_ios`'s trait, its label, its checked and enabled state, an identifier it carries,
+  and its frame on the window; two candidates alike are `Error::Ambiguous`. A press finds its
+  element again by the facts the read gave and presses it through `AXPress`.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

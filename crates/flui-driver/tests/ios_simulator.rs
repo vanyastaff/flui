@@ -12,7 +12,9 @@
 //!
 //! The lane sends no input ([`flui_driver::lane::ios_simulator::xcode`]), so the input scenario
 //! runs twice: on the synthetic path, where it passes, and through the lane, where each row is
-//! `cannot_verify` naming `ios_simulator_hid`.
+//! `cannot_verify` naming `ios_simulator_hid`. The accessibility and roles scenarios read the app
+//! through the Mac's accessibility API on the device's window, which a run off macOS has not, and
+//! which takes the Accessibility permission and the device's window on screen.
 
 use std::time::Duration;
 
@@ -83,9 +85,69 @@ fn captured(driver: &mut Driver) -> Result<()> {
     }
 }
 
+fn required() -> bool {
+    std::env::var_os("FLUI_REQUIRE_IOS_SIMULATOR").is_some_and(|value| value == "1")
+}
+
+/// `scenario` run as `name` on the scenario app `app` started on the named simulator; a session
+/// that does not start is the report's one row.
+fn report_of(
+    name: &str,
+    app: &str,
+    scenario: impl FnOnce(&mut Driver, &mut Report) -> Result<()>,
+) -> Report {
+    let mut report = Report::new();
+    match session(app) {
+        Ok(mut driver) => report.run_scenario(name, &mut driver, scenario),
+        Err(error) => {
+            let _ = report.check(
+                "the scenario app starts on the simulator",
+                || -> Result<()> { Err(error) },
+            );
+        }
+    }
+    report
+}
+
+/// A run that is required passes; any other is never a failure, and one that could not be
+/// verified says why.
+fn passes_or_says_why(report: &Report) {
+    if required() {
+        assert_eq!(report.verdict(), Verdict::Pass, "{:#?}", report.checks());
+        return;
+    }
+    assert_ne!(report.verdict(), Verdict::Fail, "{:#?}", report.checks());
+    if report.verdict() == Verdict::CannotVerify {
+        assert!(
+            report
+                .checks()
+                .iter()
+                .any(|check| matches!(check.outcome, Outcome::CannotVerify { .. })),
+            "a run that could not be verified says why: {:#?}",
+            report.checks()
+        );
+    }
+}
+
+/// The accessibility scenario through the iOS Simulator lane: the button's role, label and
+/// identifier read through the Simulator's bridge and matched to the app's tree, the projections
+/// equal, and the button pressed through `AXPress` reaching the app.
+#[test]
+fn the_ios_accessibility_scenario_runs_through_the_simulators_window() {
+    passes_or_says_why(&report_of("ios-a11y", "controls", scenarios::accessibility));
+}
+
+/// The roles scenario through the iOS Simulator lane: each role of the table reads back as the
+/// role the Simulator's bridge gives the traits `accesskit_ios` sets, which pins the bridge's
+/// half of the table.
+#[test]
+fn the_ios_roles_scenario_runs_through_the_simulators_window() {
+    passes_or_says_why(&report_of("ios-roles", "roles", scenarios::roles));
+}
+
 #[test]
 fn the_ios_scenarios_run_on_a_simulator() {
-    let required = std::env::var_os("FLUI_REQUIRE_IOS_SIMULATOR").is_some_and(|value| value == "1");
+    let required = required();
     let mut synthetic = Report::new();
     let mut os = Report::new();
     let mut started = false;

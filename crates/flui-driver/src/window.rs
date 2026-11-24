@@ -125,19 +125,31 @@ impl<'d> Window<'d> {
 
     /// Activate the element whose identifier is `identifier` through the OS accessibility API, as
     /// a screen reader does ([`Lane::invoke`](crate::Lane::invoke)): proof that assistive
-    /// technology can act on it, not only read it.
+    /// technology can act on it, not only read it. The lane is handed the app's own tree of the
+    /// window, read first, when it matches against it, as [`Self::os_tree`] is.
     ///
     /// # Errors
     ///
     /// [`Error::NotSupported`](crate::Error::NotSupported) naming `os_invoke` without a lane that
     /// acts through one; the lane's and the app's failures.
     pub fn os_invoke(&mut self, identifier: &str) -> Result<()> {
+        let no_lane = || crate::Error::not_supported("os_invoke", "the session has no OS lane");
+        let matches = self
+            .driver
+            .lane()
+            .ok_or_else(no_lane)?
+            .capabilities()
+            .accessibility
+            .is_some_and(AccessibilityApi::matches_app_tree);
+        let app = if matches {
+            self.read()?
+        } else {
+            Tree::new(Vec::new(), false)
+        };
         let placement = self.placement()?;
-        let lane = self.driver.lane().ok_or_else(|| {
-            crate::Error::not_supported("os_invoke", "the session has no OS lane")
-        })?;
+        let lane = self.driver.lane().ok_or_else(no_lane)?;
         let identifier = identifier.to_owned();
-        lane.run(move |lane| lane.invoke(&placement, &identifier))?
+        lane.run(move |lane| lane.invoke(&placement, &identifier, &app))?
     }
 
     /// The window's semantics tree and its OS accessibility tree, each as its normalized outline
