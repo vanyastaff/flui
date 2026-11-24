@@ -11,5 +11,4 @@
 ### Fixed
 
 - A dropped `Profiler` no longer leaves its sink on the capture, where it ran on every frame; making and dropping profilers over one capture no longer grows its sink list.
-- Frame-snapshot events from `Timeline::record_frame_snapshots` carry their runtime and presentation, so the Chrome trace shows each in its runtime's process instead of the process for events that name no runtime. Their `args.presentation` in the Chrome trace is now the packed number, as on every other event of the presentation; `args.ui_runtime` and the event name keep the ids as text.
 - A `Capture` created after another was dropped no longer reads the state the dropped capture left in a span that was still open, such as a frame it opened, which it could take for a frame of its own.

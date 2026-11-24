@@ -18,15 +18,17 @@ fn record(timeline: &Timeline, name: &str, start: Instant, duration: Duration) {
     timeline.record_completed_event(name, start, duration, serde_json::Value::Null);
 }
 
-/// A timeline over a capture counts what `events` returns: each frame, its spans and the
-/// application's own events.
+/// A timeline over a capture counts what `events` returns: each frame, its spans, each produced
+/// frame and the application's own events.
 ///
-/// Fails when the count leaves out a frame's own span or its child spans, or the application's
-/// events.
+/// Fails when the count leaves out a frame's own span or its child spans, a produced frame, or
+/// the application's events.
 #[cfg(feature = "profiling")]
 #[test]
 fn the_event_count_is_the_number_of_events_returned() {
     use flui_devtools::Capture;
+    use flui_sdk::foundation::generation::Generation;
+    use flui_sdk::foundation::{PresentationId, UiRuntimeId};
 
     let capture = Capture::new();
     let timeline = Timeline::over(&capture);
@@ -35,11 +37,34 @@ fn the_event_count_is_the_number_of_events_returned() {
             let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
             let _layout = tracing::debug_span!(target: "flui.frame", "layout").entered();
         }
+        // One produced frame, in the shape the runtime traces it.
+        tracing::trace!(
+            target: "flui.frame",
+            event = "frame_telemetry",
+            ui_runtime_id = UiRuntimeId::new_gen(1, Generation::FIRST).as_u64(),
+            presentation = PresentationId::new_gen(1, Generation::FIRST).as_u64(),
+            frame_id = 1_u64,
+            present_outcome = "presented",
+            segment_us = 0_u64,
+            build_us = 0_u64,
+            layout_us = 0_u64,
+            paint_us = 0_u64,
+            composite_us = 0_u64,
+            produce_to_present_us = 0_u64,
+            input_count = 0_u64,
+            input_latency_max_us = 0_u64,
+            input_epochs_overflowed = false,
+            "frame telemetry"
+        );
     });
     timeline.record_instant("application work");
 
     let events = timeline.events();
-    assert_eq!(events.len(), 5, "two frames, two layouts and one event");
+    assert_eq!(
+        events.len(),
+        6,
+        "two frames, two layouts, one produced frame and one event"
+    );
     assert_eq!(timeline.event_count(), events.len());
 }
 
