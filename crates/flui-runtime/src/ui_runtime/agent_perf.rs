@@ -5,7 +5,7 @@
 //! when a sink settles a frame. After each frame the runtime's drive reaches the agent through
 //! [`AgentSide::after_frame`](super::AgentSide::after_frame), and a running span takes the
 //! snapshots recorded since its cursor; `perf.stop` takes the last ones before it answers. A
-//! window with no span running pays one borrow and one check per frame and allocates nothing.
+//! window with no span running pays one borrow and one check per frame.
 //!
 //! # What a span counts
 //!
@@ -23,16 +23,25 @@
 //! time, `dropped`, `janky` and `worst` cover the whole span. A span with no frame reports zero
 //! for every percentile.
 //!
+//! # Who owns a span
+//!
+//! A span is its starter's, a [`SpanOwner`]: the input lease the call was asked through, which
+//! is one conversation's (a connection holds one lease per window, ADR-0400 §2), or, for a call
+//! asked through no lease, the window handles every such caller shares. Only its owner stops
+//! it. A lease's span goes when the lease is released, at the drain that releases what the
+//! lease holds ([`DevAgentSlot::take_released`](super::agent::DevAgentSlot::take_released)), so
+//! a conversation that ends without `perf.stop` leaves nothing that blocks the next one. A span
+//! asked through no lease ends when the window handles are all dropped: the next frame, or the
+//! next `perf` call, finds it orphaned and lets it go.
+//!
 //! # Edges
 //!
-//! - `perf.start` while a span runs on the window is refused `invalid_argument`: the running
-//!   span keeps its frames, and `perf.stop` ends it.
-//! - `perf.stop` with no span running is refused `invalid_argument`.
+//! - `perf.start` while a span runs on the window is refused `invalid_argument`, whoever owns
+//!   it: the running span keeps its frames, and its owner's `perf.stop` ends it.
+//! - `perf.stop` with no span running, or one another owner started, is refused
+//!   `invalid_argument`, and the span runs on.
 //! - A window that closes between the two drops its span with it; `perf.stop` answers `gone`,
 //!   as every call on a closed window does.
-//! - A span nobody stops ends when the window handles that started it are all dropped: the
-//!   next frame, or the next `perf` call, finds it orphaned and lets it go, so a vend after
-//!   that starts from no span.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -44,6 +53,7 @@ use flui_protocol::perf::{
 };
 use flui_protocol::session::{Empty, WindowParams};
 use flui_scheduler::{FrameId, FrameSnapshot, PresentOutcome};
+use flui_view::__runtime::LeaseId;
 use web_time::Duration;
 
 use super::UiRuntime;
@@ -81,11 +91,51 @@ pub(super) struct SlowFrame {
     pub(super) submit_ms: f64,
 }
 
+/// Who started a span, and so who may stop it (module docs, "Who owns a span").
+#[derive(Debug, Clone)]
+pub(super) enum SpanOwner {
+    /// The input lease the call was asked through: one conversation's. Released, it takes the
+    /// span with it.
+    Lease(LeaseId),
+    /// The window handles a call asked through no lease shares: once none is alive nobody can
+    /// stop it.
+    Handles(Weak<SemanticsHandle>),
+}
+
+impl SpanOwner {
+    /// The owner of a call asked through `lease`, or through none from a window whose handles
+    /// share `handles`.
+    fn of(lease: Option<LeaseId>, handles: Weak<SemanticsHandle>) -> Self {
+        match lease {
+            Some(lease) => Self::Lease(lease),
+            None => Self::Handles(handles),
+        }
+    }
+
+    /// Whether the owner can still stop the span: a lease until its release takes the span,
+    /// the handles while one is alive.
+    fn is_held(&self) -> bool {
+        match self {
+            Self::Lease(_) => true,
+            Self::Handles(handles) => handles.strong_count() > 0,
+        }
+    }
+
+    /// Whether `self` and `other` are the same caller.
+    fn is(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Lease(own), Self::Lease(other)) => own == other,
+            (Self::Handles(own), Self::Handles(other)) => Weak::ptr_eq(own, other),
+            (Self::Lease(_), Self::Handles(_)) | (Self::Handles(_), Self::Lease(_)) => false,
+        }
+    }
+}
+
 /// The frames of one span between `perf.start` and `perf.stop`.
 #[derive(Debug)]
 pub(super) struct PerfSpan {
-    /// The window handles that started it: once none is alive nobody can stop it.
-    handles: Weak<SemanticsHandle>,
+    /// Who started it, and may stop it.
+    owner: SpanOwner,
     /// The last snapshot taken; the next pull starts after it.
     cursor: Option<FrameId>,
     jank_multiplier: f64,
@@ -105,13 +155,13 @@ pub(super) struct PerfSpan {
 impl PerfSpan {
     /// A span keeping `worst_kept` slowest frames, judging jank at `jank_multiplier` periods.
     pub(super) fn new(
-        handles: Weak<SemanticsHandle>,
+        owner: SpanOwner,
         cursor: Option<FrameId>,
         jank_multiplier: f64,
         worst_kept: usize,
     ) -> Self {
         Self {
-            handles,
+            owner,
             cursor,
             jank_multiplier,
             worst_kept,
@@ -125,9 +175,9 @@ impl PerfSpan {
         }
     }
 
-    /// Whether a window handle that started the span is still alive.
+    /// Whether its owner can still stop it.
     fn is_held(&self) -> bool {
-        self.handles.strong_count() > 0
+        self.owner.is_held()
     }
 
     /// Takes the frames `presentation` recorded since the cursor, judged against its display's
@@ -263,11 +313,21 @@ impl PerfSampling {
         }
     }
 
-    /// Starts a span for the handles `handles`, from what `presentation` recorded so far.
+    /// Lets go the span one of `released` owns: its conversation has ended.
+    pub(super) fn forget(&self, released: &[LeaseId]) {
+        let mut span = self.span.borrow_mut();
+        if span.as_ref().is_some_and(
+            |span| matches!(span.owner, SpanOwner::Lease(lease) if released.contains(&lease)),
+        ) {
+            *span = None;
+        }
+    }
+
+    /// Starts a span for `owner`, from what `presentation` recorded so far.
     fn start(
         &self,
         presentation: &PresentationState,
-        handles: Weak<SemanticsHandle>,
+        owner: SpanOwner,
         params: &PerfStartParams,
     ) -> Result<(), AgentError> {
         let jank_multiplier = params.jank_multiplier.unwrap_or(DEFAULT_JANK_MULTIPLIER);
@@ -293,18 +353,32 @@ impl PerfSampling {
             .frames_since(None)
             .last()
             .map(|snapshot| snapshot.frame_id);
-        *span = Some(PerfSpan::new(handles, cursor, jank_multiplier, worst_kept));
+        *span = Some(PerfSpan::new(owner, cursor, jank_multiplier, worst_kept));
         Ok(())
     }
 
-    /// Ends the running span and reports it, its last frames taken first.
-    fn stop(&self, presentation: &PresentationState) -> Result<PerfReport, AgentError> {
-        let span = self.span.borrow_mut().take();
-        let Some(mut span) = span.filter(PerfSpan::is_held) else {
-            return Err(AgentError::InvalidArgument {
-                reason: "no perf span runs on this window; perf.start begins one",
-            });
+    /// Ends the span `owner` started and reports it, its last frames taken first.
+    fn stop(
+        &self,
+        presentation: &PresentationState,
+        owner: &SpanOwner,
+    ) -> Result<PerfReport, AgentError> {
+        let mut kept = self.span.borrow_mut();
+        let mut span = match kept.take().filter(PerfSpan::is_held) {
+            Some(span) if span.owner.is(owner) => span,
+            Some(other) => {
+                *kept = Some(other);
+                return Err(AgentError::InvalidArgument {
+                    reason: "the perf span on this window is another caller's; its perf.stop ends it",
+                });
+            }
+            None => {
+                return Err(AgentError::InvalidArgument {
+                    reason: "no perf span runs on this window; perf.start begins one",
+                });
+            }
         };
+        drop(kept);
         span.pull(presentation);
         let period = presentation
             .window_display
@@ -334,21 +408,23 @@ impl Serve for method::PerfStart {
         let Some(slot) = slot.as_ref() else {
             return Answer::Now(Err(AgentError::PresentationGone));
         };
+        let owner = SpanOwner::of(ctx.lease, slot.window_handles());
         Answer::Now(
             slot.perf
-                .start(ctx.state, slot.window_handles(), &params)
+                .start(ctx.state, owner, &params)
                 .map(|()| Empty::default()),
         )
     }
 }
 
 impl Serve for method::PerfStop {
-    /// Ends the window's span and reports its frames (module docs).
+    /// Ends the span the caller started and reports its frames (module docs).
     fn serve(ctx: &mut ServeContext<'_, PerfReport>, _: WindowParams) -> Answer<PerfReport> {
         let slot = ctx.state.dev_agent.borrow();
         let Some(slot) = slot.as_ref() else {
             return Answer::Now(Err(AgentError::PresentationGone));
         };
-        Answer::Now(slot.perf.stop(ctx.state))
+        let owner = SpanOwner::of(ctx.lease, slot.window_handles());
+        Answer::Now(slot.perf.stop(ctx.state, &owner))
     }
 }

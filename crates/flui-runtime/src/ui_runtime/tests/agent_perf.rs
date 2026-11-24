@@ -9,11 +9,13 @@ use flui_protocol::error::{ErrorCode, ErrorObject};
 use flui_protocol::method;
 use flui_protocol::perf::{PerfReport, PerfStartParams};
 use flui_protocol::session::WindowParams;
-use flui_view::dev_agent::AgentWindow;
+use flui_view::dev_agent::{AgentWindow, InputLease};
 
 use super::agent_semantics::{answer, counter, frame};
 use super::*;
-use crate::ui_runtime::agent_perf::{MAX_SAMPLES, MAX_WORST, PerfSpan, SlowFrame, percentile};
+use crate::ui_runtime::agent_perf::{
+    MAX_SAMPLES, MAX_WORST, PerfSpan, SlowFrame, SpanOwner, percentile,
+};
 
 /// A runtime showing a counter, one frame in, and its window.
 fn shown() -> (UiRuntime, AgentWindow, ScriptedSink) {
@@ -198,7 +200,7 @@ fn slow(frame: u64, ms: f64) -> SlowFrame {
 #[test]
 fn a_span_judges_each_frame_against_the_period_and_keeps_its_slowest() {
     let period = Some(Duration::from_millis(10));
-    let mut span = PerfSpan::new(std::sync::Weak::new(), None, 2.0, 3);
+    let mut span = PerfSpan::new(SpanOwner::Handles(std::sync::Weak::new()), None, 2.0, 3);
     for (frame, ms) in [
         (1, 5.0),
         (2, 10.0),
@@ -242,7 +244,12 @@ fn a_span_judges_each_frame_against_the_period_and_keeps_its_slowest() {
 /// and the largest time the whole span. An empty span reports zeros.
 #[test]
 fn a_span_keeps_a_bounded_window_of_times() {
-    let mut span = PerfSpan::new(std::sync::Weak::new(), None, 2.0, MAX_WORST);
+    let mut span = PerfSpan::new(
+        SpanOwner::Handles(std::sync::Weak::new()),
+        None,
+        2.0,
+        MAX_WORST,
+    );
     span.sample(slow(1, 500.0), None);
     for frame in 2..=u64::try_from(MAX_SAMPLES).expect("fits") + 1 {
         span.sample(slow(frame, 1.0), None);
@@ -259,10 +266,151 @@ fn a_span_keeps_a_bounded_window_of_times() {
     );
     assert_eq!(report.worst[0].frame, 1);
 
-    let empty = PerfSpan::new(std::sync::Weak::new(), None, 2.0, 5).report(None);
+    let empty =
+        PerfSpan::new(SpanOwner::Handles(std::sync::Weak::new()), None, 2.0, 5).report(None);
     assert_eq!(empty.frames, 0);
     assert_eq!(empty.frame_time.p50, 0.0);
     assert_eq!(percentile(&[], 0.5), 0.0);
     assert_eq!(percentile(&[1.0, 2.0, 3.0, 4.0], 0.5), 2.0);
     assert_eq!(percentile(&[1.0, 2.0, 3.0, 4.0], 0.99), 4.0);
+}
+
+/// `perf.start` asked with `params` through `window`.
+#[expect(
+    clippy::result_large_err,
+    reason = "the protocol's error object is the answer under test"
+)]
+fn start_with(
+    ui_runtime: &UiRuntime,
+    window: &AgentWindow,
+    params: PerfStartParams,
+) -> Result<(), ErrorObject> {
+    let reply = window
+        .call::<method::PerfStart>(params)
+        .expect("the inbox has room");
+    answer(ui_runtime, reply).map(|_| ())
+}
+
+/// `perf.start`'s parameters are checked before a span starts: a jank multiplier that is not
+/// finite and at least 1 is refused `invalid_argument` and starts nothing; `worst` reports at
+/// most 64 frames whatever it asks, and none when it asks for none.
+#[test]
+fn perf_start_checks_its_parameters() {
+    let (ui_runtime, window, mut sink) = shown();
+    for refused in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.5, 0.999] {
+        let mut params = PerfStartParams::new(window.id());
+        params.jank_multiplier = Some(refused);
+        let error = start_with(&ui_runtime, &window, params).expect_err("refused");
+        assert_eq!(
+            error.code,
+            ErrorCode::InvalidArgument,
+            "{refused}: {error:?}"
+        );
+        let stopped = stop(&ui_runtime, &window).expect_err("the refusal started no span");
+        assert_eq!(
+            stopped.code,
+            ErrorCode::InvalidArgument,
+            "{refused}: {stopped:?}"
+        );
+    }
+    let mut at_one = PerfStartParams::new(window.id());
+    at_one.jank_multiplier = Some(1.0);
+    start_with(&ui_runtime, &window, at_one).expect("one period is a threshold");
+    stop(&ui_runtime, &window).expect("the span reports");
+
+    for (name, worst, kept) in [
+        ("past the cap", Some(1000), MAX_WORST),
+        ("the largest u32", Some(u32::MAX), MAX_WORST),
+        ("none asked", Some(0), 0),
+    ] {
+        let mut params = PerfStartParams::new(window.id());
+        params.worst = worst;
+        start_with(&ui_runtime, &window, params).expect("the span starts");
+        for _ in 0..MAX_WORST + 6 {
+            presented_frame(&ui_runtime, &mut sink);
+        }
+        let report = stop(&ui_runtime, &window).expect("the span reports");
+        assert_eq!(report.worst.len(), kept, "{name}: {report:#?}");
+    }
+}
+
+/// The percentiles are by nearest rank over the span's frames, each in its own slot: over the
+/// times 1 to 100 ms the 50th, 90th, 95th and 99th percentiles are 50, 90, 95 and 99 ms.
+#[test]
+fn a_report_names_each_percentile_by_nearest_rank() {
+    let mut span = PerfSpan::new(SpanOwner::Handles(std::sync::Weak::new()), None, 2.0, 5);
+    // Out of order: the report sorts them.
+    for ms in (1..=100).rev() {
+        span.sample(slow(ms, f64::from(u32::try_from(ms).expect("fits"))), None);
+    }
+    let report = span.report(None);
+    let time = report.frame_time;
+    assert_eq!(
+        (time.p50, time.p90, time.p95, time.p99, time.max),
+        (50.0, 90.0, 95.0, 99.0, 100.0),
+        "{report:#?}"
+    );
+}
+
+/// `perf.start` asked through `lease`.
+#[expect(
+    clippy::result_large_err,
+    reason = "the protocol's error object is the answer under test"
+)]
+fn start_through(ui_runtime: &UiRuntime, lease: &InputLease) -> Result<(), ErrorObject> {
+    let reply = lease
+        .call::<method::PerfStart>(PerfStartParams::new(lease.window()))
+        .expect("the inbox has room");
+    answer(ui_runtime, reply).map(|_| ())
+}
+
+/// `perf.stop` asked through `lease`.
+#[expect(
+    clippy::result_large_err,
+    reason = "the protocol's error object is the answer under test"
+)]
+fn stop_through(ui_runtime: &UiRuntime, lease: &InputLease) -> Result<PerfReport, ErrorObject> {
+    let reply = lease
+        .call::<method::PerfStop>(WindowParams::new(lease.window()))
+        .expect("the inbox has room");
+    answer(ui_runtime, reply)
+}
+
+/// A span is its starter's: asked through one conversation's input lease, another lease's
+/// `perf.start` is refused while it runs, another caller's `perf.stop` is refused and leaves it
+/// running, and once the starter's lease is released (its conversation ended without
+/// `perf.stop`) the span is gone and the next conversation's `perf.start` begins one.
+#[test]
+fn a_perf_span_is_its_starters_and_goes_with_its_lease() {
+    let (ui_runtime, window, mut sink) = shown();
+    let first = window.input_lease().expect("a lease");
+    let second = window.input_lease().expect("a lease");
+
+    start_through(&ui_runtime, &first).expect("the first conversation's span starts");
+    presented_frame(&ui_runtime, &mut sink);
+    let refused = start_through(&ui_runtime, &second).expect_err("a span already runs");
+    assert_eq!(refused.code, ErrorCode::InvalidArgument, "{refused:?}");
+    let refused =
+        stop_through(&ui_runtime, &second).expect_err("the span is the first conversation's");
+    assert_eq!(refused.code, ErrorCode::InvalidArgument, "{refused:?}");
+    let refused = stop(&ui_runtime, &window).expect_err("a call through no lease is another's");
+    assert_eq!(refused.code, ErrorCode::InvalidArgument, "{refused:?}");
+    presented_frame(&ui_runtime, &mut sink);
+    let report = stop_through(&ui_runtime, &first).expect("its starter stops it");
+    assert_eq!(
+        report.frames, 2,
+        "the refused calls left it running: {report:#?}"
+    );
+
+    // The first conversation starts a span and goes without stopping it.
+    start_through(&ui_runtime, &first).expect("a new span starts");
+    presented_frame(&ui_runtime, &mut sink);
+    drop(first);
+    // The drain that serves the next call releases the dropped lease first.
+    let _report = ui_runtime.drain_commands();
+    start_through(&ui_runtime, &second).expect("the ended conversation's span is gone");
+    presented_frame(&ui_runtime, &mut sink);
+    let report =
+        stop_through(&ui_runtime, &second).expect("the second conversation's span reports");
+    assert_eq!(report.frames, 1, "counted from its own start: {report:#?}");
 }

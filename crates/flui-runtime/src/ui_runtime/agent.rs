@@ -622,7 +622,8 @@ pub(crate) struct DevAgentSlot {
     issued: Rc<RefCell<IssuedHandles>>,
     /// The input the window was delivered since the slot was made.
     pub(super) journal: super::agent_journal::InputJournal,
-    /// The frame samples a `perf.start` keeps until its `perf.stop`.
+    /// The frame samples a `perf.start` keeps until its starter's `perf.stop`, or until the
+    /// lease it was asked through is released ([`Self::take_released`]).
     pub(super) perf: super::agent_perf::PerfSampling,
 }
 
@@ -769,11 +770,16 @@ impl DevAgentSlot {
         self.port.released.lock().len()
     }
 
-    /// The first `count` leases let go, oldest first, taken to be released.
+    /// The first `count` leases let go, oldest first, taken to be released. A perf span one of
+    /// them started goes with it: its conversation has ended.
     pub(super) fn take_released(&self, count: usize) -> Vec<LeaseId> {
-        let mut released = self.port.released.lock();
-        let count = count.min(released.len());
-        released.drain(..count).collect()
+        let taken: Vec<LeaseId> = {
+            let mut released = self.port.released.lock();
+            let count = count.min(released.len());
+            released.drain(..count).collect()
+        };
+        self.perf.forget(&taken);
+        taken
     }
 }
 
