@@ -2,8 +2,9 @@
 //!
 //! Each rule reads the tree an agent reads, the AccessKit tree the platform
 //! adapter is handed, and answers the elements that break it as the protocol's
-//! [`AuditFinding`]s. The development agent's `audit.a11y` and the testing kit
-//! call these functions, so a rule is written once.
+//! [`AuditFinding`]s. The development agent's `audit.a11y` is their caller. The
+//! testing kit's gesture-alternatives check shares only [`MinimumTarget::admits`],
+//! against a minimum of its own (`flui-testing`'s `gesture_alternatives`).
 //!
 //! - [`SemanticsOwner::audit_unnamed`]: an interactive element with no
 //!   accessible name.
@@ -16,10 +17,13 @@
 //!
 //! The hit region is the part of the element's bounds the window and every
 //! clipping ancestor leave: the same region the actionability `visible` check
-//! reads, never pixels (flutter/flutter#103235, #144121). A target drawn large
+//! reads, from the published tree rather than from pixels. A target drawn large
 //! but clipped by a scroll view to a sliver is that sliver until it is scrolled
-//! in. An element the window does not show at all has no hit region and is not
-//! judged.
+//! in (ADR-0400 §5). Flutter's `MinimumTapTargetGuideline` judges the same
+//! clipped region, and its tracker records a row partly scrolled under a pinned
+//! app bar failing that way as a defect (flutter/flutter#144121): this rule
+//! reports such a row, by that decision. An element the window does not show at
+//! all has no hit region and is not judged.
 
 use accesskit_consumer::{NodeRef, TreeState};
 use flui_protocol::{
@@ -31,13 +35,13 @@ use crate::agent::{
 };
 use crate::owner::SemanticsOwner;
 
-/// The smallest hit region, in logical pixels on each axis, a pointer of the
-/// platform's primary kind is expected to reach: what
-/// [`SemanticsOwner::audit_target_size`] judges against.
+/// The smallest hit region, in logical pixels on each axis, a pointer is
+/// expected to reach: what [`SemanticsOwner::audit_target_size`] judges against.
 ///
 /// The minimum belongs to the gesture settings of the presentation
 /// (`GestureSettings::min_target` in `flui-interaction`, per pointer kind), so
-/// the caller passes it in: this crate sits below the one that owns it.
+/// the caller picks it for the pointer it judges for and passes it in: this
+/// crate sits below the one that owns it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MinimumTarget(f64);
 
@@ -56,10 +60,10 @@ impl MinimumTarget {
     }
 
     /// Whether a region `width` × `height` logical pixels meets the minimum on
-    /// both axes. A non-finite extent does not.
+    /// both axes. A non-finite extent, infinite or NaN, does not.
     #[must_use]
     pub fn admits(self, width: f64, height: f64) -> bool {
-        width >= self.0 && height >= self.0
+        width.is_finite() && height.is_finite() && width >= self.0 && height >= self.0
     }
 }
 

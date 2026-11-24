@@ -926,11 +926,16 @@ empty. `target_size` judges the part of an element's bounds the window and every
 ancestor leave, the region `visible` reads (`shown_bounds`), against a `MinimumTarget` the caller
 passes; an element the window does not show has no region and is not judged.
 
-**Why.** The development agent's `audit.a11y` and the testing kit call the same functions
-(ADR-0400 §5). A target drawn large but clipped to a sliver is a sliver to a finger, which a
-check of the drawn rectangle misses (flutter/flutter#103235, #144121). The minimum belongs to the
-presentation's gesture settings in `flui-interaction`, a crate above this one, so it is a
-parameter, finite and positive by construction.
+**Why.** The rules live with the tree they read (ADR-0400 §5); the development agent's
+`audit.a11y` is their caller. A target drawn large but clipped to a sliver is a sliver to a finger
+until it is scrolled in, so the region inside the clips is judged, not the drawn rectangle.
+Flutter's `MinimumTapTargetGuideline` judges that region too, and its tracker records a row
+partly scrolled under a pinned app bar failing it as a defect (flutter/flutter#144121); this rule
+reports such a row, by ADR-0400 §5's decision. The minimum belongs to the presentation's gesture
+settings in `flui-interaction`, a crate above this one, so it is a parameter, finite and positive
+by construction, and the caller picks the pointer it judges for: the agent the platform's primary
+pointer, the testing kit's gesture-alternatives check a finger (its own minimum, judged by the
+same `MinimumTarget::admits`). `admits` refuses a non-finite extent.
 
 **Test.** `audit.rs` in `tests/`.
 

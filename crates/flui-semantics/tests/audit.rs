@@ -5,7 +5,9 @@
 use std::rc::Rc;
 
 use flui_protocol::audit::AuditRule;
-use flui_semantics::{MinimumTarget, SemanticsAction, SemanticsConfiguration, SemanticsRole};
+use flui_semantics::{
+    MinimumTarget, SemanticsAction, SemanticsConfiguration, SemanticsRole, Toggled,
+};
 
 use crate::fixture::{Fixture, element, placement};
 
@@ -162,8 +164,56 @@ fn a_target_size_finding_names_the_hit_region_inside_the_clip() {
     );
 }
 
+/// An element is interactive by any action that operates it, not only
+/// `invoke`: an unnamed control that advertises only `toggle`, `set_value`,
+/// `select`, `expand` or `collapse` is reported, and one that only takes focus
+/// is not.
+#[test]
+fn each_action_that_operates_a_control_makes_it_interactive() {
+    let noop = || Rc::new(|_| {});
+    let mut f = Fixture::new();
+    f.add(None, 1, (0.0, 0.0, 400.0, 300.0), |c| {
+        c.set_label("Form");
+    });
+    f.add(Some(1), 2, (10.0, 10.0, 60.0, 60.0), |c| {
+        c.set_role(SemanticsRole::CheckBox);
+        c.set_toggled(Some(Toggled::Off));
+    });
+    f.add(Some(1), 3, (100.0, 10.0, 60.0, 60.0), |c| {
+        c.set_role(SemanticsRole::TextInput);
+        c.add_action(SemanticsAction::SetValue, noop());
+    });
+    f.add(Some(1), 4, (200.0, 10.0, 60.0, 60.0), |c| {
+        c.set_role(SemanticsRole::Tab);
+        c.set_selected(false);
+    });
+    f.add(Some(1), 5, (10.0, 100.0, 60.0, 60.0), |c| {
+        c.set_role(SemanticsRole::TreeItem);
+        c.set_expanded(false);
+        c.add_action(SemanticsAction::Expand, noop());
+    });
+    f.add(Some(1), 6, (100.0, 100.0, 60.0, 60.0), |c| {
+        c.set_role(SemanticsRole::TreeItem);
+        c.set_expanded(true);
+        c.add_action(SemanticsAction::Collapse, noop());
+    });
+    f.add(Some(1), 7, (200.0, 100.0, 60.0, 60.0), |c| {
+        c.set_role(SemanticsRole::TextInput);
+        c.set_read_only(true);
+        c.add_action(SemanticsAction::Focus, noop());
+    });
+    f.flush();
+    let findings = f
+        .owner
+        .audit_unnamed(placement())
+        .expect("the published tree reads");
+    let nodes: Vec<_> = findings.iter().map(|finding| finding.node).collect();
+    let wanted: Vec<_> = [2, 3, 4, 5, 6].into_iter().map(element).collect();
+    assert_eq!(nodes, wanted, "{findings:#?}");
+}
+
 /// A minimum that is not a finite positive extent is refused, and one exactly
-/// met admits the region.
+/// met admits the region, and a region with a non-finite extent is not.
 #[test]
 fn a_minimum_target_is_a_finite_positive_extent() {
     for refused in [0.0, -1.0, f64::NAN, f64::INFINITY] {
@@ -172,5 +222,16 @@ fn a_minimum_target_is_a_finite_positive_extent() {
     let minimum = MinimumTarget::try_new(24.0).expect("24 px is a minimum");
     assert!(minimum.admits(24.0, 24.0));
     assert!(!minimum.admits(23.9, 24.0));
-    assert!(!minimum.admits(24.0, f64::NAN));
+    for (width, height) in [
+        (24.0, f64::NAN),
+        (f64::NAN, 24.0),
+        (f64::INFINITY, 24.0),
+        (24.0, f64::INFINITY),
+        (f64::INFINITY, f64::INFINITY),
+    ] {
+        assert!(
+            !minimum.admits(width, height),
+            "a {width} × {height} region is not admitted"
+        );
+    }
 }
