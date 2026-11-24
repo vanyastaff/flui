@@ -732,15 +732,18 @@ impl Reactive {
                 return;
             }
             Self::forget_element_reads(&mut inner, element);
+            // An element that owns no slot releases no value, so no destructor
+            // can ask for a new owned slot while it is retiring.
+            let Some(owned) = inner.owned_by_element.remove(&element) else {
+                return;
+            };
             inner.retiring.push(element);
             let mut retired = Vec::new();
-            if let Some(owned) = inner.owned_by_element.remove(&element) {
-                for slot in owned {
-                    // A closed graph still releases this element's live
-                    // slots, so `check`'s closed refusal does not apply.
-                    if slot.graph() == self.id && inner.generation_matches(&slot) {
-                        retired.push((slot, Self::release_index(&mut inner, slot.index())));
-                    }
+            for slot in owned {
+                // A closed graph still releases this element's live
+                // slots, so `check`'s closed refusal does not apply.
+                if slot.graph() == self.id && inner.generation_matches(&slot) {
+                    retired.push((slot, Self::release_index(&mut inner, slot.index())));
                 }
             }
             retired
