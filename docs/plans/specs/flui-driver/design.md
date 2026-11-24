@@ -483,7 +483,7 @@ pub trait Connection {
     fn call<M: WindowMethod>(&mut self, params: M::Params) -> Result<M::Output, CallError>;
     fn wait(&mut self, condition: &Condition, limit: Duration) -> Result<WaitOutcome, CallError>;
     fn perform(&mut self, actions: &ActionSequence) -> Result<Performed, CallError>;
-    fn now(&self) -> At;
+    fn now(&self) -> ClockReading;
 }
 ```
 

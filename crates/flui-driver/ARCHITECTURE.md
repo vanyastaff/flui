@@ -14,7 +14,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   `onLine`, each line a `script.message`, each request a `send` through `script.callFunction`),
   and the headless target runs the agent's own `flui_runtime::agent::Session` through
   `flui_testing::agent_service::HeadlessAgentService`, so the in-process answers are the ones a socket carries.
-  The `Connection` trait is private.
+  The transport trait, `connection::Transport`, is private. The driver is a
+  `flui_protocol::client::Connection` (`client.rs`, ADR-0400 §1) over the window that had content
+  when the connection was first used, kept for the session.
 - **Virtual time on the headless target.** The headless app's host runs on a thread of its own and
   pumps no frame by itself: a call that waits asks for one frame at a time, each 16 ms of the
   host's clock, and the call's budget is counted in that time. A run is the same on every host.
@@ -33,7 +35,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   send that finds the thread ended keeps the lines it
   reads to learn why.
 - **A timed-out act is never resent.** A call with no answer in its budget is `timeout`, with
-  `may_have_run` for a method that acts; a late answer is passed over by its id.
+  `may_have_run` for a method that acts; a late answer is passed over by its id. `Error::Timeout`
+  says what it awaited (`Awaited`): only the app's agent leaving a call unanswered is a
+  `Connection`'s `CallError::Unanswered`, which releases the input of the window the call
+  addressed; a tool on the host that hung is the lane's failure, `CallError::Failed` with its
+  message.
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
   `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device
@@ -261,12 +267,14 @@ app's trees, frames and input, and this crate composes that with what only the O
   backend reports.
 - **Mapping refuses, never clamps.** `coordinates::to_device` maps in `f64` with every step checked
   and refuses a point outside the surface; `steps::os_events` hands a lane single-step moves, each
-  followed by a pause, at most `steps::MAX_STEPS` per move; the moving sources of a tick share
+  followed by a pause, at most `flui_protocol::input::MAX_STEPS` per move, as
+  `flui_protocol::input::plan` lays them; the moving sources of a tick share
   one timeline, each split by its own duration, so they move together and each keeps its own
-  speed, as on the synthetic path. Steps due within one millisecond go out together, so every
+  speed. Steps due within one millisecond go out together, so every
   pause is whole milliseconds, none under one, and a tick's pauses add up to its length exactly.
   A wheel source carries the part of a device pixel each scroll leaves into the next, and a scroll
-  that adds up to no whole pixel yet sends nothing.
+  that adds up to no whole pixel yet sends nothing. A scroll by lines is refused: an OS event
+  scrolls by device pixels, and no lane knows the line height the app scrolls a line by.
 - **A hung app costs one timeout.** Reading a UI Automation, AX or AT-SPI element stops at the
   first property read that times out or finds the element gone
   (`lane::walk::Properties`, which all three readers walk through), and the walk ends
@@ -318,11 +326,15 @@ app's trees, frames and input, and this crate composes that with what only the O
   `TextMatch` kept as the caller's own; `trace::every_text_field_of_the_wire_is_redacted_or_named_as_kept`
   holds every free string field of the protocol's schema to one side of the list. A replay never
   sends redacted text: a redacted row ends it, refused there.
+- **A trace replays against the protocol it was recorded at.** A replay compares each result
+  field by field, so `trace::replay` refuses a trace whose header names another protocol than the
+  app speaks (`Error::Version`), before any command.
 - **A replay reads handles only where the method's schema has one** (`trace::handles` walks
   each value along the protocol's own schema of its method, made with `schemars`): a text, a
   locator's name or an input source's id shaped like `e1` is text, though a node's `id` is a
   handle. `trace::no_field_the_trace_redacts_holds_a_handle` keeps the redaction, which goes by
   name, off every name that is a handle anywhere.
-- **The verdict rule is one function.** `Report::verdict`: `fail` when a check failed, else
-  `cannot_verify` when a check could not be made or nothing was checked, else `pass`.
+- **The verdict rule is one function.** `flui_protocol::report::Report::verdict`: `fail` when a
+  check failed, else `cannot_verify` when a check could not be made or nothing was checked, else
+  `pass`.
   `Error::is_cannot_verify` decides which failures cannot be verified.
