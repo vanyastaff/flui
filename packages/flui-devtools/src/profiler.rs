@@ -345,7 +345,6 @@ pub struct Profiler {
 impl Profiler {
     /// A profiler of the frames `capture` closes, from now on.
     ///
-    ///
     /// It records the outermost frames of the runtime [`ProfilerConfig::runtime`] selects, as
     /// [`Profiler`] describes.
     #[must_use]

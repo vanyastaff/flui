@@ -105,3 +105,29 @@ fn a_fixed_jank_line_judges_each_frame_by_its_duration() {
         assert_eq!(profiler.jank_percentage(), if jank { 100.0 } else { 0.0 });
     }
 }
+
+/// A frame that reports a zero display period is judged against 60 Hz, as one that reports
+/// none is, whether the period comes with the frame span or is recorded on it later: no display
+/// refreshes in no time, and a zero line would make every frame jank.
+#[test]
+fn a_zero_display_period_is_judged_as_no_period() {
+    for recorded_later in [false, true] {
+        let capture = Capture::new();
+        let profiler = Profiler::over(&capture, ProfilerConfig::default());
+        capturing(&capture, || {
+            if recorded_later {
+                frame(Some(0), Duration::ZERO);
+            } else {
+                let _frame = tracing::debug_span!(target: "flui.frame", "frame", period_us = 0_u64)
+                    .entered();
+            }
+        });
+
+        let stats = profiler.frame_stats().expect("the frame was recorded");
+        assert!(
+            !stats.is_jank(),
+            "a frame of microseconds reporting a zero period (recorded later: {recorded_later}) \
+             is smooth at 60 Hz: {stats}"
+        );
+    }
+}

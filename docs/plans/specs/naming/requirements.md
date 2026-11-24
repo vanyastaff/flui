@@ -147,7 +147,7 @@
 | 82 | Fixture `let_bound_event_closure_without_helper.rs` | `flui-view/tests/ui/` | `helper` в имени fixture | `let_bound_event_closure_without_adapter.rs` + `.stderr` | 0 |
 
 **Итоги по остальному.** a: ещё 9 путей с `support`/`common` в тестах и бенчах, по смыслу те же, что в строках 67–69.
-c5: ещё 13 `get_*` (`get_events_by_category`, `get_events_in_range`, `get_window`, `get_window_mut`, `get_group`,
+c5: ещё 13 `get_*` (`get_events_by_kind`, `get_events_in_range`, `get_window`, `get_window_mut`, `get_group`,
 `get_worker_build_ptr` и другие) переименовываются по строкам 15–20. `get_x_lparam`/`get_y_lparam` зеркалят макросы Win32 и
 остаются. c6: ещё 15 типов `IOS*`/`MacOS*` по строке 7. c9: ~400 повторов модуля в публичных модулях.
 Почти все исчезают, если модуль, который держит один тип, станет приватным и реэкспортируется (правило N7).

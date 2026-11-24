@@ -24,8 +24,8 @@ pipeline and the runtime. The
 `profiling` feature also enables animation instrumentation through the SDK:
 registry walks, source sampling and listener/future delivery become the
 `Phase::AnimationTick`, `Phase::AnimationSampling` and `Phase::AnimationListeners`.
-`Capture::layer()` subscribes to them; it never needs to be called. A `Profiler` reads the
-capture.
+The layer of a `Capture` subscribes to them, so the framework never calls this crate. A
+`Profiler` reads the capture.
 
 ```rust
 use flui_devtools::{Capture, Profiler, ProfilerConfig};

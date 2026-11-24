@@ -25,7 +25,7 @@ feature and observes the spans; no framework crate depends on devtools.
 Warnings and errors remain available without the feature.
 
 A controller owns an `animation_controller` span at target
-`flui_animation::diagnostics`. Its subscriber-issued identity and monotonically
+`flui.animation.diagnostics`. Its subscriber-issued identity and monotonically
 increasing run generation identify observation within that controller lifetime.
 No global controller counter, display-name lookup or memory address is invented.
 Without an interested subscriber, that span is disabled and no external identity
@@ -51,9 +51,9 @@ The optional span contract is:
 
 | Target | Span | Meaning | Profiler phase |
 |---|---|---|---|
-| `flui_animation` | `animation_tick` | The admitted public registry walk, including delivery and retirement | `Custom("Animation tick")` |
-| `flui_animation` | `animation_sampling` | Time, simulation or repeat position computation before publication | `Custom("Animation sampling")` |
-| `flui_animation` | `animation_listeners` | Value/status listeners, run continuations/wakers and their retirement | `Custom("Animation listeners")` |
+| `flui.animation` | `animation_tick` | The admitted public registry walk, including delivery and retirement | `Phase::AnimationTick` |
+| `flui.animation` | `animation_sampling` | Time, simulation or repeat position computation before publication | `Phase::AnimationSampling` |
+| `flui.animation` | `animation_listeners` | Value/status listeners, run continuations/wakers and their retirement | `Phase::AnimationListeners` |
 
 Durations are inclusive extents, not disjoint portions of a CPU total. Registry
 time includes its sampling and listener work. They must not be summed to infer

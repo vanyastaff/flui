@@ -15,3 +15,7 @@
 - `Profiler::new`, `Profiler::with_config` and `Default for Profiler`: `Profiler::over` is the only constructor.
 - `Profiler::print_frame_summary`: format a `FrameStats` with `{}` instead.
 - `EventCategory`, with its `name` and `color`: use `TimelineEventKind` and its `label`.
+
+### Fixed
+
+- A frame whose span reported a zero display period when it opened was judged against a zero jank line, so every such frame was jank. A zero period now counts as none, as it already did when recorded later, and the frame is judged against 60 Hz.

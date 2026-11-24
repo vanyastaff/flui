@@ -9,10 +9,6 @@
 //! [`Profiler`](crate::Profiler), the [`Timeline`](crate::Timeline) and the Chrome/Perfetto
 //! export read that capture; none of them has a recorder of its own for framework spans.
 //!
-//! `flui-devtools` is a package, and nothing in the framework may depend on it, so frame
-//! timings cannot be pushed here through a call: subscribing to the spans the framework already
-//! emits is the one seam the layering permits.
-//!
 //! # Partitions
 //!
 //! A frame belongs to the UI runtime that drove it, and a span inside it to the presentation it
@@ -579,6 +575,16 @@ struct Fields {
     period_us: Option<u64>,
 }
 
+impl Fields {
+    /// The display period `period_us` reported. A zero period is no period: no display
+    /// refreshes in no time, and a zero jank line would make every frame jank.
+    fn period(&self) -> Option<Duration> {
+        self.period_us
+            .map(Duration::from_micros)
+            .filter(|period| !period.is_zero())
+    }
+}
+
 impl Visit for Fields {
     fn record_u64(&mut self, field: &Field, value: u64) {
         match field.name() {
@@ -734,7 +740,7 @@ where
                     thread: std::thread::current().id(),
                     entries: 0,
                     runtime: fields.runtime,
-                    period: fields.period_us.map(Duration::from_micros),
+                    period: fields.period(),
                     outermost,
                     ended: Vec::new(),
                 },
@@ -754,8 +760,8 @@ where
             if fields.runtime.is_some() {
                 state.runtime = fields.runtime;
             }
-            if let Some(micros) = fields.period_us {
-                state.period = Some(Duration::from_micros(micros)).filter(|d| !d.is_zero());
+            if fields.period_us.is_some() {
+                state.period = fields.period();
             }
         });
     }
