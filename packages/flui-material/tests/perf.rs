@@ -40,22 +40,51 @@ use flui_testing::control_cost::{
 };
 use flui_testing::find;
 use flui_testing::heap::{CountingAllocator, assert_rounds_plateau};
+use flui_testing::perf::{Baselines, Held};
 use flui_testing::tester::Tester;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
-/// `cost` recorded as `scenario` and held to this catalog's baseline file.
-fn held_to_baseline(scenario: &str, cost: ControlCost) -> ControlCost {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("perf/baseline");
-    flui_testing::control_cost::held_to_baseline(&dir, scenario, cost)
+/// Every scenario that holds a file, kept sorted.
+const SCENARIOS: &[&str] = &[
+    "checkbox_alone",
+    "chip_over_text",
+    "elevated_button_over_text",
+    "filter_chip_over_text",
+    "ink_well_over_text",
+    "list_tile_over_text",
+    "navigation_bar_alone",
+    "radio_alone",
+    "switch_alone",
+    "tab_bar_alone",
+];
+
+fn baselines() -> Baselines {
+    Baselines::new(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("perf/baseline"),
+        SCENARIOS,
+    )
+}
+
+/// `cost` held to this catalog's baseline file as `scenario`; the hold is
+/// kept to the end of the test, so a bless waits for its assertions.
+fn held_to_baseline(scenario: &str, cost: ControlCost) -> (ControlCost, Held) {
+    let held = baselines().hold(scenario, &cost.counts());
+    (cost, held)
+}
+
+/// The baseline directory holds a file for each scenario and no other.
+#[test]
+fn every_baseline_file_is_a_scenario() {
+    baselines().assert_files_are_scenarios();
 }
 
 /// What an `InkWell` adds to the `Text` it holds: its behaviours on the
 /// interactive node, and its ink, an idle `CustomPaint`.
 #[test]
 fn perf_ink_well_over_text() {
-    let cost = held_to_baseline(
+    let (cost, _baseline) = held_to_baseline(
         "ink_well_over_text",
         control_over_text(|row| {
             InkWell::new()
@@ -79,7 +108,7 @@ fn perf_ink_well_over_text() {
 /// padding and text style), its button semantics on the well's node.
 #[test]
 fn perf_elevated_button_over_text() {
-    let cost = held_to_baseline(
+    let (cost, _baseline) = held_to_baseline(
         "elevated_button_over_text",
         control_over_text_under(
             |column| Theme::new(ThemeData::light(), column).boxed(),
@@ -109,7 +138,7 @@ fn perf_elevated_button_over_text() {
 /// element, the well's three and its painter, less the box; its checked
 /// state rides on the well's node, with no `Semantics` element of its own.
 fn toggle_cost(scenario: &str, control: fn(usize) -> BoxedView) -> ControlCost {
-    let cost = held_to_baseline(
+    let (cost, _baseline) = held_to_baseline(
         scenario,
         control_alone_under(
             |column| Theme::new(ThemeData::light(), column).boxed(),
@@ -162,7 +191,7 @@ fn perf_radio_alone() {
 /// node with no `Semantics` element of its own.
 #[test]
 fn perf_chip_over_text() {
-    let cost = held_to_baseline(
+    let (cost, _baseline) = held_to_baseline(
         "chip_over_text",
         control_over_text_under(
             |column| Theme::new(ThemeData::light(), column).boxed(),
@@ -191,7 +220,7 @@ fn perf_chip_over_text() {
 /// selection on the well's node as the button's toggled state.
 #[test]
 fn perf_filter_chip_over_text() {
-    let cost = held_to_baseline(
+    let (cost, _baseline) = held_to_baseline(
         "filter_chip_over_text",
         control_over_text_under(
             |column| Theme::new(ThemeData::light(), column).boxed(),
@@ -222,7 +251,7 @@ fn perf_filter_chip_over_text() {
 /// `Semantics` or `MergeSemantics` element of the tab's own.
 #[test]
 fn perf_tab_bar_alone() {
-    let cost = held_to_baseline(
+    let (cost, _baseline) = held_to_baseline(
         "tab_bar_alone",
         control_alone_under(
             |column| Theme::new(ThemeData::light(), column).boxed(),
@@ -253,7 +282,7 @@ fn perf_tab_bar_alone() {
 /// selection and merged label.
 #[test]
 fn perf_navigation_bar_alone() {
-    let cost = held_to_baseline(
+    let (cost, _baseline) = held_to_baseline(
         "navigation_bar_alone",
         control_alone_under(
             |column| {
@@ -292,7 +321,7 @@ fn perf_navigation_bar_alone() {
 /// `Semantics` element of the tile's own.
 #[test]
 fn perf_list_tile_over_text() {
-    let cost = held_to_baseline(
+    let (cost, _baseline) = held_to_baseline(
         "list_tile_over_text",
         control_over_text_under(
             |column| {
