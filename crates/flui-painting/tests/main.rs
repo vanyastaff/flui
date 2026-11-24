@@ -954,6 +954,10 @@ fn text_decorations_contract() {
                 td::a_decoration_takes_its_glyphs_colour_unless_it_names_one,
             ),
             (
+                "a_recoloured_decoration_takes_its_glyphs_new_colour",
+                td::a_recoloured_decoration_takes_its_glyphs_new_colour,
+            ),
+            (
                 "a_child_clears_an_inherited_decoration",
                 td::a_child_clears_an_inherited_decoration,
             ),
@@ -1085,6 +1089,10 @@ fn shape_cache_contract() {
                 sc::a_long_paragraph_is_not_kept,
             ),
             (
+                "a_paragraph_whose_painting_passes_the_entry_size_is_not_kept",
+                sc::a_paragraph_whose_painting_passes_the_entry_size_is_not_kept,
+            ),
+            (
                 "the_least_recently_used_paragraph_leaves_first",
                 sc::the_least_recently_used_paragraph_leaves_first,
             ),
@@ -1115,6 +1123,14 @@ fn shape_cache_contract() {
             (
                 "an_evicted_layout_is_built_into",
                 sc::an_evicted_layout_is_built_into,
+            ),
+            (
+                "the_painters_of_a_kept_paragraph_share_its_glyphs",
+                sc::the_painters_of_a_kept_paragraph_share_its_glyphs,
+            ),
+            (
+                "a_kept_paragraph_under_another_root_colour_is_painted_apart",
+                sc::a_kept_paragraph_under_another_root_colour_is_painted_apart,
             ),
         ],
     );

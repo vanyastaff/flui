@@ -101,7 +101,7 @@ fn a_snapshot_frame_lands_in_its_runtimes_process() {
     timeline.record_instant("names no runtime");
     timeline.record_frame_snapshots(&clock.frames_since(None));
     let frames: Vec<_> = timeline
-        .get_events()
+        .events()
         .into_iter()
         .filter(|event| event.args["frame_id"].is_string())
         .map(|event| (event.runtime, event.presentation))

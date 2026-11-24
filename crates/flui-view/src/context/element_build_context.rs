@@ -57,23 +57,26 @@ pub(crate) struct DependentRecord {
 /// They are bundled because every field is minted at the same place
 /// (`make_build_ctx`) from the element core and its exact `BuildOwner`;
 /// threading them separately would obscure that shared ownership origin.
-#[derive(Clone)]
-pub(crate) struct BuildCapabilities {
+/// What the owner lends for the whole build pass is borrowed, so a build
+/// pays for a handle only when a hook asks for one; what lives in the
+/// owner itself or in the element's core, which the build borrows mutably
+/// around the context, is a shared handle cloned here.
+pub(crate) struct BuildCapabilities<'b> {
     /// The exact focus manager owned by the surrounding build owner.
-    pub(crate) focus_manager: Rc<FocusManager>,
-    pub(crate) lifecycle_handle: Option<crate::LifecycleHandle>,
-    pub(crate) window_handle: Option<crate::WindowHandle>,
+    pub(crate) focus_manager: &'b Rc<FocusManager>,
+    pub(crate) lifecycle_handle: &'b Option<crate::LifecycleHandle>,
+    pub(crate) window_handle: &'b Option<crate::WindowHandle>,
     /// The binding's async task driver.
-    pub(crate) async_driver: Option<flui_scheduler::AsyncDriver>,
+    pub(crate) async_driver: &'b Option<flui_scheduler::AsyncDriver>,
     /// The binding's post-frame capability.
-    pub(crate) post_frame_handle: Option<flui_scheduler::PostFrameHandle>,
+    pub(crate) post_frame_handle: &'b Option<flui_scheduler::PostFrameHandle>,
     /// The presentation capabilities `LifecycleContext` hands out.
-    pub(crate) presentation: crate::owner::PresentationCapabilities,
+    pub(crate) presentation: &'b crate::owner::PresentationCapabilities,
     /// The host's flush registry; crate-private, for `Persisted`.
-    pub(crate) flush_registry: Option<crate::flush_registry::FlushRegistry>,
+    pub(crate) flush_registry: &'b Option<crate::flush_registry::FlushRegistry>,
     /// The UI runtime's fresh-hit-test capability, narrowed from its interaction
     /// dispatch handle.
-    pub(crate) hit_test_handle: Option<flui_interaction::pointer::HitTestHandle>,
+    pub(crate) hit_test_handle: &'b Option<flui_interaction::pointer::HitTestHandle>,
     /// The render tree this element is mounted in, cloned from its own
     /// `ElementCore` — see `make_build_ctx` for why not from the tree node.
     pub(crate) pipeline_owner: Option<flui_rendering::pipeline::PipelineCell>,
@@ -98,7 +101,7 @@ pub(crate) struct LiveBuildContext<'b> {
     /// `build` sees this context as a `BuildContext`, which cannot hand it out.
     rebuild: crate::RebuildHandle,
     /// What the binding and the element's core handed this context.
-    capabilities: BuildCapabilities,
+    capabilities: BuildCapabilities<'b>,
 }
 
 impl<'b> LiveBuildContext<'b> {
@@ -111,7 +114,7 @@ impl<'b> LiveBuildContext<'b> {
         tree: &'b ElementTree,
         dep_sink: &'b std::cell::RefCell<Vec<DependentRecord>>,
         rebuild: crate::RebuildHandle,
-        capabilities: BuildCapabilities,
+        capabilities: BuildCapabilities<'b>,
     ) -> Self {
         Self {
             element_id,
@@ -476,7 +479,7 @@ impl LifecycleContext for LiveBuildContext<'_> {
         self.capabilities.window_handle.clone()
     }
     fn focus_manager(&self) -> Rc<FocusManager> {
-        Rc::clone(&self.capabilities.focus_manager)
+        Rc::clone(self.capabilities.focus_manager)
     }
     /// Cloned at construction from the element's own `ElementCore`: during
     /// `build_scope` the element is *extracted* from its tree node, so a

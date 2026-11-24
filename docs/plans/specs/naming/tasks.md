@@ -182,7 +182,7 @@ design.md §7; в таблице стоит рекомендуемый вари�
 | RT2 | фича `test-support` (flui-runtime) | `testing` | N9; dev-зависимости flui-app, flui-testing | — | 11 | С |
 | AP1 | `CloseRequestHandler` (обёртка `Fn`) | `CloseRequestCallback` | N6 | — | 23 | Н |
 | T1 | `flui_testing::text_store_kit` (`assert_conforms`) | `flui_testing::text_store_conformance` | `kit`; ADR-0090 §4, AGENTS «Extending FLUI» | — | 50 | В (ADR-0090, ADR-0092, AGENTS) |
-| DT1 | `get_events`, `get_events_by_kind`, `get_events_in_range`; `PhaseInfo` | `events`, `events_in`, `events_between`; `PhaseTiming` | C-GETTER; `Info` | — | 14/8 | Н |
+| DT1 | `Timeline::get_events`, `get_events_by_kind`, `get_events_in_range`, `with_capacity`; `PhaseInfo` | `Timeline::events`, `events_of`, `events_between(Duration, Duration)`, `bounded`; `PhaseTiming` | C-GETTER; `Info` | — | 14/8 | Н |
 | HR1 | `get_worker_build_ptr` | `worker_build_ptr` | C-GETTER | — | ~3 | Н |
 
 ### flui-material

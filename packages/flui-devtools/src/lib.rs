@@ -98,12 +98,12 @@ mod timeline;
 
 #[cfg(feature = "profiling")]
 pub use capture::{
-    Capture, CaptureLayer, CaptureSubscription, CapturedFrame, CapturedSpan, FrameSpanFilter,
-    Partition,
+    Capture, CaptureLayer, CaptureLimits, CaptureSubscription, CapturedFrame, CapturedSpan,
+    FrameSpanFilter, Partition,
 };
 #[cfg(feature = "inspector")]
 pub use gesture_inspector::{
-    CompositionStep, ContestReport, DEFAULT_CONTEST_CAPACITY, DeadlineReport, GestureInspector,
+    CompositionStep, ContestReport, DEFAULT_MAX_CONTESTS, DeadlineReport, GestureInspector,
     InspectedComposition, InspectedMember, MemberReport, Verdict,
 };
 #[cfg(feature = "inspector")]
@@ -115,6 +115,6 @@ pub use inspector::{InspectorCounters, InspectorSnapshot};
 #[cfg(any(feature = "profiling", feature = "timeline"))]
 pub use phase::Phase;
 #[cfg(feature = "profiling")]
-pub use profiler::{FrameStats, JankLine, PhaseInfo, Profiler, ProfilerConfig};
+pub use profiler::{FrameStats, JankLine, PhaseTiming, Profiler, ProfilerConfig};
 #[cfg(feature = "timeline")]
 pub use timeline::{EventGuard, Timeline, TimelineEvent, TimelineEventKind};

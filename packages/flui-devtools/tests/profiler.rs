@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use flui_devtools::{Capture, JankLine, Profiler, ProfilerConfig};
+use flui_devtools::{Capture, CaptureLimits, JankLine, Profiler, ProfilerConfig};
 use tracing::Dispatch;
 use tracing_subscriber::layer::SubscriberExt;
 
@@ -130,4 +130,26 @@ fn a_zero_display_period_is_judged_as_no_period() {
              is smooth at 60 Hz: {stats}"
         );
     }
+}
+
+/// A capture bounded to one frame keeps the newest of the frames of a runtime.
+///
+/// Fails when `CaptureLimits::frames` is not the bound of a runtime's frames, or the oldest
+/// frame is kept instead of the newest.
+#[test]
+fn a_capture_bounded_to_one_frame_keeps_the_newest() {
+    let capture = Capture::bounded(CaptureLimits {
+        frames: 1,
+        spans: 100,
+    });
+    capturing(&capture, || frame(None, Duration::ZERO));
+    let first = capture.frames()[0].span().start();
+    capturing(&capture, || {
+        std::thread::sleep(Duration::from_millis(5));
+        frame(None, Duration::ZERO);
+    });
+
+    let kept = capture.frames();
+    assert_eq!(kept.len(), 1);
+    assert!(kept[0].span().start() > first);
 }
