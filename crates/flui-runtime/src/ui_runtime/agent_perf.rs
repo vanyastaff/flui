@@ -235,22 +235,14 @@ fn slow_frame(snapshot: &FrameSnapshot) -> SlowFrame {
     }
 }
 
-/// `frame` on the wire. The protocol gives a [`FrameSample`] no constructor outside its crate,
-/// so it is built from its wire form, which names every field it has.
+/// `frame` on the wire, with the four phases the frame clock times.
 fn frame_sample(frame: &SlowFrame) -> FrameSample {
-    let phases = [
+    FrameSample::new(frame.frame, frame.ms).phases(vec![
         PhaseTime::new(FramePhase::Build, frame.build_ms),
         PhaseTime::new(FramePhase::Layout, frame.layout_ms),
         PhaseTime::new(FramePhase::Paint, frame.paint_ms),
         PhaseTime::new(FramePhase::Submit, frame.submit_ms),
-    ];
-    let wire = serde_json::json!({
-        "frame": frame.frame,
-        "ms": frame.ms,
-        "phases": phases,
-    });
-    serde_json::from_value::<FrameSample>(wire)
-        .expect("BUG: a frame sample's wire form names its fields with finite times")
+    ])
 }
 
 impl PerfSampling {

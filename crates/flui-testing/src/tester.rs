@@ -1009,7 +1009,7 @@ impl Tester {
     }
 
     /// Press on the one element `locator` names and move by `dx`, `dy`
-    /// logical pixels over `duration`, then release.
+    /// logical pixels over `duration`, then release as [`Self::try_drag_from`] does.
     ///
     /// # Errors
     ///
@@ -1026,7 +1026,7 @@ impl Tester {
     }
 
     /// Press on the one element `locator` names and move by `dx`, `dy`
-    /// logical pixels over `duration`, then release.
+    /// logical pixels over `duration`, then release as [`Self::try_drag_from`] does.
     ///
     /// # Panics
     ///
@@ -1037,8 +1037,11 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"));
     }
 
-    /// Press at `start`, a point in the window's logical pixels, and move by
-    /// `dx`, `dy` over `duration`, then release.
+    /// Press at `start`, a point in the window's logical pixels, move by `dx`,
+    /// `dy` over `duration`, hold still for the protocol's swipe settle
+    /// ([`SWIPE_SETTLE_MS`](flui_protocol::input::gestures::SWIPE_SETTLE_MS))
+    /// and release: a drag ends below the fling velocity, so what it scrolled
+    /// stays where the contact left it.
     ///
     /// This is for a gesture that starts at a place rather than on an
     /// element, such as an edge swipe. A drag that starts on an element is
@@ -1066,6 +1069,9 @@ impl Tester {
                 to: LogicalPoint::new(start.x + dx, start.y + dy),
                 duration_ms,
                 pressure: None,
+            },
+            PointerAction::Pause {
+                duration_ms: flui_protocol::input::gestures::SWIPE_SETTLE_MS,
             },
             PointerAction::Up {
                 button: PointerButton::Primary,

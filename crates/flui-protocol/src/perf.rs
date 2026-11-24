@@ -160,6 +160,26 @@ pub struct FrameSample {
     pub tags: Vec<String>,
 }
 
+impl FrameSample {
+    /// Frame `frame`, which took `ms`, with no phase and no tag.
+    #[must_use]
+    pub const fn new(frame: u64, ms: f64) -> Self {
+        Self {
+            frame,
+            ms,
+            phases: Vec::new(),
+            tags: Vec::new(),
+        }
+    }
+
+    /// With how long each of its phases took.
+    #[must_use]
+    pub fn phases(mut self, phases: Vec<PhaseTime>) -> Self {
+        self.phases = phases;
+        self
+    }
+}
+
 /// What `perf.stop` answers for the span since `perf.start`.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

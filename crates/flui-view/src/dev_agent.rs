@@ -405,8 +405,9 @@ impl AgentWindow {
     /// Element handles in the answer are this window's. A method the
     /// window does not answer in this build answers `not_supported` naming
     /// it. Synthetic input is asked through an [`InputLease`]
-    /// ([`Self::input_lease`]): `input.inject` and `input.release` asked
-    /// here answer `invalid_argument`.
+    /// ([`Self::input_lease`]): `input.inject`, `input.release` and a
+    /// gesture that injects (every path but the semantic one) asked here
+    /// answer `invalid_argument`.
     ///
     /// # Errors
     ///
@@ -422,9 +423,10 @@ impl AgentWindow {
         self.ask::<M>(params, None)
     }
 
-    /// A lease on this window's synthetic input: `input.inject` and
-    /// `input.release` are asked through it ([`InputLease::call`]), and
-    /// what it injected is released when it is dropped.
+    /// A lease on this window's synthetic input: `input.inject`,
+    /// `input.release` and the gestures that inject are asked through it
+    /// ([`InputLease::call`]), and what it injected is released when it is
+    /// dropped.
     ///
     /// # Errors
     ///
@@ -525,8 +527,10 @@ impl AgentWindow {
 /// first, and the ones still queued then are answered `gone`. A connection
 /// that holds one lease per window it injects into leaves nothing held when
 /// it goes, and two connections never release each other's input. The
-/// window asks `input.inject` and `input.release` through a lease only:
-/// [`AgentWindow::call`] answers them `invalid_argument`.
+/// window asks `input.inject`, `input.release` and a gesture that
+/// injects through a lease only: [`AgentWindow::call`] answers them
+/// `invalid_argument`. A gesture a lease holds out for is answered `gone`
+/// when the lease is let go.
 ///
 /// Not `Clone`: one holder, one release.
 pub struct InputLease {
