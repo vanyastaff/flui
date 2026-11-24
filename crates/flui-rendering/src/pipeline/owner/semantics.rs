@@ -130,7 +130,8 @@ impl PipelineOwner {
         }
     }
 
-    /// The body of [`Self::run_semantics`], entered with the phase set.
+    /// The body of [`FramePass::run_semantics`](super::FramePass::run_semantics),
+    /// entered with the phase set.
     fn run_semantics_in_phase(&mut self) -> crate::error::RenderResult<()> {
         // The last pass's scratch lists and built nodes are gone with its regions; this one
         // starts empty.

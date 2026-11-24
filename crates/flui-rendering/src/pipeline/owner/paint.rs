@@ -141,7 +141,7 @@ impl PipelineOwner {
     }
 
     /// The paint pass proper, between entering and leaving the phase: see
-    /// [`Self::run_paint`].
+    /// [`FramePass::run_paint`](super::FramePass::run_paint).
     fn paint_in_phase(&mut self, writer: &mut SceneWriter<'_>) -> crate::error::RenderResult<()> {
         let lineage = writer.current().id().lineage();
         // The records name nodes of the version `writer` patches only while the

@@ -41,7 +41,7 @@ pub use request::{
     FileFilter, FolderFile, FolderPath, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile,
     PickedForm, Picks, SaveLocation, SaveRequest,
 };
-#[cfg(any(target_os = "android", test))]
+#[cfg(target_os = "android")]
 pub(crate) use write::off_owner_refusal;
 #[cfg(not(target_arch = "wasm32"))]
 use write::write_file;
