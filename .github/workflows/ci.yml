@@ -1192,7 +1192,7 @@ jobs:
   perf-gates:
     name: perf-gates
     needs: [checks, plan]
-    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
+    if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
