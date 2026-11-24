@@ -50,11 +50,11 @@ fn describe(element: &AXUIElement, id: ElementId, scale: f64, reads: &mut Proper
     let mut node = Node::new(id, role, roles::native_role(&ax_role, subrole.as_deref()));
     let value = read("AXValue");
     // Static text carries its label as its value (the adapter puts a label there).
-    node.name = read("AXTitle").as_deref().and_then(ax::string).or_else(|| {
-        (role == Role::Label)
-            .then(|| value.as_deref().and_then(ax::string))
-            .flatten()
-    });
+    node.name = ax::label(
+        role,
+        read("AXTitle").as_deref().and_then(ax::string),
+        value.as_deref().and_then(ax::string),
+    );
     node.automation_id = read("AXIdentifier").as_deref().and_then(ax::string);
     node.description = read("AXHelp").as_deref().and_then(ax::string);
     match role {

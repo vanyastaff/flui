@@ -163,7 +163,9 @@ impl<'d> Window<'d> {
     /// Activate the element whose identifier is `identifier` through the OS accessibility API, as
     /// a screen reader does ([`Lane::invoke`](crate::Lane::invoke)): proof that assistive
     /// technology can act on it, not only read it. The lane is handed the app's own tree of the
-    /// window, read first, when it matches against it, as [`Self::os_tree`] is.
+    /// window, read first, when it matches against it and its API acts at all
+    /// ([`AccessibilityApi::activates`]): a lane that refuses is not preceded by a read whose
+    /// failure would stand in for its refusal.
     ///
     /// # Errors
     ///
@@ -177,7 +179,7 @@ impl<'d> Window<'d> {
             .ok_or_else(no_lane)?
             .capabilities()
             .accessibility
-            .is_some_and(AccessibilityApi::matches_app_tree);
+            .is_some_and(|api| api.matches_app_tree() && api.activates());
         let app = if matches {
             self.read()?
         } else {

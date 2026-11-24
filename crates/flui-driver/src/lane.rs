@@ -20,13 +20,12 @@
 //! [`android`] drives a device or an emulator from any host, through `adb`, and [`ios_simulator`]
 //! an iOS Simulator through `xcrun simctl`, which sends no input and reads the app through the
 //! Mac's accessibility API on the Simulator's window. The macOS lane and the iOS Simulator lane
-//! share that API's client (`ax`, on macOS); no lane imports another. An input-method composition
+//! share that API's rules and, on macOS, its client (`ax`); no lane imports another. An input-method composition
 //! goes only to a lane that says it composes ([`LaneCapabilities::compositions`]), a rule
 //! [`send_guarded`] holds.
 
 pub mod android;
 pub mod atspi;
-#[cfg(target_os = "macos")]
 pub(crate) mod ax;
 #[cfg(feature = "chrome")]
 pub mod chrome;
@@ -81,8 +80,10 @@ pub enum AccessibilityApi {
     /// UI Automator dumps them: native roles are class names.
     UiAutomator,
     /// The macOS Accessibility API (AX) on the iOS Simulator's window, under which the Simulator
-    /// bridges the iOS app's UIKit tree, the tree VoiceOver on iOS reads: native roles are the
-    /// `AX` role strings the bridge translates each element's traits to.
+    /// bridges the iOS app's UIKit elements: native roles are the `AX` role strings the bridge
+    /// gives each element. Apple documents no part of the bridge, so it stands for VoiceOver on
+    /// iOS only as far as runs confirm it: the roles it gives each trait are inferred, not
+    /// measured, and whether it carries the app's identifier is unconfirmed (`docs/gaps.md`).
     SimulatorAx,
 }
 
@@ -94,6 +95,13 @@ impl AccessibilityApi {
     #[must_use]
     pub fn matches_app_tree(self) -> bool {
         matches!(self, Self::UiAutomator | Self::SimulatorAx)
+    }
+
+    /// Whether the API performs an element's action, as a screen reader's activate command does
+    /// ([`Lane::invoke`]): every one but UI Automator, which reads the tree and acts on nothing.
+    #[must_use]
+    pub fn activates(self) -> bool {
+        !matches!(self, Self::UiAutomator)
     }
 }
 

@@ -44,7 +44,7 @@ use std::time::Duration;
 use flui_protocol::session::{Isolation, Placement};
 use flui_protocol::tree::Tree;
 
-use self::accessibility::{HostAccessibility, ScreenRequest};
+use self::accessibility::{HostAccessibility, HostScreen, ScreenRequest};
 use self::device::{Simulator, Udid};
 use self::xcode::XcodeVersion;
 use self::xcrun::{Xcrun, XcrunCommand, XcrunReply, command_failed};
@@ -316,9 +316,29 @@ impl IosSimulatorLane {
     fn screen_request(&self, placement: &Placement) -> ScreenRequest {
         ScreenRequest::new(
             accessibility::window_title(&self.simulator),
+            self.simulator.udid.clone(),
             placement.size,
             placement.scale,
         )
+    }
+
+    /// Refuse a read whose window title names another listed simulator as well, asked of
+    /// `simctl` before each read, since a simulator made or renamed since the lane connected
+    /// counts ([`accessibility::check_title_names_one`]).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Ambiguous`] naming the simulators that share the title; the Simulator's failure to
+    /// list its devices.
+    fn check_title(&mut self) -> Result<()> {
+        let listing = checked(
+            self.xcrun.as_mut(),
+            &XcrunCommand::ListDevices,
+            device::MAX_LISTING,
+            SHORT,
+        )?;
+        let simulators = device::parse_devices(&listing.stdout).map_err(xcrun::lane_error)?;
+        accessibility::check_title_names_one(&simulators, &self.simulator)
     }
 
     /// The Mac's accessibility API the lane reads through.
@@ -339,19 +359,24 @@ impl IosSimulatorLane {
         }
     }
 
-    /// The app's tree of the window `placement` describes, as the Simulator shows it, matched to
-    /// `app` and projected ([`tree::read`]).
-    fn projected(&mut self, placement: &Placement, app: &Tree) -> Result<(ScreenRequest, Tree)> {
-        let screen = self.screen_request(placement);
-        let os = self
-            .host_accessibility("os_accessibility_tree")?
-            .read(&screen)?;
-        let mut projected =
-            tree::read(&os, app, placement.scale).map_err(tree::TreeError::into_error)?;
-        for root in &mut projected.roots {
-            root.window = Some(placement.window);
-        }
-        Ok((screen, projected))
+    /// The screen of the window `placement` describes as the Simulator serves it, and where its
+    /// elements are placed: `capability` names what a lane handed no read refuses.
+    fn screen(
+        &mut self,
+        placement: &Placement,
+        capability: &str,
+    ) -> Result<(ScreenRequest, HostScreen, tree::Placing)> {
+        // Refused before anything is asked when the lane reads through nothing.
+        self.host_accessibility(capability)?;
+        self.check_title()?;
+        let request = self.screen_request(placement);
+        let screen = self.host_accessibility(capability)?.read(&request)?;
+        let placing = tree::Placing {
+            screen: screen.frame,
+            size: placement.size,
+            scale: placement.scale,
+        };
+        Ok((request, screen, placing))
     }
 
     /// Install `app` when it names a bundle, and start it afresh with a new endpoint and token as
@@ -526,27 +551,34 @@ impl Lane for IosSimulatorLane {
     }
 
     fn read_tree(&mut self, placement: &Placement, app: &Tree) -> Result<Tree> {
-        self.projected(placement, app)
-            .map(|(_, projected)| projected)
+        let (_, screen, placing) = self.screen(placement, "os_accessibility_tree")?;
+        let mut projected =
+            tree::read(&screen, app, placing).map_err(tree::TreeError::into_error)?;
+        for root in &mut projected.roots {
+            root.window = Some(placement.window);
+        }
+        Ok(projected)
     }
 
     fn invoke(&mut self, placement: &Placement, identifier: &str, app: &Tree) -> Result<()> {
-        // Refused before anything is read when the lane reads through nothing.
         self.host_accessibility("os_invoke")?;
         if tree::element_of(&app.roots, identifier).is_none() {
             return Err(Error::not_found(format!(
                 "the app publishes no element whose identifier is {identifier:?}"
             )));
         }
-        let (screen, projected) = self.projected(placement, app)?;
-        let element = tree::element_of(&projected.roots, identifier).ok_or_else(|| {
-            Error::not_found(format!(
-                "the Simulator shows no element that fits the app's {identifier:?}: VoiceOver \
-                 would not reach it"
-            ))
-        })?;
+        let (request, screen, placing) = self.screen(placement, "os_invoke")?;
+        let element = tree::matched_element(&screen, app, placing, identifier)
+            .map_err(tree::TreeError::into_error)?
+            .ok_or_else(|| {
+                Error::not_found(format!(
+                    "the Simulator shows no element that fits the app's {identifier:?}: \
+                     VoiceOver would not reach it"
+                ))
+            })?
+            .clone();
         self.host_accessibility("os_invoke")?
-            .press(&screen, element)
+            .press(&request, &element)
     }
 
     fn capture_window(&mut self, placement: &Placement) -> Result<Image> {

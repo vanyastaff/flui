@@ -3,27 +3,26 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use flui_protocol::tree::{Node, Tree};
-
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::lane::ios_simulator::accessibility::{
-    HostAccessibility, ScreenRequest, no_window, same_element,
+    HostAccessibility, HostScreen, ScreenElement, ScreenRequest, no_window,
 };
+use crate::lane::ios_simulator::tree;
 
 #[derive(Debug)]
 struct Script {
     title: String,
-    screen: Tree,
+    screen: HostScreen,
     requests: Vec<ScreenRequest>,
-    presses: Vec<Node>,
+    presses: Vec<ScreenElement>,
 }
 
-/// The Simulator's window as the Mac's accessibility API would show it, scripted: one window,
-/// titled for its device, whose screen is a tree a test builds (its root the screen's group, the
-/// iOS app's elements under it, as `HostAccessibility::read` hands them over). A read of another
-/// title is refused as no window on screen is; a press finds the element as the Mac's does, by
-/// the facts a read gives, and is recorded. Clones share one script, so a test keeps one while
-/// the lane owns another.
+/// The Simulator's window as the Mac's accessibility API would serve it, scripted: one window,
+/// titled for its device, whose screen a test writes out as the API serves it (the screen's
+/// frame and its elements' attributes in the Mac's points). A read of another title is refused
+/// as no window on screen is; a press finds the element as the Mac's does
+/// (`ios_simulator::tree::locate`, refusing none and two) and is recorded. Clones share one
+/// script, so a test keeps one while the lane owns another.
 #[derive(Debug, Clone)]
 pub struct ScriptedSimulatorScreen {
     script: Arc<Mutex<Script>>,
@@ -36,7 +35,7 @@ fn lock(script: &Mutex<Script>) -> MutexGuard<'_, Script> {
 impl ScriptedSimulatorScreen {
     /// A window titled `title` showing `screen`.
     #[must_use]
-    pub fn new(title: impl Into<String>, screen: Tree) -> Self {
+    pub fn new(title: impl Into<String>, screen: HostScreen) -> Self {
         Self {
             script: Arc::new(Mutex::new(Script {
                 title: title.into(),
@@ -59,26 +58,15 @@ impl ScriptedSimulatorScreen {
         lock(&self.script).requests.clone()
     }
 
-    /// Every element pressed, as the screen shows it, in order.
+    /// Every element pressed, as the screen serves it, in order.
     #[must_use]
-    pub fn presses(&self) -> Vec<Node> {
+    pub fn presses(&self) -> Vec<ScreenElement> {
         lock(&self.script).presses.clone()
     }
 }
 
-/// The node of `nodes` that reads as `wanted`, in document order.
-fn found<'a>(nodes: &'a [Node], wanted: &Node) -> Option<&'a Node> {
-    nodes.iter().find_map(|node| {
-        if same_element(node, wanted) {
-            Some(node)
-        } else {
-            found(&node.children, wanted)
-        }
-    })
-}
-
 impl HostAccessibility for ScriptedSimulatorScreen {
-    fn read(&mut self, screen: &ScreenRequest) -> Result<Tree> {
+    fn read(&mut self, screen: &ScreenRequest) -> Result<HostScreen> {
         let mut script = lock(&self.script);
         script.requests.push(screen.clone());
         if screen.title != script.title {
@@ -87,26 +75,16 @@ impl HostAccessibility for ScriptedSimulatorScreen {
         Ok(script.screen.clone())
     }
 
-    fn press(&mut self, screen: &ScreenRequest, element: &Node) -> Result<()> {
+    fn press(&mut self, screen: &ScreenRequest, wanted: &ScreenElement) -> Result<()> {
         let mut script = lock(&self.script);
         script.requests.push(screen.clone());
         if screen.title != script.title {
             return Err(no_window(&screen.title));
         }
-        // The screen's own group is no element of the app's.
-        let pressed = script
-            .screen
-            .roots
-            .iter()
-            .find_map(|root| found(&root.children, element))
-            .cloned()
-            .ok_or_else(|| {
-                Error::not_found(format!(
-                    "the OS accessibility tree shows no element that reads as {} {:?}",
-                    element.native_role,
-                    element.name.as_deref().unwrap_or_default()
-                ))
-            })?;
+        let path = tree::locate(&script.screen, wanted)?;
+        let pressed = tree::element_at(&script.screen.elements, &path)
+            .expect("BUG: a located path names an element")
+            .clone();
         script.presses.push(pressed);
         Ok(())
     }
