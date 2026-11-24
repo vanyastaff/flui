@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
+- **Superseded-by:** [ADR-0400](ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md)
+  for §6's script builders (§2): `Gesture` builds the sequences, and `dispatch_pointer_*` and
+  `replay`'s script types are deleted.
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (the boundary and
   timeline recorded here), [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) (the
   vocabulary and its generated-table gate), [ADR-0090](ADR-0090-ime-pull-text-store-contract.md)

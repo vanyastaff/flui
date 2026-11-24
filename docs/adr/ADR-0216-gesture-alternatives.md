@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-10-13)
 - **Date:** 2026-10-13
+- **Superseded-by:** [ADR-0400](ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md)
+  for the gesture path of `assert_gesture_alternatives` driven through `PointerScript` (§2): it
+  drives a `Gesture`.
 - **Amended:** 2026-10-18 — §1 names `AnchoredDrag`, `PageView` and `RefreshIndicator` as
   behavioural widgets and scroll views whose motion operates nothing as not behavioural.
 - **Amended:** 2026-10-18 — §1 and §4: the single-pointer path may be drawn by a companion widget

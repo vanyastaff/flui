@@ -45,14 +45,17 @@ the same bug found by a whole-demo snapshot names a demo.
 
 Two structural rules hold across the stack:
 
-- **Test-only APIs live in the kit of their layer** (ADR-0243). From the frame layer up that kit is
-  `flui-testing`: it sits above the frame runtime and the widget catalog, so
+- **Test-only APIs live in the kit of their layer** (ADR-0243, ADR-0400 §8). From the frame layer
+  up that kit is `flui-testing`: it sits above the frame runtime and the widget catalog, so
   the widget harness lives there too and drives the product frame
-  transaction: `lay_out` mounts its tree in a `HeadlessHost`, whose frames are
-  `UiRuntime::pump` (ADR-0083 §4). A crate below it exposes its own kit behind a
+  transaction: `Tester::mount` mounts its tree in the headless host, whose frames are
+  `UiRuntime::pump` (ADR-0083 §4). ADR-0400 §1 replaces `lay_out`, `LaidOut`, `Harness` and a
+  public `HeadlessHost`, which the rest of this page describes as the code has them today, with
+  `Tester`; they are not deprecated yet ([gaps](gaps.md#accepted-adr-sections-not-built-yet)).
+  A crate below it exposes its own kit behind a
   feature named `testing`, never `test-support` or `test-utils`.
-- **A test's frames are the UI runtime's.** A tree mounts through `HeadlessHost::attach` (or
-  `lay_out`, which wraps it), and its first frame, the mount included, is `UiRuntime::pump`:
+- **A test's frames are the UI runtime's.** A tree mounts through `Tester::mount` (today
+  `HeadlessHost::attach` or `lay_out`, which wraps it), and its first frame, the mount included, is `UiRuntime::pump`:
   the same layout↔build fixpoint and lazy-sliver service pass every later frame runs. Frame
   loops hand-rolled over raw owners drifted once, silently: one
   bootstrapped with a bare `PipelineOwner::run_frame` and captured every `SliverAppBar`
