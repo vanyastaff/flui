@@ -21,7 +21,7 @@
 
 use std::fmt;
 
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use flui_foundation::panic::{AfterPanic, os_entry};
 
 /// The Java exception slot of the thread a native method runs on.
 pub(crate) trait ExceptionSlot {

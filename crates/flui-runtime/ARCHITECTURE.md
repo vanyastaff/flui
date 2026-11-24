@@ -1321,7 +1321,7 @@ Events are taken between answers, in turn from each stream, while fewer than 64 
 the driver's seat at a time: a hello naming no role, or `driver`, takes it, a second is refused
 `not_driver`, and an observer reads, subscribes and annotates beside it: it may call a method
 whose effect is `read_only` or `annotates`, and is refused `not_driver` for any other
-(`dispatch::may_call`, ADR-0288 §8). A timeout answers an annotating method as it answers a read,
+(`ClientRole::may_call`, which `dispatch::may_call` reads, ADR-0288 §8). A timeout answers an annotating method as it answers a read,
 retry `soon`: the window keeps only the last annotation, so a resend shows what the queued one
 does. The driver's obligation runs once, contained, when the driver's conversation
 is dropped while the service is not stopped. A waker the session registers is woken by the seam

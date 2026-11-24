@@ -324,7 +324,7 @@ fn dialogs(owner: &TestOwner, window: &CanvasWindow, active: bool) -> FileDialog
 /// A filter whose extension the File System Access picker refuses, which
 /// sends an open dialog to `<input type=file>` on every browser.
 fn input_only() -> FileFilter {
-    FileFilter::new("Notes").with_extension("my-notes")
+    FileFilter::new("Notes").extension("my-notes")
 }
 
 /// Set `input`'s files to `files` (name and text) and dispatch `change`,
@@ -417,7 +417,7 @@ async fn an_input_answers_the_files_the_user_picked_with_their_contents() {
         dialogs.open(
             OpenRequest::files()
                 .allow_multiple()
-                .filter(input_only().with_mime_type("text/plain")),
+                .filter(input_only().mime_type("text/plain")),
         ),
     );
     let input = the_input(&window);
@@ -1343,7 +1343,7 @@ async fn a_refused_picker_hands_over_to_the_input_while_the_gesture_lasts() {
     let _picker = refusing_picker("showOpenFilePicker");
     let owner = TestOwner::new();
     let window = CanvasWindow::new(&owner);
-    let text = || OpenRequest::files().filter(FileFilter::new("Text").with_extension("txt"));
+    let text = || OpenRequest::files().filter(FileFilter::new("Text").extension("txt"));
     let opened = land(dialogs(&owner, &window, true).open(text()));
     let input = until_an_input(&owner, &window).await;
     assert_eq!(input.accept(), ".txt");
@@ -1435,8 +1435,8 @@ async fn a_save_outside_a_gesture_is_a_download_whose_fate_is_not_known() {
                 .suggested_name("notes")
                 .filter(
                     FileFilter::new("Text")
-                        .with_extension("txt")
-                        .with_mime_type("text/plain"),
+                        .extension("txt")
+                        .mime_type("text/plain"),
                 )
                 .contents(b"written".to_vec()),
         ),
@@ -1532,7 +1532,7 @@ async fn a_save_the_user_chose_is_written_after_its_dialog_was_dropped() {
     let picker = SavePickerStandIn::install();
     let shown = dialogs(&owner, &window, true).save(
         SaveRequest::new()
-            .filter(FileFilter::new("Text").with_extension("txt"))
+            .filter(FileFilter::new("Text").extension("txt"))
             .contents(b"kept".to_vec()),
     );
     owner.settle().await;

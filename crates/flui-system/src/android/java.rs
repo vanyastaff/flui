@@ -30,9 +30,7 @@ mod starts;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use flui_platform::capability::{
-    Activity, Capability, CapabilityRegistrar, JniFrame, ProviderContext, Resolver,
-};
+use flui_platform::capability::{Activity, Capability, JniFrame, ProviderContext, Resolver};
 use flui_platform::launch::{Launcher, LauncherCapability};
 use flui_platform::{Unsupported, UnsupportedReason};
 use jni::objects::{Global, JClass, JObject, JObjectArray, JString, JThrowable};
@@ -47,15 +45,12 @@ pub(crate) use starts::{Started, view};
 use super::documents::{self, MAX_NAME_UNITS};
 use super::workers::Workers;
 use super::{CALLBACK_CLASS, DOCUMENTS_CLASS, PROTOCOL};
-use crate::autostart::AutostartCapability;
 use crate::dialog::{FileDialogCapability, MessageBoxCapability, MessageBoxes};
 use crate::grant::{GrantCapability, Grants};
-use crate::jump_list::JumpListCapability;
-use crate::os::{Os, OsCapability};
+use crate::os::Os;
 use crate::owner::android::native_call::jni_native;
+use crate::providers::{Providers, Provision};
 use crate::share::{Share, ShareCapability};
-use crate::shortcuts::GlobalShortcutCapability;
-use crate::taskbar::TaskbarCapability;
 use crate::user_dirs::{UserDirCapability, UserDirs};
 
 /// What a call Android makes through a `FluiCallback` runs: it is given the
@@ -658,77 +653,76 @@ fn host<C: Capability>(
     Ok((activity, java))
 }
 
-/// Provide `C` as a refusal: Android has no such thing.
-fn not_on_android<C: Capability>(registrar: &mut CapabilityRegistrar) {
-    registrar.provide::<C>(|_: &ProviderContext<'_>| {
-        Err::<C::Handle, _>(Unsupported::of::<C>(UnsupportedReason::NotOnThisPlatform))
-    });
-}
-
-/// Register the Android providers: the launcher, the file dialogs, the
-/// message box, the share sheet, the user's folders and the system
-/// information; autostart, global shortcuts, the launcher entry and the jump
-/// list are refused, since an Android application has none of them.
-pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
-    registrar.provide::<LauncherCapability>(|ctx: &ProviderContext<'_>| {
-        let (activity, java) = host::<LauncherCapability>(ctx, Reach::OwnClasses)?;
-        Ok::<_, Unsupported>(Launcher::new(
-            super::launcher::AndroidLauncher::new(
-                activity,
-                java,
-                ctx.runtime_local::<Workers>(),
-                ctx.completions().clone(),
-            ),
-            ctx,
-        ))
-    });
-    registrar.provide::<FileDialogCapability>(|ctx: &ProviderContext<'_>| {
-        let (activity, java) = host::<FileDialogCapability>(ctx, Reach::FrameworkOnly)?;
-        documents::provide(ctx, activity, std::rc::Rc::new(JavaPicker(java)))
-    });
-    registrar.provide::<MessageBoxCapability>(|ctx: &ProviderContext<'_>| {
-        let (activity, java) = host::<MessageBoxCapability>(ctx, Reach::OwnClasses)?;
-        MessageBoxes::try_new(
-            super::message_box::AndroidMessageBoxes::new(activity, java, ctx.completions().clone()),
-            ctx,
-        )
-    });
-    registrar.provide::<ShareCapability>(|ctx: &ProviderContext<'_>| {
-        let (activity, java) = host::<ShareCapability>(ctx, Reach::OwnClasses)?;
-        Share::try_new(
-            super::share::AndroidShare::new(
-                activity,
-                java,
-                ctx.runtime_local::<Workers>(),
-                ctx.completions().clone(),
-            ),
-            ctx,
-        )
-    });
-    registrar.provide::<UserDirCapability>(|ctx: &ProviderContext<'_>| {
-        let activity = ctx.activity().ok_or_else(|| {
-            Unsupported::of::<UserDirCapability>(UnsupportedReason::NotYetOnThisHost)
-        })?;
-        Ok::<_, Unsupported>(UserDirs::new(
-            super::user_dirs::AndroidUserDirs::new(activity),
-            ctx,
-        ))
-    });
-    registrar.provide::<OsCapability>(|ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Os::new(super::os::AndroidOs::read(), ctx))
-    });
-    registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
-        let (_activity, java) = host::<GrantCapability>(ctx, Reach::FrameworkOnly)?;
-        Ok::<_, Unsupported>(Grants::new(
-            super::grants::AndroidGrants::new(
-                std::rc::Rc::new(JavaReach(java)),
-                ctx.runtime_local::<Workers>(),
-            ),
-            ctx,
-        ))
-    });
-    not_on_android::<AutostartCapability>(registrar);
-    not_on_android::<GlobalShortcutCapability>(registrar);
-    not_on_android::<TaskbarCapability>(registrar);
-    not_on_android::<JumpListCapability>(registrar);
+/// The Android providers: the launcher, the file dialogs, the message box,
+/// the share sheet, the user's folders, the system information and the
+/// grants; autostart, global shortcuts, the launcher entry and the jump list
+/// are refused, since an Android application has none of them.
+pub(crate) fn providers() -> Providers {
+    Providers {
+        launcher: Provision::provided(|ctx: &ProviderContext<'_>| {
+            let (activity, java) = host::<LauncherCapability>(ctx, Reach::OwnClasses)?;
+            Ok::<_, Unsupported>(Launcher::new(
+                super::launcher::AndroidLauncher::new(
+                    activity,
+                    java,
+                    ctx.runtime_local::<Workers>(),
+                    ctx.completions().clone(),
+                ),
+                ctx,
+            ))
+        }),
+        file_dialogs: Provision::provided(|ctx: &ProviderContext<'_>| {
+            let (activity, java) = host::<FileDialogCapability>(ctx, Reach::FrameworkOnly)?;
+            documents::provide(ctx, activity, std::rc::Rc::new(JavaPicker(java)))
+        }),
+        message_boxes: Provision::provided(|ctx: &ProviderContext<'_>| {
+            let (activity, java) = host::<MessageBoxCapability>(ctx, Reach::OwnClasses)?;
+            MessageBoxes::try_new(
+                super::message_box::AndroidMessageBoxes::new(
+                    activity,
+                    java,
+                    ctx.completions().clone(),
+                ),
+                ctx,
+            )
+        }),
+        share: Provision::provided(|ctx: &ProviderContext<'_>| {
+            let (activity, java) = host::<ShareCapability>(ctx, Reach::OwnClasses)?;
+            Share::try_new(
+                super::share::AndroidShare::new(
+                    activity,
+                    java,
+                    ctx.runtime_local::<Workers>(),
+                    ctx.completions().clone(),
+                ),
+                ctx,
+            )
+        }),
+        user_dirs: Provision::provided(|ctx: &ProviderContext<'_>| {
+            let activity = ctx.activity().ok_or_else(|| {
+                Unsupported::of::<UserDirCapability>(UnsupportedReason::NotYetOnThisHost)
+            })?;
+            Ok::<_, Unsupported>(UserDirs::new(
+                super::user_dirs::AndroidUserDirs::new(activity),
+                ctx,
+            ))
+        }),
+        os: Provision::provided(|ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Os::new(super::os::AndroidOs::read(), ctx))
+        }),
+        grants: Provision::provided(|ctx: &ProviderContext<'_>| {
+            let (_activity, java) = host::<GrantCapability>(ctx, Reach::FrameworkOnly)?;
+            Ok::<_, Unsupported>(Grants::new(
+                super::grants::AndroidGrants::new(
+                    std::rc::Rc::new(JavaReach(java)),
+                    ctx.runtime_local::<Workers>(),
+                ),
+                ctx,
+            ))
+        }),
+        autostart: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+        global_shortcuts: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+        taskbar: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+        jump_list: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+    }
 }

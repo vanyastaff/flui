@@ -47,6 +47,8 @@
 //!   a reader such as the driver reads without it;
 //! - [`record`]: `record.start` and `record.stop`, a driver's recording of a window's UI runtime
 //!   in the input recording's format, sent to it row by row as `record` events;
+//! - [`reload`]: `run.reload`, which the tool that started the app serves at its own endpoint:
+//!   a rebuild applied at a [`ReloadTier`](reload::ReloadTier) and its [`ReloadReport`](reload::ReloadReport);
 //! - [`version`]: the [`PROTOCOL_VERSION`](version::PROTOCOL_VERSION) the schema is published under,
 //!   versioned apart from this crate, and the rule for changing it.
 //!
@@ -85,6 +87,7 @@ pub mod motion;
 pub mod native_recording;
 pub mod perf;
 pub mod record;
+pub mod reload;
 pub mod semantics;
 pub mod session;
 pub mod snapshot;

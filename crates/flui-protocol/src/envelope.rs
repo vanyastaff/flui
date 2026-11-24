@@ -111,6 +111,18 @@ impl<P> Request<P> {
     }
 }
 
+/// What a server reads of a line that is not a [`Request`]: its id, when it carries one, so the
+/// refusal answers the request that broke ([`ServerLine::malformed`]). A line that is not JSON,
+/// or whose id is neither a number nor a string, reads as no id.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
+#[non_exhaustive]
+pub struct Unread {
+    /// The id the line carries.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub id: Option<RequestId>,
+}
+
 /// Every line an app sends, generic over a result's representation `R`.
 ///
 /// Read by its keys (see the [module docs](self)), not by trying each shape in turn: a result
@@ -176,6 +188,27 @@ impl<R> ServerLine<R> {
         Self::Failed {
             id: None,
             error: Box::new(error),
+        }
+    }
+
+    /// The refusal of a line that is not a request: the answer to `id` when the line carries one
+    /// ([`Unread`]), so a client that sent a broken request is not left waiting for it, and a
+    /// refusal that answers no request otherwise. Every server of the conversation refuses with
+    /// it.
+    #[must_use]
+    pub fn malformed(id: Option<RequestId>) -> Self {
+        let invalid =
+            |message: &str| ErrorObject::new(crate::error::ErrorCode::InvalidArgument, message);
+        match id {
+            Some(id) => Self::answer(
+                id,
+                Err(invalid(
+                    "a request is a JSON object with an id, a method and its params",
+                )),
+            ),
+            None => Self::refusal(invalid(
+                "a request is a JSON object that carries an id: a number or a string",
+            )),
         }
     }
 

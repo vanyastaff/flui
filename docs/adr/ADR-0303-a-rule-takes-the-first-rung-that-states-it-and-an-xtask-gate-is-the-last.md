@@ -169,7 +169,7 @@ so the exemption never reaches it.
 
 `clippy.toml` lists `std::panic::catch_unwind` under `disallowed-methods`, with the reason: run
 user code through `flui-foundation`'s commit-then-call primitives (ADR-0287), and an OS entry
-through `owner::panic_boundary::os_entry` (ADR-0151 §16).
+through `flui_foundation::panic::os_entry` (ADR-0151 §16).
 
 - The primitives themselves (`crates/flui-foundation/src/panic.rs` and its submodules,
   `flui-native`'s `owner::panic_boundary`) carry an expectation at each of their catch sites,

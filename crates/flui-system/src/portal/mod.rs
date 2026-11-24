@@ -35,18 +35,17 @@ use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use flui_platform::capability::{
-    CapabilityRegistrar, CompletionSource, PortalParent, ProviderContext, WindowRef,
-};
-use flui_platform::launch::{Launcher, LauncherCapability};
+use flui_platform::capability::{CompletionSource, PortalParent, ProviderContext, WindowRef};
+use flui_platform::launch::Launcher;
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
-use crate::autostart::{Autostart, AutostartCapability};
-use crate::dialog::{FileDialogCapability, FileDialogs};
-use crate::grant::{GrantCapability, Grants};
-use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
-use crate::taskbar::{TaskbarCapability, TaskbarEntry};
-use crate::user_dirs::{UserDirCapability, UserDirs};
+use crate::autostart::Autostart;
+use crate::dialog::FileDialogs;
+use crate::grant::Grants;
+use crate::providers::{Providers, Provision};
+use crate::shortcuts::GlobalShortcuts;
+use crate::taskbar::TaskbarEntry;
+use crate::user_dirs::UserDirs;
 
 pub(crate) use background::PortalAutostart;
 pub(crate) use dialogs::PortalDialogs;
@@ -596,74 +595,65 @@ pub(crate) fn with_parent(
     });
 }
 
-/// Register the portal's providers: on the session bus, or on the bus at
+/// The Linux providers, the portal's: on the session bus, or on the bus at
 /// `address`, naming the application by `app_id` when given, else by the id
 /// the composition root names it by.
-pub(crate) fn register(
-    registrar: &mut CapabilityRegistrar,
-    address: Option<Arc<str>>,
-    app_id: Option<AppName>,
-) {
+pub(crate) fn providers(address: Option<Arc<str>>, app_id: Option<AppName>) -> Providers {
     let configure = move |ctx: &ProviderContext<'_>| {
         let portal = ctx.runtime_local::<Portal>();
         portal.configure(address.clone(), app_id.clone().or_else(|| AppName::of(ctx)));
         portal
     };
     let launcher = configure.clone();
-    registrar.provide::<LauncherCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Launcher::new(
-            PortalLauncher::new(launcher(ctx), ctx.window(), ctx.completions().clone()),
-            ctx,
-        ))
-    });
     let dialogs = configure.clone();
-    registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
-        FileDialogs::try_new(
-            PortalDialogs::new(dialogs(ctx), ctx.completions().clone()),
-            ctx,
-        )
-    });
     let autostart = configure.clone();
-    registrar.provide::<AutostartCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Autostart::new(
-            PortalAutostart::new(autostart(ctx), ctx),
-            ctx,
-        ))
-    });
     let shortcuts = configure.clone();
-    registrar.provide::<GlobalShortcutCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(GlobalShortcuts::new(
-            PortalShortcuts::new(shortcuts(ctx), ctx),
-            ctx,
-        ))
-    });
     let entry = configure.clone();
-    registrar.provide::<TaskbarCapability>(move |ctx: &ProviderContext<'_>| {
-        let portal = entry(ctx);
-        let app_id = portal.app_id.borrow().clone();
-        let feed = std::sync::Arc::clone(&ctx.runtime_local::<EntryFeedSlot>().0);
-        LauncherEntry::try_new(portal, app_id, feed).map(|entry| TaskbarEntry::new(entry, ctx))
-    });
     let dirs = configure.clone();
-    registrar.provide::<UserDirCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(UserDirs::new(XdgUserDirs::new(dirs(ctx)), ctx))
-    });
     let grants = configure;
-    registrar.provide::<GrantCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Grants::new(grants::PortalGrants::new(grants(ctx)), ctx))
-    });
-    // No portal shows a message box or a share sheet, and the jump list is
-    // Windows': refused for good, never faked.
-    refuse_for_good::<crate::dialog::MessageBoxCapability>(registrar);
-    refuse_for_good::<crate::share::ShareCapability>(registrar);
-    refuse_for_good::<crate::jump_list::JumpListCapability>(registrar);
-}
-
-/// Provide `C` as a refusal with `NotOnThisPlatform`.
-fn refuse_for_good<C: flui_platform::capability::Capability>(registrar: &mut CapabilityRegistrar) {
-    registrar.provide::<C>(|_: &ProviderContext<'_>| {
-        Err::<C::Handle, _>(Unsupported::of::<C>(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
-    });
+    Providers {
+        launcher: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Launcher::new(
+                PortalLauncher::new(launcher(ctx), ctx.window(), ctx.completions().clone()),
+                ctx,
+            ))
+        }),
+        file_dialogs: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            FileDialogs::try_new(
+                PortalDialogs::new(dialogs(ctx), ctx.completions().clone()),
+                ctx,
+            )
+        }),
+        autostart: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Autostart::new(
+                PortalAutostart::new(autostart(ctx), ctx),
+                ctx,
+            ))
+        }),
+        global_shortcuts: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(GlobalShortcuts::new(
+                PortalShortcuts::new(shortcuts(ctx), ctx),
+                ctx,
+            ))
+        }),
+        taskbar: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            let portal = entry(ctx);
+            let app_id = portal.app_id.borrow().clone();
+            let feed = std::sync::Arc::clone(&ctx.runtime_local::<EntryFeedSlot>().0);
+            LauncherEntry::try_new(portal, app_id, feed).map(|entry| TaskbarEntry::new(entry, ctx))
+        }),
+        user_dirs: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(UserDirs::new(XdgUserDirs::new(dirs(ctx)), ctx))
+        }),
+        grants: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Grants::new(grants::PortalGrants::new(grants(ctx)), ctx))
+        }),
+        // No portal shows a message box or a share sheet, and the jump list
+        // is Windows': refused for good, never faked.
+        message_boxes: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+        share: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+        jump_list: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+        // The system information has no Linux provider yet.
+        os: Provision::Refused(UnsupportedReason::NotYetOnThisHost),
+    }
 }

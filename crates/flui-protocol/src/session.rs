@@ -4,6 +4,7 @@
 use crate::capture::CaptureSource;
 use crate::geometry::{LogicalPoint, LogicalSize};
 use crate::input::{InputPath, InputPolicy, PointerDevice};
+use crate::method::MethodEffect;
 use crate::tree::WindowId;
 use crate::version::ProtocolVersion;
 
@@ -57,6 +58,14 @@ impl ClientRole {
     #[must_use]
     pub const fn is_driver(&self) -> bool {
         matches!(self, Self::Driver)
+    }
+
+    /// Whether a connection admitted in this role may call a method whose effect is `effect`:
+    /// a driver calls every method, an observer only one that does not change the app (ADR-0288
+    /// §8, ADR-0395 §1). Every server of the protocol refuses the rest `not_driver`.
+    #[must_use]
+    pub const fn may_call(self, effect: MethodEffect) -> bool {
+        self.is_driver() || !effect.changes_app()
     }
 }
 

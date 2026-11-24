@@ -114,7 +114,7 @@ pub(crate) const UNNAMED_FAILURE: SystemFailure = SystemFailure::MalformedAnswer
 pub(crate) const TOO_MANY_OFFERED: SystemFailure = SystemFailure::Os(24);
 
 #[cfg(target_os = "android")]
-pub(crate) use java::register;
+pub(crate) use java::providers;
 
 /// The Java source of the class named `binary_name`, from the sources the
 /// checked-in dex is compiled from (the crate's `android_dex` test holds the

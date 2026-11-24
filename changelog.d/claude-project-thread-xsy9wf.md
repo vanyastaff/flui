@@ -21,6 +21,19 @@
 - **`flui-cli`**: `flui run --json` reports `run.watch {paths}` once the sources are watched; a
   save made after it is a change the run sees.
 
+- **`flui-cli`**: `flui mcp` gains `flui_reload`, which rebuilds the app and applies the build
+  through the `flui run --agent` that started it, and answers what the reload came to: applied
+  at a tier, or failed with the compiler's errors and their `file:line:column`, with the time it
+  took. A `flui run --agent` that rebuilds on saves (hot reload, not `--release`) serves it at a
+  private run endpoint of its own, names it `run` in `target/flui-agent.json` and reports it in
+  `run.agent.ready` (ADR-0401).
+- **`flui-protocol`**: protocol 0.31 adds `run.reload { at_least? }`, served by the new
+  `ServedBy::Supervisor`, with `ReloadTier`, `ReloadParams`, `ReloadReport` and `Reloaded`.
+  `ClientRole::may_call`, `launch::same_token` and `ServerLine::malformed` (with
+  `envelope::Unread`) hold, for every server of the protocol, which
+  calls a role may make, how a hello's token is compared and how a line that is not a request
+  is refused.
+
 ### Changed
 
 - **`flui-cli`**: a project `flui create` writes declares no `cdylib`: the library is an rlib, and
@@ -42,6 +55,9 @@
   screen instead of closing the window for the length of the build. Windows, which cannot
   overwrite a running executable, still stops the application first, and `R` still stops,
   rebuilds and starts.
+- **`flui-cli`**: `flui run --json`'s `run.reload` event is the report `flui_reload` answers
+  with, `{"outcome": {"applied": {"tier": …}} | {"failed": {"diagnostics": […], "omitted": n}},
+  "elapsed_ms": …}`, for every reload whatever started it, in place of `{"kind": …, "ok": …}`.
 
 ### Removed
 
@@ -69,3 +85,6 @@
   `adb` forward; not yet a Windows named pipe),
   so `flui mcp` reconnecting to a restarted app, and `flui run`'s build reports, no longer leave
   the old connection's socket and reader thread open until the app closes its end.
+- **`flui-cli`**: `flui mcp` no longer loses a call that acts (`flui_act`, `flui_motion`) on the
+  first try after the app restarted: a connection whose app closed its end sends nothing and the
+  call goes on a new one, where it used to fail with the closed connection's error.
