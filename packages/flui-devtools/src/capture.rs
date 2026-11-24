@@ -229,8 +229,7 @@ type FrameSink = Arc<dyn Fn(&Capture, &CapturedFrame) + Send + Sync>;
 struct SinkId(NonZeroU64);
 
 /// A frame sink's registration on a [`Capture`], made by [`Capture::on_frame`]. The sink runs
-/// on every frame the capture closes until this handle drops or is [cancelled](Self::cancel),
-/// and is removed then.
+/// on every frame the capture closes until this handle drops, and is removed then.
 ///
 /// The handle holds its capture weakly: it never keeps a capture alive, and once the capture is
 /// gone dropping it does nothing. A removal that lands while a frame is being delivered does
@@ -244,11 +243,6 @@ struct SinkId(NonZeroU64);
 pub struct CaptureSubscription {
     capture: Weak<Shared>,
     sink: SinkId,
-}
-
-impl CaptureSubscription {
-    /// Remove the sink now, as dropping the handle does.
-    pub fn cancel(self) {}
 }
 
 impl Drop for CaptureSubscription {
@@ -1289,7 +1283,7 @@ mod tests {
         drop(capture);
 
         assert!(weak.upgrade().is_none());
-        sink.cancel();
+        drop(sink);
     }
 
     /// The enclosing frame belongs to another runtime's pump: it cannot stand in for the inner

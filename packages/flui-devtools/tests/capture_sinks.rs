@@ -37,53 +37,40 @@ fn one_frame(capture: &Capture) {
     capturing(capture, || frame(None, Duration::ZERO));
 }
 
-/// How a test ends a sink's registration.
-type Removal = fn(CaptureSubscription);
-
-/// Dropping a sink's handle, or cancelling it, removes that sink and destroys its closure; a
+/// Dropping a sink's handle removes that sink and destroys its closure; a
 /// sink registered beside it keeps seeing every frame.
 ///
 /// Fails when the handle leaves its sink registered, or removes another sink.
 #[test]
 fn ending_a_sink_handle_removes_exactly_that_sink() {
-    let removals: [(&str, Removal); 2] = [("drop", drop), ("cancel", CaptureSubscription::cancel)];
-    for (removal, remove) in removals {
-        let capture = Capture::new();
-        let (removed, kept) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-        let destroyed = Arc::new(AtomicBool::new(false));
-        let removed_sink = {
-            let count = counting(&removed);
-            let flag = DropFlag(Arc::clone(&destroyed));
-            capture.on_frame(move |capture, frame| {
-                let _owned = &flag;
-                count(capture, frame);
-            })
-        };
-        let _kept_sink = capture.on_frame(counting(&kept));
+    let capture = Capture::new();
+    let (removed, kept) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let destroyed = Arc::new(AtomicBool::new(false));
+    let removed_sink = {
+        let count = counting(&removed);
+        let flag = DropFlag(Arc::clone(&destroyed));
+        capture.on_frame(move |capture, frame| {
+            let _owned = &flag;
+            count(capture, frame);
+        })
+    };
+    let _kept_sink = capture.on_frame(counting(&kept));
 
-        one_frame(&capture);
-        assert!(
-            !destroyed.load(Ordering::SeqCst),
-            "{removal}: the sink is live"
-        );
-        remove(removed_sink);
-        assert!(
-            destroyed.load(Ordering::SeqCst),
-            "{removal}: the removed sink's closure is destroyed with its handle"
-        );
-        one_frame(&capture);
+    one_frame(&capture);
+    assert!(!destroyed.load(Ordering::SeqCst), "the sink is live");
+    drop(removed_sink);
+    assert!(
+        destroyed.load(Ordering::SeqCst),
+        "the removed sink's closure is destroyed with its handle"
+    );
+    one_frame(&capture);
 
-        assert_eq!(
-            removed.load(Ordering::SeqCst),
-            1,
-            "{removal}: the removed sink saw only the frame before"
-        );
-        assert_eq!(
-            kept.load(Ordering::SeqCst),
-            2,
-            "{removal}: the other sink saw both"
-        );
-    }
+    assert_eq!(
+        removed.load(Ordering::SeqCst),
+        1,
+        "the removed sink saw only the frame before"
+    );
+    assert_eq!(kept.load(Ordering::SeqCst), 2, "the other sink saw both");
 }
 
 /// The `ERROR` events a subscriber saw: their target and message.

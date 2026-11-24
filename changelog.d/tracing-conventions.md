@@ -28,7 +28,7 @@
   trace field.
 - The scheduler's `frame` span carries `runtime`, and the runtime opens a `presentation` span
   around each presentation's segment of a frame.
-- `Capture::on_frame` hands its sink the capture, so a sink never has to own a handle to the capture
+- `Capture::on_frame` hands its sink the capture, so a sink never has to own a clone of the capture
   that owns it, and a sink that panics no longer takes the frame from the sinks after it; the
   failure is reported as an error event and never unwinds through the subscriber. The
   runtime's presentation span now also covers a presentation's animation sampling, `submit` and
@@ -39,4 +39,3 @@
 - `OwnerFrame::set_trace_runtime` names the runtime a `frame` span reports from the moment it
   opens, so a frame whose callback panics still says whose frame it was.
   `ProfilerConfig::runtime` profiles a named runtime, one profiler per runtime over one capture.
-  `Capture::on_frame_open` (with `FrameOpening`) runs a sink when the outermost frame opens.
