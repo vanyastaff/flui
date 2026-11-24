@@ -74,14 +74,8 @@ mod tests {
 
     /// Counts its calls and its drop.
     fn counting(calls: &Rc<Cell<u32>>, dropped: &Rc<Cell<bool>>) -> Box<dyn FnMut()> {
-        struct OnDrop(Rc<Cell<bool>>);
-        impl Drop for OnDrop {
-            fn drop(&mut self) {
-                self.0.set(true);
-            }
-        }
         let calls = Rc::clone(calls);
-        let guard = OnDrop(Rc::clone(dropped));
+        let guard = std::mem::DropGuard::new(Rc::clone(dropped), |dropped| dropped.set(true));
         Box::new(move || {
             let _ = &guard;
             calls.set(calls.get() + 1);
