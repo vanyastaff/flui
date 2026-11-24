@@ -241,7 +241,7 @@ fn tools() -> Value {
         },
         {
             "name": "flui_reload",
-            "description": "Rebuild the app from its sources and apply the build, through the `flui run --agent` that started it. Absent `at_least`, the run places the reload; `restart` and `process_restart` start the app again, losing its state. The reply is the outcome, `applied` with the tier or `failed` with the compiler's errors (the running app is then left as it was), and `elapsed_ms`. Read the app again after it: handles from before a restart are gone.",
+            "description": "Rebuild the app from its sources and apply the build, through the `flui run --agent` that started it. Absent `at_least`, the run places the reload; `restart` and `process_restart` start the app again, losing its state. The reply is the outcome, `applied` with the tier or `failed` with the compiler's errors, and `elapsed_ms`. A failed build leaves the running app as it was, unless the reload stopped it first: a restart does. Read the app again after it: handles from before a restart are gone.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -496,8 +496,10 @@ fn connect(session: Option<&Path>, to_run: bool) -> Result<Connection, Failure> 
         let Some(run) = credentials.run.take() else {
             return Err(Failure::Wire(json!({
                 "code": "not_supported",
-                "message": "the app was not started by a `flui run --agent` that rebuilds it, \
-                            so nothing serves a reload",
+                "message": "the session names no run endpoint: the app was not started by a \
+                            `flui run --agent` that rebuilds it, or the environment named the \
+                            session, which carries none, \
+                            so nothing here serves a reload",
                 "retry": "never",
             })));
         };

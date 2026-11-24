@@ -453,7 +453,8 @@ macro_rules! __method_table {
             RecordStop = "record.stop", Agent, ReadOnly, Record,
                 $crate::record::RecordStopParams => $crate::record::RecordSummary;
             /// Rebuild the application and apply the build at a tier, at least the one asked
-            /// for; answered once the build is applied or failed.
+            /// for; answered once the build is applied (a new process is applied once it is
+            /// started) or failed.
             RunReload = "run.reload", Supervisor, Destructive, Session,
                 $crate::reload::ReloadParams => $crate::reload::ReloadReport;
             /// One semantics action on one element.

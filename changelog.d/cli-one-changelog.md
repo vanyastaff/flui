@@ -11,7 +11,7 @@
   project is built for `wasm32-unknown-unknown`, served by a built-in dev server on `127.0.0.1`
   (`--web-port`, default a free port), the browser is opened (`--no-open` prints the URL instead),
   and every rebuild reloads the page. `--json` adds `run.web.serve {url, dir}`,
-  `run.web.open {browser, url}` and `run.reload {kind: "page", ok}`.
+  `run.web.open {browser, url}` and `run.reload` once each reload ends.
 
 ### Changed
 

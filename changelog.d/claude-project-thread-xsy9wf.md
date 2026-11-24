@@ -28,8 +28,10 @@
   names it `run` in `target/flui-agent.json` (ADR-0401).
 - **`flui-protocol`**: protocol 0.31 adds `run.reload { at_least? }`, served by the new
   `ServedBy::Supervisor`, with `ReloadTier`, `ReloadParams`, `ReloadReport` and `Reloaded`.
-  `ClientRole::may_call` and `launch::same_token` hold, for every server of the protocol, which
-  calls a role may make and how a hello's token is compared.
+  `ClientRole::may_call`, `launch::same_token` and `ServerLine::malformed` (with
+  `envelope::Unread`) hold, for every server of the protocol, which
+  calls a role may make, how a hello's token is compared and how a line that is not a request
+  is refused.
 
 ### Changed
 
@@ -82,3 +84,6 @@
   `adb` forward; not yet a Windows named pipe),
   so `flui mcp` reconnecting to a restarted app, and `flui run`'s build reports, no longer leave
   the old connection's socket and reader thread open until the app closes its end.
+- **`flui-cli`**: `flui mcp` no longer loses a call that acts (`flui_act`, `flui_motion`) on the
+  first try after the app restarted: a connection whose app closed its end sends nothing and the
+  call goes on a new one, where it used to fail with the closed connection's error.

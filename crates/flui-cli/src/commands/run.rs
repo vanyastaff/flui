@@ -70,15 +70,21 @@ pub(crate) fn execute(
 
     let target = resolve_target(device.as_deref())?;
     ui::info(format!("Target device: {}", style(target.label()).cyan()))?;
-    let agent = if agent {
-        Some(start_agent_session(
+    // A run that rebuilds on saves serves its reloads too (ADR-0401 §2): a desktop application,
+    // an Android device or a browser, with hot reload. A worker project's host is not started
+    // with the session.
+    let serves_reloads = hot_reload && !release && !matches!(project, Project::Worker(_));
+    let (agent, run_endpoint) = if agent {
+        let (session, run_endpoint) = start_agent_session(
             &project,
             &target,
             release,
             profile.as_deref(),
-        )?)
+            serves_reloads,
+        )?;
+        (Some(session), run_endpoint)
     } else {
-        None
+        (None, None)
     };
     ui::emit(
         "run.start",
@@ -105,6 +111,7 @@ pub(crate) fn execute(
         SessionExtras {
             web,
             agent,
+            run_endpoint,
             build_overlay,
             register_associations,
         },
@@ -140,6 +147,8 @@ pub(crate) struct RunOptions {
 struct SessionExtras {
     web: WebOptions,
     agent: Option<Session>,
+    /// Where an agent asks this run for reloads, named in the session file (ADR-0401).
+    run_endpoint: Option<RunEndpoint>,
     build_overlay: bool,
     register_associations: bool,
 }
@@ -156,7 +165,8 @@ fn run_session(
 ) -> CliResult<()> {
     let SessionExtras {
         web,
-        mut agent,
+        agent,
+        run_endpoint,
         build_overlay,
         register_associations,
     } = extras;
@@ -167,9 +177,8 @@ fn run_session(
                 reason: "the host/worker split targets the desktop; use `flui run --scene` for Android scene reload".into(),
             });
         }
-        let endpoint = serve_reloads(agent.as_mut())?;
         let mut strategy = AndroidSession::new(device.clone(), release, hot_reload, agent)?;
-        return dev_loop(&mut strategy, endpoint);
+        return dev_loop(&mut strategy, run_endpoint);
     }
     if let Target::Browser(browser) = target {
         if matches!(project, Project::Worker(_)) {
@@ -180,9 +189,8 @@ fn run_session(
                         .into(),
             });
         }
-        let endpoint = serve_reloads(agent.as_mut())?;
         let mut strategy = BrowserSession::new(browser.clone(), release, hot_reload, web, agent)?;
-        return dev_loop(&mut strategy, endpoint);
+        return dev_loop(&mut strategy, run_endpoint);
     }
     // The application runs on this desktop: refused before it is built when
     // it opens links or files a later launch could not hand to it.
@@ -218,7 +226,6 @@ fn run_session(
             }
             Project::Application { .. } => {
                 ui::success("Hot reload enabled (process restart)")?;
-                let endpoint = serve_reloads(agent.as_mut())?;
                 // The overlay reaches the app through its agent, so a run without `--agent`
                 // opens a session of its own, unlisted: `flui mcp` keeps finding the session
                 // a `flui run --agent` wrote. A run that cannot open one runs without the
@@ -248,7 +255,7 @@ fn run_session(
                     build_report,
                     register_associations,
                 };
-                dev_loop(&mut strategy, endpoint)?;
+                dev_loop(&mut strategy, run_endpoint)?;
             }
         }
     } else {
@@ -277,12 +284,9 @@ fn start_build_reporter(session: &Session) -> CliResult<Option<BuildReporter>> {
 }
 
 /// The run endpoint where `flui mcp` asks this run for reloads (`run.reload`, ADR-0401), named
-/// in the session file `--agent` wrote; none without `--agent`, or, with a warning, when it
-/// cannot start: the run goes on without it.
-fn serve_reloads(session: Option<&mut Session>) -> CliResult<Option<RunEndpoint>> {
-    let Some(session) = session.filter(|session| session.file().is_some()) else {
-        return Ok(None);
-    };
+/// as `run` in `session`'s file; none, with a warning, when it cannot start: the run goes on
+/// without it.
+fn serve_reloads(session: &mut Session) -> CliResult<Option<RunEndpoint>> {
     let endpoint = match RunEndpoint::start(session.credentials().token.clone()) {
         Ok(endpoint) => endpoint,
         Err(why) => {
@@ -303,13 +307,15 @@ fn serve_reloads(session: Option<&mut Session>) -> CliResult<Option<RunEndpoint>
 /// with; an Android app's endpoint is an abstract socket that `adb forward`
 /// carries a loopback port to, a page's app's a global this command reaches
 /// through the browser. A debug build serves the agent as it is; a profile
-/// without debug assertions builds with the `driver` feature.
+/// without debug assertions builds with the `driver` feature. A run that `serves_reloads` names its
+/// run endpoint in the file before `run.agent.ready` reports it.
 fn start_agent_session(
     project: &Project,
     target: &Target,
     release: bool,
     profile: Option<&str>,
-) -> CliResult<Session> {
+    serves_reloads: bool,
+) -> CliResult<(Session, Option<RunEndpoint>)> {
     if let Target::Browser(browser) = target
         && Dialect::of(&browser.id).is_none()
     {
@@ -398,8 +404,16 @@ fn start_agent_session(
         }
         (agent::Endpoint::Local(_), _) => {}
     }
+    let run_endpoint = if serves_reloads {
+        serve_reloads(&mut session)?
+    } else {
+        None
+    };
+    if let Some(run) = &run_endpoint {
+        ready["run"] = serde_json::json!(run.address());
+    }
     ui::emit("run.agent.ready", &ready);
-    Ok(session)
+    Ok((session, run_endpoint))
 }
 
 /// The features a desktop run builds the application with beyond its
@@ -954,8 +968,10 @@ fn drive(
     child: &mut Option<AppChild>,
 ) -> CliResult<()> {
     loop {
+        let event = next_event(sources, child.as_mut());
+        // A reload's time starts once the loop has what started it, not while it waited for one.
         let started = Instant::now();
-        match next_event(sources, child.as_mut()) {
+        match event {
             LoopEvent::Interrupted => {
                 ui::info("Interrupted, stopping...")?;
                 return Err(CliError::Interrupted);
@@ -998,7 +1014,8 @@ fn drive(
                         restart(strategy, child)?
                     }
                 };
-                request.answer(&report_reload(reloaded, started));
+                let asked = request.asked();
+                request.answer(&report_reload(reloaded, asked));
             }
             LoopEvent::Key(HotKey::Clear) => {
                 let _ = console::Term::stderr().clear_screen();

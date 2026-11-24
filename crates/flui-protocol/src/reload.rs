@@ -44,21 +44,6 @@ pub struct ReloadParams {
     pub at_least: Option<ReloadTier>,
 }
 
-impl ReloadParams {
-    /// A reload the tool places itself.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self { at_least: None }
-    }
-
-    /// A reload of at least `tier`.
-    #[must_use]
-    pub const fn at_least(mut self, tier: ReloadTier) -> Self {
-        self.at_least = Some(tier);
-        self
-    }
-}
-
 /// What a reload came to, and how long it took from what started it to its outcome.
 ///
 /// `{"outcome": {"applied": {"tier": "process_restart"}}, "elapsed_ms": 1640}`.
@@ -69,7 +54,8 @@ impl ReloadParams {
 pub struct ReloadReport {
     /// What the reload came to.
     pub outcome: Reloaded,
-    /// From the save, the key or the call that started the reload to its outcome.
+    /// From the moment the run took what started the reload (a save, a key, or a call as it
+    /// reached the run, a build it waited behind included) to its outcome.
     pub elapsed_ms: u64,
 }
 
@@ -102,9 +88,10 @@ pub enum Reloaded {
         /// The tier applied: the one asked for or a higher one.
         tier: ReloadTier,
     },
-    /// The build failed with these errors; the running application, when there is one, is left
-    /// as it was. A tool that does not read the compiler's messages for this target reports
-    /// none.
+    /// The build failed with these errors. A reload that stops the application before it
+    /// builds (a restart, or a platform that cannot replace a running build) leaves none
+    /// running; any other leaves the running application as it was. A tool that does not read
+    /// the compiler's messages for this target reports no errors.
     Failed(Diagnostics),
 }
 

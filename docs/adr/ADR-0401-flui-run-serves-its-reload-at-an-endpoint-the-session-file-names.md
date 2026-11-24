@@ -53,35 +53,48 @@ the run places it. The answer is a `ReloadReport { outcome, elapsed_ms }`, its o
 `applied { tier }` or `failed(Diagnostics)`. No agent serves the method, and `flui-driver`
 refuses it `not_supported`, naming the run endpoint.
 
-§2. **The run endpoint.** A `flui run --agent` that runs a rebuild loop (desktop with hot reload,
-Android, browser) binds a fresh private endpoint (a socket in a `0700` directory, or a pipe whose
-DACL grants the current user) and only then rewrites the session file with its address as `run`,
-so the file never names an endpoint nobody serves. A run without a loop names none. The
-conversation is ADR-0238 §2's: a hello with the session's token, compared by
-`launch::same_token`, answered by a hello that names no app and lists the methods the role may
-call; then requests. One thread serves every client, polling, and holds:
+§2. **The run endpoint.** A `flui run --agent` that rebuilds on saves (a desktop application,
+an Android device or a browser, with hot reload and without `--release`) binds a fresh private
+endpoint (a socket in a `0700` directory, or a pipe whose DACL grants the current user) and only
+then rewrites the session file with its address as `run`, before `run.agent.ready` reports it
+as `run`, so neither the file nor the event names an endpoint nobody serves. A run that does not
+rebuild on saves names none. The conversation is ADR-0238 §2's: a hello with the session's
+token, compared by `launch::same_token`, answered by a hello that names no app and lists the
+methods the role may call; then requests. One thread serves every client, polling, and holds:
 
-- at most 8 clients, each with at most one reload waiting; a second request on that connection
-  is refused `busy`, retry `soon`;
-- `ClientRole::may_call`, moved into `flui-protocol` with the token comparison so that the app's
-  agent and the run endpoint read one rule: an observer's reload is refused `not_driver`;
+- one driver at a time, as the app holds one (ADR-0288 §8): a second driver's hello is refused
+  `not_driver`, retry `soon`, until the first goes, so a second agent cannot restart the app
+  under the first; an observer is admitted beside it and may call nothing;
+- `ClientRole::may_call`, moved into `flui-protocol` with the token comparison and
+  `ServerLine::malformed`, so that the app's agent and the run endpoint read one rule: an
+  observer's reload is refused `not_driver`, and a line that is not a request is answered by the
+  id it carries;
+- at most 8 clients, each with at most one reload waiting, and a second request on that
+  connection refused `busy`, retry `soon`; at most 8 reloads untaken by the loop, a reload whose
+  client went among them, and one past them refused `busy`;
 - every reload handed to the loop is answered: with its report, or `shutting_down` when the loop
-  drops it unanswered (the run ended, or the step failed). A client that goes leaves its reload
-  to run.
+  drops it unanswered (the run ended, or the step failed), and so is one a client sent before the
+  run ended that the loop never took. A client that goes leaves its reload to run.
 
 §3. **One report.** Every step of the loop that builds returns a `Reloaded`, and the loop
-writes one `ReloadReport` from it: the `run.reload` event, with the time from what started the
-reload, and the answer of the request that started it. A strategy that reads cargo's messages
+writes one `ReloadReport` from it: the `run.reload` event, timed from the moment the loop took what
+started the reload (a save, a key) or from when a call reached the run, a build it waited
+behind included, and the answer of the request that started it. A strategy that reads cargo's messages
 fills `failed` with its diagnostics; one that does not reports none. The tier is what the run
 applied: `process_restart` for a new process (in a browser, a reloaded page), `reassemble` for
 a worker build handed to the running host. Until ADR-0393 §3–§4 are built no mechanism restarts
 in the process, so `at_least: restart` is applied as `process_restart` (ADR-0393 §2), and a
-request at `restart` or above takes `R`'s path: the app stops, then builds.
+request at `restart` or above takes `R`'s path: the app stops, then builds. A failed build
+leaves the running app as it was unless the reload stopped it first: a restart does, and on
+Windows and Android every rebuild does.
 
 §4. **`flui mcp`'s `flui_reload`.** The tool calls `run.reload` over a connection of its own to
 the run endpoint, kept beside the app's, and waits up to 600 s: a build whose dependencies
 changed takes minutes. A session without `run` answers `not_supported`. The method is
 destructive, so a call that timed out or whose connection broke is not sent again (ADR-0395 §4).
+A connection whose other end closed since the last call (the app a reload restarted, a run that
+ended) sends nothing: the call is unsent and goes on a new connection whatever its method, so the
+first call after a restart reaches the new app.
 
 ### Consequences
 
@@ -103,15 +116,20 @@ destructive, so a call that timed out or whose connection broke is not sent agai
   and `what_ends_the_app_is_destructive_and_reads_never_act`.
 - `flui-cli`'s `a_reload_reaches_the_loop_and_its_client_reads_the_report`,
   `a_reload_the_run_drops_is_answered_shutting_down`,
-  `the_endpoint_refuses_what_it_may_not_run_before_the_loop_sees_it` and
-  `a_second_reload_on_one_connection_is_busy_until_the_first_is_answered` (§2);
-  `a_reload_asks_the_run_with_its_tier_and_waits_for_the_build` and
-  `a_reload_goes_to_the_run_the_session_file_names` (§4).
+  `the_endpoint_refuses_what_it_may_not_run_before_the_loop_sees_it`,
+  `a_second_reload_on_one_connection_is_busy_until_the_first_is_answered`,
+  `one_client_drives_the_run_at_a_time`, `a_broken_request_is_answered_by_its_id` and
+  `the_loop_holds_a_bounded_number_of_reloads` (§2);
+  `a_reload_asks_the_run_with_its_tier_and_waits_for_the_build`,
+  `a_reload_goes_to_the_run_the_session_file_names` and
+  `a_request_after_the_app_closed_the_connection_is_unsent` (§4).
 - `an_agent_reloads_the_app_through_the_run_that_started_it`, end to end: `flui run --agent`
-  names the endpoint, `flui_reload` restarts the app with the report the `run.reload` event
-  carries, a broken build answers its compiler error, a restart stops the app before it builds,
-  and an unknown tier is refused; `a_restart_replaces_the_running_build_only_with_one_that_succeeded`
-  reads the report a save writes.
+  names the endpoint in the file and in `run.agent.ready`; `flui_reload` restarts the app with
+  the report the `run.reload` event carries, timed from the call; the first call that acts
+  after it reaches the new app; a broken build answers its compiler error; a restart stops the
+  app before it builds; and an unknown tier is refused.
+  `a_restart_replaces_the_running_build_only_with_one_that_succeeded` reads the report a save
+  writes.
 - `flui-runtime`'s `an_observer_may_call_what_reads_or_annotates_and_nothing_else`, through the
   moved `ClientRole::may_call`.
 
@@ -120,7 +138,7 @@ destructive, so a call that timed out or whose connection broke is not sent agai
 ### 1. A run endpoint (chosen)
 
 - Good: the process that builds answers, and its connection outlives the app's.
-- Good: the same conversation, token and file: `flui mcp`'s client is unchanged.
+- Good: the same conversation, token and file: `flui mcp`'s client is the app's.
 - Bad: a second server of the conversation, small but its own (§2's bounds and refusals).
 
 ### 2. The app relays to the supervisor

@@ -250,6 +250,10 @@ fn an_agent_reloads_the_app_through_the_run_that_started_it() {
         listed["run"].is_string(),
         "the session file names the run endpoint: {listed}"
     );
+    assert_eq!(
+        ready["run"], listed["run"],
+        "`run.agent.ready` reports the run endpoint the file names"
+    );
 
     let mut mcp = flui()
         .current_dir(&app)
@@ -263,21 +267,34 @@ fn an_agent_reloads_the_app_through_the_run_that_started_it() {
         .unwrap();
     let mut stdin = mcp.stdin.take().unwrap();
     let mut replies = BufReader::new(mcp.stdout.take().unwrap()).lines();
-    let mut reload = |id: u64, arguments: serde_json::Value| -> (bool, serde_json::Value) {
-        let call = serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call",
-            "params": { "name": "flui_reload", "arguments": arguments } });
-        writeln!(stdin, "{call}").unwrap();
-        let reply: serde_json::Value =
-            serde_json::from_str(&replies.next().expect("a reply").unwrap()).unwrap();
-        let text = reply["result"]["content"][0]["text"].as_str().unwrap();
-        (
-            reply["result"]["isError"] == true,
-            serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!(text)),
-        )
-    };
+    let mut tool =
+        |id: u64, name: &str, arguments: serde_json::Value| -> (bool, serde_json::Value) {
+            let call = serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": { "name": name, "arguments": arguments } });
+            writeln!(stdin, "{call}").unwrap();
+            let reply: serde_json::Value =
+                serde_json::from_str(&replies.next().expect("a reply").unwrap()).unwrap();
+            let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+            (
+                reply["result"]["isError"] == true,
+                serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!(text)),
+            )
+        };
 
-    let (failed, report) = reload(1, serde_json::json!({}));
+    // The app's connection opens before the reload, so the call after the restart has a dead
+    // one to replace.
+    let (failed, windows) = tool(1, "flui_windows", serde_json::json!({}));
+    assert!(!failed, "{windows}");
+    // The run idles before it is asked: a report counts from the call, not from the last event.
+    std::thread::sleep(Duration::from_millis(1500));
+    let asked = Instant::now();
+    let (failed, report) = tool(2, "flui_reload", serde_json::json!({}));
+    let took = u64::try_from(asked.elapsed().as_millis()).unwrap();
     assert!(!failed, "{report}");
+    assert!(
+        report["elapsed_ms"].as_u64().is_some_and(|ms| ms <= took),
+        "the reload took at most the {took} ms of its call: {report}"
+    );
     assert_eq!(
         report["outcome"],
         serde_json::json!({ "applied": { "tier": "process_restart" } }),
@@ -302,8 +319,20 @@ fn an_agent_reloads_the_app_through_the_run_that_started_it() {
             break;
         }
     }
+    // A call that acts, which is never sent twice, reaches the restarted app, not the dead
+    // connection to the one the reload stopped: the fixture answers `motion.set` with its own
+    // error. A named window keeps the call from reading the windows first.
+    let (_, motion) = tool(3, "flui_motion", serde_json::json!({ "window": "w1" }));
+    assert_eq!(
+        motion["error"]["code"], "invalid_argument",
+        "the restarted app answers: {motion}"
+    );
     std::fs::write(app.join("src/main.rs"), "fn main() { this is not rust }\n").unwrap();
-    let (failed, report) = reload(2, serde_json::json!({ "at_least": "restart" }));
+    let (failed, report) = tool(
+        4,
+        "flui_reload",
+        serde_json::json!({ "at_least": "restart" }),
+    );
     assert!(
         !failed,
         "a failed build is an outcome, not an error: {report}"
@@ -327,7 +356,7 @@ fn an_agent_reloads_the_app_through_the_run_that_started_it() {
     }
     assert!(stopped, "the restart stopped the app first");
 
-    let (failed, refused) = reload(3, serde_json::json!({ "at_least": "hot" }));
+    let (failed, refused) = tool(5, "flui_reload", serde_json::json!({ "at_least": "hot" }));
     assert!(failed, "an unknown tier is refused: {refused}");
     assert_eq!(refused["error"]["code"], "invalid_argument", "{refused}");
 

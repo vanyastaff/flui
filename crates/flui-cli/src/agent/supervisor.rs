@@ -21,7 +21,7 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendE
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use flui_protocol::envelope::{Greeting, Request, RequestId, ServerLine};
+use flui_protocol::envelope::{Greeting, Request, RequestId, ServerLine, Unread};
 use flui_protocol::error::{ErrorCode, ErrorObject, Retry};
 use flui_protocol::framing::{LineReader, MAX_LINE};
 use flui_protocol::launch::same_token;
@@ -40,7 +40,9 @@ use crate::error::{CliResult, ResultExt as _};
 const TICK: Duration = Duration::from_millis(10);
 
 /// The most clients the endpoint holds at once; one past them is closed as it connects. Each
-/// has at most one reload waiting, so the loop is never handed more than this many.
+/// has at most one reload waiting, and the loop holds at most this many untaken: a reload whose
+/// client went still runs and counts until the loop takes it, and one past them is refused
+/// `busy`.
 const MAX_CLIENTS: usize = 8;
 
 /// How long a client may take to send its hello before it is closed.
@@ -56,10 +58,17 @@ const MAX_UNWRITTEN: usize = 1 << 20;
 #[derive(Debug)]
 pub(crate) struct ReloadRequest {
     at_least: Option<ReloadTier>,
+    /// When the request reached the run: its report's time starts here.
+    asked: Instant,
     answer: Sender<ReloadReport>,
 }
 
 impl ReloadRequest {
+    /// When the request reached the run, so its report counts the time it waited for the loop.
+    pub(crate) const fn asked(&self) -> Instant {
+        self.asked
+    }
+
     /// The cheapest tier the reload may apply; `None` when the run places it itself.
     pub(crate) const fn at_least(&self) -> Option<ReloadTier> {
         self.at_least
@@ -106,9 +115,12 @@ impl RunEndpoint {
             .name("flui-run-endpoint".into())
             .spawn(move || {
                 let mut turns = Turns {
-                    token,
-                    greeting_wait,
-                    handed,
+                    admission: Admission {
+                        token,
+                        greeting_wait,
+                        handed,
+                        driver: None,
+                    },
                     clients: BTreeMap::new(),
                     next_id: 0,
                 };
@@ -148,11 +160,19 @@ impl Drop for RunEndpoint {
 
 /// The endpoint's state, owned by its thread.
 struct Turns {
+    admission: Admission,
+    clients: BTreeMap<u64, Client>,
+    next_id: u64,
+}
+
+/// What a client is admitted by, and where its reloads go.
+struct Admission {
     token: String,
     greeting_wait: Duration,
     handed: SyncSender<ReloadRequest>,
-    clients: BTreeMap<u64, Client>,
-    next_id: u64,
+    /// The client that holds the driver's seat: one drives the run at a time, as one drives the
+    /// app (ADR-0288 §8), so a second agent cannot restart the app under the first.
+    driver: Option<u64>,
 }
 
 struct Client {
@@ -179,7 +199,10 @@ impl Turns {
             thread::sleep(TICK);
         }
         // What is owed is answered: every request the loop did not take was dropped with the
-        // endpoint's receiver, so each waiting client now reads `shutting_down`.
+        // endpoint's receiver, so each waiting client now reads `shutting_down`, and so does a
+        // request sent before the run ended that no turn has read yet, its client's connection
+        // still waiting to be accepted included.
+        self.accept(listener);
         let until = Instant::now() + FLUSH_WAIT;
         while !self.clients.is_empty() && Instant::now() < until {
             self.turn_all();
@@ -232,33 +255,31 @@ impl Turns {
             let keep = self
                 .clients
                 .get_mut(&id)
-                .is_some_and(|client| client.turn(&self.token, self.greeting_wait, &self.handed));
+                .is_some_and(|client| client.turn(id, &mut self.admission));
             if !keep {
                 self.clients.remove(&id);
+                if self.admission.driver == Some(id) {
+                    self.admission.driver = None;
+                }
             }
         }
     }
 }
 
 impl Client {
-    /// Reads, answers and writes; `false` once the client is to be dropped.
-    fn turn(
-        &mut self,
-        token: &str,
-        greeting_wait: Duration,
-        handed: &SyncSender<ReloadRequest>,
-    ) -> bool {
+    /// Reads, answers and writes client `id`; `false` once it is to be dropped.
+    fn turn(&mut self, id: u64, admission: &mut Admission) -> bool {
         if !self.ending {
-            if !self.read(token, handed) {
+            if !self.read(id, admission) {
                 return false;
             }
             if let Phase::Greeting { since } = self.phase
-                && since.elapsed() >= greeting_wait
+                && since.elapsed() >= admission.greeting_wait
             {
                 return false;
             }
         }
-        if let Some((id, answer)) = &self.waiting {
+        if let Some((request, answer)) = &self.waiting {
             let outcome = match answer.try_recv() {
                 Ok(report) => Some(Ok(report)),
                 Err(TryRecvError::Disconnected) => Some(Err(ErrorObject::new(
@@ -268,9 +289,9 @@ impl Client {
                 Err(TryRecvError::Empty) => None,
             };
             if let Some(outcome) = outcome {
-                let id = id.clone();
+                let request = request.clone();
                 self.waiting = None;
-                self.send(&ServerLine::answer(id, outcome));
+                self.send(&ServerLine::answer(request, outcome));
             }
         }
         match self.write() {
@@ -280,8 +301,8 @@ impl Client {
         }
     }
 
-    /// Takes the lines the client sent; `false` once it went or broke the protocol.
-    fn read(&mut self, token: &str, handed: &SyncSender<ReloadRequest>) -> bool {
+    /// Takes the lines client `id` sent; `false` once it went or broke the protocol.
+    fn read(&mut self, id: u64, admission: &mut Admission) -> bool {
         let mut chunk = [0_u8; 4 << 10];
         loop {
             match (&self.stream).read(&mut chunk) {
@@ -295,7 +316,10 @@ impl Client {
             loop {
                 match self.reader.next_line() {
                     Ok(Some(line)) => {
-                        self.line(&line, token, handed);
+                        match self.phase {
+                            Phase::Greeting { .. } => self.greet(&line, id, admission),
+                            Phase::Open { role } => self.request(&line, role, &admission.handed),
+                        }
                         if self.ending {
                             return true;
                         }
@@ -307,19 +331,12 @@ impl Client {
         }
     }
 
-    fn line(&mut self, line: &[u8], token: &str, handed: &SyncSender<ReloadRequest>) {
-        match self.phase {
-            Phase::Greeting { .. } => self.greet(line, token),
-            Phase::Open { role } => self.request(line, role, handed),
-        }
-    }
-
-    fn greet(&mut self, line: &[u8], token: &str) {
+    fn greet(&mut self, line: &[u8], id: u64, admission: &mut Admission) {
         let Ok(Greeting { hello, .. }) = serde_json::from_slice::<Greeting>(line) else {
             self.ending = true;
             return;
         };
-        if !same_token(hello.token.as_bytes(), token.as_bytes()) {
+        if !same_token(hello.token.as_bytes(), admission.token.as_bytes()) {
             self.ending = true;
             return;
         }
@@ -330,6 +347,21 @@ impl Client {
             )));
             self.ending = true;
             return;
+        }
+        // The seat is the last thing taken, so a client that holds it is always answered.
+        if hello.role.is_driver() {
+            if admission.driver.is_some_and(|holder| holder != id) {
+                self.send(&ServerLine::refusal(
+                    ErrorObject::new(
+                        ErrorCode::NotDriver,
+                        "the run has a driver; connect as an observer, or once it goes",
+                    )
+                    .retry(Retry::Soon),
+                ));
+                self.ending = true;
+                return;
+            }
+            admission.driver = Some(id);
         }
         let mut capabilities = Capabilities::default();
         if hello.role.may_call(RunReload::EFFECT) {
@@ -343,10 +375,8 @@ impl Client {
 
     fn request(&mut self, line: &[u8], role: ClientRole, handed: &SyncSender<ReloadRequest>) {
         let Ok(request) = serde_json::from_slice::<Request<Value>>(line) else {
-            self.send(&ServerLine::refusal(ErrorObject::new(
-                ErrorCode::InvalidArgument,
-                "a request is a JSON object with an id and a method",
-            )));
+            let unread = serde_json::from_slice::<Unread>(line).unwrap_or_default();
+            self.send(&ServerLine::malformed(unread.id));
             return;
         };
         if let Some(refusal) = self.hand_on(&request, role, handed) {
@@ -402,6 +432,7 @@ impl Client {
         let (answer, answered) = mpsc::channel::<ReloadReport>();
         let handing = ReloadRequest {
             at_least: params.at_least,
+            asked: Instant::now(),
             answer,
         };
         match handed.try_send(handing) {
@@ -529,8 +560,7 @@ mod tests {
     /// request it took, or the endpoint went with the request waiting.
     #[test]
     fn a_reload_the_run_drops_is_answered_shutting_down() {
-        let (endpoint, credentials) = serving();
-        let asked = credentials.clone();
+        let (endpoint, asked) = serving();
         let client = std::thread::spawn(move || {
             let mut connection =
                 Connection::connect(&asked, ClientRole::Driver, WAIT).expect("hello");
@@ -540,17 +570,24 @@ mod tests {
         let outcome = client.join().expect("the client");
         assert_eq!(code(&outcome), Some("shutting_down"), "{outcome:?}");
 
-        let client = std::thread::spawn(move || {
-            let mut connection =
-                Connection::connect(&credentials, ClientRole::Driver, WAIT).expect("hello");
-            connection.request("run.reload", json!({}), WAIT)
-        });
-        // The run ends with the request untaken in the channel, or before it got there: either
-        // way the client reads `shutting_down`.
-        std::thread::sleep(Duration::from_millis(100));
+        // The run ends with a request the loop never took: the endpoint's last turns read it
+        // and answer it `shutting_down`. The client has sent it before the run ends.
+        let stream = Stream::connect(name(endpoint.address()).unwrap()).expect("connect");
+        let mut writer = &stream;
+        let protocol = flui_protocol::version::PROTOCOL_VERSION;
+        writeln!(
+            writer,
+            r#"{{"hello":{{"token":"{TOKEN}","protocol":"{protocol}"}}}}"#
+        )
+        .unwrap();
+        writeln!(writer, r#"{{"id":1,"method":"run.reload"}}"#).unwrap();
         drop(endpoint);
-        let outcome = client.join().expect("the client");
-        assert_eq!(code(&outcome), Some("shutting_down"), "{outcome:?}");
+        let mut lines = BufReader::new(&stream).lines();
+        let hello: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        assert!(hello["hello"].is_object(), "{hello}");
+        let answered: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        assert_eq!(answered["id"], 1, "{answered}");
+        assert_eq!(answered["error"]["code"], "shutting_down", "{answered}");
     }
 
     /// What the endpoint refuses, and how: an observer's reload (`not_driver`), a method it does
@@ -670,6 +707,124 @@ mod tests {
         assert!(
             answered["result"]["outcome"]["failed"].is_object(),
             "{answered}"
+        );
+    }
+
+    /// A raw connection whose hello `role` was answered with a hello, and that answer; a hello
+    /// refused while another client still holds the driver's seat is sent again.
+    fn greeted(endpoint: &RunEndpoint, role: &str) -> (Stream, Value) {
+        let protocol = flui_protocol::version::PROTOCOL_VERSION;
+        let deadline = std::time::Instant::now() + WAIT;
+        loop {
+            let stream = Stream::connect(name(endpoint.address()).unwrap()).expect("connect");
+            let mut writer = &stream;
+            writeln!(
+                writer,
+                r#"{{"hello":{{"token":"{TOKEN}","protocol":"{protocol}","role":"{role}"}}}}"#
+            )
+            .unwrap();
+            let mut answer = String::new();
+            BufReader::new(&stream).read_line(&mut answer).unwrap();
+            let answer: Value = serde_json::from_str(&answer).unwrap();
+            if answer["hello"].is_object() {
+                return (stream, answer);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never greeted: {answer}"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// The next line the endpoint sent on `stream`.
+    fn read_line(stream: &Stream) -> Value {
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        serde_json::from_str(&line).unwrap_or_else(|_| panic!("a line: {line:?}"))
+    }
+
+    /// One client drives the run at a time, as one drives the app: a second driver's hello is
+    /// refused `not_driver` until the first goes, and an observer is admitted beside it with no
+    /// method to call.
+    #[test]
+    fn one_client_drives_the_run_at_a_time() {
+        let (endpoint, credentials) = serving();
+        let (driver, hello) = greeted(&endpoint, "driver");
+        assert_eq!(
+            hello["hello"]["capabilities"]["methods"],
+            json!(["run.reload"])
+        );
+
+        let second = Stream::connect(name(endpoint.address()).unwrap()).expect("connect");
+        let protocol = flui_protocol::version::PROTOCOL_VERSION;
+        let mut writer = &second;
+        writeln!(
+            writer,
+            r#"{{"hello":{{"token":"{TOKEN}","protocol":"{protocol}","role":"driver"}}}}"#
+        )
+        .unwrap();
+        let refused = read_line(&second);
+        assert_eq!(refused["error"]["code"], "not_driver", "{refused}");
+        assert_eq!(refused["error"]["retry"], "soon", "{refused}");
+
+        let (_observer, hello) = greeted(&endpoint, "observer");
+        assert!(
+            hello["hello"]["capabilities"]["methods"]
+                .as_array()
+                .is_none_or(Vec::is_empty),
+            "an observer may call nothing here: {hello}"
+        );
+
+        drop(driver);
+        Connection::connect(&credentials, ClientRole::Driver, WAIT)
+            .expect("the seat is free once its driver went");
+    }
+
+    /// A line that is not a request is answered by the id it carries, so its client is not left
+    /// waiting, and refused with no id when it carries none.
+    #[test]
+    fn a_broken_request_is_answered_by_its_id() {
+        let (endpoint, _) = serving();
+        let (stream, _) = greeted(&endpoint, "driver");
+        let mut writer = &stream;
+        writeln!(writer, r#"{{"id":7,"method":42}}"#).unwrap();
+        let answered = read_line(&stream);
+        assert_eq!(answered["id"], 7, "{answered}");
+        assert_eq!(answered["error"]["code"], "invalid_argument", "{answered}");
+        writeln!(writer, r#"{{"method":"run.reload"}}"#).unwrap();
+        let refused = read_line(&stream);
+        assert!(refused["id"].is_null(), "{refused}");
+        assert_eq!(refused["error"]["code"], "invalid_argument", "{refused}");
+        assert!(
+            endpoint.next_request().is_none(),
+            "nothing reached the loop"
+        );
+    }
+
+    /// A reload whose client went still waits for the loop and counts: once the loop holds as
+    /// many as it takes, the next is refused `busy` without reaching it.
+    #[test]
+    fn the_loop_holds_a_bounded_number_of_reloads() {
+        let (endpoint, _) = serving();
+        for id in 0..super::MAX_CLIENTS {
+            let (stream, _) = greeted(&endpoint, "driver");
+            let mut writer = &stream;
+            writeln!(writer, r#"{{"id":{id},"method":"run.reload"}}"#).unwrap();
+        }
+        let (stream, _) = greeted(&endpoint, "driver");
+        let mut writer = &stream;
+        writeln!(writer, r#"{{"id":"past","method":"run.reload"}}"#).unwrap();
+        let busy = read_line(&stream);
+        assert_eq!(busy["id"], "past", "{busy}");
+        assert_eq!(busy["error"]["code"], "busy", "{busy}");
+        assert_eq!(busy["error"]["retry"], "soon", "{busy}");
+        for _ in 0..super::MAX_CLIENTS {
+            drop(taken(&endpoint));
+        }
+        assert!(
+            endpoint.next_request().is_none(),
+            "the refused one never reached the loop"
         );
     }
 }

@@ -13,8 +13,8 @@ use flui_protocol::method::{Method as _, RecordStart};
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
     envelope::Greeting, envelope::Request, envelope::RequestId, envelope::ServerLine,
-    error::ErrorCode, error::ErrorObject, input::InputPath, session::Capabilities,
-    session::ClientRole, session::Hello, session::HelloReply,
+    envelope::Unread, error::ErrorCode, error::ErrorObject, input::InputPath,
+    session::Capabilities, session::ClientRole, session::Hello, session::HelloReply,
 };
 use flui_view::__runtime::WakeSlot;
 use serde::Serialize;
@@ -411,7 +411,8 @@ impl Session {
     /// Queue the request on `line`, or the line refusing it.
     fn admit(&mut self, line: &[u8]) {
         let Ok(request) = serde_json::from_slice::<Request<Value>>(line) else {
-            self.refuse(&malformed(line));
+            let unread = serde_json::from_slice::<Unread>(line).unwrap_or_default();
+            self.refuse(&Line::malformed(unread.id));
             return;
         };
         let Request {
@@ -565,21 +566,6 @@ fn parse_hello(line: &[u8]) -> Option<Hello> {
     serde_json::from_slice::<Greeting>(line)
         .ok()
         .map(|greeting| greeting.hello)
-}
-
-/// The refusal of a line that is not a request: it answers the line's id when the line carries
-/// one, so a client that sent a broken request is not left waiting for it.
-fn malformed(line: &[u8]) -> Line {
-    use serde::Deserialize as _;
-
-    let invalid = |message| ErrorObject::new(ErrorCode::InvalidArgument, message);
-    let Ok(value) = serde_json::from_slice::<Value>(line) else {
-        return Line::refusal(invalid("the request is not JSON"));
-    };
-    match value.get("id").map(RequestId::deserialize) {
-        Some(Ok(id)) => Line::answer(id, Err(invalid("a request names its method"))),
-        _ => Line::refusal(invalid("a request carries an id: a number or a string")),
-    }
 }
 
 /// `line` as the bytes of one line, its newline included; `None` when it does not serialize.

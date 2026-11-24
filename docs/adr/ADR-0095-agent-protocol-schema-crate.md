@@ -172,14 +172,16 @@ This settles ADR-0080's open item:
   package declares a `dev-agent` feature (the `flui create` templates do: it enables the facade's
   `dev-agent` feature, which re-exports `flui-devtools` as `flui::devtools`, and `AgentServer::from_env()` is installed
   behind it). It starts the app with that feature and with `FLUI_AGENT_ENDPOINT` and
-  `FLUI_AGENT_TOKEN` set, writes the same two values (and its pid) to `target/flui-agent.json`
-  with mode `0600`, and emits `run.agent.ready {endpoint, session}` on `--json`; the token never
+  `FLUI_AGENT_TOKEN` set, writes the same two values (and its pid, and the run endpoint where it
+  serves reloads, ADR-0401) to `target/flui-agent.json`
+  with mode `0600`, and emits `run.agent.ready {endpoint, session, run?}` on `--json`; the token never
   enters the event stream. The file goes with the run.
 - *`flui mcp`.* An MCP server over stdio, written in the CLI with no MCP SDK, so the CLI links no
   FLUI crate and no `flui-mcp` library is needed. Its tools map one to one onto the endpoint's
   operations: `flui_windows` (`windows`), `flui_read` (`read`), `flui_locate` (`semantics.locate`),
   `flui_act` (`act`), `flui_wait` (`wait.until`, whose reply the server awaits for as long as
-  the wait holds) and `flui_motion` (`motion`). A tool that needs a window and is given none
+  the wait holds), `flui_motion` (`motion`) and `flui_reload` (the run endpoint's
+  `run.reload`, ADR-0401). A tool that needs a window and is given none
   uses the app's only one, and is refused with `invalid_argument` naming the windows when
   there are several. It finds the session from `--session`, the environment, or the nearest
   `target/flui-agent.json`, connects on the first call and again once per call after a broken
