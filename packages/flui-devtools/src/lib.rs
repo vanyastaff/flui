@@ -76,6 +76,8 @@
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
+// A table keyed by ids the process mints hashes with FxHash, not SipHash.
+#![warn(clippy::disallowed_types)]
 
 // Reads the framework's own frame spans: the only seam layering permits, since nothing in the
 // framework may depend on this crate.
@@ -96,7 +98,8 @@ mod timeline;
 
 #[cfg(feature = "profiling")]
 pub use capture::{
-    Capture, CaptureLayer, CapturedFrame, CapturedSpan, FrameOpening, FrameSpanFilter, Partition,
+    Capture, CaptureLayer, CaptureSubscription, CapturedFrame, CapturedSpan, FrameSpanFilter,
+    Partition,
 };
 #[cfg(feature = "inspector")]
 pub use gesture_inspector::{

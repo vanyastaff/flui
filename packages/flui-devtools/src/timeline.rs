@@ -29,8 +29,10 @@
 
 use std::sync::Arc;
 
+use flui_sdk::foundation::{PresentationAddress, PresentationId, UiRuntimeId};
 use flui_sdk::hooks::FrameSnapshot;
 use parking_lot::Mutex;
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use web_time::{Duration, Instant};
@@ -84,14 +86,81 @@ fn saturating_micros(duration: Duration) -> u64 {
     u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
+/// An id a [`TimelineEvent`] carries, written to JSON as its packed `u64` value.
+trait PackedId: Copy {
+    /// What the id names, for the error a value no id has reads back as.
+    const NAMES: &'static str;
+
+    fn pack(self) -> u64;
+
+    fn unpack(packed: u64) -> Option<Self>;
+}
+
+impl PackedId for UiRuntimeId {
+    const NAMES: &'static str = "UI runtime";
+
+    fn pack(self) -> u64 {
+        self.as_u64()
+    }
+
+    fn unpack(packed: u64) -> Option<Self> {
+        Self::from_u64(packed)
+    }
+}
+
+impl PackedId for PresentationId {
+    const NAMES: &'static str = "presentation";
+
+    fn pack(self) -> u64 {
+        self.as_u64()
+    }
+
+    fn unpack(packed: u64) -> Option<Self> {
+        Self::from_u64(packed)
+    }
+}
+
+/// `#[serde(with)]` for an optional [`PackedId`]: the packed number, or `null`. The SDK builds
+/// the ids without their `serde` feature, so the timeline writes the number they trace as.
+mod packed_id {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::PackedId;
+
+    #[expect(
+        clippy::ref_option,
+        reason = "serde's `with` hands the serializer a reference to the field"
+    )]
+    pub(super) fn serialize<I: PackedId, S: Serializer>(
+        id: &Option<I>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        id.map(PackedId::pack).serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, I: PackedId, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<I>, D::Error> {
+        Option::<u64>::deserialize(deserializer)?
+            .map(|packed| {
+                I::unpack(packed).ok_or_else(|| {
+                    serde::de::Error::custom(format!("{packed} is no packed {} id", I::NAMES))
+                })
+            })
+            .transpose()
+    }
+}
+
 /// The Chrome-trace `args` object of `event`: every key of `event.args` when it is a JSON
 /// object (a frame snapshot's shape, see [`Timeline::record_frame_snapshots`]), then
-/// `category`, the [label](TimelineEventKind::label) of the event's kind, and `presentation`
-/// when the event ran for one. An event the application recorded carries `args: Value::Null`,
-/// which adds nothing.
+/// `category`, the [label](TimelineEventKind::label) of the event's kind, and `presentation`,
+/// the packed value of the presentation the event ran for, when it ran for one. An event the
+/// application recorded carries `args: Value::Null`, which adds nothing.
 ///
 /// `category` and `presentation` are inserted after the event's own keys, so they win over a
-/// caller-supplied key of the same name: they always mean the event's kind and presentation.
+/// key of the same name: they always mean the event's kind and presentation. A frame
+/// snapshot's own `presentation`, the id as text, is therefore the packed number here, as it is
+/// on every other event of the presentation.
 fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
     let mut args = serde_json::Map::new();
     if let serde_json::Value::Object(extra) = &event.args {
@@ -101,7 +170,7 @@ fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
     }
     args.insert("category".to_string(), json!(event.kind.label()));
     if let Some(presentation) = event.presentation {
-        args.insert("presentation".to_string(), json!(presentation));
+        args.insert("presentation".to_string(), json!(presentation.as_u64()));
     }
     serde_json::Value::Object(args)
 }
@@ -134,13 +203,15 @@ pub struct TimelineEvent {
     /// Not serialized; restored to the deserializing thread's ID on load.
     #[serde(skip, default = "current_thread_id")]
     pub thread_id: std::thread::ThreadId,
-    /// The UI runtime that drove the frame this event is part of, as its packed id, when the
-    /// event came from a [`Capture`](crate::Capture). Manual events carry none.
-    #[serde(default)]
-    pub runtime: Option<u64>,
-    /// The presentation the event ran for, as its packed id, when it ran for one.
-    #[serde(default)]
-    pub presentation: Option<u64>,
+    /// The UI runtime that drove the frame this event is part of: a span from a
+    /// [`Capture`](crate::Capture), or a frame snapshot's. Application events carry none. The
+    /// JSON export writes it as its packed value.
+    #[serde(default, with = "packed_id")]
+    pub runtime: Option<UiRuntimeId>,
+    /// The presentation the event ran for, when it ran for one. The JSON export writes it as its
+    /// packed value.
+    #[serde(default, with = "packed_id")]
+    pub presentation: Option<PresentationId>,
 }
 
 impl TimelineEvent {
@@ -423,11 +494,13 @@ impl Timeline {
             start,
             duration,
             args,
+            None,
         );
     }
 
-    /// Record an event of `kind` whose timing is already known. `name` is converted by the
-    /// caller, before the lock: a conversion may read or clear this timeline.
+    /// Record an event of `kind` whose timing is already known, for the presentation `address`
+    /// names when given. `name` is converted by the caller, before the lock: a conversion may
+    /// read or clear this timeline.
     fn record_completed(
         &self,
         name: String,
@@ -435,6 +508,7 @@ impl Timeline {
         start: Instant,
         duration: Duration,
         args: serde_json::Value,
+        address: Option<PresentationAddress>,
     ) {
         let mut inner = self.inner.lock();
         let start_micros = start
@@ -447,8 +521,8 @@ impl Timeline {
             kind,
             args,
             thread_id: std::thread::current().id(),
-            runtime: None,
-            presentation: None,
+            runtime: address.map(|address| address.ui_runtime_id),
+            presentation: address.map(|address| address.presentation_id),
         });
     }
 
@@ -470,9 +544,11 @@ impl Timeline {
     /// presentations' snapshots recorded into the SAME `Timeline` — a UI
     /// runtime hosting more than one presentation, or two UI runtimes whose
     /// first presentations share an id — would otherwise collide in one
-    /// exported trace file. The `ui_runtime` and `presentation` fields are
-    /// ALSO carried in `args` (not just the name) so a consumer can
-    /// filter/group by them without parsing the display string back apart.
+    /// exported trace file. The event's [`TimelineEvent::runtime`] and
+    /// [`TimelineEvent::presentation`] are the address's, so the Chrome
+    /// export puts the frame in its runtime's process, and its `args` carry
+    /// both ids as text (`ui_runtime`, `presentation`) so a consumer of the
+    /// JSON export can group by them without parsing the name back apart.
     pub fn record_frame_snapshots(&self, snapshots: &[FrameSnapshot]) {
         for snapshot in snapshots {
             let inputs: Vec<serde_json::Value> = snapshot
@@ -507,6 +583,7 @@ impl Timeline {
                 snapshot.segment_start,
                 snapshot.segment_span(),
                 args,
+                Some(snapshot.address),
             );
         }
     }
@@ -608,7 +685,7 @@ impl Timeline {
                 .then(b.duration_micros.cmp(&a.duration_micros))
         });
 
-        let mut processes: Vec<Option<u64>> = Vec::new();
+        let mut processes: Vec<Option<UiRuntimeId>> = Vec::new();
         let mut threads: Vec<(i64, std::thread::ThreadId)> = Vec::new();
         let mut trace_events: Vec<serde_json::Value> = Vec::new();
         let mut counters: Vec<serde_json::Value> = Vec::new();
@@ -664,7 +741,7 @@ impl Timeline {
         let mut metadata: Vec<serde_json::Value> = Vec::new();
         for (index, runtime) in processes.iter().enumerate() {
             let name = match runtime {
-                Some(runtime) => format!("FLUI runtime {runtime:#x}"),
+                Some(runtime) => format!("FLUI runtime {:#x}", runtime.as_u64()),
                 None => "FLUI".to_string(),
             };
             metadata.push(json!({
@@ -711,8 +788,7 @@ impl Timeline {
         }
 
         // Group by kind
-        let mut by_kind: std::collections::HashMap<TimelineEventKind, Vec<&TimelineEvent>> =
-            std::collections::HashMap::new();
+        let mut by_kind: FxHashMap<TimelineEventKind, Vec<&TimelineEvent>> = FxHashMap::default();
 
         for event in &events {
             by_kind.entry(event.kind).or_default().push(event);
@@ -772,14 +848,8 @@ fn captured_event(span: &crate::capture::CapturedSpan) -> TimelineEvent {
         kind,
         args: json!({ "target": span.target(), "span": span.name() }),
         thread_id: span.thread(),
-        runtime: span
-            .partition()
-            .runtime()
-            .map(flui_sdk::foundation::UiRuntimeId::as_u64),
-        presentation: span
-            .partition()
-            .presentation()
-            .map(flui_sdk::foundation::PresentationId::as_u64),
+        runtime: span.partition().runtime(),
+        presentation: span.partition().presentation(),
     }
 }
 
@@ -815,30 +885,76 @@ mod tests {
         }
     }
 
-    /// The JSON export reads back as the events it wrote, each with its kind.
+    /// The JSON export reads back as the events it wrote, each with its kind and the typed ids
+    /// of the runtime and presentation it ran for, written as their packed numbers.
     #[test]
-    fn the_json_export_reads_back_with_each_events_kind() {
+    fn the_json_export_reads_back_with_each_events_kind_and_ids() {
+        let generation = flui_sdk::foundation::generation::Generation::FIRST;
+        let runtime = UiRuntimeId::new_gen(4, generation);
+        let presentation = PresentationId::new_gen(2, generation);
         let capture = Capture::new();
         let timeline = Timeline::over(&capture);
         let subscriber = tracing_subscriber::registry().with(capture.layer());
         flui_testing::log_capture::disarm_interest_cache();
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            let _frame = tracing::debug_span!(
+                target: "flui.frame",
+                "frame",
+                runtime = runtime.as_u64()
+            )
+            .entered();
+            let _segment = tracing::debug_span!(
+                target: "flui.frame",
+                "presentation",
+                presentation = presentation.as_u64()
+            )
+            .entered();
             let _layout = tracing::debug_span!(target: "flui.frame", "layout").entered();
         });
         timeline.record_instant("app work");
 
+        let json = timeline.export_json();
+        let written: Vec<serde_json::Value> = serde_json::from_str(&json).expect("JSON");
+        assert!(
+            written
+                .iter()
+                .any(|event| event["runtime"] == json!(runtime.as_u64())),
+            "a runtime is written as its packed number: {json}"
+        );
         let read: Vec<TimelineEvent> =
-            serde_json::from_str(&timeline.export_json()).expect("the export is the events");
-        let mut kinds: Vec<TimelineEventKind> = read.iter().map(|event| event.kind).collect();
-        kinds.sort_by_key(|kind| kind.label());
+            serde_json::from_str(&json).expect("the export is the events");
+        let mut events: Vec<_> = read
+            .iter()
+            .map(|event| (event.kind, event.runtime, event.presentation))
+            .collect();
+        events.sort_by_key(|(kind, ..)| kind.label());
         assert_eq!(
-            kinds,
+            events,
             [
-                TimelineEventKind::Custom,
-                TimelineEventKind::Frame,
-                TimelineEventKind::Phase(Phase::Layout),
+                (TimelineEventKind::Custom, None, None),
+                (TimelineEventKind::Frame, Some(runtime), None),
+                (
+                    TimelineEventKind::Phase(Phase::Layout),
+                    Some(runtime),
+                    Some(presentation)
+                ),
+                (
+                    TimelineEventKind::Segment,
+                    Some(runtime),
+                    Some(presentation)
+                ),
             ]
         );
+    }
+
+    /// A packed value no id has is refused on read, not read back as no id.
+    #[test]
+    fn a_json_event_naming_no_valid_runtime_is_refused() {
+        let event = json!({
+            "name": "x", "start_micros": 0, "duration_micros": 0, "kind": "Custom",
+            "runtime": 0,
+        });
+        let read = serde_json::from_value::<TimelineEvent>(event);
+        assert!(read.is_err(), "{read:?}");
     }
 }

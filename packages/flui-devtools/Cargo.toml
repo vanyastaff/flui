@@ -44,6 +44,10 @@ serde_json = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 
+# Every feature: the tables keyed by ids the process mints (the capture's runtimes, the
+# timeline summary's kinds, the overlay's pointers) hash with FxHash, not SipHash.
+rustc-hash = { workspace = true, optional = true }
+
 [features]
 # Everything on: a crate that exists only to provide these three modules
 # gives its user nothing with an empty default. Release builds stay at zero
@@ -59,6 +63,7 @@ profiling = [
     "dep:parking_lot",
     "dep:tracing",
     "dep:tracing-subscriber",
+    "dep:rustc-hash",
     "flui-sdk/animation-diagnostics",
 ]
 
@@ -78,12 +83,13 @@ timeline = [
     "serde",
     "dep:serde",
     "dep:serde_json",
+    "dep:rustc-hash",
 ]
 
 # Counting/logging tree observer over the ADR-0040 observation seam, which
 # it reaches as `flui_sdk::foundation::observe`: its surface has no access
 # to the trees themselves.
-inspector = ["dep:flui-sdk", "dep:tracing"]
+inspector = ["dep:flui-sdk", "dep:tracing", "dep:rustc-hash"]
 
 # The complete inventory, kept as an explicit name for `cargo hack` runs.
 full = ["profiling", "timeline", "inspector"]
