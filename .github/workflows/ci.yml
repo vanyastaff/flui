@@ -648,6 +648,33 @@ jobs:
       - name: Require the AT-SPI bus
         run: echo "FLUI_REQUIRE_ATSPI=1" >> "$GITHUB_ENV"
 
+      # A test process that dies on a signal leaves nextest only "aborted
+      # with signal 11", and a crash inside the software Vulkan driver does
+      # not reproduce off the runner. From here on the kernel hands the core
+      # of every process that dies on SIGILL, SIGBUS, SIGFPE or SIGSEGV to
+      # this script, which keeps it with the path of its executable; the last
+      # steps of the job print every thread's stack from each one. A core goes
+      # to a pipe whatever the process's RLIMIT_CORE, and other signals (a
+      # test of an abort) keep nothing.
+      - name: Keep the core of a process that crashes
+        run: |
+          set -euo pipefail
+          cores="$RUNNER_TEMP/cores"
+          mkdir -p "$cores"
+          sudo tee /usr/local/sbin/flui-keep-core > /dev/null << EOF
+          #!/bin/sh
+          # Arguments: the signal, the process id, the executable's path with ! for /.
+          case "\$1" in
+            4|7|8|11)
+              umask 022
+              echo "\$3" | tr '!' '/' > "$cores/core.\$2.exe"
+              exec cat > "$cores/core.\$2" ;;
+            *) exec cat > /dev/null ;;
+          esac
+          EOF
+          sudo chmod 755 /usr/local/sbin/flui-keep-core
+          echo '|/usr/local/sbin/flui-keep-core %s %p %E' | sudo tee /proc/sys/kernel/core_pattern
+
       # The native Wayland host's tests (a step apart from the Xvfb suite)
       # need a compositor: a headless Weston on a socket
       # of its own. `FLUI_REQUIRE_WAYLAND` turns a missing compositor into a
@@ -835,6 +862,38 @@ jobs:
           path: "**/*.snap.new"
           if-no-files-found: ignore
           retention-days: 7
+
+      # The cores "Keep the core of a process that crashes" kept, read with
+      # gdb. Ubuntu's debuginfod serves the symbols of Mesa and the other
+      # archive libraries, so a frame inside the driver is named too.
+      - name: Did a process crash
+        id: crashed
+        if: failure()
+        run: |
+          if compgen -G "$RUNNER_TEMP/cores/core.*.exe" > /dev/null; then
+            echo "cores=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install gdb (a process crashed)
+        if: failure() && steps.crashed.outputs.cores == 'yes'
+        uses: ./.github/actions/apt-install
+        with:
+          packages: gdb
+          commands: gdb
+
+      - name: Every thread's stack of each crashed process
+        if: failure() && steps.crashed.outputs.cores == 'yes'
+        env:
+          DEBUGINFOD_URLS: https://debuginfod.ubuntu.com
+        run: |
+          for exe_file in "$RUNNER_TEMP"/cores/core.*.exe; do
+            core="${exe_file%.exe}"
+            exe="$(cat "$exe_file")"
+            echo "::error::$exe crashed; its stacks follow ($(basename "$core"))"
+            timeout 900 gdb -batch -nx -ex 'set debuginfod enabled on' -ex 'set pagination off' \
+              -ex 'thread apply all bt' "$exe" "$core" 2>&1 \
+              | grep -v '^Download' || true
+          done
 
   # ─────────────────────────────────────────────────────────────────────────
   # Nested cargo tests run in two parallel jobs: generated projects and
