@@ -32,6 +32,8 @@ use flui_platform::capability::{
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason, WindowId};
 use rustc_hash::FxHashMap;
 
+#[cfg(any(not(target_arch = "wasm32"), test))]
+use crate::off_owner::NotRun;
 use crate::off_owner::OffOwner;
 pub use message::{
     MessageAnswer, MessageBoxBackend, MessageBoxCapability, MessageBoxRequest, MessageBoxResult,
@@ -41,8 +43,6 @@ pub use request::{
     FileFilter, FolderFile, FolderPath, MAX_TEXT_LEN, MalformedRequest, OpenRequest, PickedFile,
     PickedForm, Picks, SaveLocation, SaveRequest,
 };
-#[cfg(target_os = "android")]
-pub(crate) use write::off_owner_refusal;
 #[cfg(not(target_arch = "wasm32"))]
 use write::write_file;
 // The web provider lists a folder before it reads a byte, by the type a
@@ -145,6 +145,20 @@ impl DialogError {
             | Self::TooManyEntries { .. } => None,
         }
     }
+}
+
+/// What a dialog answers a piece of its work that no thread took: a save's
+/// write, an Android picker's read.
+#[cfg(any(not(target_arch = "wasm32"), test))]
+pub(crate) fn off_owner_refusal<T>(reason: NotRun) -> Result<T, DialogError> {
+    Err(match reason {
+        NotRun::Busy => DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(
+            UnsupportedReason::Unavailable,
+        )),
+        NotRun::NoThread(code) => {
+            DialogError::Failed(code.map_or(SystemFailure::MalformedAnswer, SystemFailure::Os))
+        }
+    })
 }
 
 /// What an open dialog answers: what the user picked, `None` when the user
