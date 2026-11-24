@@ -467,7 +467,7 @@ fn perform_os(
         Some(scenario) if !scenario.devices().is_empty() => {
             Announcement::new(scenario.devices().to_vec(), scenario.duration(), isolation)
         }
-        _ => Announcement::new(devices_of(&events), sequence.span(), isolation),
+        _ => Announcement::new(devices_of(&events), played(&events), isolation),
     };
     driver.announce_once(|| announcement.to_string());
     let before = journal(driver, window, None)?;
@@ -533,6 +533,17 @@ fn observed(events: &[OsEvent], journal: &Journal) -> ActOutcome {
         to: span.to,
     });
     outcome
+}
+
+/// How long sending `events` takes: the sum of their pauses, which end at the plan's end.
+fn played(events: &[OsEvent]) -> Duration {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            OsEvent::Pause(pause) => Some(*pause),
+            _ => None,
+        })
+        .fold(Duration::ZERO, Duration::saturating_add)
 }
 
 fn devices_of(events: &[OsEvent]) -> Vec<OsDevice> {

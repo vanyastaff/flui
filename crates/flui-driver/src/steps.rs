@@ -1,13 +1,12 @@
-//! What an OS lane sends: an action sequence's plan ([`flui_protocol::input::plan`], the one
-//! lowering every path takes) turned into device-pixel events, one at a time, with every pointer
-//! move a single step to its destination followed by an explicit pause (ADR-0238 §11,
-//! ADR-0400 §2).
+//! What an OS lane sends: an action sequence's plan ([`flui_protocol::input::plan`]) turned into
+//! device-pixel events, one at a time, with every pointer move a single step to its destination
+//! followed by an explicit pause (ADR-0238 §11, ADR-0400 §2). Only the OS lane plays that plan so
+//! far: the runtime's agent lowers `input.inject` with a planner of its own.
 //!
 //! A lane never interpolates, and the OS or browser is never left to: Chrome interpolates a
 //! multi-step move, which made recordings differ between runs. The plan splits a move that lasts
-//! (`duration_ms`) into single steps, one per [`STEP`] of its duration, each at the whole
-//! millisecond it is due in, so the path is the driver's and the same on every run, and the same
-//! as the synthetic path's.
+//! (`duration_ms`) into single steps, one per [`STEP`](flui_protocol::input::STEP) of its duration, each at the whole
+//! millisecond it is due in, so the path is the driver's and the same on every run.
 //!
 //! The events go out in the plan's order, and the time between two instants is an explicit pause:
 //! so two contacts of a pinch spread at once rather than one after the other, a jump stays a jump
@@ -18,9 +17,8 @@
 use std::time::Duration;
 
 use flui_protocol::input::{
-    ActionSequence, ImeAction, PlannedInput, PointerButton, PointerDevice, SourceKind,
+    ActionSequence, ImeAction, PlannedInput, PointerButton, PointerDevice, ScrollUnit, SourceKind,
 };
-pub use flui_protocol::input::{MAX_STEPS, STEP};
 
 use crate::coordinates::{self, DevicePoint, WindowGeometry};
 use crate::error::{Error, Result};
@@ -86,9 +84,10 @@ pub enum OsEvent {
 ///
 /// [`Error::InvalidArgument`] for a sequence the plan refuses (its bounds and ranges); as
 /// [`coordinates::to_device`] for a point outside the window; [`Error::NotSupported`] for input no
-/// OS lane sends (a trackpad gesture, a pointer's cancel, a virtual pointer), naming it. Each is
-/// answered before any event is handed over. An input-method composition becomes its steps
-/// ([`OsEvent::Composition`]), one per tick, which only a lane that composes takes.
+/// OS lane sends (a trackpad gesture, a pointer's cancel, a virtual pointer, a scroll by lines),
+/// naming it. Each is answered before any event is handed over. An input-method composition
+/// becomes its steps ([`OsEvent::Composition`]), one per tick, which only a lane that composes
+/// takes.
 pub fn os_events(sequence: &ActionSequence, geometry: &WindowGeometry) -> Result<Vec<OsEvent>> {
     let plan = flui_protocol::input::plan(sequence)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
@@ -135,8 +134,13 @@ pub fn os_events(sequence: &ActionSequence, geometry: &WindowGeometry) -> Result
                 at,
                 delta_x,
                 delta_y,
-                ..
+                unit,
             } => {
+                // An OS event scrolls by device pixels, and no lane knows the line height the app
+                // scrolls a line by: a line scroll goes the synthetic path, which the app sizes.
+                if *unit != ScrollUnit::Pixel {
+                    return Err(unsent(&format!("{}_scroll", unit.name())));
+                }
                 let at = coordinates::to_device(geometry, *at)?;
                 let state = &mut states[planned.source];
                 let (asked_x, asked_y) = &mut state.scrolled;
