@@ -18,11 +18,15 @@
 //!   ([`crate::Error::ReleaseFailed`]).
 //! - **Isolation.** An emulator is isolated: nobody holds it. A device is someone's, so it runs
 //!   guarded: `getevent` watched for input from any device but the lane's own ([`guard`]).
-//! - **Reading.** The window's place, the display's rotation and the app's accessibility nodes,
-//!   the tree TalkBack reads, from `uiautomator dump` ([`uiautomator`]); the nodes carry no
-//!   identifier on Android, so `Lane::read_tree` matches them to the app's own tree by structure,
-//!   role, name, state and bounds ([`tree`], [`roles`]). The dump suspends every accessibility
-//!   service while it runs, so the lane dumps nothing while one is on ([`safety::check_dump`]). The window's pixels come from `screencap` ([`screencap`]).
+//! - **Reading.** The window's place and the display's rotation from `dumpsys window`
+//!   ([`device::parse_windows`]): the frame of the app's focused window by its hash, on the default
+//!   display, which the app's view covers whole. The app's accessibility nodes, the tree TalkBack
+//!   reads, from `uiautomator dump` ([`uiautomator`]); the nodes carry no identifier on Android, so
+//!   `Lane::read_tree` matches them to the app's own tree by structure, role, name, state and
+//!   bounds ([`tree`], [`roles`]), the window located before and after the dump. The dump
+//!   suspends every accessibility service while it runs, so the lane takes it only for the tree
+//!   and only while none is on, on a device or an emulator ([`safety::check_dump`]); input and
+//!   capture never dump. The window's pixels come from `screencap` ([`screencap`]).
 //! - **No activation.** `Lane::invoke` is refused: UI Automator's shell performs no action, and
 //!   `ACTION_CLICK` reaches a node only from an accessibility service or an instrumentation on the
 //!   device, neither of which the lane runs; a tap at the node's center would be the touch path
@@ -58,7 +62,7 @@ use flui_protocol::tree::Tree;
 use self::adb::{
     Adb, AdbCommand, AdbReply, AdbStream, Framing, Printed, command_failed, lane_error,
 };
-use self::device::DeviceFacts;
+use self::device::{DeviceFacts, WindowHash};
 use self::guard::GeteventGuard;
 use self::held::{Abilities, Command, HeldInput, Part, PenChange};
 use self::safety::{Display, Refusal};
@@ -156,9 +160,13 @@ impl std::fmt::Debug for Started {
     }
 }
 
-/// The app's window as the lane last found it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The app's window as the lane last found it: which window it is, where, and how the display is
+/// turned. Two readings are the same window held still only when all three agree.
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct Screen {
+    /// The window, which must hold the focus for every press, key, text and scroll: a window of
+    /// the app's title at the same place is another window.
+    window: WindowHash,
     surface: Bounds,
     rotation: u8,
 }
@@ -361,7 +369,10 @@ impl AndroidLane {
         Abilities {
             input: self.facts.input,
             uinput: self.uinput,
-            display: self.screen.map(|screen| self.display(screen.rotation)),
+            display: self
+                .screen
+                .as_ref()
+                .map(|screen| self.display(screen.rotation)),
         }
     }
 
@@ -375,8 +386,9 @@ impl AndroidLane {
         }
     }
 
-    /// The active window, dumped and read, once the device shows no accessibility service
-    /// running: the dump suspends every service while it runs.
+    /// The active window, dumped and read, for its accessibility nodes. The dump suspends every
+    /// accessibility service while it runs, so it is taken only once the device or emulator shows
+    /// none running.
     fn dump(&mut self) -> Result<UiDump> {
         let settings = Run {
             limit: device::MAX_ACCESSIBILITY_SETTINGS,
@@ -395,45 +407,85 @@ impl AndroidLane {
             .map_err(|why| lane_error(format!("`uiautomator dump` answered no window: {why}")))
     }
 
-    /// The app's surface `placement` describes, found in the active window.
+    /// The app's surface `placement` describes, which the lane keeps as where the app's window is,
+    /// with that window's hash: the frame of the app's window holding the input focus, from
+    /// `dumpsys window`, since the app's view covers its whole window (`FluiView.install`). No
+    /// accessibility is read, so no accessibility service is paused: input and capture go on
+    /// whatever services run.
     fn find(&mut self, placement: &Placement) -> Result<Screen> {
-        let dump = self.dump()?;
-        self.surface_in(&dump, placement)
-    }
-
-    /// The app's surface `placement` describes, found in `dump`, which the lane keeps as where the
-    /// app's window is.
-    fn surface_in(&mut self, dump: &UiDump, placement: &Placement) -> Result<Screen> {
+        let run = Run {
+            limit: device::MAX_WINDOWS_REPLY,
+            ..DATA
+        };
+        let printed = run_shell(self.adb.as_mut(), device::WINDOWS, run)?.text();
+        let windows = device::parse_windows(&printed)
+            .map_err(|why| lane_error(format!("`dumpsys window` answered no windows: {why}")))?;
+        let focus = windows.focus.as_ref();
+        safety::check_focus(focus.map(|name| name.title.as_str()), &self.package)
+            .map_err(Refusal::into_error)?;
+        if let Some(window) = windows.focused_window()
+            && window.display != Some(device::DEFAULT_DISPLAY)
+        {
+            return Err(Error::not_supported(
+                "android_default_display",
+                format!(
+                    "the app's window {} holds the focus on display {}, and the {LANE} lane \
+                     drives the default display only, which `input`, `screencap` and the \
+                     rotation it reads are of",
+                    window.name.title,
+                    window
+                        .display
+                        .map_or_else(|| "none named".to_owned(), |display| display.to_string())
+                ),
+            ));
+        }
         let size = (
             placement.size.width * placement.scale,
             placement.size.height * placement.scale,
         );
-        let Some(surface) = dump.surface_of(&self.package, size, SIZE_TOLERANCE) else {
-            let packages = dump.packages();
-            if !packages.contains(&self.package.as_str()) {
-                return Err(Refusal::NotForeground {
-                    focus: Some(packages.join(", ")),
-                }
-                .into_error());
-            }
+        let surface = windows.focused_frame().filter(|frame| {
+            (f64::from(frame.width()) - size.0).abs() <= SIZE_TOLERANCE
+                && (f64::from(frame.height()) - size.1).abs() <= SIZE_TOLERANCE
+        });
+        let (Some(surface), Some(focus)) = (surface, windows.focus) else {
             return Err(lane_error(format!(
-                "{} shows no view of {} x {} pixels for window {}",
+                "{} shows no window of {} x {} pixels for window {}",
                 self.package, size.0, size.1, placement.window
             )));
         };
         let screen = Screen {
+            window: focus.hash,
             surface,
-            rotation: dump.rotation,
+            rotation: windows.rotation,
         };
-        self.screen = Some(screen);
+        self.screen = Some(screen.clone());
         Ok(screen)
     }
 
-    /// The safety rule before a command that acts on the app: its window holds the focus.
+    /// The safety rule before a command that acts on the app: its window holds the focus, and,
+    /// once the lane has located the window, it is that window by its hash, the rule
+    /// [`Self::find`] locates it by: a window of the same title (an activity's window leaving as
+    /// it is started again, split screen) is another window, at another place.
     fn check_focus(&mut self) -> Result<()> {
         let printed = run_shell(self.adb.as_mut(), device::FOCUS, DATA)?.text();
         let focus = device::parse_focus(&printed);
-        safety::check_focus(focus.as_deref(), &self.package).map_err(Refusal::into_error)
+        safety::check_focus(
+            focus.as_ref().map(|name| name.title.as_str()),
+            &self.package,
+        )
+        .map_err(Refusal::into_error)?;
+        match (&self.screen, focus) {
+            (Some(located), Some(focus)) if focus.hash != located.window => {
+                Err(Refusal::NotForeground {
+                    focus: Some(format!(
+                        "{} as window {}, not window {}, the one the lane located",
+                        focus.title, focus.hash, located.window
+                    )),
+                }
+                .into_error())
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Send `command`, recording what the device took.
@@ -455,12 +507,14 @@ impl AndroidLane {
         let Command::Pen { change, at } = command else {
             return Err(lane_error("only the pen's reports go to its device"));
         };
-        let screen = self
+        let rotation = self
             .screen
-            .ok_or_else(|| lane_error("the lane has not located the app's window"))?;
+            .as_ref()
+            .ok_or_else(|| lane_error("the lane has not located the app's window"))?
+            .rotation;
         let natural = uinput::natural_point(
             *at,
-            screen.rotation,
+            rotation,
             self.facts.display.natural,
             self.facts.display.physical,
         )
@@ -738,8 +792,26 @@ impl Lane for AndroidLane {
     }
 
     fn read_tree(&mut self, placement: &Placement, app: &Tree) -> Result<Tree> {
+        // The window is located before and after the dump, which takes seconds on a phone: a
+        // window replaced or moved or a display turned in between, or a dump of another turn, is
+        // no snapshot the mapping holds for.
+        let before = self.find(placement)?;
         let dump = self.dump()?;
-        let screen = self.surface_in(&dump, placement)?;
+        let screen = self.find(placement)?;
+        if screen != before || dump.rotation != screen.rotation {
+            return Err(Error::busy(format!(
+                "the app's window changed or the display turned while the {LANE} lane dumped it \
+                 (window {} at {:?} turned {} before, window {} at {:?} turned {} after, the \
+                 dump turned {}): read again once it holds still",
+                before.window,
+                before.surface,
+                before.rotation,
+                screen.window,
+                screen.surface,
+                screen.rotation,
+                dump.rotation
+            )));
+        }
         let display = self.display(screen.rotation);
         let mapping = tree::Mapping {
             origin: DevicePoint::new(screen.surface.left, screen.surface.top),

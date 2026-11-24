@@ -17,8 +17,10 @@
 //!
 //! Before every press, key and text the app's window must hold the input focus
 //! ([`check_focus`]): a press with the shade, the lock screen or another app in front lands
-//! there. Before every `uiautomator dump`, no accessibility service may run ([`check_dump`]): the
-//! dump suspends every service while it runs, TalkBack, Voice Access and Switch Access among them.
+//! there, and the window holding it must be the one the lane located, by its hash. The read of the
+//! tree takes a `uiautomator dump`, which suspends every accessibility service while it runs
+//! (TalkBack, Voice Access and Switch Access among them), so it is refused while one runs
+//! ([`check_dump`]); locating the window, input and capture take no dump.
 
 use flui_protocol::error::{ErrorCode, HandleKind};
 use flui_protocol::session::Isolation;
@@ -119,9 +121,8 @@ pub enum Refusal {
     },
 }
 
-/// The capability a refused dump names: a window located, or the tree read, through
-/// `uiautomator dump`.
-pub const WINDOW_DUMP: &str = "android_window_dump";
+/// The capability a refused read of the tree names: the `uiautomator dump` it takes.
+pub const TREE_DUMP: &str = "android_tree_dump";
 
 /// The capability a device without root `uinput` lacks, which its pen and touchpad rows name.
 pub const UINPUT_DEVICE: &str = "uinput_device";
@@ -210,26 +211,27 @@ impl Refusal {
                 isolation.name()
             )),
             Self::ServicesOn { services } => Error::not_supported(
-                WINDOW_DUMP,
+                TREE_DUMP,
                 format!(
-                    "{} is on, and `uiautomator dump` suspends every accessibility service while \
-                     it dumps: the lane neither locates the window nor reads the tree while one \
-                     runs; locate the window before the service is turned on",
+                    "{} is on, and the read of the tree takes a `uiautomator dump`, which suspends \
+                     every accessibility service while it dumps: the lane reads no tree while one \
+                     runs; it still locates the window, sends input and captures",
                     services.describe()
                 ),
             ),
             Self::SettingsUnread { why } => Error::not_supported(
-                WINDOW_DUMP,
+                TREE_DUMP,
                 format!(
-                    "{why}, so the lane cannot tell whether an accessibility service runs, and \
-                     `uiautomator dump` would suspend one: no dump is sent"
+                    "{why}, so the lane cannot tell whether an accessibility service runs, and the \
+                     tree's `uiautomator dump` would suspend one: no dump is sent"
                 ),
             ),
         }
     }
 }
 
-/// Whether the lane may dump the window: no accessibility service runs, as `settings` printed it.
+/// Whether the lane may dump the window for its tree: no accessibility service runs, as
+/// `settings` printed it, on an emulator as on a device.
 ///
 /// # Errors
 ///

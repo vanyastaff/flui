@@ -62,7 +62,7 @@ png = "0.18"
 # the Chrome lane records a fetched ChromeDriver's, and checks a kept one's
 # before it runs.
 sha2 = { workspace = true }
-# The Android lane, which runs on every host: the window `uiautomator dump` describes.
+# The Android lane, which runs on every host: the accessibility nodes `uiautomator dump` writes.
 roxmltree = { workspace = true }
 # The Chrome lane (`chrome`): the BiDi WebSocket to a ChromeDriver on the loopback, so the client
 # handshake alone and no TLS (the version `flui-cli`'s browser relay speaks); a screenshot's base64;

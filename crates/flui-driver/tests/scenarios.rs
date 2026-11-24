@@ -928,9 +928,12 @@ const ROLES_WINDOW: &str = include_str!("android/roles_window.xml");
 const CONTROLS_WINDOW: &str = include_str!("android/controls_window.xml");
 
 /// `driver`, a headless app, driven through the Android lane on a scripted emulator whose window
-/// `uiautomator dump` answers with `window`.
+/// `uiautomator dump` answers with `window`, edge to edge in an 800 by 600 window.
 fn through_android(driver: Driver, window: &str) -> Driver {
-    let adb = android_lane::scripted_showing(true, None, window).refuse_stream("shell uinput -");
+    let size = |pixels: u32| i32::try_from(pixels).expect("the window's size fits");
+    let windows = android_lane::windows_edge_to_edge(size(WINDOW.0), size(WINDOW.1));
+    let adb = android_lane::scripted_showing(true, None, window, &windows)
+        .refuse_stream("shell uinput -");
     let lane =
         AndroidLane::connect(adb.device(), android_lane::PACKAGE).expect("the lane connects");
     driver.with_lane(lane).expect("the lane starts")

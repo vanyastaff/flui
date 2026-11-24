@@ -349,27 +349,38 @@ impl HostAdb {
     }
 }
 
+/// What a command that outlived its deadline `timeout` answers, on every [`Adb`]: it was ended,
+/// and the device may have done it.
+pub(crate) fn timed_out(command: &AdbCommand, timeout: Duration) -> Error {
+    Error::Timeout {
+        awaited: crate::error::Awaited::Host,
+        effect: Some(Effect::new(EffectKind::MayHaveRun).detail(format!(
+            "`adb {command}` was ended after {} ms; the device may have done it",
+            timeout.as_millis()
+        ))),
+        message: format!(
+            "`adb {command}` did not end within {} ms",
+            timeout.as_millis()
+        ),
+        retry: ErrorCode::Timeout.default_retry(),
+    }
+}
+
+/// What a command that printed more than `limit` bytes answers, on every [`Adb`].
+pub(crate) fn over_limit(command: &AdbCommand, limit: usize) -> Error {
+    lane_error(format!(
+        "`adb {command}` printed more than {limit} bytes; nothing past them was read"
+    ))
+}
+
 impl Adb for HostAdb {
     fn run(&mut self, command: &AdbCommand, limit: usize, timeout: Duration) -> Result<AdbReply> {
         let finished = tool::run(self.command(command), limit, timeout, "adb").map_err(
             |failure| match failure {
                 tool::Failure::Start(error) => self.started(&error),
                 tool::Failure::Io(error) => Error::Io(error),
-                tool::Failure::Timeout => Error::Timeout {
-                    awaited: crate::error::Awaited::Host,
-                    effect: Some(Effect::new(EffectKind::MayHaveRun).detail(format!(
-                        "`adb {command}` was ended after {} ms; the device may have done it",
-                        timeout.as_millis()
-                    ))),
-                    message: format!(
-                        "`adb {command}` did not end within {} ms",
-                        timeout.as_millis()
-                    ),
-                    retry: ErrorCode::Timeout.default_retry(),
-                },
-                tool::Failure::OverLimit => lane_error(format!(
-                    "`adb {command}` printed more than {limit} bytes; nothing past them was read"
-                )),
+                tool::Failure::Timeout => timed_out(command, timeout),
+                tool::Failure::OverLimit => over_limit(command, limit),
                 tool::Failure::OutputLeftOpen => {
                     lane_error(format!("`adb {command}` left its output open"))
                 }
