@@ -18,7 +18,10 @@
   [ADR-0239](../../../adr/ADR-0239-every-debug-app-hosts-the-driver-agent.md),
   [ADR-0240](../../../adr/ADR-0240-semantics-identifier.md),
   [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md),
-  [ADR-0242](../../../adr/ADR-0242-typed-inspect-and-tracing-conventions.md)
+  [ADR-0242](../../../adr/ADR-0242-typed-inspect-and-tracing-conventions.md),
+  [ADR-0400](../../../adr/ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md)
+  (the Rust front end and the `headless` feature are replaced; the plan is
+  [testing-platform](../testing-platform/tasks.md))
 - **Base:** `main` @ `0fdd19f1e`. Tasks marked **IC** need `interaction/completeness` merged (its
   recording module, input taps, native recording codec, BiDi and Android drivers). The rest can
   start on `main` now.
@@ -90,7 +93,7 @@ graph LR
 | FD6 | Synthetic input into the host input path; input journal; recording taps (input and native layers); release on close | R10, R12, R13, R24, R26, F2 | FD5 | [P] | L | 5 | IC |
 | FD7 | Agent server in `flui-app` (ADR-0239): transports for desktop, iOS, Android and web; launch contract; `EXIT_ON_DISCONNECT`; `driver` feature; devtools `agent` removed | R2–R4, F1, F2, F7 | FD5 | [P] | L, W | 6 | — |
 | FD8 | Presented-frame capture in engine and raster lane; `rendered` capture; headless source | R21 | FD7 | — | L, W | 4 | — |
-| FD9 | `flui-driver` core: crate and metadata, `Driver`/`Window`/`Element`/`expect`, connections, coordinates, effects, reports, headless target; synthetic-default policy, OS-input announcement, guard trait and isolation modes; window-size and single-step rules; failure matrix | R1, R5, R10, R11, R13, R14a, R14b, R18–R20, R32a, R34, F1–F11 | FD6, FD7 | — | L | 9 | — |
+| FD9 | `flui-driver` core: crate and metadata, `Driver`/`Window`/`Element`/`expect` (replaced by `Device` under `flui_testing::Tester`, TP18), connections, coordinates, effects, reports, headless target (replaced by `flui_testing::Headless`, TP18); synthetic-default policy, OS-input announcement, guard trait and isolation modes; window-size and single-step rules; failure matrix | R1, R5, R10, R11, R13, R14a, R14b, R18–R20, R32a, R34, F1–F11 | FD6, FD7 | — | L | 9 | — |
 | FD10 | Pixels (stable capture, masks, YIQ, baselines, predicates) and trace (writer, reader, replay, codegen) | R21–R27 | FD8, FD9 | — | L | 6 | — |
 | FD11 | Windows lane: SendInput, synthetic pointer injection, UIA, WGC, job object; desktop-mcp safety rules ported; low-level-hook user-activity guard; isolation spikes (Sandbox, second session, loopback RDP); **`windows-gallery` ported first**, then the other `windows-*` scenarios | R14, R14a, R14b, R17, R32, R32a, R33, R35, R36, R36a | FD9 | [P] | L, W | 8 | IC |
 | FD12 | Chrome lane: BiDi input with single-step moves, CDP IME, capture, ChromeDriver; `web-input` scenario | R32, R32a, R33, R35 | FD9 | [P] | L, B | 4 | IC |
@@ -101,8 +104,8 @@ graph LR
 | FD17 | Front ends: `flui drive` CLI with session file, announcement and `call`; `flui mcp` adapter (MCP 2026-07-28) with the core tool set and `--caps` groups | R28–R30, R28a | FD9, FD10 | — | L | 5 | — |
 | FD18 | Inspector app (`tools/flui-inspector`) and `flui inspect`; its own scenario suite; baseline Review view; documented CLI fallback | R25, R31 | FD17, FD26 | — | L, W | 7 | — |
 | FD19 | `interaction_gallery` scenario suite on every target; delete desktop-mcp, xtask drivers, probes, device-check scripts; documentation | R35, R36, R36a, R45 | FD11–FD17, FD20–FD30 | — | all | 4 | IC |
-| FD20 | Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9, FD29 | [P] | L, W, A | 5 | — |
-| FD21 | Accessibility audit: `flui-semantics::audit` rules, `audit.a11y`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
+| FD20 | (Moved to testing-platform TP2, ADR-0400.) Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9, FD29 | [P] | L, W, A | 5 | — |
+| FD21 | (Moved to testing-platform TP2, ADR-0400.) Accessibility audit: `flui-semantics::audit` rules, `audit.a11y`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
 | FD22 | Exploration: seeded `explore.run` with invariants, delta-debugging `explore.shrink`, replay | R39, F12 | FD10 | — | L | 5 | — |
 | FD23 | Layout facts (boxes, clips, text ink bounds, baselines, styles, painted and background colours), `layout.expect` assertions, `audit.layout` lint with finding outcomes, `audit.text_scale`, `audit.screen` with checked and not-checked lists, the layout-defect benchmark | R40, R41, R41a, R41b, R44 | FD4, FD9, FD28 | [P] | L, W | 8 | — |
 | FD24 | Layout snapshot golden and `capture.annotated` | R42, R43 | FD10, FD23 | — | L, W | 4 | — |
@@ -527,6 +530,7 @@ graph LR
 
 ### FD9. `flui-driver` core
 
+- **Status (ADR-0400):** the `Window`/`Element`/`expect` front end and the `headless` feature move to docs/plans/specs/testing-platform/tasks.md TP18.
 - **Changes:**
   - new `crates/flui-driver`, tier H between `flui-app` and `flui-cli`, Evolving `0.1`,
     `allowed-dependents`, workspace member;
@@ -544,6 +548,11 @@ graph LR
   - `Isolation` (`flui-protocol`'s) in the session and the report, and the refusal of OS input on
     a `shared` desktop without a guard;
   - the scenario window-size rule and splitting moves into single steps.
+
+  The handle API and the `headless` feature above are what `main` has. ADR-0400 replaces them:
+  `Device` implements `flui_protocol::client::Connection` for `flui_testing::Tester`, the
+  in-process target is `flui_testing::Headless`, and the feature and the handle API are deleted.
+  Moved to docs/plans/specs/testing-platform/tasks.md TP18.
 
   Update `docs/crates.md` and the layer diagram in `docs/architecture.md`.
 - **Done when:**
@@ -1568,6 +1577,7 @@ graph LR
 
 ### FD20. Performance
 
+- **Status:** Moved to docs/plans/specs/testing-platform/tasks.md TP2 by ADR-0400.
 - **Changes:**
   - the agent keeps per-frame `FrameSnapshot` samples and phase durations between `perf.start` and
     `perf.stop`, joined with the journal through `input_epochs`;
@@ -1585,6 +1595,7 @@ graph LR
 
 ### FD21. Accessibility audit (IC)
 
+- **Status:** Moved to docs/plans/specs/testing-platform/tasks.md TP2 by ADR-0400.
 - **Changes:**
   - `flui-semantics::audit` rules (unnamed, focus order with text direction, target size by
     `GestureSettings::min_target`, no alternative from the arena's recognizer registry);
@@ -1625,7 +1636,8 @@ graph LR
     `rendered` capture only when it cannot be determined, and marked so;
   - `flui-rendering::audit` holds the geometry rules: off centre, near-miss alignment, uneven gap,
     overlap, clipped and truncated text, outside window or safe area, WCAG contrast;
-  - `layout.facts`, `layout.expect` (Rust `expect(..).to_be_centered_in(..)` and the rest),
+  - `layout.facts`, `layout.expect` (the CLI and MCP method; the Rust handle `expect(..)` is
+    replaced by `Tester` reads, ADR-0400),
     `audit.layout` with per-app thresholds and waivers;
   - `audit.screen`, and `checked` and `not_checked` in `Report` with the verdict clause;
   - finding outcomes (`error`, `warning`, `needs_review`, `suppressed`);

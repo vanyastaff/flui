@@ -3,7 +3,9 @@
 - **Status:** Accepted (2026-10-19)
 - **Date:** 2026-10-19
 - **Superseded-by:** [ADR-0371](ADR-0371-before-the-first-release-no-xtask-gate-holds-a-rule-about-the-sources.md)
-  for the `xtask testing` gate only (D7, Verification): the rule stands and its reader confirms it.
+  for the `xtask testing` gate only (D7, Verification): the rule stands and its reader confirms it;
+  and [ADR-0400](ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md)
+  for D2's list of the kit's harnesses, D5 and D6 (§8): D1, D3, D4 and D7's naming rules stand.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),
   [ADR-0082](ADR-0082-platform-api-contract-crate.md),
   [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md),
