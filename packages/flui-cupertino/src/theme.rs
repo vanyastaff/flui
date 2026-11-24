@@ -15,6 +15,7 @@ use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
 use flui_sdk::widgets::InheritedTheme;
 
 use crate::colors::{ColorResolver, CupertinoColor, CupertinoColors, CupertinoDynamicColor};
+use crate::interface_level::CupertinoUserInterfaceLevel;
 use crate::text_theme::{CupertinoTextThemeData, ResolvedCupertinoTextTheme};
 
 /// The default bar background — `0xF0F9F9F9` / `0xF01D1D1D` (navigation-bar
@@ -25,11 +26,11 @@ const DEFAULT_BAR_BACKGROUND: CupertinoDynamicColor = CupertinoDynamicColor::wit
     Color::rgba(0x1D, 0x1D, 0x1D, 0xF0),
 );
 
-/// How many resolutions of one [`CupertinoTheme`] its cache keeps: the four
-/// brightness and contrast combinations. A further key (a fifth combination
-/// of an accent colour) evicts the oldest entry, so flipping settings never
-/// grows the cache.
-const RESOLUTION_CACHE_CAPACITY: usize = 4;
+/// How many resolutions of one [`CupertinoTheme`] its cache keeps: the eight
+/// brightness, contrast and interface-level combinations. A key under another
+/// system accent evicts the oldest entry, so flipping settings never grows the
+/// cache.
+const RESOLUTION_CACHE_CAPACITY: usize = 8;
 
 /// Styling specification for a [`CupertinoTheme`]: what an author writes.
 ///
@@ -92,7 +93,8 @@ pub struct CupertinoThemeData {
 /// A theme resolved for one context: what Cupertino widgets read.
 ///
 /// Every colour is concrete and every text role is a [`TextStyle`](flui_sdk::painting::typography::TextStyle)
-/// built for the brightness, contrast and system accent the context had.
+/// built for the brightness, interface level, contrast and system accent the
+/// context had.
 /// Flutter's `CupertinoTheme.of` returns the same data type the author wrote,
 /// passed through `resolveFrom(context)`
 /// (`flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/theme.dart:72`).
@@ -122,7 +124,8 @@ pub struct ResolvedCupertinoTheme {
 /// one is reused only under the inputs it was built from.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct ResolutionInputs {
-    /// The effective brightness and the high-contrast preference.
+    /// The effective brightness, the interface level and the high-contrast
+    /// preference.
     colors: ColorResolver,
     /// The system accent when it applies to this theme (an unset primary
     /// colour, the theme's brightness the platform's), else `None`.
@@ -137,8 +140,8 @@ impl CupertinoThemeData {
     ///
     /// Registers the dependencies the resolution reads: the effective
     /// brightness (an unset one reads an ancestor theme's, then the
-    /// platform's), the high-contrast preference and, for an unset primary
-    /// colour, the system accent.
+    /// platform's), the interface level, the high-contrast preference and,
+    /// for an unset primary colour, the system accent.
     #[must_use]
     pub fn resolve(&self, ctx: &dyn BuildContext) -> ResolvedCupertinoTheme {
         self.resolve_for(self.inputs(ctx, CupertinoTheme::maybe_brightness_of))
@@ -155,6 +158,7 @@ impl CupertinoThemeData {
             .brightness
             .or_else(|| ambient_brightness(ctx))
             .unwrap_or(Brightness::Light);
+        let level = CupertinoUserInterfaceLevel::of(ctx);
         let high_contrast = MediaQuery::high_contrast_of(ctx).unwrap_or(false);
         let system_accent = self
             .primary_color
@@ -169,6 +173,7 @@ impl CupertinoThemeData {
         ResolutionInputs {
             colors: ColorResolver {
                 brightness,
+                level,
                 high_contrast,
             },
             system_accent,
@@ -210,12 +215,13 @@ impl CupertinoThemeData {
 /// [`Self::of`].
 ///
 /// The theme keeps the resolutions its readers asked for, keyed by the
-/// inputs each was built from (the effective brightness, the contrast
-/// preference and the system accent that applies), so every reader under
-/// the same inputs shares one [`ResolvedCupertinoTheme`]. The cache belongs
-/// to the view value: a clone of the view, or the copy
+/// inputs each was built from (the effective brightness, the interface
+/// level, the contrast preference and the system accent that applies), so
+/// every reader under the same inputs shares one [`ResolvedCupertinoTheme`]
+/// and a reader under an elevated level gets a resolution of its own. The
+/// cache belongs to the view value: a clone of the view, or the copy
 /// [`InheritedTheme::wrap`] installs elsewhere, shares it, and a new view
-/// built with [`Self::new`] starts empty. It holds at most four entries.
+/// built with [`Self::new`] starts empty. It holds at most eight entries.
 ///
 /// # Example
 ///
@@ -283,7 +289,7 @@ impl CupertinoTheme {
     }
 
     /// The nearest [`CupertinoTheme`]'s data resolved for `ctx`, shared:
-    /// two reads under the same brightness, contrast and accent return the
+    /// two reads under the same brightness, level, contrast and accent return the
     /// same `Rc`, and a change of any of them rebuilds the reader, which
     /// then reads the resolution for the new inputs. Without an ancestor
     /// theme, the default data is resolved afresh on each call.

@@ -109,6 +109,8 @@ harness = false
 
 [dev-dependencies]
 criterion.workspace = true
+# `testing::heap::CountingAllocator`, the global allocator of the allocation witnesses.
+flui-foundation = { workspace = true, features = ["testing"] }
 # Compile-fail fixtures (`tests/compile_fail/*.rs`) pinning the
 # `#[diagnostic::on_unimplemented]` text on `RenderObject`/`RenderBox`/
 # `ParentData`: a wrong program must be told which trait to implement.

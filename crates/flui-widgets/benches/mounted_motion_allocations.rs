@@ -3,10 +3,10 @@
 //! Add `-- --normal` to exclude the separate fractional-alpha control.
 //! Counts allocation requests and requested bytes, not peak live memory.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 use std::hint::black_box;
 use std::time::Duration;
+
+use flui_foundation::testing::heap::{CountingAllocator, HeapCounts};
 
 #[path = "support/mounted_motion.rs"]
 mod mounted;
@@ -15,73 +15,21 @@ use mounted::{
     assert_progress, verify_scroll,
 };
 
-thread_local! {
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static COUNT: Cell<usize> = const { Cell::new(0) };
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static BYTES: Cell<usize> = const { Cell::new(0) };
-}
-
-struct CountingAllocator;
-
-fn record(bytes: usize) {
-    let _ = COUNT.try_with(|value| value.set(value.get().wrapping_add(1)));
-    let _ = BYTES.try_with(|value| value.set(value.get().wrapping_add(bytes)));
-}
-
-// SAFETY: all operations forward the caller's exact pointer and layout to System;
-// realloc likewise preserves System's allocation ownership and failure semantics.
-#[expect(unsafe_code, reason = "`GlobalAlloc` is an unsafe trait")]
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        record(layout.size());
-        // SAFETY: forwards the caller's valid allocation layout unchanged.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        record(layout.size());
-        // SAFETY: forwards the caller's valid allocation layout unchanged.
-        unsafe { System.alloc_zeroed(layout) }
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
-        record(size);
-        // SAFETY: the pointer was allocated by System; layout and size are
-        // the caller's valid realloc arguments, forwarded without alteration.
-        unsafe { System.realloc(ptr, layout, size) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: System allocated this pointer with this layout.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
-
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 #[derive(Default, Debug)]
 struct Allocations {
-    requests: usize,
-    bytes: usize,
+    requests: u64,
+    bytes: u64,
 }
 
 impl Allocations {
-    fn snapshot() -> Self {
-        Self {
-            requests: COUNT.try_with(Cell::get).unwrap_or(0),
-            bytes: BYTES.try_with(Cell::get).unwrap_or(0),
-        }
-    }
-
     fn measure(f: impl FnOnce()) -> Self {
-        let before = Self::snapshot();
-        f();
-        let after = Self::snapshot();
+        let (spent, ()) = HeapCounts::during(f);
         Self {
-            requests: after.requests - before.requests,
-            bytes: after.bytes - before.bytes,
+            requests: spent.allocations,
+            bytes: spent.allocated_bytes,
         }
     }
 

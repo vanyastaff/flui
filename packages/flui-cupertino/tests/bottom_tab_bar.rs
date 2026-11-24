@@ -106,3 +106,68 @@ pub fn each_item_is_one_node_its_click_reaches_on_tap() {
         }
     }
 }
+
+/// The default top border is one device pixel tall at the bar's top edge,
+/// `0x4D000000` in light and `0x29000000` in dark
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/bottom_tab_bar.dart:75`);
+/// `border(None)` removes it and a custom border replaces it.
+pub fn the_default_border_is_a_hairline_and_border_replaces_it() {
+    use flui_sdk::painting::styling::{Border, BorderSide, BorderStyle, Color};
+    use flui_sdk::platform::Brightness;
+
+    let light = Color::from_argb(0x4D00_0000);
+    let dark = Color::from_argb(0x2900_0000);
+    let custom = Color::from_argb(0xFFFF_0000);
+    let custom_border = Border::new(
+        Some(BorderSide::new(custom, 2.0, BorderStyle::Solid)),
+        None,
+        None,
+        None,
+    );
+    let cases = [
+        ("light default", Brightness::Light, None, Some((light, 0.5))),
+        ("dark default", Brightness::Dark, None, Some((dark, 0.5))),
+        ("removed", Brightness::Light, Some(None), None),
+        (
+            "custom",
+            Brightness::Light,
+            Some(Some(custom_border)),
+            Some((custom, 2.0)),
+        ),
+    ];
+    for (name, brightness, border, expected) in cases {
+        let media = MediaQueryData {
+            device_pixel_ratio: 2.0,
+            platform_brightness: brightness,
+            ..MediaQueryData::default()
+        };
+        let mut bar = CupertinoTabBar::new(two_items());
+        if let Some(border) = border {
+            bar = bar.border(border);
+        }
+        let laid = lay_out(MediaQuery::new(media, bar), tight(400.0, 50.0));
+        let sides: Vec<_> = laid
+            .draw_ops()
+            .into_iter()
+            .filter_map(|command| match command.op {
+                DrawOp::Rect { rect, paint } if [light, dark, custom].contains(&paint.color) => {
+                    Some((paint.color, rect))
+                }
+                _ => None,
+            })
+            .collect();
+        match expected {
+            None => assert!(sides.is_empty(), "{name}: no border: {sides:?}"),
+            Some((color, height)) => {
+                let [(painted, rect)] = sides.as_slice() else {
+                    panic!("{name}: one border side: {sides:?}");
+                };
+                assert_eq!(*painted, color, "{name}: the border's colour");
+                assert!(
+                    (rect.height() - height).abs() < 1e-9 && rect.min.y.abs() < 1e-9,
+                    "{name}: a {height}-point side along the top edge: {rect:?}"
+                );
+            }
+        }
+    }
+}

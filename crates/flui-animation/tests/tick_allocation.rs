@@ -3,7 +3,7 @@
 //! One `Vsync::tick_all` advances a live scalar controller, four-component
 //! insets and a seven-component nested geometry/color value, each with four
 //! value listeners. Observer conversion and scalar keyframe evaluation are
-//! included in the measured window with a counting `#[global_allocator]`. That
+//! included in the measured window with the counting `#[global_allocator]`. That
 //! allocator is process-wide, which is why this file is a test target of its
 //! own rather than a module of `tests/main.rs`.
 //!
@@ -13,7 +13,6 @@
 //! no active run or user callbacks; admission remains outside its window.
 
 use flui_animation::__runtime::VsyncDriver;
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::hint::black_box;
 
@@ -26,6 +25,7 @@ use flui_animation::{
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{EdgeInsets, Offset};
+use flui_foundation::testing::heap::{CountingAllocator, HeapCounts};
 use flui_painting::styling::Color;
 
 #[derive(Clone, MotionValue)]
@@ -36,48 +36,6 @@ struct Appearance {
 
 #[derive(Clone, MotionValue)]
 struct CardMotion(Appearance, f64);
-
-// `Cell<usize>` in a const-initialised thread-local has no drop glue and no
-// lazy init, so reading it cannot itself allocate or run during TLS teardown.
-thread_local! {
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static ALLOC_COUNT: Cell<usize> = const { Cell::new(0) };
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static ALLOC_BYTES: Cell<usize> = const { Cell::new(0) };
-}
-
-/// Add to a counter without allocating or panicking during TLS teardown.
-fn bump(counter: &'static std::thread::LocalKey<Cell<usize>>, by: usize) {
-    let _ = counter.try_with(|c| c.set(c.get().wrapping_add(by)));
-}
-
-/// Read a counter; `0` if this thread's TLS is already gone.
-fn read(counter: &'static std::thread::LocalKey<Cell<usize>>) -> usize {
-    counter.try_with(Cell::get).unwrap_or(0)
-}
-
-struct CountingAllocator;
-
-// SAFETY: `alloc`/`dealloc` forward unchanged to `System`, so every pointer
-// is freed by the allocator that produced it. `realloc`/`alloc_zeroed` keep
-// `GlobalAlloc`'s defaults, which decompose into `self.alloc` + copy +
-// `self.dealloc`: still `System`, and still counted through `alloc` (an
-// in-place `System::realloc` growth would count as an allocation — never a
-// miss).
-#[expect(unsafe_code, reason = "a counting `GlobalAlloc` is an unsafe impl")]
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        bump(&ALLOC_COUNT, 1);
-        bump(&ALLOC_BYTES, layout.size());
-        // SAFETY: `layout` is the caller's own, forwarded unchanged.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: `ptr`/`layout` are the caller's own, forwarded unchanged.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-}
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
@@ -94,7 +52,7 @@ const FRAME: f64 = 1.0 / 60.0;
 #[test]
 fn retiring_idle_registry_owners_allocates_nothing() {
     for count in [1, 1_000, 10_000] {
-        let admission_before = read(&ALLOC_COUNT);
+        let admission_before = HeapCounts::now().allocations;
         let registry = Vsync::new();
         let mut observers = Vec::with_capacity(count);
         let owners: Vec<_> = (0..count)
@@ -107,16 +65,15 @@ fn retiring_idle_registry_owners_allocates_nothing() {
             .collect();
         assert_eq!(registry.len(), count);
         assert!(
-            read(&ALLOC_COUNT) > admission_before,
+            HeapCounts::now().allocations > admission_before,
             "admission must exercise the same counting allocator"
         );
-        let calls_before = read(&ALLOC_COUNT);
-        let bytes_before = read(&ALLOC_BYTES);
+        let before = HeapCounts::now();
         for mut owner in owners {
             black_box(&mut owner).dispose();
         }
-        let calls = read(&ALLOC_COUNT) - calls_before;
-        let bytes = read(&ALLOC_BYTES) - bytes_before;
+        let spent = HeapCounts::now().since(before);
+        let (calls, bytes) = (spent.allocations, spent.allocated_bytes);
         assert!(registry.is_empty(), "every retired seat is withdrawn");
         for observer in observers {
             assert!(
@@ -260,9 +217,9 @@ fn a_steady_state_frame_allocates_nothing() {
 
     const FRAMES: usize = 10_000;
     let mut frames_with_allocation = 0usize;
-    let mut total_calls = 0usize;
-    let mut total_bytes = 0usize;
-    let mut worst_frame_bytes = 0usize;
+    let mut total_calls = 0_u64;
+    let mut total_bytes = 0_u64;
+    let mut worst_frame_bytes = 0_u64;
     let start_value = controller.value();
     let start_insets = vector.value();
     let start_nested = nested_stream.value();
@@ -272,8 +229,7 @@ fn a_steady_state_frame_allocates_nothing() {
         .each_ref()
         .map(|track| track.value_at(Duration::from_secs_f64(now)));
     for _ in 0..FRAMES {
-        let calls_before = read(&ALLOC_COUNT);
-        let bytes_before = read(&ALLOC_BYTES);
+        let before = HeapCounts::now();
 
         vsync_driver.tick_all(&clock.frame(Duration::from_secs_f64(now)));
         now += FRAME;
@@ -284,8 +240,8 @@ fn a_steady_state_frame_allocates_nothing() {
         for track in &eased_tracks {
             black_box(track.value_at(Duration::from_secs_f64(now)));
         }
-        let calls = read(&ALLOC_COUNT) - calls_before;
-        let bytes = read(&ALLOC_BYTES) - bytes_before;
+        let spent = HeapCounts::now().since(before);
+        let (calls, bytes) = (spent.allocations, spent.allocated_bytes);
         total_calls += calls;
         total_bytes += bytes;
         if calls != 0 {
@@ -336,9 +292,9 @@ fn a_steady_state_frame_allocates_nothing() {
          listeners must not allocate"
     );
 
-    let calls_before_start = read(&ALLOC_COUNT);
+    let calls_before_start = HeapCounts::now().allocations;
     let restarted = controller.forward_from(0.0);
-    let calls_after_start = read(&ALLOC_COUNT);
+    let calls_after_start = HeapCounts::now().allocations;
     assert!(restarted.is_ok());
     assert!(
         calls_after_start > calls_before_start,
@@ -370,14 +326,13 @@ fn a_steady_state_frame_allocates_nothing() {
         }
         let start_value = leaf.value();
         let deliveries_before = delivered.get();
-        let calls_before = read(&ALLOC_COUNT);
-        let bytes_before = read(&ALLOC_BYTES);
+        let before = HeapCounts::now();
         for _ in 0..FRAMES {
             vsync_driver.tick_all(&clock.frame(Duration::from_secs_f64(now)));
             now += FRAME;
         }
-        let calls = read(&ALLOC_COUNT) - calls_before;
-        let bytes = read(&ALLOC_BYTES) - bytes_before;
+        let spent = HeapCounts::now().since(before);
+        let (calls, bytes) = (spent.allocations, spent.allocated_bytes);
         assert_eq!(delivered.get() - deliveries_before, FRAMES);
         assert!(controller.status().is_directional() && leaf.value() != start_value);
         assert_eq!(
@@ -411,15 +366,14 @@ fn a_steady_state_frame_allocates_nothing() {
     }
     let start_value = controller.value();
     let deliveries_before = delivered.get();
-    let calls_before = read(&ALLOC_COUNT);
-    let bytes_before = read(&ALLOC_BYTES);
+    let before = HeapCounts::now();
     for _ in 0..FRAMES {
         root_driver.tick_all(&clock.frame(Duration::from_secs_f64(now)));
         black_box(root.has_running());
         now += FRAME;
     }
-    let calls = read(&ALLOC_COUNT) - calls_before;
-    let bytes = read(&ALLOC_BYTES) - bytes_before;
+    let spent = HeapCounts::now().since(before);
+    let (calls, bytes) = (spent.allocations, spent.allocated_bytes);
     assert!(root.has_running() && controller.value() > start_value);
     assert_eq!(delivered.get() - deliveries_before, FRAMES);
     eprintln!(

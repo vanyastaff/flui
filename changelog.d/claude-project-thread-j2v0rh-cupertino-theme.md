@@ -9,7 +9,6 @@
 - `CupertinoThemeData` and `CupertinoTextThemeData` are `#[non_exhaustive]` structs read and changed by their `pub` fields, each `None` the iOS default: start from `Default::default()` and assign the fields to change. `CupertinoThemeData::text_theme` is a `CupertinoTextThemeData`, no longer an `Option`, and an unset `CupertinoTextThemeData::primary_color` follows the theme's resolved primary colour.
 - `CupertinoTheme::of` returns an `Rc<ResolvedCupertinoTheme>` shared by every reader under the same brightness, contrast and system accent, instead of a fresh `CupertinoThemeData` copy per call.
 - `CupertinoApp` publishes its authored theme rather than a copy resolved in its own context, so a nested `MediaQuery` that changes brightness or contrast changes the theme below it.
-- `CupertinoTabBar::opaque` takes the resolved theme the caller already holds: `opaque(&theme, ctx)`.
 
 ### Removed
 

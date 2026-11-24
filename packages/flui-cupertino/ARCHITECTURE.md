@@ -40,22 +40,31 @@ styles through a mounted CupertinoTheme and checks actual painted glyph sizes
 and restored layout through MediaQuery publication. It does not establish
 UIKit font identity, optical sizing or native execution.
 
-### Palette resolution shares brightness precedence and contrast dependencies
+### Palette resolution shares brightness precedence and selective dependencies
 
-Standalone dynamic colors, theme resolution and text roles pick a variant
-through one private color resolver, from the effective brightness and the
-contrast preference. A theme's explicit brightness wins even before that theme
-is installed as an ancestor; contrast follows the nearest `MediaQuery`. Static
-colors remain authored values. A standalone dynamic color subscribes only to
-the media fields it varies along, so unrelated window size changes do not rerun
-its resolution; a theme reads brightness, contrast and the system accent once
-for all its colors.
+`CupertinoColors` is UIKit's palette as Flutter carries it, every value
+Flutter's. Standalone dynamic colors, theme resolution and text roles pick a
+variant through one private color resolver, from the effective brightness, the
+interface level and the contrast preference. A theme's explicit brightness wins
+even before that theme is installed as an ancestor; the level follows the
+nearest `CupertinoUserInterfaceLevel`, base without one; contrast follows the
+nearest `MediaQuery`. Static colors remain authored values. A standalone
+dynamic color subscribes only to the inputs it varies along, so unrelated
+window size or level changes do not rerun its resolution; a theme reads
+brightness, level, contrast and the system accent once for all its colors.
+Nothing in this package installs an elevated level: the dialogs and sheets
+that do in Flutter are not in this catalog, and an application installs one
+over what it presents above its main content.
 
 `retained_colors_follow_contrast_and_explicit_brightness` and
 `authored_and_nested_colors_ignore_outer_contrast` pin retained-tree behavior.
 `explicit_app_brightness_applies_to_live_contrast_colors` checks the palette and
-text roles an app's descendants read during live contrast changes. Elevation
-variants remain stored but unresolved; no interface-level source is implemented.
+text roles an app's descendants read during live contrast changes.
+`palette_constants_resolve_to_flutters_values` holds a sample of the palette to
+Flutter's values, `an_elevated_level_picks_the_elevated_variants` the level's
+selection, its live change and its selective dependency, and
+`a_theme_below_an_elevated_level_resolves_apart` the theme resolution keyed by
+the level.
 
 ### A theme is resolved once per set of inputs and read by field
 
@@ -67,10 +76,11 @@ with its source by mistake.
 
 `CupertinoTheme` keeps the resolutions its readers asked for in a cache its
 view value owns, so a clone of the view shares it. The key is every input
-resolution reads: the effective brightness, the contrast preference and the
-system accent when it applies. Resolution under a key reads nothing else from
-the context, so the key is complete by construction. The cache holds four
-entries and evicts the oldest. Readers under the same inputs share one `Rc`;
+resolution reads: the effective brightness, the interface level, the contrast
+preference and the system accent when it applies. Resolution under a key reads
+nothing else from the context, so the key is complete by construction. The
+cache holds eight entries, the brightness, level and contrast combinations,
+and evicts the oldest. Readers under the same inputs share one `Rc`;
 `CupertinoTheme::of` without an ancestor theme resolves the default afresh.
 The default roles share one process-wide copy of their family names, which is
 immutable data.
@@ -174,3 +184,49 @@ slide and its chrome through `CupertinoApp::router`.
 the window, the announced value, right-to-left order and reduced motion are the indicator's, so
 the two cannot drift apart. `the_control_draws_ios_dots_and_turns_its_pager` pins the look and
 the paging through this package's public entry point.
+
+### A bar's background decides what it obstructs
+
+`CupertinoNavigationBar` and `CupertinoTabBar` implement
+`ObstructingPreferredSizeView`: a bar fully obstructs when its background,
+resolved for the context, is fully opaque. The scaffolds ask on every build,
+so a theme or brightness change that makes the bar translucent moves the
+content under it on the next frame. Under a bar that fully obstructs, the
+content is padded clear of it and the obstructed edge's `MediaQuery` padding
+is consumed; under one that does not, the content runs under the bar and reads
+the bar's height plus the safe-area inset as that edge's padding.
+`CupertinoPageScaffold` takes any implementor and erases it into a
+`BoxedView`; beside it the scaffold keeps a function made for the bar's type
+that finds the bar again in that view and asks it, so the scaffold holds one
+copy of the bar and needs no `Clone` bound. `CupertinoTabScaffold` holds its
+concrete `CupertinoTabBar` and asks it directly.
+
+A translucent bar blurs its backdrop with a sigma-10 Gaussian blur. The
+filter is mounted under every bar and switched off while the background is
+fully opaque, as Flutter's navigation bar keeps a disabled filter: a bar whose
+background crosses full opacity keeps its subtree's shape, so its slots keep
+their elements, a leading button its press fade and focus. Flutter's tab bar
+adds the filter only when translucent; here both bars keep it. Flutter clips
+the filter with a `ClipRect`; FLUI's `BackdropFilter` already covers only its
+child's laid-out box, so the bars add no clip.
+
+The bars' default border is one device pixel: `1 / device_pixel_ratio`
+logical pixels under the ambient `MediaQuery`. Flutter writes width `0.0` for
+a hairline; `flui-painting` paints nothing for a side of width `0.0`. The
+default is a state of the bar's border, resolved in `build`, beside an
+authored border and a removed one.
+
+The navigation bar lays out its slots with a private toolbar delegate:
+`leading` at the start edge, `trailing` at the end, and `middle` centred on
+the full width while it keeps 6 points from both, otherwise moved toward the
+side with room and limited to the space between them. Flutter's
+`NavigationToolbar` keeps that spacing from `leading` only; here it holds on
+both sides.
+
+`the_default_border_is_one_device_pixel`,
+`the_default_border_is_a_hairline_and_border_replaces_it`,
+`the_middle_is_centred_until_it_would_reach_a_side`,
+`a_translucent_bar_blurs_its_backdrop_and_an_opaque_one_does_not`,
+`a_bar_whose_background_crosses_full_opacity_keeps_its_slots_state` and
+`content_runs_under_a_translucent_bar_and_below_an_opaque_one` pin the
+hairline, the layout, the blur and the obstruction.

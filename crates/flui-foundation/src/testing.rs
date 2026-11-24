@@ -2,7 +2,8 @@
 //!
 //! A test that hands a future, a channel or a slot a [`Waker`] and checks how
 //! often it was woken takes it from here instead of writing its own
-//! [`Wake`] implementation.
+//! [`Wake`] implementation; a test that counts what it asks of the heap
+//! installs [`heap::CountingAllocator`].
 //!
 //! ```
 //! use flui_foundation::testing::CountingWaker;
@@ -13,6 +14,8 @@
 //! waker.wake();
 //! assert_eq!(wakes.count(), 2);
 //! ```
+
+pub mod heap;
 
 use std::any::Any;
 use std::fmt;

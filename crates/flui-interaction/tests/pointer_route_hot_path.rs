@@ -1,17 +1,12 @@
 //! Hot-path regression tests for owner-routed pointer delivery.
 
-#![expect(
-    unsafe_code,
-    reason = "the counting `GlobalAlloc` below is an `unsafe impl` whose methods forward to `System`"
-)]
-
-use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::{Arc, Barrier};
 
 use flui_foundation::geometry::Offset;
 use flui_foundation::geometry::Point;
+use flui_foundation::testing::heap::{CountingAllocator, HeapCounts};
 use flui_interaction::events::{PointerEventExt, PointerKind, make_move_event};
 use flui_interaction::pointer::{HitTestEntry, InteractionLane, PointerTarget, RenderId};
 use flui_platform::input::pointer::{
@@ -20,64 +15,20 @@ use flui_platform::input::pointer::{
 use flui_platform::{EventTime, input::keyboard::Modifiers};
 
 thread_local! {
-    /// The allocations made on this thread. The count is per thread because
-    /// the measured code runs on the test's own thread while the harness's
-    /// main thread keeps allocating (its bookkeeping for the test it just
-    /// spawned), and a process-wide count would charge those to the
-    /// measurement. Constant-initialised with no destructor, so reading it
-    /// from the allocator never allocates.
-    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
-    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+    /// This thread's allocation count at the last [`reset_allocations`]. The counts are per
+    /// thread because the measured code runs on the test's own thread while the harness's
+    /// main thread keeps allocating (its bookkeeping for the test it just spawned).
+    static MARK: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Start counting this thread's allocations from zero.
 fn reset_allocations() {
-    ALLOCATIONS.set(0);
+    MARK.set(HeapCounts::now().allocations);
 }
 
-/// The allocations this thread made since [`reset_allocations`].
-fn allocations() -> usize {
-    ALLOCATIONS.get()
-}
-
-fn count_allocation() {
-    // `try_with`: an allocation during the thread's own teardown is not
-    // counted rather than a panic inside the allocator.
-    let _ = ALLOCATIONS.try_with(|count| count.set(count.get() + 1));
-}
-
-struct CountingAllocator;
-
-// SAFETY: This test allocator forwards every allocation operation to
-// `std::alloc::System` with the exact layout/pointer contract it received. The
-// only added behavior is a thread-local counter increment before `alloc`.
-unsafe impl GlobalAlloc for CountingAllocator {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        count_allocation();
-        // SAFETY: Forwarding the caller-provided layout unchanged to the
-        // wrapped system allocator preserves `GlobalAlloc::alloc`'s contract.
-        unsafe { System.alloc(layout) }
-    }
-
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: Forwarding the original pointer/layout pair unchanged to the
-        // wrapped system allocator preserves `GlobalAlloc::dealloc`'s contract.
-        unsafe { System.dealloc(ptr, layout) };
-    }
-
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        count_allocation();
-        // SAFETY: Forwarding the original pointer/layout plus requested size
-        // unchanged to the wrapped system allocator preserves the contract.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-
-    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        count_allocation();
-        // SAFETY: Forwarding the caller-provided layout unchanged to the
-        // wrapped system allocator preserves `GlobalAlloc::alloc_zeroed`.
-        unsafe { System.alloc_zeroed(layout) }
-    }
+/// The allocations this thread made since [`reset_allocations`], a `realloc` counted as one.
+fn allocations() -> u64 {
+    HeapCounts::now().allocations - MARK.get()
 }
 
 #[global_allocator]
@@ -627,7 +578,7 @@ fn measure_route_shape(target_count: usize, shape: RouteShape, history: bool) {
         if !history || !translated {
             assert_eq!(allocations, 0, "scalar and identity cached delivery borrow every source history after setup: shape={shape:?}, targets={target_count}, history={history}");
         } else {
-            assert!(allocations <= target_count * 2, "translated measured and predicted histories need at most one owned allocation each per target: targets={target_count}, allocations={allocations}");
+            assert!(allocations <= u64::try_from(target_count * 2).expect("BUG: a target count fits u64"), "translated measured and predicted histories need at most one owned allocation each per target: targets={target_count}, allocations={allocations}");
         }
         // Localizing nonempty measured and predicted histories requires owned
         // storage; global-only delivery continues to borrow the source event.

@@ -52,6 +52,7 @@ flui-macros = { workspace = true }
 
 # Optional dependencies
 serde = { workspace = true, optional = true }
+dhat = { workspace = true, optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
@@ -85,10 +86,14 @@ path = "tests/main.rs"
 name = "wasm32"
 path = "tests/wasm32.rs"
 
-# Own target: installs a counting `#[global_allocator]`, which is process-wide.
+# Own targets: each installs the counting `#[global_allocator]`, which is process-wide.
 [[test]]
 name = "inspect_allocation"
 path = "tests/inspect_allocation.rs"
+
+[[test]]
+name = "heap_counting"
+path = "tests/heap_counting.rs"
 
 [[bench]]
 name = "geometry_bench"
@@ -99,8 +104,12 @@ default = []
 ## Keep creation sites (`CreationSite`) in release builds; debug builds always keep them.
 creation-site = []
 serde = ["dep:serde"]
-## Test support (ADR-0243): `testing::CountingWaker` and `testing::panicking_waker`.
+## Test support (ADR-0243): `testing::CountingWaker`, `testing::panicking_waker` and the
+## counting global allocator `testing::heap::CountingAllocator`.
 testing = []
+## `testing::heap::CountingAllocator` forwards to DHAT's allocator, which records the stack
+## of each allocation while a profiler runs (`flui-testing`'s `dhat` feature turns it on).
+dhat = ["testing", "dep:dhat"]
 
 [package.metadata.docs.rs]
 all-features = true

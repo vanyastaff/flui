@@ -18,7 +18,8 @@ mod foreign_image;
 
 /// The property bounds the largest block a decode asks for.
 #[global_allocator]
-static ALLOCATOR: foreign_image::LargestAllocation = foreign_image::LargestAllocation;
+static ALLOCATOR: flui_foundation::testing::heap::CountingAllocator =
+    flui_foundation::testing::heap::CountingAllocator;
 
 #[cfg(fuzzing)]
 libfuzzer_sys::fuzz_target!(|bytes: &[u8]| {

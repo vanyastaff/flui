@@ -53,8 +53,9 @@ const PAGE_BARRIER: Color = Color::from_argb(0x1800_0000);
 ///
 /// # Not implemented
 ///
-/// - `CupertinoUserInterfaceLevel`: FLUI has no elevation ambient, so dynamic
-///   colors resolve their base-elevation variant.
+/// - No [`CupertinoUserInterfaceLevel`](crate::CupertinoUserInterfaceLevel)
+///   is installed: without one a subtree is at the base level, the level
+///   Flutter's app installs.
 /// - `DefaultSelectionStyle` is not installed.
 /// - `CupertinoScrollBehavior`: the app installs no `ScrollConfiguration`, so
 ///   scroll views follow `DefaultScrollBehavior`.
