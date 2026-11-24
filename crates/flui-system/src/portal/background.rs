@@ -52,14 +52,17 @@ impl PortalAutostart {
 
 impl AutostartBackend for PortalAutostart {
     fn request(&self, request: AutostartRequest, answer: Resolver<AutostartResult>) {
-        if let Err(error) = self.portal.start() {
-            let _ = answer.resolve(Err(autostart_error(error)));
-            return;
-        }
+        let reservation = match self.portal.reserve() {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                let _ = answer.resolve(Err(autostart_error(error)));
+                return;
+            }
+        };
         let portal = Rc::clone(&self.portal);
         with_parent(self.window.as_ref(), &self.completions, move |parent| {
             let token = portal.token();
-            portal.spawn(move |bus| async move {
+            portal.spawn_reserved(reservation, move |bus| async move {
                 let asked = token.clone();
                 let made = zruntime::unblock(move || options(&request, &asked)).await;
                 let options = match made {

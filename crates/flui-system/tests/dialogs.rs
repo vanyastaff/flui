@@ -1174,6 +1174,78 @@ fn a_save_whose_write_fails_answers_the_systems_failure() {
     assert!(!unwritable.exists());
 }
 
+/// The writes of saves are work off the owner thread, bounded per UI
+/// runtime: while every place is held by a write that cannot end (a named
+/// pipe with no reader), the next save is refused at once, `Unavailable`,
+/// instead of starting another thread; the held writes end as the pipe is
+/// read.
+#[test]
+#[cfg(unix)]
+fn a_save_past_the_runtimes_bound_on_writes_is_refused_at_once() {
+    /// More saves than any bound a runtime keeps.
+    const ATTEMPTS: usize = 64;
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let folder = tempfile::tempdir().expect("a test folder");
+    let fifo = folder.path().join("pipe");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "a named pipe is made");
+    let chosen = SaveLocation::new(PickedFile::try_new(&fifo).expect("an absolute path"), None);
+
+    let mut held = Vec::new();
+    let mut refused = None;
+    for _ in 0..ATTEMPTS {
+        dialogs.answer_next_save(Ok(Some(chosen.clone())));
+        let answered = land(handle.save(SaveRequest::new().contents(b"held".to_vec())));
+        // The chooser's answer, the write's refusal and the caller's answer
+        // each settle at an owner turn; a write that runs answers nothing
+        // until the pipe is read.
+        for _ in 0..8 {
+            turn(&mut host);
+        }
+        if answered.borrow().is_some() {
+            refused = answered.borrow_mut().take();
+            break;
+        }
+        held.push(answered);
+    }
+    // Read the pipe until every held write wrote, whatever the outcome: a
+    // writer that opens after the others closed meets a reader again.
+    let expected = held.len() * b"held".len();
+    let reader = std::thread::spawn(move || {
+        let mut read = 0;
+        while read < expected {
+            read += std::fs::read(&fifo).expect("the pipe is read").len();
+        }
+        read
+    });
+    let Some(refused) = refused else {
+        panic!("{ATTEMPTS} saves started a write each: none was refused");
+    };
+    assert!(
+        !held.is_empty(),
+        "a write holds a place before any is refused"
+    );
+    match refused {
+        Ok(Err(DialogError::Unsupported(unsupported))) => {
+            assert_eq!(
+                unsupported.reason,
+                flui_platform::UnsupportedReason::Unavailable
+            );
+        }
+        other => panic!("the save past the bound is refused: {other:?}"),
+    }
+    for answered in &held {
+        turn_until_landed(&mut host, answered);
+        assert_eq!(*answered.borrow(), Some(Ok(Ok(Some(chosen.clone())))));
+    }
+    assert_eq!(reader.join().expect("the reader ends"), expected);
+}
+
 #[test]
 fn a_save_the_system_wrote_itself_answers_the_file_it_wrote() {
     let (dialogs, plugin) = scripted();

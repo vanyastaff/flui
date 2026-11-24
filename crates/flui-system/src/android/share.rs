@@ -18,8 +18,8 @@
 use flui_platform::launch::ExternalUri;
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
-use super::workers::NotRun;
 use super::{StartAnswer, TOO_MANY_OFFERED, UNNAMED_FAILURE};
+use crate::off_owner::NotRun;
 use crate::share::{ShareCapability, ShareError, ShareRequest, ShareResult};
 
 /// `ENOENT` and `ENOTDIR`, on Linux and so on Android.
@@ -142,15 +142,15 @@ mod provider {
     use flui_platform::capability::{Activity, CompletionSource, Resolver, WindowRef};
 
     use super::super::java::Java;
-    use super::super::workers::Workers;
     use super::{extra_text, not_run, open_shared, start_result, unavailable};
+    use crate::off_owner::OffOwner;
     use crate::share::{ShareBackend, ShareError, ShareRequest, ShareResult};
 
     /// [`ShareBackend`] over `ACTION_SEND`.
     pub(crate) struct AndroidShare {
         activity: Activity,
         java: Arc<Java>,
-        workers: Rc<Workers>,
+        workers: Rc<OffOwner>,
         completions: CompletionSource,
     }
 
@@ -158,7 +158,7 @@ mod provider {
         pub(crate) fn new(
             activity: Activity,
             java: Arc<Java>,
-            workers: Rc<Workers>,
+            workers: Rc<OffOwner>,
             completions: CompletionSource,
         ) -> Self {
             Self {
@@ -254,8 +254,8 @@ mod tests {
     use flui_platform::{SystemFailure, UnsupportedReason};
 
     use super::super::StartAnswer;
-    use super::super::workers::NotRun;
     use super::{common_type, extra_text, file_error, not_a_file, not_run, start_result};
+    use crate::off_owner::NotRun;
     use crate::share::{ShareError, ShareRequest};
 
     /// Several files are typed by what their types share, so the chooser

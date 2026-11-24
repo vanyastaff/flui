@@ -43,10 +43,10 @@ use saf::{JavaPicker, JavaReach};
 pub(crate) use starts::{Started, view};
 
 use super::documents::{self, MAX_NAME_UNITS};
-use super::workers::Workers;
 use super::{CALLBACK_CLASS, DOCUMENTS_CLASS, PROTOCOL};
 use crate::dialog::{FileDialogCapability, MessageBoxCapability, MessageBoxes};
 use crate::grant::{GrantCapability, Grants};
+use crate::off_owner::OffOwner;
 use crate::os::Os;
 use crate::owner::android::native_call::jni_native;
 use crate::providers::{Providers, Provision};
@@ -665,7 +665,7 @@ pub(crate) fn providers() -> Providers {
                 super::launcher::AndroidLauncher::new(
                     activity,
                     java,
-                    ctx.runtime_local::<Workers>(),
+                    OffOwner::of(ctx),
                     ctx.completions().clone(),
                 ),
                 ctx,
@@ -692,7 +692,7 @@ pub(crate) fn providers() -> Providers {
                 super::share::AndroidShare::new(
                     activity,
                     java,
-                    ctx.runtime_local::<Workers>(),
+                    OffOwner::of(ctx),
                     ctx.completions().clone(),
                 ),
                 ctx,
@@ -715,7 +715,7 @@ pub(crate) fn providers() -> Providers {
             Ok::<_, Unsupported>(Grants::new(
                 super::grants::AndroidGrants::new(
                     std::rc::Rc::new(JavaReach(java)),
-                    ctx.runtime_local::<Workers>(),
+                    OffOwner::of(ctx),
                 ),
                 ctx,
             ))

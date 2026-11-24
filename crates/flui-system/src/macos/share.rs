@@ -28,14 +28,14 @@ mod appkit {
     use objc2_foundation::{NSPoint, NSRect, NSRectEdge, NSSize};
 
     use super::super::appkit::ns_window;
-    use crate::apple::queue::WorkQueue;
     use crate::apple::share::{ShareItem, objects, refused, share_checked};
+    use crate::off_owner::OffOwner;
     use crate::share::{ShareBackend, ShareError, ShareRequest, ShareResult};
 
     /// [`ShareBackend`] over the share picker.
     pub(crate) struct MacShare {
         mtm: MainThreadMarker,
-        queue: Rc<WorkQueue>,
+        queue: Rc<OffOwner>,
         completions: CompletionSource,
         /// The picker last shown, kept while its popover may be up.
         shown: Rc<RefCell<Option<Retained<NSSharingServicePicker>>>>,
@@ -44,7 +44,7 @@ mod appkit {
     impl MacShare {
         pub(crate) fn new(
             mtm: MainThreadMarker,
-            queue: Rc<WorkQueue>,
+            queue: Rc<OffOwner>,
             completions: CompletionSource,
         ) -> Self {
             Self {

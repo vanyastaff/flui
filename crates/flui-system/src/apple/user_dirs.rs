@@ -11,7 +11,7 @@
 //! [`UserDir::Videos`] is Movies. A folder the system names but the user
 //! does not have (deleted, never made, or one an iOS container does not
 //! hold) is none too. Each lookup runs off the main thread
-//! (`queue::WorkQueue`), since the home folder may be on a network volume.
+//! (`queue`, bounded by `off_owner`), since the home folder may be on a network volume.
 
 use crate::user_dirs::UserDir;
 
@@ -67,20 +67,20 @@ mod foundation {
     use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
     use objc2_foundation::{NSFileManager, NSSearchPathDirectory, NSSearchPathDomainMask};
 
-    use super::super::queue::WorkQueue;
     use super::super::url_path;
     use super::{Location, SearchPath, location};
+    use crate::off_owner::OffOwner;
     use crate::user_dirs::{
         UserDir, UserDirBackend, UserDirCapability, UserDirError, UserDirResult,
     };
 
     /// [`UserDirBackend`] over Foundation's search paths.
     pub(crate) struct AppleUserDirs {
-        queue: Rc<WorkQueue>,
+        queue: Rc<OffOwner>,
     }
 
     impl AppleUserDirs {
-        pub(crate) fn new(queue: Rc<WorkQueue>) -> Self {
+        pub(crate) fn new(queue: Rc<OffOwner>) -> Self {
             Self { queue }
         }
     }
@@ -146,7 +146,7 @@ mod foundation {
             >(
                 UnsupportedReason::Unavailable
             )));
-            self.queue.run(answer, busy, move || locate(dir));
+            self.queue.dispatch(answer, busy, move || locate(dir));
         }
     }
 }

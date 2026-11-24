@@ -1,7 +1,7 @@
 //! What AppKit's share picker and UIKit's share sheet are handed: the text
 //! as a string, the link as a URL and each file as a file URL, in that
 //! order, so the system offers the services that take all of them. Each
-//! file is checked to exist off the main thread first (`queue::WorkQueue`).
+//! file is checked to exist off the main thread first (`queue`, bounded by `off_owner`).
 
 use std::path::PathBuf;
 
@@ -55,9 +55,9 @@ mod foundation {
     use objc2::runtime::AnyObject;
     use objc2_foundation::{NSArray, NSString, NSURL};
 
-    use super::super::queue::WorkQueue;
     use super::super::{file_url, io_code};
     use super::{ShareItem, file_error, items};
+    use crate::off_owner::OffOwner;
     use crate::share::{ShareCapability, ShareError, ShareRequest, ShareResult};
 
     /// The refusal of a share the system cannot show, for `reason`.
@@ -83,7 +83,7 @@ mod foundation {
     /// `WindowClosed`, each without `show`; a check whose work item
     /// panicked ends the caller's completion as its own ended.
     pub(crate) fn share_checked(
-        queue: &WorkQueue,
+        queue: &OffOwner,
         completions: &CompletionSource,
         window: &WindowRef,
         request: ShareRequest,
@@ -94,7 +94,7 @@ mod foundation {
         let files = request.files;
         let (checked, check) = completions.pending::<ShareResult>();
         let busy = Err(refused(UnsupportedReason::Unavailable));
-        queue.run(check, busy, move || check_files(&files));
+        queue.dispatch(check, busy, move || check_files(&files));
         let window = window.clone();
         let mut waiting = Some((answer, show));
         checked.on_complete(move |outcome| {

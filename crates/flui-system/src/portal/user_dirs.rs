@@ -36,18 +36,19 @@ impl XdgUserDirs {
 
 impl UserDirBackend for XdgUserDirs {
     fn locate(&self, dir: UserDir, answer: Resolver<UserDirResult>) {
-        if self.portal.start().is_err() {
+        let Ok(reservation) = self.portal.reserve() else {
             let _ = answer.resolve(Err(Unsupported::new(UnsupportedReason::Unavailable).into()));
             return;
-        }
-        self.portal.spawn(move |_| async move {
-            let located = zruntime::unblock(move || {
-                locate(dir, &Environment::of_process())
-                    .map(|folder| folder.filter(|folder| is_there(folder)))
-            })
-            .await;
-            let _ = answer.resolve(located);
-        });
+        };
+        self.portal
+            .spawn_reserved(reservation, move |_| async move {
+                let located = zruntime::unblock(move || {
+                    locate(dir, &Environment::of_process())
+                        .map(|folder| folder.filter(|folder| is_there(folder)))
+                })
+                .await;
+                let _ = answer.resolve(located);
+            });
     }
 }
 
