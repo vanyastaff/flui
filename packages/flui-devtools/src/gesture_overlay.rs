@@ -5,14 +5,14 @@
 //! drawn beside the point its contact went down: the contest's sequence and
 //! outcome, then one line per member with its composition path, claim,
 //! verdict and rejection reason, and the deadlines that elapsed for it. A
-//! contest stays until it settles, then fades out over [`FADE`].
+//! contest stays until it settles, then fades out over [`CONTEST_FADE`].
 //!
 //! Toggling the controller rebuilds only the overlay's own layer, never the
 //! application below it. While the overlay is hidden, or not mounted, no
 //! observer is registered on the arena, so it costs the input path nothing.
 //!
 //! ```no_run
-//! use flui_devtools::gesture_overlay::{GestureInspectorOverlay, GestureOverlayController};
+//! use flui_devtools::{GestureInspectorOverlay, GestureOverlayController};
 //! use flui_sdk::widgets::Text;
 //!
 //! let controller = GestureOverlayController::new(true);
@@ -47,7 +47,7 @@ use crate::gesture_inspector::{
 };
 
 /// How long a settled contest stays on screen, fading out.
-pub const FADE: Duration = Duration::from_millis(1500);
+pub const CONTEST_FADE: Duration = Duration::from_millis(1500);
 
 /// Where a contest is drawn relative to its contact's Down position.
 const LABEL_OFFSET: f64 = 12.0;
@@ -351,13 +351,13 @@ fn settled_at(contest: &ContestReport) -> Option<EventTime> {
 }
 
 /// The contest's opacity at `now`: whole while it is undecided, fading over
-/// [`FADE`] once it settled, `None` once faded out.
+/// [`CONTEST_FADE`] once it settled, `None` once faded out.
 fn opacity(contest: &ContestReport, now: EventTime) -> Option<f64> {
     if contest.winner.is_none() && contest.cancelled.is_none() {
         return Some(1.0);
     }
     let elapsed = now.saturating_duration_since(settled_at(contest)?);
-    (elapsed < FADE).then(|| 1.0 - elapsed.as_secs_f64() / FADE.as_secs_f64())
+    (elapsed < CONTEST_FADE).then(|| 1.0 - elapsed.as_secs_f64() / CONTEST_FADE.as_secs_f64())
 }
 
 impl fmt::Debug for OverlayLayerState {

@@ -7,12 +7,12 @@
 //!   [`FrameTimingLayer`], a `tracing` layer that subscribes to the `frame`
 //!   span `UpdateScheduler::drive_frame` opens and the `build`/`layout`/
 //!   `paint`/`compositing` spans the pipeline emits inside it.
-//! - **`timeline`** — [`timeline::Timeline`], an event recorder with Chrome
+//! - **`timeline`** — [`Timeline`], an event recorder with Chrome
 //!   trace export and a bridge from the scheduler's `FrameSnapshot`s.
-//! - **`inspector`** — [`gesture_inspector::GestureInspector`], which reports
+//! - **`inspector`** — [`GestureInspector`], which reports
 //!   what a gesture arena decided per contest through `GestureObserver`, and
-//!   [`gesture_overlay::GestureInspectorOverlay`], a debug overlay that draws
-//!   those contests over the app, and [`inspector::InspectorCounters`], a counting
+//!   [`GestureInspectorOverlay`], a debug overlay that draws
+//!   those contests over the app, and [`InspectorCounters`], a counting
 //!   `TreeObserver` over the ADR-0040 observation seam: mounts, moves,
 //!   rebuilds per cause, unmounts.
 //!
@@ -56,10 +56,10 @@
 //!
 //! - `profiling`: [`Profiler`] and [`FrameTimingLayer`] (`tracing` +
 //!   `tracing-subscriber`).
-//! - `timeline`: [`timeline`] (`flui_sdk::hooks::FrameSnapshot` for the
+//! - `timeline`: [`Timeline`] and [`TimelineEvent`] (`flui_sdk::hooks::FrameSnapshot` for the
 //!   scheduler bridge, `serde` for the exporters).
-//! - `inspector`: [`inspector`] (`flui_sdk::foundation::observe` for the
-//!   seam), [`gesture_overlay`] (`flui_sdk::widgets`) and [`gesture_inspector`] (`flui_sdk::interaction`'s arena
+//! - `inspector`: [`InspectorCounters`] (`flui_sdk::foundation::observe` for the
+//!   seam), [`GestureInspectorOverlay`] (`flui_sdk::widgets`) and [`GestureInspector`] (`flui_sdk::interaction`'s arena
 //!   observation).
 //! - `full`: all of the above, as one name for feature-matrix runs.
 
@@ -74,48 +74,47 @@
 #![deny(missing_docs)]
 #![warn(missing_debug_implementations)]
 
-/// The one capture of frame spans every profiling tool reads.
 #[cfg(feature = "profiling")]
-pub mod capture;
-/// Feeds the profiler from the framework's own frame spans — the only seam
-/// layering permits, since nothing in the framework may depend on this crate.
+mod capture;
+// Feeds the profiler from the framework's own frame spans: the only seam
+// layering permits, since nothing in the framework may depend on this crate.
 #[cfg(feature = "profiling")]
-pub mod frame_timing_layer;
+mod frame_timing_layer;
 #[cfg(feature = "inspector")]
-pub mod gesture_inspector;
+mod gesture_inspector;
 #[cfg(feature = "inspector")]
-pub mod gesture_overlay;
+mod gesture_overlay;
 #[cfg(feature = "inspector")]
-pub mod inspector;
-/// Which spans are frame phases.
+mod inspector;
 #[cfg(feature = "profiling")]
-pub mod phase;
+mod phase;
 #[cfg(feature = "profiling")]
-pub mod profiler;
+mod profiler;
 #[cfg(feature = "timeline")]
-pub mod timeline;
+mod timeline;
 
 #[cfg(feature = "profiling")]
-pub use capture::{Capture, CaptureLayer, CapturedFrame, CapturedSpan, FrameOpening, Partition};
+pub use capture::{
+    Capture, CaptureLayer, CapturedFrame, CapturedSpan, FrameOpening, FrameSpanFilter, Partition,
+};
 #[cfg(feature = "profiling")]
 pub use frame_timing_layer::FrameTimingLayer;
+#[cfg(feature = "inspector")]
+pub use gesture_inspector::{
+    CompositionStep, ContestReport, DEFAULT_CONTEST_CAPACITY, DeadlineReport, GestureInspector,
+    InspectedComposition, InspectedMember, MemberReport, Verdict,
+};
+#[cfg(feature = "inspector")]
+pub use gesture_overlay::{
+    CONTEST_FADE, GestureInspectorOverlay, GestureInspectorOverlayState, GestureOverlayController,
+};
+#[cfg(feature = "inspector")]
+pub use inspector::{InspectorCounters, InspectorSnapshot};
 #[cfg(feature = "profiling")]
 pub use phase::Phase;
 #[cfg(feature = "profiling")]
-pub use profiler::{JankLine, Profiler, ProfilerConfig};
-
-/// Prelude module for convenient imports
-///
-/// ```rust
-/// use flui_devtools::prelude::*;
-/// ```
-pub mod prelude {
-    #[cfg(feature = "profiling")]
-    pub use crate::frame_timing_layer::FrameTimingLayer;
-    #[cfg(feature = "inspector")]
-    pub use crate::inspector::{InspectorCounters, InspectorSnapshot};
-    #[cfg(feature = "profiling")]
-    pub use crate::profiler::{FramePhase, FrameStats, JankLine, Profiler, ProfilerConfig};
-    #[cfg(feature = "timeline")]
-    pub use crate::timeline::{Timeline, TimelineEvent};
-}
+pub use profiler::{
+    FramePhase, FrameStats, JankLine, PhaseGuard, PhaseInfo, Profiler, ProfilerConfig,
+};
+#[cfg(feature = "timeline")]
+pub use timeline::{EventCategory, EventGuard, Timeline, TimelineEvent};

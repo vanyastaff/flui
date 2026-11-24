@@ -6,7 +6,7 @@
 //! emits `tracing` spans and the tools read them. [`CaptureLayer`] is the one reader. It
 //! recognizes a frame, the spans of its presentations and its [`Phase`]s, measures each from its
 //! outermost entered visit, and keeps them in a [`Capture`]. The [`Profiler`]
-//! ([`FrameTimingLayer`]), the [`Timeline`](crate::timeline::Timeline)
+//! ([`FrameTimingLayer`]), the [`Timeline`](crate::Timeline)
 //! and the Chrome/Perfetto export read that capture; none of them has a recorder of its own for
 //! framework spans.
 //!

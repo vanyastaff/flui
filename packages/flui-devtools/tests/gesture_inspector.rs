@@ -9,9 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_devtools::gesture_inspector::{
-    ContestReport, GestureInspector, InspectedMember, MemberReport, Verdict,
-};
+use flui_devtools::{ContestReport, GestureInspector, InspectedMember, MemberReport, Verdict};
 use flui_sdk::foundation::ManualClock;
 use flui_sdk::foundation::geometry::Offset;
 use flui_sdk::interaction::{
@@ -24,7 +22,7 @@ use flui_testing::recording::{
 };
 use flui_testing::replay::{PointerScript, TouchScript};
 
-use flui_devtools::gesture_overlay::{GestureInspectorOverlay, GestureOverlayController};
+use flui_devtools::{GestureInspectorOverlay, GestureOverlayController};
 use flui_sdk::foundation::RebuildReason;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
