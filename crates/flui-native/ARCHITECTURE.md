@@ -222,7 +222,8 @@ trait depends on `flui-platform` instead.
   `owner::signal` the coalesced owner turns and quit admission, `owner::slot`
   the owner-thread storage for a value that is not `Send`, and
   `owner::panic_boundary` the containment a panic meets before it reaches the
-  operating system (`os_entry`, the one boundary of every OS entry, below),
+  operating system (`os_entry`, `flui_foundation::panic`'s one boundary of
+  every OS entry of FLUI, which the capability crates call too, below),
   `owner::call_point` the one point where the
   platform calls a handler, `owner::app_delivery` what a loop delivers to the
   application's handler, `owner::window_delivery` what a window delivers to
@@ -1198,10 +1199,11 @@ trait depends on `flui-platform` instead.
   one call of `os_entry`. `wasm_bindgen` closures are
   out of that rule because wasm32 aborts on panic,
   android-activity's procedures contain their own, and `flui-hot-reload`'s
-  plugin ABI is outside this crate. Tests: `owner::panic_boundary::tests` (the
-  first failure is logged before the answer, with the entry's arguments, and a
-  contained step with its text; a panicking log stays inside;
+  plugin ABI is outside this crate. Tests: `flui-foundation`'s `os_boundary`
+  module (the first failure is logged before the answer, with the entry's
+  arguments; a panicking log stays inside;
   `contained_ivars_keep_a_destructors_panic_inside_the_boundary`),
+  `owner::panic_boundary::tests` (a contained step is logged with its text),
   `a_failing_subscriber_is_logged_and_a_session_end_still_granted`,
   `a_panicking_listener_stays_inside_its_handler` (AccessKit, Windows and
   Linux), the TSF row `a_tsf_call_failing_past_its_poisoning_leaves_no_depth`

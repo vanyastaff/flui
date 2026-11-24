@@ -159,7 +159,7 @@ mod foundation {
     use crate::apple::content_types::{ContentFilter, HasContentTypes, Judged, NameRule};
     use crate::apple::{error_code, failure, url_path};
     use crate::dialog::{DialogError, OpenResult, PickedFile, Picks};
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
+    use flui_foundation::panic::{AfterPanic, os_entry};
 
     /// A picked document's security-scoped access, held while this lives:
     /// started when it is made, stopped when it drops. A URL in the

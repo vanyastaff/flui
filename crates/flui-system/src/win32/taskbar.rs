@@ -42,8 +42,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{BOOL, HSTRING, PCSTR, w};
 
 use super::{Owner, os_code};
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::taskbar::{EntryState, Fraction, Honoured, Progress, TaskbarBackend};
+use flui_foundation::panic::{AfterPanic, os_entry};
 
 /// The scale `ITaskbarList3` reports progress against.
 const PROGRESS_TOTAL: u64 = 10_000;

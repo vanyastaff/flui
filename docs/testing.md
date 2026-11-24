@@ -186,7 +186,7 @@ compiler reports the expectation left behind.
 
 `std::panic::catch_unwind` is a disallowed method in `clippy.toml` (ADR-0303 §6): user code runs
 through `flui_foundation::panic` (`commit`, `FirstPanic`, ADR-0287) and an OS entry through
-`owner::panic_boundary::os_entry`. A production site that still catches by hand carries
+`flui_foundation::panic::os_entry`. A production site that still catches by hand carries
 `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its `let` or expression
 statement, or on its function, never on a file or module; the primitives carry one that names them
 as the boundary. Test code is exempt per crate, by `#![cfg_attr(test, allow(..))]` on the crate

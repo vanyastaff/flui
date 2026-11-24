@@ -527,10 +527,10 @@ mod appkit {
     use super::{
         Binding, HotKeyNumber, HotKeySystem, HotKeyTable, KeyLayout, bind, layout_changed, unbind,
     };
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::shortcuts::{
         Shortcut, ShortcutBackend, ShortcutError, ShortcutEvent, ShortcutFeed, ShortcutHold,
     };
+    use flui_foundation::panic::{AfterPanic, os_entry};
 
     /// The last hot key number handed out in the process, one domain since
     /// every handler on the application target hears every hot key. Only

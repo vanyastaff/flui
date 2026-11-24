@@ -31,11 +31,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::w;
 
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::shortcuts::{
     BoundShortcut, Shortcut, ShortcutBackend, ShortcutError, ShortcutEvent, ShortcutFeed,
     ShortcutHold, ShortcutId, Trigger, TriggerKey, function_key,
 };
+use flui_foundation::panic::{AfterPanic, os_entry};
 
 /// The highest id an application's hot key may have.
 const MAX_HOTKEY_ID: i32 = 0xBFFF;
