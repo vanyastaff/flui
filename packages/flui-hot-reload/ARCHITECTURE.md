@@ -196,3 +196,21 @@ a bounded child process. It calls and drops an old image-defined callback after
 registration retirement and replacement, then verifies subsequent dispatch and
 callback retirement. This test executes the actual loader and plugin code, rather
 than inspecting an address or reproducing a retention predicate.
+
+### A worker's rebuild requests reach the host through its init
+
+A worker `cdylib` links its own copy of this crate, statics included, so the
+rebuild slot its `request_rebuild` reads is not the one `WorkerReloadHook`
+registered the host's hook in. `flui_worker_init` therefore takes the host's
+entry (`HostRequestRebuildFn`) beside the registration callback, and
+`hot_reload_worker!` binds it into the worker image's slot before the worker's
+own init runs. A slot with a hook of its own runs that hook; a slot with only
+the host's entry forwards to it. The host's entry runs only its own image's
+hook, so an image handed its own entry cannot forward in a loop. The entry is
+`extern "C-unwind"`: a panicking hook unwinds into the worker's caller.
+Changing a generated symbol's signature changes `SYMBOL_REVISION` in the ABI
+token, so an image built before the change is refused at load.
+
+`a_worker_images_rebuild_request_runs_the_hosts_hook`
+(`examples/hot_reload_lifecycle_fixture`) loads the cargo-built fixture as a
+worker, calls the image's own `request_rebuild` and checks the host's hook ran.

@@ -20,6 +20,32 @@ pub const DEFAULT_FINGERPRINT: u64 = 0;
 /// reloadable build functions without touching dylib-local statics.
 pub type RegisterWorkerBuildFn = extern "C" fn(fingerprint: u64, build: *const ());
 
+/// Host-side entry passed into `flui_worker_init` so the worker's
+/// `request_rebuild` reaches the hook the host registered: the worker image's
+/// own copy of this crate has a rebuild slot of its own, which no host hook
+/// is ever registered in. `C-unwind`, so a panicking hook unwinds into the
+/// worker's caller instead of aborting.
+pub type HostRequestRebuildFn = extern "C-unwind" fn();
+
+/// The entry this host hands a worker: the rebuild hook registry with the
+/// `app-plugin` feature, otherwise a warning that this host has none.
+fn host_request_rebuild_fn() -> HostRequestRebuildFn {
+    #[cfg(feature = "app-plugin")]
+    {
+        crate::dispatch::host_request_rebuild
+    }
+    #[cfg(not(feature = "app-plugin"))]
+    {
+        extern "C-unwind" fn no_rebuild_registry() {
+            tracing::warn!(
+                "a worker asked for a rebuild, but this host is built without \
+                 flui-hot-reload's `app-plugin` feature, which holds the rebuild hook"
+            );
+        }
+        no_rebuild_registry
+    }
+}
+
 static WORKER_BUILDS: OnceLock<Mutex<BTreeMap<u64, BuildPtr>>> = OnceLock::new();
 
 fn worker_builds() -> &'static Mutex<BTreeMap<u64, BuildPtr>> {
@@ -116,7 +142,7 @@ pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
         .map(|slot| slot.0)
 }
 
-type WorkerInitFn = extern "C" fn(RegisterWorkerBuildFn);
+type WorkerInitFn = extern "C" fn(RegisterWorkerBuildFn, HostRequestRebuildFn);
 type WorkerVersionFn = extern "C" fn() -> u32;
 type WorkerFingerprintFn = extern "C" fn() -> u64;
 type WorkerAbiTokenFn = extern "C" fn() -> u64;
@@ -225,7 +251,7 @@ impl WorkerPlugin {
                 .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state");
             *session = Some(Vec::new());
         }
-        (self.init_fn)(host_register_fn());
+        (self.init_fn)(host_register_fn(), host_request_rebuild_fn());
         let registered_now = REGISTRATION_SESSION
             .lock()
             .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")

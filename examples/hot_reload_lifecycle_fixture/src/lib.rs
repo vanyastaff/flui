@@ -52,3 +52,21 @@ static TICK: AtomicU32 = AtomicU32::new(0);
 pub extern "C" fn fixture_tick() -> u32 {
     TICK.fetch_add(1, Ordering::SeqCst) + 1
 }
+
+/// The worker family beside the app family, so the lifecycle test can load
+/// this image as a worker too. It registers no build function: the test
+/// reads only what `flui_worker_init` binds.
+fn fixture_worker_init(_register: flui_hot_reload::RegisterWorkerBuildFn) {}
+
+flui_hot_reload::hot_reload_worker!(fixture_worker_init);
+
+/// Calls this image's own copy of `flui_hot_reload::request_rebuild`, as a
+/// worker's gesture handler does.
+#[expect(
+    unsafe_code,
+    reason = "`#[unsafe(no_mangle)]` exports the symbol the lifecycle test resolves with `dlsym`"
+)]
+#[unsafe(no_mangle)]
+pub extern "C-unwind" fn fixture_request_rebuild() {
+    flui_hot_reload::request_rebuild();
+}

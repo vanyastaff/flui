@@ -3,6 +3,12 @@
 //! Worker crates register reloadable `build()` bodies via `flui_worker_init`.
 //! The host retains a [`RebuildHookRegistration`] so gesture handlers inside
 //! the worker can schedule a frame without linking `flui-app`.
+//!
+//! A worker `cdylib` links its own copy of this crate, statics included, so
+//! the slot its [`request_rebuild`] reads is not the one the host registered
+//! its hook in. `flui_worker_init` therefore hands the worker the host's
+//! entry ([`HostRequestRebuildFn`]), and the worker image's slot forwards to
+//! it whenever no hook is registered in that image itself.
 
 use std::sync::{
     Arc, LazyLock,
@@ -12,12 +18,16 @@ use std::sync::{
 use flui_sdk::view::BuildContext;
 use parking_lot::Mutex;
 
+use crate::worker::HostRequestRebuildFn;
+
 type RebuildHook = Arc<dyn Fn() + Send + Sync + 'static>;
 
 #[derive(Default)]
 struct RebuildHookSlot {
     generation: u64,
     hook: Option<RebuildHook>,
+    /// In a worker image, the host's entry its `flui_worker_init` received.
+    host: Option<HostRequestRebuildFn>,
 }
 
 static NEXT_HOOK_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -104,14 +114,41 @@ fn register_request_rebuild_with_counter(
 
 /// Ask the host to rebuild dirty elements on the next frame.
 ///
-/// No-op with a warning when the host has not registered a hook yet.
+/// In the host, this runs the registered hook. In a worker image, which has
+/// no hook of its own, it calls the host's entry that `flui_worker_init`
+/// handed over. No-op with a warning when neither is there yet.
 pub fn request_rebuild() {
+    let (hook, host) = {
+        let slot = REQUEST_REBUILD.lock();
+        (slot.hook.clone(), slot.host)
+    };
+    match (hook, host) {
+        (Some(hook), _) => hook(),
+        (None, Some(host)) => host(),
+        (None, None) => {
+            tracing::warn!("flui_hot_reload::request_rebuild called before host registered a hook");
+        }
+    }
+}
+
+/// The host's entry a worker image's [`request_rebuild`] forwards to. It runs
+/// only the hook registered in this image, never a forward, so an image that
+/// is handed its own entry cannot call itself in a loop.
+pub(crate) extern "C-unwind" fn host_request_rebuild() {
     let hook = REQUEST_REBUILD.lock().hook.clone();
     if let Some(hook) = hook {
         hook();
     } else {
-        tracing::warn!("flui_hot_reload::request_rebuild called before host registered a hook");
+        tracing::warn!("a worker asked for a rebuild before the host registered a hook");
     }
+}
+
+/// Makes this image's [`request_rebuild`] forward to the host's entry.
+/// `hot_reload_worker!`'s `flui_worker_init` calls it before the worker's own
+/// init; `#[doc(hidden)]`, never named outside this crate's macros.
+#[doc(hidden)]
+pub fn forward_rebuild_requests_to(host: HostRequestRebuildFn) {
+    REQUEST_REBUILD.lock().host = Some(host);
 }
 
 /// Context passed from the host-owned `ViewState::build` into worker code.

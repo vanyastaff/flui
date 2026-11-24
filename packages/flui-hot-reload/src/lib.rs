@@ -255,13 +255,19 @@ pub use hook::{ScenePluginHook, WorkerReloadHook};
 pub use host::{PluginKind, ScenePlugin};
 #[cfg(not(target_arch = "wasm32"))]
 pub use worker::{
-    RegisterWorkerBuildFn, WorkerPlugin, WorkerPollOutcome, WorkerReloadDriver,
-    get_worker_build_ptr, host_register_fn, worker_artifact_stamp,
+    HostRequestRebuildFn, RegisterWorkerBuildFn, WorkerPlugin, WorkerPollOutcome,
+    WorkerReloadDriver, get_worker_build_ptr, host_register_fn, worker_artifact_stamp,
 };
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "app-plugin"))]
 pub use dispatch::{
     RebuildHookRegistration, WorkerBuildEnv, register_request_rebuild, request_rebuild,
 };
+
+// Called by `hot_reload_worker!`'s generated `flui_worker_init` through
+// `$crate`. `#[doc(hidden)]`, never named outside this crate's own macros.
+#[cfg(all(not(target_arch = "wasm32"), feature = "app-plugin"))]
+#[doc(hidden)]
+pub use dispatch::forward_rebuild_requests_to as __private_forward_rebuild_requests_to;
 pub use engine::{HotReloadOutcome, HotReloadTier};
 pub use strategy::ReloadStrategy;
