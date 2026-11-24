@@ -122,6 +122,22 @@ fn component_contracts() {
             button::disabled_button_announces_disabled,
         ),
         (
+            "button::the activation key presses a focused button and a disabled one takes no focus",
+            button::the_activation_key_presses_a_focused_button_and_a_disabled_one_takes_no_focus,
+        ),
+        (
+            "button::the press fade follows the held contact and a cancelled press restores it",
+            button::the_press_fade_follows_the_held_contact_and_a_cancelled_press_restores_it,
+        ),
+        (
+            "button::a contactless activation runs the handler without a fade",
+            button::a_contactless_activation_runs_the_handler_without_a_fade,
+        ),
+        (
+            "button::a plain button paints its resolved colour with its own alpha",
+            button::a_plain_button_paints_its_resolved_colour_with_its_own_alpha,
+        ),
+        (
             "nav_bar::leading middle and trailing all mount",
             nav_bar::leading_middle_and_trailing_all_mount,
         ),
@@ -183,6 +199,18 @@ fn theme_and_color_resolution() {
         (
             "cupertino_app::a live brightness republish re resolves the theme",
             cupertino_app::a_live_brightness_republish_re_resolves_the_theme,
+        ),
+        (
+            "cupertino_app::a nested media query resolves the app theme below it",
+            cupertino_app::a_nested_media_query_resolves_the_app_theme_below_it,
+        ),
+        (
+            "theme::every text role set on the theme reaches a reader",
+            theme::every_text_role_set_on_the_theme_reaches_a_reader,
+        ),
+        (
+            "theme::readers under one context share one resolution",
+            theme::readers_under_one_context_share_one_resolution,
         ),
     ]);
 }

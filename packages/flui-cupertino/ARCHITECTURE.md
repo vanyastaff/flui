@@ -7,15 +7,25 @@ and callbacks are owner-local; the package does not own a reactive graph.
 
 ### Button fade ownership follows its presentation clock
 
-The button owns one controller across both legs of its tap fade. A scope
-replacement transfers that owner without restarting its displayed sample.
-The press leg's completion starts the release once; disposal withdraws the
-active owner before retained callbacks can attempt another run.
+The button owns one controller, made at the first press that fades, across
+both legs of its press fade. The fade follows the press: the tap's down
+holds the button and its up or cancel releases it. A leg that is running is
+never cut short; the leg that completes starts the next only when the held
+side changed meanwhile, and a leg that ends cancelled starts nothing, so a
+press never starts a stale release. A key activation or an assistive click
+has no contact: it runs the handler and leaves the opacity as it is. A
+scope replacement transfers the owner without restarting its displayed
+sample; disposal withdraws the active owner, whose running leg then ends
+cancelled.
 
 `an_active_button_press_fade_migrates_and_retires` and
 `an_active_button_release_fade_migrates_and_retires` exercise pointer taps,
 mid-leg registry replacement, continuous compositing alpha, progress from the
 new clock, resting frame demand and unmount during another active fade.
+`the_press_fade_follows_the_held_contact_and_a_cancelled_press_restores_it`
+holds, releases, moves out and cancels a press, and
+`a_contactless_activation_runs_the_handler_without_a_fade` clicks it through the
+accessibility tree.
 
 ### Typography defaults select numeric growth independently of authored fonts
 
@@ -32,17 +42,46 @@ UIKit font identity, optical sizing or native execution.
 
 ### Palette resolution shares brightness precedence and contrast dependencies
 
-Standalone dynamic colors, theme materialization and text roles use one private
-color resolver. A theme's explicit brightness wins even before that theme is
-installed as an ancestor; contrast follows the nearest `MediaQuery`. Static
-colors remain authored values. Dynamic colors subscribe only to relevant media
-fields, so unrelated window size changes do not rerun their resolution.
+Standalone dynamic colors, theme resolution and text roles pick a variant
+through one private color resolver, from the effective brightness and the
+contrast preference. A theme's explicit brightness wins even before that theme
+is installed as an ancestor; contrast follows the nearest `MediaQuery`. Static
+colors remain authored values. A standalone dynamic color subscribes only to
+the media fields it varies along, so unrelated window size changes do not rerun
+its resolution; a theme reads brightness, contrast and the system accent once
+for all its colors.
 
 `retained_colors_follow_contrast_and_explicit_brightness` and
 `authored_and_nested_colors_ignore_outer_contrast` pin retained-tree behavior.
-`explicit_app_brightness_applies_to_live_contrast_colors` checks the app's
-published palette and text roles during live contrast changes. Elevation
+`explicit_app_brightness_applies_to_live_contrast_colors` checks the palette and
+text roles an app's descendants read during live contrast changes. Elevation
 variants remain stored but unresolved; no interface-level source is implemented.
+
+### A theme is resolved once per set of inputs and read by field
+
+`CupertinoThemeData` is what an author writes, each `None` the iOS default;
+`ResolvedCupertinoTheme` is what widgets read, its colors concrete and its nine
+text roles built. They are two types because a concrete color is a different
+type from a dynamic one: a resolved theme cannot be resolved again or compared
+with its source by mistake.
+
+`CupertinoTheme` keeps the resolutions its readers asked for in a cache its
+view value owns, so a clone of the view shares it. The key is every input
+resolution reads: the effective brightness, the contrast preference and the
+system accent when it applies. Resolution under a key reads nothing else from
+the context, so the key is complete by construction. The cache holds four
+entries and evicts the oldest. Readers under the same inputs share one `Rc`;
+`CupertinoTheme::of` without an ancestor theme resolves the default afresh.
+The default roles share one process-wide copy of their family names, which is
+immutable data.
+
+`CupertinoApp` publishes the authored data, not a resolution of it, so a nested
+`MediaQuery` that changes brightness or contrast changes the theme below it.
+
+`readers_under_one_context_share_one_resolution`,
+`a_nested_media_query_resolves_the_app_theme_below_it` and
+`every_text_role_set_on_the_theme_reaches_a_reader` pin the sharing, the nested
+resolution and the nine settable roles.
 
 ### Event callbacks borrow the originating dispatch's write context
 
@@ -52,8 +91,9 @@ forward their context without opening a new writer. `CupertinoTabScaffold`
 updates its controller before forwarding the same context and selected
 index to the caller. Tab builders remain read-only queries.
 
-The button's press animation starts before its callback. The integration
-test `tap_callback_writes_a_signal_and_rebuilds_its_reader` drives the mounted
+The button's press animation starts before its callback, and the callback
+runs with no borrow of the button's state held. The integration test
+`tap_callback_writes_a_signal_and_rebuilds_its_reader` drives the mounted
 button through pointer dispatch and checks the signal and subsequent rebuild.
 
 ### Tab selection uses the current bar's bounds
@@ -82,10 +122,26 @@ behaviours and its semantics are one interactive node (ADR-0322 §1), as
 that enabled state, including for disabled buttons whose text label merges
 into the node, and its press group offers the tap as the click and the long
 press as the context menu. No separate accessibility state is introduced.
+The same node hosts the button's focus node, draws the inherited focus ring
+and binds `ActivateIntent` and `ButtonActivateIntent` to the press, as
+`InkWell` does; the switch keeps a disabled button from taking focus and
+leaves its bindings declared and switched off.
 
 The `component_contracts` family checks the labelled tap button,
 `long_press_only_button_announces_enabled`, and
-`disabled_button_announces_disabled` through the emitted accessibility tree.
+`disabled_button_announces_disabled` through the emitted accessibility tree,
+and `the_activation_key_presses_a_focused_button_and_a_disabled_one_takes_no_focus`
+through a `Tester`'s Tab and Enter.
+
+### A button's fill keeps its resolved alpha
+
+A plain or filled button paints its colour as the ambient brightness and
+contrast resolve it, alpha included; only a tinted button replaces the alpha,
+with its fixed light or dark opacity. Flutter multiplies the fill by the
+unresolved colour's opacity, the light variant's, which paints a dark-mode
+`SEPARATOR` fill at alpha 73 instead of 153.
+`a_plain_button_paints_its_resolved_colour_with_its_own_alpha` checks both
+brightnesses.
 
 ### The app plays the shared parallax slide for its routes
 

@@ -278,6 +278,7 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
     fn build(&self, view: &CupertinoTabScaffold, ctx: &dyn BuildContext) -> impl IntoView {
         let current_index = view.controller.index();
         let tab_count = view.tab_bar.items().len();
+        let theme = CupertinoTheme::of(ctx);
 
         // The bar may change size while keeping its controller. Validate the
         // selection against this build's count; an invalid configuration must
@@ -330,7 +331,7 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
         // double-pad.
         if !view.resize_to_avoid_bottom_inset || tab_bar_height > media.view_insets.bottom {
             let bottom_padding = tab_bar_height + media.padding().bottom;
-            if view.tab_bar.opaque(ctx) {
+            if view.tab_bar.opaque(&theme, ctx) {
                 // Opaque: directly stop content higher, and the bar's own
                 // height is fully consumed out of the republished padding.
                 content_padding_bottom = bottom_padding;
@@ -350,8 +351,7 @@ impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
 
         let background = view
             .background_color
-            .unwrap_or_else(|| CupertinoTheme::of(ctx).scaffold_background_color())
-            .resolve(ctx);
+            .map_or(theme.scaffold_background_color, |color| color.resolve(ctx));
 
         // The tab bar's own `current_index`/`on_tap` are overridden here via
         // `Clone` + builder methods; the tab bar has no `copy_with`. The

@@ -19,9 +19,9 @@ use flui_sdk::widgets::{
     PreferredSizeView, Row, Semantics, SizedBox, Text,
 };
 
-use crate::CupertinoTheme;
 use crate::colors::{CupertinoColor, CupertinoColors, CupertinoDynamicColor};
 use crate::nav_bar::HAIRLINE_BORDER_WIDTH;
+use crate::{CupertinoTheme, ResolvedCupertinoTheme};
 
 /// The standard iOS 10 tab bar height (`_kTabBarHeight`).
 pub(crate) const TAB_BAR_HEIGHT: f64 = 50.0;
@@ -279,16 +279,19 @@ impl CupertinoTabBar {
         self.on_tap.clone()
     }
 
-    /// Whether the resolved background is fully opaque. Consumed by
-    /// [`crate::CupertinoTabScaffold`]'s content-padding math.
+    /// Whether the background resolved under `theme` is fully opaque, which
+    /// [`crate::CupertinoTabScaffold`] reads to decide whether content
+    /// extends under the bar. `theme` is the [`CupertinoTheme::of`] of
+    /// `ctx`, which the caller already holds.
     #[must_use]
-    pub fn opaque(&self, ctx: &dyn BuildContext) -> bool {
-        let theme = CupertinoTheme::of(ctx);
-        let background = self
-            .background_color
-            .unwrap_or_else(|| theme.bar_background_color())
-            .resolve(ctx);
-        background.is_opaque()
+    pub fn opaque(&self, theme: &ResolvedCupertinoTheme, ctx: &dyn BuildContext) -> bool {
+        self.background(theme, ctx).is_opaque()
+    }
+
+    /// The authored background resolved against `ctx`, or the theme's.
+    fn background(&self, theme: &ResolvedCupertinoTheme, ctx: &dyn BuildContext) -> Color {
+        self.background_color
+            .map_or(theme.bar_background_color, |color| color.resolve(ctx))
     }
 }
 
@@ -304,18 +307,14 @@ impl std::fmt::Debug for CupertinoTabBar {
 impl StatelessView for CupertinoTabBar {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let theme = CupertinoTheme::of(ctx);
-        let background = self
-            .background_color
-            .unwrap_or_else(|| theme.bar_background_color())
-            .resolve(ctx);
+        let background = self.background(&theme, ctx);
         let inactive = self.inactive_color.resolve(ctx);
         let active = self
             .active_color
-            .unwrap_or_else(|| theme.primary_color())
-            .resolve(ctx);
+            .map_or(theme.primary_color, |color| color.resolve(ctx));
         let bottom_inset = MediaQuery::maybe_of(ctx).map_or(0.0, |data| data.padding().bottom);
 
-        let tab_label_style = theme.text_theme().tab_label_text_style();
+        let tab_label_style = &theme.text_theme.tab_label_text_style;
 
         let item_views: Vec<BoxedView> = self
             .items

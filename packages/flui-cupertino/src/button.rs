@@ -1,19 +1,18 @@
-//! The iOS-style button and its tap-fade sequence.
+//! The iOS-style button and its press fade.
 //!
-//! Implementation notes: the press fade's controller is made at the first tap
-//! that fades and chained leg to leg through `AnimationRunFuture`
-//! (ADR-0064); the button's behaviours and semantics are one interactive
-//! node (ADR-0322 §1).
+//! Implementation notes: the press fade's controller is made at the first
+//! press that fades, and each leg starts the next through its
+//! `AnimationRunFuture` (ADR-0064); the button's behaviours, focus,
+//! activation bindings and semantics are one interactive node (ADR-0322 §1).
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_sdk::animation::Animatable;
 
 use flui_sdk::animation::{
-    Animation, AnimationController, AnimationRunFuture, CurvedAnimation, DrivenController, Tween,
-    Vsync, curves,
+    Animation, AnimationController, CurvedAnimation, DrivenController, Tween, Vsync, curves,
 };
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::Alignment;
@@ -25,14 +24,15 @@ use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::environment::VsyncScope;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, StatefulView, ViewState};
-use flui_sdk::widgets::__private::node::{ControlTap, Description, InteractiveNode};
+use flui_sdk::widgets::__private::node::{ActionBinding, ControlTap, Description, InteractiveNode};
 use flui_sdk::widgets::prelude::BoxConstraints;
 use flui_sdk::widgets::{
-    Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, Padding,
+    Action, ActionOutcome, ActivateIntent, Align, ButtonActivateIntent, ConstrainedBox,
+    DecoratedBox, DefaultTextStyle, FadeTransition, Padding,
 };
 
-use crate::CupertinoTheme;
 use crate::colors::{CupertinoColor, CupertinoColors};
+use crate::{CupertinoTheme, ResolvedCupertinoTheme};
 
 /// A user tap/long-press handler. `Rc`-based (owner-local, per ADR-0027) —
 /// matches the callback shape of the node's `ControlTap::on_tap`.
@@ -114,24 +114,48 @@ enum ButtonFillStyle {
 /// without one it paints its disabled colors and announces itself as a
 /// disabled button.
 ///
-/// # Tap fade
+/// # Focus and activation
 ///
-/// Flutter's `CupertinoButton` starts the opacity fade when the pointer goes
-/// down and reverses it on release, or when the pointer moves past the tap
-/// slop. This button runs the whole sequence on the recognized tap instead:
-/// it animates toward [`pressed_opacity`](Self::pressed_opacity) over 120 ms
-/// (`curves::EASE_IN_OUT_CUBIC_EMPHASIZED`), calls the handler, and once
-/// that fade completes animates back to full opacity over 180 ms
-/// (`curves::EASE_OUT_CUBIC`). Each tap shows a brief flash rather than a
-/// fade that lasts as long as the pointer is held, and a drag past the slop
-/// does not cancel a fade, because the fade starts only after the tap is
-/// recognized.
+/// An enabled button takes keyboard focus and draws the inherited focus ring
+/// while that focus is shown. Enter, Space or Select on the focused button
+/// (an `ActivateIntent` or a `ButtonActivateIntent`) presses it, as Flutter's
+/// `FocusableActionDetector` with its `ActivateIntent` action does
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/button.dart:455`).
+/// A disabled button does not take focus, and an activation intent stops at
+/// it.
+///
+/// # Press fade
+///
+/// The fade follows the press, as Flutter's `_handleTapDown`,
+/// `_handleTapUp`, `_handleTapCancel` and `_animate` do
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/button.dart:372`).
+/// When the tap recognizer shows the press, the button animates toward
+/// [`pressed_opacity`](Self::pressed_opacity) over 120 ms
+/// (`curves::EASE_IN_OUT_CUBIC_EMPHASIZED`); when the contact lifts or the
+/// tap is cancelled, it animates back to full opacity over 180 ms
+/// (`curves::EASE_OUT_CUBIC`). A leg that is running is never cut short: the
+/// press that ends before its fade-out completes fades back in once it has.
+/// The handler runs on the recognized tap, after the release has begun.
+///
+/// A key activation or an assistive-technology click has no contact: it
+/// calls the handler and leaves the opacity as it is, as Flutter's
+/// `_handleTap` does
+/// (`flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/button.dart:419`).
+///
+/// A contact that moves past the tap slop cancels the tap, so the button
+/// fades back in and does not call the handler. Flutter's recognizer keeps
+/// such a tap (`postAcceptSlopTolerance: null`) and fades out again when
+/// the contact returns over the button; here the press ends at the slop.
 ///
 /// # Not implemented
 ///
-/// - The button does not take keyboard focus, so it has no focus ring
-///   (`RoundedSuperellipseBorder` outline), `autofocus` or focus-change
-///   callback.
+/// - No `autofocus`, `focus_node` or focus-change callback: the catalog's
+///   interactive node takes none from a package.
+/// - The focus ring is the inherited ring style, not Flutter's
+///   `RoundedSuperellipseBorder` outline in a colour derived from the fill.
+/// - A button with only a long-press handler shows no press fade: a tap
+///   family of its own would offer assistive technology a click that does
+///   nothing.
 /// - It resolves no mouse cursor; FLUI has no `MouseCursor` type to resolve.
 /// - It does not wrap its child in an `IconTheme` sized from the text style.
 ///
@@ -325,54 +349,41 @@ impl std::fmt::Debug for CupertinoButton {
     }
 }
 
-/// Resolves the background fill.
+/// Resolves the background fill: the authored colour, or the theme's primary
+/// colour for a tinted or filled button without one.
 ///
-/// ## Why the `Plain`/`Filled` alpha comes from `view.color`, not the resolved color
-///
-/// For `Tinted`, the multiplier is a fixed light/dark constant — no
-/// surprises. For `Plain`/`Filled`, the alpha is read from the **original,
-/// never-resolved** `view.color`, not from the resolved color. A dynamic
-/// color's own alpha is that of its light/normal variant; resolving it
-/// against the ambient brightness yields a separate value. So this
-/// multiplier is always the color's light-variant alpha, even when the
-/// background itself resolved to the dark variant.
-///
-/// This looks like a bug (a dark-mode background painted with the light
-/// alpha) but is deliberate: `CupertinoColors::SEPARATOR` is alpha 73 light /
-/// 153 dark, and a `SEPARATOR`-colored `Plain`/`Filled` button under a Dark
-/// theme renders at alpha 73. The alpha is a direct channel copy
-/// (`Color::with_alpha`, `u8`) rather than an `f64` opacity round trip — same
-/// source byte, no float-precision risk.
+/// A plain or filled button paints that colour as it resolved, its alpha
+/// included, so a dynamic colour keeps the alpha of the variant the ambient
+/// brightness and contrast pick: `CupertinoColors::SEPARATOR` paints alpha 73
+/// under a light theme and 153 under a dark one. A tinted button replaces
+/// the alpha with its fixed light or dark opacity. Flutter multiplies a
+/// plain or filled fill by the unresolved colour's opacity, the light
+/// variant's (`flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/button.dart:480`),
+/// which paints a dark-mode fill with the light alpha; the resolved colour
+/// is what the author's dynamic colour asks for.
 fn resolve_background_color(
     view: &CupertinoButton,
     ctx: &dyn BuildContext,
-    primary_color: Color,
+    theme: &ResolvedCupertinoTheme,
 ) -> Option<Color> {
     let base = match view.color {
         Some(color) => Some(color.resolve(ctx)),
         None => match view.style {
             ButtonFillStyle::Plain => None,
-            ButtonFillStyle::Tinted | ButtonFillStyle::Filled => Some(primary_color),
+            ButtonFillStyle::Tinted | ButtonFillStyle::Filled => Some(theme.primary_color),
         },
     };
 
     base.map(|base_color| match view.style {
         ButtonFillStyle::Tinted => {
-            let opacity = if CupertinoTheme::brightness_of(ctx) == Brightness::Light {
+            let opacity = if theme.brightness == Brightness::Light {
                 K_TINTED_OPACITY_LIGHT
             } else {
                 K_TINTED_OPACITY_DARK
             };
             base_color.with_opacity(opacity)
         }
-        ButtonFillStyle::Plain | ButtonFillStyle::Filled => {
-            let alpha = match view.color {
-                Some(CupertinoColor::Static(color)) => color.opacity(),
-                Some(CupertinoColor::Dynamic(dynamic)) => dynamic.color.opacity(),
-                None => 1.0,
-            };
-            base_color.with_opacity(f64::from(alpha))
-        }
+        ButtonFillStyle::Plain | ButtonFillStyle::Filled => base_color,
     })
 }
 
@@ -380,96 +391,66 @@ fn resolve_background_color(
 fn resolve_foreground_color(
     view: &CupertinoButton,
     ctx: &dyn BuildContext,
-    theme: &crate::CupertinoThemeData,
-    primary_color: Color,
+    theme: &ResolvedCupertinoTheme,
     enabled: bool,
 ) -> Color {
     if let Some(color) = view.foreground_color {
         return color.resolve(ctx);
     }
     match (view.style, enabled) {
-        (ButtonFillStyle::Filled, _) => theme.primary_contrasting_color().resolve(ctx),
-        (_, true) => primary_color,
+        (ButtonFillStyle::Filled, _) => theme.primary_contrasting_color,
+        (_, true) => theme.primary_color,
         (_, false) => CupertinoColors::TERTIARY_LABEL.resolve_from(ctx),
     }
 }
 
-/// Starts the press-in fade on tap, returning the run's [`AnimationRunFuture`] so
-/// the caller can chain the release fade onto it — `None` if it did not
-/// start a run at all.
+/// What the button's state, its tap and its activation bindings share: the
+/// current handler and the press fade.
 ///
-/// `pressed_opacity: None` means [`CupertinoButton::pressed_opacity`]'s
-/// contract — "disables the fade animation entirely". Driving the controller
-/// anyway would tick invisibly (the tween's begin/end both collapse to
-/// `1.0`). Skipping the run here has no observable paint difference —
-/// `build`'s `opacity` `Tween` also collapses to `1.0..=1.0` in that
-/// case — it only removes wasted ticking and rebuild-scheduling.
-fn start_press_fade(
-    controller: &AnimationController,
-    pressed_opacity: Option<f64>,
-    rebuild: Option<&RebuildHandle>,
-) -> Option<AnimationRunFuture> {
-    pressed_opacity?;
-    let curve: Rc<dyn flui_sdk::animation::Curve> =
-        std::rc::Rc::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED);
-    let outcome = controller.animate_to_curved(1.0, Some(FADE_OUT_DURATION), curve);
-    if let Err(error) = &outcome {
-        tracing::debug!(?error, "CupertinoButton press fade failed to start");
-    }
-    if let Some(rebuild) = rebuild {
-        rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-    }
-    outcome.ok()
-}
-
-/// Starts the release fade once `press_fade` genuinely completes — never on
-/// cancellation (a second tap superseding this one must not start a
-/// release for the one it displaced).
-///
-/// Chained on `press_fade`'s own [`AnimationRunFuture`] (ADR-0064), not a status
-/// listener: a status listener has no way to tell "the press fade just
-/// landed" from "the release fade just landed" now that direction is chosen
-/// by the method (`animate_to_curved` reports `ForwardSettled` at BOTH ends,
-/// issue #1171) — a listener watching `ForwardSettled` unconditionally
-/// re-triggers itself once the release it started lands. Chaining off the
-/// return of the leg just started is one-shot, unlike a persistent listener.
-fn chain_release_fade(controller: &AnimationController, press_fade: AnimationRunFuture) {
-    let release_controller = controller.clone();
-    press_fade.when_complete_or_cancel(move |outcome| {
-        if outcome.is_ok() {
-            let curve: Rc<dyn flui_sdk::animation::Curve> =
-                std::rc::Rc::new(curves::EASE_OUT_CUBIC);
-            if let Err(error) =
-                release_controller.animate_to_curved(0.0, Some(FADE_IN_DURATION), curve)
-            {
-                tracing::debug!(?error, "CupertinoButton release fade failed to start");
-            }
-        }
-    });
-}
-
-/// The press fade's controller, made at the first tap that fades: a button
-/// nobody taps holds no animation and no frame registration. Shared by the
-/// state and the tap.
-#[derive(Default)]
-struct PressFade {
+/// The fade's controller is made at the first press that fades: a button
+/// nobody presses holds no animation and no frame registration. Nothing
+/// here refers back to the tap or the bindings, so the strong references
+/// they hold form no cycle; a running leg's continuation holds this core
+/// weakly.
+struct ButtonCore {
+    /// The tap handler, refreshed every build, so an activation calls the
+    /// current one.
+    on_pressed: RefCell<Option<ButtonCallback>>,
+    /// Whether the button fades at all ([`CupertinoButton::pressed_opacity`]
+    /// is set), refreshed every build.
+    fades: Cell<bool>,
+    /// Whether a press holds the button down: the end the fade runs toward,
+    /// Flutter's `_buttonHeldDown`.
+    held: Cell<bool>,
     controller: RefCell<Option<DrivenController>>,
     /// The ambient clock, read at each dependency change, that a controller
     /// made later is driven by.
     vsync: RefCell<Option<Vsync>>,
+    /// Rebuilds the button once its controller exists, so the fade
+    /// transition reads it (ADR-0018: scheduled from a press, never from
+    /// `build`).
+    rebuild: RebuildHandle,
+    /// This core, for a running leg's continuation.
+    this: Weak<Self>,
 }
 
-impl PressFade {
+impl ButtonCore {
     /// The controller, made on the ambient clock if there is none yet. The
     /// slot's borrow ends before the caller drives it.
     fn controller(&self) -> AnimationController {
         let mut slot = self.controller.borrow_mut();
-        let owner = slot.get_or_insert_with(|| {
-            AnimationController::builder(Duration::from_millis(200))
-                .debug_label("CupertinoButton.press")
-                .build_on(self.vsync.borrow().as_ref())
-        });
-        owner.controller().clone()
+        if let Some(owner) = slot.as_ref() {
+            return owner.controller().clone();
+        }
+        let owner = AnimationController::builder(Duration::from_millis(200))
+            .debug_label("CupertinoButton.press")
+            .build_on(self.vsync.borrow().as_ref());
+        let controller = owner.controller().clone();
+        *slot = Some(owner);
+        drop(slot);
+        self.rebuild
+            .schedule(flui_sdk::view::RebuildReason::StateChange);
+        controller
     }
 
     /// The controller's handle, if one was made.
@@ -479,19 +460,103 @@ impl PressFade {
             .as_ref()
             .map(|owner| owner.controller().clone())
     }
+
+    /// Moves the press to `held`, as Flutter's tap handlers set
+    /// `_buttonHeldDown`, and starts the fade toward it. A move that leaves
+    /// the side unchanged starts nothing.
+    fn hold(&self, held: bool) {
+        if self.held.replace(held) == held || !self.fades.get() {
+            return;
+        }
+        self.animate();
+    }
+
+    /// Starts the leg toward the held side unless a leg is running, as
+    /// Flutter's `_animate` does: a running leg is never cut short, and the
+    /// one that completes starts the next if the side changed meanwhile, so
+    /// a press that lifts during its fade-out fades back in after it.
+    ///
+    /// A leg that ends cancelled (its controller disposed) starts nothing,
+    /// so a retired fade never runs again.
+    fn animate(&self) {
+        let controller = self.controller();
+        if controller.is_animating() {
+            return;
+        }
+        let held = self.held.get();
+        let run = if held {
+            controller.animate_to_curved(
+                1.0,
+                Some(FADE_OUT_DURATION),
+                curves::EASE_IN_OUT_CUBIC_EMPHASIZED,
+            )
+        } else {
+            controller.animate_to_curved(0.0, Some(FADE_IN_DURATION), curves::EASE_OUT_CUBIC)
+        };
+        match run {
+            Ok(run) => {
+                let this = Weak::clone(&self.this);
+                run.when_complete_or_cancel(move |outcome| {
+                    if outcome.is_ok()
+                        && let Some(core) = this.upgrade()
+                        && core.held.get() != held
+                    {
+                        core.animate();
+                    }
+                });
+            }
+            Err(error) => tracing::debug!(?error, "CupertinoButton press fade failed to start"),
+        }
+    }
+
+    /// The press: what the recognized tap, a key activation and an
+    /// assistive-technology click run, as Flutter's `_handleTap`. It calls
+    /// the handler and changes no fade: a contact's own down and up drive
+    /// that, and an activation without one shows none. The handler runs with
+    /// no borrow held, after the tap's up has committed the release, so a
+    /// handler that panics leaves the next press able to fade.
+    fn activate(&self, ctx: &mut flui_sdk::view::EventContext<'_>) -> ActionOutcome {
+        // Cloned out, so the slot is free while the handler runs.
+        let handler = self.on_pressed.borrow().clone();
+        let Some(handler) = handler else {
+            return ActionOutcome::NotPerformed;
+        };
+        handler(ctx);
+        ActionOutcome::Performed
+    }
+}
+
+impl Action<ActivateIntent> for ButtonCore {
+    fn invoke(
+        &self,
+        ctx: &mut flui_sdk::view::EventContext<'_>,
+        _intent: &ActivateIntent,
+    ) -> ActionOutcome {
+        self.activate(ctx)
+    }
+}
+
+impl Action<ButtonActivateIntent> for ButtonCore {
+    fn invoke(
+        &self,
+        ctx: &mut flui_sdk::view::EventContext<'_>,
+        _intent: &ButtonActivateIntent,
+    ) -> ActionOutcome {
+        self.activate(ctx)
+    }
 }
 
 /// Persistent state behind [`CupertinoButton`] — see [`StatefulView`]/
 /// [`ViewState`].
 pub struct CupertinoButtonState {
-    fade: Rc<PressFade>,
-    rebuild: RebuildHandle,
+    core: Rc<ButtonCore>,
 }
 
 impl std::fmt::Debug for CupertinoButtonState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CupertinoButtonState")
-            .field("has_controller", &self.fade.controller.borrow().is_some())
+            .field("has_controller", &self.core.controller.borrow().is_some())
+            .field("held", &self.core.held.get())
             .finish_non_exhaustive()
     }
 }
@@ -500,46 +565,51 @@ impl StatefulView for CupertinoButton {
     type State = CupertinoButtonState;
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let rebuild = ctx.rebuild_handle();
         CupertinoButtonState {
-            fade: Rc::default(),
-            // ADR-0018: fired later from `start_press_fade` (called from the
-            // `on_tap` handler in `build`, never from `build` itself).
-            rebuild: ctx.rebuild_handle(),
+            core: Rc::new_cyclic(|this| ButtonCore {
+                on_pressed: RefCell::new(None),
+                fades: Cell::new(false),
+                held: Cell::new(false),
+                controller: RefCell::new(None),
+                vsync: RefCell::new(None),
+                rebuild,
+                this: Weak::clone(this),
+            }),
         }
     }
 }
 
 impl ViewState<CupertinoButton> for CupertinoButtonState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.fade.vsync.borrow_mut() = VsyncScope::maybe_of(ctx);
+        *self.core.vsync.borrow_mut() = VsyncScope::maybe_of(ctx);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let vsync = VsyncScope::maybe_of(ctx);
-        if let Some(controller) = self.fade.controller.borrow_mut().as_mut()
+        if let Some(controller) = self.core.controller.borrow_mut().as_mut()
             && let Err(error) = controller.rebind(vsync.as_ref())
         {
             tracing::error!(%error, "CupertinoButton lost its frame registry");
         }
-        *self.fade.vsync.borrow_mut() = vsync;
+        *self.core.vsync.borrow_mut() = vsync;
     }
 
     fn build(&self, view: &CupertinoButton, ctx: &dyn BuildContext) -> impl IntoView {
         let enabled = view.enabled();
         let theme = CupertinoTheme::of(ctx);
-        let primary_color = theme.primary_color().resolve(ctx);
 
-        let background_color = resolve_background_color(view, ctx, primary_color);
-        let foreground_color = resolve_foreground_color(view, ctx, &theme, primary_color, enabled);
+        let background_color = resolve_background_color(view, ctx, &theme);
+        let foreground_color = resolve_foreground_color(view, ctx, &theme, enabled);
 
         let text_style = if view.size_style == CupertinoButtonSize::Small {
-            theme.text_theme().action_small_text_style()
+            &theme.text_theme.action_small_text_style
         } else {
-            theme.text_theme().action_text_style()
+            &theme.text_theme.action_text_style
         };
         let text_style = TextStyle {
             color: Some(foreground_color),
-            ..text_style
+            ..text_style.clone()
         };
 
         let fill_color = match background_color {
@@ -576,7 +646,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
 
         let decorated = DecoratedBox::new(decoration).child(Padding::new(padding).child(content));
 
-        let opacity: std::rc::Rc<dyn Animation<f64>> = match self.fade.current() {
+        let opacity: std::rc::Rc<dyn Animation<f64>> = match self.core.current() {
             Some(controller) => {
                 let pressed_opacity = view.pressed_opacity.unwrap_or(1.0);
                 let curved = std::rc::Rc::new(CurvedAnimation::new(
@@ -591,12 +661,24 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
             None => std::rc::Rc::new(flui_sdk::animation::ConstantAnimation::new(1.0)),
         };
 
-        // Flutter's `Semantics(button: true)` and `GestureDetector` around the
-        // button are one interactive node here (ADR-0322 §1): its description
-        // is the button, announced as one whether enabled or not (a disabled
-        // button is still a button, just an inert one), named by the
-        // identifier (ADR-0240); its switch says `enabled`, and its press
-        // group adds the click and, with a long press, the context menu.
+        // The replaced handler is dropped after the slot's borrow ends: its
+        // `Drop` is the author's.
+        let replaced = self.core.on_pressed.replace(view.on_pressed.clone());
+        drop(replaced);
+        self.core.fades.set(view.pressed_opacity.is_some());
+
+        // Flutter's `Semantics(button: true)`, `RawGestureDetector` and
+        // `FocusableActionDetector` around the button are one interactive
+        // node here (ADR-0322 §1): its description is the button, announced
+        // as one whether enabled or not (a disabled button is still a
+        // button, just an inert one), named by the identifier (ADR-0240);
+        // its switch says `enabled`, and its press group adds the click and,
+        // with a long press, the context menu. The node hosts the button's
+        // focus node and draws the ring while that focus is shown; Enter,
+        // Space and Select on the focused button reach the bindings through
+        // the root shortcuts (ADR-0079). A disabled node cannot take focus
+        // and keeps the bindings declared and switched off, so the intent
+        // stops at the button.
         let description =
             Description::new(SemanticsRole::Button).identifier(view.identifier.clone());
         let faded =
@@ -604,24 +686,33 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
 
         let mut node = InteractiveNode::new(faded)
             .enabled(enabled)
-            .semantics(description);
-        if enabled && (view.on_pressed.is_some() || view.on_long_press.is_some()) {
+            .semantics(description)
+            .focusable("CupertinoButton")
+            .focus_ring()
+            .bindings([
+                ActionBinding::shared::<ActivateIntent, ButtonCore>(&self.core),
+                ActionBinding::shared::<ButtonActivateIntent, ButtonCore>(&self.core),
+            ]);
+        if enabled {
             let mut tap = ControlTap::new();
-            if let Some(on_pressed) = view.on_pressed.clone() {
-                let fade = Rc::clone(&self.fade);
-                let rebuild = self.rebuild.clone();
-                let pressed_opacity = view.pressed_opacity;
-                tap = tap.on_tap(move |ctx| {
-                    if pressed_opacity.is_some() {
-                        let controller = fade.controller();
-                        if let Some(future) =
-                            start_press_fade(&controller, pressed_opacity, Some(&rebuild))
-                        {
-                            chain_release_fade(&controller, future);
-                        }
-                    }
-                    on_pressed(ctx);
-                });
+            // The fade follows the press the tap recognizer shows (Flutter's
+            // `_handleTapDown`/`_handleTapUp`/`_handleTapCancel`); only a
+            // button with a tap handler has the tap family, so a
+            // long-press-only button offers assistive technology no click.
+            if view.on_pressed.is_some() {
+                let (down, up, cancel, pressed) = (
+                    Rc::clone(&self.core),
+                    Rc::clone(&self.core),
+                    Rc::clone(&self.core),
+                    Rc::clone(&self.core),
+                );
+                tap = tap
+                    .on_tap_down(move |_ctx, _details| down.hold(true))
+                    .on_tap_up(move |_ctx, _details| up.hold(false))
+                    .on_tap_cancel(move |_ctx, _details| cancel.hold(false))
+                    .on_tap(move |ctx| {
+                        pressed.activate(ctx);
+                    });
             }
             if let Some(on_long_press) = view.on_long_press.clone() {
                 tap = tap.on_long_press(move |ctx| on_long_press(ctx));
@@ -632,7 +723,9 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
     }
 
     fn dispose(&mut self) {
-        let controller = self.fade.controller.borrow_mut().take();
+        // Dropping the owner cancels a running leg, whose continuation then
+        // starts nothing.
+        let controller = self.core.controller.borrow_mut().take();
         drop(controller);
     }
 }

@@ -8,249 +8,25 @@
 //! non-Apple host and `"Segoe UI"` would never be reached. Left as ordinary
 //! names the host does not carry, they fall through and the rest of the chain
 //! does its job.
+//!
+//! Each default role's constant cites, by line, its counterpart in
+//! `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/text_theme.dart`.
+
+use std::sync::LazyLock;
 
 use flui_sdk::foundation::{TextScaleProfile, TextSizingIntent};
 use flui_sdk::painting::styling::Color;
 use flui_sdk::painting::typography::{FontFamilyName, FontWeight, SharedSlice, TextStyle};
-use flui_sdk::view::prelude::BuildContext;
 
-use crate::colors::{CupertinoColors, CupertinoDynamicColor};
-
-/// The default general-content text style.
-fn default_text_style() -> TextStyle {
-    TextStyle {
-        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Body)),
-        font_family: Some("CupertinoSystemText".into()),
-        font_family_fallback: system_text_fallback(),
-        font_size: Some(17.0),
-        letter_spacing: Some(-0.41),
-        color: Some(CupertinoColors::LABEL.color),
-        ..TextStyle::default()
-    }
-}
-
-/// The default style of interactive text without a background.
-fn default_action_text_style() -> TextStyle {
-    TextStyle {
-        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Body)),
-        font_family: Some("CupertinoSystemText".into()),
-        font_family_fallback: system_text_fallback(),
-        font_size: Some(17.0),
-        letter_spacing: Some(-0.41),
-        color: Some(CupertinoColors::ACTIVE_BLUE.color),
-        ..TextStyle::default()
-    }
-}
-
-/// The default style of interactive text in a small button.
-fn default_action_small_text_style() -> TextStyle {
-    TextStyle {
-        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Callout)),
-        font_family: Some("CupertinoSystemText".into()),
-        font_family_fallback: system_text_fallback(),
-        font_size: Some(15.0),
-        letter_spacing: Some(-0.23),
-        color: Some(CupertinoColors::ACTIVE_BLUE.color),
-        ..TextStyle::default()
-    }
-}
-
-/// The default style of tab labels.
-fn default_tab_label_text_style() -> TextStyle {
-    TextStyle {
-        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Caption2)),
-        font_family: Some("CupertinoSystemText".into()),
-        font_family_fallback: system_text_fallback(),
-        font_size: Some(10.0),
-        font_weight: Some(FontWeight::W500),
-        letter_spacing: Some(-0.24),
-        color: Some(CupertinoColors::INACTIVE_GRAY.color),
-        ..TextStyle::default()
-    }
-}
-
-/// The source for [`CupertinoTextThemeData::nav_title_text_style`].
-fn default_middle_title_text_style() -> TextStyle {
-    TextStyle {
-        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Headline)),
-        font_family: Some("CupertinoSystemText".into()),
-        font_family_fallback: system_text_fallback(),
-        font_size: Some(17.0),
-        font_weight: Some(FontWeight::W600),
-        letter_spacing: Some(-0.41),
-        color: Some(CupertinoColors::LABEL.color),
-        ..TextStyle::default()
-    }
-}
-
-/// The default style of large titles.
-fn default_large_title_text_style() -> TextStyle {
-    TextStyle {
-        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::LargeTitle)),
-        font_family: Some("CupertinoSystemDisplay".into()),
-        font_family_fallback: system_display_fallback(),
-        font_size: Some(34.0),
-        font_weight: Some(FontWeight::W700),
-        letter_spacing: Some(0.38),
-        color: Some(CupertinoColors::LABEL.color),
-        ..TextStyle::default()
-    }
-}
-
-/// The default style of pickers.
-fn default_picker_text_style() -> TextStyle {
-    TextStyle {
-        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Title2)),
-        font_family: Some("CupertinoSystemDisplay".into()),
-        font_family_fallback: system_display_fallback(),
-        font_size: Some(21.0),
-        font_weight: Some(FontWeight::W400),
-        letter_spacing: Some(-0.6),
-        color: Some(CupertinoColors::LABEL.color),
-        ..TextStyle::default()
-    }
-}
-
-/// The default style of date/time pickers.
-fn default_date_time_picker_text_style() -> TextStyle {
-    TextStyle {
-        sizing: Some(TextSizingIntent::Profile(TextScaleProfile::Title2)),
-        font_family: Some("CupertinoSystemDisplay".into()),
-        font_family_fallback: system_display_fallback(),
-        font_size: Some(21.0),
-        letter_spacing: Some(0.4),
-        font_weight: Some(FontWeight::W400),
-        color: Some(CupertinoColors::LABEL.color),
-        ..TextStyle::default()
-    }
-}
-
-/// The fallback chain for `'CupertinoSystemText'`; see the notes at the top of
-/// this file.
-fn system_text_fallback() -> SharedSlice<FontFamilyName> {
-    [
-        "-apple-system",
-        "system-ui",
-        "Segoe UI",
-        "Helvetica Neue",
-        "Arial",
-        "sans-serif",
-    ]
-    .into()
-}
-
-/// Same fallback chain as [`system_text_fallback`] — the Text/Display split
-/// exists only because San Francisco ships as two optical sizes; a family
-/// fallback chain has no such split to mirror.
-fn system_display_fallback() -> SharedSlice<FontFamilyName> {
-    system_text_fallback()
-}
-
-/// The action style for `primary_color`. There is always a concrete
-/// [`CupertinoDynamicColor`] to read `.color` off, so this is a plain function
-/// rather than a method on [`TextThemeDefaults`] (it reads none of that
-/// type's fields).
-fn action_text_style_for(primary_color: CupertinoDynamicColor) -> TextStyle {
-    TextStyle {
-        color: Some(primary_color.color),
-        ..default_action_text_style()
-    }
-}
-
-/// The small-button action style for `primary_color`.
-fn action_small_text_style_for(primary_color: CupertinoDynamicColor) -> TextStyle {
-    TextStyle {
-        color: Some(primary_color.color),
-        ..default_action_small_text_style()
-    }
-}
-
-/// The navigation-bar action style — a direct delegate to the action style.
-fn nav_action_text_style_for(primary_color: CupertinoDynamicColor) -> TextStyle {
-    action_text_style_for(primary_color)
-}
-
-/// Sets `style.color` to `color`, returning `style` unchanged when it already
-/// has that color (a no-op short-circuit, even though FLUI's `TextStyle` is
-/// cheap to clone regardless).
-fn apply_label_color(style: TextStyle, color: Color) -> TextStyle {
-    if style.color == Some(color) {
-        style
-    } else {
-        TextStyle {
-            color: Some(color),
-            ..style
-        }
-    }
-}
-
-/// The label-color-driven default styles, parameterized on the two dynamic
-/// colors that drive them.
-///
-/// The label and inactive-gray colors are typed as [`CupertinoDynamicColor`]
-/// directly, since they are always dynamic in practice; FLUI needs
-/// [`crate::CupertinoColor`] only where a field can hold *either* a
-/// concrete or dynamic color, not where it is always one or the other.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct TextThemeDefaults {
-    label_color: CupertinoDynamicColor,
-    inactive_gray_color: CupertinoDynamicColor,
-}
-
-impl TextThemeDefaults {
-    const fn new(
-        label_color: CupertinoDynamicColor,
-        inactive_gray_color: CupertinoDynamicColor,
-    ) -> Self {
-        Self {
-            label_color,
-            inactive_gray_color,
-        }
-    }
-
-    fn text_style(&self) -> TextStyle {
-        apply_label_color(default_text_style(), self.label_color.color)
-    }
-
-    fn tab_label_text_style(&self) -> TextStyle {
-        apply_label_color(
-            default_tab_label_text_style(),
-            self.inactive_gray_color.color,
-        )
-    }
-
-    fn nav_title_text_style(&self) -> TextStyle {
-        apply_label_color(default_middle_title_text_style(), self.label_color.color)
-    }
-
-    fn nav_large_title_text_style(&self) -> TextStyle {
-        apply_label_color(default_large_title_text_style(), self.label_color.color)
-    }
-
-    fn picker_text_style(&self) -> TextStyle {
-        apply_label_color(default_picker_text_style(), self.label_color.color)
-    }
-
-    fn date_time_picker_text_style(&self) -> TextStyle {
-        apply_label_color(
-            default_date_time_picker_text_style(),
-            self.label_color.color,
-        )
-    }
-
-    /// Collapses both colors using the same policy as the containing theme.
-    fn resolve_colors(&self, colors: &crate::colors::ColorResolver<'_>) -> Self {
-        let resolved_label = colors.dynamic(self.label_color);
-        let resolved_inactive_gray = colors.dynamic(self.inactive_gray_color);
-        Self::new(
-            CupertinoDynamicColor::with_brightness(resolved_label, resolved_label),
-            CupertinoDynamicColor::with_brightness(resolved_inactive_gray, resolved_inactive_gray),
-        )
-    }
-}
+use crate::colors::{ColorResolver, CupertinoColor, CupertinoColors};
 
 /// Cupertino typography theme: the type-style roles a Cupertino widget tree
 /// reads by name instead of hard-coding a `TextStyle`.
+///
+/// What an author writes. Each role left `None` takes its iOS default when
+/// the theme resolves ([`crate::CupertinoTheme::of`]); a set role is used as
+/// written. Widgets read the roles of the resolved
+/// [`ResolvedCupertinoTextTheme`], never this type.
 ///
 /// # Font family
 ///
@@ -263,203 +39,268 @@ impl TextThemeDefaults {
 /// type ramp, but off Apple platforms the glyphs come from whatever the host
 /// provides.
 ///
+/// # Colours
 ///
-/// ## Read-time dynamic resolution
+/// The default roles take the label colour (the general and title roles), the
+/// inactive gray (the tab label) or the primary colour (the three action
+/// roles), each resolved for the context's brightness and contrast. A set
+/// role keeps its own colour: FLUI's `TextStyle::color` is a concrete
+/// [`Color`], so it was already resolved when it was written (Flutter's
+/// `resolveFrom` also resolves a dynamic colour inside a set style, which a
+/// FLUI style cannot hold).
 ///
-/// The label/action-family roles below are **not** pre-resolved: they embed
-/// [`CupertinoColors::LABEL`]/[`CupertinoColors::ACTIVE_BLUE`]'s *unresolved
-/// effective* color (the light-mode variant — a
-/// `CupertinoDynamicColor` defaults to its `color` field until resolved).
-/// [`CupertinoTextThemeData::resolve_from`] produces a copy with those roles
-/// collapsed to the color actually implied by the ambient context (dark mode
-/// flips `label`/`inactiveGray`/`primaryColor` to their dark variants).
-/// [`crate::CupertinoTheme::of`] calls this before returning, so
-/// ordinary consumers always see already-resolved styles — see that
-/// function's doc.
+/// Flutter reference: `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/text_theme.dart:136`.
 ///
-/// Caller-supplied overrides (`with_text_style`, …) are **not** re-resolved:
-/// FLUI's `TextStyle::color` is a concrete [`Color`], never a
-/// [`CupertinoDynamicColor`], so an override the caller passed in was already
-/// concrete when it was set.
+/// # Example
 ///
-/// Flutter reference: `flutter/flutter@3.50.1 packages/flutter/lib/src/cupertino/text_theme.dart`.
-#[derive(Debug, Clone, PartialEq)]
+/// ```rust
+/// use flui_cupertino::{CupertinoColors, CupertinoThemeData};
+/// use flui_sdk::painting::typography::TextStyle;
+///
+/// let mut theme = CupertinoThemeData::default();
+/// theme.text_theme.primary_color = Some(CupertinoColors::SYSTEM_RED.into());
+/// theme.text_theme.picker_text_style = Some(TextStyle {
+///     font_size: Some(19.0),
+///     ..TextStyle::default()
+/// });
+/// assert_eq!(theme.text_theme.text_style, None);
+/// ```
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct CupertinoTextThemeData {
-    defaults: TextThemeDefaults,
-    primary_color: CupertinoDynamicColor,
-    text_style: Option<TextStyle>,
-    action_text_style: Option<TextStyle>,
-    action_small_text_style: Option<TextStyle>,
-    tab_label_text_style: Option<TextStyle>,
-    nav_title_text_style: Option<TextStyle>,
-    nav_large_title_text_style: Option<TextStyle>,
-    nav_action_text_style: Option<TextStyle>,
-    picker_text_style: Option<TextStyle>,
-    date_time_picker_text_style: Option<TextStyle>,
+    /// The colour of the default action roles ([`Self::action_text_style`],
+    /// [`Self::action_small_text_style`], [`Self::nav_action_text_style`]).
+    /// `None`: the theme's resolved
+    /// [`primary_color`](crate::CupertinoThemeData::primary_color).
+    pub primary_color: Option<CupertinoColor>,
+    /// The style of general text content.
+    pub text_style: Option<TextStyle>,
+    /// The style of interactive text without a background (a large or
+    /// medium `CupertinoButton`'s text).
+    pub action_text_style: Option<TextStyle>,
+    /// The style of interactive text in a small button.
+    pub action_small_text_style: Option<TextStyle>,
+    /// The style of tab labels.
+    pub tab_label_text_style: Option<TextStyle>,
+    /// The style of titles in standard navigation bars.
+    pub nav_title_text_style: Option<TextStyle>,
+    /// The style of large titles in sliver navigation bars.
+    pub nav_large_title_text_style: Option<TextStyle>,
+    /// The style of interactive text in navigation bars.
+    pub nav_action_text_style: Option<TextStyle>,
+    /// The style of pickers.
+    pub picker_text_style: Option<TextStyle>,
+    /// The style of date and time pickers.
+    pub date_time_picker_text_style: Option<TextStyle>,
 }
 
-impl Default for CupertinoTextThemeData {
-    fn default() -> Self {
-        Self {
-            defaults: TextThemeDefaults::new(
-                CupertinoColors::LABEL,
-                CupertinoColors::INACTIVE_GRAY,
+/// The text roles of a resolved theme: every role a concrete [`TextStyle`]
+/// for the context the theme was resolved in.
+///
+/// Built once per resolution by [`crate::CupertinoThemeData::resolve`] and
+/// read by field; a widget clones only the role it needs to own.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedCupertinoTextTheme {
+    /// The style of general text content.
+    pub text_style: TextStyle,
+    /// The style of interactive text without a background.
+    pub action_text_style: TextStyle,
+    /// The style of interactive text in a small button.
+    pub action_small_text_style: TextStyle,
+    /// The style of tab labels.
+    pub tab_label_text_style: TextStyle,
+    /// The style of titles in standard navigation bars.
+    pub nav_title_text_style: TextStyle,
+    /// The style of large titles in sliver navigation bars.
+    pub nav_large_title_text_style: TextStyle,
+    /// The style of interactive text in navigation bars.
+    pub nav_action_text_style: TextStyle,
+    /// The style of pickers.
+    pub picker_text_style: TextStyle,
+    /// The style of date and time pickers.
+    pub date_time_picker_text_style: TextStyle,
+}
+
+impl CupertinoTextThemeData {
+    /// Every role for `colors`, the default action colour being
+    /// `theme_primary` unless [`Self::primary_color`] is set.
+    pub(crate) fn resolve_with(
+        &self,
+        colors: ColorResolver,
+        theme_primary: Color,
+    ) -> ResolvedCupertinoTextTheme {
+        let fonts: &DefaultFonts = &DEFAULT_FONTS;
+        let label = colors.dynamic(CupertinoColors::LABEL);
+        let primary = self
+            .primary_color
+            .map_or(theme_primary, |color| colors.resolve(color));
+        let role = |authored: &Option<TextStyle>, default: &RoleDefault, color: Color| {
+            authored
+                .clone()
+                .unwrap_or_else(|| default.style(fonts, color))
+        };
+        ResolvedCupertinoTextTheme {
+            text_style: role(&self.text_style, &TEXT, label),
+            action_text_style: role(&self.action_text_style, &ACTION, primary),
+            action_small_text_style: role(&self.action_small_text_style, &ACTION_SMALL, primary),
+            tab_label_text_style: role(
+                &self.tab_label_text_style,
+                &TAB_LABEL,
+                colors.dynamic(CupertinoColors::INACTIVE_GRAY),
             ),
-            primary_color: CupertinoColors::SYSTEM_BLUE,
-            text_style: None,
-            action_text_style: None,
-            action_small_text_style: None,
-            tab_label_text_style: None,
-            nav_title_text_style: None,
-            nav_large_title_text_style: None,
-            nav_action_text_style: None,
-            picker_text_style: None,
-            date_time_picker_text_style: None,
+            nav_title_text_style: role(&self.nav_title_text_style, &MIDDLE_TITLE, label),
+            nav_large_title_text_style: role(&self.nav_large_title_text_style, &LARGE_TITLE, label),
+            // The navigation action delegates to the action style.
+            nav_action_text_style: role(&self.nav_action_text_style, &ACTION, primary),
+            picker_text_style: role(&self.picker_text_style, &PICKER, label),
+            date_time_picker_text_style: role(
+                &self.date_time_picker_text_style,
+                &DATE_TIME_PICKER,
+                label,
+            ),
         }
     }
 }
 
-impl CupertinoTextThemeData {
-    /// The default text theme.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
+/// One default role's metrics; its colour comes from the resolution.
+struct RoleDefault {
+    profile: TextScaleProfile,
+    family: Family,
+    font_size: f64,
+    font_weight: Option<FontWeight>,
+    letter_spacing: f64,
+}
 
-    /// Sets the color [`Self::action_text_style`]/[`Self::action_small_text_style`]/
-    /// [`Self::nav_action_text_style`] derive from when not overridden.
-    /// Defaults to [`CupertinoColors::SYSTEM_BLUE`].
-    #[must_use]
-    pub fn with_primary_color(mut self, primary_color: CupertinoDynamicColor) -> Self {
-        self.primary_color = primary_color;
-        self
-    }
+/// Which San Francisco optical size a default role names.
+#[derive(Clone, Copy)]
+enum Family {
+    Text,
+    Display,
+}
 
-    /// Overrides [`Self::text_style`].
-    #[must_use]
-    pub fn with_text_style(mut self, style: TextStyle) -> Self {
-        self.text_style = Some(style);
-        self
+impl RoleDefault {
+    fn style(&self, fonts: &DefaultFonts, color: Color) -> TextStyle {
+        TextStyle {
+            sizing: Some(TextSizingIntent::Profile(self.profile)),
+            font_family: Some(match self.family {
+                Family::Text => fonts.text.clone(),
+                Family::Display => fonts.display.clone(),
+            }),
+            font_family_fallback: fonts.fallback.clone(),
+            font_size: Some(self.font_size),
+            font_weight: self.font_weight,
+            letter_spacing: Some(self.letter_spacing),
+            color: Some(color),
+            ..TextStyle::default()
+        }
     }
+}
 
-    /// Overrides [`Self::action_text_style`].
-    #[must_use]
-    pub fn with_action_text_style(mut self, style: TextStyle) -> Self {
-        self.action_text_style = Some(style);
-        self
-    }
+/// `_kDefaultTextStyle` (text_theme.dart:19).
+const TEXT: RoleDefault = RoleDefault {
+    profile: TextScaleProfile::Body,
+    family: Family::Text,
+    font_size: 17.0,
+    font_weight: None,
+    letter_spacing: -0.41,
+};
 
-    /// Overrides [`Self::action_small_text_style`].
-    #[must_use]
-    pub fn with_action_small_text_style(mut self, style: TextStyle) -> Self {
-        self.action_small_text_style = Some(style);
-        self
-    }
+/// `_kDefaultActionTextStyle` (text_theme.dart:34).
+const ACTION: RoleDefault = RoleDefault {
+    profile: TextScaleProfile::Body,
+    family: Family::Text,
+    font_size: 17.0,
+    font_weight: None,
+    letter_spacing: -0.41,
+};
 
-    /// Overrides [`Self::nav_title_text_style`].
-    #[must_use]
-    pub fn with_nav_title_text_style(mut self, style: TextStyle) -> Self {
-        self.nav_title_text_style = Some(style);
-        self
-    }
+/// `_kDefaultActionSmallTextStyle` (text_theme.dart:49).
+const ACTION_SMALL: RoleDefault = RoleDefault {
+    profile: TextScaleProfile::Callout,
+    family: Family::Text,
+    font_size: 15.0,
+    font_weight: None,
+    letter_spacing: -0.23,
+};
 
-    /// The style of general text content.
-    #[must_use]
-    pub fn text_style(&self) -> TextStyle {
-        self.text_style
-            .clone()
-            .unwrap_or_else(|| self.defaults.text_style())
-    }
+/// `_kDefaultTabLabelTextStyle` (text_theme.dart:63).
+const TAB_LABEL: RoleDefault = RoleDefault {
+    profile: TextScaleProfile::Caption2,
+    family: Family::Text,
+    font_size: 10.0,
+    font_weight: Some(FontWeight::W500),
+    letter_spacing: -0.24,
+};
 
-    /// The style of interactive text without a background (e.g.
-    /// `CupertinoButton`'s large/medium text).
-    #[must_use]
-    pub fn action_text_style(&self) -> TextStyle {
-        self.action_text_style
-            .clone()
-            .unwrap_or_else(|| action_text_style_for(self.primary_color))
-    }
+/// `_kDefaultMiddleTitleTextStyle` (text_theme.dart:72), the navigation
+/// title.
+const MIDDLE_TITLE: RoleDefault = RoleDefault {
+    profile: TextScaleProfile::Headline,
+    family: Family::Text,
+    font_size: 17.0,
+    font_weight: Some(FontWeight::W600),
+    letter_spacing: -0.41,
+};
 
-    /// The style of interactive text in a small button.
-    #[must_use]
-    pub fn action_small_text_style(&self) -> TextStyle {
-        self.action_small_text_style
-            .clone()
-            .unwrap_or_else(|| action_small_text_style_for(self.primary_color))
-    }
+/// `_kDefaultLargeTitleTextStyle` (text_theme.dart:81).
+const LARGE_TITLE: RoleDefault = RoleDefault {
+    profile: TextScaleProfile::LargeTitle,
+    family: Family::Display,
+    font_size: 34.0,
+    font_weight: Some(FontWeight::W700),
+    letter_spacing: 0.38,
+};
 
-    /// The style of unselected tabs.
-    #[must_use]
-    pub fn tab_label_text_style(&self) -> TextStyle {
-        self.tab_label_text_style
-            .clone()
-            .unwrap_or_else(|| self.defaults.tab_label_text_style())
-    }
+/// `_kDefaultPickerTextStyle` (text_theme.dart:101).
+const PICKER: RoleDefault = RoleDefault {
+    profile: TextScaleProfile::Title2,
+    family: Family::Display,
+    font_size: 21.0,
+    font_weight: Some(FontWeight::W400),
+    letter_spacing: -0.6,
+};
 
-    /// The style of titles in standard navigation bars.
-    #[must_use]
-    pub fn nav_title_text_style(&self) -> TextStyle {
-        self.nav_title_text_style
-            .clone()
-            .unwrap_or_else(|| self.defaults.nav_title_text_style())
-    }
+/// `_kDefaultDateTimePickerTextStyle` (text_theme.dart:116).
+const DATE_TIME_PICKER: RoleDefault = RoleDefault {
+    profile: TextScaleProfile::Title2,
+    family: Family::Display,
+    font_size: 21.0,
+    font_weight: Some(FontWeight::W400),
+    letter_spacing: 0.4,
+};
 
-    /// The style of large titles in sliver navigation bars.
-    #[must_use]
-    pub fn nav_large_title_text_style(&self) -> TextStyle {
-        self.nav_large_title_text_style
-            .clone()
-            .unwrap_or_else(|| self.defaults.nav_large_title_text_style())
-    }
+/// The family names every default role shares: one copy of each name and of
+/// the fallback chain for the process, so a resolution clones reference
+/// counts and allocates no name. Immutable data; a `static` only because a
+/// `FontFamilyName` cannot be built in a `const`.
+static DEFAULT_FONTS: LazyLock<DefaultFonts> = LazyLock::new(DefaultFonts::new);
 
-    /// The style of interactive text in navigation bars.
-    #[must_use]
-    pub fn nav_action_text_style(&self) -> TextStyle {
-        self.nav_action_text_style
-            .clone()
-            .unwrap_or_else(|| nav_action_text_style_for(self.primary_color))
-    }
+/// The family names of the default roles.
+struct DefaultFonts {
+    text: FontFamilyName,
+    display: FontFamilyName,
+    fallback: SharedSlice<FontFamilyName>,
+}
 
-    /// The style of pickers.
-    #[must_use]
-    pub fn picker_text_style(&self) -> TextStyle {
-        self.picker_text_style
-            .clone()
-            .unwrap_or_else(|| self.defaults.picker_text_style())
-    }
-
-    /// The style of date/time pickers.
-    #[must_use]
-    pub fn date_time_picker_text_style(&self) -> TextStyle {
-        self.date_time_picker_text_style
-            .clone()
-            .unwrap_or_else(|| self.defaults.date_time_picker_text_style())
-    }
-
-    /// Returns a copy with every role's dynamic color resolved against
-    /// `ctx` — see the type doc's "Read-time dynamic resolution" section.
-    #[must_use]
-    pub fn resolve_from(&self, ctx: &dyn BuildContext) -> Self {
-        self.resolve_colors(&crate::colors::ColorResolver::new(ctx, None))
-    }
-
-    pub(crate) fn resolve_colors(&self, colors: &crate::colors::ColorResolver<'_>) -> Self {
-        let resolved_primary = colors.dynamic(self.primary_color);
+impl DefaultFonts {
+    fn new() -> Self {
         Self {
-            defaults: self.defaults.resolve_colors(colors),
-            primary_color: CupertinoDynamicColor::with_brightness(
-                resolved_primary,
-                resolved_primary,
-            ),
-            text_style: self.text_style.clone(),
-            action_text_style: self.action_text_style.clone(),
-            action_small_text_style: self.action_small_text_style.clone(),
-            tab_label_text_style: self.tab_label_text_style.clone(),
-            nav_title_text_style: self.nav_title_text_style.clone(),
-            nav_large_title_text_style: self.nav_large_title_text_style.clone(),
-            nav_action_text_style: self.nav_action_text_style.clone(),
-            picker_text_style: self.picker_text_style.clone(),
-            date_time_picker_text_style: self.date_time_picker_text_style.clone(),
+            text: "CupertinoSystemText".into(),
+            display: "CupertinoSystemDisplay".into(),
+            // One chain for both optical sizes: the Text/Display split exists
+            // only because San Francisco ships as two, and a fallback chain
+            // has no such split to mirror. See the notes at the top of this
+            // file for its two leading entries.
+            fallback: [
+                "-apple-system",
+                "system-ui",
+                "Segoe UI",
+                "Helvetica Neue",
+                "Arial",
+                "sans-serif",
+            ]
+            .into(),
         }
     }
 }

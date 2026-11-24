@@ -32,13 +32,13 @@ use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::SizedBox;
 
 /// What a descendant of the shell observes: the effective brightness, the
-/// published theme's (already materialized) primary color, and a dynamic
-/// color resolved at the DESCENDANT's own altitude — the three observation
-/// points Apple's model distinguishes.
+/// resolved theme's primary color and text roles, and a dynamic color
+/// resolved at the DESCENDANT's own altitude — the observation points
+/// Apple's model distinguishes.
 #[derive(Clone, Debug, PartialEq)]
 struct Observed {
     brightness: Brightness,
-    published_primary: CupertinoColor,
+    published_primary: Color,
     label_resolved_here: Color,
     text_color: Option<Color>,
     action_color: Option<Color>,
@@ -51,15 +51,13 @@ struct Probe {
 
 impl StatelessView for Probe {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let theme = CupertinoTheme::of(ctx);
         *self.captured.lock().unwrap() = Some(Observed {
             brightness: CupertinoTheme::brightness_of(ctx),
-            published_primary: CupertinoTheme::of(ctx).primary_color(),
+            published_primary: theme.primary_color,
             label_resolved_here: CupertinoColor::Dynamic(CupertinoColors::LABEL).resolve(ctx),
-            text_color: CupertinoTheme::of(ctx).text_theme().text_style().color,
-            action_color: CupertinoTheme::of(ctx)
-                .text_theme()
-                .action_text_style()
-                .color,
+            text_color: theme.text_theme.text_style.color,
+            action_color: theme.text_theme.action_text_style.color,
         });
         SizedBox::shrink()
     }
@@ -91,12 +89,12 @@ const SYSTEM_RED_LIGHT: Color = Color::rgb(255, 59, 48);
 
 pub fn publishes_the_resolved_theme_to_descendants() {
     let (probe, captured) = probe();
-    let theme = CupertinoThemeData::default().with_primary_color(CupertinoColors::SYSTEM_RED);
+    let mut theme = CupertinoThemeData::default();
+    theme.primary_color = Some(CupertinoColors::SYSTEM_RED.into());
     let _tree = lay_out(CupertinoApp::new(probe).theme(theme), loose(800.0));
     let seen = observed(&captured);
     assert_eq!(
-        seen.published_primary,
-        CupertinoColor::Static(SYSTEM_RED_LIGHT),
+        seen.published_primary, SYSTEM_RED_LIGHT,
         "the caller's theme — not a default — must reach descendants, already resolved"
     );
 }
@@ -177,10 +175,7 @@ pub fn a_live_brightness_republish_re_resolves_the_theme() {
         },
         loose(800.0),
     );
-    assert_eq!(
-        observed(&captured).published_primary,
-        CupertinoColor::Static(SYSTEM_BLUE_LIGHT)
-    );
+    assert_eq!(observed(&captured).published_primary, SYSTEM_BLUE_LIGHT);
 
     // The appearance flip: mutate the source, let the scheduled republish
     // rebuild — no root-dirtying pump.
@@ -189,8 +184,7 @@ pub fn a_live_brightness_republish_re_resolves_the_theme() {
     let seen = observed(&captured);
     assert_eq!(seen.brightness, Brightness::Dark);
     assert_eq!(
-        seen.published_primary,
-        CupertinoColor::Static(SYSTEM_BLUE_DARK),
+        seen.published_primary, SYSTEM_BLUE_DARK,
         "a live platform-brightness change must re-materialize the published theme"
     );
 }
@@ -198,19 +192,16 @@ pub fn a_live_brightness_republish_re_resolves_the_theme() {
 pub fn explicit_app_brightness_applies_to_live_contrast_colors() {
     let source = Rc::new(BrightnessSource::default());
     let (probe, captured) = probe();
+    let mut theme = CupertinoThemeData::default();
+    theme.brightness = Some(Brightness::Dark);
     let mut tree = lay_out(
         BrightnessRoot {
             source: Rc::clone(&source),
-            child: CupertinoApp::new(probe)
-                .theme(CupertinoThemeData::default().with_brightness(Brightness::Dark))
-                .boxed(),
+            child: CupertinoApp::new(probe).theme(theme).boxed(),
         },
         loose(800.0),
     );
-    assert_eq!(
-        observed(&captured).published_primary,
-        CupertinoColor::Static(SYSTEM_BLUE_DARK)
-    );
+    assert_eq!(observed(&captured).published_primary, SYSTEM_BLUE_DARK);
     for contrast in [true, false] {
         source.data.borrow_mut().high_contrast = contrast;
         source.set_brightness(Brightness::Light);
@@ -232,11 +223,49 @@ pub fn explicit_app_brightness_applies_to_live_contrast_colors() {
         );
         assert_eq!(
             seen.published_primary,
-            CupertinoColor::Static(if contrast {
+            if contrast {
                 Color::rgb(64, 156, 255)
             } else {
                 SYSTEM_BLUE_DARK
-            })
+            }
         );
     }
+}
+
+/// The app publishes its authored theme, so a nested `MediaQuery` that turns
+/// the platform dark resolves the theme dark below it while the subtree
+/// beside it, under the outer light media, stays light. Red-check: publish
+/// the theme the app resolved in its own context.
+pub fn a_nested_media_query_resolves_the_app_theme_below_it() {
+    use flui_sdk::widgets::Column;
+
+    let (outer, outer_seen) = probe();
+    let (inner, inner_seen) = probe();
+    let home = Column::new(vec![
+        outer.boxed(),
+        MediaQuery::new(
+            MediaQueryData {
+                platform_brightness: Brightness::Dark,
+                ..MediaQueryData::default()
+            },
+            inner,
+        )
+        .boxed(),
+    ]);
+    let _tree = lay_out(
+        MediaQuery::new(MediaQueryData::default(), CupertinoApp::new(home)),
+        loose(800.0),
+    );
+    let outer = observed(&outer_seen);
+    assert_eq!(
+        (outer.brightness, outer.published_primary, outer.text_color),
+        (Brightness::Light, SYSTEM_BLUE_LIGHT, Some(Color::BLACK)),
+        "the outer subtree follows the outer light media"
+    );
+    let inner = observed(&inner_seen);
+    assert_eq!(
+        (inner.brightness, inner.published_primary, inner.text_color),
+        (Brightness::Dark, SYSTEM_BLUE_DARK, Some(Color::WHITE)),
+        "the theme resolves for the nested dark media below it"
+    );
 }
