@@ -318,6 +318,7 @@ impl Adb for ScriptedAdb {
         };
         match rule.answer {
             Answer::Timeout => Err(Error::Timeout {
+                awaited: crate::error::Awaited::Host,
                 effect: Some(Effect::new(EffectKind::MayHaveRun)),
                 message: format!("`adb {text}` did not end within {} ms", timeout.as_millis()),
                 retry: ErrorCode::Timeout.default_retry(),

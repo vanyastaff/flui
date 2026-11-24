@@ -2,7 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use flui_protocol::error::Retry;
 use flui_protocol::method;
+use flui_protocol::version::ProtocolVersion;
 use serde_json::Value;
 
 use super::format::{Positions, Privacy, TraceError};
@@ -96,10 +98,26 @@ pub struct Divergence {
 ///
 /// # Errors
 ///
-/// [`Error::InvalidArgument`] naming both windows when the target's main window is not the size
+/// [`Error::Version`] naming both when the trace was recorded at another protocol than the app
+/// speaks; [`Error::InvalidArgument`] naming both windows when the target's main window is not the size
 /// the trace was recorded at; the target's failure to read its main window.
 pub fn replay(trace: &Trace, driver: &mut Driver) -> Result<ReplayReport> {
     let header = trace.header();
+    // A replay compares each result field by field, so results of another wire differ in fields
+    // the app did not regress in: the trace replays only against the protocol it was recorded at.
+    let app = driver.protocol();
+    if header.protocol != app.to_string() {
+        return Err(Error::Version {
+            app: Some(app),
+            client: header.protocol.parse::<ProtocolVersion>().ok(),
+            message: format!(
+                "the trace was recorded at protocol {} and the app speaks {app}; record it again \
+                 against this app",
+                header.protocol
+            ),
+            retry: Retry::Never,
+        });
+    }
     if let Some(window) = header.window {
         let placement = driver.main_window()?.placement()?;
         WindowSpec::new(window.width, window.height, window.scale).check(&placement)?;

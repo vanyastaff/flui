@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use flui_protocol::locator::{Locator, StateFilter, TextMatch};
 use flui_protocol::tree::Node;
-use flui_protocol::wait::{Condition, Expectation, WaitOutcome};
+use flui_protocol::wait::{Condition, Expectation, WaitEnd, WaitOutcome};
 use flui_protocol::wire::Checked;
 
 use crate::compose;
 use crate::error::{Error, Result};
-use crate::report::{Check, Report};
 use crate::window::ElementLocator;
+use flui_protocol::report::{Check, Report};
 
 /// The assertions about what `subject` describes.
 pub fn expect(subject: ElementLocator<'_>) -> Expect<'_> {
@@ -235,7 +235,7 @@ impl std::fmt::Debug for SoftExpect<'_> {
 }
 
 fn settle(outcome: &WaitOutcome, expected: String, actual: String) -> Result<()> {
-    if outcome.satisfied {
+    if outcome.end == WaitEnd::Satisfied {
         Ok(())
     } else {
         Err(Error::Expectation { expected, actual })

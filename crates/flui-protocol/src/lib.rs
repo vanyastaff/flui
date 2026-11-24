@@ -11,6 +11,8 @@
 //!
 //! On the wire vocabulary sits the driver protocol of ADR-0238, in ADR-0080's shapes:
 //!
+//! - [`client`]: the [`Connection`](client::Connection) a test drives one window through, at every
+//!   depth, and the [`CallError`](client::CallError) a call fails with;
 //! - [`method`]: the table of every operation, [`METHODS`](method::METHODS), each a sealed [`Method`](method::Method) with its
 //!   wire name, the side that serves it, its effect class, its MCP [`Tier`](method::Tier) and its typed
 //!   parameters and output;
@@ -49,6 +51,7 @@
 //!   in the input recording's format, sent to it row by row as `record` events;
 //! - [`reload`]: `run.reload`, which the tool that started the app serves at its own endpoint:
 //!   a rebuild applied at a [`ReloadTier`](reload::ReloadTier) and its [`ReloadReport`](reload::ReloadReport);
+//! - [`report`]: a run's one [`Report`](report::Report), its checks and their one verdict;
 //! - [`version`]: the [`PROTOCOL_VERSION`](version::PROTOCOL_VERSION) the schema is published under,
 //!   versioned apart from this crate, and the rule for changing it.
 //!
@@ -72,6 +75,7 @@ pub mod act;
 pub mod audit;
 pub mod build;
 pub mod capture;
+pub mod client;
 pub mod envelope;
 pub mod error;
 pub mod events;
@@ -88,6 +92,7 @@ pub mod native_recording;
 pub mod perf;
 pub mod record;
 pub mod reload;
+pub mod report;
 pub mod semantics;
 pub mod session;
 pub mod snapshot;

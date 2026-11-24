@@ -28,11 +28,12 @@ use flui_driver::lane::windows::{
 use flui_driver::lane::{ActivityGuard, Lane};
 use flui_driver::os_input::OsDevice;
 use flui_driver::protocol::input::{DeviceClass, InputKind, PointerButton, PointerDevice};
+use flui_driver::protocol::report::Report;
+use flui_driver::protocol::verdict::Verdict;
 use flui_driver::protocol::wire::Role;
 use flui_driver::steps::OsEvent;
 use flui_driver::{
-    Driver, Error, InputPath, InputPolicy, Launch, Locator, Report, Scenario, Verdict, WindowSpec,
-    expect,
+    Driver, Error, InputPath, InputPolicy, Launch, Locator, Scenario, WindowSpec, expect,
 };
 
 use crate::private_desktop::{self, LiveDesktop};
@@ -167,7 +168,7 @@ fn every_role_reads_back_as_its_control_type_through_ui_automation() {
         .to_have_count(1)
         .expect("the roles page shows");
     let mut report = Report::new();
-    report.run_scenario("roles", &mut driver, scenarios::roles);
+    driver.run_scenario(&mut report, "roles", scenarios::roles);
     assert_eq!(
         report.verdict(),
         Verdict::Pass,
@@ -459,7 +460,7 @@ fn the_conformance_scenario_runs_through_the_os_lane() {
         .expect("the window is the scenario's");
     assert_eq!(driver.input_policy(), InputPolicy::require(InputPath::Os));
     let mut report = Report::new();
-    report.run_scenario("conformance", &mut driver, scenarios::conformance);
+    driver.run_scenario(&mut report, "conformance", scenarios::conformance);
     assert_eq!(report.lane(), Some("windows"));
     assert!(
         !report.announcements().is_empty(),
@@ -543,7 +544,7 @@ fn the_device_check_scenarios_run_through_the_os_lane() {
             )
             .expect("the window is the scenario's");
         let mut report = Report::new();
-        report.run_scenario(name, &mut driver, scenario);
+        driver.run_scenario(&mut report, name, scenario);
         let expected = if on_input_desktop || !sends_input {
             Verdict::Pass
         } else {

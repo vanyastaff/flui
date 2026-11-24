@@ -21,7 +21,7 @@ use flui_protocol::launch::PAGE_EXPORT_VERSION;
 use flui_protocol::session::HelloReply;
 use serde_json::{Value, json};
 
-use super::{Call, Connection, Events, Heard};
+use super::{Call, Events, Heard, Transport};
 use crate::error::{Error, Result};
 use crate::lane::chrome::bidi::{COMMAND_TIMEOUT, PageEvent, PageLines, Session};
 
@@ -200,7 +200,7 @@ impl BidiConnection {
     }
 }
 
-impl Connection for BidiConnection {
+impl Transport for BidiConnection {
     fn hello(&self) -> &HelloReply {
         &self.hello
     }

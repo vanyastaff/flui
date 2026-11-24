@@ -503,6 +503,8 @@ pub(crate) struct HeadlessLaunch {
     pub(crate) height: u32,
     pub(crate) insets: flui_platform::WindowInsets,
     pub(crate) reply_timeout: Duration,
+    /// How far each frame moves the app's virtual clock.
+    pub(crate) frame: Duration,
     pub(crate) attach: HeadlessAttach,
 }
 
@@ -528,6 +530,7 @@ impl Launch {
                 height: 600,
                 insets: flui_platform::WindowInsets::ZERO,
                 reply_timeout: Duration::from_secs(5),
+                frame: crate::connection::in_process::FRAME,
                 attach: Box::new(move |host| {
                     host.attach(&root())
                         .map_err(|error| format!("the root did not attach: {error}"))
@@ -581,5 +584,28 @@ impl Launch {
             headless.reply_timeout = timeout;
         }
         self
+    }
+
+    /// How far each frame of the headless app moves its virtual clock: 16 ms, a window at 60 Hz,
+    /// when not named. A longer frame stands for a window that presents more slowly, which plays
+    /// input a tick a frame past the 60 Hz bound its agent answers within. A zero period is
+    /// refused, since no frame would move the clock.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidArgument`] for a zero period or a launch that is not headless.
+    pub fn frame_period(mut self, period: Duration) -> Result<Self> {
+        let Target::Headless(headless) = &mut self.target else {
+            return Err(Error::invalid_argument(
+                "only a headless app's clock moves by the frames the driver asks for",
+            ));
+        };
+        if period.is_zero() {
+            return Err(Error::invalid_argument(
+                "a frame moves the clock by more than nothing",
+            ));
+        }
+        headless.frame = period;
+        Ok(self)
     }
 }

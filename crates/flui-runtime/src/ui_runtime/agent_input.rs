@@ -161,7 +161,7 @@ pub(super) fn plan(sequence: &ActionSequence) -> Result<Plan, AgentError> {
                 let index = sources.len();
                 sources.push(Source {
                     name: id.clone(),
-                    kind: pointer_kind(*device),
+                    kind: pointer_kind(*device)?,
                 });
                 for (tick, action) in ticks.iter_mut().zip(actions) {
                     plan_pointer(tick, index, action)?;
@@ -267,12 +267,24 @@ fn source_name(source: &InputSource) -> Option<&str> {
     }
 }
 
-fn pointer_kind(device: PointerDevice) -> PointerKind {
-    match device {
+/// The pointer devices `input.inject` delivers, as the agent's hello lists them: each one
+/// [`pointer_kind`] maps.
+pub(crate) fn injected_pointers() -> Vec<PointerDevice> {
+    PointerDevice::ALL
+        .iter()
+        .copied()
+        .filter(|device| pointer_kind(*device).is_ok())
+        .collect()
+}
+
+fn pointer_kind(device: PointerDevice) -> Result<PointerKind, AgentError> {
+    Ok(match device {
+        PointerDevice::Mouse => PointerKind::Mouse,
         PointerDevice::Touch => PointerKind::Touch,
         PointerDevice::Pen => PointerKind::Pen { tool: PenTool::Tip },
-        _ => PointerKind::Mouse,
-    }
+        PointerDevice::Virtual => PointerKind::Virtual,
+        _ => return Err(unknown_action()),
+    })
 }
 
 fn last_at_least(tick: &mut Tick, duration: Duration) {

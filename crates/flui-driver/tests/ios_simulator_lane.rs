@@ -897,7 +897,13 @@ mod start {
             .start(&SimulatorApp::try_new(BUNDLE).expect("a bundle"))
             .expect_err("the launch timed out");
         assert!(
-            matches!(error, flui_driver::Error::Timeout { .. }),
+            matches!(
+                error,
+                flui_driver::Error::Timeout {
+                    awaited: flui_driver::Awaited::Host,
+                    ..
+                }
+            ),
             "{error:?}"
         );
         assert!(

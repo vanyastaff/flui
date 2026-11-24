@@ -8,7 +8,9 @@
 //! pass and never a silent skip (R33); `FLUI_REQUIRE_CHROME` turns that into a failure, for a job
 //! that provides them.
 
-use flui_driver::{Artifact, Driver, InputPath, InputPolicy, Launch, Report, Verdict};
+use flui_driver::protocol::report::Report;
+use flui_driver::protocol::verdict::Verdict;
+use flui_driver::{Artifact, Driver, InputPath, InputPolicy, Launch};
 
 use crate::scenarios;
 
@@ -51,7 +53,7 @@ fn the_web_input_scenario_runs_in_headless_chrome() {
         }
         Err(error) => panic!("the web build did not start in headless Chrome: {error}"),
     };
-    report.run_scenario("web-input", &mut driver, scenarios::web_input);
+    driver.run_scenario(&mut report, "web-input", scenarios::web_input);
     assert_eq!(report.lane(), Some("chrome"));
     assert_eq!(report.verdict(), Verdict::Pass, "{:#?}", report.checks());
 }

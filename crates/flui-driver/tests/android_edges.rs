@@ -21,7 +21,7 @@ use flui_driver::lane::{self, ActivityGuard, Lane as _};
 use flui_driver::protocol::input::{PointerButton, PointerDevice};
 use flui_driver::steps::OsEvent;
 use flui_driver::testing::ScriptedAdb;
-use flui_driver::{Error, Isolation};
+use flui_driver::{Awaited, Error, Isolation};
 
 use crate::android_lane::{
     FOCUSED, GETEVENT, PACKAGE, PROBED, USAGE, WINDOW, abilities, answer_syncs, capability,
@@ -1182,7 +1182,13 @@ fn a_lane_that_started_no_app_stops_nothing_when_it_ends() {
         .reply("forward --remove", AdbReply::new(0, ""))
         .timeout_once("forward --no-rebind");
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
-    assert!(matches!(lane.start(&app), Err(Error::Timeout { .. })));
+    assert!(matches!(
+        lane.start(&app),
+        Err(Error::Timeout {
+            awaited: Awaited::Host,
+            ..
+        })
+    ));
     let local = local_spec(&adb.commands("forward --no-rebind")[0]);
     drop(lane);
     assert_eq!(

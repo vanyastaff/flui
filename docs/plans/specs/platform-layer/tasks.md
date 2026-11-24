@@ -5191,11 +5191,11 @@ GPU-память простаивающего или невидимого окн
   прогон не выполняет. Её выполняет тот же тест на рабочем столе, принимающем ввод пользователя
   (`FLUI_TEST_VISIBLE_DESKTOP=1`, с `FLUI_REQUIRE_INPUT_DESKTOP=1`, чтобы прогон вне него упал);
   его делает владелец, это долг строки качества parity «Real OS input drives an app through the
-  driver's OS lane». Форма отчёта для строки parity есть: `Report::to_json` пишет `lane`,
+  driver's OS lane». Форма отчёта для строки parity есть: сериализация `flui_protocol::report::Report` пишет `lane`,
   `verdict`, `cannot_verify` и `isolation`, `Display` — строки `lane: …` и
   `FLUI_DRIVER_VERDICT=…`; тест требует `report.lane() == Some("windows")`,
   `policy::a_certification_scenario_takes_the_os_path_announced_once_before_its_first_event` —
-  `to_json()["lane"]`. Через
+  `serde_json::to_value(&report)?["lane"]`. Через
   `os`-lane на macOS — `macos_desktop::the_conformance_scenario_runs_through_the_os_lane`, тоже в
   долгу до прогона на Mac. Через X11-lane сценарий проходит в CI на Xvfb
   (`x11_desktop::the_conformance_scenario_runs_through_the_os_lane`); долг Linux — прогон на X

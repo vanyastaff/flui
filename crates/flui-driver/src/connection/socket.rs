@@ -37,7 +37,7 @@ use interprocess::local_socket::Stream;
 use interprocess::local_socket::traits::Stream as _;
 use serde_json::Value;
 
-use super::{Call, Connection, Events, Heard, MAX_REPLY};
+use super::{Call, Events, Heard, MAX_REPLY, Transport};
 use crate::error::{Error, Result};
 
 /// How long the hello's answer may take.
@@ -241,7 +241,7 @@ impl SocketConnection {
     }
 }
 
-impl Connection for SocketConnection {
+impl Transport for SocketConnection {
     fn hello(&self) -> &HelloReply {
         &self.hello
     }

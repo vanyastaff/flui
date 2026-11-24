@@ -27,6 +27,9 @@ vocabulary! {
         NoAlternative => "no_alternative",
         /// A gesture's semantics alternative has a different effect.
         AlternativeDiffers => "alternative_differs",
+        /// Text whose colour against what is painted behind it falls below the contrast its size
+        /// needs, read from the draw commands' colours, never from pixels.
+        TextContrast => "text_contrast",
     }
 }
 

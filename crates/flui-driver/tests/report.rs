@@ -3,15 +3,17 @@
 
 use flui_driver::protocol::act::{Effect, EffectKind};
 use flui_driver::protocol::error::{ErrorCode, ErrorObject, Retry};
-use flui_driver::report::{VERDICT_LINE, verdict_exit_code};
-use flui_driver::{Check, Error, Isolation, Outcome, Report, Verdict};
+use flui_driver::protocol::report::{Check, Outcome, Report};
+use flui_driver::protocol::report::{VERDICT_LINE, verdict_exit_code};
+use flui_driver::protocol::verdict::Verdict;
+use flui_driver::{Error, Isolation};
 
 fn passed(name: &str) -> Check {
     Check::new(name, Outcome::Passed)
 }
 
 fn failed(name: &str) -> Check {
-    Check::from_result::<()>(
+    Check::from_result::<(), Error>(
         name,
         &Err(Error::Expectation {
             expected: "1".into(),
@@ -21,7 +23,7 @@ fn failed(name: &str) -> Check {
 }
 
 fn unsupported(name: &str, capability: &str) -> Check {
-    Check::from_result::<()>(
+    Check::from_result::<(), Error>(
         name,
         &Err(Error::NotSupported {
             capability: Some(capability.into()),
@@ -33,14 +35,14 @@ fn unsupported(name: &str, capability: &str) -> Check {
 
 #[test]
 fn the_verdict_is_fail_then_cannot_verify_then_pass() {
-    let interrupted = Check::from_result::<()>(
+    let interrupted = Check::from_result::<(), Error>(
         "os tap",
         &Err(Error::InterruptedByUser {
             lane: "windows".into(),
             event: "a key press".into(),
         }),
     );
-    let no_device = Check::from_result::<()>(
+    let no_device = Check::from_result::<(), Error>(
         "android tap",
         &Err(Error::Lane {
             lane: "android".into(),
@@ -48,7 +50,7 @@ fn the_verdict_is_fail_then_cannot_verify_then_pass() {
             message: "no device".into(),
         }),
     );
-    let lane_failed = Check::from_result::<()>(
+    let lane_failed = Check::from_result::<(), Error>(
         "android tap",
         &Err(Error::Lane {
             lane: "android".into(),
@@ -116,7 +118,7 @@ fn the_verdict_is_fail_then_cannot_verify_then_pass() {
             Some(format!("{VERDICT_LINE}{}", verdict.name()).as_str()),
             "{row}: the last line is the verdict"
         );
-        let json = report.to_json();
+        let json = serde_json::to_value(&report).expect("a report serializes");
         assert_eq!(json["verdict"], verdict.name(), "{row}");
         assert_eq!(json["exit_code"], report.exit_code(), "{row}");
     }
@@ -147,7 +149,7 @@ fn a_scenario_that_checked_nothing_cannot_be_verified() {
         flui_widgets::Text::new("nothing to check")
     }))
     .expect("the headless app starts");
-    report.run_scenario("empty", &mut driver, |_, _| Ok(()));
+    driver.run_scenario(&mut report, "empty", |_, _| Ok(()));
     assert_eq!(report.verdict(), Verdict::CannotVerify, "{report}");
     let not_checked: Vec<&str> = report
         .not_checked()
@@ -156,7 +158,7 @@ fn a_scenario_that_checked_nothing_cannot_be_verified() {
     assert_eq!(not_checked, ["empty"]);
 
     let mut checked = Report::new();
-    checked.run_scenario("one check", &mut driver, |driver, report| {
+    driver.run_scenario(&mut checked, "one check", |driver, report| {
         report.check("reads the window", || driver.main_window().map(|_| ()))
     });
     assert_eq!(checked.verdict(), Verdict::Pass, "{checked}");
@@ -171,7 +173,10 @@ fn the_report_names_the_isolation_and_the_announcements() {
     let printed = report.to_string();
     assert!(printed.contains("isolation: shared"), "{printed}");
     assert!(printed.contains("announced: OS input"), "{printed}");
-    assert_eq!(report.to_json()["isolation"], "shared");
+    assert_eq!(
+        serde_json::to_value(&report).expect("a report serializes")["isolation"],
+        "shared"
+    );
 }
 
 #[test]

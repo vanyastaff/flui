@@ -13,12 +13,14 @@ use flui_protocol::{
     capture::Screenshot, error::ErrorCode, error::ErrorObject, error::HandleKind, events::Event,
     events::EventKind, input::DeviceClass, input::Direction, input::InputKind, input::InputParams,
     input::InputPath, input::Journal, input::PointerButton, input::PointerDevice,
-    input::PressKeysParams, input::ScrollUnit, input::SwipeParams, input::TapParams,
-    locator::LocateParams, locator::Locator, locator::Matches, locator::Target, locator::TextMatch,
-    perf::FramePhase, perf::PerfExpectParams, perf::PerfReport, session::ClientRole,
-    session::Hello, session::Isolation, snapshot::ChangedField, snapshot::Snapshot,
-    tree::ElementRef, verdict::Verdict, version::ProtocolVersion, wait::Condition,
-    wait::UnsettledReason, wait::WaitOutcome, wait::WaitParams, wire::ActionName, wire::Role,
+    input::PressKeysParams, input::ScrollUnit, input::ScrollUntilParams, input::SwipeParams,
+    input::TapParams, locator::LocateParams, locator::Locator, locator::Matches, locator::Target,
+    locator::TextMatch, perf::FramePhase, perf::PerfExpectParams, perf::PerfReport,
+    session::ClientRole, session::Hello, session::Isolation, session::Placement, session::Platform,
+    snapshot::ChangedField, snapshot::Snapshot, tree::ElementRef, verdict::Verdict,
+    version::ProtocolVersion, wait::ClearedBy, wait::Condition, wait::SettleScope,
+    wait::UnsettledReason, wait::WaitEnd, wait::WaitOutcome, wait::WaitParams, wire::ActionName,
+    wire::Role,
 };
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -80,6 +82,10 @@ fn every_vocabulary_enum_is_spelled_as_it_is_named() {
     spelled_as_named(Tier::ALL, Tier::name);
     spelled_as_named(UnsettledReason::ALL, UnsettledReason::name);
     spelled_as_named(Verdict::ALL, Verdict::name);
+    spelled_as_named(ClearedBy::ALL, ClearedBy::name);
+    spelled_as_named(SettleScope::ALL, SettleScope::name);
+    spelled_as_named(WaitEnd::ALL, WaitEnd::name);
+    spelled_as_named(Platform::ALL, Platform::name);
     {
         use flui_protocol::native_recording::{
             Absence, Appearance, Autofill, Availability, Backend, CancelReason, Capitalization,
@@ -353,21 +359,85 @@ fn waits_take_conditions_and_answer_the_last_observation() {
             {"matches": {"locator": {"role": "check_box"}, "expect": {"count": 3}}},
             {"matches": {"locator": {"role": "check_box"},
                          "expect": {"state": {"checked": "mixed"}}}},
+            {"matches": {"locator": {"identifier": "banner"}, "expect": "visible"}},
+            {"matches": {"locator": {"root": true},
+                         "expect": {"description": {"match": "contains", "text": "Inbox"}}}},
             {"any": ["settled", {"frames": 3}]},
             {"event": {"kind": "semantics", "window": "w3"}},
         ]},
         "timeout_ms": 2000,
         "max_frames": 120,
     }));
-    assert!(matches!(wait.condition, Condition::All(ref all) if all.len() == 8));
-    round_trips::<WaitOutcome>(json!({
-        "satisfied": false,
+    assert!(matches!(wait.condition, Condition::All(ref all) if all.len() == 10));
+    let outcome: WaitOutcome = round_trips(json!({
+        "end": "unsatisfied",
         "frames": 300,
         "observation": {"revision": 9, "count": 0},
         "unsettled": [
-            {"reason": "pending_work"},
-            {"reason": "timer", "due_in_ms": 250},
+            {"reason": "pending_work", "cleared_by": "next_frame"},
+            {"reason": "timer", "cleared_by": "deadline", "due_in_ms": 250},
+            {"reason": "ticker", "window": "w3", "owner": "w3/e12",
+             "site": {"file": "src/spinner.rs", "line": 40, "column": 9},
+             "cleared_by": "next_frame"},
+            {"reason": "platform_reply", "window": "w3", "cleared_by": "outside"},
         ],
+        "scope": "complete",
+    }));
+    assert_eq!(outcome.end, WaitEnd::Unsatisfied);
+    assert_eq!(outcome.scope, SettleScope::Complete);
+    // Only the test can release what is left: the wait ends idle, naming it.
+    let idle: WaitOutcome = round_trips(json!({
+        "end": "idle",
+        "frames": 2,
+        "observation": {"revision": 9, "count": 0},
+        "unsettled": [{"reason": "background", "cleared_by": "test"}],
+        "scope": "complete",
+    }));
+    assert_eq!(idle.end, WaitEnd::Idle);
+    // An answer that names no scope counted its runtime's half alone.
+    let runtime_only: WaitOutcome = serde_json::from_value(json!({
+        "end": "satisfied",
+        "frames": 1,
+        "observation": {"revision": 2, "count": 1},
+    }))
+    .expect("an answer without a scope reads");
+    assert_eq!(runtime_only.end, WaitEnd::Satisfied);
+    assert_eq!(runtime_only.scope, SettleScope::RuntimeOnly);
+}
+
+#[test]
+fn a_placement_names_its_platform_and_safe_area() {
+    let placement: Placement = round_trips(json!({
+        "window": "w3",
+        "size": {"width": 390.0, "height": 844.0},
+        "scale": 3.0,
+        "visible": true,
+        "focused": true,
+        "platform": "ios",
+        "safe_area": {"top": 47.0, "right": 0.0, "bottom": 34.0, "left": 0.0},
+    }));
+    assert_eq!(placement.platform, Some(Platform::Ios));
+    round_trips::<Placement>(json!({
+        "window": "w3",
+        "size": {"width": 800.0, "height": 600.0},
+        "scale": 1.0,
+        "visible": false,
+        "focused": false,
+    }));
+}
+
+#[test]
+fn scroll_until_names_the_scrollable_and_what_it_scrolls_to() {
+    let params: ScrollUntilParams = round_trips(json!({
+        "target": {"locator": {"identifier": "inbox"}},
+        "until": {"name": {"match": "exact", "text": "Message 40"}},
+        "direction": "down",
+        "timeout_ms": 8000,
+    }));
+    assert_eq!(params.options.effective_timeout_ms(), 8_000);
+    round_trips::<ScrollUntilParams>(json!({
+        "target": {"element": "w3/e4"},
+        "until": {"root": true, "role": "button"},
     }));
 }
 

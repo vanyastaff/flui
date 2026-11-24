@@ -231,6 +231,71 @@ fn a_window_methods_parameters_name_the_window_they_address() {
     );
 }
 
+/// Addressing parameters names the window where they name none, and keeps the one they name: a
+/// locator's, a key press's with no target, never an element's, a point's or a field's.
+#[cfg(feature = "serde")]
+#[test]
+fn addressing_names_a_window_only_where_the_parameters_name_none() {
+    use flui_protocol::{
+        act::ActParams, geometry::LogicalPoint, input::InputParams, input::PressKeysParams,
+        input::TapParams, locator::LocateParams, locator::Locator, locator::Target,
+        method::Addressed, tree::ElementId, tree::ElementRef, tree::WindowId, wire::ActionName,
+    };
+
+    let connection = WindowId::from_u64(3).expect("non-zero");
+    let other = WindowId::from_u64(4).expect("non-zero");
+    let element = ElementRef::new(other, ElementId::from_u64(9).expect("non-zero"));
+    let point = Target::Point {
+        window: other,
+        at: LogicalPoint::new(1.0, 2.0),
+    };
+    let keys = |window: Option<&str>| -> PressKeysParams {
+        serde_json::from_value(serde_json::json!({ "window": window, "keys": ["Enter"] }))
+            .expect("press keys reads")
+    };
+    let table: Vec<(&str, Box<dyn Addressed>, WindowId)> = vec![
+        (
+            "a locator naming none",
+            Box::new(LocateParams::new(Locator::default())),
+            connection,
+        ),
+        (
+            "a locator naming one",
+            Box::new(LocateParams::new(Locator::default().in_window(other))),
+            other,
+        ),
+        (
+            "a gesture on a locator naming none",
+            Box::new(TapParams::new(Locator::default())),
+            connection,
+        ),
+        (
+            "a gesture on an element",
+            Box::new(TapParams::new(element)),
+            other,
+        ),
+        (
+            "an act at a point",
+            Box::new(ActParams::new(point, ActionName::Invoke)),
+            other,
+        ),
+        ("keys with no target", Box::new(keys(None)), connection),
+        ("keys in a window", Box::new(keys(Some("w4"))), other),
+        (
+            "an injection",
+            Box::new(InputParams::new(
+                other,
+                flui_protocol::input::ActionSequence::new(Vec::new()),
+            )),
+            other,
+        ),
+    ];
+    for (case, mut params, expected) in table {
+        params.address(connection);
+        assert_eq!(params.window(), Some(expected), "{case}");
+    }
+}
+
 /// What an observer may call and what a timeout lets a client resend is one rule over the
 /// effects (ADR-0395): a read and an annotation leave the app as it was, an act and a destructive
 /// call change it.
@@ -249,4 +314,122 @@ fn only_an_act_or_a_destructive_call_changes_the_app() {
             (MethodEffect::Destructive, true),
         ]
     );
+}
+
+/// A gesture is the agent's on the synthetic and semantic paths (ADR-0400 §2): every acting
+/// `element.*` row is a window method, and what the window may hold it for is its act timeout,
+/// which the conversation counts in the reply's deadline (ADR-0288 §4).
+#[cfg(feature = "serde")]
+#[test]
+fn every_gesture_is_a_window_method_held_for_its_act_timeout() {
+    use std::time::Duration;
+
+    use flui_protocol::{
+        input::DragParams, input::GestureOptions, input::LongPressParams, input::PressKeysParams,
+        input::ScrollUntilParams, input::TapParams, locator::Locator, locator::Target,
+        method::Addressed, tree::ElementId, tree::ElementRef, tree::WindowId,
+    };
+
+    let gestures: Vec<&str> = METHODS
+        .iter()
+        .filter(|row| row.group() == "element" && row.effect == MethodEffect::Acts)
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(
+        gestures,
+        [
+            "element.double_tap",
+            "element.drag_to",
+            "element.fling",
+            "element.long_press",
+            "element.pinch",
+            "element.press_keys",
+            "element.scroll_into_view",
+            "element.scroll_until",
+            "element.swipe",
+            "element.tap",
+            "element.type_text",
+        ]
+    );
+    for name in &gestures {
+        let row = method::find(name).expect("a gesture is a method");
+        assert_eq!(row.served_by, ServedBy::Agent, "{name}");
+    }
+    let driver_composed: Vec<&str> = METHODS
+        .iter()
+        .filter(|row| row.served_by == ServedBy::Driver)
+        .map(|row| row.name)
+        .collect();
+    assert_eq!(
+        driver_composed,
+        [
+            "audit.screen",
+            "input.perform",
+            "perf.expect",
+            "session.attach",
+            "session.capabilities",
+            "session.close",
+            "session.launch",
+        ],
+        "what only the driver composes: the `os` path of a gesture is `input.perform`'s"
+    );
+
+    let window = WindowId::from_u64(3).expect("non-zero");
+    let element = Target::Element(ElementRef::new(
+        window,
+        ElementId::from_u64(9).expect("non-zero"),
+    ));
+    let mut tap = TapParams::new(element);
+    assert_eq!(tap.window(), Some(window));
+    assert_eq!(
+        tap.holds_for(),
+        Duration::from_millis(GestureOptions::DEFAULT_TIMEOUT_MS),
+        "an act that names no timeout holds for the default"
+    );
+    tap.options.timeout_ms = Some(u64::MAX);
+    assert_eq!(
+        tap.holds_for(),
+        Duration::from_millis(GestureOptions::MAX_TIMEOUT_MS),
+        "an act holds for a day at most"
+    );
+    assert_eq!(
+        tap.options.named_timeout_ms(),
+        Some(GestureOptions::MAX_TIMEOUT_MS),
+        "the timeout a composed act takes is bounded as the window's hold is"
+    );
+    tap.options.timeout_ms = None;
+    assert_eq!(tap.options.named_timeout_ms(), None);
+    let until = ScrollUntilParams::new(
+        Target::Locator(Locator::identifier("inbox")),
+        Locator::root(),
+    );
+    assert_eq!(
+        until.window(),
+        None,
+        "a locator naming no window searches the only one"
+    );
+
+    let long_press: LongPressParams = serde_json::from_value(serde_json::json!({
+        "target": {"element": "w3/e9"},
+        "duration_ms": 800,
+        "timeout_ms": 1000,
+    }))
+    .expect("a long press reads");
+    assert_eq!(
+        long_press.holds_for(),
+        Duration::from_millis(1_800),
+        "a long press holds for its timeout and then its press"
+    );
+    let keys: PressKeysParams = serde_json::from_value(serde_json::json!({
+        "window": "w3",
+        "keys": ["Enter"],
+    }))
+    .expect("press keys reads");
+    assert_eq!(keys.window(), Some(window), "no target: the window named");
+    let drag: DragParams = serde_json::from_value(serde_json::json!({
+        "target": {"point": {"window": "w3", "at": {"x": 1.0, "y": 2.0}}},
+        "to": {"element": "w3/e9"},
+    }))
+    .expect("a drag reads");
+    assert_eq!(drag.window(), Some(window));
 }

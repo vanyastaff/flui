@@ -277,6 +277,7 @@ pub fn read_failure(error: ProviderError, trusted: bool, deadline: Duration) -> 
     }
     match error {
         ProviderError::Timeout => Error::Timeout {
+            awaited: crate::error::Awaited::Host,
             effect: None,
             message: format!(
                 "the Simulator's window did not answer a call of the read within {} ms",

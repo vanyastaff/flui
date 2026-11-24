@@ -263,6 +263,7 @@ pub(crate) fn perform(element: &AXUIElement, action: &'static str) -> Result<(),
 pub(crate) fn read_error(error: ProviderError) -> Error {
     match error {
         ProviderError::Timeout => Error::Timeout {
+            awaited: crate::error::Awaited::Host,
             effect: None,
             message: format!(
                 "the app's accessibility API did not answer within {} ms: the app may be hung",

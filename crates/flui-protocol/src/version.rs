@@ -80,7 +80,7 @@ impl ProtocolVersion {
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 31);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 32);
 
 /// A published version that is not additive to the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -218,6 +218,23 @@ pub const BREAKING: &[Break] = &[
         ],
         required: &[],
     },
+    Break {
+        version: ProtocolVersion::new(0, 32),
+        adr: "ADR-0400",
+        // Settledness has one owner, the host that runs the turns: a cause may be the host's or a
+        // ticker's, and says what discharges it, so `UnsettledReason` gains values and a cause
+        // requires its `cleared_by`; the vocabulary grows for one `Tester` (a root locator, the
+        // visible and description expectations, a virtual pointer, the contrast rule, a
+        // window's platform); a wait ends satisfied, unsatisfied or idle, so `WaitOutcome`'s
+        // `satisfied` gives way to a required `end`; an app speaking 0.32 refuses older clients,
+        // which would refuse the new values.
+        renamed: &[],
+        removed: &["/$defs/WaitOutcome/properties/satisfied"],
+        required: &[
+            "/$defs/UnsettledCause/required/cleared_by",
+            "/$defs/WaitOutcome/required/end",
+        ],
+    },
 ];
 
 impl fmt::Display for ProtocolVersion {
@@ -301,8 +318,8 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.31");
-        assert_eq!("0.31".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.32");
+        assert_eq!("0.32".parse(), Ok(PROTOCOL_VERSION));
         assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
@@ -324,10 +341,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.31"))
+            Some(serde_json::json!("0.32"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.31")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.32")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());

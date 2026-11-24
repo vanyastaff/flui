@@ -33,19 +33,20 @@ use flui_driver::lane::ios_simulator::accessibility::HostScreen;
 use flui_driver::lane::ios_simulator::roles as ios_roles;
 use flui_driver::lane::macos::roles as ax_roles;
 use flui_driver::lane::windows::roles::{ROLES, expected_wire_role};
-use flui_driver::protocol::geometry::LogicalPoint;
+use flui_driver::protocol::geometry::{LogicalInsets, LogicalPoint};
 use flui_driver::protocol::input::{
     ActionSequence, DeviceClass, ImeAction, InputKind, InputSource, PointerAction, PointerButton,
     PointerDevice, ScrollUnit, TrackpadAction, WheelAction,
 };
+use flui_driver::protocol::report::Check;
+use flui_driver::protocol::report::{Outcome, Report};
 use flui_driver::protocol::semantics::SemanticsRole;
+use flui_driver::protocol::session::Platform;
 use flui_driver::protocol::tree::Node;
+use flui_driver::protocol::verdict::Verdict;
 use flui_driver::protocol::wire::Role;
-use flui_driver::report::Check;
 use flui_driver::testing::ScriptedSimulatorScreen;
-use flui_driver::{
-    Driver, Error, InputPath, Launch, Locator, Outcome, Report, Result, Verdict, expect,
-};
+use flui_driver::{Driver, Error, InputPath, Launch, Locator, Result, expect};
 use flui_foundation::geometry::EdgeInsets;
 use flui_platform::{TargetPlatform, WindowInsets};
 use flui_view::environment::PlatformConvention;
@@ -820,7 +821,7 @@ fn run(
     scenario: impl FnOnce(&mut Driver, &mut Report) -> Result<()>,
 ) -> Report {
     let mut report = Report::new();
-    report.run_scenario(name, &mut driver, scenario);
+    driver.run_scenario(&mut report, name, scenario);
     report
 }
 
@@ -1161,6 +1162,30 @@ fn phone(top: f64, bottom: f64) -> Driver {
         .window_insets(insets)
         .expect("a headless window takes its insets");
     Driver::launch(launch).expect("the headless app starts")
+}
+
+/// The placement the agent serves states the safe area the host reports, side by side, and the
+/// platform-neutral conventions a headless window follows unless it names a platform.
+#[test]
+fn a_placement_states_the_safe_area_the_host_reports() {
+    let insets = WindowInsets::ZERO
+        .try_with_safe_area(EdgeInsets::new(59.0, 3.0, 34.0, 7.0))
+        .expect("finite insets");
+    let launch = Launch::headless(|| Insets)
+        .window_size(393, 852)
+        .window_insets(insets)
+        .expect("a headless window takes its insets");
+    let mut driver = Driver::launch(launch).expect("the headless app starts");
+    let placement = driver
+        .main_window()
+        .and_then(|mut window| window.placement())
+        .expect("the window's placement");
+    assert_eq!(
+        placement.safe_area,
+        Some(LogicalInsets::new(59.0, 3.0, 34.0, 7.0)),
+        "{placement:?}"
+    );
+    assert_eq!(placement.platform, Some(Platform::Neutral), "{placement:?}");
 }
 
 /// A native window's insets are its OS's: a launch of anything but a headless view refuses them.

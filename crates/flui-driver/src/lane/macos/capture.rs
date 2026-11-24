@@ -234,6 +234,7 @@ pub(super) fn capture(
     let whole = answered
         .recv_timeout(CAPTURE_WITHIN)
         .map_err(|_| Error::Timeout {
+            awaited: crate::error::Awaited::Host,
             effect: None,
             message: format!(
                 "ScreenCaptureKit did not capture the app's window within {} ms",
