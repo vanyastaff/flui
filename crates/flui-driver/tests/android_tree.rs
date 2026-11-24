@@ -32,7 +32,9 @@ use flui_driver::protocol::session::Placement;
 use flui_driver::protocol::tree::{ElementId, Node, Rect, Tree, WindowId};
 use flui_driver::protocol::wire::{Checked, Role};
 
-use crate::android_lane::{PACKAGE, scripted, scripted_showing};
+use flui_driver::testing::ScriptedAdb;
+
+use crate::android_lane::{PACKAGE, scripted, scripted_showing, windows_edge_to_edge};
 
 /// The scenario app's window as `accesskit_android` serves it, edge to edge on a 1080 by 2400
 /// display.
@@ -191,7 +193,32 @@ fn edge_cases() -> Tree {
             )
         })
         .collect();
-    root.children = vec![small, large, volume, items];
+    // A grid cell, which the read always reports as a selection, and a row of a multi-select
+    // list that publishes a selection: the toggled state each has, which the adapter publishes as
+    // checkable and checked, the read does not report.
+    let mut cell = identified(
+        app_node(
+            10,
+            Role::GridCell,
+            "GridCell",
+            Some("Cell"),
+            (0, 300, 540, 100),
+        ),
+        "cell",
+    );
+    cell.selected = Some(false);
+    let mut apples = identified(
+        app_node(
+            11,
+            Role::ListItem,
+            "ListItem",
+            Some("Apples"),
+            (540, 300, 540, 100),
+        ),
+        "apples",
+    );
+    apples.selected = Some(true);
+    root.children = vec![small, large, volume, items, cell, apples];
     Tree::new(vec![root], false)
 }
 
@@ -668,13 +695,24 @@ fn a_reply_of_another_shape_refuses_the_dump() {
     }
 }
 
-/// The lane reads the tree from one dump, asking first which services run, and says it reads
-/// through UI Automator; a list the user emptied lets it read.
+/// A device of the fixtures' window, edge to edge, whose `uinput` the shell may not open.
+fn device_showing(xml: &str) -> ScriptedAdb {
+    scripted_showing(false, None, xml, &windows_edge_to_edge(1080, 2400))
+        .refuse_stream("shell uinput -")
+}
+
+/// An emulator of the fixtures' window, edge to edge.
+fn emulator_showing(xml: &str) -> ScriptedAdb {
+    scripted_showing(true, None, xml, &windows_edge_to_edge(1080, 2400))
+        .refuse_stream("shell uinput -")
+}
+
+/// On a device, the lane reads the tree from one dump, asking first which services run, and says
+/// it reads through UI Automator; a list the user emptied lets it read.
 #[test]
 fn the_lane_reads_the_tree_from_a_dump_once_no_service_runs() {
-    let adb = scripted_showing(true, None, CONTROLS)
-        .refuse_stream("shell uinput -")
-        .reply_once("shell settings get secure", AdbReply::new(0, "\n0\n"));
+    let adb =
+        device_showing(CONTROLS).reply_once("shell settings get secure", AdbReply::new(0, "\n0\n"));
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
     assert_eq!(
         lane.capabilities().accessibility,
@@ -697,31 +735,44 @@ fn the_lane_reads_the_tree_from_a_dump_once_no_service_runs() {
     assert_eq!(adb.commands("exec-out uiautomator dump").len(), 1);
 }
 
-/// With TalkBack or Voice Access on, the lane neither reads the tree nor locates the window: no
-/// dump goes out.
+/// On a device with TalkBack or Voice Access on, the lane reads no tree, and no dump goes out; it
+/// still locates the window, which takes no dump.
 #[test]
 fn a_running_service_stops_every_dump_before_it_starts() {
     let talkback = "com.google.android.marvin.talkback/.TalkBackService\n1\n";
     let voice_access = "com.google.android.apps.accessibility.voiceaccess/.JustSpeakService\n0\n";
-    let adb = scripted_showing(true, None, CONTROLS)
-        .refuse_stream("shell uinput -")
+    let adb = device_showing(CONTROLS)
         .reply_once("shell settings get secure", AdbReply::new(0, talkback))
         .reply_once("shell settings get secure", AdbReply::new(0, voice_access));
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
-    let read = lane
-        .read_tree(&placement(), &controls())
-        .expect_err("no tree while TalkBack reads");
-    let located = lane
-        .locate_window(&placement())
-        .expect_err("no window while Voice Access listens");
-    for refused in [read, located] {
+    for reader in ["TalkBack", "Voice Access"] {
+        let refused = lane
+            .read_tree(&placement(), &controls())
+            .expect_err("no tree while a service runs");
         assert_eq!(
             refused.missing_capability().as_deref(),
             Some(safety::WINDOW_DUMP),
-            "{refused:?}"
+            "{reader}: {refused:?}"
         );
     }
+    lane.locate_window(&placement())
+        .expect("the window is located without a dump");
     assert_eq!(adb.commands("exec-out uiautomator"), Vec::<String>::new());
+}
+
+/// An emulator runs nobody's service, so the lane reads the tree there without asking which run:
+/// a service the image has on is no person's, paused for a moment.
+#[test]
+fn an_emulator_reads_the_tree_whatever_services_run() {
+    let talkback = "com.google.android.marvin.talkback/.TalkBackService\n1\n";
+    let adb = emulator_showing(CONTROLS)
+        .reply_once("shell settings get secure", AdbReply::new(0, talkback));
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
+    let os = lane
+        .read_tree(&placement(), &controls())
+        .expect("the emulator's tree is read");
+    assert!(find(&os.roots, "like").is_some());
+    assert_eq!(adb.commands("shell settings"), Vec::<String>::new());
 }
 
 /// An activation through the OS accessibility API is refused with its reason, before the device
@@ -754,13 +805,7 @@ fn the_root_is_the_decor_views_child_not_nativeactivitys_content_view() {
         "the root read is the app's view, with its six nodes"
     );
     // The app's view gone (its tree not served yet): the content view alone is no window.
-    let start = CONTROLS
-        .find("<node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\"")
-        .expect("the app's view");
-    let end = CONTROLS
-        .find("<node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\"")
-        .expect("the content root");
-    let without_view = format!("{}{}", &CONTROLS[..start], &CONTROLS[end..]);
+    let without_view = without_app_view(CONTROLS);
     assert_eq!(
         tree::read(&dump(&without_view), PACKAGE, &app, MAPPING),
         Err(TreeError::NoWindow {
@@ -796,6 +841,18 @@ fn a_radio_buttons_selection_is_the_checked_state_the_adapter_publishes() {
     let os =
         tree::read(&dump(&flipped), PACKAGE, &edge_cases(), MAPPING).expect("the rest matches");
     assert_eq!(find(&os.roots, "small"), None);
+}
+
+/// A grid cell, which the app's read always reports as a selection, and a multi-select list row
+/// that publishes one, have a toggled state the read does not report and the adapter publishes as
+/// checkable and checked: each is matched, and projects its selection as the read does.
+#[test]
+fn a_selection_roles_toggled_state_the_read_does_not_report_is_no_mismatch() {
+    let os = edge_cases_read();
+    let cell = find(&os.roots, "cell").expect("the grid cell is matched");
+    assert_eq!((cell.checked, cell.selected), (None, None));
+    let apples = find(&os.roots, "apples").expect("the list row is matched");
+    assert_eq!((apples.checked, apples.selected), (None, Some(true)));
 }
 
 /// A list hands Android one row past its viewport, the rest of the rows the app keeps past it to
@@ -854,7 +911,7 @@ fn what_a_dump_cannot_show_is_no_difference() {
     );
     assert_eq!(
         os.roots[0].children.len(),
-        4,
+        6,
         "the two announcers are left out"
     );
     let differences = Projection::of(&app, &os).differences();
@@ -928,6 +985,55 @@ fn a_dump_past_the_walk_budgets_projects_cut_and_says_so() {
     }
 }
 
+/// A node's children are cut to the room the node budget has left before they are matched: a
+/// node the walk reaches with the budget spent aligns none of its children, so two of them alike,
+/// which would be an ambiguity, cost nothing and fail nothing.
+#[test]
+fn children_past_the_node_budget_are_cut_before_they_are_matched() {
+    let filler = format!(
+        "<node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\" \
+         package=\"{PACKAGE}\" content-desc=\"\" checkable=\"false\" checked=\"false\" \
+         clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" \
+         scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" \
+         bounds=\"[0,600][10,610]\" />"
+    );
+    let row = format!(
+        "<node index=\"0\" text=\"\" resource-id=\"\" class=\"android.widget.TextView\" \
+         package=\"{PACKAGE}\" content-desc=\"Row\" checkable=\"false\" checked=\"false\" \
+         clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" \
+         scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" \
+         bounds=\"[0,400][100,420]\" />"
+    );
+    // The root and the label take handles 1 and 2, the label's fillers the next ones, and the
+    // button, the count, the switch and the field four more: the pad takes the budget's last
+    // handle, so none is left for its two rows.
+    let fillers = flui_driver::lane::walk::MAX_NODES - 7;
+    let gallery = "content-desc=\"Gallery\" checkable=\"false\" checked=\"false\" clickable=\"false\" enabled=\"true\" focusable=\"false\" focused=\"false\" scrollable=\"false\" long-clickable=\"false\" password=\"false\" selected=\"false\" bounds=\"[0,60][140,94]\" />";
+    let pad = "bounds=\"[0,350][480,590]\" />";
+    assert!(CONTROLS.contains(gallery) && CONTROLS.contains(pad));
+    let wide = CONTROLS
+        .replace(
+            gallery,
+            &format!(
+                "{}>{}</node>",
+                gallery.trim_end_matches(" />"),
+                filler.repeat(fillers)
+            ),
+        )
+        .replace(
+            pad,
+            &format!("bounds=\"[0,350][480,590]\">{row}{row}</node>"),
+        );
+    let mut app = controls();
+    let mut pad_row = app_node(8, Role::Label, "Label", Some("Row"), (0, 400, 100, 20));
+    pad_row.identifier = Some("row".to_owned());
+    app.roots[0].children[5].children = vec![pad_row];
+    let os = tree::read(&dump(&wide), PACKAGE, &app, MAPPING).expect("the budget cuts the rows");
+    assert!(os.truncated);
+    let pad = find(&os.roots, "pad").expect("the pad is read");
+    assert!(pad.children.is_empty() && pad.children_unread, "{pad:?}");
+}
+
 /// The app's tree and the OS tree compared are of one revision: a tree that moved while the dump
 /// was taken is read again, and one that moves on every read is reported as busy, never taken for
 /// a difference of the OS.
@@ -967,7 +1073,7 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
             }),
         )
         .expect("the stand-in binds its endpoint");
-        let adb = scripted_showing(true, None, CONTROLS).refuse_stream("shell uinput -");
+        let adb = emulator_showing(CONTROLS);
         let lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
         let driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
             .expect("the driver attaches")
@@ -990,13 +1096,60 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
     );
     assert_eq!(adb.commands("exec-out uiautomator dump").len(), 2);
 
-    // A tree that moves on every reading is busy, after three readings.
-    let (_agent, mut driver, reads, adb) = session((1..=10).collect());
+    // A match the lane could not make while the tree moved (the app's view not served yet) was
+    // made against a tree the app no longer showed: read again, and it holds.
+    let (_agent, mut driver, _reads, adb) = session(vec![1, 2]);
+    let _first = adb.clone().reply_once(
+        "exec-out uiautomator",
+        AdbReply::new(0, without_app_view(CONTROLS)),
+    );
+    let os = driver
+        .main_window()
+        .and_then(|mut window| window.os_tree())
+        .expect("the second reading matches");
+    assert!(find(&os.roots, "like").is_some());
+    assert_eq!(adb.commands("exec-out uiautomator dump").len(), 2);
+
+    // The same failed match on a tree that held still is the answer.
+    let (_agent, mut driver, _reads, adb) = session(vec![1]);
+    let _first = adb.clone().reply_once(
+        "exec-out uiautomator",
+        AdbReply::new(0, without_app_view(CONTROLS)),
+    );
+    let unmatched = driver
+        .main_window()
+        .and_then(|mut window| window.os_tree())
+        .expect_err("no window in the dump");
+    assert!(matches!(unmatched, Error::NotFound { .. }), "{unmatched:?}");
+    assert_eq!(adb.commands("exec-out uiautomator dump").len(), 1);
+
+    // A tree that moves on every reading, as one republishing every frame does, is read again
+    // for as long as the bound in time allows, however many readings that is, then busy.
+    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect());
+    let started = std::time::Instant::now();
     let moving = driver
         .main_window()
         .and_then(|mut window| window.os_tree())
         .expect_err("the tree never held still");
     assert!(matches!(moving, Error::Busy { .. }), "{moving:?}");
-    assert_eq!(adb.commands("exec-out uiautomator dump").len(), 3);
-    assert_eq!(reads.load(Ordering::SeqCst), 6);
+    assert!(
+        adb.commands("exec-out uiautomator dump").len() > 3,
+        "read again past any count of three"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+/// `xml` without the app's view, as a dump taken before the app serves its tree shows it.
+fn without_app_view(xml: &str) -> String {
+    let start = xml
+        .find("<node index=\"0\" text=\"\" resource-id=\"\" class=\"android.view.View\"")
+        .expect("the app's view");
+    let end = xml
+        .find("<node index=\"1\" text=\"\" resource-id=\"\" class=\"android.widget.LinearLayout\"")
+        .expect("the content root");
+    format!("{}{}", &xml[..start], &xml[end..])
 }

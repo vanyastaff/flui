@@ -117,9 +117,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   (a radio button's selection included) and enabled state, and its bounds at the surface's
   origin; two candidates the order does not tell apart are `Error::Ambiguous`, and bounds off the
   display place a node nowhere. Only a matched node carries the app's role and identifier; what a
-  dump cannot show (`tree::Unobservable`) projects as the app published it. No dump runs while
-  any accessibility service does (`safety::check_dump`): the dump suspends every one. The OS tree
-  and the app's are of one revision (`Window::compare_projection`). `invoke` is refused, since
+  dump cannot show (`tree::Unobservable`) projects as the app published it. Only the read of the
+  tree dumps: the window is located from `dumpsys window` (`device::parse_windows`), so input and
+  capture pause no accessibility service, and on a device no dump runs while any service does
+  (`safety::check_dump`). The OS tree and the app's are of one revision, read again while the
+  app's moves for at most two seconds (`Window::compare_projection`). `invoke` is refused, since
   UI Automator performs no accessibility action.
 - **The iOS Simulator lane sends no input** until a supported channel exists (the flui-driver
   spec's rule; `lane::ios_simulator::xcode` has the evidence): `Lane::check` refuses every input

@@ -1,5 +1,7 @@
-//! What `uiautomator dump` shows of the screen, read as untrusted input: where the app's window
-//! is, how the display is turned, and the accessibility nodes the app serves.
+//! What `uiautomator dump` shows of the screen, read as untrusted input: how the display is
+//! turned and the accessibility nodes the app serves. The lane reads it only for the tree: where
+//! the app's window is comes from `dumpsys window` (`super::device::WINDOWS`), which pauses no
+//! accessibility service.
 //!
 //! The dump is the active window's view hierarchy as accessibility reads it:
 //! `<hierarchy rotation="N">` and its `<node>`s, each with its `package`, its `class`, its `text`
@@ -159,39 +161,6 @@ impl UiDump {
             .ok_or_else(|| "the dump names no rotation from 0 to 3".to_owned())?;
         let roots = nodes_of(hierarchy, 0)?;
         Ok(Self { rotation, roots })
-    }
-
-    /// The first node, outermost first, that `package` shows at the size `size` within
-    /// `tolerance` pixels on each side: the app's surface among its window's views.
-    #[must_use]
-    pub fn surface_of(&self, package: &str, size: (f64, f64), tolerance: f64) -> Option<Bounds> {
-        let fits = |node: &UiNode| {
-            node.package == package
-                && node.bounds.is_some_and(|bounds| {
-                    (f64::from(bounds.width()) - size.0).abs() <= tolerance
-                        && (f64::from(bounds.height()) - size.1).abs() <= tolerance
-                })
-        };
-        let mut pending: Vec<&UiNode> = self.roots.iter().rev().collect();
-        while let Some(node) = pending.pop() {
-            if fits(node) {
-                return node.bounds;
-            }
-            pending.extend(node.children.iter().rev());
-        }
-        None
-    }
-
-    /// The applications whose nodes the window holds at its top, for people.
-    #[must_use]
-    pub fn packages(&self) -> Vec<&str> {
-        let mut packages: Vec<&str> = Vec::new();
-        for root in &self.roots {
-            if !packages.contains(&root.package.as_str()) {
-                packages.push(&root.package);
-            }
-        }
-        packages
     }
 }
 

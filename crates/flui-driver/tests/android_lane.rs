@@ -31,6 +31,18 @@ use flui_driver::{Endpoint, Error};
 pub(crate) const PACKAGE: &str = "dev.flui.scenario";
 pub(crate) const USAGE: &str = include_str!("android/input_usage.txt");
 pub(crate) const WINDOW: &str = include_str!("android/window.xml");
+/// What `dumpsys window` prints of the windows, as the lane's line keeps it (Android 14's
+/// `DisplayRotation` and `WindowState` dumps): the app's window below a 60-pixel status bar.
+pub(crate) const WINDOWS: &str = include_str!("android/windows.txt");
+
+/// [`WINDOWS`] with the app's window `width` by `height` pixels at the display's top left: an
+/// edge-to-edge window.
+pub(crate) fn windows_edge_to_edge(width: i32, height: i32) -> String {
+    WINDOWS.replace(
+        "frame=[0,60][1080,2400]",
+        &format!("frame=[0,0][{width},{height}]"),
+    )
+}
 pub(crate) const GETEVENT: &str = include_str!("android/getevent.txt");
 
 /// The kernel's device list while the probe's device is registered.
@@ -71,14 +83,15 @@ pub(crate) fn scripted(emulator: bool, uinput: bool) -> ScriptedAdb {
 /// [`scripted`], its `uinput` devices answering what they are written with `uinput` (the kernel
 /// then lists the probe's), or with no rule for `uinput` at all when `None`.
 pub(crate) fn scripted_with(emulator: bool, uinput: Option<Responder>) -> ScriptedAdb {
-    scripted_showing(emulator, uinput, WINDOW)
+    scripted_showing(emulator, uinput, WINDOW, WINDOWS)
 }
 
-/// [`scripted_with`], its window dumped as `window`.
+/// [`scripted_with`], its window dumped as `window` and its windows listed as `windows`.
 pub(crate) fn scripted_showing(
     emulator: bool,
     uinput: Option<Responder>,
     window: &str,
+    windows: &str,
 ) -> ScriptedAdb {
     let adb = ScriptedAdb::new()
         .reply(
@@ -90,6 +103,7 @@ pub(crate) fn scripted_showing(
             "shell wm size",
             AdbReply::new(0, "Physical size: 1080x2400\nPhysical density: 420\n"),
         )
+        .reply("shell dumpsys window displays", AdbReply::new(0, windows))
         .reply("shell dumpsys window", AdbReply::new(0, FOCUSED))
         .reply(
             "shell settings get secure",
@@ -435,21 +449,71 @@ fn what_the_device_prints_reads_into_its_facts() {
 }
 
 #[test]
-fn the_dump_gives_the_rotation_and_the_apps_surface() {
-    let dump = UiDump::parse(WINDOW).expect("the fixture is a dump");
-    assert_eq!(dump.rotation, 0);
-    assert_eq!(dump.packages(), vec![PACKAGE]);
+fn the_windows_give_the_rotation_and_the_focused_apps_frame() {
+    let windows = device::parse_windows(WINDOWS).expect("the fixture lists windows");
+    assert_eq!(windows.rotation, 0);
+    assert_eq!(windows.windows.len(), 4);
     assert_eq!(
-        dump.surface_of(PACKAGE, (1080.0, 2340.0), 2.0),
+        windows.focus.as_deref(),
+        Some("dev.flui.scenario/android.app.NativeActivity")
+    );
+    assert_eq!(
+        windows.focused_frame(),
         Some(Bounds {
             left: 0,
             top: 60,
             right: 1080,
             bottom: 2400
+        }),
+        "the frame, never the parent or display frame before it"
+    );
+    // Android 10 and before write the frame as `mFrame=`, a turned display's rotation by name.
+    let older = "    mRotation=ROTATION_90 mDeferredRotationPauseCount=0\n\
+                 \x20 Window #2 Window{abc u0 dev.flui.scenario/android.app.NativeActivity}:\n\
+                 \x20   Frames: containing=[0,0][2400,1080] parent=[0,0][2400,1080]\n\
+                 \x20   mFrame=[60,0][2400,1080] last=[60,0][2400,1080]\n\
+                 \x20 mCurrentFocus=Window{abc u0 dev.flui.scenario/android.app.NativeActivity}\n";
+    let windows = device::parse_windows(older).expect("an older device's windows");
+    assert_eq!(windows.rotation, 1);
+    assert_eq!(
+        windows.focused_frame(),
+        Some(Bounds {
+            left: 60,
+            top: 0,
+            right: 2400,
+            bottom: 1080
         })
     );
-    assert_eq!(dump.surface_of("other.app", (1080.0, 2340.0), 2.0), None);
-    assert_eq!(dump.surface_of(PACKAGE, (800.0, 600.0), 2.0), None);
+    // No rotation, or one `Surface` does not have, is no reply the lane reads.
+    for refused in [
+        WINDOWS.replace("mRotation=0", "mRotation=4"),
+        WINDOWS.replace("    mRotation=0 mDeferredRotationPauseCount=0\n", ""),
+    ] {
+        assert!(device::parse_windows(&refused).is_err(), "{refused}");
+    }
+    // The focus on a window the list does not hold, or none, frames nothing.
+    let unlisted = WINDOWS.replace(
+        "mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario",
+        "mCurrentFocus=Window{9999 u0 dev.flui.scenario.other",
+    );
+    assert_eq!(
+        device::parse_windows(&unlisted)
+            .expect("windows")
+            .focused_frame(),
+        None
+    );
+    // The windows read are bounded.
+    let many = format!(
+        "mRotation=0\n{}",
+        "  Window #0 Window{1 u0 Toast}:\n    Frames: frame=[0,0][1,1]\n"
+            .repeat(device::MAX_WINDOWS + 10)
+    );
+    assert_eq!(
+        device::parse_windows(&many).expect("windows").windows.len(),
+        device::MAX_WINDOWS
+    );
+    let dump = UiDump::parse(WINDOW).expect("the fixture is a dump");
+    assert_eq!(dump.rotation, 0);
     assert_eq!(
         Bounds::parse("[1,2][3,4]").map(|bounds| bounds.width()),
         Some(2)
@@ -1113,7 +1177,7 @@ fn a_tap_goes_out_as_motion_events_each_press_after_the_focus_check() {
     let sent: Vec<String> = adb
         .log()
         .into_iter()
-        .filter(|line| is_input(line) || line.starts_with("shell dumpsys"))
+        .filter(|line| is_input(line) || line.starts_with("shell dumpsys window windows"))
         .collect();
     assert_eq!(
         sent,
@@ -1160,7 +1224,7 @@ fn keys_text_and_a_scroll_go_out_as_input_commands() {
 #[test]
 fn the_app_without_the_focus_is_refused_before_its_press() {
     let adb = scripted(true, true).reply_once(
-        "shell dumpsys window",
+        "shell dumpsys window windows",
         AdbReply::new(0, "  mCurrentFocus=Window{9e u0 NotificationShade}\n"),
     );
     let mut lane = connected(&adb);
@@ -1400,13 +1464,54 @@ fn a_capture_in_another_pixel_format_is_taken_again_as_a_png() {
 
 #[test]
 fn a_window_the_device_does_not_show_is_not_in_front() {
-    let shade = WINDOW.replace(PACKAGE, "com.android.systemui");
-    let adb = scripted(true, true).reply_once("exec-out uiautomator", AdbReply::new(0, shade));
+    let shade = WINDOWS.replace(
+        "mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}",
+        "mCurrentFocus=Window{77aa u0 NotificationShade}",
+    );
+    assert_ne!(shade, WINDOWS);
+    let adb =
+        scripted(true, true).reply_once("shell dumpsys window displays", AdbReply::new(0, shade));
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
     let refused = lane
         .locate_window(&placement())
         .expect_err("the shade is in front");
     assert!(matches!(refused, Error::NotForeground { .. }), "{refused}");
+}
+
+/// A device whose user runs an accessibility service (a password manager, an automation app)
+/// still has its window located, pressed on and captured: none of them takes a `uiautomator
+/// dump`, which would pause the service. Only the read of the tree is refused, naming it.
+#[test]
+fn a_service_on_a_device_refuses_the_tree_and_nothing_else() {
+    let service = "com.example.passwords/.AutofillService\n0\n";
+    let adb = scripted(false, true)
+        .reply_once("shell settings get secure", AdbReply::new(0, service))
+        .reply_once("shell settings get secure", AdbReply::new(0, service))
+        .reply(
+            "exec-out screencap",
+            AdbReply::new(0, raw_capture(1080, 2400, 1, 16)),
+        );
+    let mut lane = connected(&adb);
+    lane::send_guarded(
+        &mut lane,
+        &tap(PointerDevice::Touch, DevicePoint::new(300, 600)),
+    )
+    .expect("the press goes out");
+    lane.capture_window(&placement())
+        .expect("the window is captured");
+    let empty = flui_driver::protocol::tree::Tree::new(Vec::new(), false);
+    let refused = lane
+        .read_tree(&placement(), &empty)
+        .expect_err("no tree while the service runs");
+    assert_eq!(
+        refused.missing_capability().as_deref(),
+        Some(safety::WINDOW_DUMP)
+    );
+    assert!(
+        refused.to_string().contains("com.example.passwords"),
+        "{refused}"
+    );
+    assert_eq!(adb.commands("exec-out uiautomator"), Vec::<String>::new());
 }
 
 #[test]

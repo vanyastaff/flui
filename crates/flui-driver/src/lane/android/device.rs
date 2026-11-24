@@ -1,6 +1,7 @@
 //! What the lane reads of the device, as pure parsers over what `adb` printed: the devices the adb
 //! server lists and which one a run takes, whether it is an emulator, its display, the commands
-//! its `input` has, the window that holds the input focus, and which accessibility services run.
+//! its `input` has, the windows' frames and the one that holds the input focus, and which
+//! accessibility services run.
 //!
 //! Everything here is the device's output, so each parser reads it as untrusted: a line it cannot
 //! read is skipped or answers `None`, never a panic, and what it collects is bounded.
@@ -8,6 +9,7 @@
 use flui_protocol::session::Isolation;
 
 use super::adb::unavailable;
+use super::uiautomator::Bounds;
 use crate::error::{Error, Result};
 
 /// The most devices read from one listing.
@@ -218,6 +220,126 @@ pub fn parse_focus(printed: &str) -> Option<String> {
     let _user = words.next()?;
     let title = words.next()?.trim();
     (!title.is_empty()).then(|| title.to_owned())
+}
+
+/// The line that prints where the windows are: the display's rotation (`DisplayRotation`'s
+/// `mRotation=`), then each window's header (`Window #N Window{hash uU title}:`), its frame
+/// (`frame=[l,t][r,b]` on its `Frames:` line from Android 11, `mFrame=[l,t][r,b]` before) and the
+/// window holding the input focus (`mCurrentFocus=`), as `dumpsys window` writes them. It reads
+/// no accessibility, so it pauses no accessibility service.
+pub const WINDOWS: &str = "dumpsys window displays | grep -m1 'mRotation='; \
+                           dumpsys window windows | grep -E 'Window #|mCurrentFocus=|rame=\\['";
+
+/// The most bytes of the [`WINDOWS`] reply the lane reads.
+pub const MAX_WINDOWS_REPLY: usize = 256 * 1024;
+
+/// The most windows the lane reads of one [`WINDOWS`] reply.
+pub const MAX_WINDOWS: usize = 512;
+
+/// One window as `dumpsys window` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WindowFrame {
+    /// Its title: `package/activity` for an activity's window, `StatusBar` for the status bar.
+    pub title: String,
+    /// Its frame in display pixels as the display is turned; `None` when no frame was read.
+    pub frame: Option<Bounds>,
+}
+
+/// Where the windows are, as the [`WINDOWS`] line's reply shows them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Windows {
+    /// The display's rotation from its natural orientation, in quarter turns
+    /// (`Surface.ROTATION_0` to `ROTATION_270`).
+    pub rotation: u8,
+    /// The windows, in the order `dumpsys` lists them, at most [`MAX_WINDOWS`].
+    pub windows: Vec<WindowFrame>,
+    /// The title of the window holding the input focus; `None` when no window holds it.
+    pub focus: Option<String>,
+}
+
+impl Windows {
+    /// The frame of the window holding the input focus.
+    #[must_use]
+    pub fn focused_frame(&self) -> Option<Bounds> {
+        let focus = self.focus.as_deref()?;
+        self.windows
+            .iter()
+            .find(|window| window.title == focus)
+            .and_then(|window| window.frame)
+    }
+}
+
+/// The windows the [`WINDOWS`] line printed as `printed`: see [`Windows`]. A window's frame is
+/// the first `frame=` or `mFrame=` after its header; a line the parser does not know is skipped.
+///
+/// # Errors
+///
+/// When the reply names no rotation from 0 to 3, so the lane cannot tell how the display is
+/// turned.
+pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
+    let mut rotation = None;
+    let mut windows: Vec<WindowFrame> = Vec::new();
+    let mut in_window = false;
+    for line in printed.lines() {
+        let line = line.trim();
+        if rotation.is_none()
+            && let Some(value) = line.strip_prefix("mRotation=")
+        {
+            let value = value.split_whitespace().next().unwrap_or_default();
+            rotation = match value {
+                "0" | "ROTATION_0" => Some(0),
+                "1" | "ROTATION_90" => Some(1),
+                "2" | "ROTATION_180" => Some(2),
+                "3" | "ROTATION_270" => Some(3),
+                _ => return Err(format!("`dumpsys` printed the rotation {value:?}")),
+            };
+            continue;
+        }
+        if line.starts_with("Window #") {
+            in_window = false;
+            if windows.len() < MAX_WINDOWS
+                && let Some(title) = window_title(line)
+            {
+                windows.push(WindowFrame { title, frame: None });
+                in_window = true;
+            }
+            continue;
+        }
+        if in_window
+            && let Some(window) = windows.last_mut()
+            && window.frame.is_none()
+        {
+            window.frame = frame_of(line);
+        }
+    }
+    let rotation = rotation.ok_or_else(|| "`dumpsys` printed no display rotation".to_owned())?;
+    Ok(Windows {
+        rotation,
+        windows,
+        focus: parse_focus(printed),
+    })
+}
+
+/// The title of the window a `Window #N Window{hash uU title}:` header names.
+fn window_title(header: &str) -> Option<String> {
+    let inside = header.split_once("Window{")?.1.rsplit_once('}')?.0;
+    let mut words = inside.splitn(3, ' ');
+    let _hash = words.next()?;
+    let _user = words.next()?;
+    let title = words.next()?.trim();
+    (!title.is_empty()).then(|| title.to_owned())
+}
+
+/// The frame a window's line gives: its `frame=[l,t][r,b]` (Android 11 and later, on the
+/// `Frames:` line) or `mFrame=[l,t][r,b]` (before), never `parent=`, `display=` or another frame.
+fn frame_of(line: &str) -> Option<Bounds> {
+    let at = line.split_whitespace().find_map(|word| {
+        word.strip_prefix("frame=")
+            .or_else(|| word.strip_prefix("mFrame="))
+    })?;
+    Bounds::parse(at)
 }
 
 /// The line that prints the accessibility services the user turned on and whether touch

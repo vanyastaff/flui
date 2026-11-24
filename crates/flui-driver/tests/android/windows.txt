@@ -1,0 +1,10 @@
+    mRotation=0 mDeferredRotationPauseCount=0
+  Window #0 Window{3c2b1a9 u0 NavigationBar0}:
+    Frames: parent=[0,2337][1080,2400] display=[-10000,-10000][10000,10000] frame=[0,2337][1080,2400] last=[0,2337][1080,2400] insetsChanged=false
+  Window #1 Window{8d7e6f5 u0 StatusBar}:
+    Frames: parent=[0,0][1080,60] display=[-10000,-10000][10000,10000] frame=[0,0][1080,60] last=[0,0][1080,60] insetsChanged=false
+  Window #2 Window{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}:
+    Frames: parent=[0,60][1080,2400] display=[0,60][1080,2400] frame=[0,60][1080,2400] last=[0,60][1080,2400] insetsChanged=false
+  Window #3 Window{1a2b3c4 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}:
+    Frames: parent=[0,0][1080,2400] display=[0,0][1080,2400] frame=[0,0][1080,2400] last=[0,0][1080,2400] insetsChanged=false
+  mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}
