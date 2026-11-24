@@ -86,6 +86,7 @@ impl Failure {
                 message: format!("the browser refused `{method}`: {error}: {message}"),
             },
             Self::Timeout => Error::Timeout {
+                awaited: crate::error::Awaited::Host,
                 effect: None,
                 message: format!("the browser did not answer `{method}` in time"),
                 retry: flui_protocol::error::Retry::Soon,

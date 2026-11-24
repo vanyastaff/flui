@@ -19,9 +19,9 @@ use std::time::Duration;
 use flui_driver::lane::ios_simulator::xcode::HID_CAPABILITY;
 use flui_driver::lane::ios_simulator::{self, LANE, SimulatorApp};
 use flui_driver::pixels::CaptureSource;
-use flui_driver::{
-    Driver, Error, InputPath, InputPolicy, Outcome, Report, Result, Scenario, Verdict,
-};
+use flui_driver::protocol::report::{Outcome, Report};
+use flui_driver::protocol::verdict::Verdict;
+use flui_driver::{Driver, Error, InputPath, InputPolicy, Result, Scenario};
 
 use crate::scenarios;
 
@@ -92,7 +92,7 @@ fn the_ios_scenarios_run_on_a_simulator() {
     match session("controls") {
         Ok(mut driver) => {
             started = true;
-            synthetic.run_scenario("ios-input", &mut driver, scenarios::ios_input);
+            driver.run_scenario(&mut synthetic, "ios-input", scenarios::ios_input);
             let _ = synthetic.check("the simulator captures the app's window", || {
                 captured(&mut driver)
             });
@@ -100,7 +100,7 @@ fn the_ios_scenarios_run_on_a_simulator() {
             driver
                 .declare(Scenario::new("ios-input").certification())
                 .expect("the scenario is declared");
-            os.run_scenario("ios-input", &mut driver, scenarios::ios_input);
+            driver.run_scenario(&mut os, "ios-input", scenarios::ios_input);
         }
         Err(error) => {
             let _ = synthetic.check(
@@ -111,7 +111,7 @@ fn the_ios_scenarios_run_on_a_simulator() {
     }
     match session("insets") {
         Ok(mut driver) => {
-            synthetic.run_scenario("ios-safe-area", &mut driver, scenarios::safe_area);
+            driver.run_scenario(&mut synthetic, "ios-safe-area", scenarios::safe_area);
         }
         Err(error) => {
             let _ = synthetic.check(
@@ -138,7 +138,7 @@ fn the_ios_scenarios_run_on_a_simulator() {
     if started {
         // Every row through the lane is refused for the input it would send, never passed or
         // failed on input that never went out.
-        let refused = |check: &&flui_driver::Check| {
+        let refused = |check: &&flui_driver::protocol::report::Check| {
             matches!(
                 &check.outcome,
                 Outcome::CannotVerify { capability: Some(capability), .. }

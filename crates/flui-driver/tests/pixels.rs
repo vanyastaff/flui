@@ -12,7 +12,7 @@ use flui_driver::pixels::{
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalRect};
 use flui_driver::protocol::tree::Rect;
 use flui_driver::testing::ScriptedLane;
-use flui_driver::{Driver, Error, Isolation, Launch, Locator, TextMatch};
+use flui_driver::{Awaited, Driver, Error, Isolation, Launch, Locator, TextMatch};
 
 use crate::fixtures::{Counter, Probe};
 
@@ -604,7 +604,16 @@ fn a_mask_hides_a_changing_clock() {
     let never = window
         .expect_baseline(&Baselines::new(dir.path()), "counter", &unmasked)
         .expect_err("a moving clock is never stable");
-    assert!(matches!(never, Error::Timeout { .. }), "{never:?}");
+    assert!(
+        matches!(
+            never,
+            Error::Timeout {
+                awaited: Awaited::Host,
+                ..
+            }
+        ),
+        "{never:?}"
+    );
     let mask_of_nothing =
         BaselineOptions::new(CaptureSource::Os).mask(Locator::named("nothing like it"));
     let refused = window

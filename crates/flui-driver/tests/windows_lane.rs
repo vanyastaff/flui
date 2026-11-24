@@ -1744,6 +1744,16 @@ fn a_pattern_request_and_an_invoke_tell_their_failures_apart() {
         pattern(Err(ProviderError::Timeout)),
         Some(ErrorCode::Timeout)
     );
+    assert!(
+        matches!(
+            walk::pattern::<()>(Err(ProviderError::Timeout), "like", "invoke", timeout),
+            Err(flui_driver::Error::Timeout {
+                awaited: flui_driver::Awaited::Host,
+                ..
+            })
+        ),
+        "a hung provider is the host's timeout, not the agent's"
+    );
     assert_eq!(pattern(Err(ProviderError::Gone)), Some(ErrorCode::Gone));
     assert_ne!(
         pattern(Err(ProviderError::Failed("broken".into()))),
@@ -1755,7 +1765,7 @@ fn a_pattern_request_and_an_invoke_tell_their_failures_apart() {
     let hung = walk::invoked(Err(ProviderError::Timeout), "like", timeout).expect_err("hung");
     assert_eq!(hung.code(), Some(ErrorCode::Timeout));
     assert!(
-        matches!(&hung, flui_driver::Error::Timeout { effect: Some(effect), .. }
+        matches!(&hung, flui_driver::Error::Timeout { awaited: flui_driver::Awaited::Host, effect: Some(effect), .. }
             if effect.kind == flui_driver::protocol::act::EffectKind::MayHaveRun),
         "{hung:?}"
     );

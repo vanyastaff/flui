@@ -116,7 +116,7 @@ impl SemanticsOwner {
                 .is_some_and(|matches| matches.matches.is_empty() && matches.truncated == 0),
             Condition::Matches { locator, expect } => self
                 .observe(locator, placement, seen)?
-                .is_some_and(|matches| expectation_holds(expect, &matches)),
+                .is_some_and(|matches| self.expectation_holds(expect, &matches, placement)),
             Condition::Settled => facts.settled,
             Condition::Frames(frames) => facts.frames >= u64::from(*frames),
             Condition::All(all) => {
@@ -170,17 +170,26 @@ impl SemanticsOwner {
     }
 }
 
-fn expectation_holds(expect: &Expectation, matches: &Matches) -> bool {
-    if let Expectation::Count(count) = expect {
-        let total =
-            matches.matches.len() + usize::try_from(matches.truncated).unwrap_or(usize::MAX);
-        return usize::try_from(*count).is_ok_and(|count| count == total);
+impl SemanticsOwner {
+    /// Whether every element `matches` names meets `expect`, and there is one; `Count` is
+    /// decided on the whole list.
+    fn expectation_holds(
+        &self,
+        expect: &Expectation,
+        matches: &Matches,
+        placement: Placement,
+    ) -> bool {
+        if let Expectation::Count(count) = expect {
+            let total =
+                matches.matches.len() + usize::try_from(matches.truncated).unwrap_or(usize::MAX);
+            return usize::try_from(*count).is_ok_and(|count| count == total);
+        }
+        !matches.matches.is_empty()
+            && matches.matches.iter().all(|matched| match expect {
+                Expectation::Visible => self.is_shown(matched.element, placement),
+                _ => meets(expect, &matched.node),
+            })
     }
-    !matches.matches.is_empty()
-        && matches
-            .matches
-            .iter()
-            .all(|matched| meets(expect, &matched.node))
 }
 
 fn meets(expect: &Expectation, node: &Node) -> bool {
@@ -206,7 +215,12 @@ fn meets(expect: &Expectation, node: &Node) -> bool {
                     .is_none_or(|selected| node.selected == Some(selected))
         }
         Expectation::Focused => node.focused,
-        // `Count` is decided on the whole list; one added later is not met.
+        Expectation::Description(description) => node
+            .description
+            .as_deref()
+            .is_some_and(|text| description.matches(text)),
+        // `Count` is decided on the whole list and `Visible` on the tree; one added later is not
+        // met.
         _ => false,
     }
 }

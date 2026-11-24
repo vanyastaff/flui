@@ -5,7 +5,7 @@
 //! already holds answers at once), after each frame the owner presents, and when its deadline
 //! passes. The deadline is on the presentation's own clock, so a manual clock expires it
 //! deterministically, and it joins [`UiRuntime::next_wake`] so a window that draws nothing still
-//! times out. A timeout is an answer (`satisfied: false` with the last observation and why the
+//! times out. A timeout is an answer (`unsatisfied`, with the last observation and why the
 //! window had not settled), not an error.
 
 use std::panic::resume_unwind;
@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
-    tree::WindowId, wait::Condition, wait::UnsettledCause, wait::UnsettledReason,
-    wait::WaitOutcome, wait::WaitParams,
+    tree::WindowId, wait::ClearedBy, wait::Condition, wait::UnsettledCause, wait::UnsettledReason,
+    wait::WaitEnd, wait::WaitOutcome, wait::WaitParams,
 };
 use flui_semantics::{EventSet, Placement, WaitFacts, counts_frames};
 use web_time::Instant;
@@ -196,7 +196,11 @@ impl UiRuntime {
             return Some(wait);
         }
         let mut outcome = WaitOutcome::default();
-        outcome.satisfied = holds;
+        outcome.end = if holds {
+            WaitEnd::Satisfied
+        } else {
+            WaitEnd::Unsatisfied
+        };
         outcome.frames = wait.frames;
         if let Some(evaluation) = evaluation {
             outcome.observation = evaluation.observation;
@@ -211,22 +215,38 @@ impl UiRuntime {
     /// Why the owner is not idle, from the runtime's own predicates: what
     /// `HeadlessHost::pump_until_settled` reads. Agent waits are left out, so a wait never keeps
     /// the window from settling for another.
+    ///
+    /// Each cause is of the whole runtime (no window, owner or site: the runtime records none
+    /// yet) and names what discharges it as these predicates see it: the next turn serves a
+    /// redraw, a scheduled frame and queued work, a turn at its deadline a timer. A redraw held
+    /// behind an armed frame retry is still listed as the next turn's, which ADR-0400 §3 moves to
+    /// the retry's deadline when the runtime derives the list from its own state.
     pub(crate) fn unsettled_causes(&self, now: Instant) -> Vec<UnsettledCause> {
         let mut causes = Vec::new();
         if self.needs_redraw() {
-            causes.push(UnsettledCause::new(UnsettledReason::NeedsRedraw));
+            causes.push(UnsettledCause::new(
+                UnsettledReason::NeedsRedraw,
+                ClearedBy::NextFrame,
+            ));
         }
         if self.scheduler().is_frame_scheduled() {
-            causes.push(UnsettledCause::new(UnsettledReason::FrameScheduled));
+            causes.push(UnsettledCause::new(
+                UnsettledReason::FrameScheduled,
+                ClearedBy::NextFrame,
+            ));
         }
         if self.has_pending_work() {
-            causes.push(UnsettledCause::new(UnsettledReason::PendingWork));
+            causes.push(UnsettledCause::new(
+                UnsettledReason::PendingWork,
+                ClearedBy::NextFrame,
+            ));
         }
         if let Some(due) = self.next_wake_excluding_agent_waits() {
-            let mut cause = UnsettledCause::new(UnsettledReason::Timer);
             let remaining = due.saturating_duration_since(now);
-            cause.due_in_ms = Some(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX));
-            causes.push(cause);
+            causes.push(
+                UnsettledCause::new(UnsettledReason::Timer, ClearedBy::Deadline)
+                    .due_in_ms(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)),
+            );
         }
         causes
     }

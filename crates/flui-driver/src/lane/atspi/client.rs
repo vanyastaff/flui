@@ -354,6 +354,7 @@ impl A11yBus {
 fn provider_error(error: ProviderError, what: &str) -> Error {
     match error {
         ProviderError::Timeout => Error::Timeout {
+            awaited: crate::error::Awaited::Host,
             effect: None,
             message: format!(
                 "the accessibility bus did not answer for {what} within {} ms",

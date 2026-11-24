@@ -333,6 +333,22 @@ fn a_locator_matches_what_it_describes_and_nothing_else() {
             Locator::named("Ghost"),
             vec![],
         ),
+        ("the root", Locator::root(), vec![1]),
+        (
+            "the root of this window",
+            Locator::root().in_window(window()),
+            vec![1],
+        ),
+        (
+            "the root is no other criterion's match",
+            Locator::root().name("Save"),
+            vec![],
+        ),
+        (
+            "within the root",
+            Locator::identifier("delete").within(Locator::root()),
+            vec![9, 12],
+        ),
         (
             "this window",
             Locator::named("Save").in_window(window()),

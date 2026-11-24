@@ -358,6 +358,7 @@ fn stable(
         last = now;
     }
     Err(Error::Timeout {
+        awaited: crate::error::Awaited::Host,
         effect: None,
         message: format!(
             "the window's captures still changed after {} ms or {MAX_STABLE_CAPTURES} captures; \

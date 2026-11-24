@@ -111,6 +111,7 @@ impl Properties {
 
 fn timed_out(timeout: Duration) -> Error {
     Error::Timeout {
+        awaited: crate::error::Awaited::Host,
         effect: None,
         message: format!(
             "the app's accessibility provider did not answer within {} ms: the app may be hung",
@@ -181,6 +182,7 @@ pub fn invoked(
     match answer {
         Ok(()) => Ok(()),
         Err(ProviderError::Timeout) => Err(Error::Timeout {
+            awaited: crate::error::Awaited::Host,
             effect: Some(Effect::new(EffectKind::MayHaveRun)),
             message: format!(
                 "the app's accessibility provider did not answer the invoke of {automation_id:?} \

@@ -356,6 +356,7 @@ impl Adb for HostAdb {
                 tool::Failure::Start(error) => self.started(&error),
                 tool::Failure::Io(error) => Error::Io(error),
                 tool::Failure::Timeout => Error::Timeout {
+                    awaited: crate::error::Awaited::Host,
                     effect: Some(Effect::new(EffectKind::MayHaveRun).detail(format!(
                         "`adb {command}` was ended after {} ms; the device may have done it",
                         timeout.as_millis()

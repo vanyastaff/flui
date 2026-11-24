@@ -104,15 +104,16 @@ every depth above it. A depth supplies a connection, not a harness:
 ```rust
 // flui_protocol::client
 pub trait Connection {
-    /// One request to the window's agent. Never runs a frame and never moves the clock.
+    /// One request to the connection's window; parameters that name another are refused. A read
+    /// runs no frame; an act or a wait may run frames and move the clock while it is served.
     fn call<M: WindowMethod>(&mut self, params: M::Params) -> Result<M::Output, CallError>;
     /// Hold out until the application answers `condition` (§3), at most `limit` of the
     /// connection's clock.
     fn wait(&mut self, condition: &Condition, limit: Duration) -> Result<WaitOutcome, CallError>;
     fn perform(&mut self, actions: &ActionSequence) -> Result<Performed, CallError>;
-    fn now(&self) -> At; // frame number, time, and whether the clock is virtual
+    fn now(&self) -> ClockReading; // frame number, time, and whether the clock is virtual
     /// The end of a test: what this connection can check and release (§7).
-    fn finish(&mut self, checks: &EndChecks) -> Vec<Failure>;
+    fn finish(&mut self, checks: &EndChecks) -> Vec<UnpassedCheck>;
 }
 
 // flui_testing
@@ -269,7 +270,7 @@ pub struct UnsettledCause {
     pub reason: UnsettledReason,
     pub window: Option<WindowId>,     // none for a cause of the whole application
     pub owner: Option<ElementRef>,    // the element that owns it, where the runtime records one
-    pub site: Option<SourceSite>,     // where it was created
+    pub site: Option<SourceLocation>, // where it was created
     pub cleared_by: ClearedBy,
     pub due_in_ms: Option<u64>,       // for the report; the wake reads `Unsettled::wake`
 }
@@ -280,6 +281,7 @@ pub enum ClearedBy {
     Outside,    // something outside the application answers it: a platform reply in flight
 }
 pub enum SettleScope { Complete, RuntimeOnly } // a field of `WaitOutcome` and of the report
+pub enum WaitEnd { Satisfied, Unsatisfied, Idle } // how a wait ended: `WaitOutcome::end`
 
 // flui_runtime
 pub struct Unsettled { /* causes, and the exact `Instant` of the earliest wake */ }
@@ -308,13 +310,13 @@ listed. Every host (the headless host, `AppRun`'s runner, each native runner) wa
 A wait holds out on the connection's clock. On a virtual clock the connection runs the host's loop,
 moving the clock to `Unsettled::wake`, an application's timers included, until the runtime answers,
 `limit` of virtual time has passed (the time a device would spend), or 10 000 turns have passed
-without the clock moving, which answers unsettled with the causes that re-armed at the same
-instant (egui's `max_steps`). A wait whose condition is false answers `WaitOutcome::Idle` with the
-remaining causes when the host's half is `Complete` and every remaining cause is `Test`: only the
-test can release it. An `Outside` cause keeps the wait parked to its limit, as an `Absent` half
-does. A host whose half is `Absent` (a runner until it composes one) is never idle, and its
-answers carry `SettleScope::RuntimeOnly`. `wait.settled` on a window counts that window's causes
-and the causes of the whole application.
+without the clock moving, which ends the wait `WaitEnd::Unsatisfied` with the causes that
+re-armed at the same instant (egui's `max_steps`). A wait whose condition is false ends
+`WaitEnd::Idle` with the remaining causes when the host's half is `Complete` and every remaining
+cause is `Test`: only the test can release it. An `Outside` cause keeps the wait parked to its
+limit, as an `Absent` half does. A host whose half is `Absent` (a runner until it composes one) is
+never idle, and its answers carry `SettleScope::RuntimeOnly`. `wait.settled` on a window counts
+that window's causes and the causes of the whole application.
 
 A settle that does not end fails with every cause named. The runtime answers `wait.settled`,
 `wait.frames`, `audit.a11y`, `perf.start` and `perf.stop`, which are `not_answered!` today; the two
@@ -553,13 +555,13 @@ link-time test registry; a testing crate beside `flui-testing`.
 - Tests of `flui-runtime`: a table with one row per `UnsettledReason` on which the host's settle
   and `wait(Settled)` agree, a row where both stay unsettled and name the cause and its
   `cleared_by`, and a row where both settle on the same state; a held background job never wakes
-  the loop and makes a false wait `Idle` naming it; a parked wait's deadline is reached in virtual
-  time; a host half that is `Absent`, and an `Outside` cause, never answer `Idle`; a deadline a
-  fraction of a millisecond away is reached; a timer that re-arms at the same instant ends the
-  wait unsettled after the turn bound, naming it; a redraw while a retry is armed wakes at the
-  retry; one served-answer test per method removed from `not_answered!`; an act parked for
-  stability injects at the bounds of the frame it passed on, and one past its timeout never
-  injects.
+  the loop and ends a false wait `WaitEnd::Idle` naming it; a parked wait's deadline is reached
+  in virtual time; a host half that is `Absent`, and an `Outside` cause, never end a wait
+  `WaitEnd::Idle`; a deadline a fraction of a millisecond away is reached; a timer that re-arms
+  at the same instant ends the wait unsettled after the turn bound, naming it; a redraw while a
+  retry is armed wakes at the retry; one served-answer test per method removed from
+  `not_answered!`; an act parked for stability injects at the bounds of the frame it passed on,
+  and one past its timeout never injects.
 - Tests of `flui-testing`: a read leaves the frame number unchanged; a caught panic followed by
   `Drop`, an error returned through `?` followed by `Drop`, and an expected error dropped before
   a leaked ticker, each run or skip the end checks as §7 says and lose no failure; a leaked ticker

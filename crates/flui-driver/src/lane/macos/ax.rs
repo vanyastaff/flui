@@ -348,6 +348,7 @@ fn application(pid: i32) -> CFRetained<AXUIElement> {
 fn read_error(error: ProviderError) -> Error {
     match error {
         ProviderError::Timeout => Error::Timeout {
+            awaited: crate::error::Awaited::Host,
             effect: None,
             message: format!(
                 "the app's accessibility API did not answer within {} ms: the app may be hung",

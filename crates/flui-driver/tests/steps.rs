@@ -9,10 +9,10 @@ use flui_driver::coordinates::{DevicePoint, WindowGeometry};
 use flui_driver::lane::send_guarded;
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
 use flui_driver::protocol::input::{
-    ActionSequence, ImeAction, InputSource, PointerAction, PointerButton, PointerDevice,
-    ScrollUnit, WheelAction,
+    ActionSequence, ImeAction, InputSource, MAX_SPAN, MAX_STEPS, PointerAction, PointerButton,
+    PointerDevice, STEP, ScrollUnit, TrackpadAction, WheelAction,
 };
-use flui_driver::steps::{MAX_STEPS, OsEvent, STEP, os_events};
+use flui_driver::steps::{OsEvent, os_events};
 use flui_driver::testing::ScriptedLane;
 
 fn geometry() -> WindowGeometry {
@@ -309,9 +309,12 @@ fn no_pause_is_shorter_than_a_millisecond_and_a_tick_keeps_its_length() {
 
 #[test]
 fn a_very_long_move_takes_longer_steps_not_more_of_them() {
-    let day = 24 * 60 * 60 * 1000;
+    // Nearly the longest move a sequence holds, a whole number of milliseconds per step so the
+    // last pause is exact.
+    let per_step = u64::try_from(MAX_SPAN.as_millis()).expect("minutes") / u64::from(MAX_STEPS);
+    let long = per_step * u64::from(MAX_STEPS);
     let events = os_events(
-        &pointer(vec![move_to(0.0, 0.0, 0), move_to(100.0, 100.0, day)]),
+        &pointer(vec![move_to(0.0, 0.0, 0), move_to(100.0, 100.0, long)]),
         &geometry(),
     )
     .expect("a long move");
@@ -322,9 +325,20 @@ fn a_very_long_move_takes_longer_steps_not_more_of_them() {
     assert_eq!(moves, 1 + MAX_STEPS as usize);
     assert_eq!(
         events.last(),
-        Some(&OsEvent::Pause(Duration::from_millis(
-            day / u64::from(MAX_STEPS)
-        )))
+        Some(&OsEvent::Pause(Duration::from_millis(per_step)))
+    );
+}
+
+#[test]
+fn a_sequence_longer_than_any_path_plays_sends_nothing() {
+    let past = u64::try_from(MAX_SPAN.as_millis()).expect("minutes") + 1;
+    let refused = os_events(
+        &pointer(vec![move_to(0.0, 0.0, 0), move_to(100.0, 100.0, past)]),
+        &geometry(),
+    );
+    assert!(
+        matches!(refused, Err(Error::InvalidArgument { .. })),
+        "{refused:?}"
     );
 }
 
@@ -421,7 +435,8 @@ fn a_lane_sent_a_composition_directly_refuses_it() {
     );
 }
 
-/// What no OS lane sends is refused before any event: a point outside the window.
+/// What no OS lane sends is refused before any event, naming what it lacks: a point outside the
+/// window, a trackpad gesture, a virtual pointer, a pointer's cancel, a scroll by lines.
 #[test]
 fn input_no_lane_sends_is_refused_before_any_event() {
     let outside = os_events(
@@ -431,6 +446,70 @@ fn input_no_lane_sends_is_refused_before_any_event() {
     assert!(
         matches!(outside, Err(Error::OutsideTarget { .. })),
         "{outside:?}"
+    );
+
+    let lined = |unit: ScrollUnit| {
+        ActionSequence::new(vec![InputSource::Wheel {
+            id: "w".into(),
+            actions: vec![WheelAction::Scroll {
+                at: LogicalPoint::new(10.0, 10.0),
+                delta_x: 0.0,
+                delta_y: 3.0,
+                unit,
+            }],
+        }])
+    };
+    let table: Vec<(&str, ActionSequence, &str)> = vec![
+        (
+            "a trackpad gesture",
+            ActionSequence::new(vec![InputSource::Trackpad {
+                id: "t".into(),
+                actions: vec![
+                    TrackpadAction::Begin {
+                        at: LogicalPoint::new(10.0, 10.0),
+                    },
+                    TrackpadAction::End,
+                ],
+            }]),
+            "os_trackpad_gesture",
+        ),
+        (
+            "a virtual pointer",
+            ActionSequence::new(vec![InputSource::Pointer {
+                id: "v".into(),
+                device: PointerDevice::Virtual,
+                actions: vec![move_to(10.0, 10.0, 0), down(), up()],
+            }]),
+            "os_virtual_pointer",
+        ),
+        (
+            "a pointer's cancel",
+            pointer(vec![move_to(10.0, 10.0, 0), down(), PointerAction::Cancel]),
+            "os_pointer_cancel",
+        ),
+        (
+            "a scroll by lines",
+            lined(ScrollUnit::Line),
+            "os_line_scroll",
+        ),
+    ];
+    for (case, sequence, lacking) in table {
+        let refused = os_events(&sequence, &geometry());
+        assert!(
+            matches!(
+                &refused,
+                Err(Error::NotSupported { capability: Some(capability), .. })
+                    if capability == lacking
+            ),
+            "{case}: {refused:?}"
+        );
+    }
+    let pixels = os_events(&lined(ScrollUnit::Pixel), &geometry()).expect("a scroll by pixels");
+    assert!(
+        pixels
+            .iter()
+            .any(|event| matches!(event, OsEvent::Scroll { delta_y: 6, .. })),
+        "three logical pixels at scale 2 are six device pixels: {pixels:?}"
     );
 }
 
