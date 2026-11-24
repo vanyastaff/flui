@@ -15,8 +15,8 @@
 //! - **Safety.** Before a sequence, `Lane::check` refuses what leaves the app or changes the device
 //!   ([`safety`]); before each press, key, text and scroll, one `dumpsys window` must show the
 //!   window the lane located holding the input focus, by its hash, at the frame and turn the lane
-//!   located it at. What the lane holds is released on every exit ([`held`]), and what stays held is named
-//!   ([`crate::Error::ReleaseFailed`]).
+//!   located it at. What the lane holds is released on every exit ([`held`]), and what stays
+//!   held is named ([`crate::Error::ReleaseFailed`]).
 //! - **Isolation.** An emulator is isolated: nobody holds it. A device is someone's, so it runs
 //!   guarded: `getevent` watched for input from any device but the lane's own ([`guard`]).
 //! - **Reading.** The window's place and the display's rotation from `dumpsys window`
@@ -55,6 +55,8 @@ pub mod uinput;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use flui_protocol::act::{Effect, EffectKind};
+use flui_protocol::error::Retry;
 use flui_protocol::input::PointerDevice;
 use flui_protocol::launch::{ENDPOINT_EXTRA, EXIT_ON_DISCONNECT_EXTRA, TOKEN_EXTRA};
 use flui_protocol::session::{Isolation, Placement};
@@ -188,6 +190,9 @@ pub struct AndroidLane {
     guard: Option<GeteventGuard>,
     pen: Option<PenDevice>,
     screen: Option<Screen>,
+    /// The commands the device took since the lane last released everything, which it does at
+    /// the end of every sequence: what of the sequence under way already went out.
+    delivered: usize,
     /// Whether the lane started the app, which it stops at its end.
     app_started: bool,
     /// The loopback port the lane forwarded to the app, which it removes at its end.
@@ -248,6 +253,7 @@ impl AndroidLane {
             guard,
             pen: None,
             screen: None,
+            delivered: 0,
             app_started: false,
             forwarded: None,
             dump_path,
@@ -475,7 +481,9 @@ impl AndroidLane {
     /// the [`Screen`] the lane located. A window of the same title (an activity's window leaving
     /// as it is started again, split screen) is another window, so the app is not in front; the
     /// same window moved, resized or turned would take the command at another place than the
-    /// lane computed it for, so it is busy until the lane locates it again.
+    /// lane computed it for, so it is busy until the lane locates it again. Once part of the
+    /// sequence went out, that busy says it may have run and invites no retry, which would send
+    /// that part again.
     fn check_focus(&mut self) -> Result<()> {
         let windows = self.read_windows()?;
         let (Some(located), Some(focus)) = (&self.screen, &windows.focus) else {
@@ -491,14 +499,25 @@ impl AndroidLane {
             .into_error());
         }
         let surface = windows.focused_frame();
-        if surface != Some(located.surface) || windows.rotation != located.rotation {
-            return Err(Error::busy(format!(
-                "the app's window {} moved or the display turned since the {LANE} lane located \
-                 it (at {:?} turned {} then, at {surface:?} turned {} now): locate it again",
-                located.window, located.surface, located.rotation, windows.rotation
-            )));
+        if surface == Some(located.surface) && windows.rotation == located.rotation {
+            return Ok(());
         }
-        Ok(())
+        let message = format!(
+            "the app's window {} moved or the display turned since the {LANE} lane located it \
+             (at {:?} turned {} then, at {surface:?} turned {} now): locate it again",
+            located.window, located.surface, located.rotation, windows.rotation
+        );
+        if self.delivered == 0 {
+            return Err(Error::busy(message));
+        }
+        Err(Error::Busy {
+            effect: Some(Effect::new(EffectKind::MayHaveRun).detail(format!(
+                "{} commands of the sequence went out before the window moved; the rest did not",
+                self.delivered
+            ))),
+            message: format!("{message}, after part of the sequence went out"),
+            retry: Retry::Never,
+        })
     }
 
     /// Send `command`, recording what the device took.
@@ -508,7 +527,10 @@ impl AndroidLane {
             None => self.pen_report(command),
         };
         match &sent {
-            Ok(()) => self.held.took(command),
+            Ok(()) => {
+                self.held.took(command);
+                self.delivered = self.delivered.saturating_add(1);
+            }
             Err(Error::Timeout { .. }) => self.held.unsure(command),
             Err(_) => {}
         }
@@ -801,6 +823,7 @@ impl Lane for AndroidLane {
             })
         };
         self.held.forget_plans();
+        self.delivered = 0;
         crate::lane::release_outcome([contact, pen, keys])
     }
 

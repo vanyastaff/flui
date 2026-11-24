@@ -60,6 +60,9 @@ pub enum Error {
     Busy {
         /// Why, for people.
         message: String,
+        /// How much of an acting call reached the app before it was found busy, when part of it
+        /// did ([`Error::effect`]).
+        effect: Option<Effect>,
         /// Whether the same call can succeed later.
         retry: Retry,
     },
@@ -334,7 +337,11 @@ impl Error {
                 message,
                 retry,
             },
-            ErrorCode::Busy => Self::Busy { message, retry },
+            ErrorCode::Busy => Self::Busy {
+                message,
+                effect,
+                retry,
+            },
             ErrorCode::NotFound => Self::NotFound {
                 message,
                 candidates,
@@ -501,6 +508,7 @@ impl Error {
     pub(crate) fn busy(message: impl Into<String>) -> Self {
         Self::Busy {
             message: message.into(),
+            effect: None,
             retry: ErrorCode::Busy.default_retry(),
         }
     }
@@ -629,7 +637,8 @@ impl Error {
         match self {
             Self::Timeout { effect, .. }
             | Self::Platform { effect, .. }
-            | Self::Gone { effect, .. } => effect.as_ref(),
+            | Self::Gone { effect, .. }
+            | Self::Busy { effect, .. } => effect.as_ref(),
             Self::ReleaseFailed {
                 first: Some(first), ..
             } => first.effect(),

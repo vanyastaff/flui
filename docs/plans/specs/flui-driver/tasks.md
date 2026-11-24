@@ -1145,7 +1145,10 @@ graph LR
     refusal on one that does not; the pen's axes at each rotation and under a `wm size` override;
     `getevent -l` over `adb shell -tt` seeing the person's touch and not the lane's `input`
     commands; the window's frame and rotation as the device's `dumpsys window` prints them (the
-    window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`);
+    window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`); the
+    reply's `WINDOW MANAGER` part headers and where the focus is printed on each Android version
+    (the default display's section from Android 10, the windows' part before), with a `LAST ANR`
+    part in the reply;
     `uiautomator dump` answering while the app animates; `screencap`'s raw header and
     format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
     endpoint forward and the app's exit when the session ends; which window is under the point
