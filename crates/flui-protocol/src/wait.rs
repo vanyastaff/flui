@@ -264,8 +264,8 @@ vocabulary! {
         Unsatisfied => "unsatisfied",
         /// The condition was false and nothing but the test can change that: the host's half is
         /// counted (`SettleScope::Complete`) and every remaining cause is cleared by the test.
-        /// No runtime answers it yet: an answer counts its runtime's half alone, so today's waits
-        /// end `satisfied` or `unsatisfied`.
+        /// A host that composes no half of its own never answers it: its answers count the
+        /// runtime's half alone (`SettleScope::RuntimeOnly`).
         Idle => "idle",
     }
 }

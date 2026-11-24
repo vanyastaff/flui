@@ -308,7 +308,9 @@ listed. Every host (the headless host, `AppRun`'s runner, each native runner) wa
 `Instant` owned by whoever armed it; `due_in_ms` is its rounded copy for the report.
 
 A wait holds out on the connection's clock. On a virtual clock the connection runs the host's loop,
-moving the clock to `Unsettled::wake`, an application's timers included, until the runtime answers,
+moving the clock to `Unsettled::wake`, an application's timers included (a cause the next turn
+serves is served at once, and one that the turn re-armed a frame period later or at the next
+deadline if that is sooner, as a display paces its frames), until the runtime answers,
 `limit` of virtual time has passed (the time a device would spend), or 10 000 turns have passed
 without the clock moving, which ends the wait `WaitEnd::Unsatisfied` with the causes that
 re-armed at the same instant (egui's `max_steps`). A wait whose condition is false ends
@@ -319,8 +321,8 @@ never idle, and its answers carry `SettleScope::RuntimeOnly`. `wait.settled` on 
 that window's causes and the causes of the whole application.
 
 A settle that does not end fails with every cause named. The runtime answers `wait.settled`,
-`wait.frames`, `audit.a11y`, `perf.start` and `perf.stop`, which are `not_answered!` today; the two
-captures stay with a host that has a renderer.
+`wait.frames`, `audit.a11y`, `perf.start` and `perf.stop`; the two captures stay with a host that
+has a renderer.
 
 ### §4. A frame's internals are read in process, through types
 
