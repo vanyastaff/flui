@@ -211,8 +211,10 @@ impl AsViewKey for Box<dyn ViewKey> {
 ///
 /// assert!(key1.key_eq(&key2));
 /// assert!(!key1.key_eq(&key3));
+/// // A view that holds a key compares by it too, as `Memo` needs.
+/// assert_eq!(key1, key2);
 /// ```
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct ValueKey<T: Clone + Hash + Eq + 'static> {
     value: T,
 }

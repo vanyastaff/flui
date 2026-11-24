@@ -104,6 +104,12 @@ impl<V: View + PartialEq + Clone> View for Memo<V> {
         crate::element::ElementKind::proxy(self)
     }
 
+    /// The inner view's key: a memo stands in for its view in a list of
+    /// children, so it is matched to its element by the same key.
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        self.inner.key()
+    }
+
     /// Skip the rebuild when `self.inner == prev.inner`.
     ///
     /// This is the only site in the codebase that uses a `PartialEq`
