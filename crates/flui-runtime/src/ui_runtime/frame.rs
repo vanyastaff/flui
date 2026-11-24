@@ -647,7 +647,7 @@ impl UiRuntime {
             phases.lap(FramePhase::Layout);
         }
         // Paint buffers its patch in the presentation's scene, and the root
-        // around the pipeline's frame node and the debug overlay joins it in
+        // around the pipeline's frame node and the debug overlays joins it in
         // the same patch. A semantics error drops the patch: the pipeline,
         // finding it never applied, repaints from the root on the retry.
         //
@@ -677,24 +677,50 @@ impl UiRuntime {
         // since the repaint the target change asked for carries the update.
         let textures_republish =
             scene.owes_texture_frame(presentation.texture_registry(), Some(target));
+        // The build banner a development tool reported, laid out for this frame's surface and
+        // kept clear of the performance overlay while that is drawn. A banner that changed is
+        // published even when the pipeline paints nothing (`PresentationScene::produce`).
+        let banner = presentation
+            .build_banner
+            .banner(
+                flui_foundation::geometry::Size::new(constraints.max_width, constraints.max_height),
+                presentation
+                    .performance_overlay_shown()
+                    .then_some(crate::performance_overlay::BOUNDS),
+            )
+            .and_then(|content| {
+                let owner = presentation
+                    .pipeline()
+                    .with(flui_rendering::pipeline::PipelineOwner::root_id)?;
+                Some(crate::presentation_scene::OverlayFrame {
+                    content,
+                    text,
+                    device_pixel_ratio: dpr.get(),
+                    owner,
+                })
+            });
         let painted = {
             let pipeline = presentation.pipeline();
             scene.produce(
                 |writer| pipeline.run_frame(writer),
+                banner,
+                || pipeline.scene_frame_node(),
                 || {
-                    let overlay = presentation.performance_overlay_readout().map(|readout| {
-                        crate::presentation_scene::OverlayFrame {
-                            readout,
-                            text,
-                            device_pixel_ratio: pipeline
-                                .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio)
-                                .get(),
-                            owner: pipeline
-                                .with(flui_rendering::pipeline::PipelineOwner::root_id)
-                                .expect("BUG: a frame that painted has a root"),
-                        }
-                    });
-                    (pipeline.scene_frame_node(), overlay)
+                    pipeline
+                        .with(flui_rendering::pipeline::PipelineOwner::root_id)
+                        .and_then(|owner| {
+                            let readout = presentation.performance_overlay_readout()?;
+                            Some(crate::presentation_scene::OverlayFrame {
+                                content: readout,
+                                text,
+                                device_pixel_ratio: pipeline
+                                    .with(
+                                        flui_rendering::pipeline::PipelineOwner::device_pixel_ratio,
+                                    )
+                                    .get(),
+                                owner,
+                            })
+                        })
                 },
             )?
         };
@@ -712,7 +738,8 @@ impl UiRuntime {
 
         if !painted {
             phases.lap(FramePhase::Paint);
-            // A frame that painted nothing publishes nothing, unless the screen is owed the held
+            // A frame with no patch (the pipeline painted nothing and the build banner holds
+            // still) publishes nothing, unless the screen is owed the held
             // version: the surface withheld it, or a texture update it owes a publication for
             // waits for the raster host, which takes it with the publication and damages the
             // texture's users alone (ADR-0304 §7, §8).

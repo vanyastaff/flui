@@ -61,6 +61,7 @@
     )
 )]
 pub mod agent;
+mod build_overlay;
 pub mod capability;
 pub mod dev_agent;
 mod epoch;

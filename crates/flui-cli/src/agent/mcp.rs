@@ -31,8 +31,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use flui_protocol::method::{
-    Addressed, Method, MethodEffect, MotionSet, SemanticsAct, SemanticsLocate, SemanticsRead,
-    WaitUntil, WindowsList,
+    Addressed, Method, MotionSet, SemanticsAct, SemanticsLocate, SemanticsRead, WaitUntil,
+    WindowsList,
 };
 use flui_protocol::session::ClientRole;
 use serde::Serialize;
@@ -438,9 +438,9 @@ impl Agent for Live {
         // Once more when the connection broke: the app may have restarted
         // since the last call and left a dead socket behind. A request that
         // never reached it goes again; one that did goes again only when the
-        // method reads, since one that acts may have run.
-        let reads = flui_protocol::method::find(method)
-            .is_some_and(|info| info.effect == MethodEffect::ReadOnly);
+        // method leaves the app as it was, since one that changes it may have run.
+        let resendable =
+            flui_protocol::method::find(method).is_some_and(|info| !info.effect.changes_app());
         for attempt in 0..2 {
             if self.connection.is_none() {
                 self.connection = Some(self.connect()?);
@@ -451,7 +451,7 @@ impl Agent for Live {
                 .expect("BUG: connected one line above");
             match connection.request(method, params.clone(), holds) {
                 Err(Failure::Unsent(_)) if attempt == 0 => self.connection = None,
-                Err(Failure::Transport(_)) if attempt == 0 && reads => self.connection = None,
+                Err(Failure::Transport(_)) if attempt == 0 && resendable => self.connection = None,
                 Err(failure @ (Failure::Transport(_) | Failure::Unsent(_))) => {
                     self.connection = None;
                     return Err(failure);

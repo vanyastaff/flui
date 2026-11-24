@@ -240,6 +240,12 @@ enum Commands {
         #[arg(long, conflicts_with = "scene")]
         agent: bool,
 
+        /// Do not show rebuilds over the running app's windows. A debug run
+        /// on this desktop otherwise shows that a rebuild runs and where it
+        /// failed, through the app's local agent
+        #[arg(long)]
+        no_build_overlay: bool,
+
         /// With `--device browser:… --agent`: start the browser without a window
         #[arg(long, requires = "agent")]
         headless: bool,
@@ -790,6 +796,7 @@ fn main() {
             no_open,
             headless,
             agent,
+            no_build_overlay,
             register_associations,
         } => {
             if scene {
@@ -816,6 +823,7 @@ fn main() {
                             headless,
                         },
                         agent,
+                        build_overlay: !no_build_overlay,
                         register_associations,
                     },
                 )

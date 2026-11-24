@@ -18,6 +18,7 @@
 use crate::agent::browser::launch::{LaunchError, LaunchedBrowser};
 use crate::agent::browser::relay::Relay;
 use crate::agent::browser::{self, Dialect};
+use crate::agent::build_report::BuildReporter;
 use crate::agent::{self, Session};
 use crate::build::web_page::WebPage;
 use crate::build::{BuilderContextBuilder, Platform, Profile, WebBuilder};
@@ -35,6 +36,10 @@ use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
+mod process_restart;
+
+use process_restart::ProcessRestart;
+
 /// Execute the run command.
 ///
 /// When `hot_reload` is true (and not in release mode), watches the project's
@@ -50,6 +55,7 @@ pub(crate) fn execute(
     let RunOptions {
         web,
         agent,
+        build_overlay,
         register_associations,
     } = options;
     let mode = if release { "release" } else { "debug" };
@@ -80,6 +86,12 @@ pub(crate) fn execute(
         return super::ios::run(udid, release, profile.as_deref());
     }
 
+    // The overlay is the agent's, which a build keeps only with debug assertions: `dev`'s. Windows
+    // stops the app before it rebuilds, so no window would take a report.
+    let build_overlay = build_overlay
+        && !cfg!(windows)
+        && !release
+        && profile.as_deref().is_none_or(|profile| profile == "dev");
     let result = run_session(
         project,
         &target,
@@ -90,6 +102,7 @@ pub(crate) fn execute(
         SessionExtras {
             web,
             agent,
+            build_overlay,
             register_associations,
         },
     );
@@ -111,6 +124,9 @@ pub(crate) struct RunOptions {
     pub(crate) web: WebOptions,
     /// `--agent`: serve the app to an AI agent.
     pub(crate) agent: bool,
+    /// `--no-build-overlay` turns this off: a debug run on this desktop shows
+    /// each rebuild over the running app's windows (`build.report`).
+    pub(crate) build_overlay: bool,
     /// `--register-associations`: a development build on this desktop
     /// registers its URL schemes and file types with Windows as a release
     /// build does.
@@ -121,6 +137,7 @@ pub(crate) struct RunOptions {
 struct SessionExtras {
     web: WebOptions,
     agent: Option<Session>,
+    build_overlay: bool,
     register_associations: bool,
 }
 
@@ -137,6 +154,7 @@ fn run_session(
     let SessionExtras {
         web,
         agent,
+        build_overlay,
         register_associations,
     } = extras;
     if let Target::Android(device) = target {
@@ -195,11 +213,33 @@ fn run_session(
             }
             Project::Application { .. } => {
                 ui::success("Hot reload enabled (process restart)")?;
+                // The overlay reaches the app through its agent, so a run without `--agent`
+                // opens a session of its own, unlisted: `flui mcp` keeps finding the session
+                // a `flui run --agent` wrote. A run that cannot open one runs without the
+                // overlay.
+                let (agent, build_report) = match agent {
+                    Some(session) if build_overlay => {
+                        let reporter = start_build_reporter(&session)?;
+                        (Some(session), reporter)
+                    }
+                    None if build_overlay => match Session::create_unlisted() {
+                        Ok(session) => {
+                            let reporter = start_build_reporter(&session)?;
+                            (reporter.is_some().then_some(session), reporter)
+                        }
+                        Err(why) => {
+                            ui::warning(format!("rebuilds are not shown in the app: {why}"))?;
+                            (None, None)
+                        }
+                    },
+                    agent => (agent, None),
+                };
                 let mut strategy = ProcessRestart {
                     selection,
                     profile,
                     verbose,
                     agent,
+                    build_report,
                     register_associations,
                 };
                 dev_loop(&mut strategy)?;
@@ -216,6 +256,18 @@ fn run_session(
         )?;
     }
     Ok(())
+}
+
+/// The thread that shows the run's builds in the app `session` reaches (`build.report`), or
+/// none, with a warning, when it cannot start: the run goes on without the overlay.
+fn start_build_reporter(session: &Session) -> CliResult<Option<BuildReporter>> {
+    match BuildReporter::start(session.credentials().clone()) {
+        Ok(reporter) => Ok(Some(reporter)),
+        Err(why) => {
+            ui::warning(format!("rebuilds are not shown in the app: {why}"))?;
+            Ok(None)
+        }
+    }
 }
 
 /// What `--agent` needs before anything is built: this desktop, an Android
@@ -298,13 +350,17 @@ fn start_agent_session(
     if let Some(feature) = driver_feature {
         session = session.with_driver_feature(feature);
     }
+    let file = session
+        .file()
+        .expect("BUG: every session `--agent` opens is listed")
+        .to_owned();
     ui::success(format!(
         "Agent session: {} (connect with `flui mcp`)",
-        style(session.file().display()).cyan()
+        style(file.display()).cyan()
     ))?;
     let mut ready = serde_json::json!({
         "endpoint": session.app_endpoint(),
-        "session": session.file(),
+        "session": file,
     });
     match (&session.credentials().endpoint, target) {
         (agent::Endpoint::Forwarded(address), _) => {
@@ -1360,113 +1416,6 @@ fn log_changed_paths(paths: &[PathBuf]) {
 }
 
 // ============================================================================
-// Strategy: process restart
-// ============================================================================
-
-/// Rebuild the binary and restart the process on every change.
-struct ProcessRestart {
-    /// The `--package` and `--bin` of the binary each build and run names.
-    selection: Vec<String>,
-    profile: Option<String>,
-    verbose: bool,
-    /// `--agent`: the app is built (with the `driver` feature for a profile
-    /// without debug assertions) and started
-    /// with the session's endpoint and token.
-    agent: Option<Session>,
-    /// `--register-associations`: the app registers its URL schemes and file
-    /// types with Windows.
-    register_associations: bool,
-}
-
-impl ReloadStrategy for ProcessRestart {
-    fn watch_paths(&self) -> Vec<(PathBuf, bool)> {
-        vec![
-            (PathBuf::from("src"), true),
-            (PathBuf::from("Cargo.toml"), false),
-        ]
-    }
-
-    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
-        if self.build() {
-            self.spawn(child)?;
-        }
-        Ok(())
-    }
-
-    /// Rebuild while the app keeps running, and replace it only with a build
-    /// that succeeded: a compile error leaves the window up with the
-    /// previous build while the author fixes it, and a good build replaces
-    /// it without the app being gone for the length of the build. Windows
-    /// refuses to overwrite a running executable, so there the app stops
-    /// before the build, and a failed build leaves no app running.
-    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
-        if cfg!(windows) {
-            stop_and_report(child);
-        }
-        ui::step("Rebuilding...")?;
-        let built = self.build();
-        if built {
-            stop_and_report(child);
-            self.spawn(child)?;
-        }
-        ui::emit(
-            "run.reload",
-            &serde_json::json!({ "kind": "restart", "ok": built }),
-        );
-        if !built {
-            // The app was not polled while the build ran.
-            reap_exited(child);
-            if self.is_running(child.as_ref()) {
-                ui::warning(
-                    "Build failed. The application keeps running its previous build... \
-                     (fix errors and save to retry)",
-                )?;
-            } else {
-                ui::warning(
-                    "Build failed. Watching for changes... (fix errors and save to retry)",
-                )?;
-            }
-        }
-        Ok(())
-    }
-
-    fn reload_label(&self) -> &'static str {
-        "Rebuild and restart"
-    }
-}
-
-impl ProcessRestart {
-    /// `cargo build` of the application, reported as `run.build.*`.
-    fn build(&self) -> bool {
-        timed_build(|| {
-            run_cargo_build(
-                &self.selection,
-                self.profile.as_deref(),
-                self.verbose,
-                self.agent.as_ref(),
-            )
-        })
-    }
-
-    /// Start the built application into `child`.
-    fn spawn(&self, child: &mut Option<AppChild>) -> CliResult<()> {
-        if let Some(session) = &self.agent {
-            session.clear_endpoint();
-        }
-        let spawned = spawn_app(
-            &self.selection,
-            self.profile.as_deref(),
-            self.verbose,
-            self.agent.as_ref(),
-            self.register_associations,
-        )?;
-        announce_started(&spawned, "Application started");
-        *child = Some(spawned);
-        Ok(())
-    }
-}
-
-// ============================================================================
 // Browser: build for wasm32, serve, reload the page
 // ============================================================================
 
@@ -2096,44 +2045,6 @@ impl ReloadStrategy for AndroidSession {
 
     fn reload_label(&self) -> &'static str {
         "Rebuild, reinstall and restart"
-    }
-}
-
-/// Run `cargo build` and return whether it succeeded.
-fn run_cargo_build(
-    selection: &[String],
-    profile: Option<&str>,
-    verbose: bool,
-    agent: Option<&Session>,
-) -> bool {
-    let mut cmd = Command::new("cargo");
-    cmd.arg("build");
-
-    if let Some(prof) = profile {
-        cmd.args(["--profile", prof]);
-    }
-
-    if verbose {
-        cmd.arg("--verbose");
-    }
-
-    // The same floors as the run that follows, or the build script reruns:
-    // a refused `flui.toml` is reported by that run.
-    if let Ok(floors) = std::env::current_dir()
-        .map_err(CliError::from)
-        .and_then(|root| crate::config::project_floors(&root))
-    {
-        cmd.envs(floors.host_cargo_env());
-    }
-    // The same features as the run that follows, or cargo builds twice.
-    with_build(&mut cmd, selection, agent);
-
-    match cmd.status() {
-        Ok(status) => status.success(),
-        Err(e) => {
-            let _ = crate::ui::error(format!("failed to run cargo build: {e}"));
-            false
-        }
     }
 }
 
