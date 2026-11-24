@@ -1178,11 +1178,16 @@ jobs:
         run: cargo semver-checks check-release -p flui-platform --baseline-rev "$BASELINE"
 
   # ─────────────────────────────────────────────────────────────────────────
-  # perf-gates — what a frame costs in instructions, which need valgrind:
-  # each `perf_scaling_` scenario runs on its small and large tree under
-  # callgrind and fails when the large one costs more than 5% over the small.
-  # The scenarios' counts and allocations are held to their baseline files by
-  # the `test` job on every pull request (ADR-0396 §2).
+  # perf-gates — what each perf scenario's measured window costs in
+  # instructions (ADR-0396 §3). The perf targets run in release with
+  # FLUI_PERF_INSTRUCTIONS=callgrind: each hold runs its test again under
+  # callgrind, collecting only inside its window, and checks the
+  # `instructions` line of its baseline file, which may rise 3%; a
+  # `perf_scaling_` scenario also fails when its large tree costs more than 5%
+  # over its small one. The files' other lines are the `test` job's, at
+  # opt-level 0, and this run leaves them alone. Instructions are blessed only
+  # here, since callgrind's counts follow the host: on a miss the next step
+  # blesses them, prints the diff and uploads the files.
   # ─────────────────────────────────────────────────────────────────────────
   perf-gates:
     name: perf-gates
@@ -1190,6 +1195,8 @@ jobs:
     if: needs.plan.outputs.lane == 'full'
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    env:
+      FLUI_PERF_INSTRUCTIONS: callgrind
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1203,7 +1210,7 @@ jobs:
         with:
           cache-bin: false
           cache-on-failure: true
-          shared-key: workspace-perf-v1
+          shared-key: workspace-perf-release-v1
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install valgrind
@@ -1211,59 +1218,41 @@ jobs:
         with:
           packages: valgrind
 
-      # Instructions are collected only while `perf_measured` runs, so a count
-      # of zero means the window was renamed or skipped and fails. The libtest
-      # harness's own lines go to stdout, kept apart from callgrind's stderr.
-      # The products below stay far inside 64 bits: a count is tens of millions.
-      - name: callgrind each perf_scaling_ scenario on its small and large tree
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-nextest@0.9
+
+      # The features of the `test` job's run, so the windows build the same
+      # tree as the files' other lines describe.
+      - name: cargo nextest run --release --test perf (instructions, under callgrind)
+        id: instructions
+        run: >-
+          cargo nextest run --locked --release --no-fail-fast --workspace --exclude flui-native
+          --features flui/material,flui/cupertino,flui/native --test perf
+        env:
+          FLUI_PERF_BASELINE: check
+
+      - name: Bless the instructions that moved
+        if: failure() && steps.instructions.outcome == 'failure'
         run: |
           set -euo pipefail
-          shopt -s inherit_errexit
-          binary=$(cargo test --locked -p flui-widgets --test perf --no-run --message-format=json \
-            | jq -r 'select(.reason == "compiler-artifact" and .target.name == "perf") | .executable // empty' \
-            | tail -n 1)
-          if [ ! -x "$binary" ]; then
-            echo "::error::cargo reported no executable for the perf target"
-            exit 1
-          fi
-          scenarios=$("$binary" --list --format terse | sed -n 's/^\(perf_scaling_[A-Za-z0-9_]*\): test$/\1/p')
-          if [ -z "$scenarios" ]; then
-            echo "::error::the perf target has no perf_scaling_ scenario"
-            exit 1
-          fi
-          logs=$RUNNER_TEMP/callgrind
-          mkdir -p "$logs"
-          collect() {  # collect <scenario> <size>: the instructions of its measured window
-            local log="$logs/$1.$2.log" count
-            if ! FLUI_PERF_SIZE=$2 valgrind --tool=callgrind \
-                --callgrind-out-file="$logs/$1.$2.callgrind" \
-                --toggle-collect='*perf_measured*' \
-                "$binary" --exact "$1" --test-threads=1 > "$log.out" 2> "$log"; then
-              cat "$log.out" "$log" >&2
-              echo "::error::$1 ($2) failed under callgrind" >&2
-              return 1
-            fi
-            count=$(sed -n 's/.*Collected : *\([0-9][0-9]*\).*/\1/p' "$log" | head -n 1)
-            if [ -z "$count" ] || (( count == 0 )); then
-              echo "::error::callgrind collected nothing inside perf_measured for $1 ($2): '${count:-no Collected line}'" >&2
-              return 1
-            fi
-            echo "$count"
-          }
-          failed=0
-          printf '%-64s %12s %12s\n' scenario small large
-          for scenario in $scenarios; do
-            small=$(collect "$scenario" small)
-            large=$(collect "$scenario" large)
-            verdict=
-            if (( large * 100 > small * 105 )); then
-              verdict="  GROWS"
-              echo "::error::$scenario costs $large instructions on the large tree, more than 5% over the small tree's $small"
-              failed=1
-            fi
-            printf '%-64s %12s %12s%s\n' "$scenario" "$small" "$large" "$verdict"
-          done
-          exit "$failed"
+          FLUI_PERF_BASELINE=bless cargo nextest run --locked --release --no-fail-fast \
+            --workspace --exclude flui-native \
+            --features flui/material,flui/cupertino,flui/native --test perf
+          git diff -- 'crates/*/perf/baseline/*.toml' 'packages/*/perf/baseline/*.toml'
+          echo "::error::the instructions above moved; a change that was meant takes the files of the perf-instructions artifact"
+
+      - name: Upload the blessed baseline files
+        if: failure() && steps.instructions.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: perf-instructions
+          path: |
+            crates/*/perf/baseline/*.toml
+            packages/*/perf/baseline/*.toml
+          if-no-files-found: error
+          retention-days: 14
 
   # ─────────────────────────────────────────────────────────────────────────
   # size — what an application costs before it does anything: the release

@@ -1,14 +1,16 @@
 //! The counts each perf scenario is held to: one file per scenario in
 //! `crates/flui-widgets/perf/baseline/`, compared and blessed by
-//! `flui_testing::perf` as `FLUI_PERF_BASELINE` says.
+//! `flui_testing::perf::Baselines` as `FLUI_PERF_BASELINE` says.
 //!
 //! Unset, a scenario holds only its own budget assertions, which hold on
-//! every host and with any feature set. CI's `perf-gates` job runs `check`, on
-//! Linux and with flui-widgets' default features, which is where the files were
-//! blessed: the heap counters move with the allocator's platform and with the
-//! features that change what a frame builds.
+//! every host and with any feature set. CI's `test` job runs `check` on the
+//! work and heap counters, on Linux and with the features and opt-level of
+//! `flui_testing::perf::BLESS_COMMAND`, which is where they were blessed: the
+//! heap counters move with the allocator's platform and with the features
+//! that change what a frame builds. CI's `perf-gates` job checks and blesses
+//! the `instructions` lines, in release under callgrind.
 
-use flui_testing::perf::{Baselines, Held};
+use flui_testing::perf::Baselines;
 
 /// Every scenario that may hold a file, kept sorted.
 const SCENARIOS: &[&str] = &[
@@ -29,16 +31,12 @@ const SCENARIOS: &[&str] = &[
     "texture_frame",
 ];
 
-fn baselines() -> Baselines {
+/// This target's baseline files.
+pub(crate) fn baselines() -> Baselines {
     Baselines::new(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("perf/baseline"),
         SCENARIOS,
     )
-}
-
-/// Holds `scenario`'s `counts` to its file ([`Baselines::hold`]).
-pub(crate) fn hold(scenario: &str, counts: &[(&str, u64)]) -> Held {
-    baselines().hold(scenario, counts)
 }
 
 /// The directory holds a file for each scenario of [`SCENARIOS`] and no other,

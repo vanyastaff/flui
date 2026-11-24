@@ -335,9 +335,10 @@ generator is too much logic for shell), or the owning crate's tests (chosen): th
   with `perf` (the tolerance arithmetic, the parsers of callgrind's and libtest's output, the
   distinct package count) or never had one: the reader of a change to those steps holds them, and
   the steps run only on main, except the package count, which `deps` runs on every pull request.
-- Bad, because the measured window's name (`perf_measured`), the `perf_scaling_` prefix and the
-  `FLUI_PERF_SIZE` values are written in both the perf target and the callgrind step, tied by a
-  comment; the zero-count guard catches a rename, not a window that measures part of a frame.
+- Bad, because the measured window's name, the `perf_scaling_` prefix and the size values were
+  written in both the perf target and the callgrind step, tied by a comment; ADR-0396 §3 moved
+  the window and the count into `flui_testing::perf`, where a hold runs its own test under
+  callgrind.
 - Bad, because a bless does not know its host: a bless off Linux x86_64 writes that host's counts,
   and Linux's check then fails on a cost that is higher there, or prints a cost that is lower in
   the records step, for the reader to catch.

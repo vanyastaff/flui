@@ -9,8 +9,9 @@
 //! scenario holds its counts **before** asserting its budget, so a broken
 //! budget under `check` still reports every counter.
 //!
-//! Every record also carries what the scenario's measured frames asked of the
-//! heap on the test thread, counted by this target's `#[global_allocator]`:
+//! Every record also carries what the scenario's measured frames, the window
+//! of `flui_testing::perf::measure`, asked of the heap on the test thread,
+//! counted by this target's `#[global_allocator]`:
 //! `allocations` (a `realloc` included), `reallocations` (the buffers among
 //! them that outgrew their capacity) and `allocated_bytes`. Like the frame
 //! counters they are a function of the tree and the change, not of the host;
@@ -20,12 +21,14 @@
 //! checks that over the list scrolls, the frames that build and drop the most;
 //! the other scenarios rely on the same code paths but are not repeated.
 //!
-//! A `perf_scaling_` scenario runs the same change on a small and a large tree
-//! and asserts that the two cost the same: equal allocations here, and equal
-//! instruction counts within a tolerance in CI's `perf-gates` job, which runs
-//! each size alone under callgrind (`FLUI_PERF_SIZE`) and counts only what
-//! runs inside [`perf_measured`]. A frame whose cost grows with nodes
-//! it does not touch fails there, though no counter of its work moves.
+//! CI's `perf-gates` job runs the target again in release with
+//! `FLUI_PERF_INSTRUCTIONS=callgrind`, and each window's instructions are held
+//! to the `instructions` line of its file (ADR-0396 §3). A `perf_scaling_`
+//! scenario runs the same change on a small and a large tree and holds both
+//! with `Baselines::hold_scaling`, which asserts that the two cost the same:
+//! equal allocations, and instructions within a tolerance when they are
+//! counted. A frame whose cost grows with nodes it does not touch fails there,
+//! though no counter of its work moves.
 //!
 //! The plateau tests at the end hold the heap level instead of a frame's cost: an
 //! application mounted, driven and dropped again and again leaves no more bytes live each
@@ -54,6 +57,7 @@ use flui_testing::FrameReport;
 use flui_testing::control_cost::control_over_text;
 use flui_testing::heap::{CountingAllocator, HeapCounts, assert_rounds_plateau};
 use flui_testing::host::{HeadlessHost, HeadlessWindow};
+use flui_testing::perf::{Cost, Held, measure};
 use flui_testing::widgets::SharedSignal;
 use flui_testing::widgets::{LaidOut, lay_out, tight};
 use flui_widgets::prelude::*;
@@ -67,35 +71,6 @@ mod baseline;
 
 #[global_allocator]
 static ALLOCATOR: CountingAllocator = CountingAllocator;
-
-/// The heap counters a frame scenario records, under their baseline names.
-fn heap_counts(heap: HeapCounts) -> [(&'static str, u64); 3] {
-    [
-        ("allocations", heap.allocations),
-        ("reallocations", heap.reallocations),
-        ("allocated_bytes", heap.allocated_bytes),
-    ]
-}
-
-/// Runs a scenario's measured frames and returns their result with what
-/// they asked of the heap.
-///
-/// The one window `perf-gates` counts under callgrind: it collects
-/// instructions only while this function runs (callgrind's `--toggle-collect`
-/// on its name, in `.github/workflows/ci.yml`), so it must stay out of line
-/// and keep its name.
-#[inline(never)]
-fn perf_measured<R>(frames: impl FnOnce() -> R) -> (R, HeapCounts) {
-    let before = HeapCounts::now();
-    let result = frames();
-    // A frame scenario compares what its frames ask of the heap; what they
-    // leave live is a mount figure, so it is left out of every comparison.
-    let heap = HeapCounts {
-        live_bytes: 0,
-        ..HeapCounts::now().since(before)
-    };
-    (result, heap)
-}
 
 /// One 60 Hz frame of virtual time.
 const FRAME: Duration = Duration::from_nanos(16_666_667);
@@ -215,14 +190,13 @@ fn mount() -> Mounted {
     Mounted { laid, writer }
 }
 
-/// Holds `report` and what the measured frames asked of the heap to the
-/// scenario's baseline file ([`baseline::hold`]). Called before a scenario
-/// asserts, so a failing budget still reports its numbers; the scenario keeps
-/// the returned hold to its end, so a bless waits for its assertions.
-fn hold_report(scenario: &str, report: &FrameReport, heap: HeapCounts) -> flui_testing::perf::Held {
-    let mut counts: Vec<(&str, u64)> = report.counters().into_iter().collect();
-    counts.extend(heap_counts(heap));
-    baseline::hold(scenario, &counts)
+/// Holds `report` and the `cost` of the window it was measured in to the
+/// scenario's baseline file ([`baseline::baselines`]). Called before a
+/// scenario asserts, so a failing budget still reports its numbers; the
+/// scenario keeps the returned hold to its end, so a bless waits for its
+/// assertions.
+fn hold_report(scenario: &str, report: &FrameReport, cost: &Cost) -> Held {
+    baseline::baselines().hold_measured(scenario, &report.counters(), cost)
 }
 
 fn counter(report: &FrameReport, name: &str) -> u64 {
@@ -245,8 +219,8 @@ fn perf_counters_are_live_on_a_full_reassemble() {
     let mut app = mount();
     app.laid.perform_reassemble();
     app.laid.reassemble_render_tree();
-    let (report, allocations) = perf_measured(|| app.laid.pump_report(FRAME));
-    let _baseline = hold_report("full_reassemble", &report, allocations);
+    let (report, cost) = measure(|| app.laid.pump_report(FRAME));
+    let _baseline = hold_report("full_reassemble", &report, &cost);
 
     for (name, value) in report.counters() {
         if matches!(
@@ -277,8 +251,8 @@ fn perf_scrolling_a_10k_list_one_screen_lays_out_only_the_band() {
         .set_pixels(HEIGHT, OffsetWriteCause::Programmatic);
     // Two frames: a lazy band that first appears is built after that frame's
     // paint and lands on the next (the ListView first-frame divergence).
-    let (report, allocations) = perf_measured(|| app.pump_many(2));
-    let _baseline = hold_report("list_10k_scroll_one_screen", &report, allocations);
+    let (report, cost) = measure(|| app.pump_many(2));
+    let _baseline = hold_report("list_10k_scroll_one_screen", &report, &cost);
 
     assert!(
         band < 400,
@@ -333,16 +307,17 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
     let mut scroll_to = |screen: u32| {
         writer.set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
         let before = rows_built();
-        let ((), heap) = perf_measured(|| {
+        let ((), cost) = measure(|| {
             let _ = host.pump(FRAME);
         });
         let built = rows_built() - before;
-        let ((), after) = perf_measured(|| {
+        let ((), after) = measure(|| {
             let _ = host.pump(FRAME);
         });
-        let ((), idle) = perf_measured(|| {
+        let ((), idle) = measure(|| {
             let _ = host.pump(FRAME);
         });
+        let (after, idle) = (after.heap(), idle.heap());
         assert!(
             rows_built() - before == built
                 && after.allocations == idle.allocations
@@ -350,14 +325,15 @@ fn perf_a_warm_scroll_reuses_what_the_earlier_ones_kept() {
             "screen {screen}'s scroll did work after the frame it measures: \
              the next frame asked {after:?} of the heap against an idle {idle:?}"
         );
-        (heap, built)
+        (cost, built)
     };
     for screen in 0..=WARM_SCROLLS {
         scroll_to(screen);
     }
     let (first, first_built) = scroll_to(WARM_SCROLLS + 1);
     let (next, next_built) = scroll_to(WARM_SCROLLS + 2);
-    let _baseline = baseline::hold("list_10k_scroll_warm", &heap_counts(first));
+    let _baseline = baseline::baselines().hold_measured("list_10k_scroll_warm", &[], &first);
+    let (first, next) = (first.heap(), next.heap());
 
     assert!(
         first_built >= visible_rows && next_built >= visible_rows,
@@ -381,7 +357,7 @@ fn scroll_round_trips() -> Vec<HeapCounts> {
         .map(|screen: u32| {
             app.writer
                 .set_pixels(HEIGHT * f64::from(screen), OffsetWriteCause::Programmatic);
-            perf_measured(|| app.pump_many(2)).1
+            measure(|| app.pump_many(2)).1.heap()
         })
         .collect()
 }
@@ -456,13 +432,13 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
         laid.pump_for(FRAME);
     }
 
-    let (report, allocations) = perf_measured(|| {
+    let (report, cost) = measure(|| {
         controller.set_value(0.5).expect("no build is running");
         laid.pump_report(FRAME)
     });
-    let _baseline = hold_report("slide_transition_tick", &report, allocations);
+    let _baseline = hold_report("slide_transition_tick", &report, &cost);
     assert_eq!(
-        allocations,
+        cost.heap(),
         HeapCounts::default(),
         "a steady slide tick allocates nothing"
     );
@@ -480,10 +456,10 @@ fn perf_a_slide_transition_tick_moves_a_layer_without_rebuilding() {
     assert_eq!(report.scene.damage_full, 0, "{report:#?}");
 }
 
-/// The two tree sizes a `perf_scaling_` scenario compares, by the name
-/// `FLUI_PERF_SIZE` selects one with. Ten times apart, so a cost that follows
-/// the tree shows up as a multiple rather than as noise.
-const SCALING_SIZES: [(&str, usize); 2] = [("small", 500), ("large", 5_000)];
+/// The rows of the small and the large tree a `perf_scaling_` scenario
+/// compares. Ten times apart, so a cost that follows the tree shows up as a
+/// multiple rather than as noise.
+const SCALING_ROWS: [usize; 2] = [500, 5_000];
 
 /// The frames a scaling scenario measures.
 const SCALING_FRAMES: usize = 4;
@@ -521,12 +497,12 @@ impl StatelessView for ButtonColumn {
 }
 
 /// Mounts [`ButtonColumn`] on a headless host, settles it, and returns the
-/// heap counts of [`SCALING_FRAMES`] label changes, each to one of two
-/// strings in turn. With `warm`, the label first toggles between them for as
-/// many frames, so the text context has kept both laid out and the measured
+/// cost of [`SCALING_FRAMES`] label changes, each to one of two strings in
+/// turn. With `warm`, the label first toggles between them for as many
+/// frames, so the text context has kept both laid out and the measured
 /// changes share those layouts; without, the measured changes include each
 /// string's first and second layout.
-fn label_change_heap(buttons: usize, warm: bool) -> HeapCounts {
+fn label_change_cost(buttons: usize, warm: bool) -> Cost {
     let label = SharedSignal::new(String::from("label 0"));
     let mut host = HeadlessHost::new(HeadlessWindow::new(WIDTH as u32, HEIGHT as u32));
     host.attach(&ButtonColumn {
@@ -546,51 +522,29 @@ fn label_change_heap(buttons: usize, warm: bool) -> HeapCounts {
             let _ = host.pump(FRAME);
         }
     }
-    let ((), heap) = perf_measured(|| {
+    let ((), cost) = measure(|| {
         for text in texts {
             label.set(text);
             let _ = host.pump(FRAME);
         }
     });
-    heap
+    cost
 }
 
 /// A label change costs the same over 500 rows as over 5 000: equal heap
-/// counts here, and equal instructions within a tolerance under
-/// `perf-gates`' callgrind step. A frame that clears a table the mount
-/// grew, or walks the tree to collect something only a few nodes report,
-/// fails the second while every counter of its work stays put.
+/// counts, and equal instructions within a tolerance when `perf-gates`
+/// counts them (`Baselines::hold_scaling`). A frame that clears a table the
+/// mount grew, or walks the tree to collect something only a few nodes
+/// report, fails the second while every counter of its work stays put.
 #[test]
 fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
-    let only = std::env::var("FLUI_PERF_SIZE").ok();
-    let mut measured = Vec::new();
-    for (name, buttons) in SCALING_SIZES {
-        if only.as_deref().is_some_and(|selected| selected != name) {
-            continue;
-        }
-        measured.push((name, buttons, label_change_heap(buttons, false)));
-    }
-    // Both sizes are measured before either is held; a check stops at the
-    // first size whose counts fail.
-    let _baseline: Vec<flui_testing::perf::Held> = measured
-        .iter()
-        .map(|(name, _, heap)| baseline::hold(&format!("label_change_{name}"), &heap_counts(*heap)))
-        .collect();
-    let measured: Vec<(usize, HeapCounts)> = measured
-        .into_iter()
-        .map(|(_, buttons, heap)| (buttons, heap))
-        .collect();
-    assert!(
-        !measured.is_empty(),
-        "FLUI_PERF_SIZE names no size of {SCALING_SIZES:?}"
+    let [small_rows, large_rows] = SCALING_ROWS;
+    let small = label_change_cost(small_rows, false);
+    let large = label_change_cost(large_rows, false);
+    let _baseline = baseline::baselines().hold_scaling(
+        ("label_change_small", &small),
+        ("label_change_large", &large),
     );
-    if let [(small_rows, small), (large_rows, large)] = measured[..] {
-        assert_eq!(
-            small, large,
-            "{SCALING_FRAMES} label changes asked {small:?} of the heap over {small_rows} rows \
-             and {large:?} over {large_rows}"
-        );
-    }
 }
 
 /// A label toggling between two strings the text context has kept: each
@@ -600,9 +554,9 @@ fn perf_scaling_a_label_change_costs_the_same_on_any_tree_size() {
 /// which pays for keeping them, stays put.
 #[test]
 fn perf_a_label_toggling_between_kept_strings_shares_their_layouts() {
-    let (_, buttons) = SCALING_SIZES[0];
-    let heap = label_change_heap(buttons, true);
-    let _baseline = baseline::hold("label_change_kept", &heap_counts(heap));
+    let [buttons, _] = SCALING_ROWS;
+    let cost = label_change_cost(buttons, true);
+    let _baseline = baseline::baselines().hold_measured("label_change_kept", &[], &cost);
 }
 
 /// The rows a filter scenario mounts, all eager, so every one is an element,
@@ -667,10 +621,10 @@ impl ViewState<FilteredRows> for FilteredRowsState {
         SingleChildScrollView::new().child(Column::new(rows))
     }
 }
-
-/// Mounts [`FilteredRows`], settles it, and returns the report and heap
+/// Mounts [`FilteredRows`], settles it, and returns the report and the cost
+/// of the one frame that turns the filter on.
 /// counts of the one frame that turns the filter on.
-fn filter_frame(memo: bool) -> (FrameReport, HeapCounts) {
+fn filter_frame(memo: bool) -> (FrameReport, Cost) {
     let even_only = SharedSignal::new(false);
     let mut laid = lay_out(
         FilteredRows {
@@ -680,7 +634,7 @@ fn filter_frame(memo: bool) -> (FrameReport, HeapCounts) {
         tight(WIDTH, HEIGHT),
     );
     laid.pump_for(FRAME);
-    perf_measured(|| {
+    measure(|| {
         even_only.set(true);
         laid.pump_report(FRAME)
     })
@@ -694,8 +648,8 @@ fn filter_frame(memo: bool) -> (FrameReport, HeapCounts) {
 /// does; the file holds that work.
 #[test]
 fn perf_filtering_3000_keyed_rows_keeps_the_rows_that_stay() {
-    let (report, heap) = filter_frame(false);
-    let _baseline = hold_report("filter_3000_keyed_rows", &report, heap);
+    let (report, cost) = filter_frame(false);
+    let _baseline = hold_report("filter_3000_keyed_rows", &report, &cost);
 
     let kept = u64::from(FILTER_ROWS / 2);
     assert_eq!(report.pipeline.frames_produced, 1, "{report:#?}");
@@ -715,8 +669,8 @@ fn perf_filtering_3000_keyed_rows_keeps_the_rows_that_stay() {
 /// so the column still matches each kept row by key and not by position.
 #[test]
 fn perf_filtering_3000_memo_rows_rebuilds_none_of_the_rows_that_stay() {
-    let (report, heap) = filter_frame(true);
-    let _baseline = hold_report("filter_3000_memo_rows", &report, heap);
+    let (report, cost) = filter_frame(true);
+    let _baseline = hold_report("filter_3000_memo_rows", &report, &cost);
 
     let kept = u64::from(FILTER_ROWS / 2);
     assert_eq!(report.pipeline.frames_produced, 1, "{report:#?}");
@@ -746,7 +700,7 @@ fn perf_raw_button_over_text() {
         ("text_reallocations", cost.bare.reallocations),
         ("text_bytes", cost.bare.live_bytes),
     ]);
-    let _baseline = baseline::hold("raw_button_over_text", &counts);
+    let _baseline = baseline::baselines().hold("raw_button_over_text", &counts);
 
     // One element for the button and one for its behaviours; one render
     // object. The allocations and bytes are held by the baseline, which
@@ -830,8 +784,8 @@ impl StatelessView for CaretOverRows {
 }
 
 /// The report of [`SCALING_FRAMES`] caret blinks over `rows` rows, with the
-/// heap counts they made.
-fn caret_blinks(rows: usize) -> (FrameReport, HeapCounts) {
+/// cost of their window.
+fn caret_blinks(rows: usize) -> (FrameReport, Cost) {
     let shown = SharedSignal::new(true);
     let mut laid = lay_out(
         CaretOverRows {
@@ -843,7 +797,7 @@ fn caret_blinks(rows: usize) -> (FrameReport, HeapCounts) {
     for _ in 0..2 {
         laid.pump_for(FRAME);
     }
-    perf_measured(|| {
+    measure(|| {
         let mut total = FrameReport::default();
         for blink in 0..SCALING_FRAMES {
             shown.set(blink % 2 == 1);
@@ -858,9 +812,9 @@ fn caret_blinks(rows: usize) -> (FrameReport, HeapCounts) {
 /// nothing it does grows with the tree (ADR-0304 §8).
 #[test]
 fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
-    let (small, small_heap) = caret_blinks(1_000);
-    let (large, large_heap) = caret_blinks(10_000);
-    let _baseline = hold_report("caret_blink_in_10k_list", &large, large_heap);
+    let (small, small_cost) = caret_blinks(1_000);
+    let (large, large_cost) = caret_blinks(10_000);
+    let _baseline = hold_report("caret_blink_in_10k_list", &large, &large_cost);
 
     for name in [
         "nodes_painted",
@@ -882,8 +836,9 @@ fn perf_a_caret_blink_in_a_10k_list_costs_the_same_on_any_tree_size() {
     );
     assert_eq!(counter(&large, "damage_full"), 0, "{large:#?}");
     assert_eq!(
-        small_heap, large_heap,
-        "{small_heap:?} over 1 000 rows, {large_heap:?} over 10 000"
+        small_cost.heap(),
+        large_cost.heap(),
+        "{small_cost:?} over 1 000 rows, {large_cost:?} over 10 000"
     );
 }
 
@@ -915,15 +870,15 @@ fn perf_an_idle_frame_leaves_the_retained_scene_alone() {
         .expect("the mount submitted a scene")
         .id();
     let submits = host.sink().submits();
-    let ((), allocations) = perf_measured(|| {
+    let ((), cost) = measure(|| {
         for _ in 0..IDLE_FRAMES {
             host.request_frame();
             let _ = host.pump(FRAME);
         }
     });
-    let _baseline = baseline::hold("idle_frame_retained_scene", &heap_counts(allocations));
+    let _baseline = baseline::baselines().hold_measured("idle_frame_retained_scene", &[], &cost);
     assert_eq!(
-        allocations,
+        cost.heap(),
         HeapCounts::default(),
         "an idle frame allocates nothing"
     );
@@ -971,8 +926,8 @@ fn perf_a_not_shown_retry_republishes_the_held_version() {
     );
     let shown = laid.painted_frame_count();
 
-    let (retry, heap) = perf_measured(|| laid.pump_report(FRAME));
-    let _baseline = hold_report("not_shown_retry", &retry, heap);
+    let (retry, cost) = measure(|| laid.pump_report(FRAME));
+    let _baseline = hold_report("not_shown_retry", &retry, &cost);
     assert_eq!(
         laid.painted_frame_count(),
         shown + 1,
@@ -1122,10 +1077,10 @@ fn perf_a_texture_frame_republishes_the_held_version() {
     let submits = laid.painted_frame_count();
 
     feed(&feeds, 0, 9);
-    let (report, heap) = perf_measured(|| laid.pump_report(FRAME));
-    let _baseline = hold_report("texture_frame", &report, heap);
+    let (report, cost) = measure(|| laid.pump_report(FRAME));
+    let _baseline = hold_report("texture_frame", &report, &cost);
     assert_eq!(
-        heap,
+        cost.heap(),
         HeapCounts::default(),
         "a steady texture frame allocates nothing"
     );
@@ -1176,7 +1131,7 @@ fn an_idle_frame_after_a_texture_frame_publishes_nothing() {
     let _ = host.pump(FRAME);
     assert_eq!(host.sink().textures().frames.len(), 1, "the frame went out");
     let submits = host.sink().submits();
-    let ((), allocations) = perf_measured(|| {
+    let ((), cost) = measure(|| {
         for _ in 0..10 {
             host.request_frame();
             let _ = host.pump(FRAME);
@@ -1188,7 +1143,7 @@ fn an_idle_frame_after_a_texture_frame_publishes_nothing() {
         "an idle frame submits nothing"
     );
     assert_eq!(
-        allocations,
+        cost.heap(),
         HeapCounts::default(),
         "an idle frame allocates nothing"
     );
@@ -1260,7 +1215,7 @@ fn perf_semantics_action_over_text() {
             .child(Text::new(format!("Row {row}")))
             .boxed()
     });
-    let _baseline = baseline::hold("semantics_action_over_text", &cost.counts());
+    let _baseline = baseline::baselines().hold("semantics_action_over_text", &cost.counts());
 }
 
 /// A press counter, driven the way an application's test drives it.
