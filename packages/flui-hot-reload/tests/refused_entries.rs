@@ -162,3 +162,52 @@ pub extern "C" fn flui_scene_abi_token() -> u64 { TOKEN }
         Err(LoadError::MissingSymbol { symbol, .. }) if symbol == "flui_scene_free"
     ));
 }
+
+/// A worker driver's count is the images it has loaded, the first included,
+/// and a refused reload in between does not restart it. Fails when the load
+/// that follows a refusal counts from one again.
+#[test]
+fn a_worker_driver_counts_each_image_it_loads_across_a_refusal() {
+    use flui_hot_reload::{WorkerPollOutcome, WorkerReloadDriver};
+
+    let directory = FixtureDirectory::new("counted");
+    let worker = |name: &str| {
+        compile_fixture(
+            directory.path(),
+            name,
+            r#"
+fn build() {}
+#[unsafe(no_mangle)]
+pub extern "C" fn flui_worker_init(register: extern "C" fn(u64, *const ()), _request_rebuild: extern "C-unwind" fn()) -> bool {
+    register(0xC0_07ED, build as *const ());
+    true
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
+"#,
+        )
+    };
+    let first = worker("counted_first");
+    let second = worker("counted_second");
+    let refused = directory.path().join("counted_refused.so");
+    std::fs::write(&refused, b"not a library").expect("write a file that is no library");
+    // The sidecar manifest beside the watched path names the image to load,
+    // as `flui run` stages each build under a path of its own.
+    let watched = directory.path().join("worker.so");
+    let manifest = directory.path().join(".flui_worker_plugin");
+    let stage = |image: &Path| {
+        std::fs::write(&manifest, image.to_string_lossy().as_bytes()).expect("write the manifest");
+    };
+
+    stage(&first);
+    let mut driver =
+        WorkerReloadDriver::new(&watched).with_poll_interval(std::time::Duration::ZERO);
+    stage(&refused);
+    assert_eq!(driver.poll(), WorkerPollOutcome::ReloadFailed);
+    stage(&second);
+    assert_eq!(
+        driver.poll(),
+        WorkerPollOutcome::Reloaded { reload_count: 2 },
+        "the second image loaded is the second counted"
+    );
+}

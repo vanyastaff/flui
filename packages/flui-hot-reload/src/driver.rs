@@ -59,7 +59,6 @@ pub struct HotReloadDriver {
     lib_path: PathBuf,
     poll_interval: Duration,
     last_poll: Instant,
-    reload_count: u32,
     /// The plugin file that last failed to load, not reopened until rebuilt.
     refusal: LoadRefusal,
 }
@@ -88,7 +87,6 @@ impl HotReloadDriver {
             lib_path,
             poll_interval: timing::ARTIFACT_POLL,
             last_poll: Instant::now(),
-            reload_count: 0,
             refusal,
         }
     }
@@ -104,51 +102,43 @@ impl HotReloadDriver {
     ///
     /// Returns `true` when a plugin was loaded or reloaded successfully, and
     /// `false` when unchanged, throttled, or unavailable. Call
-    /// [`Self::build_scene`] separately; its caller must ensure every scene
-    /// and retained clone is dropped before a later poll can unload its image.
+    /// [`Self::build_scene`] separately; a scene it built borrows the driver,
+    /// so no poll can unload the image under it.
     pub fn poll(&mut self) -> bool {
         if self.last_poll.elapsed() < self.poll_interval {
             return false;
         }
         self.last_poll = Instant::now();
 
-        if let Some(ref plugin) = self.plugin {
-            // Plugin loaded — check for updates
-            if plugin.has_update() {
-                tracing::info!("HotReloadDriver: plugin updated — reloading");
-                let old = self.plugin.take().expect("plugin was Some");
-                let kind = old.kind();
-                old.unload();
-
-                self.plugin = self
-                    .refusal
-                    .load(&self.lib_path, |path| ScenePlugin::load(path));
-                if self.plugin.is_some() {
-                    self.reload_count += 1;
-                    tracing::info!(
-                        "HotReloadDriver: reloaded ({:?}, reload #{})",
-                        kind,
-                        self.reload_count
-                    );
-                    return true;
-                }
-                tracing::warn!("HotReloadDriver: reload failed — plugin not available");
-            }
-        } else {
-            // No plugin loaded: try to load a file that appeared or was
-            // rebuilt since the last refusal.
+        if self.plugin.is_some() {
+            let Some(old) = self.plugin.take_if(|plugin| plugin.has_update()) else {
+                return false;
+            };
+            tracing::info!("HotReloadDriver: plugin updated — reloading");
+            old.unload();
             self.plugin = self
                 .refusal
                 .load(&self.lib_path, |path| ScenePlugin::load(path));
-            if self.plugin.is_some() {
-                tracing::info!(
-                    "HotReloadDriver: plugin now available — loaded from {}",
-                    self.lib_path.display()
-                );
-                return true;
+            if self.plugin.is_none() {
+                tracing::warn!("HotReloadDriver: reload failed — plugin not available");
+                return false;
             }
+            tracing::info!("HotReloadDriver: reloaded from {}", self.lib_path.display());
+            return true;
         }
 
+        // No plugin loaded: try to load a file that appeared or was rebuilt
+        // since the last refusal.
+        self.plugin = self
+            .refusal
+            .load(&self.lib_path, |path| ScenePlugin::load(path));
+        if self.plugin.is_some() {
+            tracing::info!(
+                "HotReloadDriver: plugin now available — loaded from {}",
+                self.lib_path.display()
+            );
+            return true;
+        }
         false
     }
 
