@@ -79,14 +79,19 @@ fn a_passed_check_is_never_unpassed() {
         UnpassedCheck::try_from_check(Check::new("held", Outcome::Passed)),
         None
     );
-    let failed = UnpassedCheck::failed("released", "a key stays down");
+    let failed = Check::new(
+        "released",
+        Outcome::Failed {
+            reason: "a key stays down".to_owned(),
+        },
+    );
     assert_eq!(
-        UnpassedCheck::try_from_check(failed.check().clone()),
-        Some(failed.clone())
+        UnpassedCheck::try_from_check(failed.clone()).map(|unpassed| unpassed.check().clone()),
+        Some(failed)
     );
     assert!(matches!(
         UnpassedCheck::cannot_verify("ledger", "no ledger", None)
-            .into_check()
+            .check()
             .outcome,
         Outcome::CannotVerify { .. }
     ));

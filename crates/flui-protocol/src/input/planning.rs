@@ -193,7 +193,8 @@ pub enum PlanError {
         id: String,
     },
     /// A value is outside the range its field takes: a point past [`MAX_COORDINATE`] or not
-    /// finite, a pressure outside `0.0..=1.0`, a delta, scale or angle not finite.
+    /// finite, a pressure outside `0.0..=1.0`, a delta or angle not finite, a pinch's scale not
+    /// finite or not above zero.
     OutOfRange {
         /// The source, by its index in the sequence.
         source: usize,
@@ -231,7 +232,8 @@ impl fmt::Display for PlanError {
             } => write!(
                 f,
                 "source {source}, tick {tick}: `{field}` is out of range (a point within \
-                 {MAX_COORDINATE} logical pixels, a pressure in 0..=1, finite deltas)"
+                 {MAX_COORDINATE} logical pixels, a pressure in 0..=1, finite deltas and angles, a \
+                 finite scale above zero)"
             ),
         }
     }

@@ -158,8 +158,16 @@ pub trait Addressed {
     /// only window.
     fn window(&self) -> Option<WindowId>;
 
+    /// Name `window` where they name none: a locator's window, or a key press's window when it
+    /// has no target. Parameters that name a window keep it, so afterwards [`Self::window`] is
+    /// `Some`, `window` or the one they already named.
+    fn address(&mut self, window: WindowId);
+
     /// How long the window may hold the request before it answers, past the time it takes to
-    /// serve: a wait's timeout. A server bounding the reply adds it.
+    /// serve: a wait's timeout, an injection's ticks and span ([`ActionSequence::plays_within`]),
+    /// a gesture's act timeout. A server bounding the reply adds it.
+    ///
+    /// [`ActionSequence::plays_within`]: crate::input::ActionSequence::plays_within
     fn holds_for(&self) -> Duration {
         Duration::ZERO
     }
@@ -171,6 +179,8 @@ macro_rules! addressed_by_window_field {
             fn window(&self) -> Option<WindowId> {
                 Some(self.window)
             }
+
+            fn address(&mut self, _: WindowId) {}
         }
     )+};
 }
@@ -195,9 +205,11 @@ impl Addressed for crate::input::InputParams {
         Some(self.window)
     }
 
-    /// The input plays over its span before the answer.
+    fn address(&mut self, _: WindowId) {}
+
+    /// The input plays its ticks, one frame each at least, and its span before the answer.
     fn holds_for(&self) -> Duration {
-        self.actions.span()
+        self.actions.plays_within()
     }
 }
 
@@ -205,11 +217,17 @@ impl Addressed for crate::act::ActionabilityParams {
     fn window(&self) -> Option<WindowId> {
         Some(self.element.window)
     }
+
+    fn address(&mut self, _: WindowId) {}
 }
 
 impl Addressed for crate::act::ActParams {
     fn window(&self) -> Option<WindowId> {
         target_window(&self.target)
+    }
+
+    fn address(&mut self, window: WindowId) {
+        address_target(&mut self.target, window);
     }
 }
 
@@ -219,6 +237,13 @@ fn target_window(target: &Target) -> Option<WindowId> {
         Target::Element(element) => Some(element.window),
         Target::Locator(locator) => locator.window,
         Target::Point { window, .. } => Some(*window),
+    }
+}
+
+/// Name `window` on a target's locator that names none; an element and a point name theirs.
+fn address_target(target: &mut Target, window: WindowId) {
+    if let Target::Locator(locator) = target {
+        locator.window.get_or_insert(window);
     }
 }
 
@@ -232,6 +257,10 @@ macro_rules! addressed_by_gesture_target {
         impl Addressed for $params {
             fn window(&self) -> Option<WindowId> {
                 target_window(&self.target)
+            }
+
+            fn address(&mut self, window: WindowId) {
+                address_target(&mut self.target, window);
             }
 
             /// The act holds out for actionability until its timeout.
@@ -257,6 +286,10 @@ impl Addressed for crate::input::LongPressParams {
         target_window(&self.target)
     }
 
+    fn address(&mut self, window: WindowId) {
+        address_target(&mut self.target, window);
+    }
+
     /// The act holds out for actionability until its timeout, then holds the press as long as
     /// it names.
     fn holds_for(&self) -> Duration {
@@ -271,6 +304,15 @@ impl Addressed for crate::input::PressKeysParams {
         self.target.as_ref().map_or(self.window, target_window)
     }
 
+    fn address(&mut self, window: WindowId) {
+        match &mut self.target {
+            Some(target) => address_target(target, window),
+            None => {
+                self.window.get_or_insert(window);
+            }
+        }
+    }
+
     fn holds_for(&self) -> Duration {
         act_timeout(&self.options)
     }
@@ -280,12 +322,18 @@ impl Addressed for crate::locator::LocateParams {
     fn window(&self) -> Option<WindowId> {
         self.locator.window
     }
+
+    fn address(&mut self, window: WindowId) {
+        self.locator.window.get_or_insert(window);
+    }
 }
 
 impl Addressed for crate::wait::WaitParams {
     fn window(&self) -> Option<WindowId> {
         Some(self.window)
     }
+
+    fn address(&mut self, _: WindowId) {}
 
     fn holds_for(&self) -> Duration {
         Duration::from_millis(self.effective_timeout_ms())

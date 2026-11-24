@@ -60,7 +60,7 @@ pub enum Condition {
         /// What it must show.
         expect: Expectation,
     },
-    /// The app has no frame pending, no transient callbacks, timers or image loads.
+    /// Nothing in [`UnsettledReason`] holds the app: no cause a runtime lists.
     Settled,
     /// This many frames have presented since the wait began.
     Frames(u32),

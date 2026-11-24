@@ -461,8 +461,9 @@ impl ActionSequence {
     /// as its longest pause or move. Saturates at [`Duration::MAX`]. Linear in the number of
     /// actions, however many sources the ticks are spread over.
     ///
-    /// A [`plan`] plays each move that names no duration for one [`STEP`], so its
-    /// [`Plan::span`] is what playing the sequence takes, and never less than this.
+    /// A [`plan`] lays each move that names no duration over one [`STEP`], so its [`Plan::span`]
+    /// is never less than this; a window plays a tick at a frame, so it plays the sequence within
+    /// [`Self::plays_within`].
     #[must_use]
     pub fn span(&self) -> Duration {
         let mut lasts = vec![Duration::ZERO; self.ticks()];
@@ -472,6 +473,16 @@ impl ActionSequence {
         lasts
             .into_iter()
             .fold(Duration::ZERO, Duration::saturating_add)
+    }
+
+    /// How long a window at 60 Hz takes to play the sequence: its span, and a frame ([`STEP`])
+    /// for each tick, since a window plays a tick at a frame and a tick that names no duration
+    /// still takes one. What a server bounding an injection's reply adds; what a slower cadence
+    /// takes past it comes out of the reply's own timeout. Saturates at [`Duration::MAX`].
+    #[must_use]
+    pub fn plays_within(&self) -> Duration {
+        let ticks = u32::try_from(self.ticks()).unwrap_or(u32::MAX);
+        self.span().saturating_add(STEP.saturating_mul(ticks))
     }
 }
 

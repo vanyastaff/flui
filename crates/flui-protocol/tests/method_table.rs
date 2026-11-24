@@ -230,6 +230,71 @@ fn a_window_methods_parameters_name_the_window_they_address() {
     );
 }
 
+/// Addressing parameters names the window where they name none, and keeps the one they name: a
+/// locator's, a key press's with no target, never an element's, a point's or a field's.
+#[cfg(feature = "serde")]
+#[test]
+fn addressing_names_a_window_only_where_the_parameters_name_none() {
+    use flui_protocol::{
+        act::ActParams, geometry::LogicalPoint, input::InputParams, input::PressKeysParams,
+        input::TapParams, locator::LocateParams, locator::Locator, locator::Target,
+        method::Addressed, tree::ElementId, tree::ElementRef, tree::WindowId, wire::ActionName,
+    };
+
+    let connection = WindowId::from_u64(3).expect("non-zero");
+    let other = WindowId::from_u64(4).expect("non-zero");
+    let element = ElementRef::new(other, ElementId::from_u64(9).expect("non-zero"));
+    let point = Target::Point {
+        window: other,
+        at: LogicalPoint::new(1.0, 2.0),
+    };
+    let keys = |window: Option<&str>| -> PressKeysParams {
+        serde_json::from_value(serde_json::json!({ "window": window, "keys": ["Enter"] }))
+            .expect("press keys reads")
+    };
+    let table: Vec<(&str, Box<dyn Addressed>, WindowId)> = vec![
+        (
+            "a locator naming none",
+            Box::new(LocateParams::new(Locator::default())),
+            connection,
+        ),
+        (
+            "a locator naming one",
+            Box::new(LocateParams::new(Locator::default().in_window(other))),
+            other,
+        ),
+        (
+            "a gesture on a locator naming none",
+            Box::new(TapParams::new(Locator::default())),
+            connection,
+        ),
+        (
+            "a gesture on an element",
+            Box::new(TapParams::new(element)),
+            other,
+        ),
+        (
+            "an act at a point",
+            Box::new(ActParams::new(point, ActionName::Invoke)),
+            other,
+        ),
+        ("keys with no target", Box::new(keys(None)), connection),
+        ("keys in a window", Box::new(keys(Some("w4"))), other),
+        (
+            "an injection",
+            Box::new(InputParams::new(
+                other,
+                flui_protocol::input::ActionSequence::new(Vec::new()),
+            )),
+            other,
+        ),
+    ];
+    for (case, mut params, expected) in table {
+        params.address(connection);
+        assert_eq!(params.window(), Some(expected), "{case}");
+    }
+}
+
 /// What an observer may call and what a timeout lets a client resend is one rule over the
 /// effects (ADR-0395): a read and an annotation leave the app as it was, an act and a destructive
 /// call change it.

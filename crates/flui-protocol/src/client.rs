@@ -3,8 +3,8 @@
 //!
 //! A [`Connection`] names protocol types and `std` alone: it is a contract with no runtime behind
 //! it, so the test kit and the driver implement the same trait and a scenario written over it
-//! runs on either. Its window is the one the connection was opened on; a call's parameters may
-//! still address another ([`Addressed::window`](crate::method::Addressed::window)).
+//! runs on either. It drives one window, the one it was opened on: every call, wait, input and
+//! end addresses it, and a call whose parameters name another window is refused.
 
 use std::fmt;
 use std::time::Duration;
@@ -19,12 +19,18 @@ use crate::wait::{Condition, WaitOutcome};
 
 /// A connection to one window of an application: see the [module docs](self).
 pub trait Connection {
-    /// One request to the window's agent. Never runs a frame and never moves the clock.
+    /// One request to the connection's window. Parameters that name no window are sent to it
+    /// ([`Addressed::address`]). A read runs no frame; an act or a wait may run frames and move
+    /// the clock for as long as serving it takes, and the connection's input path may compose
+    /// an act from several requests.
     ///
     /// # Errors
     ///
-    /// [`CallError::Failed`] with what the application or the connection refused;
+    /// [`CallError::Failed`] with what the application or the connection refused, an
+    /// `invalid_argument` among them for parameters that name another window;
     /// [`CallError::Unanswered`] when no answer arrived.
+    ///
+    /// [`Addressed::address`]: crate::method::Addressed::address
     fn call<M: WindowMethod>(&mut self, params: M::Params) -> Result<M::Output, CallError>;
 
     /// Hold out until the application answers `condition` (ADR-0400 §3), at most `limit` of the
@@ -144,13 +150,6 @@ impl ClockReading {
             time,
             virtual_clock,
         }
-    }
-
-    /// The same reading, at `frame`.
-    #[must_use]
-    pub const fn frame(mut self, frame: u64) -> Self {
-        self.frame = Some(frame);
-        self
     }
 }
 

@@ -129,17 +129,6 @@ impl Check {
 pub struct UnpassedCheck(Check);
 
 impl UnpassedCheck {
-    /// The check `name` that did not hold, and what was wrong.
-    #[must_use]
-    pub fn failed(name: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self(Check::new(
-            name,
-            Outcome::Failed {
-                reason: reason.into(),
-            },
-        ))
-    }
-
     /// The check `name` that was asked for and could not be made, why, and the capability it
     /// lacked when one was.
     #[must_use]
@@ -167,12 +156,6 @@ impl UnpassedCheck {
     #[must_use]
     pub const fn check(&self) -> &Check {
         &self.0
-    }
-
-    /// The check, to add to a report.
-    #[must_use]
-    pub fn into_check(self) -> Check {
-        self.0
     }
 }
 
