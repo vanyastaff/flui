@@ -190,6 +190,13 @@ impl LoadRefusal {
                 Some(loaded)
             }
             Err(error) => {
+                // The refusal is recorded before the subscriber runs, so a
+                // subscriber that panics leaves this revision refused.
+                self.refused = Some(Refused {
+                    path: path.to_path_buf(),
+                    revision,
+                    at,
+                });
                 if !same_artifact {
                     if matches!(error, LoadError::Missing { .. }) {
                         tracing::debug!(%error, "hot reload: plugin not loaded");
@@ -197,11 +204,6 @@ impl LoadRefusal {
                         tracing::warn!(%error, "hot reload: plugin refused");
                     }
                 }
-                self.refused = Some(Refused {
-                    path: path.to_path_buf(),
-                    revision,
-                    at,
-                });
                 None
             }
         }
