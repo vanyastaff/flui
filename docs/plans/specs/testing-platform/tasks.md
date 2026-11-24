@@ -111,7 +111,7 @@
   работают `pump_until_settled`, `time_to_next_frame` и ответы на `wait.settled`; ожидание на
   виртуальных часах ограничено и временем, и 10 000 ходов без сдвига часов; `Idle` только при
   `HostHalf::Complete` и причинах `Test`. Рантайм отвечает на `wait.settled`, `wait.frames`,
-  `audit.a11y`, `perf.start`, `perf.stop`. `TargetSize` по области попадания внутри клипа живёт в
+  `audit.a11y`, `perf.start`, `perf.stop`. `TargetSize` по области попадания внутри окна и клипов, которые не прокручиваются, живёт в
   `flui-semantics`, `TextContrast` в `flui-rendering::audit` (тот же код, что FD23 спеки
   `flui-driver`); `audit.a11y` зовёт оба. Агент сам отвечает на жесты: держит действие до
   actionable на двух кадрах в пределах его таймаута, срок удержания будит хост, по истечении

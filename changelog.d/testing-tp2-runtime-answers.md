@@ -17,7 +17,8 @@
   window presented between them: percentiles, the slowest frames with their phases, and dropped
   and janky frames against the display's refresh period when it is known.
 - `flui_semantics::MinimumTarget` and `SemanticsOwner::audit_unnamed` / `audit_target_size`: the
-  target-size rule judges the hit region inside every clip, never the drawn bounds.
+  target-size rule judges the hit region inside the window and every clip that does not scroll,
+  so a row partly scrolled out of a list is judged by its size once revealed.
 - `flui_rendering::audit` and `PipelineOwner::audit_text_contrast`: WCAG text contrast read from
   a frame's scene, with a text whose background the draw commands do not determine reported as
   not checked.
