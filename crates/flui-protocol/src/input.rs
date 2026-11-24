@@ -589,9 +589,10 @@ pub struct GestureOptions {
     )]
     pub force: bool,
     /// How long locating and actionability may take, in milliseconds; 5000 when absent and at
-    /// most 24 hours ([`Self::effective_timeout_ms`]). It is what the window may hold the act
-    /// for, which the conversation counts in the reply's deadline (ADR-0288 §4); past it the act
-    /// is dropped, so nothing is injected after its answer.
+    /// most 24 hours ([`Self::named_timeout_ms`]). A window that serves the gesture may hold the
+    /// act this long, which the conversation counts in the reply's deadline (ADR-0288 §4). No
+    /// app's agent serves a gesture yet: the driver composes each one, locating and checking
+    /// actionability for this long.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -613,12 +614,18 @@ impl GestureOptions {
     /// is this long.
     pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1_000;
 
+    /// The timeout the act names, in milliseconds, at most [`Self::MAX_TIMEOUT_MS`]; `None` when
+    /// it names none, for the caller's own default.
+    #[must_use]
+    pub fn named_timeout_ms(&self) -> Option<u64> {
+        self.timeout_ms.map(|ms| ms.min(Self::MAX_TIMEOUT_MS))
+    }
+
     /// How long the window may hold the act, in milliseconds: the timeout named, at most
     /// [`Self::MAX_TIMEOUT_MS`], or [`Self::DEFAULT_TIMEOUT_MS`].
     #[must_use]
     pub fn effective_timeout_ms(&self) -> u64 {
-        self.timeout_ms
-            .map_or(Self::DEFAULT_TIMEOUT_MS, |ms| ms.min(Self::MAX_TIMEOUT_MS))
+        self.named_timeout_ms().unwrap_or(Self::DEFAULT_TIMEOUT_MS)
     }
 }
 

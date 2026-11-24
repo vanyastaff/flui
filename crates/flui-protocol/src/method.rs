@@ -7,10 +7,12 @@
 //! file are all read from it, so none of the front ends can know a method the others do not.
 //! [`Method`] is sealed: a method exists only by being declared here.
 //!
-//! A gesture (`element.*` but the actionability read) is the agent's on the synthetic and semantic
-//! paths: the window locates, holds the act until its target is actionable or the act's timeout
-//! passes, and injects in the turn the check passed (ADR-0400 §2). On the `os` path the driver
-//! composes it from the agent's methods and its lane (ADR-0238 §5).
+//! A gesture (`element.*` but the actionability read) is the agent's row on the synthetic and
+//! semantic paths, which a window serving it holds until its target is actionable or the act's
+//! timeout passes (ADR-0400 §2). No app's agent serves one yet: each answers `not_supported` and
+//! lists none in its hello, so the driver composes every gesture from the agent's methods, and on
+//! the `os` path from its lane (ADR-0238 §5). `element.scroll_until` is declared only: no side
+//! answers it yet.
 //!
 //! The rest of the design's table joins as its tasks land: the OS lanes (`os.*`,
 //! `input.os`, `capture.os`), pixel baselines, recording and traces, layout facts, the other

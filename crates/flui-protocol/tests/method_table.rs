@@ -326,6 +326,13 @@ fn every_gesture_is_a_window_method_held_for_its_act_timeout() {
         Duration::from_millis(GestureOptions::MAX_TIMEOUT_MS),
         "an act holds for a day at most"
     );
+    assert_eq!(
+        tap.options.named_timeout_ms(),
+        Some(GestureOptions::MAX_TIMEOUT_MS),
+        "the timeout a composed act takes is bounded as the window's hold is"
+    );
+    tap.options.timeout_ms = None;
+    assert_eq!(tap.options.named_timeout_ms(), None);
     let until = ScrollUntilParams::new(
         Target::Locator(Locator::identifier("inbox")),
         Locator::root(),
