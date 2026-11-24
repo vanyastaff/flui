@@ -6,6 +6,7 @@
 //! here.
 
 mod global_key;
+pub(crate) mod hash_index;
 mod object_key;
 pub(crate) mod registry;
 

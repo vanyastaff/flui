@@ -21,6 +21,7 @@ use flui_rendering::pipeline::PipelineCell;
 
 use crate::BoxedView;
 use crate::ElementOwner;
+use crate::key::hash_index::KeyHashIndex;
 use crate::owner::{LifecycleHook, RecoveredAt, RecoveredPanic};
 use crate::tree::ElementNode;
 use crate::tree::ElementTree;
@@ -270,10 +271,6 @@ impl SparseChildren {
     /// mounted.
     ///
     /// `host` is the adaptor element's own id (the parent for fresh mounts).
-    #[expect(
-        clippy::disallowed_types,
-        reason = "indexed by view keys, whose hashes an application derives from its own data, so the table keeps SipHash's random seed against chosen collisions"
-    )]
     pub(crate) fn reconcile(
         &mut self,
         source: ReconcileSource<'_>,
@@ -377,12 +374,11 @@ impl SparseChildren {
         // residents are bucketed by key hash (decided by `key_eq` inside the
         // bucket, as the dense reconciler does) and keyless ones by index, so
         // each built view costs O(1) expected rather than a scan of the band.
-        let mut keyed_by_hash: std::collections::HashMap<u64, Vec<usize>> =
-            std::collections::HashMap::new();
+        let mut keyed_by_hash = KeyHashIndex::over(residents.len());
         let mut keyless_by_index: FxHashMap<usize, usize> = FxHashMap::default();
         for (pos, resident) in residents.iter().enumerate() {
             match &resident.key {
-                Some(key) => keyed_by_hash.entry(key.key_hash()).or_default().push(pos),
+                Some(key) => keyed_by_hash.insert(key.key_hash(), pos),
                 None => {
                     keyless_by_index.insert(resident.index, pos);
                 }
@@ -395,12 +391,9 @@ impl SparseChildren {
             };
             let view: &dyn View = view;
             let candidate = if let Some(key) = view.key() {
-                keyed_by_hash.get(&key.key_hash()).and_then(|bucket| {
-                    bucket.iter().copied().find(|&pos| {
-                        let resident = &residents[pos];
-                        !resident.claimed
-                            && resident.key.as_deref().is_some_and(|rk| rk.key_eq(key))
-                    })
+                keyed_by_hash.candidates(key.key_hash()).find(|&pos| {
+                    let resident = &residents[pos];
+                    !resident.claimed && resident.key.as_deref().is_some_and(|rk| rk.key_eq(key))
                 })
             } else {
                 keyless_by_index

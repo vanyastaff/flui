@@ -24,6 +24,42 @@ pub(crate) enum SubtreeRemoval {
     Finalize,
 }
 
+/// The buffers [`ElementTree::remove_subtree`] walks a subtree into, kept on
+/// the tree so that removing many subtrees in one frame (a filter that drops
+/// half a list) allocates for the largest of them rather than for each.
+///
+/// A removal takes the buffers out of the tree and puts them back empty, so
+/// one that re-enters through a nested removal finds empty ones and
+/// allocates its own. Capacity above [`RemovalScratch::KEPT_CAPACITY`] is
+/// given back, so one large teardown does not hold its peak for the life of
+/// the tree.
+#[derive(Debug, Default)]
+pub(super) struct RemovalScratch {
+    /// The subtree's ids in pre-order, the root first.
+    subtree: Vec<ElementId>,
+    /// `GlobalKey`'d descendants the walk stopped at.
+    keyed_descendants: Vec<ElementId>,
+    /// The walk's pending ids.
+    work_stack: Vec<ElementId>,
+}
+
+impl RemovalScratch {
+    /// Ids a buffer keeps room for between removals: 4 KiB of `ElementId`s.
+    const KEPT_CAPACITY: usize = 512;
+
+    /// Empty every buffer, keeping at most [`Self::KEPT_CAPACITY`] of room.
+    fn reset(&mut self) {
+        for buffer in [
+            &mut self.subtree,
+            &mut self.keyed_descendants,
+            &mut self.work_stack,
+        ] {
+            buffer.clear();
+            buffer.shrink_to(Self::KEPT_CAPACITY);
+        }
+    }
+}
+
 impl ElementTree {
     /// Remove `dependent` from the forward maps of the exact providers owned
     /// by the reverse index.
@@ -297,7 +333,8 @@ impl ElementTree {
     /// branch) — e.g. `LaidOut::pump_widget`'s root-swap in the headless
     /// harness.
     ///
-    /// The algorithm mirrors `id_reconcile::remove_child` / `collect_subtree_preorder`:
+    /// `id_reconcile::remove_child` calls it for a dense parent's dropped
+    /// child. The algorithm:
     ///
     /// 1. Peek whether the root is keyed (`registered_global_key`),
     ///    side-effect-free, before touching anything. A keyed root
@@ -328,9 +365,11 @@ impl ElementTree {
     ///    soft-removes and stays retakeable), `remove_finalized` under
     ///    `Finalize` (nothing survives, including a keyed root).
     ///
-    /// Complexity: O(n) time + O(n) peak heap for the work-stack (n = subtree
-    /// size), O(h) call-stack for the constant-stack iterative walk — paid
-    /// only for an un-keyed root; a keyed root is O(1).
+    /// Complexity: O(n) time + O(n) peak heap for the walk's buffers (n =
+    /// subtree size), O(h) call-stack for the constant-stack iterative walk —
+    /// paid only for an un-keyed root; a keyed root is O(1). The buffers are
+    /// the tree's [`RemovalScratch`], so a removal no larger than one before
+    /// it allocates nothing.
     pub(crate) fn remove_subtree(
         &mut self,
         id: ElementId,
@@ -364,10 +403,14 @@ impl ElementTree {
         // loses the state the key exists to preserve. Not descending is the
         // other half: a retaken element keeps its own children, so hard-
         // removing them deepest-first would hand the retake an empty subtree.
-        let mut subtree: Vec<ElementId> = Vec::new();
-        let mut keyed_descendants: Vec<ElementId> = Vec::new();
+        let mut scratch = std::mem::take(&mut self.removal_scratch);
+        let RemovalScratch {
+            subtree,
+            keyed_descendants,
+            work_stack,
+        } = &mut scratch;
         {
-            let mut work_stack: Vec<ElementId> = vec![id];
+            work_stack.push(id);
             while let Some(node_id) = work_stack.pop() {
                 if mode == SubtreeRemoval::DeactivateKeyed
                     && node_id != id
@@ -379,7 +422,7 @@ impl ElementTree {
                     continue;
                 }
                 subtree.push(node_id);
-                self.stack_owned_children(node_id, owner.child_manager_registry, &mut work_stack);
+                self.stack_owned_children(node_id, owner.child_manager_registry, work_stack);
             }
         }
 
@@ -388,17 +431,17 @@ impl ElementTree {
         // walk: an exhausted ancestor would refuse after its children were freed.
         // Keyed boundaries excluded above survive DeactivateKeyed and need no
         // generation advance, including every node under those boundaries.
-        self.preflight_unmount(&subtree);
+        self.preflight_unmount(subtree);
 
         // Soft-remove the keyed descendants BEFORE their ancestors are freed,
         // so `remove`'s unlink-from-parent and render detach run against a
         // tree that is still intact. No keyed node here is an ancestor of
         // another — the walk never descended past one — so the order among
         // them does not matter.
-        for &keyed in &keyed_descendants {
+        for &keyed in keyed_descendants.iter() {
             self.remove(keyed, owner);
         }
-        self.retire_sparse_children(&subtree, owner.child_manager_registry);
+        self.retire_sparse_children(subtree, owner.child_manager_registry);
 
         // Free descendants deepest-first -- `subtree[0]` is the root itself
         // (removed below, last); iterating the rest in reverse visits each
@@ -422,6 +465,8 @@ impl ElementTree {
                 self.remove(id, owner);
             }
         }
+        scratch.reset();
+        self.removal_scratch = scratch;
     }
 
     /// Fully remove an element that has already been unmounted (e.g.
