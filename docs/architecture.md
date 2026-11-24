@@ -199,7 +199,7 @@ Hot-reload is split into two layers so build tooling and runtime hosts stay deco
 1. **Build orchestration** — `flui run` watches the sources with the CLI's own debounced watcher (`SourceWatcher`, crate-private in `crates/flui-cli/src/watch.rs`) and triggers `cargo build`; the app being reloaded never watches files.
 2. **Artifact reload** — `HotReloadDriver` polls the plugin `.so`/`.dll` mtime and reloads via `dlopen` without restarting the host.
 
-See [Hot Reload](hot-reload.md) for workflows, `ReloadStrategy`, and integration examples.
+See [Hot Reload](hot-reload.md) for workflows and integration examples.
 
 ## See Also
 

@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use flui::Application;
 use flui::app::AppConfig;
 use flui::prelude::*;
-use flui_hot_reload::{ScenePluginHook, engine::env};
+use flui_hot_reload::{ScenePluginHook, env};
 
 /// The gallery's size in physical pixels.
 const GALLERY_WIDTH: u32 = 800;

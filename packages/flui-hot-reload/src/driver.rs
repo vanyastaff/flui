@@ -38,8 +38,8 @@ use std::{
 
 use crate::{
     dynlib::LoadRefusal,
-    host::{PluginKind, PluginScene, ScenePlugin},
-    strategy::timing,
+    host::{PluginScene, ScenePlugin},
+    timing,
 };
 
 /// Manages the hot-reload lifecycle for a scene plugin.
@@ -93,8 +93,8 @@ impl HotReloadDriver {
         }
     }
 
-    /// Set the polling interval for mtime checks (default:
-    /// [`timing::ARTIFACT_POLL`]).
+    /// Set the polling interval for mtime checks (default: the artifact poll
+    /// interval every driver starts with).
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
         self
@@ -182,22 +182,6 @@ impl HotReloadDriver {
     /// Whether a plugin is currently loaded.
     pub fn is_loaded(&self) -> bool {
         self.plugin.is_some()
-    }
-
-    /// The kind of plugin loaded, if any.
-    pub fn plugin_kind(&self) -> Option<PluginKind> {
-        self.plugin.as_ref().map(ScenePlugin::kind)
-    }
-
-    /// The plugin version, if loaded.
-    pub fn plugin_version(&self) -> Option<u32> {
-        self.plugin.as_ref().map(ScenePlugin::version)
-    }
-
-    /// How many times the plugin has been reloaded since the driver was
-    /// created.
-    pub fn reload_count(&self) -> u32 {
-        self.reload_count
     }
 
     /// The library file path being watched.
