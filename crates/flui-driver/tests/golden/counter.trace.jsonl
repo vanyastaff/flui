@@ -6,5 +6,5 @@
 {"command":{"method":"windows.list","params":{},"seq":3,"t_ms":48}}
 {"result":{"ok":{"windows":["w1"]},"seq":3,"t_ms":48}}
 {"command":{"method":"wait.until","params":{"condition":{"matches":{"expect":{"name":{"match":"exact","text":"Count: 1"}},"locator":{"name":{"match":"prefix","text":"Count:"},"window":"w1"}}},"timeout_ms":5000,"window":"w1"},"seq":4,"t_ms":48}}
-{"result":{"ok":{"end":"satisfied","frames":0,"observation":{"count":1,"matched":[{"id":"e2","name":"�","native_role":"Label","role":"label","surface_rect":{"height":17,"width":52,"x":374,"y":0}}],"revision":2},"scope":"runtime_only"},"seq":4,"t_ms":48}}
+{"result":{"ok":{"end":"satisfied","frames":0,"observation":{"count":1,"matched":[{"id":"e2","name":"�","native_role":"Label","role":"label","surface_rect":{"height":17,"width":52,"x":374,"y":0}}],"revision":2},"scope":"complete"},"seq":4,"t_ms":48}}
 {"end":{}}

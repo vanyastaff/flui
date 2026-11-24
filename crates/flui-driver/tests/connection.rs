@@ -72,7 +72,11 @@ fn a_wait_answers_on_the_connection_s_window() {
         .wait(&count, Duration::from_secs(5))
         .expect("the wait is answered");
     assert_eq!(outcome.end, WaitEnd::Satisfied, "{outcome:?}");
-    assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
+    assert_eq!(
+        outcome.scope,
+        SettleScope::Complete,
+        "the headless host composes its half of the list"
+    );
 }
 
 #[test]
@@ -443,8 +447,10 @@ fn a_host_tool_that_hangs_is_a_failed_call_with_its_message() {
     assert!(log.releases() > 0, "the lane released what it pressed");
 }
 
+/// A condition an idle application cannot make true ends idle as soon as the headless host,
+/// which composes its half of the list, sees nothing but the test can change it (ADR-0400 §3).
 #[test]
-fn a_wait_that_never_holds_ends_unsatisfied() {
+fn a_wait_that_never_holds_on_an_idle_app_ends_idle() {
     let probe = Probe::default();
     let mut driver = Driver::launch(counter(&probe)).expect("the headless app starts");
     let never = Condition::Matches {
@@ -454,7 +460,8 @@ fn a_wait_that_never_holds_ends_unsatisfied() {
     let outcome = driver
         .wait(&never, Duration::from_millis(200))
         .expect("the wait is answered");
-    assert_eq!(outcome.end, WaitEnd::Unsatisfied, "{outcome:?}");
+    assert_eq!(outcome.end, WaitEnd::Idle, "{outcome:?}");
+    assert!(outcome.unsettled.is_empty(), "{outcome:?}");
     assert_eq!(probe.presses(), 0);
 }
 
