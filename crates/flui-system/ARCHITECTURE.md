@@ -8,6 +8,12 @@ under `testing`. What each platform provides is in [`docs/gaps.md`](../../docs/g
 System services rows of [`platform-parity.toml`](../flui-native/platform-parity.toml); this file
 states the rules the code keeps.
 
+A platform answers for every service in one `Providers` literal (`src/providers.rs`): a field per
+service, each a `Provision`, either a provider or a refusal with its reason. A service added to
+the crate is a field, so no platform compiles until it says how it answers it, and
+`SystemPlugin::register` registers the platform's literal and decides nothing. `PortalOnBus`
+registers the Linux literal over another bus, refusals included.
+
 ## Handles and backends
 
 | Service | Handle | Backend | Answer |
