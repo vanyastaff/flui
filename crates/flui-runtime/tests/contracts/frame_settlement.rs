@@ -251,3 +251,36 @@ fn a_sink_holding_its_depth_gets_no_frame_until_one_settles() {
         "the kept demand is produced once a place is free"
     );
 }
+
+#[test]
+fn a_frame_queued_before_its_presentation_closed_settles_stale() {
+    use flui_foundation::PresentationAddress;
+    use flui_runtime::sink::{FrameSettlement, Settled};
+
+    // No agent window is vended: the close owes the runtime's own bookkeeping alone.
+    let mut runtime = crate::owner_publication::runtime_with_wake(Arc::new(|| {}));
+    runtime
+        .attach_root_widget(&flui_widgets::Text::new("closing"))
+        .expect("mount text");
+    let mut sink = Queues { epochs: Vec::new() };
+    let now = web_time::Instant::now() + std::time::Duration::from_millis(16);
+    let _ = runtime.pump(&mut flui_runtime::pump::SampledClock(now), &mut sink);
+    let [epoch] = sink.epochs[..] else {
+        panic!("one frame was submitted, got {:?}", sink.epochs);
+    };
+    let address = PresentationAddress {
+        ui_runtime_id: runtime.id(),
+        presentation_id: runtime.presentation_id(),
+    };
+
+    runtime.stop_presentations();
+    assert_eq!(
+        runtime.settle_frame(FrameSettlement::new(
+            address,
+            epoch,
+            SubmitVerdict::Presented
+        )),
+        Settled::Stale,
+        "a closed presentation settles no frame it queued before the close"
+    );
+}

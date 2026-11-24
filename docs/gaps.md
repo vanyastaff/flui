@@ -854,13 +854,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - Driver pipeline compilation (6–10 ms a pipeline) dwarfs the parse. The first format's pipeline library is built on a worker from the slot's attach (ADR-0305 §1): with 100 ms of first build before the first frame, a cold first capture on lavapipe drops from 210–239 ms to 140–173 ms (bench `first_frame`, Mesa's cache off); what is left there is lavapipe's compilation at the first queue execution. On Vulkan the context's `wgpu::PipelineCache` is kept between runs in the application's machine-local storage (`crates/flui-engine/src/pipelines/store.rs`), for drivers without a disk cache of their own. Only what the warm-up built is saved: the runners stop admitting storage writes before the context retires, so another format's pipelines, effects and variants built on first use compile again at each launch. What the cache saves at launch has not been measured on an Android device.
 - The entry closes when wgpu lets a native build drop the WGSL front end and the engine's shaders reach it as IR generated at build time, with the binary size and first-frame time measured before and after.
 
-### A release build links the development agent's owner side
-
-> **Environments:** all · **Who it hurts:** Every release application, which carries code only the driver agent reaches · **Parity:** none (build graph)
-
-- `flui-app` serves the agent only under `cfg(driver_agent)` (a debug build, or the `driver` feature; ADR-0239), but `flui-runtime` compiles its owner side on every build: `UiCommand::Agent` is a variant the owner's drain matches, so the window methods (`ui_runtime::agent*`), the protocol types they answer with (`flui-protocol`), `flui_view::__runtime::Reply`, the recording wire conversions and `flui-semantics`' agent reads stay reachable in a release binary although nothing can send that command there. In the release counter CI's `size` job measures (Linux x86_64, symbols kept) they come to about 324 KB of the 21.7 MB.
-- The entry closes when the agent's owner side, its command variant and the crates' agent modules compile only under the conditions `cfg(driver_agent)` reads (debug assertions or the `driver` feature), and `counter_release_bytes` and `counter_wasm_bytes` in `perf/size.toml` fall by what they measure.
-
 ### The native hosts' parsers of foreign bytes have no fuzz target
 
 > **Environments:** Linux, Windows · **Who it hurts:** Applications whose process reads what another process sends: an input method's replies, clipboard and drag payloads, a compositor's arrays · **Parity:** none (robustness)

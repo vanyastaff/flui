@@ -192,5 +192,5 @@
   `UiRuntime::dev_agent_window`. `flui_view::dev_agent::{AgentFault, HandleKind,
   InspectTarget}` go with the per-method calls.
 - **`flui_runtime::dev_agent::DevAgentAttachment`, `DevAgentHost::new` and
-  `DevAgentHost::is_attached`**: `DevAgentHost::attach(hooks)` builds a host that serves until it
-  is dropped, and `DevAgentHost::is_serving` says whether any of its hooks serves.
+  `DevAgentHost::is_attached`**: `DevAgentHost::attach(windows, hooks)` builds a host that serves
+  until it is dropped, and `DevAgentHost::is_serving` says whether any of its hooks serves.

@@ -136,7 +136,10 @@ impl UiRuntime {
         frame_time: Instant,
         scene: &flui_layer::SceneVersion,
     ) -> PendingFrame {
-        let layer_reads = producer.stage_agent_layer_reads(scene);
+        let layer_reads = producer
+            .agent_side
+            .get()
+            .map_or_default(|agent| agent.stage_layer_reads(producer, scene));
         PendingFrame {
             epoch: FrameEpoch::ZERO,
             submitted_at: producer.clock().now(),
@@ -159,7 +162,9 @@ impl UiRuntime {
     /// reached): the layer reads the frame holds wait for the next scene.
     pub(super) fn abandon_pending_frame(producer: &PresentationState, frame: PendingFrame) {
         let reads = frame.layer_reads.len();
-        producer.restore_staged_agent_layer_reads(frame.layer_reads);
+        if let Some(agent) = producer.agent_side.get() {
+            agent.restore_layer_reads(producer, frame.layer_reads);
+        }
         tracing::trace!(
             target: "flui.frame",
             epoch = frame.epoch.get(),
@@ -408,7 +413,9 @@ impl UiRuntime {
             .then(|| producer.scene.completed(shown));
         // Before anything else that can panic: the frame's layer reads are answered if the
         // window showed the scene, and parked again if it did not.
-        held.absorb(producer.settle_agent_layer_reads(layer_reads, shown_on_screen));
+        if let Some(agent) = producer.agent_side.get() {
+            held.absorb(agent.settle_layer_reads(producer, layer_reads, shown_on_screen));
+        }
         let mut tail = VerdictTail::new(FirstPanic::new());
         // The first panic of the work that follows the submit is kept beside a layer read's
         // reply panic (`held`), so neither replaces the other.

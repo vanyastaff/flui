@@ -536,7 +536,9 @@ impl UiRuntime {
         recording: bool,
         origin: InputOrigin,
     ) -> Applied {
-        self.journal_input(presentation, &input, origin == InputOrigin::Agent);
+        if let Some(agent) = self.agent_side.get() {
+            agent.journal_input(self, presentation, &input, origin == InputOrigin::Agent);
+        }
         self.route_platform_input(target, presentation, input, recording)
     }
 

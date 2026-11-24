@@ -743,7 +743,9 @@ impl UiRuntime {
     ) -> Option<web_time::Instant> {
         [
             self.next_wake_excluding_agent_waits_owing(floor_owed),
-            self.next_agent_wait_deadline(),
+            self.agent_side
+                .get()
+                .and_then(|agent| agent.next_wait_deadline(self)),
         ]
         .into_iter()
         .flatten()

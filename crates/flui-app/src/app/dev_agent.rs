@@ -33,7 +33,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use flui_runtime::dev_agent::DevAgentHost;
+use flui_runtime::dev_agent::{AgentWindowSource, DevAgentHost};
 use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
 
@@ -44,41 +44,52 @@ struct Pending(Mutex<Option<Box<dyn DevAgentHook>>>);
 /// The development agent hooks installed on an [`AppConfig`](crate::AppConfig),
 /// in the order they were installed, until a loop takes them.
 ///
-/// Built by [`AppConfig::dev_agent`](crate::AppConfig::dev_agent).
-/// `Clone` shares the hooks, so whichever clone a loop starts with, the loop
-/// takes them all.
+/// Built by [`AppConfig::dev_agent`](crate::AppConfig::dev_agent), which is
+/// the one place that names the agent's windows ([`AgentWindowSource::dev_agent`]):
+/// an application that installs no hook links none of the agent's owner side
+/// (ADR-0402). `Clone` shares the hooks, so whichever clone a loop starts
+/// with, the loop takes them all.
 #[derive(Clone)]
-pub(crate) struct DevAgent(Vec<Arc<Pending>>);
+pub(crate) struct DevAgent {
+    hooks: Vec<Arc<Pending>>,
+    windows: AgentWindowSource,
+}
 
 impl DevAgent {
     /// `agents` with `hook` installed after the ones it holds.
     pub(crate) fn with(agents: Option<Self>, hook: impl DevAgentHook) -> Self {
         let hook: Box<dyn DevAgentHook> = Box::new(hook);
-        let mut agents = agents.unwrap_or(Self(Vec::new()));
-        agents.0.push(Arc::new(Pending(Mutex::new(Some(hook)))));
+        let mut agents = agents.unwrap_or_else(|| Self {
+            hooks: Vec::new(),
+            windows: AgentWindowSource::dev_agent(),
+        });
+        agents.hooks.push(Arc::new(Pending(Mutex::new(Some(hook)))));
         agents
     }
 
-    /// The hooks no loop has taken yet, in the order they were installed.
-    pub(crate) fn take(&self) -> Vec<Box<dyn DevAgentHook>> {
-        self.0
+    /// Attach the hooks no loop has taken yet, in the order they were
+    /// installed; `None` when every hook was taken.
+    pub(crate) fn attach(&self) -> Option<DevAgentHost> {
+        let hooks: Vec<Box<dyn DevAgentHook>> = self
+            .hooks
             .iter()
             .filter_map(|pending| pending.0.lock().take())
-            .collect()
+            .collect();
+        (!hooks.is_empty()).then(|| DevAgentHost::attach(self.windows, hooks))
     }
 }
 
 impl fmt::Debug for DevAgent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let waiting = self
-            .0
+            .hooks
             .iter()
             .filter(|pending| pending.0.lock().is_some())
             .count();
         f.debug_struct("DevAgent")
-            .field("installed", &self.0.len())
+            .field("installed", &self.hooks.len())
             .field("waiting", &waiting)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -145,7 +156,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_runtime::dev_agent::DevAgentHost;
+    use flui_runtime::dev_agent::{AgentWindowSource, DevAgentHost};
     use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 
     use super::LoopAgents;
@@ -193,7 +204,7 @@ mod tests {
         let shared = config.clone();
         let agents = config.dev_agent.as_ref().expect("hooks installed");
 
-        let host = DevAgentHost::attach(agents.take());
+        let host = agents.attach().expect("three hooks waiting");
         let counts = || {
             [
                 &first_attaches,
@@ -212,8 +223,8 @@ mod tests {
                 .dev_agent
                 .as_ref()
                 .expect("the clone shares the hooks")
-                .take()
-                .is_empty(),
+                .attach()
+                .is_none(),
             "a clone of the configuration finds the hooks taken"
         );
         drop(host);
@@ -228,7 +239,10 @@ mod tests {
     fn a_host_lent_when_its_loop_ends_is_handed_back_to_be_dropped() {
         let (serving, attaches, detaches) = hook(false);
         let serving: Box<dyn DevAgentHook> = Box::new(serving);
-        let mut agents = LoopAgents::Serving(DevAgentHost::attach([serving]));
+        let mut agents = LoopAgents::Serving(DevAgentHost::attach(
+            AgentWindowSource::dev_agent(),
+            [serving],
+        ));
         let host = agents.lend().expect("the loop's host is lent");
         assert!(agents.lend().is_none(), "a nested call finds it lent");
         assert!(agents.end().is_none(), "the lender keeps the host");

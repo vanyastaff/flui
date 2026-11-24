@@ -364,7 +364,9 @@ impl UiRuntime {
             }
             self.service_gesture_geometry(&turn);
             // A wake at an agent wait's deadline may run no frame: the wait still ends.
-            self.evaluate_agent_waits(false);
+            if let Some(agent) = self.agent_side.get() {
+                agent.after_turn(self);
+            }
             self.take_redraw_request()
         });
         drop(turn);
