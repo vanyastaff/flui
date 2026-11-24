@@ -92,7 +92,10 @@ impl LogConfig {
     ///
     /// Nothing global happens here. The result is an ordinary value that a
     /// caller can stack further layers onto before handing it to
-    /// [`install_subscriber`](crate::ownership::install_subscriber).
+    /// [`install_subscriber`](crate::ownership::install_subscriber). Its
+    /// filter is the directives as written: a filter above the build's ceiling
+    /// is reported only by the subscriber [`setup`](crate::setup) installs
+    /// (see [the build's ceiling](crate::filter#the-builds-ceiling)).
     ///
     /// ```rust
     /// use flui_log::config::LogConfig;

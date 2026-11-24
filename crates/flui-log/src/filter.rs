@@ -23,11 +23,10 @@
 //! (ADR-0398). A directive above it selects events the binary does not hold:
 //! a filter that asks for `debug` and silently delivers nothing looks like a
 //! framework that logs nothing. So the subscriber [`setup`](crate::setup)
-//! installs over such a filter says so in one WARN event on target
-//! [`CEILING_TARGET`], which its filter admits whatever the directives say of
-//! other targets, through the platform's sink, and
-//! [`ResilientSetup::compiled_out`](crate::ResilientSetup::compiled_out)
-//! names the level.
+//! installs over such a filter says so once, on target [`CEILING_TARGET`],
+//! which its filter admits whatever the directives say of other targets,
+//! through the platform's sink: a WARN, or an ERROR in a build capped below
+//! WARN. A build capped at `off` has no call site left to say it with.
 //!
 //! # Directives
 //!
@@ -262,16 +261,27 @@ pub(crate) fn admitting_the_ceiling_report(
 }
 
 /// Reports, on [`CEILING_TARGET`], that the installed filter selects
-/// `selected` events, which the build's `ceiling` compiled out.
+/// `selected` events, which the build's `ceiling` compiled out: a WARN, or an
+/// ERROR where the ceiling holds no WARN call site. A build whose ceiling is
+/// `off` holds neither, and says nothing.
 pub(crate) fn report_ceiling(selected: LevelFilter, ceiling: LevelFilter) {
-    tracing::warn!(
-        target: CEILING_TARGET,
-        { selected.public = %selected, ceiling.public = %ceiling },
-        "the log filter selects events above this build's `tracing` static maximum level, \
-         which compiled them out; a `max_level_*` feature in the build sets that level, as \
-         `flui build --release` does through `release-max-level-info` (ADR-0398). Events \
-         bridged from `log` still reach the filter"
-    );
+    const REPORT: &str = "the log filter selects events above this build's `tracing` static \
+         maximum level, which compiled them out; a `max_level_*` feature in the build sets that \
+         level, as `flui build --release` does through `release-max-level-info` (ADR-0398). \
+         Events bridged from `log` still reach the filter";
+    if ceiling >= LevelFilter::WARN {
+        tracing::warn!(
+            target: CEILING_TARGET,
+            { selected.public = %selected, ceiling.public = %ceiling },
+            "{REPORT}"
+        );
+    } else {
+        tracing::error!(
+            target: CEILING_TARGET,
+            { selected.public = %selected, ceiling.public = %ceiling },
+            "{REPORT}"
+        );
+    }
 }
 
 /// The most verbose level `targets` selects above `ceiling`, the build's

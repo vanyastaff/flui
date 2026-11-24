@@ -386,10 +386,11 @@ fn the_release_ceiling_reaches_tracing_only_through_its_feature() {
 }
 
 /// A build without debug assertions and with `flui-log`'s
-/// `release-max-level-info` reports a filter that selects DEBUG through the
-/// subscriber `setup_with_env_fallback` installs, whichever arm installs it,
-/// and names the level in `compiled_out` (ADR-0398 §3); a filter at the
-/// ceiling, or a build without the feature, reports nothing.
+/// `release-max-level-info` reports a filter that selects DEBUG once, through
+/// the subscriber `setup` installs, whichever arm of `setup_with_env_fallback`
+/// installs it and whatever the directives say of other targets (ADR-0398
+/// §3). A filter at the ceiling, a build without the feature and a setup that
+/// finds the slot taken report nothing.
 #[test]
 fn a_filter_above_the_release_ceiling_is_reported_where_the_log_goes() {
     let Some(root) = checkout_root() else { return };
@@ -402,28 +403,26 @@ fn main() {
     let config = LogConfig::builder()
         .filter(FilterConfig::new("warn,flui_app=debug"))
         .build();
-    let setup = flui_log::setup_with_env_fallback(&config, SubscriberPolicy::Auto)
+    // A second setup finds the slot this one took: the subscriber it would
+    // have installed is not the one that filters.
+    if std::env::var_os("FLUI_CONSUMER_SETUP_TWICE").is_some() {
+        flui_log::setup(&config, SubscriberPolicy::Auto).expect("the first setup");
+    }
+    flui_log::setup_with_env_fallback(&config, SubscriberPolicy::Auto)
         .expect("the consumer's directives parse");
-    let compiled_out = setup
-        .compiled_out
-        .map_or_else(|| "none".to_owned(), |level| level.to_string());
-    println!("compiled_out={compiled_out}");
 }
 "#;
-    for (features, rust_log, expected) in [
-        (&["release-max-level-info"][..], None, Some("debug")),
+    const CEILING: &[&str] = &["release-max-level-info"];
+    for (features, rust_log, twice, reports) in [
+        (CEILING, None, false, 1),
+        // No bare level: only the admitted target lets the report through.
+        (CEILING, Some("flui_view=debug"), false, 1),
+        (CEILING, Some("off,flui_view=debug"), false, 1),
         // A rejected override: the configuration's own directives are installed.
-        (
-            &["release-max-level-info"][..],
-            Some("flui_view[frame]=debug"),
-            Some("debug"),
-        ),
-        (
-            &["release-max-level-info"][..],
-            Some("warn,flui_view=info"),
-            None,
-        ),
-        (&[][..], None, None),
+        (CEILING, Some("flui_view[frame]=debug"), false, 1),
+        (CEILING, None, true, 1),
+        (CEILING, Some("warn,flui_view=info"), false, 0),
+        (&[][..], None, false, 0),
     ] {
         let mut log = dependency("flui-log", &root.join("crates/flui-log"), false);
         log.as_table_mut().expect("dependency table").insert(
@@ -443,41 +442,39 @@ fn main() {
             // The ceiling follows `debug_assertions`, which the release
             // profile turns off; the optimizer does not matter here.
             .env("CARGO_PROFILE_RELEASE_OPT_LEVEL", "0")
+            // The report is matched as text, which colours would split.
+            .env("NO_COLOR", "1")
             .current_dir(project.path());
         match rust_log {
             Some(value) => command.env("RUST_LOG", value),
             None => command.env_remove("RUST_LOG"),
         };
+        if twice {
+            command.env("FLUI_CONSUMER_SETUP_TWICE", "1");
+        } else {
+            command.env_remove("FLUI_CONSUMER_SETUP_TWICE");
+        }
+        let case = format!("{features:?} RUST_LOG={rust_log:?} twice={twice}");
         let output = command.output().expect("run the log consumer");
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             output.status.success(),
-            "{features:?} {rust_log:?}: {stderr}"
-        );
-        assert!(
-            stdout
-                .lines()
-                .any(|line| line == format!("compiled_out={}", expected.unwrap_or("none"))),
-            "{features:?} {rust_log:?}: {stdout}"
+            "{case}: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
         // FLUI's desktop sink writes to standard output.
-        let report = stdout
+        let report: Vec<&str> = stdout
             .lines()
-            .find(|line| line.contains("flui_log::ceiling"));
-        match expected {
-            Some(level) => {
-                let report = report.unwrap_or_else(|| {
-                    panic!("{features:?} {rust_log:?}: no ceiling report in {stdout}")
-                });
-                assert!(
-                    report.contains("WARN")
-                        && report.contains(&format!("selected.public={level}"))
-                        && report.contains("ceiling.public=info"),
-                    "{features:?} {rust_log:?}: {report}"
-                );
-            }
-            None => assert!(report.is_none(), "{features:?} {rust_log:?}: {stdout}"),
+            .filter(|line| line.contains("flui_log::ceiling"))
+            .collect();
+        assert_eq!(report.len(), reports, "{case}: {stdout}");
+        for line in report {
+            assert!(
+                line.contains("WARN")
+                    && line.contains("selected.public=debug")
+                    && line.contains("ceiling.public=info"),
+                "{case}: {line}"
+            );
         }
     }
 }

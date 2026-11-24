@@ -131,8 +131,7 @@ above its static maximum level out of a binary, and `flui build --release` and
 `release-max-level-info` feature, which the facade forwards (ADR-0398). A
 directive above it selects nothing there, so the subscriber `setup` installs
 says so once, in a warning on target `flui_log::ceiling` that its filter
-admits, through the platform's sink, and `ResilientSetup::compiled_out` names
-the level.
+admits, through the platform's sink.
 
 A directive string is `target=level` pairs and one bare level for the rest
 (`info,wgpu=warn,flui_view=trace`), read by `tracing_subscriber`'s `Targets`

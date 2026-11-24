@@ -142,7 +142,7 @@ pub(crate) fn cargo_project(dir: &Path) -> BuildResult<CargoProject> {
         package: package.map(|package| package.name.to_string()),
         library,
         framework: package.map_or(FrameworkDependency::Neither, |package| {
-            FrameworkDependency::of(&package.dependencies)
+            FrameworkDependency::of(&package.dependencies, false)
         }),
     })
 }
@@ -312,7 +312,10 @@ async fn select_target_for(
                 package: package.id.clone(),
                 package_name: package.name.to_string(),
                 version: package.version.to_string(),
-                framework: FrameworkDependency::of(&package.dependencies),
+                framework: FrameworkDependency::of(
+                    &package.dependencies,
+                    kind == TargetKind::Example,
+                ),
                 name: target.name.clone(),
                 kind: kind.clone(),
                 crate_type: if staticlib {

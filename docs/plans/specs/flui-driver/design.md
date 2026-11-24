@@ -899,8 +899,9 @@ What the driver relies on:
 | `TreeError<E>` with `TreeContext` | `flui-rendering` (pipeline owner), `flui-view` (build owner) | `platform` error details, trace rows, findings |
 
 The agent installs the capture layer per UI runtime only while a driver session subscribes, and it
-partitions by presentation id. Because the framework sets no compile-time level cap, release
-builds with the `driver` feature can be profiled.
+partitions by presentation id. The CLI's release mode compiles DEBUG and TRACE call sites out
+(ADR-0398) and an agent build is a development build, so a profile is taken from an agent, debug
+or `profiling` build.
 
 ## Self-contained by construction (R46–R49)
 

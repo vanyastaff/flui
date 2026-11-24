@@ -5,7 +5,7 @@
   call site, FLUI's or the application's: about 0.7 MB of a generated counter on Linux x86_64 and
   0.45 MB on wasm32. The subscriber `flui_log` installs over a filter that selects events above
   the build's ceiling reports it once, as a warning on target `flui_log::ceiling` through the
-  platform's sink, and `flui_log::ResilientSetup::compiled_out` names the level.
+  platform's sink.
 
 ### Changed
 
@@ -16,3 +16,6 @@
   `cargo build --release`: an application that ships through cargo alone passes
   `--features flui/release-max-level-info` itself. A facade older than this feature fails cargo's
   resolution of a `--release` build: update it with the CLI.
+- **A `--release` build records nothing in a `flui-devtools` capture**: the phase spans and frame
+  events it reads are compiled out. Take a capture from a debug, `--profile profiling` or
+  `flui run --agent` build.

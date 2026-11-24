@@ -723,3 +723,53 @@ fn a_desktop_run_that_opens_links_needs_one_instance() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// `flui run --profile release` is `--release` (ADR-0398 §2): the run is in
+/// the release mode and builds through the facade's ceiling, which the
+/// stand-in facade does not compile without.
+#[test]
+fn a_run_of_the_release_profile_is_a_release_run() {
+    let tmp = TempDir::new().expect("fixture");
+    let facade = tmp.path().join("facade");
+    package(&facade, "flui", "[features]\nrelease-max-level-info = []\n");
+    std::fs::write(
+        facade.join("src/lib.rs"),
+        "#[cfg(not(feature = \"release-max-level-info\"))]\ncompile_error!(\"FLUI_BUILT_WITHOUT_THE_CEILING\");\n",
+    )
+    .expect("facade library");
+    let app = tmp.path().join("app");
+    package(
+        &app,
+        "app",
+        "[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
+    );
+    std::fs::write(app.join("src/main.rs"), "use flui as _;\n\nfn main() {}\n")
+        .expect("main naming the facade");
+    let output = cargo_bin_cmd!("flui")
+        .current_dir(&app)
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TARGET_DIR", app.join("target"))
+        .args([
+            "run",
+            "--profile",
+            "release",
+            "--device",
+            "desktop",
+            "--json",
+        ])
+        .timeout(std::time::Duration::from_secs(120))
+        .output()
+        .expect("CLI");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let start = stdout
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|event| event["event"] == "run.start")
+        .unwrap_or_else(|| panic!("no run.start in {stdout}"));
+    assert_eq!(start["mode"], "release", "{start}");
+}

@@ -67,7 +67,8 @@ the whole application.
 `flui build --release` and `flui run --release` add `--features <key>/release-max-level-info` for
 every platform, where `<key>` is the name under which the built package depends on the facade
 (`flui`, or its rename), else on `flui-app`, both read from the cargo metadata of the target the
-build selects; an `optional` dependency gets `<key>?/release-max-level-info`, which turns the
+build selects, counting the dev-dependencies an example links; an `optional` dependency gets
+`<key>?/release-max-level-info`, which turns the
 feature on only where the dependency already is. `flui run --profile release` is `--release`,
 read once for every target (`Profile::of_run`), and a worker project's run without hot reload
 builds its host in the run's mode. One function decides the features of a build mode,
@@ -87,14 +88,15 @@ documentation says.
 ### §3. A filter above the ceiling is reported past the filter
 
 When the subscriber `flui-log`'s `setup` installs has a filter that selects a level its build
-compiled out, that filter also admits target `flui_log::ceiling` at WARN, and the subscriber
-reports there, once per installation, the level the filter asks for and the ceiling, through the
-platform's sink (the terminal, logcat, the unified log, the browser console). So a
-`RUST_LOG=flui_view=debug` that would otherwise silence every other warning is still told, on
-every host and from every caller of `setup`, and `ResilientSetup::compiled_out` names the level.
+compiled out, that filter also admits target `flui_log::ceiling` at WARN, and `setup` sends that
+subscriber alone (through its own `Dispatch`, whatever scoped default the thread has), once per
+installation, the level the filter asks for and the ceiling, through the platform's sink (the
+terminal, logcat, the unified log, the browser console). So a `RUST_LOG=flui_view=debug` that
+would otherwise silence every other warning is still told, on every host and from every caller of
+`setup`. A subscriber the host already installed filters by its own directives and gets nothing.
 Events bridged from `log` (wgpu's, for one) are not compiled out by the ceiling, and the report
-says it concerns `tracing` call sites. A build whose static maximum level is below WARN cannot
-hold the report either.
+says it concerns `tracing` call sites. A build capped below WARN gets the report as an ERROR, and
+one capped at `off` holds no call site to say it with.
 
 ### Consequences
 
@@ -122,8 +124,8 @@ hold the report either.
   gives a builder, `a_run_is_the_release_mode_whichever_flag_names_the_release_profile` the mode
   of a run, `a_desktop_run_checks_what_it_builds` the desktop run's cargo arguments for a debug,
   a release and an agent run, and `the_framework_key_is_the_normal_dependency_the_manifest_names`
-  and `the_framework_key_is_named_by_the_package_the_run_builds` the key of a renamed or optional
-  facade.
+  and `the_framework_key_is_named_by_the_package_the_run_builds` the key of a renamed, optional or
+  example's dev-dependency facade.
 - `flui-cli`'s `a_desktop_release_build_compiles_the_facade_with_its_ceiling` builds against a
   stand-in facade that does not compile without the feature, and
   `web_release_build_names_the_facade_ceiling` reads the web builder's cargo arguments. The
@@ -131,8 +133,9 @@ hold the report either.
 - The facade's `the_release_ceiling_reaches_tracing_only_through_its_feature` reads `tracing`'s
   features in the graph of a consumer outside the workspace with and without the feature, and
   `a_filter_above_the_release_ceiling_is_reported_where_the_log_goes` builds a consumer of
-  `flui-log` without debug assertions and reads the report and `compiled_out` for a filter above
-  the ceiling, a rejected override and a filter at it, and without the feature.
+  `flui-log` without debug assertions and counts the reports for a filter above the ceiling with
+  and without a bare level, a rejected override, a second setup, a filter at the ceiling and a
+  build without the feature.
 - `flui-log`'s `a_filter_is_beyond_the_ceiling_by_its_most_verbose_directive` and
   `a_filter_above_the_ceiling_admits_its_report` hold the level a filter selects above a ceiling
   and the filter the report passes.

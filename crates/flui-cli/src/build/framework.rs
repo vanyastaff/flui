@@ -30,16 +30,16 @@ pub(crate) enum FrameworkDependency {
 }
 
 impl FrameworkDependency {
-    /// The facade among `dependencies`, else `flui-app`, counting normal
-    /// dependencies only: a dev- or build-dependency is not in the shipped
-    /// graph, so a feature named through it would do nothing there.
-    pub(crate) fn of(dependencies: &[Dependency]) -> Self {
-        let named = |name: &str| {
+    /// The facade among `dependencies`, else `flui-app`, counting the kinds
+    /// the built target links: normal dependencies, and dev-dependencies too
+    /// for an example (`links_dev_dependencies`). A build-dependency is in no
+    /// target's graph, so a feature named through it would do nothing there.
+    /// A normal declaration is preferred where both name the crate.
+    pub(crate) fn of(dependencies: &[Dependency], links_dev_dependencies: bool) -> Self {
+        let named = |name: &str, kind: DependencyKind| {
             dependencies
                 .iter()
-                .find(|dependency| {
-                    dependency.kind == DependencyKind::Normal && dependency.name == name
-                })
+                .find(|dependency| dependency.kind == kind && dependency.name == name)
                 .map(|dependency| Self::Named {
                     key: dependency
                         .rename
@@ -48,8 +48,15 @@ impl FrameworkDependency {
                     optional: dependency.optional,
                 })
         };
-        named("flui")
-            .or_else(|| named("flui-app"))
+        let linked = |name: &str| {
+            named(name, DependencyKind::Normal).or_else(|| {
+                links_dev_dependencies
+                    .then(|| named(name, DependencyKind::Development))
+                    .flatten()
+            })
+        };
+        linked("flui")
+            .or_else(|| linked("flui-app"))
             .unwrap_or(Self::Neither)
     }
 
@@ -129,18 +136,25 @@ mod tests {
     }
 
     /// The key is the one the manifest names the dependency under, the
-    /// facade before `flui-app`, and a dev-dependency never counts; a
-    /// feature named through an optional one turns on only where it is.
+    /// facade before `flui-app`; a dev-dependency counts for an example,
+    /// which links it, and for no other target; a feature named through an
+    /// optional dependency turns on only where it is.
     #[test]
     fn the_framework_key_is_the_normal_dependency_the_manifest_names() {
-        for (deps, expected) in [
-            (vec![dependency("flui", None, None)], Some("flui/driver")),
+        for (deps, example, expected) in [
+            (
+                vec![dependency("flui", None, None)],
+                false,
+                Some("flui/driver"),
+            ),
             (
                 vec![dependency("flui", Some("ui"), None)],
+                false,
                 Some("ui/driver"),
             ),
             (
                 vec![optional_dependency("flui", None, None, true)],
+                false,
                 Some("flui?/driver"),
             ),
             (
@@ -148,17 +162,37 @@ mod tests {
                     dependency("flui-app", None, None),
                     dependency("flui", None, None),
                 ],
+                false,
                 Some("flui/driver"),
             ),
             (
                 vec![dependency("flui-app", None, None)],
+                false,
                 Some("flui-app/driver"),
             ),
-            (vec![dependency("flui", None, Some("dev"))], None),
-            (vec![dependency("flui-widgets", None, None)], None),
+            (vec![dependency("flui", None, Some("dev"))], false, None),
+            (
+                vec![dependency("flui", None, Some("dev"))],
+                true,
+                Some("flui/driver"),
+            ),
+            (
+                vec![
+                    dependency("flui", Some("dev_ui"), Some("dev")),
+                    dependency("flui", None, None),
+                ],
+                true,
+                Some("flui/driver"),
+            ),
+            (vec![dependency("flui", None, Some("build"))], true, None),
+            (vec![dependency("flui-widgets", None, None)], false, None),
         ] {
-            let found = FrameworkDependency::of(&dependencies(&deps.join(",")));
-            assert_eq!(found.feature("driver").as_deref(), expected, "{deps:?}");
+            let found = FrameworkDependency::of(&dependencies(&deps.join(",")), example);
+            assert_eq!(
+                found.feature("driver").as_deref(),
+                expected,
+                "{deps:?}, example {example}"
+            );
         }
     }
 
