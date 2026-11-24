@@ -70,6 +70,13 @@ pub fn text_context_lends(text: &TextContext) -> u64 {
     text.lends()
 }
 
+/// How many times `text` has shaped spans: a paragraph found among the laid-out
+/// paragraphs it keeps shares that layout and does not count.
+#[must_use]
+pub fn text_context_shapings(text: &TextContext) -> u64 {
+    text.shaped
+}
+
 /// Whether `fonts` was fed from a host scan: built by
 /// [`FontCollection::with_host_fonts`], or a [`HostFontFeed`] on it has
 /// finished. A composition root's tests use it to show the collection its

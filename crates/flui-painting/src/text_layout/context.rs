@@ -826,6 +826,13 @@ pub struct TextContext {
     /// Each span of the paragraph being shaped: its byte range and where its
     /// properties end in `style_scratch`; empty between shapings.
     pub(crate) span_scratch: Vec<(std::ops::Range<usize>, usize)>,
+    /// Paragraphs laid out before, by everything they were laid out from, at
+    /// the collection's current generation (`parley_text::shape_cache`).
+    pub(crate) shape_cache: crate::parley_text::ShapeCache,
+    /// How many times this context has shaped spans, a paragraph its cache
+    /// held not counted; read by tests through `testing::text_context_shapings`.
+    #[cfg(any(test, feature = "testing"))]
+    pub(crate) shaped: u64,
 }
 
 impl TextContext {
@@ -845,6 +852,9 @@ impl TextContext {
             spare_layout: None,
             style_scratch: Vec::new(),
             span_scratch: Vec::new(),
+            shape_cache: crate::parley_text::ShapeCache::default(),
+            #[cfg(any(test, feature = "testing"))]
+            shaped: 0,
         }
     }
 
@@ -854,20 +864,22 @@ impl TextContext {
         &self.fonts
     }
 
-    /// Give back what shaping can rebuild: the layout scratch buffers, and the
-    /// loaded font files nothing holds.
+    /// Give back what shaping can rebuild: the layout scratch buffers, the
+    /// laid-out paragraphs the context keeps, and the loaded font files
+    /// nothing holds.
     ///
-    /// [`Moderate`](MemoryPressureLevel::Moderate) drops the scratch buffers and
-    /// the font files not used for a while. [`Critical`](MemoryPressureLevel::Critical)
-    /// drops every font file as well. A face a
-    /// [`FontRegistry`](crate::glyphs::FontRegistry) holds keeps its data and
-    /// its keys; a face nothing holds loads again, under a new blob id, on its
-    /// next use.
+    /// [`Moderate`](MemoryPressureLevel::Moderate) drops the scratch buffers,
+    /// the kept paragraphs and the font files not used for a while.
+    /// [`Critical`](MemoryPressureLevel::Critical) drops every font file as
+    /// well. A face a [`FontRegistry`](crate::glyphs::FontRegistry) holds keeps
+    /// its data and its keys; a face nothing holds loads again, under a new
+    /// blob id, on its next use.
     pub fn reclaim(&mut self, level: MemoryPressureLevel) {
         self.layout_ctx = parley::LayoutContext::new();
         self.spare_layout = None;
         self.style_scratch = Vec::new();
         self.span_scratch = Vec::new();
+        self.shape_cache.clear();
         match level {
             MemoryPressureLevel::Moderate => self.font_ctx.source_cache.prune(TRIM_MAX_AGE, false),
             _ => self.font_ctx.source_cache.prune(0, true),
