@@ -559,7 +559,7 @@ fn an_element_fits_only_the_node_whose_facts_it_shows() {
         }),
         ("enabled", &|node| node.disabled = true),
         ("identifier", &|node| {
-            node.automation_id = Some("other".to_owned())
+            node.automation_id = Some("other".to_owned());
         }),
         ("state", &|node| node.checked = Some(Checked::True)),
         ("frame", &|node| {

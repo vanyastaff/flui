@@ -1185,18 +1185,22 @@ graph LR
     without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
     and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
     port tried when one is taken, is removed by that port once `adb` made it or may have.
-  - `uiautomator dump` suspends the accessibility services running while it dumps, so the lane
-    refuses every dump while a screen reader runs (a TalkBack service in
-    `enabled_accessibility_services`, or touch exploration on), naming `android_window_dump`, and a
-    TalkBack run locates the window before TalkBack is on (`docs/gaps.md`).
+  - `uiautomator dump` suspends every accessibility service running while it dumps, so the lane
+    refuses every dump while any service is on (`enabled_accessibility_services`, a list never set
+    or emptied being none) or touch exploration is, naming `android_window_dump` and the services,
+    and a TalkBack run locates the window before TalkBack is on (`docs/gaps.md`).
   - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
     sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,
-    which `Lane::read_tree` is handed, by structure, role (the class `accesskit_android` gives the
-    node's AccessKit role, `lane::android::roles`), content description, checked and enabled
-    state and bounds placed at the surface's origin; two candidates alike are `Ambiguous`, and
-    bounds off the display place a node nowhere. `invoke` is refused naming `os_invoke`: UI
-    Automator performs no action. Held by `android_tree::*` and, through the lane on a scripted
-    emulator serving the headless app's tree, by
+    which `Lane::read_tree` is handed, of one revision with the OS tree: the root is the decor
+    view's child where `FluiView.install` puts it, and the children are matched in the order the
+    adapter adds them, those `accesskit_consumer`'s filter keeps under a clipping parent first, by
+    role (the class `accesskit_android` gives the node's AccessKit role, `lane::android::roles`),
+    content description, toggled state (a radio button's selection included), enabled state and
+    bounds placed at the surface's origin; two candidates the order does not tell apart are
+    `Ambiguous`, bounds off the display place a node nowhere, and what a dump cannot show (a
+    range's value, the announcers) is no difference (`tree::Unobservable`). `invoke` is refused
+    naming `os_invoke`: UI Automator performs no action. Held by `android_tree::*` and, through
+    the lane on a scripted emulator answering with literal dumps of the headless app's pages, by
     `scenarios::the_android_roles_scenario_passes_through_the_lane_on_the_headless_app` and
     `scenarios::the_android_accessibility_scenario_passes_through_the_lane_but_its_activation`; the
     device runs are `android_device::the_android_roles_scenario_runs_through_the_os_lane` and

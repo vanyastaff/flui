@@ -12,7 +12,7 @@
   - LY99 — прогон сценария conformance через Windows `os`-lane на рабочем столе, принимающем
     ввод пользователя: на отдельном рабочем столе nextest он `cannot_verify` (прогон
     2026-11-20 в записи), а на рабочий стол пользователя тесты выходят только с
-    `FLUI_TEST_VISIBLE_DESKTOP=1`, и этот прогон делает владелец.
+    `FLUI_TEST_VISIBLE_DESKTOP=1`, и этот прогон делает владелец;
 - **Ограниченное утверждение:** LY8/LY9 исполняются вместе по
   [ADR-0172](../../../adr/ADR-0172-host-owned-system-preferences.md), используя
   текущие имена крейтов и owner-local runtime. Это не утверждает остальные задачи,
@@ -5106,21 +5106,30 @@ GPU-память простаивающего или невидимого окн
   `scenarios::the_conformance_scenario_passes_on_the_headless_target`; на Windows 11 2026-11-20 —
   3 из 3. Android-lane (FD13) читает дерево, которое читает TalkBack, из `uiautomator dump`:
   `accesskit_android` не ставит `viewIdResourceName`, поэтому `lane::android::tree` сопоставляет
-  дамп с деревом приложения по структуре, роли (класс, который `accesskit_android` 0.9.1 даёт
-  роли AccessKit, таблица `lane::android::roles`), имени (`content-desc`), состояниям checked и
-  enabled и границам в координатах дисплея; два одинаковых кандидата — типизированная ошибка
-  `Ambiguous`, границы вне дисплея узел никуда не ставят. Сопоставленный узел несёт роль и
+  дамп с деревом приложения той же ревизии (`Window::compare_projection` перечитывает дерево,
+  сдвинувшееся во время дампа, не более трёх раз, затем `Busy`): корень — дочерний узел decor
+  view, куда его ставит `FluiView.install` (а не content view NativeActivity с теми же
+  границами), дети — в порядке, в котором их добавляет адаптер (сперва те, что оставляет фильтр
+  `accesskit_consumer` под обрезающим родителем), по роли (класс, который `accesskit_android`
+  0.9.1 даёт роли AccessKit, таблица `lane::android::roles`), имени (`content-desc`), состоянию
+  переключения (выбор radio button тоже), enabled и границам в координатах дисплея; два
+  кандидата, которых порядок не различает, — типизированная ошибка `Ambiguous`, границы вне
+  дисплея узел никуда не ставят, а то, чего дамп показать не может (значение диапазона, узлы
+  объявлений), разницей не считается (`tree::Unobservable`). Сопоставленный узел несёт роль и
   идентификатор приложения. `invoke` отказывает (`os_invoke`): оболочка UI Automator действий не
   выполняет, а `ACTION_CLICK` доходит до узла только от службы accessibility или инструментации
   на устройстве; касание в центре узла — путь ввода, а не активация. `uiautomator dump`
-  приостанавливает службы accessibility, и lane отказывает в любом дампе, пока работает
-  скринридер (служба TalkBack в `enabled_accessibility_services` или включённое touch
-  exploration). Сценарии в коде: `roles` с плечом `AccessibilityApi::UiAutomator` и
-  `accessibility`; headless-половина — `scenarios::the_android_roles_scenario_passes_through_the_lane_on_the_headless_app`
-  и `scenarios::the_android_accessibility_scenario_passes_through_the_lane_but_its_activation`
-  (через lane на эмуляторе по сценарию, который отдаёт дамп дерева headless-приложения так, как
-  его отдал бы `accesskit_android`), таблицы и отказы — `android_tree::*`; на Windows 11 и
-  WSL Ubuntu 24.04 2026-11-20 проходят. Семь ролей, чью метку FLUI публикует описанием
+  приостанавливает все службы accessibility, и lane отказывает в любом дампе, пока включена
+  хоть одна (`enabled_accessibility_services`; список, который не задан или опустел, — ни одной)
+  или touch exploration, называя службы. Сценарии в коде: `roles` с плечом
+  `AccessibilityApi::UiAutomator`, проверяющим само сопоставление (узел, найденный по
+  идентификатору, который переносит сопоставление), и `accessibility`; headless-половина —
+  `scenarios::the_android_roles_scenario_passes_through_the_lane_on_the_headless_app`,
+  `scenarios::an_android_role_row_fails_when_the_lane_cannot_match_its_node` и
+  `scenarios::the_android_accessibility_scenario_passes_through_the_lane_but_its_activation`
+  (через lane на эмуляторе по сценарию, который отвечает дампами страниц headless-приложения,
+  записанными вручную по исходникам `accesskit_android`), таблицы, сопоставление и отказы —
+  `android_tree::*`; на Windows 11 и WSL Ubuntu 24.04 2026-11-24 проходят. Семь ролей, чью метку FLUI публикует описанием
   (paragraph, caption, code, emphasis, strong, insertion, deletion), до TalkBack без текста:
   `accesskit_android` описание не передаёт (`docs/gaps.md`, «Accessibility bridge fidelity»).
   iOS-Simulator-lane (FD15, `flui-driver::lane::ios_simulator`) читает то дерево, что читает
