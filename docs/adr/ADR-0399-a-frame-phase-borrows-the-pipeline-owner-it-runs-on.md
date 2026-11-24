@@ -163,7 +163,8 @@ is the one call each pass makes.
   so no frame path can move it: the shape in §1 is the check.
 - `tests/frame_unwind.rs`: every row of `a_frame_that_unwinds_leaves_the_pipeline_its_owner` panics
   in the middle of a phase (a paint span, a layout or paint report, a wake, a compositing hook) and
-  ends by checking that no phase is left open and that the retry and the frame after it paint (§2);
+  ends by checking that no phase is left open, that the unwound frame is not counted, and that the
+  retry and the frame after it paint (§2);
   `a_pass_ended_early_leaves_the_next_frame_whole` drops a pass after layout and checks that the
   next frame paints what it owed and the one after owes nothing. `flui-runtime`'s
   `a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry` holds ADR-0048.

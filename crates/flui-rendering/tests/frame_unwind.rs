@@ -160,6 +160,8 @@ struct Fixture {
     /// The second rigged leaf, after the first in the walks.
     late: RenderId,
     late_compositing: Arc<AtomicU8>,
+    /// The frames this fixture ran that painted, its first included.
+    painted: std::cell::Cell<u64>,
 }
 
 /// The fixture's tree, before its first frame.
@@ -217,7 +219,11 @@ impl Fixture {
     fn run_frame(
         &self,
     ) -> Result<Option<flui_layer::LayerTree>, flui_foundation::TreeError<RenderError>> {
-        self.scene.borrow_mut().run_cell_frame(&self.cell)
+        let frame = self.scene.borrow_mut().run_cell_frame(&self.cell);
+        if matches!(frame, Ok(Some(_))) {
+            self.painted.set(self.painted.get() + 1);
+        }
+        frame
     }
 }
 
@@ -251,6 +257,7 @@ fn fixture() -> Fixture {
         compositing,
         late,
         late_compositing,
+        painted: std::cell::Cell::new(1),
     }
 }
 
@@ -303,9 +310,9 @@ fn unwinds_under<R>(trigger: Trigger, frame: impl FnOnce() -> R) {
 }
 
 /// The checks every row ends with: the owner in the cell is the pipeline's own, no phase is
-/// left open, and the retry at the constraints the frame already had paints. The production
-/// retry runs at unchanged constraints, so only the work the unwound frame kept brings the
-/// tree to its new size.
+/// left open, the unwound frame is not counted, and the retry at the constraints the frame
+/// already had paints and is counted. The production retry runs at unchanged constraints, so
+/// only the work the unwound frame kept brings the tree to its new size.
 fn the_pipeline_kept_its_owner(f: &Fixture) {
     assert!(f.cell.is_free(), "the cell is not left borrowed");
     f.cell.with(|owner| {
@@ -319,11 +326,21 @@ fn the_pipeline_kept_its_owner(f: &Fixture) {
             "the cell's owner measures through the pipeline's context"
         );
         assert!(!owner.debug_doing_any_phase(), "no phase is left open");
+        assert_eq!(
+            owner.counters().frames_produced,
+            f.painted.get(),
+            "the owner counts the frames that painted, not the one that unwound"
+        );
     });
 
     assert!(
         matches!(f.run_frame(), Ok(Some(_))),
         "the retry at unchanged constraints paints"
+    );
+    assert_eq!(
+        f.cell.with(|owner| owner.counters().frames_produced),
+        f.painted.get(),
+        "the retry is counted once"
     );
     assert_eq!(
         f.cell.with(|owner| owner.box_size(f.root)),
@@ -546,6 +563,10 @@ fn a_pass_ended_early_leaves_the_next_frame_whole() {
     owner.set_root_render_object(Box::new(RenderColoredBox::red(10.0, 10.0)));
     owner.set_root_constraints(Some(tight(100.0)));
     let mut layout = owner.layout_pass();
+    assert!(
+        format!("{layout:?}").starts_with("FramePass { phase: \"Layout\", owner: PipelineOwner {"),
+        "a pass names its phase and shows its owner: {layout:?}"
+    );
     layout.run_layout().expect("the first layout runs");
     drop(layout.into_compositing());
     let mut scene = SceneHost::new();
