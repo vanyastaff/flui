@@ -1111,13 +1111,19 @@ owed reading `readback_failed` with the effect `ran`, since the action was deliv
 
 **Injected input.** `input.inject` and `input.release` reach the owner through an input lease
 (`AgentWindow::input_lease`; the call carries its `LeaseId`) and are refused `invalid_argument`
-without one (ADR-0288 §9). `agent_input.rs` turns the sequence into a plan of ticks before
-anything plays (`plan`, which refuses the whole sequence) and queues it on the presentation
-(`agent_input`, at most 64 jobs, then `InputQueueFull`). `drive_frame` advances the queue once per
-frame boundary, after the commit anchor: a tick's input goes in through `handle_input_from`, the
-path the platform's input takes (`handle_input_on`), marked as the agent's; each event is
-contained so one handler's panic does not keep the rest out, and the first panic continues once
-all went in. What a lease holds (contacts down, keys pressed) is kept per lease; a release
+without one (ADR-0288 §9). `agent_input.rs` plans the sequence once with
+`flui_protocol::input::plan`, the one planner the driver's OS lane plays too, whose bounds and
+refusals are the protocol's, and lowers the plan into the events this window takes (`lower`, which
+refuses the whole sequence, adding only what the window cannot deliver: a key that is no W3C name
+nor text, a composition caret outside its text, a trackpad gesture); it queues the lowered script
+on the presentation (`agent_input`, at most 64 jobs, then `InputQueueFull`). `drive_frame` advances
+the queue once per frame boundary, after the commit anchor, on the plan's timeline: a tick starts
+at a boundary, each input goes out at the first boundary at or past its offset in the tick,
+stamped with the instant the plan gives it, and the next tick starts at the first boundary past
+the tick's end but never at the boundary its predecessor started at. An input goes in through
+`handle_input_from`, the path the platform's input takes (`handle_input_on`), marked as the
+agent's; each event is contained so one handler's panic does not keep the rest out, and the first
+panic continues once all went in. What a lease holds (contacts down, keys pressed) is kept per lease; a release
 cancels the contacts and lifts the keys, the latest first. A lease the agent drops is recorded on
 the port (`DevAgentPort::release`, which wakes the owner) and released by the drain, which counts
 the dropped leases before it reads its commands and releases them after: a call asked through a
@@ -1127,6 +1133,35 @@ reading (`ReadingOwed`), so it is answered once a frame has passed since that in
 `observed`, the window's journal entries its ticks made. A failure part of the way answers
 `InputPartial`, the failure's code with a `partial` effect counting ticks. A window that closes
 answers its queued input `gone`. Pinned by `tests/contracts/agent_input.rs` and `agent_service.rs`.
+
+**Gestures.** The agent answers every `element.*` gesture on the synthetic and semantic paths
+(ADR-0400 §2; `agent_gesture.rs`, `agent_scroll.rs` for `scroll_until`), and refuses the `os`
+path, which the driver composes with its lane. A gesture is a held act (`agent_held.rs`): the
+presentation's `HeldActs`, at most 64 (`TooManyActs`, `busy`), is the one owner of every act it
+holds. An act is attempted when it is served, at each frame boundary before injected input goes on
+(`AgentSide::advance_held_acts`, so an act that passes injects its first tick at that boundary),
+and on an owner turn without a frame once its deadline passed, which wakes the owner
+(`AgentSide::next_act_deadline` in `next_wake`); while any act is held the window asks for frames.
+An attempt resolves a locator again in the application (none holds on, several under a strict
+pick answer `ambiguous`), reads the element's actionability as `element.actionability` does (the
+same `actionability`, its stability included), and performs once every check passes, or only
+attached under `force`: the sequence `flui_protocol::input::gestures` composes from that frame's
+point and bounds, injected through the call's lease as `input.inject` is, or on the semantic path
+the semantics action that does the same (a primary tap invokes; a focus before text or keys
+focuses). The deadline is the act's own timeout on the presentation's clock; the attempt at or
+past it is the last, and answers the check that failed (`NotActionable` with `failed` and
+`covered_by`), `not_found` or `gone` when it does not perform. An act is dropped as it is answered,
+so nothing it would send goes out after its answer; an act nobody awaits is dropped unanswered; the
+lease an act injects through being let go answers it `gone`, as does the presentation closing; a
+panic in app code an attempt reaches (a hit-test, a semantics handler) answers the act before it
+continues. `scroll_until` turns the wheel at the scrollable's visible centre a viewport at a time,
+each step an injection whose answer the next attempt waits for, until the locator resolves under
+the scrollable to an element that shows, or the scrollable's descendants and their bounds are
+unchanged after a step (`ScrollEnded`, `not_found`), so a scrollable that does not move ends the
+search; a call that names no direction scrolls down, then right when the first step down moves
+nothing. The conversation routes gestures through the connection's input lease (`LEASED` in
+`agent/dispatch.rs`) and counts their act timeout and the time their input plays in the reply's
+deadline (`Addressed::holds_for`). Pinned by `tests/contracts/agent_gestures.rs`.
 
 **Input journal.** Once `dev_agent_window` has made the presentation's agent slot, every input
 routed to the presentation is journaled in the slot (`agent_journal.rs`): the platform's and the

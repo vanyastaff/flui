@@ -540,6 +540,10 @@ pub struct PresentationState {
     /// and releases queued. Advanced at each frame boundary; its queued work is answered `gone`
     /// when the presentation closes. Owner thread only.
     pub(crate) agent_input: RefCell<crate::ui_runtime::AgentInput>,
+    /// Gestures and scrolls an agent asked for that hold out at frame boundaries until their
+    /// target is ready or their timeout passes. Answered `gone` when the presentation closes
+    /// first. Owner thread only.
+    pub(crate) agent_acts: RefCell<crate::ui_runtime::HeldActs>,
     /// Waits an agent parked: conditions held out for until a frame makes them hold or
     /// their deadline passes. Answered `gone` when the presentation closes first. Owner
     /// thread only.

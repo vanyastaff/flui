@@ -476,6 +476,9 @@ impl UiRuntime {
         let mut boundary = flui_foundation::panic::FirstPanic::new();
         boundary.contain(|| self.run_commit_anchor());
         if let Some(agent) = self.agent_side.get() {
+            // A held act that passes on this frame queues its input, whose first tick goes out
+            // at this boundary.
+            boundary.contain(|| agent.advance_held_acts(self));
             boundary.contain(|| agent.advance_input(self, now));
         }
         boundary.resume();

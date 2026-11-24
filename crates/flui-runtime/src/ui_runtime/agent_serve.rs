@@ -35,9 +35,9 @@ use flui_protocol::{
     geometry::LogicalInsets, geometry::LogicalSize, input::InputParams, input::InputPath,
     input::Journal, input::JournalParams, input::Released, inspect::InspectParams,
     inspect::InspectReading, locator::LocateParams, locator::Locator, locator::Matches,
-    locator::Pick, locator::Target, motion::MotionParams, motion::MotionState, session::Empty,
-    session::Placement, session::Platform, session::WindowParams, tree::ReadParams, tree::Tree,
-    tree::WindowId, wait::Condition, wait::FramesParams, wait::SettledParams, wait::WaitOutcome,
+    locator::Target, motion::MotionParams, motion::MotionState, session::Empty, session::Placement,
+    session::Platform, session::WindowParams, tree::ReadParams, tree::Tree, tree::WindowId, wait::Condition, wait::FramesParams, wait::SettledParams,
+    wait::WaitOutcome,
     wait::WaitParams,
 };
 use flui_view::__runtime::{LeaseId, Reply, WindowCall};
@@ -54,10 +54,6 @@ use super::commands::DrainReport;
 use crate::build_overlay::{BuildBanner, UnknownBuildState};
 use crate::presentation::PresentationState;
 
-/// How many matches a strict locator is resolved over: two say it is ambiguous, ten name the
-/// candidates.
-const STRICT_CANDIDATES: u32 = 10;
-
 /// What serving a request came to.
 pub(super) enum Answer<T> {
     /// The answer, sent at this drain.
@@ -71,6 +67,16 @@ pub(super) enum Answer<T> {
 pub(super) struct PanicAnswer(RefCell<AgentError>);
 
 impl PanicAnswer {
+    /// A panic answers `failure` until it is [set](Self::set) again.
+    pub(super) fn new(failure: AgentError) -> Self {
+        Self(RefCell::new(failure))
+    }
+
+    /// What a panic answers now.
+    pub(super) fn into_failure(self) -> AgentError {
+        self.0.into_inner()
+    }
+
     /// A panic from here on answers `failure`.
     pub(super) fn set(&self, failure: AgentError) {
         *self.0.borrow_mut() = failure;
@@ -383,17 +389,6 @@ macro_rules! not_answered {
 not_answered!(
     CapturePresented,
     CaptureRendered,
-    ElementDoubleTap,
-    ElementDragTo,
-    ElementFling,
-    ElementLongPress,
-    ElementPinch,
-    ElementPressKeys,
-    ElementScrollIntoView,
-    ElementScrollUntil,
-    ElementSwipe,
-    ElementTap,
-    ElementTypeText,
 );
 
 impl Serve for method::WindowPlacement {
@@ -471,16 +466,23 @@ impl Serve for method::InputInject {
                 reason: "input.inject is synthetic input; another path is input.perform's",
             }));
         }
-        let plan = match agent_input::plan(&params.actions) {
-            Ok(plan) => plan,
+        let script = match agent_input::lower(&params.actions) {
+            Ok(script) => script,
             Err(error) => return Answer::Now(Err(error)),
         };
         let before = match agent::tree_before(ctx.state, ctx.window, params.snapshot) {
             Ok(before) => before,
             Err(error) => return Answer::Now(Err(error)),
         };
+        let injecting = agent_input::Injecting {
+            lease,
+            script,
+            element: None,
+            snapshot: params.snapshot,
+            before,
+        };
         ctx.runtime
-            .queue_injection(ctx.state, lease, plan, params.snapshot, before, ctx.park());
+            .queue_injection(ctx.state, injecting, ctx.park());
         Answer::Later
     }
 }
@@ -563,26 +565,7 @@ fn resolve<T>(
     ctx: &ServeContext<'_, T>,
     locator: &Locator,
 ) -> Result<flui_protocol::tree::ElementId, AgentError> {
-    let strict = locator.pick == Pick::Strict;
-    let mut params = LocateParams::new(locator.clone());
-    if strict {
-        params.max_matches = Some(STRICT_CANDIDATES);
-    }
-    let matches = agent::locate(ctx.state, ctx.window, &params)?;
-    match matches.matches.as_slice() {
-        [] => Err(AgentError::NoMatch),
-        [only] => Ok(only.element.element),
-        several if strict => Err(AgentError::Ambiguous {
-            matched: several.len(),
-            candidates: several
-                .iter()
-                .map(|candidate| {
-                    flui_protocol::tree::outline(std::slice::from_ref(&candidate.node))
-                })
-                .collect(),
-        }),
-        [first, ..] => Ok(first.element.element),
-    }
+    agent::resolve(ctx.state, ctx.window, locator)
 }
 
 impl Serve for method::ElementActionability {

@@ -29,8 +29,10 @@ use std::time::Duration;
 
 use flui_protocol::input_recording::Row;
 use flui_protocol::method::{
-    Addressed, EventsSubscribe, EventsUnsubscribe, InputInject, InputRelease, Method, RecordStart,
-    RecordStop, WindowMethod, WindowsList,
+    Addressed, ElementDoubleTap, ElementDragTo, ElementFling, ElementLongPress, ElementPinch,
+    ElementPressKeys, ElementScrollIntoView, ElementScrollUntil, ElementSwipe, ElementTap,
+    ElementTypeText, EventsSubscribe, EventsUnsubscribe, InputInject, InputRelease, Method,
+    RecordStart, RecordStop, WindowMethod, WindowsList,
 };
 use flui_protocol::{
     act::Effect, act::EffectKind, envelope::RequestId, error::ErrorCode, error::ErrorObject,
@@ -239,32 +241,44 @@ fn done(outcome: Result<Value, ErrorObject>) -> (Work, Duration) {
     (Work::Done(Some(outcome)), Duration::ZERO)
 }
 
+/// The window methods asked through the connection's input lease on the window: the ones whose
+/// synthetic input the lease holds, so the input a gesture leaves held is the connection's and
+/// goes with it (ADR-0400 §2).
+const LEASED: &[&str] = &[
+    InputInject::NAME,
+    InputRelease::NAME,
+    ElementDoubleTap::NAME,
+    ElementDragTo::NAME,
+    ElementFling::NAME,
+    ElementLongPress::NAME,
+    ElementPinch::NAME,
+    ElementPressKeys::NAME,
+    ElementScrollIntoView::NAME,
+    ElementScrollUntil::NAME,
+    ElementSwipe::NAME,
+    ElementTap::NAME,
+    ElementTypeText::NAME,
+];
+
 /// Start a window method: the route generated for each one the table declares. Synthetic input
-/// is asked through the connection's lease on the window ([`Leases`]).
+/// and the gestures that make it are asked through the connection's lease on the window
+/// ([`Leases`], [`LEASED`]).
 fn window_route(
     shared: &Shared,
     leases: &mut Leases,
     method: &MethodRow,
     params: Value,
 ) -> Option<(Work, Duration)> {
-    match method.name {
-        InputInject::NAME => {
-            return Some(ask::<InputInject>(shared, params, |window, params| {
-                leases.call::<InputInject>(window, params)
-            }));
-        }
-        InputRelease::NAME => {
-            return Some(ask::<InputRelease>(shared, params, |window, params| {
-                leases.call::<InputRelease>(window, params)
-            }));
-        }
-        _ => {}
-    }
+    let leased = LEASED.contains(&method.name);
     macro_rules! routes {
         ($($ty:ident = $name:literal, $effect:ident, $tier:ident, $params:ty => $output:ty;)+) => {
             match method.name {
                 $($name => Some(ask::<flui_protocol::method::$ty>(shared, params, |window, params| {
-                    window.call::<flui_protocol::method::$ty>(params)
+                    if leased {
+                        leases.call::<flui_protocol::method::$ty>(window, params)
+                    } else {
+                        window.call::<flui_protocol::method::$ty>(params)
+                    }
                 })),)+
                 _ => None,
             }

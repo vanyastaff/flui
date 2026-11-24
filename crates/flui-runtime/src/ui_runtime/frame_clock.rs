@@ -725,6 +725,7 @@ impl UiRuntime {
     ///
     /// A wait an agent parked (`wait.until`) counts through its deadline, so a window
     /// that draws nothing still times it out.
+    /// So does an act an agent holds (a gesture waiting for its target).
     #[must_use]
     pub fn next_wake(&self) -> Option<web_time::Instant> {
         self.next_wake_owing_floors(&|_| true)
@@ -741,21 +742,33 @@ impl UiRuntime {
         &self,
         floor_owed: &dyn Fn(PresentationAddress) -> bool,
     ) -> Option<web_time::Instant> {
-        let mut earliest = self
-            .agent_side
-            .get()
-            .and_then(|agent| agent.next_wait_deadline(self));
+        let mut earliest = self.next_agent_deadline();
         self.visit_armed_deadlines(floor_owed, &mut |_, at| {
             earliest = Some(earliest.map_or(at, |known| known.min(at)));
         });
         earliest
     }
 
+    /// The earliest deadline the development agent's owner side wakes for: a wait it parked or an
+    /// act it holds, on a window that is not closing. Neither keeps the application from being
+    /// idle, so [`Self::unsettled`] lists it as a wake alone.
+    pub(super) fn next_agent_deadline(&self) -> Option<web_time::Instant> {
+        let agent = self.agent_side.get()?;
+        [
+            agent.next_wait_deadline(self),
+            agent.next_act_deadline(self),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
     /// Every deadline the runtime wakes for, each with the presentation it belongs to (`None`
     /// for the runtime's own), the in-flight floor of a presentation only where `floor_owed`
     /// holds for its address. The one enumeration of them: [`Self::next_wake_owing_floors`] and
     /// the runtime's half of what keeps it from being idle ([`Self::unsettled`]) both read it,
-    /// so the two cannot disagree. The deadlines of waits an agent parked are not here.
+    /// so the two cannot disagree. The agent's deadlines ([`Self::next_agent_deadline`]) are not
+    /// here.
     pub(super) fn visit_armed_deadlines(
         &self,
         floor_owed: &dyn Fn(PresentationAddress) -> bool,

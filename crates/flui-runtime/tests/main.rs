@@ -107,6 +107,8 @@ mod agent_wire;
 
 #[path = "contracts/agent_act.rs"]
 mod agent_act;
+#[path = "contracts/agent_gestures.rs"]
+mod agent_gestures;
 #[path = "contracts/agent_input.rs"]
 mod agent_input;
 #[path = "contracts/announce.rs"]

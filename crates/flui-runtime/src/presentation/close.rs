@@ -349,12 +349,14 @@ impl PresentationState {
         });
         let owed = std::mem::take(&mut *self.agent_reads.borrow_mut());
         let reads = deliver_each(owed, crate::ui_runtime::PendingActRead::abandon);
+        let acts = self.agent_acts.borrow_mut().abandon();
+        let held = deliver_each(acts, crate::ui_runtime::HeldAct::abandon);
         let injected = self.agent_input.borrow_mut().abandon();
         let inputs = deliver_each(injected, crate::ui_runtime::AbandonedInput::answer);
         let waits = std::mem::take(&mut *self.agent_waits.borrow_mut());
         let waited = deliver_each(waits, crate::ui_runtime::PendingWait::abandon);
         let layers = self.abandon_agent_layer_reads();
-        for stage in [reads, inputs, waited, layers] {
+        for stage in [reads, held, inputs, waited, layers] {
             ended.absorb(stage);
         }
         ended

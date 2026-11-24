@@ -23,12 +23,12 @@ use crate::renderer_binding::ViewHitTest;
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
-    act::ActOutcome, act::ActionRequest, act::Actionability, act::ActionabilityParams, act::Effect,
-    act::EffectKind, act::EffectUnit, error::ErrorCode, error::ErrorObject, error::HandleKind,
-    error::Retry, events::EventFilter, input::InputPath, locator::LocateParams, locator::Matches,
-    record::RecordParams, snapshot::Snapshot, snapshot::SnapshotReading, tree::ElementId,
-    tree::ElementRef, tree::ReadQuery, tree::Tree, tree::WindowId, wait::WaitOutcome,
-    wire::ActionName,
+    act::ActOutcome, act::ActionRequest, act::Actionability, act::ActionabilityCheck,
+    act::ActionabilityParams, act::Effect, act::EffectKind, act::EffectUnit, error::ErrorCode,
+    error::ErrorObject, error::HandleKind, error::Retry, events::EventFilter, input::InputPath,
+    locator::LocateParams, locator::Locator, locator::Matches, locator::Pick, record::RecordParams,
+    snapshot::Snapshot, snapshot::SnapshotReading, tree::ElementId, tree::ElementRef,
+    tree::ReadQuery, tree::Tree, tree::WindowId, wait::WaitOutcome, wire::ActionName,
 };
 use flui_semantics::{
     Placement, SemanticsActionError, TreeSnapshot, WireActionError, WireLocateError, WireReadError,
@@ -206,6 +206,29 @@ pub(crate) enum AgentError {
         /// The ticks it had.
         total: u32,
     },
+    /// The input asked for makes no sequence the window plays: the plan's refusal (a bound, a
+    /// range, a shared name) or a gesture's (a stroke that goes nowhere), in its own words.
+    #[error("{0}")]
+    UnplayableInput(String),
+    /// A held act's target never passed `failed` before the act's timeout; nothing was sent.
+    #[error("the element was not {} within the act's timeout", failed.name())]
+    NotActionable {
+        /// The first check that failed at the last attempt.
+        failed: ActionabilityCheck,
+        /// What the hit-test reached instead, as its outline line.
+        covered_by: Option<String>,
+    },
+    /// The presentation already holds as many acts as it admits; one ends before another is
+    /// taken.
+    #[error("the window already holds as many acts as it admits")]
+    TooManyActs,
+    /// A scroll's content stopped moving before the locator resolved under it: its extent
+    /// ended, or it does not scroll.
+    #[error("the scrollable stopped moving before the locator resolved under it")]
+    ScrollEnded,
+    /// Input a held act queued failed with this answer.
+    #[error("{}", .0.message)]
+    InputFailed(Box<ErrorObject>),
 }
 
 impl AgentError {
@@ -220,8 +243,11 @@ impl AgentError {
             | Self::TooManySubscriptions
             | Self::TooManyRecordings
             | Self::InputQueueFull
+            | Self::TooManyActs
             | Self::TreeBusy(_) => ErrorCode::Busy,
             Self::InputPartial { failure, .. } => failure.code(),
+            Self::InputFailed(answer) => answer.code,
+            Self::NotActionable { .. } => ErrorCode::NotActionable,
             Self::RuntimeGone => ErrorCode::ShuttingDown,
             Self::PresentationGone
             | Self::LeaseReleased
@@ -232,8 +258,8 @@ impl AgentError {
             }
             Self::ActionUnsupported { .. } => ErrorCode::ActionUnsupported,
             Self::Disabled { .. } => ErrorCode::Disabled,
-            Self::InvalidArgument { .. } => ErrorCode::InvalidArgument,
-            Self::NoMatch => ErrorCode::NotFound,
+            Self::InvalidArgument { .. } | Self::UnplayableInput(_) => ErrorCode::InvalidArgument,
+            Self::NoMatch | Self::ScrollEnded => ErrorCode::NotFound,
             Self::Ambiguous { .. } => ErrorCode::Ambiguous,
             Self::NotSupported { .. } => ErrorCode::NotSupported,
             Self::Malformed
@@ -257,8 +283,10 @@ impl AgentError {
             | Self::TooManySubscriptions
             | Self::TooManyRecordings
             | Self::InputQueueFull
+            | Self::TooManyActs
             | Self::TreeBusy(_) => Retry::Soon,
-            Self::NoMatch => Retry::WhenAppears,
+            Self::NoMatch | Self::NotActionable { .. } => Retry::WhenAppears,
+            Self::InputFailed(answer) => answer.retry,
             _ => Retry::Never,
         }
     }
@@ -302,6 +330,10 @@ impl AgentError {
                     total,
                     EffectUnit::Tick,
                 ));
+            }
+            Self::InputFailed(answer) => return *answer,
+            Self::NotActionable { failed, covered_by } => {
+                ErrorObject::not_actionable(message, failed, covered_by)
             }
             Self::Ambiguous { candidates, .. } => ErrorObject::ambiguous(message, candidates),
             Self::PresentationGone => {
@@ -905,6 +937,45 @@ pub(super) fn locate(
             .locate_wire(params, placement)
             .map_err(AgentError::from_locate)
     })
+}
+
+/// How many matches a strict locator is resolved over: two say it is ambiguous, ten name the
+/// candidates.
+const STRICT_CANDIDATES: u32 = 10;
+
+/// The one element `locator` matches in `state`'s committed tree now, as its pick says: a strict
+/// pick that matches several is `ambiguous` with an outline of each candidate, never the first,
+/// and none is `not_found`.
+pub(super) fn resolve(
+    state: &PresentationState,
+    window: WindowId,
+    locator: &Locator,
+) -> Result<ElementId, AgentError> {
+    let strict = locator.pick == Pick::Strict;
+    let mut params = LocateParams::new(locator.clone());
+    if strict {
+        params.max_matches = Some(STRICT_CANDIDATES);
+    }
+    let matches = locate(state, window, &params)?;
+    match matches.matches.as_slice() {
+        [] => Err(AgentError::NoMatch),
+        [only] => Ok(only.element.element),
+        several if strict => Err(AgentError::Ambiguous {
+            matched: several.len(),
+            candidates: several
+                .iter()
+                .map(|candidate| {
+                    flui_protocol::tree::outline(std::slice::from_ref(&candidate.node))
+                })
+                .collect(),
+        }),
+        [first, ..] => Ok(first.element.element),
+    }
+}
+
+/// Whether an answer of `state`'s agent reported `element`.
+pub(super) fn was_issued(state: &PresentationState, element: ElementId) -> bool {
+    issued_of(state).borrow().was_issued(element)
 }
 
 /// The owner half of `element.actionability`.

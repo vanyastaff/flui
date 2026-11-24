@@ -91,6 +91,13 @@ pub(crate) trait AgentSide {
     /// The frame boundary: input agents injected goes on, one tick.
     fn advance_input(&self, ui_runtime: &UiRuntime, now: Instant);
 
+    /// The frame boundary, before injected input goes on: the acts agents hold are attempted
+    /// against the frame just committed, and one whose target passed queues its input.
+    fn advance_held_acts(&self, ui_runtime: &UiRuntime);
+
+    /// The earliest deadline of an act an agent holds on a window that is not closing.
+    fn next_act_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant>;
+
     /// The earliest deadline of a wait an agent parked on a window that is not closing.
     fn next_wait_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant>;
 
@@ -204,11 +211,24 @@ impl AgentSide for AgentOwnerSide {
     }
 
     fn after_turn(&self, ui_runtime: &UiRuntime) {
+        // A held act whose deadline passed is answered on a turn without a frame too; a panic
+        // there continues once the waits are evaluated.
+        let mut held = FirstPanic::new();
+        held.contain(|| ui_runtime.advance_held_acts(super::agent_held::Pass::Expired));
         ui_runtime.evaluate_agent_waits(false);
+        held.resume();
     }
 
     fn advance_input(&self, ui_runtime: &UiRuntime, now: Instant) {
         ui_runtime.advance_agent_input(now);
+    }
+
+    fn advance_held_acts(&self, ui_runtime: &UiRuntime) {
+        ui_runtime.advance_held_acts(super::agent_held::Pass::Boundary);
+    }
+
+    fn next_act_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant> {
+        ui_runtime.next_held_act_deadline()
     }
 
     fn next_wait_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant> {

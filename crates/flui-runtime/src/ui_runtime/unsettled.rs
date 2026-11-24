@@ -67,11 +67,7 @@ impl UiRuntime {
                 at,
             );
         });
-        if let Some(at) = self
-            .agent_side
-            .get()
-            .and_then(|agent| agent.next_wait_deadline(self))
-        {
+        if let Some(at) = self.next_agent_deadline() {
             into.wake_at(at);
         }
     }

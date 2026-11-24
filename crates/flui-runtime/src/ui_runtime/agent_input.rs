@@ -1,11 +1,20 @@
-//! Synthetic input an agent injects (`input.inject`, `input.release`; ADR-0288 §9): the action
-//! sequence planned as ticks, each tick dispatched at a frame boundary through the entry native
-//! input takes ([`UiRuntime::handle_input_on`]), and what each input lease of the window holds.
+//! Synthetic input an agent injects (`input.inject`, `input.release`, and the gestures it answers
+//! on the synthetic path; ADR-0288 §9, ADR-0400 §2): the action sequence planned once by
+//! [`flui_protocol::input::plan`], lowered into the events the window takes, played at frame
+//! boundaries through the entry native input takes ([`UiRuntime::handle_input_on`]), and what
+//! each input lease of the window holds.
 //!
-//! An injection's ticks run in order, one per frame boundary: a tick's presses, releases, keys
-//! and text go out at once, and its moves are spread over the frames of their duration. The
-//! answer waits for the frame after the last tick, so `ran` means the window has presented what
-//! the input did. A window runs one injection at a time, in the order they came.
+//! The plan's bounds and refusals are the protocol's. Lowering refuses only what this window
+//! cannot deliver: a key that is neither a W3C key name nor the text of one, a composition caret
+//! outside its text, a trackpad gesture.
+//!
+//! An injection plays the plan's ticks in order, on the plan's timeline: a tick starts at a frame
+//! boundary, each of its inputs goes out at the first boundary at or past its offset in the tick
+//! (stamped with the instant the plan gives it), and the tick lasts until its end. The next tick
+//! starts at the first boundary after that, but never at the boundary its predecessor started at,
+//! so each tick has a boundary of its own. The answer waits for the frame after the last tick, so
+//! `ran` means the window has presented what the input did. A window runs one injection at a time,
+//! in the order they came.
 //!
 //! What an injection leaves held (a contact down, a button or a key pressed) is its lease's
 //! ([`flui_view::dev_agent::InputLease`]) and stays held across injections, as the platform's
@@ -32,9 +41,9 @@ use flui_platform::{EventTime, ImeEvent, PlatformInput};
 use flui_protocol::method::{self, Method};
 use flui_protocol::{
     act::ActOutcome, act::Effect, act::EffectKind, act::JournalSpan, geometry::LogicalPoint,
-    input::ActionSequence, input::ImeAction, input::InputPath, input::InputSource,
-    input::KeyAction, input::PointerAction, input::PointerDevice, input::Released,
-    input::WheelAction, snapshot::Snapshot,
+    input::ActionSequence, input::ImeAction, input::InputPath, input::PlannedInput,
+    input::PointerDevice, input::Released, input::SourceKind, input::TimedInput,
+    snapshot::Snapshot, tree::ElementRef,
 };
 use flui_semantics::TreeSnapshot;
 use flui_view::__runtime::LeaseId;
@@ -45,16 +54,6 @@ use super::agent::{AgentError, ReadingOwed, ReplySender, send_reply};
 use super::input::InputOrigin;
 use crate::presentation::PresentationState;
 
-/// The most ticks one injection plans.
-const MAX_TICKS: usize = 4096;
-
-/// The most sources one injection names.
-const MAX_SOURCES: usize = 32;
-
-/// The longest one injection lasts: a longer sequence is refused rather than holding the
-/// window's input for it.
-const MAX_SPAN: Duration = Duration::from_secs(600);
-
 /// The most injections and releases a window keeps queued; past it, a new one answers `busy`.
 const MAX_QUEUED: usize = 64;
 
@@ -62,27 +61,35 @@ const MAX_QUEUED: usize = 64;
 /// an injected contact never shares an id with one of the platform's.
 const INJECTED_POINTERS: u64 = 1 << 62;
 
-/// An action sequence as ticks.
-pub(super) struct Plan {
-    /// The pointer and wheel sources, by the index steps name them with.
+/// Input lowered for the window from one or more plans played in turn: their ticks, each with its
+/// inputs at their offsets, and the pointer and wheel sources the inputs name.
+pub(super) struct Script {
+    /// The pointer and wheel sources, by the index inputs name them with.
     sources: Vec<Source>,
     ticks: VecDeque<Tick>,
 }
 
-/// A pointer or wheel source of a plan.
+/// A pointer or wheel source of a script.
 struct Source {
     name: String,
     kind: PointerKind,
 }
 
-/// One tick: what goes out at its frame boundary, and how long it lasts.
+/// One tick: its inputs, and how long it lasts from its start.
 struct Tick {
+    /// In the plan's order, each at its offset from the tick's start.
     steps: Vec<Step>,
     lasts: Duration,
 }
 
-/// One input of a tick.
-enum Step {
+/// One input of a tick, `after` its start.
+struct Step {
+    after: Duration,
+    input: Input,
+}
+
+/// What one input of a script does.
+enum Input {
     Down {
         source: usize,
         button: PointerButton,
@@ -96,7 +103,6 @@ enum Step {
         source: usize,
         to: Point<f64>,
         pressure: Option<Pressure>,
-        over: Duration,
     },
     Cancel {
         source: usize,
@@ -117,136 +123,153 @@ fn invalid(reason: &'static str) -> AgentError {
     AgentError::InvalidArgument { reason }
 }
 
-/// `sequence` as ticks: tick `i` holds the `i`th action of every source, and lasts as long as
-/// its longest pause or move.
+/// `sequence` planned ([`flui_protocol::input::plan`]) and lowered into the input this window
+/// takes.
 ///
 /// # Errors
 ///
-/// `invalid_argument` for a sequence the window cannot play as asked: two sources of one name,
-/// a key that is neither a W3C key name nor the text of one, a point or pressure out of range,
-/// more than [`MAX_TICKS`] ticks or [`MAX_SOURCES`] sources, or longer than [`MAX_SPAN`];
-/// `not_supported` for a trackpad source, which this build does not inject.
-pub(super) fn plan(sequence: &ActionSequence) -> Result<Plan, AgentError> {
-    if sequence.sources.len() > MAX_SOURCES {
-        return Err(invalid("an injection names at most 32 sources"));
-    }
-    let count = sequence.ticks();
-    if count > MAX_TICKS {
-        return Err(invalid("an injection plays at most 4096 ticks"));
-    }
-    if sequence.span() > MAX_SPAN {
-        return Err(invalid("an injection lasts at most ten minutes"));
-    }
-    let mut ticks: Vec<Tick> = (0..count)
-        .map(|_| Tick {
-            steps: Vec::new(),
-            lasts: Duration::ZERO,
-        })
-        .collect();
-    let mut sources: Vec<Source> = Vec::new();
-    let mut names: Vec<&str> = Vec::new();
-    for source in &sequence.sources {
-        if let Some(name) = source_name(source) {
-            if names.contains(&name) {
-                return Err(invalid("two sources of an injection share a name"));
-            }
-            names.push(name);
-        }
-        match source {
-            InputSource::Pointer {
-                id,
-                device,
-                actions,
-            } => {
-                let index = sources.len();
-                sources.push(Source {
-                    name: id.clone(),
-                    kind: pointer_kind(*device)?,
-                });
-                for (tick, action) in ticks.iter_mut().zip(actions) {
-                    plan_pointer(tick, index, action)?;
-                }
-            }
-            InputSource::Wheel { id, actions } => {
-                let index = sources.len();
-                sources.push(Source {
-                    name: id.clone(),
-                    kind: PointerKind::Mouse,
-                });
-                for (tick, action) in ticks.iter_mut().zip(actions) {
-                    match action {
-                        WheelAction::Scroll {
-                            at,
-                            delta_x,
-                            delta_y,
-                            unit,
-                        } => {
-                            let unit = match unit {
-                                flui_protocol::input::ScrollUnit::Line => ScrollUnit::Lines,
-                                _ => ScrollUnit::Pixels,
-                            };
-                            let delta = ScrollDelta::try_new(unit, *delta_x, *delta_y)
-                                .map_err(|_| invalid("a scroll delta is finite"))?;
-                            tick.steps.push(Step::Scroll {
-                                source: index,
-                                at: point(*at)?,
-                                delta,
-                            });
-                        }
-                        WheelAction::Pause { duration_ms } => {
-                            last_at_least(tick, Duration::from_millis(*duration_ms));
-                        }
-                        _ => return Err(unknown_action()),
-                    }
-                }
-            }
-            InputSource::Keys { actions, .. } => {
-                for (tick, action) in ticks.iter_mut().zip(actions) {
-                    match action {
-                        KeyAction::Down { key } => tick.steps.push(Step::Key {
-                            state: KeyState::Down(KeyPress::First),
-                            key: key_named(key)?,
-                        }),
-                        KeyAction::Up { key } => tick.steps.push(Step::Key {
-                            state: KeyState::Up,
-                            key: key_named(key)?,
-                        }),
-                        KeyAction::Pause { duration_ms } => {
-                            last_at_least(tick, Duration::from_millis(*duration_ms));
-                        }
-                        _ => return Err(unknown_action()),
-                    }
-                }
-            }
-            InputSource::Text { text } => {
-                if let Some(tick) = ticks.first_mut() {
-                    tick.steps.push(Step::Ime(ImeEvent::Commit(text.clone())));
-                }
-            }
-            InputSource::Ime { actions } => {
-                for (tick, action) in ticks.iter_mut().zip(actions) {
-                    tick.steps.push(Step::Ime(ime_event(action)?));
-                }
-            }
-            InputSource::Trackpad { .. } => {
+/// `invalid_argument` for a sequence the plan refuses (its bounds and ranges, named in the
+/// message) or whose keys or composition the window cannot deliver as asked; `not_supported` for
+/// a trackpad source, which this build does not inject.
+pub(super) fn lower(sequence: &ActionSequence) -> Result<Script, AgentError> {
+    let plan = flui_protocol::input::plan(sequence)
+        .map_err(|error| AgentError::UnplayableInput(error.to_string()))?;
+    let mut sources = Vec::new();
+    // The script's source each planned source's inputs name, for a pointer or a wheel.
+    let mut pointer_of: Vec<Option<usize>> = Vec::with_capacity(plan.sources().len());
+    for planned in plan.sources() {
+        let kind = match planned.kind {
+            SourceKind::Pointer(device) => Some(pointer_kind(device)?),
+            SourceKind::Wheel => Some(PointerKind::Mouse),
+            SourceKind::Keys | SourceKind::Text | SourceKind::Ime => None,
+            SourceKind::Trackpad => {
                 return Err(AgentError::NotSupported {
                     capability: method::InputInject::NAME,
                     reason: "this app's windows do not take injected trackpad gestures yet",
                 });
             }
             _ => return Err(unknown_action()),
-        }
+        };
+        pointer_of.push(kind.map(|kind| {
+            sources.push(Source {
+                name: planned
+                    .id
+                    .clone()
+                    .expect("BUG: the plan names every pointer and wheel source"),
+                kind,
+            });
+            sources.len() - 1
+        }));
     }
-    Ok(Plan {
-        sources,
-        ticks: ticks.into(),
+    let mut ticks = VecDeque::with_capacity(plan.tick_ends().len());
+    let mut inputs = plan.inputs().iter().peekable();
+    let mut start = Duration::ZERO;
+    for (tick, &end) in plan.tick_ends().iter().enumerate() {
+        let mut steps = Vec::new();
+        while let Some(timed) = inputs.next_if(|timed| timed.tick == tick) {
+            steps.push(Step {
+                after: timed.at.saturating_sub(start),
+                input: lower_input(timed, &pointer_of)?,
+            });
+        }
+        ticks.push_back(Tick {
+            steps,
+            lasts: end.saturating_sub(start),
+        });
+        start = end;
+    }
+    Ok(Script { sources, ticks })
+}
+
+/// One planned input as the input the window takes.
+fn lower_input(timed: &TimedInput, pointer_of: &[Option<usize>]) -> Result<Input, AgentError> {
+    let source = || {
+        pointer_of
+            .get(timed.source)
+            .copied()
+            .flatten()
+            .expect("BUG: a pointer input names a pointer or wheel source of its plan")
+    };
+    Ok(match &timed.input {
+        PlannedInput::PointerDown {
+            button, pressure, ..
+        } => Input::Down {
+            source: source(),
+            button: button_of(*button),
+            pressure: pressure.map(pressure_of).transpose()?,
+        },
+        PlannedInput::PointerUp { button, .. } => Input::Up {
+            source: source(),
+            button: button_of(*button),
+        },
+        PlannedInput::PointerMove { to, pressure } => Input::Move {
+            source: source(),
+            to: Point::new(to.x, to.y),
+            pressure: pressure.map(pressure_of).transpose()?,
+        },
+        PlannedInput::PointerCancel { .. } => Input::Cancel { source: source() },
+        PlannedInput::Scroll {
+            at,
+            delta_x,
+            delta_y,
+            unit,
+        } => {
+            let unit = match unit {
+                flui_protocol::input::ScrollUnit::Line => ScrollUnit::Lines,
+                _ => ScrollUnit::Pixels,
+            };
+            Input::Scroll {
+                source: source(),
+                at: point(*at),
+                delta: ScrollDelta::try_new(unit, *delta_x, *delta_y)
+                    .map_err(|_| invalid("a scroll delta is finite"))?,
+            }
+        }
+        PlannedInput::KeyDown(key) => Input::Key {
+            state: KeyState::Down(KeyPress::First),
+            key: key_named(key)?,
+        },
+        PlannedInput::KeyUp(key) => Input::Key {
+            state: KeyState::Up,
+            key: key_named(key)?,
+        },
+        PlannedInput::Text(text) => Input::Ime(ImeEvent::Commit(text.clone())),
+        PlannedInput::Ime(action) => Input::Ime(ime_event(action)?),
+        _ => return Err(unknown_action()),
     })
 }
 
-impl Plan {
-    /// How many ticks the plan has left.
+impl Script {
+    /// How many ticks the script has left.
     fn len(&self) -> usize {
         self.ticks.len()
+    }
+
+    /// This script, then `next`: `next`'s ticks after this one's, its sources as it names them.
+    pub(super) fn then(mut self, next: Self) -> Self {
+        let offset = self.sources.len();
+        self.sources.extend(next.sources);
+        self.ticks.extend(next.ticks.into_iter().map(|mut tick| {
+            for step in &mut tick.steps {
+                step.input.shift_source(offset);
+            }
+            tick
+        }));
+        self
+    }
+}
+
+impl Input {
+    /// Name the source `offset` places later.
+    fn shift_source(&mut self, offset: usize) {
+        match self {
+            Self::Down { source, .. }
+            | Self::Up { source, .. }
+            | Self::Move { source, .. }
+            | Self::Cancel { source }
+            | Self::Scroll { source, .. } => *source += offset,
+            Self::Key { .. } | Self::Ime(_) => {}
+        }
     }
 }
 
@@ -254,16 +277,6 @@ fn unknown_action() -> AgentError {
     AgentError::NotSupported {
         capability: method::InputInject::NAME,
         reason: "this app's windows do not know that kind of input",
-    }
-}
-
-fn source_name(source: &InputSource) -> Option<&str> {
-    match source {
-        InputSource::Pointer { id, .. }
-        | InputSource::Wheel { id, .. }
-        | InputSource::Keys { id, .. }
-        | InputSource::Trackpad { id, .. } => Some(id),
-        _ => None,
     }
 }
 
@@ -287,46 +300,6 @@ fn pointer_kind(device: PointerDevice) -> Result<PointerKind, AgentError> {
     })
 }
 
-fn last_at_least(tick: &mut Tick, duration: Duration) {
-    tick.lasts = tick.lasts.max(duration);
-}
-
-fn plan_pointer(tick: &mut Tick, source: usize, action: &PointerAction) -> Result<(), AgentError> {
-    let step = match action {
-        PointerAction::Down { button, pressure } => Step::Down {
-            source,
-            button: button_of(*button),
-            pressure: pressure.map(pressure_of).transpose()?,
-        },
-        PointerAction::Up { button } => Step::Up {
-            source,
-            button: button_of(*button),
-        },
-        PointerAction::Move {
-            to,
-            duration_ms,
-            pressure,
-        } => {
-            let over = Duration::from_millis(*duration_ms);
-            last_at_least(tick, over);
-            Step::Move {
-                source,
-                to: point(*to)?,
-                pressure: pressure.map(pressure_of).transpose()?,
-                over,
-            }
-        }
-        PointerAction::Cancel => Step::Cancel { source },
-        PointerAction::Pause { duration_ms } => {
-            last_at_least(tick, Duration::from_millis(*duration_ms));
-            return Ok(());
-        }
-        _ => return Err(unknown_action()),
-    };
-    tick.steps.push(step);
-    Ok(())
-}
-
 fn button_of(button: flui_protocol::input::PointerButton) -> PointerButton {
     match button {
         flui_protocol::input::PointerButton::Secondary => PointerButton::SECONDARY,
@@ -337,19 +310,9 @@ fn button_of(button: flui_protocol::input::PointerButton) -> PointerButton {
     }
 }
 
-/// How far from the window's origin a point may be, in logical pixels: past any window, and small
-/// enough that a move between two points never overflows.
-const MAX_COORDINATE: f64 = 1.0e9;
-
-fn point(at: LogicalPoint) -> Result<Point<f64>, AgentError> {
-    let near = |value: f64| value.is_finite() && value.abs() <= MAX_COORDINATE;
-    if near(at.x) && near(at.y) {
-        Ok(Point::new(at.x, at.y))
-    } else {
-        Err(invalid(
-            "a point is finite and within a billion pixels of the window",
-        ))
-    }
+/// A point the plan admitted: finite, and within its bound of the window.
+fn point(at: LogicalPoint) -> Point<f64> {
+    Point::new(at.x, at.y)
 }
 
 fn pressure_of(pressure: f64) -> Result<Pressure, AgentError> {
@@ -436,6 +399,8 @@ pub(crate) struct AgentInput {
     pointers: u64,
     /// How many injections the window has queued: the next one's id.
     injections: u64,
+    /// How many frame boundaries the window's work has seen, the current one included.
+    boundaries: u64,
 }
 
 /// What one lease holds: its sources' pointers, as the platform's own would be, and the keys it
@@ -492,15 +457,6 @@ fn sample(
     })
 }
 
-/// What a lease's steps came to: the input they make, in order, the moves they start, and the
-/// failure that stopped them. The lease's state reflects exactly the input made.
-#[derive(Default)]
-struct Applied {
-    batch: Vec<PlatformInput>,
-    glides: Vec<Glide>,
-    error: Option<AgentError>,
-}
-
 impl Held {
     /// The contact of `source`, made when the lease first uses it.
     fn contact(&mut self, pointers: &mut u64, source: &Source) -> Result<&mut Contact, AgentError> {
@@ -547,40 +503,18 @@ impl Held {
             .expect("BUG: a contact was just pushed"))
     }
 
-    /// Apply `steps` at `time`, stopping at the first that cannot go out.
-    fn apply(
-        &mut self,
-        pointers: &mut u64,
-        sources: &[Source],
-        steps: Vec<Step>,
-        time: EventTime,
-    ) -> Applied {
-        let mut applied = Applied::default();
-        for step in steps {
-            match self.step(pointers, sources, step, time) {
-                Ok(Some(Made::Input(input))) => applied.batch.push(input),
-                Ok(Some(Made::Glide(glide))) => applied.glides.push(glide),
-                Ok(None) => {}
-                Err(error) => {
-                    applied.error = Some(error);
-                    break;
-                }
-            }
-        }
-        applied
-    }
-
-    /// One step: the lease's state moves on only when it makes its input.
+    /// One input at `time`: the lease's state moves on only when it makes its event; `None` for
+    /// one that changes nothing the window sees.
     fn step(
         &mut self,
         pointers: &mut u64,
         sources: &[Source],
-        step: Step,
+        input: Input,
         time: EventTime,
-    ) -> Result<Option<Made>, AgentError> {
+    ) -> Result<Option<PlatformInput>, AgentError> {
         let modifiers = modifiers_of(&self.keys);
-        let made = match step {
-            Step::Down {
+        let made = match input {
+            Input::Down {
                 source,
                 button,
                 pressure,
@@ -605,9 +539,9 @@ impl Held {
                     PointerEvent::ButtonChange(ButtonChange::Pressed(press))
                 };
                 contact.buttons = contact.buttons.with(button);
-                Made::Input(PlatformInput::Pointer(event))
+                PlatformInput::Pointer(event)
             }
-            Step::Up { source, button } => {
+            Input::Up { source, button } => {
                 let contact = self.contact(pointers, &sources[source])?;
                 let (Some(at), true) = (contact.at, contact.buttons.contains(button)) else {
                     // Lifting a button that is up sends nothing.
@@ -626,44 +560,51 @@ impl Held {
                 } else {
                     PointerEvent::ButtonChange(ButtonChange::Released(release))
                 };
-                Made::Input(PlatformInput::Pointer(event))
+                PlatformInput::Pointer(event)
             }
-            Step::Move {
+            Input::Move {
                 source,
                 to,
                 pressure,
-                over,
             } => {
                 let contact = self.contact(pointers, &sources[source])?;
-                Made::Glide(Glide {
-                    source,
-                    from: contact.at.unwrap_or(to),
-                    to,
-                    over,
-                    pressure,
-                })
+                if contact.at == Some(to) {
+                    return Ok(None);
+                }
+                let sample = sample(time, to, pressure)?;
+                contact.at = Some(to);
+                // A touch contact that is up has no position the window sees.
+                if contact.kind == PointerKind::Touch && contact.buttons == PointerButtons::NONE {
+                    return Ok(None);
+                }
+                PlatformInput::Pointer(PointerEvent::Move(
+                    PointerMove::new(contact.info(), contact.buttons, sample)
+                        .with_modifiers(modifiers),
+                ))
             }
-            Step::Cancel { source } => {
+            Input::Cancel { source } => {
                 let contact = self.contact(pointers, &sources[source])?;
                 if contact.buttons == PointerButtons::NONE {
                     return Ok(None);
                 }
                 contact.buttons = PointerButtons::NONE;
-                Made::Input(PlatformInput::Pointer(PointerEvent::Cancel(
-                    PointerCancel::new(contact.info(), time, CancelReason::Platform),
+                PlatformInput::Pointer(PointerEvent::Cancel(PointerCancel::new(
+                    contact.info(),
+                    time,
+                    CancelReason::Platform,
                 )))
             }
-            Step::Scroll { source, at, delta } => {
+            Input::Scroll { source, at, delta } => {
                 let contact = self.contact(pointers, &sources[source])?;
                 let position =
                     PointerPosition::try_new(at).map_err(|_| invalid("a point is finite"))?;
                 contact.at = Some(at);
-                Made::Input(PlatformInput::Pointer(PointerEvent::Scroll(
+                PlatformInput::Pointer(PointerEvent::Scroll(
                     ScrollEvent::new(contact.info(), time, position, delta)
                         .with_modifiers(modifiers),
-                )))
+                ))
             }
-            Step::Key { state, key } => {
+            Input::Key { state, key } => {
                 let pressed = self.keys.iter().position(|held| *held == key);
                 let state = match (state, pressed) {
                     (KeyState::Down(_), None) => {
@@ -681,57 +622,14 @@ impl Held {
                     (KeyState::Up, None) => return Ok(None),
                 };
                 // A modifier's own event carries the modifiers as they are after it.
-                Made::Input(PlatformInput::Keyboard(
+                PlatformInput::Keyboard(
                     KeyEvent::new(state, key, Code::Unidentified, time)
                         .with_modifiers(modifiers_of(&self.keys)),
-                ))
+                )
             }
-            Step::Ime(event) => Made::Input(PlatformInput::Ime(event)),
+            Input::Ime(event) => PlatformInput::Ime(event),
         };
         Ok(Some(made))
-    }
-
-    /// Move each glide's pointer to where it is `elapsed` into its move, at `time`.
-    fn glide(
-        &mut self,
-        pointers: &mut u64,
-        sources: &[Source],
-        glides: &[Glide],
-        elapsed: Duration,
-        time: EventTime,
-    ) -> Applied {
-        let mut applied = Applied::default();
-        for glide in glides {
-            let modifiers = modifiers_of(&self.keys);
-            let moved = self
-                .contact(pointers, &sources[glide.source])
-                .and_then(|contact| {
-                    let at = glide.at(elapsed);
-                    if contact.at == Some(at) {
-                        return Ok(None);
-                    }
-                    let sample = sample(time, at, glide.pressure)?;
-                    contact.at = Some(at);
-                    // A touch contact that is up has no position the window sees.
-                    if contact.kind == PointerKind::Touch && contact.buttons == PointerButtons::NONE
-                    {
-                        return Ok(None);
-                    }
-                    Ok(Some(PointerEvent::Move(
-                        PointerMove::new(contact.info(), contact.buttons, sample)
-                            .with_modifiers(modifiers),
-                    )))
-                });
-            match moved {
-                Ok(Some(event)) => applied.batch.push(PlatformInput::Pointer(event)),
-                Ok(None) => {}
-                Err(error) => {
-                    applied.error = Some(error);
-                    break;
-                }
-            }
-        }
-        applied
     }
 
     /// Let go of everything held, stamped `time`: each contact cancelled, the latest first, then
@@ -759,12 +657,6 @@ impl Held {
     }
 }
 
-/// What one step made.
-enum Made {
-    Input(PlatformInput),
-    Glide(Glide),
-}
-
 enum Job {
     Inject(Box<Injection>),
     Release {
@@ -782,16 +674,18 @@ impl Job {
     }
 }
 
-/// One `input.inject` the window is playing.
+/// One injection the window is playing: an `input.inject`, or a gesture's input.
 struct Injection {
     /// Which of the window's injections it is.
     id: u64,
     lease: LeaseId,
-    plan: Plan,
-    /// The tick under way, while its moves and pauses last.
+    script: Script,
+    /// The tick under way, while its inputs and its time last.
     current: Option<Running>,
     /// How many ticks it had.
     total: usize,
+    /// The element a gesture aimed at, which its answer names.
+    element: Option<ElementRef>,
     snapshot: Snapshot,
     before: Option<TreeSnapshot>,
     reply: ReplySender<ActOutcome>,
@@ -799,54 +693,52 @@ struct Injection {
     observed: Option<JournalSpan>,
 }
 
-/// A tick whose moves or pause are still running.
+/// A tick whose inputs or time are still running.
 struct Running {
     started: Instant,
+    /// The frame boundary it started at.
+    boundary: u64,
     lasts: Duration,
-    moves: Vec<Glide>,
+    /// Its inputs not yet out.
+    steps: VecDeque<Step>,
 }
 
-/// A move spread over its duration.
-struct Glide {
-    source: usize,
-    from: Point<f64>,
-    to: Point<f64>,
-    over: Duration,
-    pressure: Option<Pressure>,
-}
-
-impl Glide {
-    /// Where the pointer is `elapsed` into the move.
-    fn at(&self, elapsed: Duration) -> Point<f64> {
-        if elapsed >= self.over {
-            return self.to;
-        }
-        let t = elapsed.as_secs_f64() / self.over.as_secs_f64();
-        Point::new(
-            self.from.x + (self.to.x - self.from.x) * t,
-            self.from.y + (self.to.y - self.from.y) * t,
-        )
-    }
+/// What an injection of a script is asked with.
+pub(super) struct Injecting {
+    /// The lease it goes through.
+    pub(super) lease: LeaseId,
+    /// Its input.
+    pub(super) script: Script,
+    /// The element a gesture aimed at, which the answer names.
+    pub(super) element: Option<ElementRef>,
+    /// The reading the answer carries.
+    pub(super) snapshot: Snapshot,
+    /// The tree the input starts on, for a delta.
+    pub(super) before: Option<TreeSnapshot>,
 }
 
 impl AgentInput {
-    /// Queue an injection of `plan` through `lease`.
+    /// Queue `injecting`.
     ///
     /// # Errors
     ///
     /// `busy`, with the reply back, when the window already has [`MAX_QUEUED`] jobs.
-    pub(super) fn inject(
+    fn inject(
         &mut self,
-        lease: LeaseId,
-        plan: Plan,
-        snapshot: Snapshot,
-        before: Option<TreeSnapshot>,
+        injecting: Injecting,
         reply: ReplySender<ActOutcome>,
     ) -> Result<(), ReplySender<ActOutcome>> {
         if self.jobs.len() >= MAX_QUEUED {
             return Err(reply);
         }
-        let total = plan.len();
+        let Injecting {
+            lease,
+            script,
+            element,
+            snapshot,
+            before,
+        } = injecting;
+        let total = script.len();
         self.injections = self
             .injections
             .checked_add(1)
@@ -854,9 +746,10 @@ impl AgentInput {
         self.jobs.push_back(Job::Inject(Box::new(Injection {
             id: self.injections,
             lease,
-            plan,
+            script,
             current: None,
             total,
+            element,
             snapshot,
             before,
             reply,
@@ -897,13 +790,20 @@ impl AgentInput {
         }
     }
 
-    /// The next step of the window's work at a frame boundary at `now`, stamped `time`.
-    fn turn(&mut self, now: Instant, time: EventTime) -> Turn {
+    /// A frame boundary begins: the number it has among the boundaries the window's work saw.
+    fn begin_boundary(&mut self) -> u64 {
+        self.boundaries = self.boundaries.saturating_add(1);
+        self.boundaries
+    }
+
+    /// The next step of the window's work at frame boundary `boundary`, at `now`; an input is
+    /// stamped with the instant `stamp` gives the moment the plan puts it at.
+    fn turn(&mut self, boundary: u64, now: Instant, stamp: &dyn Fn(Instant) -> EventTime) -> Turn {
         let Self {
             leases,
             jobs,
             pointers,
-            injections: _,
+            ..
         } = self;
         let Some(front) = jobs.front_mut() else {
             return Turn::Idle;
@@ -917,58 +817,49 @@ impl AgentInput {
                 };
                 let (batch, released) = leases
                     .remove(&lease)
-                    .map_or_else(Default::default, |held| held.let_go(time));
+                    .map_or_else(Default::default, |held| held.let_go(stamp(now)));
                 return Turn::Released(batch, released, reply);
             }
         };
         let held = leases.entry(injection.lease).or_default();
         let mut batch = Vec::new();
-        if let Some(running) = injection.current.take() {
-            // The running tick's moves go on; it ends once it has lasted its time.
-            let elapsed = now.saturating_duration_since(running.started);
-            let moved = held.glide(
-                pointers,
-                &injection.plan.sources,
-                &running.moves,
-                elapsed,
-                time,
-            );
-            batch.extend(moved.batch);
-            if let Some(error) = moved.error {
-                return Self::failed(jobs, batch, error);
+        loop {
+            if let Some(running) = &mut injection.current {
+                let elapsed = now.saturating_duration_since(running.started);
+                while let Some(step) = running.steps.pop_front_if(|step| step.after <= elapsed) {
+                    let time = stamp(
+                        running
+                            .started
+                            .checked_add(step.after)
+                            .unwrap_or(running.started),
+                    );
+                    match held.step(pointers, &injection.script.sources, step.input, time) {
+                        Ok(Some(input)) => batch.push(input),
+                        Ok(None) => {}
+                        Err(error) => return Self::failed(jobs, batch, error),
+                    }
+                }
+                if !running.steps.is_empty() || elapsed < running.lasts {
+                    return Turn::Sent(batch, injection.id);
+                }
+                let started_here = running.boundary == boundary;
+                injection.current = None;
+                if started_here {
+                    // Each tick has a boundary of its own: the next starts at the next one.
+                    break;
+                }
             }
-            if elapsed < running.lasts {
-                injection.current = Some(running);
-                return Turn::Sent(batch, injection.id);
-            }
-        } else if let Some(Tick { steps, lasts }) = injection.plan.ticks.pop_front() {
-            let applied = held.apply(pointers, &injection.plan.sources, steps, time);
-            batch.extend(applied.batch);
-            if let Some(error) = applied.error {
-                return Self::failed(jobs, batch, error);
-            }
-            let moved = held.glide(
-                pointers,
-                &injection.plan.sources,
-                &applied.glides,
-                Duration::ZERO,
-                time,
-            );
-            batch.extend(moved.batch);
-            if let Some(error) = moved.error {
-                return Self::failed(jobs, batch, error);
-            }
-            if !lasts.is_zero() {
-                injection.current = Some(Running {
-                    started: now,
-                    lasts,
-                    moves: applied.glides,
-                });
-                return Turn::Sent(batch, injection.id);
-            }
+            let Some(Tick { steps, lasts }) = injection.script.ticks.pop_front() else {
+                break;
+            };
+            injection.current = Some(Running {
+                started: now,
+                boundary,
+                lasts,
+                steps: steps.into(),
+            });
         }
-        if !injection.plan.ticks.is_empty() {
-            // The next tick starts at the next boundary.
+        if !injection.script.ticks.is_empty() {
             return Turn::Sent(batch, injection.id);
         }
         let Some(Job::Inject(injection)) = jobs.pop_front() else {
@@ -978,14 +869,14 @@ impl AgentInput {
     }
 
     /// The front injection stopped at `error` in the tick under way, after making `batch`: the
-    /// ticks before it went out in full, and it is neither in the plan nor running any more.
+    /// ticks before it went out in full, and it is neither in the script nor running any more.
     fn failed(jobs: &mut VecDeque<Job>, batch: Vec<PlatformInput>, error: AgentError) -> Turn {
         let Some(Job::Inject(injection)) = jobs.pop_front() else {
             unreachable!("BUG: the front job is an injection");
         };
         let played = injection
             .total
-            .saturating_sub(injection.plan.len())
+            .saturating_sub(injection.script.len())
             .saturating_sub(1);
         let total = injection.total;
         Turn::Failed(batch, error, played, total, injection.reply)
@@ -1063,21 +954,14 @@ enum Turn {
 }
 
 impl UiRuntime {
-    /// Queue an injection of `plan` through `lease` in `state`'s window, and ask for the frame
-    /// whose boundary starts it.
+    /// Queue `injecting` in `state`'s window, and ask for the frame whose boundary starts it.
     pub(super) fn queue_injection(
         &self,
         state: &PresentationState,
-        lease: LeaseId,
-        plan: Plan,
-        snapshot: Snapshot,
-        before: Option<TreeSnapshot>,
+        injecting: Injecting,
         reply: ReplySender<ActOutcome>,
     ) {
-        let queued = state
-            .agent_input
-            .borrow_mut()
-            .inject(lease, plan, snapshot, before, reply);
+        let queued = state.agent_input.borrow_mut().inject(injecting, reply);
         match queued {
             Ok(()) => self.request_redraw_for(state),
             Err(reply) => send_reply(&reply, None, Err(AgentError::InputQueueFull)),
@@ -1098,23 +982,24 @@ impl UiRuntime {
         }
     }
 
-    /// Advance every window's injections at a frame boundary at `now`: a running tick's moves go
-    /// on, a tick that has lasted its time ends, and the next one starts, one per window per
-    /// boundary. A panic in the app's handler of injected input continues once every window has
-    /// had its turn; the first is kept.
+    /// Advance every window's injections at a frame boundary at `now`: a running tick's inputs
+    /// due by now go out, a tick that has lasted its time ends, and the next one starts, at most
+    /// one per window per boundary. A panic in the app's handler of injected input continues once
+    /// every window has had its turn; the first is kept.
     pub(super) fn advance_agent_input(&self, now: Instant) {
-        let time = self.event_time_at(now);
         let mut first = FirstPanic::new();
         for state in self.presentations.iter() {
-            first.contain(|| self.advance_window_input(state, now, time));
+            first.contain(|| self.advance_window_input(state, now));
         }
         first.resume();
     }
 
-    fn advance_window_input(&self, state: &PresentationState, now: Instant, time: EventTime) {
+    fn advance_window_input(&self, state: &PresentationState, now: Instant) {
+        let stamp = |instant: Instant| self.event_time_at(instant);
+        let boundary = state.agent_input.borrow_mut().begin_boundary();
         loop {
             // Taken with the window's input borrowed; no app code runs until it is let go.
-            let turn = state.agent_input.borrow_mut().turn(now, time);
+            let turn = state.agent_input.borrow_mut().turn(boundary, now, &stamp);
             match turn {
                 Turn::Idle => return,
                 Turn::Sent(batch, id) => {
@@ -1134,6 +1019,7 @@ impl UiRuntime {
                 }
                 Turn::Played(batch, injection) => {
                     let Injection {
+                        element,
                         snapshot,
                         before,
                         reply,
@@ -1143,6 +1029,7 @@ impl UiRuntime {
                     let sent = self.send_agent_input(state, batch);
                     let mut outcome =
                         ActOutcome::new(InputPath::Synthetic, Effect::new(EffectKind::Ran));
+                    outcome.element = element;
                     outcome.observed = widen(observed, sent.observed);
                     // Owed once the input has gone out, a handler's panic included: the answer
                     // waits for the frame after it, which shows what the input did. The window
@@ -1227,25 +1114,30 @@ impl UiRuntime {
         first
     }
 
-    /// Release what each of `leases` holds in `state`'s window, and drop the work queued through
-    /// them: their holders have gone.
+    /// Release what each of `leases` holds in `state`'s window, and drop the work queued and the
+    /// acts held through them: their holders have gone.
     fn release_agent_leases(&self, state: &PresentationState, leases: Vec<LeaseId>) {
         let time = self.event_time_at(flui_foundation::MonotonicClock::now(&self.clock));
         let mut batch = Vec::new();
         let mut dropped = Vec::new();
         {
             let mut input = state.agent_input.borrow_mut();
-            for lease in leases {
-                let (released, jobs) = input.forget(lease, time);
+            for lease in &leases {
+                let (released, jobs) = input.forget(*lease, time);
                 batch.extend(released);
                 dropped.extend(jobs);
             }
         }
+        let held = state.agent_acts.borrow_mut().forget(&leases);
         let mut sent = self.send_agent_input(state, batch);
         // An answer wakes its asker, user code: they go after the input is let go, and before a
         // panic continues.
         sent.panic
             .absorb(super::deliver_each(dropped, Abandoned::lease_released));
+        sent.panic.absorb(super::deliver_each(
+            held,
+            super::agent_held::HeldAct::lease_released,
+        ));
         sent.resume();
     }
 }
@@ -1266,7 +1158,7 @@ impl SentInput {
 }
 
 /// The span covering both `a` and `b`.
-fn widen(a: Option<JournalSpan>, b: Option<JournalSpan>) -> Option<JournalSpan> {
+pub(super) fn widen(a: Option<JournalSpan>, b: Option<JournalSpan>) -> Option<JournalSpan> {
     match (a, b) {
         (Some(a), Some(b)) => Some(JournalSpan {
             from: a.from.min(b.from),
