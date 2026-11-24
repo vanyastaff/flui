@@ -1,4 +1,4 @@
-//! Layout phase implementation for `PipelineOwner<Layout>`.
+//! Layout phase implementation: the body of `FramePass<Layout>::run_layout`.
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Size;

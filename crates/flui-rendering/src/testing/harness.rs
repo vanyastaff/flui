@@ -9,15 +9,15 @@
 //!   `Layout` phase, for inspecting committed geometry/offsets without a
 //!   full frame (Box and Sliver alike);
 //! - [`run_frame`](RenderTester::run_frame) -> [`FrameRun`]: a full frame
-//!   (layout -> compositing -> paint), adding layer-tree structure, picture
+//!   (layout -> compositing -> paint -> semantics), adding layer-tree structure, picture
 //!   bounds, dirty-state checks, and multi-frame helpers ([`pump`](FrameRun::pump),
 //!   [`pump_frames`](FrameRun::pump_frames), [`advance_layout`](FrameRun::advance_layout),
 //!   [`advance_paint`](FrameRun::advance_paint), [`simulate`](FrameRun::simulate)).
 //!
 //! Both run results implement [`Probe`], so Box and Sliver are inspected
-//! through the identical surface. They are two types only because the
-//! typestate forbids one live struct from holding both a `<Layout>` and an
-//! `<Idle>` owner.
+//! through the identical surface. They are two types because only a full
+//! frame has a layer tree: a layout run that answered layer-tree queries
+//! would answer them about a frame that never painted.
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Rect, Size};

@@ -1,4 +1,4 @@
-//! Paint phase implementation for `PipelineOwner<PaintPhase>`.
+//! Paint phase implementation: the body of `FramePass<PaintPhase>::run_paint`.
 
 use std::sync::Arc;
 
@@ -61,9 +61,9 @@ impl PipelineOwner {
     /// paint phase begins with layout work still pending — the scheduler's
     /// layout queue is non-empty. This is the one misuse the type system
     /// cannot rule out: a caller may legally drive the phases directly
-    /// (`into_layout().into_compositing().into_paint()`, the bench
+    /// (`layout_pass().into_compositing().into_paint()`, the bench
     /// pattern) and skip
-    /// [`PipelineOwner::run_layout`](super::PipelineOwner::run_layout), so
+    /// [`FramePass::run_layout`](super::FramePass::run_layout), so
     /// completeness stays a runtime gate. The empty-queue variant of that
     /// chain is designed behavior and keeps returning `Ok`.
     pub(super) fn flush_paint(

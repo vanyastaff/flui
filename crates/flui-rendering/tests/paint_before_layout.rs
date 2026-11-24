@@ -1,11 +1,11 @@
 //! The `run_paint` frame-completeness gate (`RenderError::PaintBeforeLayout`).
 //!
-//! Phase ORDERING is enforced by the type system: each `run_*` method lives
-//! only on its phase's impl block and the transitions are by-value
-//! (`rebind_phase`), so `run_paint` cannot even be named before `run_layout`
-//! returns. What the type system cannot express is COMPLETENESS — a caller
-//! may legally drive the phases directly
-//! (`into_layout().into_compositing().into_paint()`) and skip `run_layout`
+//! Phase ORDERING is enforced by the type system: each `run_*` method is a
+//! method of its own `FramePass` only, and a pass is handed on to the next
+//! phase by value, so `run_paint` cannot even be named before a pass has come
+//! through layout. What the type system cannot express is COMPLETENESS — a
+//! caller may legally drive the passes directly
+//! (`layout_pass().into_compositing().into_paint()`) and skip `run_layout`
 //! with empty queues, which is exactly the manual-phase pattern the
 //! benches and the direct-chain tests use. The one runtime gate paint keeps
 //! is therefore completeness: entering `run_paint` with the scheduler's

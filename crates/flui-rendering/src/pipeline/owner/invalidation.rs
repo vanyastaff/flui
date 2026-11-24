@@ -69,7 +69,7 @@ impl PipelineOwner {
     /// Drains the pending dirty-request channel into the scheduler's
     /// dirty sets.
     ///
-    /// Called at phase boundaries by the typestate transitions; producers
+    /// Called before a frame's first pass (`run_frame`); producers
     /// (background asset loaders, async work) write into the channel via
     /// a [`crate::pipeline::RenderInvalidationHandle`] and the owner observes them on
     /// the next frame. Non-blocking; processes every request

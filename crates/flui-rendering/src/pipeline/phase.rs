@@ -51,9 +51,10 @@
 //! }
 //! ```
 //!
-//! The legitimate sequence type-checks and runs. Each `run_*` returns
-//! [`crate::error::RenderResult<()>`]; `?` or `expect` propagates
-//! panics-turned-errors from third-party render objects:
+//! The legitimate sequence type-checks and runs. `run_layout`, `run_paint` and
+//! `run_semantics` return [`crate::error::RenderResult<()>`] (compositing
+//! cannot fail); `?` or `expect` propagates panics-turned-errors from
+//! third-party render objects:
 //!
 //! ```
 //! use flui_layer::SceneOwner;
@@ -112,7 +113,6 @@ mod sealed {
 /// Implementors are zero-sized marker structs ([`Layout`], [`Compositing`],
 /// [`PaintPhase`], [`Semantics`]). They never appear in runtime values: they
 /// live only as the `PhantomData` of a [`FramePass`](crate::pipeline::FramePass).
-/// `PipelineOwner<Phase>`.
 pub trait PipelinePhase: sealed::Sealed + 'static {
     /// Static name of the phase, for debug printing.
     const NAME: &'static str;

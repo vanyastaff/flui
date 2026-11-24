@@ -157,7 +157,7 @@ with no observable render change returns `NONE`.
 
 ### 3. `PipelineOwner` is the canonical application seam
 
-`PipelineOwner<Phase>` will expose these phase-agnostic methods:
+`PipelineOwner` will expose these methods, callable whenever no frame pass borrows the owner:
 
 ```rust
 pub fn mark_needs_compositing_bits_update(&mut self, render_id: RenderId);

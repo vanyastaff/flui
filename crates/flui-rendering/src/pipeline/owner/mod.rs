@@ -98,31 +98,30 @@ const DEFAULT_DIRTY_CHANNEL_CAPACITY: usize = 256;
 /// The pipeline owner:
 /// - Stores the root render object
 /// - Tracks dirty nodes needing layout/paint/semantics
-/// - Coordinates phase work via consuming phase transitions
+/// - Coordinates phase work through the passes it lends ([`FramePass`])
 /// - Holds the layer tree produced by the most recent paint phase
 ///
 /// # Phase ordering
 ///
 /// Phase ordering is enforced by the type system rather than runtime
-/// asserts: each phase's `run_*` method lives only on the matching
-/// `PipelineOwner` impl block.
+/// asserts: a frame lends this owner to one phase at a time, and each
+/// phase's `run_*` is a method of its own [`FramePass`] only (ADR-0399).
 ///
 /// # Pipeline Phases
 ///
-/// Use [`run_frame`](Self::run_frame) for the typestate-driven orchestration:
+/// [`run_frame`](Self::run_frame) runs every pass in order:
 ///
 /// ```text
-/// Idle ─into_layout()──▶ Layout ─run_layout()──▶ into_compositing()
-///        ▲                                        │
-///        │                                        ▼
-///        │                                   Compositing ─run_compositing()─▶ into_paint()
-///        │                                                                     │
-///        │                                                                     ▼
-///        │                                                                Paint ─run_paint()─▶ into_semantics()
-///        │                                                                                      │
-///        │                                                                                      ▼
-///        │                                                                                  Semantics ─run_semantics()─▶ finish()
-///        └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+/// layout_pass() ─▶ Layout ─run_layout()─▶ into_compositing()
+///                                           │
+///                                           ▼
+///                  Compositing ─run_compositing()─▶ into_paint()
+///                                                     │
+///                                                     ▼
+///                  Paint ─run_paint()─▶ into_semantics()
+///                                         │
+///                                         ▼
+///                  Semantics ─run_semantics()─▶ dropped: the owner is free
 /// ```
 ///
 /// # Multi-window

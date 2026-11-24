@@ -130,12 +130,12 @@ pub enum RenderError {
 
     /// The paint phase began with layout work still pending: the
     /// scheduler's layout queue was non-empty when
-    /// [`PipelineOwner::run_paint`](crate::pipeline::PipelineOwner::run_paint)
+    /// [`FramePass::run_paint`](crate::pipeline::FramePass::run_paint)
     /// was entered.
     ///
-    /// Phase order is a type (each `run_*` lives on its phase's
-    /// `PipelineOwner`), but a caller may drive the phases by hand
-    /// (`into_layout().into_compositing().into_paint()`) and skip `run_layout`
+    /// Phase order is a type (each `run_*` is a method of its phase's
+    /// `FramePass`), but a caller may drive the passes by hand
+    /// (`layout_pass().into_compositing().into_paint()`) and skip `run_layout`
     /// with work queued, so completeness stays a run-time check. With the
     /// queue empty that chain is allowed and returns `Ok`. The error aborts
     /// the frame and names no node.

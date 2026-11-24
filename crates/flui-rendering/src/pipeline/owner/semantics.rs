@@ -1,4 +1,4 @@
-//! Semantics phase implementation for `PipelineOwner<Semantics>`.
+//! Semantics phase implementation: the body of `FramePass<Semantics>::run_semantics`.
 //!
 //! # Assembly is mark-scoped, with a full rebuild as the fallback
 //!

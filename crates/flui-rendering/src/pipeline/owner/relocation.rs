@@ -504,25 +504,15 @@ impl PipelineOwner {
     /// }
     /// ```
     ///
+    /// A frame pass cannot release:
+    ///
     /// ```compile_fail
-    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Idle, PaintPhase, PipelineOwner};
+    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, FramePass, PaintPhase};
     /// fn cannot_release_during_paint(
-    ///     owner: &mut PipelineOwner<PaintPhase>,
+    ///     paint: &mut FramePass<'_, PaintPhase>,
     ///     token: DetachedRenderSubtrees,
     /// ) {
-    ///     owner.release_detached_render_subtrees_for_finalization(token);
-    /// }
-    /// ```
-    ///
-    /// Finalization release is available on an idle owner:
-    ///
-    /// ```
-    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Idle, PaintPhase, PipelineOwner};
-    /// fn cannot_release_during_paint(
-    ///     owner: &mut PipelineOwner,
-    ///     token: DetachedRenderSubtrees,
-    /// ) {
-    ///     owner.release_detached_render_subtrees_for_finalization(token);
+    ///     paint.release_detached_render_subtrees_for_finalization(token);
     /// }
     /// ```
     ///

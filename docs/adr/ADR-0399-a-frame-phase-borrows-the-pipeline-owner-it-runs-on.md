@@ -1,6 +1,6 @@
 # ADR-0399: A frame phase borrows the pipeline owner it runs on
 
-- **Status:** Proposed (2026-11-24)
+- **Status:** Implemented (2026-11-24)
 - **Date:** 2026-11-24
 - **Related:** [ADR-0048](ADR-0048-frame-transaction-boundary.md) (a frame that unwinds leaves the
   presentation's owner in its `PipelineCell`, which this decision holds by a borrow instead of a
@@ -27,7 +27,7 @@ The order is right; the moves are what it costs:
 |------|----------|
 | A `PipelineOwner` is 4,240 bytes | `size_of::<PipelineOwner>()` on Linux x86-64 at the commit this record lands with |
 | One frame moves it about a dozen times | `run_frame_in_place` builds a vacant owner for the slot (`PipelineOwner::vacant`), swaps it in, passes the owner by value to `run_frame_contained`, which rebinds it five times (`into_layout`, `into_compositing`, `into_paint`, `into_semantics`, `finish`), returns it in a tuple and swaps it back |
-| A label change spends about 4% of its instructions copying it | callgrind over `perf_scaling_a_label_change_costs_the_same_on_any_tree_size` (`memcpy` called from `in_place`, `run_frame_contained`, `over`, `into_layout`, `into_idle` and `Semantics::finish`; [`docs/gaps.md`](../gaps.md#the-pipeline-owner-is-copied-whole-through-its-phases-every-frame)) |
+| A label change spends about 4% of its instructions copying it | callgrind over `perf_scaling_a_label_change_costs_the_same_on_any_tree_size` (`memcpy` called from `in_place`, `run_frame_contained`, `over`, `into_layout`, `into_idle` and `Semantics::finish`) |
 | `rebind_phase` lists every field by hand | `crates/flui-rendering/src/pipeline/owner/mod.rs`: about fifty fields, a mirror each new field must join |
 | The slot is kept on an unwind by catching it | `contain_phase` and the pending-dirty drain run under `catch_unwind` so the owner can be written back before the panic resumes: two `#[expect(clippy::disallowed_methods)]` sites that exist only because the owner leaves its slot |
 
@@ -74,19 +74,19 @@ impl PipelineOwner {
 }
 
 impl<'o> FramePass<'o, Layout> {
-    pub fn run_layout(&mut self) -> Result<(), TreeError<RenderError>>;
+    pub fn run_layout(&mut self) -> RenderResult<()>;
     pub fn into_compositing(self) -> FramePass<'o, Compositing>;
 }
 impl<'o> FramePass<'o, Compositing> {
-    pub fn run_compositing(&mut self) -> Result<(), TreeError<RenderError>>;
+    pub fn run_compositing(&mut self);
     pub fn into_paint(self) -> FramePass<'o, PaintPhase>;
 }
 impl<'o> FramePass<'o, PaintPhase> {
-    pub fn run_paint(&mut self, writer: &mut SceneWriter<'_>) -> Result<(), TreeError<RenderError>>;
+    pub fn run_paint(&mut self, writer: &mut SceneWriter<'_>) -> RenderResult<()>;
     pub fn into_semantics(self) -> FramePass<'o, Semantics>;
 }
 impl FramePass<'_, Semantics> {
-    pub fn run_semantics(&mut self) -> Result<(), TreeError<RenderError>>;
+    pub fn run_semantics(&mut self) -> RenderResult<()>;
 }
 
 impl<P: PipelinePhase> Deref for FramePass<'_, P> {
@@ -108,13 +108,31 @@ impl<P: PipelinePhase> Deref for FramePass<'_, P> {
 
 ### §2. A frame that unwinds keeps its owner because the owner never left
 
-The phases settle their own state before an unwind leaves them (the rules of "A frame that unwinds
-keeps its owner" in `crates/flui-rendering/ARCHITECTURE.md`, unchanged). `run_frame` no longer
-catches: a panic unwinds through the dropped passes with the owner in its slot, and
+`run_frame` no longer catches: a panic unwinds through the passes with the owner in its slot, and
 `PipelineCell::run_frame` keeps the cell's borrow rules. `PipelineOwner::vacant`, `in_place`,
 `rebind_phase`, `contain_phase`'s `catch_unwind` and the drain's `catch_unwind` are deleted with
 their `#[expect(clippy::disallowed_methods)]`. A phase error still gains its path in the tree
 (`in_tree`) before it is returned.
+
+The owner after a panic in the middle of a phase is the one the phase itself leaves, because a
+pass holds no state of its own: it is a borrow and a marker, and it has no `Drop`. Each phase
+settles before the unwind leaves its `run_*` (the rules of "A frame that unwinds keeps its owner"
+in `crates/flui-rendering/ARCHITECTURE.md`):
+
+- the phase is closed: layout, paint and semantics call `exit_phase` on the unwind as on a return,
+  which clears the scheduler's debug flag and drains the marks routed to its side queue back into
+  the dirty lists, and paint also ends its local paint window;
+- the work the phase did not finish stays queued: layout puts the unfinished entries of its batch
+  back and commits the paint the interrupted entry owes, compositing keeps its queue and writes a
+  node's bits only after its hook answered, paint keeps its queue;
+- the frame is not counted: `frames_produced` grows only after semantics returns, and nothing
+  marks the owner as inside a frame, so there is no flag for an unwind to leave set.
+
+The next `run_frame` therefore redoes what the failed one owed and nothing else. There is no
+"frame interrupted" mark to set or clear, and correctness never depends on a pass's destructor
+running: forgetting a pass is the same as dropping it, which `FramePass` holds with
+`const _: () = assert!(!std::mem::needs_drop::<FramePass<'static, Layout>>())`. A pass ended early
+on purpose (a test that stops after layout) leaves the owner as the last finished phase left it.
 
 ### §3. A phase's body is the owner's, reached only through its pass
 
@@ -143,8 +161,14 @@ is the one call each pass makes.
   a layout pass) and `frame_from_layout.rs` (no `run_frame` while a layout pass borrows the owner).
 - `PipelineOwner` has no type parameter and no method that takes `self` by value to change phase,
   so no frame path can move it: the shape in §1 is the check.
-- `tests/frame_unwind.rs` keeps every row of `a_frame_that_unwinds_leaves_the_pipeline_its_owner`,
-  and `flui-runtime`'s `a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry` holds ADR-0048.
+- `tests/frame_unwind.rs`: every row of `a_frame_that_unwinds_leaves_the_pipeline_its_owner` panics
+  in the middle of a phase (a paint span, a layout or paint report, a wake, a compositing hook) and
+  ends by checking that no phase is left open and that the retry and the frame after it paint (§2);
+  `a_pass_ended_early_leaves_the_next_frame_whole` drops a pass after layout and checks that the
+  next frame paints what it owed and the one after owes nothing. `flui-runtime`'s
+  `a_pipeline_frame_that_unwinds_keeps_its_tree_for_the_retry` holds ADR-0048.
+- The `needs_drop` assertion in `crates/flui-rendering/src/pipeline/owner/pass.rs` fails to compile
+  the day a pass gains a destructor, so forgetting a pass stays the same as dropping it.
 - The instruction counts `perf-gates` keeps on `main` (ADR-0396 §3) fall by the copies the
   context table names.
 
@@ -179,7 +203,6 @@ is the one call each pass makes.
 
 ## More information
 
-The gap this closes is [The pipeline owner is copied whole through its phases every
-frame](../gaps.md#the-pipeline-owner-is-copied-whole-through-its-phases-every-frame); the change
-that builds this record deletes that entry and rewrites the ordering and unwind entries of
-`crates/flui-rendering/ARCHITECTURE.md`.
+This record closes the `docs/gaps.md` entry "The pipeline owner is copied whole through its phases
+every frame", and the ordering and unwind entries of `crates/flui-rendering/ARCHITECTURE.md` state
+the rule as it is built here.

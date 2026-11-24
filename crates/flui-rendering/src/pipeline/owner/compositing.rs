@@ -1,4 +1,4 @@
-//! Compositing phase implementation for `PipelineOwner<Compositing>`.
+//! Compositing phase implementation: the body of `FramePass<Compositing>::run_compositing`.
 
 use flui_foundation::RenderId;
 use rustc_hash::FxHashSet;

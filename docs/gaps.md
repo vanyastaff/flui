@@ -688,14 +688,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
   - **The root's environment:** each rebuild of `MediaQueryRoot` copies the whole `MediaQueryData` (224 bytes) into a fresh `MediaQuery` view, one `Rc` (`crates/flui-runtime/src/media_query_root.rs`), so every field the data gains costs each full reassemble its size (`full_reassemble.toml`); the root could hand on a shared snapshot that a preference change replaces.
 - The entry closes when a label change allocates at most 40 times a frame, held by those rows. It is measured after the retained scene lands; until then a bless on `main` (`FLUI_PERF_BASELINE=bless`) ratchets each row a change lowered.
 
-### The pipeline owner is copied whole through its phases every frame
-
-> **Environments:** all · **Who it hurts:** Every app, on each frame that lays out or paints · **Parity:** [Quality bar](platform-parity.md#quality-bar)
-
-- The phases of a frame are typestates of the owner itself: `PipelineOwner<Idle>` becomes `PipelineOwner<Layout>`, then `PaintPhase` and `Semantics`, by value (`rebind_phase`, the "Phase ORDERING lives in the type system" decision of [`crates/flui-rendering/ARCHITECTURE.md`](../crates/flui-rendering/ARCHITECTURE.md)). `PipelineOwner::in_place` (`crates/flui-rendering/src/pipeline/owner/construction.rs`) also builds a vacant owner to stand in its slot while the frame runs. Each move copies the whole struct.
-- Under callgrind, the four frames of `perf_scaling_a_label_change_costs_the_same_on_any_tree_size` (small tree) spend about 4% of their instructions in those copies (`memcpy` called from `in_place`, `run_frame_contained`, `over`, `into_layout`, `into_idle` and `Semantics::finish`).
-- Keeping the ordering in types without the moves needs that decision changed, for example to a phase token that borrows `&mut PipelineOwner` for one phase and hands the next token on. The entry closes when a frame moves no owner, and the decision in `ARCHITECTURE.md` states the new shape.
-
 ### Accepted ADR sections not built yet
 
 > **Environments:** all · **Who it hurts:** Anyone who reads an accepted ADR as the code's current shape · **Parity:** [Quality bar](platform-parity.md#quality-bar)

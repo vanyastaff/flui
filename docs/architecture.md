@@ -87,8 +87,8 @@ View Tree        ──build──▶   Element Tree   ──layout──▶   R
 | Phase | Owner | Input | Output | Constraint |
 |-------|-------|-------|--------|------------|
 | Build | `BuildOwner` | dirty `View` nodes | reconciled `Element` tree | `View::build()` is pure — no I/O, no external mutation |
-| Layout | `PipelineOwner<Layout>` | `Constraints` | `Size` per `RenderBox` | Single-pass O(n) where possible (constraints down, sizes up) |
-| Paint | `PipelineOwner<PaintPhase>` | `RenderBox` tree | `DisplayList` → layers | Recording is in `flui-painting`; GPU submission in `flui-engine` |
+| Layout | `FramePass<Layout>` | `Constraints` | `Size` per `RenderBox` | Single-pass O(n) where possible (constraints down, sizes up) |
+| Paint | `FramePass<PaintPhase>` | `RenderBox` tree | `DisplayList` → layers | Recording is in `flui-painting`; GPU submission in `flui-engine` |
 
 The pipeline is **on-demand**. The platform event loop waits (`ControlFlow::Wait`, or `WaitUntil` for a scheduled deadline), and a frame runs only when something asks for one: a dirty tree (`mark_needs_layout`, `mark_needs_paint`), or work that waits for a frame (a running animation, a woken async task, an `end_of_frame` waiter), which asks the scheduler for a frame even when no tree is dirty. A render loop that polls every frame is not an accepted design.
 
