@@ -2,14 +2,16 @@
 //! document, by assistive technology now, and by pointer and keyboard on the
 //! same model (ADR-0214).
 //!
-//! Each [`Text`](crate::Text) or [`RichText`](crate::RichText) beneath an
-//! area registers itself through the inherited [`SelectionScope`] under a
-//! [`SemanticsAnchor`] of its own. The paragraph publishes its runs and
-//! declares that anchor (`RenderParagraph::set_selectable`); the area's node
-//! is a merge boundary with the `Document` role that publishes the selection
-//! as positions in those runs and takes `SetTextSelection` for the whole
-//! document. The selection is held as two ([anchor], byte) ends, so it names
-//! a text by identity, never by its place or its words.
+//! Each [`Text`](crate::Text) beneath an area registers itself through the
+//! inherited [`SelectionScope`] under a [`SemanticsAnchor`] of its own. The
+//! paragraph publishes its runs and declares that anchor
+//! (`RenderParagraph::set_selectable`); the area's node is a merge boundary
+//! with the `Document` role that publishes the selection as positions in
+//! those runs and takes `SetTextSelection` for the whole document. The
+//! selection is held as two ([anchor], byte) ends, so it names a text by
+//! identity, never by its place or its words. A [`RichText`](crate::RichText)
+//! built directly reads no area, as Flutter's reads none
+//! (`flutter/flutter@3.50.1`, `packages/flutter/lib/src/widgets/text.dart`).
 //!
 //! [anchor]: SemanticsAnchor
 
@@ -51,7 +53,7 @@ use self::handles::{HandleState, Look};
 use self::input::{CaretMemory, PointerState, SelectionGestures};
 use self::menu::AreaChain;
 use super::primary_selection::PrimarySelectionOwner;
-use super::rich_text::ResolvedParagraph;
+use super::rich_text::RichText;
 use super::selection_style::{DefaultSelectionStyle, SelectionStyle};
 use crate::anchored_box::AnchoredBox;
 use crate::interaction::Focus;
@@ -1280,7 +1282,7 @@ impl StatelessView for SelectionContainer {
 /// A text beneath a [`SelectionArea`], registered with it while mounted.
 #[derive(Clone)]
 pub(super) struct SelectableParagraph {
-    paragraph: ResolvedParagraph,
+    paragraph: RichText,
     on_link: Option<RefCallback<TextLink>>,
     registry: Rc<SelectionRegistry>,
     /// The colour the area highlights with.
@@ -1289,7 +1291,7 @@ pub(super) struct SelectableParagraph {
 
 impl SelectableParagraph {
     pub(super) fn new(
-        paragraph: ResolvedParagraph,
+        paragraph: RichText,
         on_link: Option<RefCallback<TextLink>>,
         registry: Rc<SelectionRegistry>,
         color: Color,
@@ -1303,7 +1305,7 @@ impl SelectableParagraph {
     }
 
     fn plain_text(&self) -> String {
-        self.paragraph.authored.text.to_plain_text()
+        self.paragraph.text.to_plain_text()
     }
 }
 
@@ -1368,7 +1370,7 @@ impl ViewState<SelectableParagraph> for SelectableParagraphState {
     }
 
     fn build(&self, view: &SelectableParagraph, _ctx: &dyn BuildContext) -> impl IntoView {
-        let paragraph = ResolvedParagraph {
+        let paragraph = RichText {
             selectable: Some(self.entry.anchor.clone()),
             highlight: self.entry.highlight.borrow().clone().and_then(|range| {
                 let length = self.entry.text.borrow().len();

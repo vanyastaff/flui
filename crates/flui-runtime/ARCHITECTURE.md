@@ -156,7 +156,7 @@ host.
   resources and direction after publication and on a late runtime's first build
   (ADR-0173).
   `bold_text_changes_the_painted_glyphs` checks actual painted font instances for
-  Text, RichText and EditableText, live restoration, subtree overrides and late
+  Text, `Text::rich` and EditableText, live restoration, subtree overrides and late
   runtime seeds.
 
 - **Rebuild delivery is assembled before mount.** Every presentation connects

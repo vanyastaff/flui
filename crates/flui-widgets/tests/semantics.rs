@@ -334,10 +334,10 @@ pub(crate) fn collection_consumer_uses_member_totals_for_separated_and_composed_
 
 pub(crate) fn rich_text_accessible_labels_follow_span_overrides_and_replacement() {
     use flui_painting::typography::TextSpan;
-    use flui_widgets::RichText;
+    use flui_widgets::Text;
 
     let content = |label: &str| {
-        RichText::new(
+        Text::rich(
             TextSpan::new("Dr.")
                 .with_semantics_label(label)
                 .with_child(TextSpan::new(" A.").with_semantics_label(" Alice")),
@@ -1291,12 +1291,11 @@ pub(crate) fn content_past_the_paint_clip_is_hidden_only_on_the_node_it_forms() 
     // the clip hides.
     let linked = || {
         use flui_painting::typography::TextSpan;
-        use flui_widgets::RichText;
+        use flui_widgets::Text;
         Column::new((
             Transform::translate(0.0, 150.0)
                 .child(
-                    RichText::new(TextSpan::new("go").with_link("app://go"))
-                        .on_link(|_ctx, _link| {}),
+                    Text::rich(TextSpan::new("go").with_link("app://go")).on_link(|_ctx, _link| {}),
                 )
                 .boxed(),
             SizedBox::new(10.0, 300.0).boxed(),
@@ -3725,11 +3724,11 @@ fn reading_order_in_a_document_follows_the_move() {
 
 fn a_text_region_moves_with_its_paragraph() {
     use flui_painting::typography::TextSpan;
-    use flui_widgets::{RichText, Transform};
+    use flui_widgets::{Text, Transform};
     let seen = placements(
         |dx| {
             Transform::translate(dx, 0.0).child(
-                RichText::new(TextSpan::with_children(vec![
+                Text::rich(TextSpan::with_children(vec![
                     TextSpan::new("Read the "),
                     TextSpan::new("terms").with_link("app://terms"),
                 ]))

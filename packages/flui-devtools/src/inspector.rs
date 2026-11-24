@@ -1,9 +1,7 @@
-//! Counting/logging tree inspector — the first consumer of the ADR-0040
-//! observation seam.
+//! A counting tree observer over the ADR-0040 observation seam.
 //!
-//! Proves the dependency-inverted observation seam end to end through
-//! `flui_sdk::foundation::observe`, with no tree access in its surface. An
-//! application installs an [`InspectorCounters`] with `flui-app`'s
+//! It reaches the trees only through `flui_sdk::foundation::observe`, with no tree access in
+//! its surface. An application installs an [`InspectorCounters`] with `flui-app`'s
 //! `AppConfig::dev_tree_observer`, whose factory each UI runtime asks once
 //! for its observer, and it tallies mounts, moves, rebuilds (with per-cause
 //! counts), and unmounts as the tree mutates. No locks in the public surface.

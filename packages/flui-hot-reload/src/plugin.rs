@@ -143,7 +143,9 @@ macro_rules! scene_plugin {
 ///
 /// # Generated symbols
 ///
-/// - `flui_worker_init(register)` — register build fns (called on load + every reload)
+/// - `flui_worker_init(register, request_rebuild)` — register build fns
+///   (called on load + every reload); `request_rebuild` is the host's entry
+///   the worker's [`request_rebuild`](crate::request_rebuild) forwards to
 /// - `flui_worker_version() -> u32`
 /// - `flui_worker_fingerprint() -> u64` — optional layout-change detection
 ///
@@ -158,10 +160,15 @@ macro_rules! hot_reload_worker {
         /// Worker registration hook — runs on load and after every dylib reload.
         ///
         /// `register` is host-owned storage; never write build pointers into
-        /// dylib-local `static` variables.
+        /// dylib-local `static` variables. `request_rebuild` is bound first,
+        /// so a rebuild the worker's init asks for already reaches the host.
         // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
-        pub extern "C" fn flui_worker_init(register: $crate::RegisterWorkerBuildFn) {
+        pub extern "C" fn flui_worker_init(
+            register: $crate::RegisterWorkerBuildFn,
+            request_rebuild: $crate::HostRequestRebuildFn,
+        ) {
+            $crate::__private_forward_rebuild_requests_to(request_rebuild);
             $init_fn(register);
         }
 

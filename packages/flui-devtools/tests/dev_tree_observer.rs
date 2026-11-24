@@ -19,7 +19,7 @@ use flui_testing::log_capture::capture;
 /// The runner asks the factory once for its window's runtime, and the counters it returns see
 /// that runtime's mounts; the run's end retires the runtime and ends their stream.
 ///
-/// Red-check: take the runner's `install_dev_tree_observer` call out and the factory is never
+/// Fails when the runner does not call `install_dev_tree_observer`: the factory is never
 /// asked and nothing is counted.
 #[test]
 fn an_apps_dev_tree_observer_counts_its_runtimes_mounts() {
@@ -58,8 +58,8 @@ fn an_apps_dev_tree_observer_counts_its_runtimes_mounts() {
 /// A factory that panics is logged, and the runtime it was asked for runs on without an
 /// observer: its window still presents frames and the run ends cleanly.
 ///
-/// Red-check: take the runner's `install_dev_tree_observer` call out and no failure is logged;
-/// call the factory outside containment and the run fails.
+/// Fails when the runner does not call `install_dev_tree_observer`, so no failure is logged, or
+/// when the factory is called outside containment, so the run fails.
 #[test]
 fn a_panicking_dev_tree_observer_factory_leaves_the_runtime_running() {
     let config = quiet().dev_tree_observer(|_| panic!("the observer factory failed"));

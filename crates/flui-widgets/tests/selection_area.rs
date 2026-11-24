@@ -478,12 +478,12 @@ pub(crate) fn a_document_selection_snaps_into_its_texts_or_is_withheld() {
 /// (the two links fold into one node with the last handler).
 pub(crate) fn links_in_a_selection_area_keep_their_own_nodes() {
     use flui_painting::typography::TextSpan;
-    use flui_widgets::RichText;
+    use flui_widgets::Text;
 
     let opened = Rc::new(RefCell::new(Vec::new()));
     let record = Rc::clone(&opened);
     let mut laid = mounted(SelectionArea::new(
-        RichText::new(TextSpan::with_children(vec![
+        Text::rich(TextSpan::with_children(vec![
             TextSpan::new("Read the "),
             TextSpan::new("terms").with_link("app://terms"),
             TextSpan::new(" and the "),
@@ -736,10 +736,10 @@ pub(crate) fn a_document_reads_its_texts_where_they_are_laid_out() {
 /// holds "hidden").
 pub(crate) fn a_line_limit_bounds_what_a_paragraph_reports() {
     use flui_painting::typography::TextSpan;
-    use flui_widgets::RichText;
+    use flui_widgets::Text;
 
     let (area, seen) = recorded_area(Column::new((
-        RichText::new(TextSpan::new("shown\nhidden")).max_lines(1),
+        Text::rich(TextSpan::new("shown\nhidden")).max_lines(1),
         Text::new("Omega"),
     )));
     let mut laid = mounted(area);
@@ -854,11 +854,11 @@ pub(crate) fn sort_keys_order_the_reported_text() {
 /// "silent").
 pub(crate) fn a_silenced_text_is_left_out_of_the_selection() {
     use flui_painting::typography::TextSpan;
-    use flui_widgets::RichText;
+    use flui_widgets::Text;
 
     let (area, seen) = recorded_area(Column::new((
         Text::new("Alpha"),
-        RichText::new(TextSpan::new("silent").with_semantics_label("")),
+        Text::rich(TextSpan::new("silent").with_semantics_label("")),
         Text::new("Omega"),
     )));
     let mut laid = mounted(area);
@@ -892,16 +892,16 @@ pub(crate) fn a_silenced_text_is_left_out_of_the_selection() {
 /// text keeps them all).
 pub(crate) fn span_overrides_read_their_override_and_hold_their_runs() {
     use flui_painting::typography::TextSpan;
-    use flui_widgets::RichText;
+    use flui_widgets::Text;
 
     let (area, seen) = recorded_area(Column::new((
-        RichText::new(TextSpan::new("Dr.").with_semantics_label("Doctor")),
-        RichText::new(TextSpan::with_children(vec![
+        Text::rich(TextSpan::new("Dr.").with_semantics_label("Doctor")),
+        Text::rich(TextSpan::with_children(vec![
             TextSpan::new("Hi "),
             TextSpan::new("secret").with_semantics_label(""),
             TextSpan::new(" there"),
         ])),
-        RichText::new(TextSpan::with_children(vec![
+        Text::rich(TextSpan::with_children(vec![
             TextSpan::new("Read the "),
             TextSpan::new("EULA")
                 .with_link("app://terms")
@@ -1164,11 +1164,11 @@ fn run_values(node: &accesskit_consumer::NodeRef<'_>) -> Vec<String> {
 /// routed, in an area that records what it selects.
 fn linked_area(width: f64) -> (LaidOut, Rc<RefCell<Vec<Option<String>>>>) {
     use flui_painting::typography::TextSpan;
-    use flui_widgets::RichText;
+    use flui_widgets::Text;
 
     let (area, seen) = recorded_area(
         SizedBox::new(width, 400.0).child(
-            RichText::new(TextSpan::with_children(vec![
+            Text::rich(TextSpan::with_children(vec![
                 TextSpan::new("Read the "),
                 TextSpan::new("terms").with_link("app://terms"),
                 TextSpan::new(" and the "),
@@ -1254,10 +1254,10 @@ pub(crate) fn a_wrapped_link_holds_a_run_on_each_line() {
 
 /// The text of `linked_area`, its links routed to a handler that does
 /// nothing.
-fn linked_text() -> flui_widgets::RichText {
+fn linked_text() -> flui_widgets::Text {
     use flui_painting::typography::TextSpan;
 
-    flui_widgets::RichText::new(TextSpan::with_children(vec![
+    flui_widgets::Text::rich(TextSpan::with_children(vec![
         TextSpan::new("Read the "),
         TextSpan::new("terms").with_link("app://terms"),
         TextSpan::new(" and the "),
@@ -1335,7 +1335,7 @@ pub(crate) fn a_link_inside_a_cluster_leaves_the_runs_with_the_text() {
     use flui_painting::typography::TextSpan;
 
     let laid = mounted(SelectionArea::new(
-        flui_widgets::RichText::new(TextSpan::with_children(vec![
+        flui_widgets::Text::rich(TextSpan::with_children(vec![
             TextSpan::new("Cafe"),
             TextSpan::new("\u{301} menu").with_link("app://menu"),
         ]))

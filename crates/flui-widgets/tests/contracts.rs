@@ -380,6 +380,7 @@ fn text_editing() {
             ("text::a_text_run_reads_the_ambient_direction_unless_it_names_one", crate::text::a_text_run_reads_the_ambient_direction_unless_it_names_one),
             ("text::the_system_text_scale_grows_each_span_once", crate::text::the_system_text_scale_grows_each_span_once),
             ("text::media_text_scaling_changes_the_laid_out_text", crate::text::media_text_scaling_changes_the_laid_out_text),
+            ("text::a_rich_text_reads_the_style_and_weight_around_it", crate::text::a_rich_text_reads_the_style_and_weight_around_it),
             ("text::icon_text_sizing_keeps_box_and_glyph_together", crate::text::icon_text_sizing_keeps_box_and_glyph_together),
             ("text::icon_labels_reach_the_assembled_accessibility_tree", crate::text::icon_labels_reach_the_assembled_accessibility_tree),
             ("text::an_icon_theme_shadow_and_opacity_paint", crate::text::an_icon_theme_shadow_and_opacity_paint),
