@@ -69,7 +69,7 @@ impl LayoutStamp {
 ///
 /// Compositing does NOT have its own flag — mid-compositing marks route via
 /// [`PhaseKind::Layout`] (the compositing pass runs as part of the layout
-/// pipeline per the typestate transitions). This enum models the cross-product
+/// pipeline's passes). This enum models the cross-product
 /// without hiding it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PhaseKind {

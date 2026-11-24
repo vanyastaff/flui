@@ -1011,12 +1011,6 @@ impl PresentationState {
         self.performance_overlay.set(enabled);
     }
 
-    /// Whether the performance overlay is drawn, at its
-    /// [`BOUNDS`](crate::performance_overlay::BOUNDS).
-    pub(crate) fn performance_overlay_shown(&self) -> bool {
-        self.performance_overlay.get()
-    }
-
     /// This frame's debug readout, to draw above the presentation's content,
     /// `None` while the overlay is off.
     ///

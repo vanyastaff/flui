@@ -11,7 +11,6 @@ use flui_foundation::{CreationSite, RenderId, SlotSet};
 use crate::{
     RenderUpdateImpact,
     parent_data::ParentData,
-    pipeline::phase::PipelinePhase,
     storage::{RenderNode, RenderTree},
 };
 
@@ -23,7 +22,7 @@ const MEMBERSHIP_IMPACT: RenderUpdateImpact = RenderUpdateImpact::LAYOUT
     .union(RenderUpdateImpact::COMPOSITING_BITS)
     .union(RenderUpdateImpact::SEMANTICS);
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Makes `children`, in that order, the whole child list of `parent`, and
     /// returns whether the list changed.
     ///
@@ -141,7 +140,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     }
 }
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Removes the subtree rooted at `id` — THE dispose site.
     ///
     /// Removal is where owner-side state dies (the inversion of the

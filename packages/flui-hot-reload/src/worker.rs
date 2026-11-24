@@ -11,6 +11,7 @@ use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use crate::LoadError;
 use crate::dynlib::{self, DynLib};
 
 /// Default fingerprint when the worker omits `flui_worker_fingerprint`.
@@ -59,6 +60,43 @@ fn worker_builds() -> &'static Mutex<BTreeMap<u64, BuildPtr>> {
 /// logged), so it can never be pruned; workers must register from
 /// `flui_worker_init` only.
 static REGISTRATION_SESSION: Mutex<Option<Vec<(u64, BuildPtr)>>> = Mutex::new(None);
+
+/// Runs a worker's `flui_worker_init` and returns what it registered, or
+/// `None` when the init panicked, with those registrations pruned again.
+fn run_init(init_fn: WorkerInitFn) -> Option<Vec<(u64, BuildPtr)>> {
+    *REGISTRATION_SESSION
+        .lock()
+        .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state") = Some(Vec::new());
+    let initialized = init_fn(host_register_fn(), host_request_rebuild_fn());
+    let registered = REGISTRATION_SESSION
+        .lock()
+        .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
+        .take()
+        .unwrap_or_default();
+    if initialized {
+        Some(registered)
+    } else {
+        prune(registered);
+        None
+    }
+}
+
+/// Removes the registrations that are still the ones in `registered`. A newer
+/// worker registering the same fingerprint keeps its entry.
+fn prune(registered: Vec<(u64, BuildPtr)>) {
+    if registered.is_empty() {
+        return;
+    }
+    let mut builds = worker_builds()
+        .lock()
+        .expect("BUG: WORKER_BUILDS mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state");
+    for (fingerprint, ptr) in registered {
+        if builds.get(&fingerprint) == Some(&ptr) {
+            builds.remove(&fingerprint);
+            tracing::debug!(fingerprint, "worker build pruned");
+        }
+    }
+}
 
 /// Type-erased function pointer — safe to store in a `Sync` static.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -142,7 +180,7 @@ pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
         .map(|slot| slot.0)
 }
 
-type WorkerInitFn = extern "C" fn(RegisterWorkerBuildFn, HostRequestRebuildFn);
+type WorkerInitFn = extern "C" fn(RegisterWorkerBuildFn, HostRequestRebuildFn) -> bool;
 type WorkerVersionFn = extern "C" fn() -> u32;
 type WorkerFingerprintFn = extern "C" fn() -> u64;
 type WorkerAbiTokenFn = extern "C" fn() -> u64;
@@ -156,7 +194,6 @@ pub struct WorkerPlugin {
     // Admission is permanent: arbitrary Rust-ABI descendants can escape the
     // tree and carry image-owned code, vtables or storage (ADR-0111).
     lib: ManuallyDrop<DynLib>,
-    init_fn: WorkerInitFn,
     fingerprint_fn: Option<WorkerFingerprintFn>,
     version: u32,
     mtime: Option<std::time::SystemTime>,
@@ -168,50 +205,47 @@ pub struct WorkerPlugin {
 impl WorkerPlugin {
     /// Load a worker from `lib_path` and call its `flui_worker_init` hook.
     ///
-    /// Returns `None` when the file is missing, unloadable, lacks worker
-    /// symbols, or fails the ABI-token handshake (built by a different
-    /// compiler or source revision than this host — see [`crate::abi_token`]).
-    pub fn load(lib_path: impl AsRef<Path>) -> Option<Self> {
+    /// # Errors
+    ///
+    /// The [`LoadError`] that says why: the file is missing or the platform
+    /// loader refused it, it lacks a worker symbol, it fails the ABI-token
+    /// handshake (built by a different compiler or source revision than this
+    /// host — see [`crate::abi_token`]), or its init panicked.
+    pub fn load(lib_path: impl AsRef<Path>) -> Result<Self, LoadError> {
         let lib_path = lib_path.as_ref();
         let lib = DynLib::open(lib_path)?;
+        let missing = |symbol: &str| LoadError::MissingSymbol {
+            path: lib_path.to_path_buf(),
+            symbol: symbol.to_owned(),
+        };
 
         // SAFETY: `lib` was just opened and outlives this block. `flui_worker_init`
         // is the worker ABI symbol this crate defines, so a library built by the
-        // matching macro exports it with `WorkerInitFn`'s signature; the pointer
-        // is null-checked before the transmute.
+        // matching macro exports it with `WorkerInitFn`'s signature; `symbol`
+        // answers `None` for a null address.
         #[expect(unsafe_code, reason = "calls the worker init symbol")]
         unsafe {
-            let init_ptr = lib.symbol("flui_worker_init")?;
-            if init_ptr.is_null() {
-                return None;
-            }
+            let init_ptr = lib
+                .symbol("flui_worker_init")
+                .ok_or_else(|| missing("flui_worker_init"))?;
             let init_fn: WorkerInitFn = std::mem::transmute(init_ptr);
 
             // ABI handshake before calling anything else in the image: build
             // pointers registered by init are transmuted to typed fn pointers
             // whose argument types are `repr(Rust)`, so layout agreement must
             // be established first.
-            let Some(token_ptr) = lib.symbol("flui_worker_abi_token") else {
-                tracing::error!(
-                    path = %lib_path.display(),
-                    "worker refused: no ABI-token symbol — rebuild it against \
-                     this tree (the ownership-safe worker ABI requires it)"
-                );
-                return None;
-            };
+            let token_ptr = lib
+                .symbol("flui_worker_abi_token")
+                .ok_or_else(|| missing("flui_worker_abi_token"))?;
             let token_fn: WorkerAbiTokenFn = std::mem::transmute(token_ptr);
             let worker_token = token_fn();
             let host_token = crate::abi_token();
             if worker_token != host_token {
-                tracing::error!(
-                    worker_token,
-                    host_token,
-                    path = %lib_path.display(),
-                    "worker refused: ABI token mismatch — host and worker were \
-                     built by different compilers or source revisions; rebuild \
-                     both from one worktree with one toolchain"
-                );
-                return None;
+                return Err(LoadError::AbiMismatch {
+                    path: lib_path.to_path_buf(),
+                    host: host_token,
+                    plugin: worker_token,
+                });
             }
 
             let version = lib.symbol("flui_worker_version").map_or(0, |ptr| {
@@ -223,44 +257,26 @@ impl WorkerPlugin {
                 .symbol("flui_worker_fingerprint")
                 .map(|ptr| std::mem::transmute::<_, WorkerFingerprintFn>(ptr));
 
+            // Before the image is admitted: an image whose init panicked is
+            // refused and closes when `lib` drops here.
+            let registered = run_init(init_fn).ok_or_else(|| LoadError::InitFailed {
+                path: lib_path.to_path_buf(),
+            })?;
             let mtime = dynlib::file_revision(lib_path);
             let plugin = WorkerPlugin {
                 lib: ManuallyDrop::new(lib),
-                init_fn,
                 fingerprint_fn,
                 version,
                 mtime,
-                registered: Mutex::new(Vec::new()),
+                registered: Mutex::new(registered),
             };
-            plugin.init();
             tracing::info!(
                 version = plugin.version,
                 path = %lib_path.display(),
                 "Worker plugin loaded"
             );
-            Some(plugin)
+            Ok(plugin)
         }
-    }
-
-    /// Re-run the worker's registration hook (`flui_worker_init`), recording
-    /// what it registers so `Drop` can prune exactly those entries.
-    pub fn init(&self) {
-        {
-            let mut session = REGISTRATION_SESSION
-                .lock()
-                .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state");
-            *session = Some(Vec::new());
-        }
-        (self.init_fn)(host_register_fn(), host_request_rebuild_fn());
-        let registered_now = REGISTRATION_SESSION
-            .lock()
-            .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
-            .take()
-            .unwrap_or_default();
-        self.registered
-            .lock()
-            .expect("BUG: WorkerPlugin::registered mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
-            .extend(registered_now);
     }
 
     /// Type-layout fingerprint exported by the worker (0 when absent).
@@ -298,27 +314,14 @@ impl WorkerPlugin {
 
 impl Drop for WorkerPlugin {
     fn drop(&mut self) {
-        // Remove only entries still owned by this registration. A newer worker
-        // registering the same fingerprint keeps its entry. The loader reference
-        // is permanently retained independently of this registry and its lock.
-        let registered = std::mem::take(
+        // The loader reference is permanently retained independently of this
+        // registry and its lock.
+        prune(std::mem::take(
             &mut *self
                 .registered
                 .lock()
                 .expect("BUG: WorkerPlugin::registered mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state"),
-        );
-        if registered.is_empty() {
-            return;
-        }
-        let mut builds = worker_builds()
-            .lock()
-            .expect("BUG: WORKER_BUILDS mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state");
-        for (fingerprint, ptr) in registered {
-            if builds.get(&fingerprint) == Some(&ptr) {
-                builds.remove(&fingerprint);
-                tracing::debug!(fingerprint, "worker build pruned on unload");
-            }
-        }
+        ));
     }
 }
 

@@ -15,14 +15,16 @@ use serde_json::Value;
 
 /// The fields whose strings a trace redacts: the names, values, descriptions and titles the app
 /// shows, the text typed into it (a key's character, an input method's commit, as ADR-0215 §5
-/// redacts them), its announcements, the outline lines that quote them, and the token a session
-/// is admitted with.
+/// redacts them), its announcements, the outline lines that quote them, the token a session is
+/// admitted with, and the source file a build report names (absolute for a file outside the
+/// workspace, so it can name the author's home directory).
 pub const TEXT_FIELDS: &[&str] = &[
     "candidates",
     "character",
     "commit",
     "covered_by",
     "description",
+    "file",
     "label",
     "message",
     "name",

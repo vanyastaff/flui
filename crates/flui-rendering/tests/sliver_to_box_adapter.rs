@@ -26,10 +26,7 @@ use crate::common::{
     vertical_constraints,
 };
 
-fn render_offset(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    id: flui_foundation::RenderId,
-) -> Offset {
+fn render_offset(owner: &PipelineOwner, id: flui_foundation::RenderId) -> Offset {
     inspect::render_offset(owner, id).expect("node exists")
 }
 

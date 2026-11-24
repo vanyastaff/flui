@@ -12,8 +12,6 @@ use flui_layer::{
 use flui_painting::DisplayList;
 use smallvec::SmallVec;
 
-use crate::pipeline::phase::PaintPhase;
-
 use super::super::{PipelineOwner, counters::PaintCounts};
 use super::{
     effect_layers::EffectSlots,
@@ -214,11 +212,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
     }
 
     /// The node of a boundary served this pass.
-    pub(super) fn node_of(
-        &self,
-        owner: &PipelineOwner<PaintPhase>,
-        id: RenderId,
-    ) -> Option<SceneNodeId> {
+    pub(super) fn node_of(&self, owner: &PipelineOwner, id: RenderId) -> Option<SceneNodeId> {
         match self.staged.records.get(&id) {
             Some(Some(Refreshed::Repainted(record))) => Some(record.node),
             Some(None) => None,
@@ -416,7 +410,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
     /// Ends the frame node's content and publishes it.
     pub(super) fn finish_frame(
         &mut self,
-        owner: &PipelineOwner<PaintPhase>,
+        owner: &PipelineOwner,
         root: RenderId,
         root_is_boundary: bool,
     ) {
@@ -442,11 +436,7 @@ impl<'w, 'o, 's> FragmentComposer<'w, 'o, 's> {
     /// the writer, and returns what the owner commits; the pass's consumed
     /// updates, reached nodes and child paint orders stay in its working
     /// collections.
-    pub(super) fn finish(
-        mut self,
-        owner: &PipelineOwner<PaintPhase>,
-        lineage: Lineage,
-    ) -> PaintOutcome {
+    pub(super) fn finish(mut self, owner: &PipelineOwner, lineage: Lineage) -> PaintOutcome {
         debug_assert!(
             self.work.builds.is_empty(),
             "BUG: a boundary's content was left open"

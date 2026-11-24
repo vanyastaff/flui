@@ -8,7 +8,7 @@
 //! "build + dlopen a real plugin" cost that the rest of `flui-hot-reload`'s
 //! tests avoid.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use flui_hot_reload::app_plugin;
 
@@ -29,7 +29,29 @@ impl flui_view::View for FixtureRoot {
     }
 }
 
-app_plugin!(FixtureRoot);
+static PANIC_NEXT_MOUNT: AtomicBool = AtomicBool::new(false);
+
+/// The root `app_plugin!` mounts: it panics once after
+/// `fixture_panic_next_mount`, as a developer's root view under edit can.
+fn fixture_root() -> FixtureRoot {
+    assert!(
+        !PANIC_NEXT_MOUNT.swap(false, Ordering::SeqCst),
+        "the fixture's root panicked"
+    );
+    FixtureRoot
+}
+
+app_plugin!(fixture_root());
+
+/// Makes the next mount of this image's root panic.
+#[expect(
+    unsafe_code,
+    reason = "`#[unsafe(no_mangle)]` exports the symbol the lifecycle test resolves with `dlsym`"
+)]
+#[unsafe(no_mangle)]
+pub extern "C" fn fixture_panic_next_mount() {
+    PANIC_NEXT_MOUNT.store(true, Ordering::SeqCst);
+}
 
 /// Per-image tick counter, deliberately independent of `app_plugin!`'s own
 /// generated symbols.

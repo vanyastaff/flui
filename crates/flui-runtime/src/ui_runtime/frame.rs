@@ -623,8 +623,8 @@ impl UiRuntime {
             presentation.url_owner.end_cold_start();
         }
 
-        // Phase 2 & 3: Layout, Compositing, Paint, Semantics through the
-        // typestate-driven orchestrator.
+        // Phase 2 & 3: Layout, Compositing, Paint, Semantics, one pass each
+        // over the owner in place.
         presentation.enter_segment_phase(SegmentPhase::Pipeline);
         presentation
             .renderer()
@@ -678,27 +678,30 @@ impl UiRuntime {
         let textures_republish =
             scene.owes_texture_frame(presentation.texture_registry(), Some(target));
         // The build banner a development tool reported, laid out for this frame's surface and
-        // kept clear of the performance overlay while that is drawn. A banner that changed is
-        // published even when the pipeline paints nothing (`PresentationScene::produce`).
-        let banner = presentation
-            .build_banner
-            .banner(
-                flui_foundation::geometry::Size::new(constraints.max_width, constraints.max_height),
-                presentation
-                    .performance_overlay_shown()
-                    .then_some(crate::performance_overlay::BOUNDS),
-            )
-            .and_then(|content| {
-                let owner = presentation
-                    .pipeline()
-                    .with(flui_rendering::pipeline::PipelineOwner::root_id)?;
-                Some(crate::presentation_scene::OverlayFrame {
-                    content,
-                    text,
-                    device_pixel_ratio: dpr.get(),
-                    owner,
+        // kept clear of the performance overlay's readout the frame shows. A banner that changed
+        // is published even when the pipeline paints nothing (`PresentationScene::produce`).
+        let banner = |readout: Option<flui_foundation::geometry::Rect<f64>>| {
+            presentation
+                .build_banner
+                .banner(
+                    flui_foundation::geometry::Size::new(
+                        constraints.max_width,
+                        constraints.max_height,
+                    ),
+                    readout,
+                )
+                .and_then(|content| {
+                    let owner = presentation
+                        .pipeline()
+                        .with(flui_rendering::pipeline::PipelineOwner::root_id)?;
+                    Some(crate::presentation_scene::OverlayFrame {
+                        content,
+                        text,
+                        device_pixel_ratio: dpr.get(),
+                        owner,
+                    })
                 })
-            });
+        };
         let painted = {
             let pipeline = presentation.pipeline();
             scene.produce(

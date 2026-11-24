@@ -45,8 +45,8 @@ when it ran.
 ## Decision
 
 **Move the reentrancy boundary out of the layout walk and into the gap between layout passes, and
-let the binding drive a bounded layout↔build fixpoint.** `PipelineOwner<Layout>::run_layout` can be
-re-driven while the owner stays in the `Layout` phase, so the binding — the one place holding
+let the binding drive a bounded layout↔build fixpoint.** `FramePass<Layout>::run_layout` can be
+re-driven while the layout pass is alive, so the binding — the one place holding
 `&mut ElementTree`, `&mut BuildOwner` and the owner-local pipeline cell — interleaves layout passes with
 builder servicing, then runs the rest of the frame on a settled tree.
 
@@ -192,7 +192,7 @@ what a superseding record would need.
 - `Slab<Box<RenderNode>>` in `storage/tree.rs`, so a node's address does not move when the tree
   grows mid-walk.
 - `LayoutChildBuilder` and `LayoutChildBuild`, plus
-  `PipelineOwner<Layout>::run_layout_with_child_builder`.
+  `FramePass<Layout>::run_layout_with_child_builder`.
 - `LayoutCallbackScope`, with a side map in `subtree_arena.rs` that holds the only new `unsafe`.
 - `ChildLayout::Built`, used by the fixed-extent list, the variable list and the grid.
 - `BuildOwner::build_child_in_layout`.

@@ -34,8 +34,7 @@ The host never reconstructs a `Box` to free plugin memory. Free uses
 `MaybeUninit<Scene>`, which preserves allocation size/alignment without dropping
 the moved value. Both teardown functions are `unsafe extern "C"`: the caller
 must supply the live allocation, preserve unique ownership, and choose the
-matching consumption path. Null is a no-op. The C ABI and symbol names remain
-unchanged; Rust callers now must acknowledge their obligations explicitly.
+matching consumption path. Null is a no-op.
 
 Keep the image loaded until both its allocation and every retained plugin-backed
 payload have been destroyed, including payloads moved out or cloned from a
@@ -75,10 +74,10 @@ without the feature:
   registration. A degraded or failed reload is logged and keeps the last good
   tree, as before.
 - `ScenePluginHook` owns the `HotReloadDriver`. `scene_frame` builds the frame's
-  scene and lends it to the host's renderer. The original scene is dropped
-  before the call returns while the driver holds the image. The unsafe
-  `scene_frame` caller must additionally guarantee the renderer retains no
-  cloned image-dependent payload; a borrowed scene alone cannot ensure this.
+  scene and lends it to the host's renderer; the scene borrows the driver and
+  is dropped before the call returns. The unsafe `scene_frame` caller must
+  additionally guarantee the renderer retains no cloned image-dependent
+  payload; a borrowed scene alone cannot ensure this.
 
 The host applies a `Patched` poll once to every UI runtime, not to whichever UI runtime
 polled first; before the hook, a worker's rebuild request reached only the most
@@ -125,12 +124,14 @@ reported. Pinned by
 
 `HotReloadDriver::poll` returns whether an image was loaded or replaced. It
 never calls a scene build entry point. Constructing a scene remains the
-separate unsafe `build_scene` operation: its caller must drop every scene and
-retained clone before the image can be unloaded. A safe polling method that
-returned an unrestricted `Scene` would let that lifetime obligation escape
-without an unsafe call. The hook polls, builds once, lends the scene to the
-renderer and retires it before returning; reload no longer builds and discards
-an extra scene. The driver and host hook boundaries follow ADR-0108. The consumer test
+separate `build_scene` operation, which returns a `PluginScene<'_>` that
+borrows the driver: `poll`, which may unload the image, does not compile while
+a scene lives. What a borrow cannot hold is a clone of a scene payload
+(`Arc<dyn Any>`, `Arc<dyn Fn>`) taken through it, so `build_scene` stays
+`unsafe` with that one obligation, the same one `DevReloadHook::scene_frame`
+states. The hook polls, builds once, lends the scene to the renderer and
+retires it before returning; a reload builds no scene of its own. The driver
+and host hook boundaries follow ADR-0108. The consumer test
 `polling_an_unavailable_plugin_reports_no_change` pins the polling result type
 and retries an unavailable image without constructing a scene.
 
@@ -188,7 +189,8 @@ escape into host-owned trees and consumer clones. Worker registration retirement
 still prunes matching dispatch entries, but does not invalidate already escaped
 values. Rejected images close normally. Each admitted revision consumes image
 memory and can keep its Windows staged file locked; restart the host to reclaim
-these resources. Scene plugins retain their separate unsafe unload obligations.
+these resources. A scene plugin's image is unloaded on reload, so its scenes
+borrow it (`PluginScene`).
 
 `admitted_worker_callbacks_survive_retirement_and_replacement` compiles two
 same-toolchain dynamic fixtures and loads them through the public worker API in
@@ -214,3 +216,36 @@ token, so an image built before the change is refused at load.
 `a_worker_images_rebuild_request_runs_the_hosts_hook`
 (`examples/hot_reload_lifecycle_fixture`) loads the cargo-built fixture as a
 worker, calls the image's own `request_rebuild` and checks the host's hook ran.
+
+### A panic in the developer's code stays in the plugin image
+
+Every entry a plugin macro generates is `extern "C"`, and a panic cannot
+unwind out of one: it aborts the process, the host's included. Each entry that
+runs the developer's code (`flui_scene_build`, `flui_app_build` with the root
+view's construction, its mount and its frame, and `flui_worker_init`) runs it
+through one guard, `entry::contain`. The guard keeps the panic in the image,
+writes its text to stderr or logcat (the host's subscriber is not reachable
+from the image), and destroys the payload there, where its vtable lives. The
+entry answers with its refusal value: a build answers null, which the host
+treats as a skipped frame for both families, and an init answers `false`,
+which the loader treats as a refused load. A refused worker's registrations
+are pruned before its image closes. An `app_plugin!` pipeline that a panic
+left unmounted mounts again on the next build.
+
+`a_panicking_scene_function_answers_null_and_the_next_build_works` and
+`a_panicking_worker_init_answers_false` (in-process expansions),
+`a_panicking_app_root_skips_the_frame_and_the_next_build_mounts` (the
+cargo-built fixture), `a_scene_plugin_answering_null_skips_the_frame` and
+`a_worker_whose_init_fails_is_refused_with_its_registrations` (`rustc`-built
+fixtures) pin it.
+
+### A refused library says why, once per build
+
+`DynLib::open`, `ScenePlugin::load` and `WorkerPlugin::load` answer
+`Result<_, LoadError>`. `LoadError::Open` carries the platform loader's own
+text (`dlerror`, or the Windows error message), and the other variants name the
+missing symbol, both ABI tokens, or the worker's failed init. The drivers load
+through `LoadRefusal`, which logs a refusal once per artifact revision, a file
+not built yet at `debug` and any other at `warn`, and stays quiet on the
+retries of the same revision. Pinned by `a_refused_library_says_why` and
+`a_refused_artifact_is_reopened_once_it_changes_or_after_a_wait`.

@@ -1,4 +1,4 @@
-//! Paint phase implementation for `PipelineOwner<PaintPhase>`.
+//! Paint phase implementation: the body of `FramePass<PaintPhase>::run_paint`.
 
 use std::sync::Arc;
 
@@ -11,13 +11,10 @@ use smallvec::SmallVec;
 use crate::{
     context::{FragmentOp, FragmentScope, PaintAnchor},
     error::PoisonPhase,
-    pipeline::{
-        phase::{Idle, PaintPhase, Semantics},
-        scheduler::PhaseKind,
-    },
+    pipeline::scheduler::PhaseKind,
 };
 
-use super::{PipelineOwner, rebind_phase, subtree_arena::ensure_stack};
+use super::{PipelineOwner, subtree_arena::ensure_stack};
 
 mod composer;
 mod effect_layers;
@@ -36,19 +33,7 @@ pub(super) use scratch::PaintScratch;
 // Paint phase: run_paint + helpers
 // ============================================================================
 
-impl PipelineOwner<PaintPhase> {
-    /// Transitions a paint-phase pipeline into the [`Semantics`] phase.
-    #[must_use]
-    pub fn into_semantics(self) -> PipelineOwner<Semantics> {
-        rebind_phase(self)
-    }
-
-    /// Returns to [`Idle`] from the paint phase.
-    #[must_use]
-    pub fn into_idle(self) -> PipelineOwner<Idle> {
-        rebind_phase(self)
-    }
-
+impl PipelineOwner {
     /// Paints the boundaries the queue owes and buffers the patch that
     /// publishes them in `writer` (ADR-0304 §3, §8).
     ///
@@ -76,12 +61,15 @@ impl PipelineOwner<PaintPhase> {
     /// paint phase begins with layout work still pending — the scheduler's
     /// layout queue is non-empty. This is the one misuse the type system
     /// cannot rule out: a caller may legally drive the phases directly
-    /// (`into_layout().into_compositing().into_paint()`, the bench
+    /// (`layout_pass().into_compositing().into_paint()`, the bench
     /// pattern) and skip
-    /// [`PipelineOwner::run_layout`](super::PipelineOwner::run_layout), so
+    /// [`FramePass::run_layout`](super::FramePass::run_layout), so
     /// completeness stays a runtime gate. The empty-queue variant of that
     /// chain is designed behavior and keeps returning `Ok`.
-    pub fn run_paint(&mut self, writer: &mut SceneWriter<'_>) -> crate::error::RenderResult<()> {
+    pub(super) fn flush_paint(
+        &mut self,
+        writer: &mut SceneWriter<'_>,
+    ) -> crate::error::RenderResult<()> {
         // Frame-completeness gate, BEFORE the empty-paint-queue early
         // return: the paint phase began with layout work still pending. A
         // direct phase chain that skipped `run_layout` with a serviced

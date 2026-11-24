@@ -46,21 +46,28 @@
 #[macro_export]
 macro_rules! scene_plugin {
     ($build_fn:ident) => {
-        /// Build a scene and return an opaque pointer to `Box<Scene>`.
+        /// Build a scene and return an opaque pointer to `Box<Scene>`, or null
+        /// when the scene function panicked: the panic is reported and
+        /// destroyed in this image, and the host skips the frame.
         ///
         /// # Safety
         ///
         /// Keep this plugin image loaded until the allocation and every plugin-backed
-        /// payload have been destroyed. Consume the pointer exactly once: pass
-        /// the original scene to `flui_scene_drop`, OR move it out once with
-        /// `ptr::read` and return the emptied allocation to `flui_scene_free`.
-        /// Never deallocate the allocation in the host.
+        /// payload have been destroyed. Consume a non-null pointer exactly once:
+        /// pass the original scene to `flui_scene_drop`, OR move it out once
+        /// with `ptr::read` and return the emptied allocation to
+        /// `flui_scene_free`. Never deallocate the allocation in the host.
+        /// Null owns nothing and both teardown functions accept it as a no-op.
         // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_scene_build(width: f64, height: f64) -> *mut ::std::ffi::c_void {
-            let scene: $crate::Scene = $build_fn(width, height);
-            let boxed = ::std::boxed::Box::new(scene);
-            ::std::boxed::Box::into_raw(boxed) as *mut ::std::ffi::c_void
+            let built = $crate::__private_contain_entry("flui_scene_build", || -> $crate::Scene {
+                $build_fn(width, height)
+            });
+            let ::std::option::Option::Some(scene) = built else {
+                return ::std::ptr::null_mut();
+            };
+            ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene)).cast::<::std::ffi::c_void>()
         }
 
         /// Returns the plugin version number.
@@ -143,9 +150,10 @@ macro_rules! scene_plugin {
 ///
 /// # Generated symbols
 ///
-/// - `flui_worker_init(register, request_rebuild)` — register build fns
+/// - `flui_worker_init(register, request_rebuild) -> bool` — register build fns
 ///   (called on load + every reload); `request_rebuild` is the host's entry
-///   the worker's [`request_rebuild`](crate::request_rebuild) forwards to
+///   the worker's [`request_rebuild`](crate::request_rebuild) forwards to;
+///   `false` when the init panicked
 /// - `flui_worker_version() -> u32`
 /// - `flui_worker_fingerprint() -> u64` — optional layout-change detection
 ///
@@ -162,14 +170,16 @@ macro_rules! hot_reload_worker {
         /// `register` is host-owned storage; never write build pointers into
         /// dylib-local `static` variables. `request_rebuild` is bound first,
         /// so a rebuild the worker's init asks for already reaches the host.
+        /// `false` when the worker's init panicked: the panic is reported and
+        /// destroyed in this image, and the host refuses the image.
         // SAFETY: the plugin contract permits one definition of this symbol family per image.
         #[unsafe(no_mangle)]
         pub extern "C" fn flui_worker_init(
             register: $crate::RegisterWorkerBuildFn,
             request_rebuild: $crate::HostRequestRebuildFn,
-        ) {
+        ) -> bool {
             $crate::__private_forward_rebuild_requests_to(request_rebuild);
-            $init_fn(register);
+            $crate::__private_contain_entry("flui_worker_init", || $init_fn(register)).is_some()
         }
 
         /// Worker version (for diagnostics).
@@ -231,25 +241,22 @@ macro_rules! hot_reload_worker {
 /// # Unload semantics
 ///
 /// The mounted `PluginPipeline` is **leaked, never dropped** — on thread
-/// exit, on hot-reload, and on process exit alike. This is not new: the
-/// pipeline was previously behind a plain `static`, and Rust never runs drop
-/// glue for `static` items either, so "leak on unload" was always this
-/// macro's actual contract (the "hot restart: state lost" line above). What
-/// changed is *how* that's now guaranteed: the pipeline lives in a
-/// `thread_local!`, and a thread-local wrapping a type that needs dropping
-/// registers a TLS destructor — one that lives in this plugin's own image.
-/// `dlclose`-ing a DSO with a live TLS destructor registration is unsafe to
-/// varying degrees across runtimes (a deferred-unmap runtime can silently
-/// keep serving the OLD code on a same-path reload; a non-deferring one can
-/// run the destructor after the image is already unmapped). The pipeline is
-/// therefore stored as `ManuallyDrop<PluginPipeline>`, which is
-/// unconditionally drop-glue-free, so no TLS destructor is ever registered
-/// for it — deliberately trading "run `PluginPipeline::drop`" for "never put
-/// this image's unload behavior at the mercy of pending TLS destructors".
-/// Thread affinity is identified by a drop-free, per-thread monotonic token
-/// in the same TLS payload. Calling `std::thread::current` from the cdylib is
-/// deliberately avoided: Rust's private std copy can otherwise register a
-/// pthread-key destructor whose callback also lives in the unloadable image.
+/// exit, on hot-reload, and on process exit alike, which is the "hot restart:
+/// state lost" contract above. The pipeline lives in a `thread_local!`, and a
+/// thread-local wrapping a type that needs dropping registers a TLS
+/// destructor that lives in this plugin's own image. `dlclose`-ing a DSO with
+/// a live TLS destructor registration is unsafe to varying degrees across
+/// runtimes (a deferred-unmap runtime can silently keep serving the OLD code
+/// on a same-path reload; a non-deferring one can run the destructor after
+/// the image is already unmapped). The pipeline is therefore stored as
+/// `ManuallyDrop<PluginPipeline>`, which is unconditionally drop-glue-free,
+/// so no TLS destructor is ever registered for it: `PluginPipeline::drop`
+/// never runs, and the image's unload never waits on a pending TLS
+/// destructor. Thread affinity is identified by a drop-free, per-thread
+/// monotonic token in the same TLS payload. Calling `std::thread::current`
+/// from the cdylib is deliberately avoided: Rust's private std copy can
+/// otherwise register a pthread-key destructor whose callback also lives in
+/// the unloadable image.
 ///
 /// # Generated Symbols
 ///
@@ -343,13 +350,8 @@ macro_rules! app_plugin {
             /// `mem::needs_drop` false for this slot unconditionally (see the
             /// `const` assertion right below), so the standard library never
             /// registers a destructor for it at all — no deferred unload, no
-            /// UAF, on any runtime. This is not a NEW leak: a plain `static`
-            /// (the previous `OnceLock<Mutex<PluginPipeline>>`) was never
-            /// destructed either — Rust runs no automatic drop glue for
-            /// `static` items — so "leak the pipeline, don't run its Drop"
-            /// was already the contract `app_plugin!` shipped ("hot restart:
-            /// state lost"). This preserves that byte-for-byte; it does not
-            /// introduce it.
+            /// UAF, on any runtime. The leaked pipeline is the macro's "hot
+            /// restart: state lost" contract (see "Unload semantics" above).
             static __FLUI_APP_STATE: __FluiAppThreadState = const {
                 __FluiAppThreadState {
                     token: ::std::cell::Cell::new(0),
@@ -424,19 +426,29 @@ macro_rules! app_plugin {
                     return ::std::ptr::null_mut();
                 }
 
-                let mut slot = state.pipeline.borrow_mut();
-                let pipeline = slot.get_or_insert_with(|| {
-                    ::std::mem::ManuallyDrop::new($crate::PluginPipeline::mount(
-                        $root_view,
-                        // The plugin image is a ui_runtime of its own for text: the
-                        // host's context cannot cross the dlopen boundary.
-                        $crate::__private_text::TextContextHandle::standalone(),
-                    ))
+                // The root view's construction, its mount and the frame are
+                // the developer's code; a panic in any of them is contained
+                // here and answered with null. A pipeline the panic left
+                // unmounted mounts again on the next call.
+                let built = $crate::__private_contain_entry("flui_app_build", || {
+                    let mut slot = state.pipeline.borrow_mut();
+                    let pipeline = slot.get_or_insert_with(|| {
+                        ::std::mem::ManuallyDrop::new($crate::PluginPipeline::mount(
+                            $root_view,
+                            // The plugin image is a ui_runtime of its own for text: the
+                            // host's context cannot cross the dlopen boundary.
+                            $crate::__private_text::TextContextHandle::standalone(),
+                        ))
+                    });
+                    // A frame that produced no scene, a size the host sent
+                    // that is not finite or is negative included, still hands
+                    // the host a valid pointer: an empty scene, with the
+                    // reason reported.
+                    $crate::__private_draw_frame(pipeline, width, height)
                 });
-                // A frame that produced no scene, a size the host sent that
-                // is not finite or is negative included, still hands the host
-                // a valid pointer: an empty scene, with the reason reported.
-                let scene = $crate::__private_draw_frame(pipeline, width, height);
+                let ::std::option::Option::Some(scene) = built else {
+                    return ::std::ptr::null_mut();
+                };
                 ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene))
                     .cast::<::std::ffi::c_void>()
             })

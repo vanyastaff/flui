@@ -821,9 +821,11 @@ impl HeroHandle {
             handle.inner.seat.anchor(),
         )));
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(10.0, 10.0))));
-        let mut owner = owner.into_layout();
-        owner.run_layout().expect("a lone anchor lays out");
-        let cell = PipelineCell::new(owner.into_idle());
+        owner
+            .layout_pass()
+            .run_layout()
+            .expect("a lone anchor lays out");
+        let cell = PipelineCell::new(owner);
         handle.inner.seat.bind(Some(cell.downgrade()));
         (handle, cell)
     }

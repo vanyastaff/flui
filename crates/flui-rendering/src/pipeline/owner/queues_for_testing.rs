@@ -3,9 +3,8 @@
 use flui_foundation::RenderId;
 
 use super::PipelineOwner;
-use crate::pipeline::phase::PipelinePhase;
 
-impl<P: PipelinePhase> PipelineOwner<P> {
+impl PipelineOwner {
     /// The nodes queued for layout, in queue order.
     pub fn queued_for_layout(&self) -> Vec<RenderId> {
         self.scheduler

@@ -226,9 +226,9 @@ impl<C: OverlayContent> ShownOverlay<C> {
 impl PresentationScene {
     /// Runs `paint` with a patch open, then composes the scene's root around
     /// the frame node `frame` names, the performance overlay `readout` names
-    /// and `banner`, in the same patch: when `paint` painted, or when the
-    /// banner the version shows is not `banner`. Returns whether there is a
-    /// patch to [`Self::apply`].
+    /// and the banner `banner` lays out, in the same patch: when `paint`
+    /// painted, or when the banner the version shows is not the one laid out.
+    /// Returns whether there is a patch to [`Self::apply`].
     ///
     /// The banner is published on a frame the pipeline paints nothing in: it
     /// is the development tools', so a report that changes it repaints no
@@ -236,16 +236,26 @@ impl PresentationScene {
     /// the root alone. The performance overlay changes only with the frames
     /// it measures: `readout` runs on a frame that painted, and a frame that
     /// publishes the banner alone keeps the readout the version shows.
+    /// `banner` is given the bounds of the readout this frame shows, so the
+    /// banner keeps clear of the readout on screen, not of the overlay's
+    /// switch, which a frame that does not paint has not drawn yet.
     pub(crate) fn produce<'t, E>(
         &mut self,
         paint: impl FnOnce(&mut SceneWriter<'_>) -> Result<bool, E>,
-        banner: Option<OverlayFrame<'t, Banner>>,
+        banner: impl FnOnce(Option<Rect<f64>>) -> Option<OverlayFrame<'t, Banner>>,
         frame: impl FnOnce() -> Option<SceneNodeId>,
         readout: impl FnOnce() -> Option<OverlayFrame<'t, Readout>>,
     ) -> Result<bool, E> {
         let mut writer = self.owner.writer();
         let painted = paint(&mut writer)?;
         let lineage = writer.current().id().lineage();
+        // On a frame that did not paint this pushes nothing: the version's
+        // readout stays.
+        let overlay = Self::compose_readout(&mut self.overlay, &mut writer, painted, readout);
+        let readout_bounds = overlay
+            .and(self.overlay.as_ref())
+            .map(|shown| shown.content.bounds());
+        let banner = banner(readout_bounds);
         let banner_shown = match (
             self.banner
                 .as_ref()
@@ -259,10 +269,14 @@ impl PresentationScene {
         if !painted && banner_shown {
             return Ok(false);
         }
-        let overlay = Self::compose_readout(&mut self.overlay, &mut writer, painted, readout);
         let banner = Self::compose_node(&mut self.banner, &mut writer, banner);
         Self::compose_root(&mut writer, frame(), overlay, banner);
-        Ok(true)
+        // A banner that could not be recorded this frame (the text context
+        // lent, the lineage out of content versions) leaves the patch empty:
+        // a frame that did not paint then publishes nothing, and the next frame
+        // the presentation draws, which nothing asks for on its behalf, tries
+        // the banner again.
+        Ok(painted || !writer.is_empty())
     }
 
     /// The node the performance overlay is shown at: `readout` composed on a
@@ -779,7 +793,7 @@ mod tests {
                 });
                 Ok::<_, ()>(true)
             },
-            None,
+            |_| None,
             || None,
             || None,
         );
@@ -823,7 +837,7 @@ mod tests {
         }
         let patched = scene.produce(
             |_| Ok::<_, ()>(painted),
-            banner.map(overlay(text)),
+            |_| banner.map(overlay(text)),
             || None,
             || readout.map(overlay(text)),
         );
@@ -851,26 +865,27 @@ mod tests {
         composed_frame(scene, text, true, readout, None).expect("a frame that painted patches")
     }
 
-    /// A banner whose labels do not shape costs one patch, and the frames
-    /// after it publish nothing while it holds still; a frame that painted
-    /// does not record it again either. Fails if each idle frame applies a
-    /// patch for it, or records it again.
+    /// A banner whose labels do not shape publishes nothing, nor do the
+    /// frames after it while it holds still; a frame that painted does not
+    /// try to record it again either. Fails if a frame applies a patch for
+    /// it, or shapes its labels again.
     #[test]
     fn an_unshapeable_banner_holds_still() {
         let text = flui_rendering::TextContextHandle::standalone();
+        let shapings = || text.with(|text| flui_painting::testing::text_context_shapings(text));
         let mut scene = PresentationScene::default();
         let _first = overlay_frame(&mut scene, &text, None);
+        let before = shapings();
         let banner = Banner::unshapeable();
-        let failed = composed_frame(&mut scene, &text, false, None, Some(banner.clone()))
-            .expect("a new banner patches once");
-        assert_eq!(
-            failed
-                .scene
-                .node(failed.scene.root())
-                .map(|root| root.content().slots().count()),
-            Some(0),
-            "nothing of it is slotted"
+        assert!(
+            composed_frame(&mut scene, &text, false, None, Some(banner.clone())).is_none(),
+            "a banner that does not shape publishes nothing"
         );
+        assert!(shapings() > before, "recording it shaped its first label");
+        // The label that shapes is shaped again on every attempt to record
+        // the banner once the context no longer holds its layout.
+        text.with(|text| text.reclaim(flui_foundation::memory::MemoryPressureLevel::Moderate));
+        let tried = shapings();
         assert!(
             composed_frame(&mut scene, &text, false, None, Some(banner.clone())).is_none(),
             "an idle frame publishes nothing for it"
@@ -878,6 +893,45 @@ mod tests {
         let painted = composed_frame(&mut scene, &text, true, None, Some(banner))
             .expect("a frame that painted patches");
         assert_eq!(painted.damage, flui_layer::DamageRegion::Unchanged);
+        assert_eq!(shapings(), tried, "no frame tries to record it again");
+    }
+
+    /// A banner composed while the text context is lent is not recorded,
+    /// and a frame that did not paint then publishes no patch; the next
+    /// frame records it. Fails if each such frame publishes an empty
+    /// version, or the banner is never shown once the context is free.
+    #[test]
+    fn a_banner_waits_for_the_text_context_without_publishing() {
+        let text = flui_rendering::TextContextHandle::standalone();
+        let mut scene = PresentationScene::default();
+        let _first = overlay_frame(&mut scene, &text, None);
+        let chip = || {
+            let banner = crate::build_overlay::BuildBanner::default();
+            assert_eq!(
+                banner.report(flui_protocol::build::BuildState::Building),
+                Ok(true)
+            );
+            banner
+                .banner(flui_foundation::geometry::Size::new(800.0, 600.0), None)
+                .expect("the chip is drawn")
+        };
+        for _ in 0..2 {
+            let lent = text.with(|_| composed_frame(&mut scene, &text, false, None, Some(chip())));
+            assert!(
+                lent.is_none(),
+                "a frame with the context lent publishes nothing"
+            );
+        }
+        let shown = composed_frame(&mut scene, &text, false, None, Some(chip()))
+            .expect("the free context records the banner");
+        assert_eq!(
+            shown
+                .scene
+                .node(shown.scene.root())
+                .map(|root| root.content().slots().count()),
+            Some(1),
+            "the banner is slotted"
+        );
     }
 
     /// A frame that publishes the banner alone keeps the readout the version

@@ -17,7 +17,7 @@ use flui_objects::{RenderColoredBox, RenderFlex, RenderRepaintBoundary};
 use flui_rendering::{
     constraints::BoxConstraints,
     error::PoisonPhase,
-    pipeline::{Idle, PipelineOwner},
+    pipeline::PipelineOwner,
     testing::{SceneHost, box_node, edit_render_object, inspect::first_opacity_alpha, tree},
 };
 
@@ -101,7 +101,7 @@ fn mount(
     calls: Arc<AtomicUsize>,
     alpha: u8,
     skip_paint: bool,
-) -> (PipelineOwner<Idle>, RenderId) {
+) -> (PipelineOwner, RenderId) {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(
         &mut owner,
@@ -131,19 +131,19 @@ fn mount(
 pub(crate) fn a_panicking_descriptor_under_a_repaint_poisons_the_frame_in_the_paint_phase() {
     let armed = Arc::new(AtomicBool::new(false));
     let calls = Arc::new(AtomicUsize::new(0));
-    let (owner, fx) = mount(Arc::clone(&armed), Arc::clone(&calls), 128, false);
+    let (mut owner, fx) = mount(Arc::clone(&armed), Arc::clone(&calls), 128, false);
 
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("first frame paints cleanly");
     let calls_before_arm = calls.load(Ordering::Relaxed);
 
-    edit_render_object::<PoisonedDescriptor, _, _>(&mut owner, fx, |object| {
+    edit_render_object::<PoisonedDescriptor, _>(&mut owner, fx, |object| {
         object.armed.store(true, Ordering::Relaxed);
     });
     owner.mark_needs_paint(fx);
 
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     let observed = format!("{result:?}");
     let Err(flui_rendering::error::RenderError::Poisoned { phase, .. }) =
         result.map_err(flui_foundation::TreeError::into_error)
@@ -166,10 +166,10 @@ pub(crate) fn a_panicking_descriptor_under_a_repaint_poisons_the_frame_in_the_pa
          pass",
     );
 
-    edit_render_object::<PoisonedDescriptor, _, _>(&mut owner, fx, |object| {
+    edit_render_object::<PoisonedDescriptor, _>(&mut owner, fx, |object| {
         object.armed.store(false, Ordering::Relaxed);
     });
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     let tree = result
         .expect("the retry paints cleanly")
         .expect("the retry produces a layer tree");

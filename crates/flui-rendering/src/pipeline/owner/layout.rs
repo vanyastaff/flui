@@ -1,36 +1,18 @@
-//! Layout phase implementation for `PipelineOwner<Layout>`.
+//! Layout phase implementation: the body of `FramePass<Layout>::run_layout`.
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Size;
 
-use crate::{
-    constraints::BoxConstraints,
-    pipeline::{
-        phase::{Compositing, Idle, Layout},
-        scheduler::PhaseKind,
-    },
-};
+use crate::{constraints::BoxConstraints, pipeline::scheduler::PhaseKind};
 
-use super::{PipelineOwner, poison::LayoutFailureKind, rebind_phase, subtree_arena::SubtreeArena};
+use super::{PipelineOwner, poison::LayoutFailureKind, subtree_arena::SubtreeArena};
 use crate::pipeline::dirty::DirtyNode;
 
 // ============================================================================
 // Layout phase: run_layout + helpers
 // ============================================================================
 
-impl PipelineOwner<Layout> {
-    /// Transitions a layout-phase pipeline into the [`Compositing`] phase.
-    #[must_use]
-    pub fn into_compositing(self) -> PipelineOwner<Compositing> {
-        rebind_phase(self)
-    }
-
-    /// Returns to [`Idle`] from the layout phase (e.g. on error abort).
-    #[must_use]
-    pub fn into_idle(self) -> PipelineOwner<Idle> {
-        rebind_phase(self)
-    }
-
+impl PipelineOwner {
     /// Updates layout for all dirty render objects.
     ///
     /// This is phase 1 of the rendering pipeline. During layout:
@@ -46,7 +28,7 @@ impl PipelineOwner<Layout> {
     /// walk. `layout_child()` lays out the child synchronously and returns its
     /// result; a rejected measurement propagates before the parent can publish
     /// dependent geometry.
-    pub fn run_layout(&mut self) -> crate::error::RenderResult<()> {
+    pub(super) fn flush_layout(&mut self) -> crate::error::RenderResult<()> {
         let _span =
             tracing::debug_span!(target: "flui.frame", "layout", dirty_nodes = self.scheduler.layout_queue_len(),)
                 .entered();
@@ -570,7 +552,7 @@ impl PipelineOwner<Layout> {
     ///
     /// `run_layout`'s dirty-queue iteration runs the same walk, announcing the
     /// work of a whole batch with one wake instead of one per root.
-    pub fn layout_dirty_root(
+    pub(super) fn layout_dirty_root(
         &mut self,
         id: RenderId,
         constraints: BoxConstraints,

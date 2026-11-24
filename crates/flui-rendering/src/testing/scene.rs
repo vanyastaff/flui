@@ -18,7 +18,7 @@ use flui_layer::{
 };
 
 use crate::error::RenderError;
-use crate::pipeline::{Idle, PipelineCell, PipelineOwner, PipelinePhase};
+use crate::pipeline::{PipelineCell, PipelineOwner};
 
 /// A scene owner a test runs pipeline frames into.
 #[derive(Debug)]
@@ -57,35 +57,9 @@ impl SceneHost {
         self.owner.current()
     }
 
-    /// Runs one frame of `pipeline` by value
-    /// ([`PipelineOwner::run_frame`]), applies what it painted and returns
-    /// the frame node's tree, `None` for a frame that painted nothing.
-    ///
-    /// # Panics
-    ///
-    /// When the patch is refused: a defect in the producer.
-    pub fn run_frame(
-        &mut self,
-        pipeline: PipelineOwner<Idle>,
-    ) -> (
-        PipelineOwner<Idle>,
-        Result<Option<LayerTree>, TreeError<RenderError>>,
-    ) {
-        let mut held = Some(pipeline);
-        let (result, tree) = self.drive_owned(&mut held, |pipeline, writer| {
-            let (pipeline, result) = pipeline.run_frame(writer);
-            (pipeline, result)
-        });
-        let pipeline = held.expect("BUG: the pipeline comes back from its frame");
-        (
-            pipeline,
-            result.map(|painted| painted.then_some(tree).flatten()),
-        )
-    }
-
-    /// Runs one frame of `pipeline` in place
-    /// ([`PipelineOwner::run_frame_in_place`]); otherwise as
-    /// [`Self::run_frame`].
+    /// Runs one frame of `pipeline` ([`PipelineOwner::run_frame`]), applies
+    /// what it painted and returns the frame node's tree, `None` for a frame
+    /// that painted nothing.
     ///
     /// # Errors
     ///
@@ -94,13 +68,11 @@ impl SceneHost {
     /// # Panics
     ///
     /// When the patch is refused: a defect in the producer.
-    pub fn run_frame_in_place(
+    pub fn run_frame(
         &mut self,
-        pipeline: &mut PipelineOwner<Idle>,
+        pipeline: &mut PipelineOwner,
     ) -> Result<Option<LayerTree>, TreeError<RenderError>> {
-        let (result, tree) = self.drive(pipeline, |pipeline, writer| {
-            pipeline.run_frame_in_place(writer)
-        });
+        let (result, tree) = self.drive(pipeline, PipelineOwner::run_frame);
         result.map(|painted| painted.then_some(tree).flatten())
     }
 
@@ -134,10 +106,10 @@ impl SceneHost {
     /// # Panics
     ///
     /// When the patch is refused: a defect in the producer.
-    pub fn drive<P: PipelinePhase, R>(
+    pub fn drive<R>(
         &mut self,
-        pipeline: &mut PipelineOwner<P>,
-        paint: impl FnOnce(&mut PipelineOwner<P>, &mut SceneWriter<'_>) -> R,
+        pipeline: &mut PipelineOwner,
+        paint: impl FnOnce(&mut PipelineOwner, &mut SceneWriter<'_>) -> R,
     ) -> (R, Option<LayerTree>) {
         let (answer, applied) = self.apply(pipeline, paint);
         let tree = applied.then(|| self.frame_tree(pipeline)).flatten();
@@ -150,10 +122,10 @@ impl SceneHost {
     /// # Panics
     ///
     /// As [`Self::drive`].
-    pub fn apply<P: PipelinePhase, R>(
+    pub fn apply<R>(
         &mut self,
-        pipeline: &mut PipelineOwner<P>,
-        paint: impl FnOnce(&mut PipelineOwner<P>, &mut SceneWriter<'_>) -> R,
+        pipeline: &mut PipelineOwner,
+        paint: impl FnOnce(&mut PipelineOwner, &mut SceneWriter<'_>) -> R,
     ) -> (R, bool) {
         let answer = {
             let mut writer = self.owner.writer();
@@ -222,35 +194,6 @@ impl SceneHost {
         (answer, true)
     }
 
-    /// [`Self::drive`] for a frame that takes the pipeline by value.
-    fn drive_owned<R>(
-        &mut self,
-        held: &mut Option<PipelineOwner<Idle>>,
-        paint: impl FnOnce(PipelineOwner<Idle>, &mut SceneWriter<'_>) -> (PipelineOwner<Idle>, R),
-    ) -> (R, Option<LayerTree>) {
-        let answer = {
-            let mut writer = self.owner.writer();
-            let pipeline = held
-                .take()
-                .expect("BUG: the pipeline is held between frames");
-            let (pipeline, answer) = paint(pipeline, &mut writer);
-            if pipeline.scene_staged() {
-                compose_root(&mut writer, pipeline.scene_frame_node());
-            }
-            *held = Some(pipeline);
-            answer
-        };
-        let pipeline = held.as_mut().expect("BUG: the pipeline is back");
-        if !pipeline.scene_staged() {
-            return (answer, None);
-        }
-        let released = self.apply_patch();
-        drop(pipeline.scene_applied(self.owner.current()));
-        self.restock(released);
-        let tree = self.frame_tree(pipeline);
-        (answer, tree)
-    }
-
     /// The raster side shows the last applied version, as a window that
     /// presents every frame does: the log before it is let go, and what no
     /// one else holds goes back to the owner for the next frames to write
@@ -284,9 +227,9 @@ impl SceneHost {
     /// applied version: a test compares two frames' contents with
     /// [`Arc::ptr_eq`] to tell a kept boundary from a republished one.
     #[must_use]
-    pub fn content_of<P: PipelinePhase>(
+    pub fn content_of(
         &self,
-        pipeline: &PipelineOwner<P>,
+        pipeline: &PipelineOwner,
         id: flui_foundation::RenderId,
     ) -> Option<Arc<BoundaryContent>> {
         let node = pipeline.boundary_scene_node(id)?;
@@ -296,7 +239,7 @@ impl SceneHost {
     /// The tree the pipeline's frame node paints in the last applied
     /// version, rooted at its device-pixel-ratio layer.
     #[must_use]
-    pub fn frame_tree<P: PipelinePhase>(&self, pipeline: &PipelineOwner<P>) -> Option<LayerTree> {
+    pub fn frame_tree(&self, pipeline: &PipelineOwner) -> Option<LayerTree> {
         self.owner
             .current()
             .flatten_node(pipeline.scene_frame_node()?)

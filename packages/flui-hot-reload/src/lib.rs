@@ -23,12 +23,12 @@
 //!   vtables or storage. Dropping a [`worker::WorkerPlugin`] prunes its matching
 //!   registrations without unmapping its image. Each distinct worker revision
 //!   retains memory and can keep Windows staged files locked until host exit.
-//! * What remains, and why this stays a dev-loop tool: a returned `Scene`
+//! * What remains, and why this stays a dev-loop tool: a returned scene
 //!   can hold `Arc<dyn Any>` (`AnnotatedRegionLayer`) and `Arc<dyn Fn>`
 //!   (`InlineSpan::on_tap` inside a display list) whose vtables live in the
-//!   plugin image, and no lifetime ties it to [`dynlib::DynLib`]'s `dlclose`
-//!   — the caller must drop the scene before unloading
-//!   ([`ScenePlugin::build_scene`] stays `unsafe` for exactly this), and the
+//!   plugin image. The [`PluginScene`] borrows its plugin, so the scene itself
+//!   cannot outlive the image, but a clone of one of those payloads can:
+//!   [`ScenePlugin::build_scene`] stays `unsafe` for exactly this, and the
 //!   token handshake is a strong tripwire, not a proof of layout equality.
 //!
 //! ## Two-Layer Architecture
@@ -83,11 +83,11 @@
 //! use flui_hot_reload::ScenePlugin;
 //! use std::path::Path;
 //!
-//! if let Some(plugin) = ScenePlugin::load(Path::new("/path/to/libflui_scene.so")) {
-//!     // SAFETY: see `ScenePlugin::build_scene` — host and plugin must agree
-//!     // on `Scene`'s layout, and the scene must drop before `unload()`.
-//!     // `None` means "skip this frame" (an app_plugin! wrong-thread
-//!     // refusal, or no plugin loaded) — never a caller error.
+//! if let Ok(plugin) = ScenePlugin::load(Path::new("/path/to/libflui_scene.so")) {
+//!     // SAFETY: the renderer keeps no clone of a scene payload past this
+//!     // frame (see `ScenePlugin::build_scene`). `None` means "skip this
+//!     // frame" (a contained panic, an app_plugin! wrong-thread refusal) —
+//!     // never a caller error.
 //!     if let Some(scene) = unsafe { plugin.build_scene(1080.0, 2400.0) } {
 //!         renderer.render_scene(&scene);
 //!     }
@@ -115,8 +115,11 @@
 //!
 //! let config = flui::app::AppConfig::new().dev_reload(WorkerReloadHook::new(worker_path));
 //! ```
+
 // Every public item is documented; keep it that way.
 #![deny(missing_docs)]
+#![warn(rust_2018_idioms, clippy::all, clippy::pedantic)]
+// After the `warn(clippy::all)` above, which would otherwise turn the lint back on in tests.
 #![cfg_attr(
     test,
     allow(
@@ -124,13 +127,36 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
+#![expect(
+    clippy::module_name_repetitions,
+    reason = "`worker::WorkerPlugin`, `driver::HotReloadDriver` and `dynlib::DynLib` repeat their module name, and those are the names callers import"
+)]
+// The crate-level `warn(clippy::pedantic)` above re-enables the pedantic
+// lints the workspace allows; these five are re-suppressed. `allow`, not
+// `expect`: which of them fire depends on the enabled features and target
+// (the wasm32 subset), so no expectation holds
+// in every configuration `cargo hack --each-feature` and the facade combos
+// compile.
+#![allow(
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    reason = "feature- and target-dependent after the crate-level pedantic re-enable"
+)]
 
 pub mod strategy;
 
 pub mod engine;
 
 mod abi;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod load_error;
 pub use abi::abi_token;
+#[cfg(not(target_arch = "wasm32"))]
+pub use load_error::LoadError;
 
 /// Canonical scene payload shared by plugin factories and the host ABI.
 pub use flui_sdk::hooks::Scene;
@@ -186,26 +212,15 @@ fn report_frame(error: &PluginFrameError) {
         message.push_str(&cause.to_string());
         source = cause.source();
     }
-    #[cfg(target_os = "android")]
-    {
-        let tag = c"PluginPipeline";
-        let message = std::ffi::CString::new(message).unwrap_or_default();
-        // SAFETY: `tag` and `message` are NUL-terminated C strings that outlive
-        // the call; liblog copies both before returning and retains neither.
-        #[expect(unsafe_code, reason = "liblog's C entry point")]
-        unsafe {
-            android_log_sys::__android_log_write(
-                android_log_sys::LogPriority::INFO as i32,
-                tag.as_ptr(),
-                message.as_ptr(),
-            );
-        }
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        eprintln!("[PluginPipeline] {message}");
-    }
+    entry::report(&format!("PluginPipeline: {message}"));
 }
+
+mod entry;
+
+// Called by every plugin macro's generated entry through `$crate`.
+// `#[doc(hidden)]`, never named outside this crate's own macros.
+#[doc(hidden)]
+pub use entry::contain as __private_contain_entry;
 
 // Dynamic library loading is not available on wasm32
 #[cfg(not(target_arch = "wasm32"))]
@@ -231,7 +246,7 @@ pub use driver::HotReloadDriver;
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "host-hook")))]
 pub use hook::{ScenePluginHook, WorkerReloadHook};
 #[cfg(not(target_arch = "wasm32"))]
-pub use host::{PluginKind, ScenePlugin};
+pub use host::{PluginKind, PluginScene, ScenePlugin};
 #[cfg(not(target_arch = "wasm32"))]
 pub use worker::{
     HostRequestRebuildFn, RegisterWorkerBuildFn, WorkerPlugin, WorkerPollOutcome,

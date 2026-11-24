@@ -14,7 +14,9 @@
 - **`flui-protocol`**: protocol 0.29 adds `build.report` and the method effect `annotates`, which
   an observer may call: it changes only what the development tools draw over a window, never the
   app. `MethodEffect::changes_app` is the one rule for what an observer may call and what a
-  timed-out call may resend.
+  timed-out call may resend. A failed build's `Diagnostics` keeps at most `MAX_DIAGNOSTICS` and
+  counts the rest, and a report with more is refused while it is decoded; protocol 0.30 states
+  that bound in the schema.
 
 - **`flui-cli`**: `flui run --json` reports `run.watch {paths}` once the sources are watched; a
   save made after it is a change the run sees.
@@ -63,3 +65,7 @@
   renaming a new file over it, and an overflowing event queue is a change to every watched path
   instead of a lost one. A worker host that exited while the worker built is reported as that
   exit before its successor starts.
+- **`flui-cli`**: a dropped connection to an app's agent shuts its socket down (a Unix socket or an
+  `adb` forward; not yet a Windows named pipe),
+  so `flui mcp` reconnecting to a restarted app, and `flui run`'s build reports, no longer leave
+  the old connection's socket and reader thread open until the app closes its end.

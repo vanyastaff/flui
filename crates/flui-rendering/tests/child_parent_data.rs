@@ -13,7 +13,7 @@ use flui_rendering::{
     constraints::{BoxConstraints, SliverConstraints},
     context::BoxLayoutContext,
     parent_data::{BoxParentData, SliverMultiBoxAdaptorParentData},
-    pipeline::{PipelineOwner, phase::Layout},
+    pipeline::PipelineOwner,
     traits::RenderBox,
 };
 
@@ -116,7 +116,7 @@ impl RenderBox for Leaf {
 }
 
 fn parent_data<T: flui_rendering::parent_data::ParentData + Clone>(
-    owner: &PipelineOwner<Layout>,
+    owner: &PipelineOwner,
     id: RenderId,
 ) -> Option<T> {
     owner
@@ -128,7 +128,7 @@ fn parent_data<T: flui_rendering::parent_data::ParentData + Clone>(
         .cloned()
 }
 
-fn offset_of(owner: &PipelineOwner<Layout>, id: RenderId) -> Option<Offset> {
+fn offset_of(owner: &PipelineOwner, id: RenderId) -> Option<Offset> {
     parent_data::<BoxParentData>(owner, id).map(|data| data.offset)
 }
 
@@ -151,10 +151,9 @@ fn a_child_keeps_the_parent_data_its_parent_left_it() {
     for then in [Then::Returns, Then::Fails, Then::Panics] {
         let probe = Host::default();
         probe.then.set(Some(then));
-        let (owner, host, child) = host_over_a_leaf(probe.shares());
-        let mut owner = owner.into_layout();
+        let (mut owner, host, child) = host_over_a_leaf(probe.shares());
 
-        match catch_unwind(AssertUnwindSafe(|| owner.run_layout())) {
+        match catch_unwind(AssertUnwindSafe(|| owner.layout_pass().run_layout())) {
             Ok(_) => {}
             Err(payload) => flui_foundation::panic::discard_payload(payload),
         }
@@ -167,7 +166,10 @@ fn a_child_keeps_the_parent_data_its_parent_left_it() {
         probe.pass.set(1);
         probe.then.set(Some(Then::Returns));
         owner.mark_needs_layout(host);
-        owner.run_layout().expect("the next pass succeeds");
+        owner
+            .layout_pass()
+            .run_layout()
+            .expect("the next pass succeeds");
         assert_eq!(
             *probe.read.borrow(),
             [Some(written(0, 0))],
@@ -184,8 +186,7 @@ fn a_child_listed_twice_keeps_what_its_first_slot_wrote() {
     let probe = Host::default();
     let (mut owner, host, child) = host_over_a_leaf(probe.shares());
     flui_rendering::testing::raw_tree::append_unlinked_child(&mut owner, host, child);
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout succeeds");
+    owner.layout_pass().run_layout().expect("layout succeeds");
 
     assert_eq!(*probe.read.borrow(), [Some(SEEDED), None]);
     assert_eq!(offset_of(&owner, child), Some(written(0, 0)));
@@ -202,8 +203,7 @@ fn a_torn_list_reads_a_copy_of_a_child_it_does_not_own() {
     owner.adopt_render_child(outer_id, inner_id);
     flui_rendering::testing::raw_tree::append_unlinked_child(&mut owner, outer_id, child);
     owner.set_root_id(Some(outer_id));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout succeeds");
+    owner.layout_pass().run_layout().expect("layout succeeds");
 
     assert_eq!(
         *inner.read.borrow(),

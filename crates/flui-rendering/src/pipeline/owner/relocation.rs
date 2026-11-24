@@ -5,7 +5,7 @@ use std::{collections::hash_map::Entry, fmt, rc::Rc};
 use flui_foundation::RenderId;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::pipeline::{handle::AttachmentEpoch, phase::Idle};
+use crate::pipeline::handle::AttachmentEpoch;
 
 use super::PipelineOwner;
 
@@ -247,7 +247,7 @@ impl std::error::Error for ReleaseDetachedRenderSubtreesFailure {
     }
 }
 
-impl PipelineOwner<Idle> {
+impl PipelineOwner {
     /// Detaches disjoint live render subtrees as one linear relocation batch.
     ///
     /// Validation completes before any edge, parent data, attachment interval,
@@ -268,9 +268,9 @@ impl PipelineOwner<Idle> {
     ///
     /// ```compile_fail
     /// use flui_foundation::RenderId;
-    /// use flui_rendering::pipeline::{Idle, Layout, PipelineOwner};
-    /// fn cannot_detach_during_layout(owner: &mut PipelineOwner<Layout>) {
-    ///     owner.detach_render_subtrees(&[RenderId::new(1)]);
+    /// use flui_rendering::pipeline::{FramePass, Layout};
+    /// fn cannot_detach_during_layout(layout: &mut FramePass<'_, Layout>) {
+    ///     layout.detach_render_subtrees(&[RenderId::new(1)]);
     /// }
     /// ```
     ///
@@ -278,8 +278,8 @@ impl PipelineOwner<Idle> {
     ///
     /// ```
     /// use flui_foundation::RenderId;
-    /// use flui_rendering::pipeline::{Idle, Layout, PipelineOwner};
-    /// fn cannot_detach_during_layout(owner: &mut PipelineOwner<Idle>) {
+    /// use flui_rendering::pipeline::PipelineOwner;
+    /// fn detach_when_idle(owner: &mut PipelineOwner) {
     ///     owner.detach_render_subtrees(&[RenderId::new(1)]);
     /// }
     /// ```
@@ -377,24 +377,24 @@ impl PipelineOwner<Idle> {
     /// }
     /// ```
     ///
-    /// This method exists only on `PipelineOwner<Idle>`:
+    /// A frame pass cannot attach:
     ///
     /// ```compile_fail
-    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Idle, Layout, PipelineOwner};
+    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, FramePass, Layout};
     /// fn cannot_attach_during_layout(
-    ///     owner: &mut PipelineOwner<Layout>,
+    ///     layout: &mut FramePass<'_, Layout>,
     ///     token: DetachedRenderSubtrees,
     /// ) {
-    ///     owner.attach_render_subtrees(token);
+    ///     layout.attach_render_subtrees(token);
     /// }
     /// ```
     ///
     /// An idle owner accepts the same token-consuming call:
     ///
     /// ```
-    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Idle, Layout, PipelineOwner};
-    /// fn cannot_attach_during_layout(
-    ///     owner: &mut PipelineOwner<Idle>,
+    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, PipelineOwner};
+    /// fn attach_when_idle(
+    ///     owner: &mut PipelineOwner,
     ///     token: DetachedRenderSubtrees,
     /// ) {
     ///     owner.attach_render_subtrees(token);
@@ -504,25 +504,15 @@ impl PipelineOwner<Idle> {
     /// }
     /// ```
     ///
+    /// A frame pass cannot release:
+    ///
     /// ```compile_fail
-    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Idle, PaintPhase, PipelineOwner};
+    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, FramePass, PaintPhase};
     /// fn cannot_release_during_paint(
-    ///     owner: &mut PipelineOwner<PaintPhase>,
+    ///     paint: &mut FramePass<'_, PaintPhase>,
     ///     token: DetachedRenderSubtrees,
     /// ) {
-    ///     owner.release_detached_render_subtrees_for_finalization(token);
-    /// }
-    /// ```
-    ///
-    /// Finalization release is available on an idle owner:
-    ///
-    /// ```
-    /// use flui_rendering::pipeline::{DetachedRenderSubtrees, Idle, PaintPhase, PipelineOwner};
-    /// fn cannot_release_during_paint(
-    ///     owner: &mut PipelineOwner<Idle>,
-    ///     token: DetachedRenderSubtrees,
-    /// ) {
-    ///     owner.release_detached_render_subtrees_for_finalization(token);
+    ///     paint.release_detached_render_subtrees_for_finalization(token);
     /// }
     /// ```
     ///

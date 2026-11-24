@@ -1,29 +1,15 @@
-//! Compositing phase implementation for `PipelineOwner<Compositing>`.
+//! Compositing phase implementation: the body of `FramePass<Compositing>::run_compositing`.
 
 use flui_foundation::RenderId;
 use rustc_hash::FxHashSet;
 
-use crate::pipeline::phase::{Compositing, Idle, PaintPhase};
-
-use super::{PipelineOwner, rebind_phase, subtree_arena::ensure_stack};
+use super::{PipelineOwner, subtree_arena::ensure_stack};
 
 // ============================================================================
 // Compositing phase: run_compositing
 // ============================================================================
 
-impl PipelineOwner<Compositing> {
-    /// Transitions a compositing-phase pipeline into the [`PaintPhase`] phase.
-    #[must_use]
-    pub fn into_paint(self) -> PipelineOwner<PaintPhase> {
-        rebind_phase(self)
-    }
-
-    /// Returns to [`Idle`] from the compositing phase.
-    #[must_use]
-    pub fn into_idle(self) -> PipelineOwner<Idle> {
-        rebind_phase(self)
-    }
-
+impl PipelineOwner {
     /// Updates compositing bits for all dirty render objects.
     ///
     /// For each entry in `dirty.needs_compositing` (sorted shallow-first),
@@ -56,11 +42,11 @@ impl PipelineOwner<Compositing> {
     /// fight the recursive borrows: the recursion reads
     /// `&self.render_tree` (shared) and accumulates actions, then
     /// we apply them under `&mut self`.
-    pub fn run_compositing(&mut self) -> crate::error::RenderResult<()> {
+    pub(super) fn flush_compositing_bits(&mut self) {
         // Empty fast-path: no allocation, no logging churn for the
         // common "nothing changed" frame.
         if !self.scheduler.has_compositing_work() {
-            return Ok(());
+            return;
         }
         let _span = tracing::debug_span!(
             target: "flui.frame",
@@ -135,10 +121,9 @@ impl PipelineOwner<Compositing> {
         if paint_queued {
             self.scheduler.notify_visual_update();
         }
-        Ok(())
     }
 
-    /// Recursive helper for [`Self::run_compositing`] — see that method's
+    /// Recursive helper for [`Self::flush_compositing_bits`] — see that method's
     /// doc for the algorithm. Operates on shared `&self.render_tree` via
     /// interior-mutability flag accessors; paint-queue side effects are
     /// staged via `actions` for post-walk application.
@@ -244,7 +229,7 @@ impl PipelineOwner<Compositing> {
 /// `&self` (interior-mutability flag access only). Paint-queue
 /// mutations (remove-from / push-to `dirty.needs_paint`) can't
 /// happen mid-recursion without re-borrowing `&mut self`, so they
-/// are recorded here and replayed by [`PipelineOwner::run_compositing`]
+/// are recorded here and replayed by [`FramePass::run_compositing`](super::FramePass::run_compositing)
 /// post-walk.
 #[derive(Default)]
 struct CompositingWalkActions {

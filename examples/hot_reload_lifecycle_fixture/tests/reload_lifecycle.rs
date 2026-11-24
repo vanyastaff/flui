@@ -1,6 +1,6 @@
-//! Real `dlopen`/`dlclose`/reload coverage for `app_plugin!` — the lifecycle
-//! `flui-hot-reload`'s own tests leave untested, because building a plugin
-//! from inside a test is environment-fragile.
+//! Real `dlopen`/`dlclose`/reload coverage for the plugin macros, through a
+//! cargo-built plugin: the lifecycle `flui-hot-reload`'s own tests cannot
+//! reach, because building a plugin from inside a test is environment-fragile.
 //!
 //! Build the plugin before running these tests:
 //! `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`.
@@ -10,81 +10,40 @@
 //! The tests consume that path rather than infer Cargo's private build layout
 //! from their executable. No test starts a nested Cargo build.
 //!
-//! (An earlier version of this test lived in `flui-hot-reload`'s own
-//! `tests/` directory, with the fixture wired in as a `[dev-dependencies]`
-//! path entry. That created a dev-dependency cycle back onto
-//! `flui-hot-reload` itself — the fixture's own normal dependency on
-//! `flui-hot-reload` with `features = ["app-plugin"]` unifies with the SAME
-//! resolved package `flui-hot-reload`'s own tests build against, confirmed
-//! via `cargo tree -e features`, so `app-plugin` was silently always-on for
-//! ANY `flui-hot-reload` test build, even a bare `cargo test -p
-//! flui-hot-reload` with no `--features` flag at all. Moving the test here,
-//! into the plugin crate itself, removes that dependency edge entirely.)
+//! The tests live in the fixture crate, not in `flui-hot-reload`'s `tests/`:
+//! there the fixture, a path dev-dependency that enables `app-plugin`, would
+//! unify that feature into every `flui-hot-reload` test build.
 //!
-//! # What the thread-affinity storage repair fixed, and what this test proves
+//! # What they prove
 //!
-//! `app_plugin!` used to store its `PluginPipeline` behind a plain `static`
-//! (`OnceLock<Mutex<PluginPipeline>>`), which Rust never runs drop glue for.
-//! The storage flip moved it into a `thread_local!`, and a thread-local
-//! wrapping a droppable type registers a TLS destructor **tied to the
-//! defining shared object** — exactly the kind of thing that makes `dlclose`
-//! unsafe on some runtimes (a deferred-unmap runtime can keep serving the OLD
-//! mapped code on a same-path reload instead of a fresh one) and undefined on
-//! others (running the destructor after the image is already unmapped). The
-//! fix wraps the slot in `ManuallyDrop`, which is unconditionally
-//! drop-glue-free, so std never registers a destructor for THAT slot. The
-//! static half of this proof is `plugin.rs`'s compile-time `needs_drop`
-//! assertion (fails to compile if a future edit reintroduces drop glue there
-//! — see that file). [`dlclose_then_reload_keeps_the_lifecycle_working`]
-//! below is the dynamic half for that one slot: it never crashes, panics, or
-//! produces a non-functional pipeline across a real load → drive → dlclose →
-//! reload → drive cycle.
+//! A `dlclose` must unmap the plugin, so that a reload maps fresh code. A
+//! droppable thread-local in the plugin registers a TLS destructor tied to
+//! the image, which makes `dlclose` defer the unmap (glibc) or run the
+//! destructor after the unmap (a non-deferring runtime). `app_plugin!` keeps
+//! its whole thread-local state drop-glue-free, which `plugin.rs`'s
+//! compile-time `needs_drop` assertion checks statically, and `flui-view`'s
+//! `key::registry` keeps its registry stack drop-glue-free under its own
+//! assertions. Its affinity guard uses a monotonic token in that state instead
+//! of `std::thread::current`, which would register a pthread-key destructor in
+//! the image.
 //!
-//! # GlobalKey registry and affinity TLS regression
+//! - [`dlclose_then_reload_keeps_the_lifecycle_working`] drives a real
+//!   load → build → dlclose → reload → build cycle on every platform.
+//! - [`dlclose_then_reload_same_path_serves_a_fresh_image`] reloads the same
+//!   unchanged path and checks the image is fresh by `fixture_tick`, a counter
+//!   independent of the macro's symbols: a fresh mapping answers 1 on its first
+//!   tick, a stale one continues from the previous session. The test thread stays
+//!   alive across the reload, the condition under which a TLS-destructor hold
+//!   would keep the old mapping. macOS's dyld never unmaps a `dlclose`d dylib,
+//!   so the test is `#[cfg(not(target_os = "macos"))]`.
+//! - [`dlclose_then_reload_distinct_paths_serve_fresh_images`] covers what
+//!   macOS relies on instead: a reload at a distinct path, as the CLI's
+//!   content-addressed worker staging produces, is a fresh mapping on every
+//!   runtime.
 //!
-//! `fixture_tick` — a counter independent of `app_plugin!`'s own symbols —
-//! lets a fresh mapping be told apart from a stale, reused one: a genuinely
-//! fresh `dlopen` always starts it at 0, so the first call returns 1; a
-//! stale mapping instead keeps incrementing from wherever the previous
-//! session left it. Driving the fixture from this always-alive test thread
-//! (never joined/exited before the reload — the exact condition that keeps a
-//! TLS-destructor hold live for as long as a runtime honors one) and then
-//! reloading the SAME unchanged file reliably reproduces staleness: the
-//! second session's first tick reads 4 (continuing session one's count of
-//! 3), not 1.
-//!
-//! The remaining source was `flui-view`'s `key::registry` module:
-//! `REGISTRY_STACK` held `Arc`-containing handles directly
-//! in droppable thread-locals. They are now drop-glue-free containers with
-//! explicit quiescent teardown, guarded by compile-time `needs_drop`
-//! assertions. [`dlclose_then_reload_same_path_serves_a_fresh_image`] is the
-//! dynamic proof: reloading the unchanged same path must map a fresh image and
-//! reset this image-local counter.
-//!
-//! **Platform scope of the strict proof.** That test runs where the loader
-//! actually honors `dlclose` unload — Linux and Android's glibc/bionic. macOS
-//! is a deferred-unmap runtime: dyld does not unmap a `dlclose`'d dylib, so a
-//! same-path reload there necessarily serves the retained image and the
-//! freshness assertion cannot hold. The test is therefore
-//! `#[cfg(not(target_os = "macos"))]`-gated with that reason stated at the
-//! gate. [`dlclose_then_reload_distinct_paths_serve_fresh_images`] covers the
-//! macOS-relied-on property instead: a reload at a *distinct* path is a fresh
-//! mapping on every runtime, which is exactly what the CLI's content-addressed
-//! worker staging produces. [`dlclose_then_reload_keeps_the_lifecycle_working`]
-//! runs everywhere too, covering that the load → drive → unload → reload cycle
-//! stays functional even where the mapping is reused.
-//!
-//! Removing that deferred-unmap pin exposed a second hazard: the old affinity
-//! check called `std::thread::current` inside the cdylib. The plugin's private
-//! std copy registered a pthread-key destructor pointing into its own image;
-//! after a real unmap, test-thread exit called the stale pointer. The affinity
-//! guard now uses a monotonic token in drop-free TLS instead. The lifecycle
-//! tests therefore prove both fresh remapping and safe thread teardown.
-//!
-//! Producing two BYTE-DIFFERENT fixture builds (to assert "serves new code"
-//! by content instead of by this proxy) would need either an unstable cargo
-//! feature (`-Z bindeps`, confirmed unavailable on this toolchain by direct
-//! probe) or a second nested build — the exact thing being avoided.
+//! Two byte-different fixture builds, which would let a test assert "serves
+//! new code" by content, would need either `-Z bindeps` (unstable) or a nested
+//! build; the tick counter stands in for it.
 
 use std::path::{Path, PathBuf};
 
@@ -169,7 +128,7 @@ fn tick(lib: &DynLib) -> u32 {
 }
 
 /// Drive one full session: load, confirm it's an `app_plugin!`, build a
-/// scene (drop it before unload, per `build_scene`'s `# Safety`), then
+/// scene, then
 /// unload. Returns nothing — the point is that none of this panics.
 fn load_drive_unload(path: &Path) {
     let plugin = ScenePlugin::load(path).expect("fixture must load as a ScenePlugin");
@@ -178,10 +137,8 @@ fn load_drive_unload(path: &Path) {
         PluginKind::App,
         "the fixture is an app_plugin!, not a scene_plugin!"
     );
-    // SAFETY: host and fixture are built by this same workspace/toolchain
-    // (the ABI-token handshake `ScenePlugin::load` already performed
-    // confirms it), and the returned scene is dropped immediately, before
-    // `plugin` (and thus the library) is unloaded below.
+    // SAFETY: nothing here clones a payload out of the scene, which borrows
+    // `plugin` and is dropped before the unload below.
     #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
     let scene = unsafe { plugin.build_scene(64.0, 64.0) };
     assert!(
@@ -192,12 +149,10 @@ fn load_drive_unload(path: &Path) {
     plugin.unload();
 }
 
-/// The mechanical half of what this repair actually changed: a real
-/// load → drive → dlclose → reload → drive cycle must not crash, panic, or
-/// leave a non-functional pipeline. This is what `ManuallyDrop` + the
-/// thread-affinity pin are for — see this file's module doc for the
-/// compile-time half of the proof and for what this test does NOT (yet)
-/// cover.
+/// A real load → drive → dlclose → reload → drive cycle at one path does not
+/// crash, panic, or leave a non-functional pipeline: a fresh thread-local
+/// slot mounts a fresh pipeline whether or not the runtime reused the
+/// mapping. Runs on every platform, macOS included.
 #[test]
 fn dlclose_then_reload_keeps_the_lifecycle_working() {
     let source = fixture_artifact_path();
@@ -218,8 +173,8 @@ fn dlclose_then_reload_keeps_the_lifecycle_working() {
 ///
 /// Excluded on macOS: dyld is a deferred-unmap runtime — it does not unmap a
 /// `dlclose`'d dylib, so a same-path reload there serves the retained image
-/// and a fresh counter cannot be demonstrated. (This is the failure mode this
-/// file's module doc names; the mechanical test above still covers macOS.)
+/// and a fresh counter cannot be demonstrated; the test above still covers
+/// macOS.
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn dlclose_then_reload_same_path_serves_a_fresh_image() {
@@ -328,4 +283,42 @@ fn a_worker_images_rebuild_request_runs_the_hosts_hook() {
     drop(image);
     drop(worker);
     drop(registration);
+}
+
+/// A panic in the developer's root view, its mount or its frame cannot unwind
+/// out of `flui_app_build`, an `extern "C"` entry: it aborts the host's
+/// process. Fails, by aborting the test binary, when the entry runs that code
+/// outside containment. The image loads from a copy at a path of its own, so
+/// its root mounts fresh.
+#[test]
+fn a_panicking_app_root_skips_the_frame_and_the_next_build_mounts() {
+    let copy = TempPath::new("panicking_root");
+    std::fs::copy(fixture_artifact_path(), copy.path()).expect("copy the fixture");
+    let plugin = ScenePlugin::load(copy.path()).expect("the fixture loads as a ScenePlugin");
+    let image = DynLib::open(copy.path()).expect("the image opens again by its path");
+    // SAFETY: `fixture_panic_next_mount` is the fixture's own exported
+    // `extern "C" fn()`, compiled from this workspace with this toolchain, and
+    // `image` keeps it mapped through the call.
+    #[expect(unsafe_code, reason = "transmutes the symbol to its signature")]
+    unsafe {
+        let ptr = image
+            .symbol("fixture_panic_next_mount")
+            .expect("fixture must export fixture_panic_next_mount");
+        std::mem::transmute::<*mut c_void, extern "C" fn()>(ptr)();
+    }
+
+    // SAFETY: nothing here clones a payload out of either scene, and both
+    // borrow `plugin`, so they drop before it unloads the image below.
+    #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
+    let (refused, mounted) = unsafe {
+        (
+            plugin.build_scene(64.0, 64.0),
+            plugin.build_scene(64.0, 64.0),
+        )
+    };
+    assert!(refused.is_none(), "a panicking root is a skipped frame");
+    assert!(mounted.is_some(), "the next build mounts the root again");
+    drop(mounted);
+    drop(image);
+    plugin.unload();
 }

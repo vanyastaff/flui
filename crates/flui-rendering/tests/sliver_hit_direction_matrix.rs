@@ -17,11 +17,7 @@ use flui_rendering::{
 
 use crate::common::{BoxedRenderObject, BoxedSliverObject, laid_out_tight_100x100 as laid_out};
 
-fn hits_at(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    x: f64,
-    y: f64,
-) -> Vec<flui_foundation::RenderId> {
+fn hits_at(owner: &PipelineOwner, x: f64, y: f64) -> Vec<flui_foundation::RenderId> {
     inspect::hit_path(owner, x, y)
 }
 

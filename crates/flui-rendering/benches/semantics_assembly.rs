@@ -25,7 +25,6 @@
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::{Leaf, geometry::Size};
-use flui_rendering::pipeline::phase::Idle;
 use flui_rendering::{
     BoxLayoutContext, PipelineOwner, parent_data::BoxParentData, traits::RenderBox,
 };
@@ -66,8 +65,8 @@ impl RenderBox for Labeled {
 
 /// A pipeline whose render tree holds `branches` boundary branches of 8
 /// labeled leaves each, semantics enabled and settled (first pass done).
-/// Returns the owner at Idle plus one leaf id to mark.
-fn settled_owner(branches: usize) -> (PipelineOwner<Idle>, flui_foundation::RenderId) {
+/// Returns the owner plus one leaf id to mark.
+fn settled_owner(branches: usize) -> (PipelineOwner, flui_foundation::RenderId) {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root = owner.set_root_render_object(Box::new(Labeled {
         label: "root",
@@ -99,18 +98,26 @@ fn settled_owner(branches: usize) -> (PipelineOwner<Idle>, flui_foundation::Rend
     }
     owner.set_semantics_enabled(true);
 
-    let owner = owner.into_layout().into_compositing().into_paint();
-    let mut owner = owner.into_semantics();
-    owner.run_semantics().expect("initial semantics pass");
-    (owner.finish(), a_leaf.expect("at least one branch"))
+    owner
+        .layout_pass()
+        .into_compositing()
+        .into_paint()
+        .into_semantics()
+        .run_semantics()
+        .expect("initial semantics pass");
+    (owner, a_leaf.expect("at least one branch"))
 }
 
-/// Drives one full semantics pass and hands the owner back at Idle.
-fn pass(owner: PipelineOwner<Idle>) -> PipelineOwner<Idle> {
-    let owner = owner.into_layout().into_compositing().into_paint();
-    let mut owner = owner.into_semantics();
-    owner.run_semantics().expect("semantics pass");
-    owner.finish()
+/// Drives one full semantics pass.
+fn pass(mut owner: PipelineOwner) -> PipelineOwner {
+    owner
+        .layout_pass()
+        .into_compositing()
+        .into_paint()
+        .into_semantics()
+        .run_semantics()
+        .expect("semantics pass");
+    owner
 }
 
 fn assembly_cost(c: &mut Criterion) {

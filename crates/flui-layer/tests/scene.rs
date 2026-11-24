@@ -89,6 +89,24 @@ fn picture() -> flui_painting::DisplayList {
 
 // scene_apply_contract
 
+/// A writer's patch is empty until an op is buffered, and empty again once it is applied; a
+/// minted id is not an op. Fails if a patch that holds no op reads as one to apply, or one that
+/// holds an op as empty.
+pub(crate) fn a_patch_is_empty_until_an_op_is_buffered() {
+    let (mut owner, leaves) = owner_with_leaves(1);
+    let mut writer = owner.writer();
+    assert!(writer.is_empty(), "a new patch holds no op");
+    let _unused = writer.mint_node();
+    assert!(writer.is_empty(), "a minted id is not an op");
+    writer.push(publish(leaves[0], empty()));
+    assert!(!writer.is_empty(), "a buffered op");
+    owner.apply(SURFACE).expect("the patch applies");
+    assert!(
+        owner.writer().is_empty(),
+        "an applied patch leaves none behind"
+    );
+}
+
 /// A slot that names the node it sits in, or an ancestor of it, is refused:
 /// the scene stays a tree.
 pub(crate) fn a_slot_naming_its_own_ancestor_is_refused() {

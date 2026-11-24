@@ -1,14 +1,9 @@
-error[E0599]: no method named `run_frame` found for struct `PipelineOwner<flui_rendering::pipeline::Layout>` in the current scope
- --> tests/compile_fail/frame_from_layout.rs:6:19
+error[E0499]: cannot borrow `owner` as mutable more than once at a time
+ --> tests/compile_fail/frame_from_layout.rs:8:13
   |
-6 |     let _ = owner.run_frame();
-  |                   ^^^^^^^^^ method not found in `PipelineOwner<flui_rendering::pipeline::Layout>`
-  |
-note: there's an earlier shadowed binding `owner` of type `PipelineOwner` that has method `run_frame` available
- --> tests/compile_fail/frame_from_layout.rs:4:9
-  |
-4 |     let owner = PipelineOwner::new(TextContextHandle::standalone());
-  |         ^^^^^ `owner` of type `PipelineOwner` that has method `run_frame` defined earlier here
-5 |     let owner = owner.into_layout();
-  |         ----- earlier `owner` shadowed here with type `PipelineOwner<flui_rendering::pipeline::Layout>`
-  = note: the method was found for `PipelineOwner`
+7 |     let layout = owner.layout_pass();
+  |                  ----- first mutable borrow occurs here
+8 |     let _ = owner.run_frame(&mut scene.writer());
+  |             ^^^^^ second mutable borrow occurs here
+9 |     drop(layout);
+  |          ------ first borrow later used here
