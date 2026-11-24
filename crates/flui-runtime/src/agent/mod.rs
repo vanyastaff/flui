@@ -10,8 +10,9 @@
 //! thread or reads a clock, so the same conversation runs over a socket's threads, a page's event
 //! loop or a test's pump, and every limit below holds on each of them.
 //!
-//! The service is always compiled. An app that never starts an agent creates none, so it pays
-//! for the code only: no thread, no socket, no allocation.
+//! The service is compiled in every build, with no feature. An app that never starts an agent
+//! creates none: no thread, no socket, no allocation; one that installs no hook links none of it
+//! (ADR-0402).
 //!
 //! # The conversation
 //!

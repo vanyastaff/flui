@@ -1030,6 +1030,13 @@ impl UiRuntime {
     #[must_use]
     pub fn dev_agent_window(&self, presentation: PresentationId) -> Option<AgentWindow> {
         let state = self.presentations.get(presentation)?;
+        // The one place that names the agent's owner side: from here on the runtime's drain,
+        // frames and closes serve it (ADR-0402).
+        self.agent_side
+            .set(Some(&super::agent_side::AGENT_OWNER_SIDE));
+        state
+            .agent_side
+            .set(Some(&super::agent_side::AGENT_OWNER_SIDE));
         let window = window_of(presentation);
         let (port, collecting, fresh) = {
             let mut slot = state.dev_agent.borrow_mut();
@@ -1059,6 +1066,10 @@ impl UiRuntime {
             (Arc::clone(&slot.port), collecting, fresh)
         };
         if fresh {
+            // Collection starts: no frame reported to an agent before the first vend, and the
+            // tree may be a new owner's after a restart. The hub starts at what is shown, so a
+            // subscriber hears only what follows it.
+            state.begin_agent_events();
             self.request_redraw_for(state);
         }
         let port: Weak<dyn AgentPort> = Arc::downgrade(&port) as _;

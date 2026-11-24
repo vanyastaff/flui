@@ -1287,6 +1287,27 @@ path the same code. The devtools server cannot name the runtime (an official pac
 through the SDK; the runtime holds no transport. Flutter has no counterpart: its service
 extensions are the VM's. Pinned by `dev_agent_host_contains_its_hook` (`src/dev_agent/tests.rs`).
 
+### The runtime reaches the agent only through the side a vended window installs
+
+**Rule.** The UI runtime's own paths (the command drain, a frame's end, an owner turn, the next
+wake, platform input, a presentation leaving, a scene's settlement, a presentation's close, the
+runtime's own drop) call the development agent only through `ui_runtime::agent_side::AgentSide`,
+the reference `UiRuntime::dev_agent_window` installs on the runtime and on the presentation it
+vends for, never cleared. Installing it on a presentation brings the presentation's event hub up
+to the frames and the tree already shown, which no frame reported before, so a subscriber hears
+no replay. `DevAgentHost::attach` takes a `dev_agent::AgentWindowSource` before the hooks, and
+only `AgentWindowSource::dev_agent` names `dev_agent_window`. A direct call from those paths into
+an agent module is the defect this rule exists to catch (ADR-0402).
+
+**Why here.** Linking follows reachability: a binary in which no code installs a hook names
+neither `AgentWindowSource::dev_agent` nor `dev_agent_window`, so it links none of the agent's
+owner side (ADR-0402 gives the bytes), in every build mode and with no feature for two crates to
+disagree on. Flutter's counterpart is `BindingBase.initServiceExtensions`, guarded so its tree
+shaker drops the extensions from a release build. The `*_bytes` lines of `perf/size.toml` see a
+change that links back more than 2% of a binary; a smaller one is held by its reader (AGENTS.md,
+"Rules a reader holds"). Every agent test vends its windows through `dev_agent_window`, so a vend
+that installed no side fails them.
+
 ### The agent's conversation is one service, and it does no I/O
 
 **Rule.** `agent::Service` serves the windows a development-agent hook is handed (the hook calls

@@ -526,6 +526,9 @@ pub struct PresentationState {
     /// handle themselves, so collection lasts while the hook keeps one.
     /// Owner thread only.
     pub(crate) dev_agent: RefCell<Option<crate::ui_runtime::DevAgentSlot>>,
+    /// The development agent's owner side, once a window of this presentation was vended; never
+    /// cleared, so the jobs an agent left are answered after the slot above goes (ADR-0402).
+    pub(crate) agent_side: Cell<Option<&'static dyn crate::ui_runtime::AgentSide>>,
     /// The bounds the agent's actionability check last read, to tell whether
     /// an element holds still. Owner thread only.
     pub(crate) agent_stability: RefCell<crate::ui_runtime::AgentStability>,

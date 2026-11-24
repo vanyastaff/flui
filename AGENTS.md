@@ -239,6 +239,10 @@ and the readers of "Before a merge" look for a change that breaks one:
 - No process-global state: a `static` or `thread_local!` outside tests is immutable data, a
   private ID counter, or granted by ADR-0097; one an ADR is to remove is debt with its bullet in
   `docs/gaps.md`.
+- A UI runtime path (the drain, a frame, an owner turn, input, settlement, a close, the
+  runtime's drop) reaches the development agent only through `ui_runtime::agent_side::AgentSide`,
+  and only `AgentWindowSource::dev_agent` names `UiRuntime::dev_agent_window`: a direct call
+  links the agent into every release binary, and the `size` job sees it only past 2% (ADR-0402).
 - Every OS entry into `flui-native` or a capability crate (an `extern` fn, an Objective-C or COM
   method, an AccessKit handler, a closure handed to the OS) is a constant or one call of
   `flui_foundation::panic::os_entry` (`owner::panic_boundary::os_entry` in `flui-native`), or of
