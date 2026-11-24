@@ -75,7 +75,7 @@ impl PipelineOwner {
     /// A removal batch left open by a scope that unwound is closed first, so
     /// the frame never walks a child list that names a removed node.
     pub fn layout_pass(&mut self) -> FramePass<'_, Layout> {
-        self.close_removal_batches();
+        self.close_removal_batch();
         FramePass::new(self)
     }
 }

@@ -69,7 +69,7 @@
 
 use smallvec::SmallVec;
 
-use flui_foundation::ElementId;
+use flui_foundation::{ElementId, RenderId};
 
 use super::element_tree::{ElementTree, ProvisionalOrder};
 use super::reconcile_event::{ReconcileEvent, emit as emit_event};
@@ -222,13 +222,17 @@ pub(crate) fn reconcile_children_by_id(
         new_bottom -= 1;
     }
 
-    // The removals of phases 3 and 5b each run in a removal batch of the
-    // parent's pipeline when they may remove anything: a parent dropping `k`
-    // of `n` render children compacts its render child list once, not once
-    // per child.
-    let pipeline = tree
-        .get(parent_id)
-        .and_then(|node| node.element().pipeline_owner());
+    // The removals of phases 3 and 5b each run in a removal batch for the
+    // parent's render object when they may remove anything: a parent
+    // dropping `k` of `n` render children compacts its render child list
+    // once, not once per child.
+    let batch = tree.get(parent_id).and_then(|node| {
+        let element = node.element();
+        Some(RemovalBatch {
+            pipeline: element.pipeline_owner()?,
+            parent: element.render_id()?,
+        })
+    });
 
     // ── Phase 3: index the remaining old middle by key hash; remove any
     // keyless old middle child (it can only match positionally, which
@@ -243,7 +247,7 @@ pub(crate) fn reconcile_children_by_id(
     // `old_slots`). The index's positions are offsets from `old_top`.
     let mut old_keyed = KeyHashIndex::over(old_bottom - old_top);
     let middle_left = old_top < old_bottom;
-    batched_removals(pipeline.as_ref().filter(|_| middle_left), || {
+    batched_removals(batch.as_ref().filter(|_| middle_left), || {
         for (idx, slot) in old_slots
             .iter_mut()
             .enumerate()
@@ -387,7 +391,7 @@ pub(crate) fn reconcile_children_by_id(
 
     // ── Phase 5b: remove any old child never claimed.
     let unclaimed_left = old_slots.iter().any(Option::is_some);
-    batched_removals(pipeline.as_ref().filter(|_| unclaimed_left), || {
+    batched_removals(batch.as_ref().filter(|_| unclaimed_left), || {
         for (idx, slot) in old_slots.iter_mut().enumerate() {
             if let Some(old_id) = slot.take() {
                 // Capture identity before the slab frees the slot; the event
@@ -722,15 +726,20 @@ fn view_at(new_views: &crate::view::ChildViews, index: usize) -> &crate::BoxedVi
         .expect("BUG: a reconcile index stays below the new view count")
 }
 
-/// Runs `remove` in a removal batch of `pipeline`
+/// The removal batch a reconcile opens: the parent element's render object
+/// on its pipeline.
+struct RemovalBatch {
+    pipeline: flui_rendering::pipeline::PipelineCell,
+    parent: RenderId,
+}
+
+/// Runs `remove` in `batch`
 /// ([`PipelineCell::with_batched_removals`](flui_rendering::pipeline::PipelineCell::with_batched_removals)),
-/// or directly when the parent has none or nothing is left to remove.
-fn batched_removals<R>(
-    pipeline: Option<&flui_rendering::pipeline::PipelineCell>,
-    remove: impl FnOnce() -> R,
-) -> R {
-    match pipeline {
-        Some(pipeline) => pipeline.with_batched_removals(remove),
+/// or directly when the parent has no render object or nothing is left to
+/// remove.
+fn batched_removals<R>(batch: Option<&RemovalBatch>, remove: impl FnOnce() -> R) -> R {
+    match batch {
+        Some(batch) => batch.pipeline.with_batched_removals(batch.parent, remove),
         None => remove(),
     }
 }

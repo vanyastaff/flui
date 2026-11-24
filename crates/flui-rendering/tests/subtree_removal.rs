@@ -215,11 +215,11 @@ fn parent_of_rows(count: usize, log: &DropLog) -> (PipelineCell, RenderId, Vec<R
     (PipelineCell::new(owner), top, rows)
 }
 
-/// A removal batch removes each subtree at once, descendants included, and leaves the parent's
-/// list alone until it ends: no removal scans or shifts the list. Its end compacts the list in
-/// one pass, keeping the other children in their order, and marks the parent: the odd half of
-/// 3000 rows, one of them with a child of its own removed before it, as a filtering list unmounts
-/// them.
+/// A removal batch removes each subtree at once and leaves its parent's list alone until it
+/// ends: no removal scans or shifts the list. Its end compacts the list in one pass, keeping the
+/// other children in their order, and marks the parent: the odd half of 3000 rows, one of them,
+/// removed last, with a child of its own removed before it, as a filtering list unmounts them.
+/// That child's removal writes its own parent's list at once: the batch is for `top`.
 #[test]
 fn a_removal_batch_compacts_the_parent_once_and_keeps_the_order_of_the_rest() {
     const ROWS: usize = 3_000;
@@ -240,18 +240,16 @@ fn a_removal_batch_compacts_the_parent_once_and_keeps_the_order_of_the_rest() {
     cell.with_mut(|owner| owner.layout_pass().run_layout().expect("layout"));
     let clean = cell.with(PipelineOwner::dirty_node_count);
 
-    cell.with_batched_removals(|| {
-        cell.with_mut(|owner| assert_eq!(owner.remove_render_object(nested), 1));
-        for &id in &dropped {
+    cell.with_batched_removals(top, || {
+        for &id in dropped.iter().filter(|&&id| id != rows[1]) {
             cell.with_mut(|owner| assert_eq!(owner.remove_render_object(id), 1));
         }
         cell.with(|owner| {
             let tree = owner.render_tree();
             assert!(
-                dropped.iter().all(|&id| !tree.contains(id)),
+                dropped.iter().skip(1).all(|&id| !tree.contains(id)),
                 "removed at once"
             );
-            assert!(!tree.contains(nested));
             assert_eq!(
                 tree.children(top),
                 rows,
@@ -262,6 +260,19 @@ fn a_removal_batch_compacts_the_parent_once_and_keeps_the_order_of_the_rest() {
                 clean,
                 "and so is the parent's mark"
             );
+        });
+        // A row's own child goes first, as its element unmounts before the row.
+        cell.with_mut(|owner| assert_eq!(owner.remove_render_object(nested), 1));
+        cell.with(|owner| {
+            assert!(
+                owner.render_tree().children(rows[1]).is_empty(),
+                "a list under another parent is written at once"
+            );
+        });
+        cell.with_mut(|owner| assert_eq!(owner.remove_render_object(rows[1]), 1));
+        cell.with(|owner| {
+            assert!(!owner.render_tree().contains(rows[1]));
+            assert_eq!(owner.render_tree().children(top), rows);
         });
         assert_eq!(
             log.borrow().len(),
@@ -294,7 +305,7 @@ fn a_removal_batch_left_open_by_an_unwind_closes_at_the_next_layout_pass() {
     let (cell, top, rows) = parent_of_rows(3, &log);
 
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        cell.with_batched_removals(|| {
+        cell.with_batched_removals(top, || {
             cell.with_mut(|owner| owner.remove_render_object(rows[1]));
             panic!("a hook of the batch panics");
         })

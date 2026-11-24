@@ -322,7 +322,7 @@ pub struct PipelineOwner {
     /// The nodes a removal took out of the tree, empty between removals:
     /// kept for its capacity, and drained when their destructors run.
     removed_nodes: Vec<crate::storage::RenderNode>,
-    /// The subtrees an open removal batch queued (`PipelineCell::with_batched_removals`).
+    /// The removal batch open on this owner (`PipelineCell::with_batched_removals`).
     removal_batch: tree_edit::RemovalBatch,
 
     /// The device pixel ratio the recorded output above was recorded under.

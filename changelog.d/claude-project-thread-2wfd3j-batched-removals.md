@@ -1,6 +1,6 @@
 ### Added
 
-- `PipelineCell::with_batched_removals` runs a closure during which `PipelineOwner::remove_render_object` leaves each former parent's child list to the batch's end, which compacts every such list once.
+- `PipelineCell::with_batched_removals(parent, f)` runs a closure during which `PipelineOwner::remove_render_object` of a child of `parent` leaves `parent`'s child list to the batch's end, which compacts it once.
 
 ### Fixed
 

@@ -166,10 +166,11 @@ impl PipelineOwner {
     /// `Drop` on render objects remains strictly node-local (decoded
     /// images, shaped text, GPU handles).
     ///
-    /// Returns the number of nodes removed. Inside a removal batch
+    /// Returns the number of nodes removed. Inside a removal batch for the
+    /// former parent of `id`
     /// ([`PipelineCell::with_batched_removals`](crate::pipeline::PipelineCell::with_batched_removals))
-    /// the former parent's child list keeps the stale id, and the parent is
-    /// marked, until the batch ends and compacts that list once. Must not run
+    /// that parent's child list keeps the stale id, and the parent is marked,
+    /// until the batch ends and compacts that list once. Must not run
     /// mid-phase — the layout/paint walks hold raw borrows into the slab.
     pub fn remove_render_object(&mut self, id: RenderId) -> usize {
         debug_assert!(
@@ -178,7 +179,8 @@ impl PipelineOwner {
              the walks hold borrows into the slab; defer removal to \
              between-frame work",
         );
-        let batched = self.removal_batch.depth > 0;
+        let former_parent = self.render_tree.parent(id);
+        let batched = former_parent.is_some() && former_parent == self.removal_batch.parent;
         let edge = if batched {
             ParentEdge::Compact
         } else {
@@ -188,7 +190,7 @@ impl PipelineOwner {
         let mut removed_nodes = std::mem::take(&mut self.removed_nodes);
         if let Some(parent_id) = self.take_render_subtree(id, edge, &mut removed_nodes) {
             if batched {
-                self.removal_batch.parents.insert(parent_id);
+                self.removal_batch.stale = true;
             } else {
                 self.note_render_child_membership_changed(parent_id);
             }
@@ -197,7 +199,7 @@ impl PipelineOwner {
         tracing::debug!(?id, count, "remove_render_object: subtree disposed");
         // Destructors run last, against a committed tree and owner (ADR-0252,
         // ADR-0287): one that panics leaves nothing half-removed; in a batch,
-        // the parent it left stays recorded for the compaction.
+        // the stale list stays recorded for the compaction.
         // `clear` drops every node even when one panics; the buffer is kept
         // only when none did.
         removed_nodes.clear();
@@ -205,52 +207,56 @@ impl PipelineOwner {
         count
     }
 
-    /// Opens a removal batch: until the matching
-    /// [`end_removal_batch`](Self::end_removal_batch),
-    /// [`remove_render_object`](Self::remove_render_object) leaves its
-    /// parent's list to the batch's end.
-    pub(crate) fn begin_removal_batch(&mut self) {
-        self.removal_batch.depth += 1;
+    /// Opens a removal batch for the children of `parent`: until the
+    /// matching [`end_removal_batch`](Self::end_removal_batch),
+    /// [`remove_render_object`](Self::remove_render_object) of a child of
+    /// `parent` leaves `parent`'s list to the batch's end. Returns whether it
+    /// opened one: a batch already open for another parent stays the open one,
+    /// and this scope's removals write their lists at once.
+    pub(crate) fn begin_removal_batch(&mut self, parent: RenderId) -> bool {
+        match self.removal_batch.parent {
+            None => {
+                self.removal_batch.parent = Some(parent);
+                self.removal_batch.depth = 1;
+                true
+            }
+            Some(open) if open == parent => {
+                self.removal_batch.depth += 1;
+                true
+            }
+            Some(_) => false,
+        }
     }
 
-    /// Closes the innermost removal batch; closing the outermost compacts the
-    /// child list of every parent the batch removed children from.
+    /// Closes the innermost scope of the open removal batch; closing the last
+    /// one compacts the batch's parent's child list.
     pub(crate) fn end_removal_batch(&mut self) {
         self.removal_batch.depth = self.removal_batch.depth.saturating_sub(1);
         if self.removal_batch.depth == 0 {
-            self.compact_batched_parents();
+            self.close_removal_batch();
         }
     }
 
-    /// Closes every removal batch still open and compacts what they left.
+    /// Closes the removal batch still open, if any, and compacts what it left.
     ///
     /// A batch whose end never ran (its scope unwound before the end) leaves
-    /// stale ids in its parents' lists; the layout pass calls this first, so
+    /// stale ids in its parent's list; the layout pass calls this first, so
     /// no frame walks a list that names a removed node.
-    pub(super) fn close_removal_batches(&mut self) {
-        self.removal_batch.depth = 0;
-        self.compact_batched_parents();
-    }
-
-    /// Drops the removed ids from the list of each parent a batch removed
-    /// children from, in one pass per parent, and marks it as
-    /// [`remove_render_object`](Self::remove_render_object) marks one parent:
-    /// `k` removals from a parent of `n` children cost `O(n + k)`, not
-    /// `O(k·n)`.
-    fn compact_batched_parents(&mut self) {
-        if self.removal_batch.parents.is_empty() {
-            return;
+    ///
+    /// The compaction drops the removed ids from the parent's list in one
+    /// pass and marks the parent as
+    /// [`remove_render_object`](Self::remove_render_object) marks one: `k`
+    /// removals from a parent of `n` children cost `O(n + k)`, not `O(k·n)`.
+    pub(super) fn close_removal_batch(&mut self) {
+        let batch = std::mem::take(&mut self.removal_batch);
+        // A parent removed later in the batch went with its list.
+        if batch.stale
+            && let Some(parent_id) = batch.parent
+            && self.render_tree.contains(parent_id)
+        {
+            self.render_tree.drop_removed_children(parent_id);
+            self.note_render_child_membership_changed(parent_id);
         }
-        let mut parents = std::mem::take(&mut self.removal_batch.parents);
-        for &parent_id in parents.as_slice() {
-            // A parent removed later in the batch went with its list.
-            if self.render_tree.contains(parent_id) {
-                self.render_tree.drop_removed_children(parent_id);
-                self.note_render_child_membership_changed(parent_id);
-            }
-        }
-        parents.clear();
-        self.removal_batch.parents = parents;
     }
 
     /// Steps 1–5 of [`remove_render_object`](Self::remove_render_object) for
@@ -442,15 +448,20 @@ impl ParentDataSlot<'_> {
     }
 }
 
-/// The state of the removal batches open on an owner: how many, and the
-/// parents whose child lists their end compacts. One owner for it: both
-/// change only in the methods above.
+/// The removal batch open on an owner: the one parent whose child removals
+/// it leaves to its end, how many scopes opened it, and whether a removal
+/// left that parent's list naming a removed child. One owner for this state:
+/// it changes only in `PipelineOwner`'s batch methods.
 #[derive(Debug, Default)]
 pub(super) struct RemovalBatch {
-    /// Batches open; [`PipelineOwner::remove_render_object`] leaves the
-    /// parent's list to the end while it is above zero.
+    /// The parent of the open batch; `None` between batches. One parent, not
+    /// a set: a reconcile removes the children of one render parent, and a
+    /// removal under any other parent (a row's own child, removed as its
+    /// element unmounts before the row) writes that list at once, so nothing
+    /// grows per removed row.
+    parent: Option<RenderId>,
+    /// Scopes open for `parent`; the batch ends when the last one closes.
     depth: u32,
-    /// The former parents of the subtrees removed in the open batch, each
-    /// once; empty between batches and kept for its capacity.
-    parents: SlotSet<RenderId>,
+    /// Whether `parent`'s list names a child removed in the batch.
+    stale: bool,
 }
