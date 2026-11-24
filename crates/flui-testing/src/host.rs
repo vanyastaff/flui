@@ -88,9 +88,16 @@ pub use clock::HostClock;
 pub use dev_agent::HeadlessDevAgent;
 pub use errors::{NotSettled, WindowSystemMismatch};
 pub use os_drag::{HeadlessOsDrags, StartedOsDrag};
-// The kit's doubles this host's API hands out, beside it (ADR-0264 §4):
+// The kits' doubles this host's API hands out, beside it (ADR-0264 §4):
 // `HeadlessHost::http` returns a `ScriptedHttp`, scripted with
-// `ScriptedResponse`, and `HeadlessWindow::haptic_actuator` is a `FakeHaptics`.
+// `ScriptedResponse`, `HeadlessWindow::haptic_actuator` is a `FakeHaptics`,
+// and `HeadlessHost::clipboard` and `HeadlessHost::primary_selection` return
+// the scripted clipboard and primary selection with the requests their
+// scripts answer.
+pub use flui_interaction::testing::{
+    ClipboardRequest, ClipboardWriteHold, ClipboardWriteRequest, PrimarySelectionRequest,
+    ScriptedClipboard, ScriptedPrimarySelection,
+};
 pub use flui_platform::testing::{FakeHaptics, ScriptedHttp, ScriptedResponse};
 pub(crate) use registrations::AppRegistrations;
 use registrations::{Registry, compose_registry};
@@ -866,7 +873,7 @@ impl HeadlessHost {
 
     /// The clipboard the UI runtime hands its widgets.
     #[must_use]
-    pub fn clipboard(&self) -> crate::clipboard::ScriptedClipboard {
+    pub fn clipboard(&self) -> ScriptedClipboard {
         self.scripted.clipboard.clone()
     }
 
@@ -885,7 +892,7 @@ impl HeadlessHost {
     /// refused it, as on that platform, and what this double is told reaches
     /// nobody.
     #[must_use]
-    pub fn primary_selection(&self) -> crate::primary_selection::ScriptedPrimarySelection {
+    pub fn primary_selection(&self) -> ScriptedPrimarySelection {
         self.scripted.primary_selection.clone()
     }
 }

@@ -15,7 +15,7 @@
 //! reads fail as a host that cannot reach its clipboard does.
 //!
 //! Writes go through a second script on the same scenario,
-//! [`writes`](ScriptedClipboard::writes), of [`WriteRequest`]s (ADR-0337):
+//! [`writes`](ScriptedClipboard::writes), of [`ClipboardWriteRequest`]s (ADR-0337):
 //! a step, a delayed step, the standing answer or a release decides whether
 //! a write is taken and when, and whenever a write is answered `Ok` or
 //! [`ApplicationOnly`](ClipboardError::ApplicationOnly), the clipboard takes
@@ -38,7 +38,6 @@ use std::collections::{BTreeMap, VecDeque};
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
 use flui_foundation::panic::FirstPanic;
-use flui_interaction::text_input::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 use flui_platform::{
     ClipboardError, ClipboardRead, ClipboardWrite, ClipboardWritten, Concealment, ExpiryClearing,
     Unsupported,
@@ -47,6 +46,8 @@ use flui_platform::{
         CapabilityProvider, CapabilityRegistrar, CompletionSource, ProviderContext, Resolver,
     },
 };
+
+use crate::text_input::{ClipboardBackend, ClipboardCapability, ClipboardHandle};
 
 /// A request a clipboard's handle makes of its host and is answered later.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,7 +61,7 @@ pub enum ClipboardRequest {
 /// the writes were asked, from 1, and the write.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct WriteRequest {
+pub struct ClipboardWriteRequest {
     /// The write's place among the writes asked of this clipboard, from 1.
     pub number: u64,
     /// What it asks.
@@ -74,7 +75,7 @@ pub struct ScriptedClipboard {
     contents: Rc<RefCell<Contents>>,
     order: Rc<RefCell<Order>>,
     reads: Script<ClipboardRequest, ClipboardRead>,
-    writes: Script<WriteRequest, ClipboardWritten>,
+    writes: Script<ClipboardWriteRequest, ClipboardWritten>,
     service: Track<ServiceState>,
 }
 
@@ -164,7 +165,7 @@ impl ScriptedClipboard {
         reads.otherwise(move |_: &ClipboardRequest| answered.borrow().answer());
         let writes = scenario.script("clipboard writes");
         let decided = Rc::clone(&contents);
-        writes.otherwise(move |_: &WriteRequest| decided.borrow().decide());
+        writes.otherwise(move |_: &ClipboardWriteRequest| decided.borrow().decide());
         let clipboard = Self {
             contents,
             order: Rc::default(),
@@ -212,7 +213,7 @@ impl ScriptedClipboard {
     /// caller's completion settles at a later owner turn, after every
     /// observer heard it.
     #[must_use]
-    pub fn writes(&self) -> &Script<WriteRequest, ClipboardWritten> {
+    pub fn writes(&self) -> &Script<ClipboardWriteRequest, ClipboardWritten> {
         &self.writes
     }
 
@@ -258,7 +259,7 @@ impl ScriptedClipboard {
     /// Answer `clearing` to every handle that asks what this host does with
     /// an expiring write; [`ExpiryClearing::AtTimeAndLock`] until set. The
     /// scripted clipboard clears nothing itself: a test reads the expiry a
-    /// write asked for from its [`WriteRequest`].
+    /// write asked for from its [`ClipboardWriteRequest`].
     pub fn answer_expiry_clearing(&self, clearing: ExpiryClearing) {
         self.contents.borrow_mut().expiry_clearing = Some(clearing);
     }
@@ -394,7 +395,7 @@ impl ScriptedClipboard {
             number
         };
         self.writes
-            .receive(WriteRequest { number, write }, stand_in);
+            .receive(ClipboardWriteRequest { number, write }, stand_in);
     }
 }
 
@@ -412,7 +413,7 @@ impl Landing {
     /// order, then answer their completions in that order, then let through
     /// the reads that waited for them. A completion never settles before
     /// its write's text is on the clipboard.
-    fn answered(&self, request: &WriteRequest, written: Option<&ClipboardWritten>) {
+    fn answered(&self, request: &ClipboardWriteRequest, written: Option<&ClipboardWritten>) {
         let (Some(contents), Some(order)) = (self.contents.upgrade(), self.order.upgrade()) else {
             return;
         };
@@ -476,7 +477,7 @@ impl Landing {
 /// answered, in order, with the standing answer.
 #[must_use = "writes are held only while the hold is alive"]
 pub struct ClipboardWriteHold {
-    writes: Script<WriteRequest, ClipboardWritten>,
+    writes: Script<ClipboardWriteRequest, ClipboardWritten>,
     contents: Rc<RefCell<Contents>>,
 }
 

@@ -655,7 +655,7 @@ pub(crate) fn a_selection_changed_while_the_field_claims_stands() {
 /// Reads the primary selection as it drops: a selection whose owner asks
 /// the platform what replaced it.
 struct ReadsOnDrop {
-    primary: flui_testing::primary_selection::ScriptedPrimarySelection,
+    primary: flui_testing::host::ScriptedPrimarySelection,
     read: Rc<std::cell::RefCell<Vec<Option<String>>>>,
 }
 

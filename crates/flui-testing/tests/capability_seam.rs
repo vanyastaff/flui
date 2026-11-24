@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use flui_interaction::testing::ScriptedClipboard;
 use flui_interaction::text_input::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim,
     PrimarySelectionCapability, PrimarySelectionHandle,
@@ -23,7 +24,6 @@ use flui_platform::{
     Unsupported, UnsupportedReason,
 };
 use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry, ProviderTier};
-use flui_testing::clipboard::ScriptedClipboard;
 use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_view::{
     BuildContext, IntoView, LifecycleContext, LifecycleContextExt, StatefulView, View, ViewState,

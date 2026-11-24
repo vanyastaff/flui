@@ -88,8 +88,10 @@
 //!    velocity estimation; [`drag`] - Drag-and-drop sessions
 //! 4. [`binding`] - the [gesture binding](binding::GestureBinding), which composes them for one presentation
 //! 5. [`haptics`] - A presentation's haptics, on the binding's clock and dispatch
-//! 6. `testing` - Synthetic event builders (requires `testing` feature). Gesture
-//!    scripting and replay live in `flui-testing`, which owns the virtual clock.
+//! 6. `testing` - The doubles of this crate's contracts (the scripted clipboard and
+//!    primary selection, the in-memory text store) and synthetic event builders
+//!    (requires `testing` feature). Gesture scripting and replay live in
+//!    `flui-testing`, which owns the virtual clock.
 
 #![cfg_attr(
     test,
