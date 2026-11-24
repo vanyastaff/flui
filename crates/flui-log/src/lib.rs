@@ -101,7 +101,9 @@
 //!     .with(tracing_tracy::TracyLayer::default());
 //! ```
 //!
-//! The framework sets no `max_level_*` feature, so a release build can be profiled this way.
+//! The release build `flui build --release` makes holds no DEBUG span (ADR-0398), so a
+//! timeline is taken this way from a debug build, a `--profile profiling` build or an agent
+//! build.
 //!
 //! # Platforms
 //!
@@ -162,16 +164,16 @@ mod test_support;
 
 use config::LogConfig;
 use filter::FilterError;
-use ownership::{
-    SetupError, SubscriberInstallation, SubscriberOwnership, SubscriberPolicy, install_subscriber,
-};
+use ownership::{SetupError, SubscriberInstallation, SubscriberPolicy, install_subscriber};
 use tracing::level_filters::STATIC_MAX_LEVEL;
 
 /// Build FLUI's default subscriber and apply an ownership policy to it.
 ///
 /// Under [`SubscriberPolicy::Inherit`] no subscriber is built and the
 /// process-global slot is not even read, so an embedded entry point provably
-/// cannot disturb its host.
+/// cannot disturb its host. A subscriber this call installs over a filter
+/// that selects events the build compiled out reports it once, through the
+/// platform's sink (see [the build's ceiling](filter#the-builds-ceiling)).
 ///
 /// # Errors
 ///
@@ -183,19 +185,46 @@ pub fn setup(
     config: &LogConfig,
     policy: SubscriberPolicy,
 ) -> Result<SubscriberInstallation, SetupError> {
+    install(config, policy).map(|installed| installed.installation)
+}
+
+/// What [`install`] did, and the level its filter selects above the build's
+/// ceiling when it installed a subscriber.
+struct Installed {
+    installation: SubscriberInstallation,
+    compiled_out: Option<tracing::level_filters::LevelFilter>,
+}
+
+/// [`setup`], with the level above the ceiling it reported. The filter is
+/// resolved once, and the subscriber is filtered by what was resolved.
+fn install(config: &LogConfig, policy: SubscriberPolicy) -> Result<Installed, SetupError> {
     // The `else` arm is `Inherit`, and returning here is what makes the
     // "reads nothing, builds nothing" guarantee structural: the subscriber is
     // never constructed, so there is no host-owned slot to consult and no
     // native resource to allocate and drop.
     let Some(install_policy) = policy.install_policy() else {
-        return Ok(SubscriberInstallation::unchanged());
+        return Ok(Installed {
+            installation: SubscriberInstallation::unchanged(),
+            compiled_out: None,
+        });
     };
 
-    install_subscriber(
-        config.subscriber()?,
+    let (filter, compiled_out) =
+        filter::admitting_the_ceiling_report(config.filter().targets()?, STATIC_MAX_LEVEL);
+    let installation = install_subscriber(
+        config.subscriber_filtered_by(filter),
         install_policy,
         config.log_bridge_policy(),
-    )
+    )?;
+    // A subscriber the host installed filters by its own directives.
+    let compiled_out = compiled_out.filter(|_| installation.ownership.is_installed());
+    if let Some(selected) = compiled_out {
+        filter::report_ceiling(selected, STATIC_MAX_LEVEL);
+    }
+    Ok(Installed {
+        installation,
+        compiled_out,
+    })
 }
 
 /// What [`setup_with_env_fallback`] did.
@@ -220,25 +249,11 @@ pub struct ResilientSetup {
     /// holds no event of that level (see [the build's ceiling](filter#the-builds-ceiling)).
     ///
     /// `Some` means the filter asks for events `tracing`'s static maximum level
-    /// compiled out, so they are not delivered. `None` also when this call
-    /// installed no subscriber, whose filter is then not this configuration's.
+    /// compiled out, so they are not delivered; the installed subscriber has
+    /// already reported it on [`filter::CEILING_TARGET`]. `None` also when this
+    /// call installed no subscriber, whose filter is then not this
+    /// configuration's.
     pub compiled_out: Option<tracing::level_filters::LevelFilter>,
-}
-
-/// The most verbose level `config`'s filter selects above `ceiling`, for a
-/// subscriber this call installed; `None` when the call installed none, whose
-/// filter is then not this configuration's.
-fn selected_beyond(
-    config: &LogConfig,
-    ownership: SubscriberOwnership,
-    ceiling: tracing::level_filters::LevelFilter,
-) -> Option<tracing::level_filters::LevelFilter> {
-    if !ownership.is_installed() {
-        return None;
-    }
-    // The subscriber was built from this filter a moment ago, so it resolves.
-    let targets = config.filter().targets().ok()?;
-    filter::beyond(&targets, ceiling)
 }
 
 /// Set up logging, falling back to the configured directives when the
@@ -279,11 +294,14 @@ pub fn setup_with_env_fallback(
     config: &LogConfig,
     policy: SubscriberPolicy,
 ) -> Result<ResilientSetup, SetupError> {
-    match setup(config, policy) {
-        Ok(installation) => Ok(ResilientSetup {
+    match install(config, policy) {
+        Ok(Installed {
+            installation,
+            compiled_out,
+        }) => Ok(ResilientSetup {
             installation,
             rejected_env_override: None,
-            compiled_out: selected_beyond(config, installation.ownership, STATIC_MAX_LEVEL),
+            compiled_out,
         }),
 
         // Only an environment override can be retried around. A bad *configured*
@@ -292,17 +310,14 @@ pub fn setup_with_env_fallback(
             rejected
             @ (FilterError::Environment { .. } | FilterError::EnvironmentNotUnicode { .. }),
         )) => {
-            let without_override = config.without_env_override();
-
-            let installation = setup(&without_override, policy)?;
+            let Installed {
+                installation,
+                compiled_out,
+            } = install(&config.without_env_override(), policy)?;
             Ok(ResilientSetup {
                 installation,
                 rejected_env_override: Some(rejected),
-                compiled_out: selected_beyond(
-                    &without_override,
-                    installation.ownership,
-                    STATIC_MAX_LEVEL,
-                ),
+                compiled_out,
             })
         }
 
@@ -331,51 +346,5 @@ mod resilient_setup_tests {
             .expect_err("invalid configured directives must not be swallowed");
 
         assert!(matches!(error, super::SetupError::Filter(_)));
-    }
-
-    #[test]
-    fn a_setup_reports_the_level_above_the_ceiling_only_for_the_subscriber_it_installed() {
-        use tracing::level_filters::LevelFilter;
-
-        use crate::ownership::SubscriberOwnership;
-
-        let config = |directives: &str| {
-            LogConfig::builder()
-                .filter(FilterConfig::new(directives).without_env_var())
-                .build()
-        };
-        for (directives, ownership, ceiling, expected) in [
-            (
-                "warn,flui_view=debug",
-                SubscriberOwnership::Installed,
-                LevelFilter::INFO,
-                Some(LevelFilter::DEBUG),
-            ),
-            (
-                "warn,flui_view=debug",
-                SubscriberOwnership::Installed,
-                LevelFilter::TRACE,
-                None,
-            ),
-            // A subscriber the host installed filters by its own directives.
-            (
-                "warn,flui_view=debug",
-                SubscriberOwnership::Unchanged,
-                LevelFilter::INFO,
-                None,
-            ),
-            (
-                "info",
-                SubscriberOwnership::Installed,
-                LevelFilter::INFO,
-                None,
-            ),
-        ] {
-            assert_eq!(
-                super::selected_beyond(&config(directives), ownership, ceiling),
-                expected,
-                "`{directives}`, {ownership:?}, under a ceiling of {ceiling}"
-            );
-        }
     }
 }

@@ -1,6 +1,7 @@
 //! What to log, as whom, and in what shape.
 
 use tracing::Subscriber;
+use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::SubscriberExt as _;
 use tracing_subscriber::registry::LookupSpan;
 use tracing_subscriber::{Layer as _, Registry};
@@ -113,9 +114,18 @@ impl LogConfig {
         impl Subscriber + for<'lookup> LookupSpan<'lookup> + Send + Sync + 'static + use<>,
         FilterError,
     > {
-        let filter = self.filter.targets()?;
+        Ok(self.subscriber_filtered_by(self.filter.targets()?))
+    }
+
+    /// FLUI's default stack, filtered by `filter`: this configuration's
+    /// resolved directives, or those with the ceiling report admitted
+    /// ([`crate::filter::admitting_the_ceiling_report`]).
+    pub(crate) fn subscriber_filtered_by(
+        &self,
+        filter: Targets,
+    ) -> impl Subscriber + for<'lookup> LookupSpan<'lookup> + Send + Sync + 'static + use<> {
         let platform = PlatformLayer::platform_default(self);
-        Ok(Registry::default().with(platform.with_filter(filter)))
+        Registry::default().with(platform.with_filter(filter))
     }
 }
 

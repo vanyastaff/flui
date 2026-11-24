@@ -267,13 +267,18 @@ impl Profile {
             Profile::Release => "release",
         }
     }
-}
 
-impl From<&str> for Profile {
-    fn from(s: &str) -> Self {
-        match s {
-            "release" => Profile::Release,
-            _ => Profile::Debug,
+    /// The build mode of a run that passes `--release` or names a cargo
+    /// profile with `--profile`. Cargo's `release` profile is the release
+    /// mode whichever flag names it; any other named profile is not, whatever
+    /// it optimizes, so a `profiling` build keeps its spans (ADR-0398 §2).
+    /// `flui run` reads every target's mode from here.
+    #[must_use]
+    pub(crate) fn of_run(release: bool, cargo_profile: Option<&str>) -> Self {
+        if release || cargo_profile == Some("release") {
+            Profile::Release
+        } else {
+            Profile::Debug
         }
     }
 }
@@ -327,7 +332,10 @@ mod tests {
     /// facade under, or the agent's driver in its place (ADR-0398 §2).
     #[test]
     fn a_build_mode_is_its_profile_flag_and_its_features() {
-        let framework = FrameworkDependency::Named("ui".to_owned());
+        let framework = FrameworkDependency::Named {
+            key: "ui".to_owned(),
+            optional: false,
+        };
         for (profile, driver, expected) in [
             (
                 Profile::Release,
@@ -352,6 +360,26 @@ mod tests {
                 ctx.mode_args(&framework),
                 expected,
                 "{profile:?} {driver:?}"
+            );
+        }
+    }
+
+    /// A run's mode is the release mode when either flag names cargo's
+    /// `release` profile, and no other profile is, so every target of
+    /// `flui run` builds the same thing from the same command line.
+    #[test]
+    fn a_run_is_the_release_mode_whichever_flag_names_the_release_profile() {
+        for (release, cargo_profile, expected) in [
+            (true, None, Profile::Release),
+            (false, Some("release"), Profile::Release),
+            (false, Some("profiling"), Profile::Debug),
+            (false, Some("dev"), Profile::Debug),
+            (false, None, Profile::Debug),
+        ] {
+            assert_eq!(
+                Profile::of_run(release, cargo_profile),
+                expected,
+                "--release {release}, --profile {cargo_profile:?}"
             );
         }
     }

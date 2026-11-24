@@ -152,8 +152,8 @@ impl<P, Pr> BuilderContextBuilder<P, Pr> {
 
     /// Build for the agent with its `driver` feature (`<key>/driver`, as
     /// `--features` takes it), which an optimized agent build needs. An
-    /// agent build keeps its trace and debug events, since the driver reads
-    /// the frame's phase spans (ADR-0398 §2).
+    /// agent build is a development build, not one that ships, so it keeps
+    /// its trace and debug events (ADR-0398 §2).
     #[must_use]
     pub(crate) fn agent_driver(mut self, feature: Option<String>) -> Self {
         self.agent_driver = feature;

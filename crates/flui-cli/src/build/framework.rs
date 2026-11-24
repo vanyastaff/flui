@@ -14,9 +14,15 @@ pub(crate) const RELEASE_CEILING_FEATURE: &str = "release-max-level-info";
 /// manifest names it under.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum FrameworkDependency {
-    /// `flui` (the facade, preferred) or `flui-app`, under this key: its
-    /// `rename` when the manifest gives one, else the crate's name.
-    Named(String),
+    /// `flui` (the facade, preferred) or `flui-app`.
+    Named {
+        /// Its `rename` when the manifest gives one, else the crate's name.
+        key: String,
+        /// Whether the manifest declares it `optional`: a feature named
+        /// through it then turns on only where the dependency already is
+        /// (`<key>?/<feature>`), so a mode never adds it to the graph.
+        optional: bool,
+    },
     /// Neither (a legacy `flui-widgets`-only package, or no FLUI at all).
     Neither,
 }
@@ -26,28 +32,37 @@ impl FrameworkDependency {
     /// dependencies only: a dev- or build-dependency is not in the shipped
     /// graph, so a feature named through it would do nothing there.
     pub(crate) fn of(dependencies: &[Dependency]) -> Self {
-        let key = |name: &str| {
+        let named = |name: &str| {
             dependencies
                 .iter()
                 .find(|dependency| {
                     dependency.kind == DependencyKind::Normal && dependency.name == name
                 })
-                .map(|dependency| {
-                    dependency
+                .map(|dependency| Self::Named {
+                    key: dependency
                         .rename
                         .clone()
-                        .unwrap_or_else(|| dependency.name.clone())
+                        .unwrap_or_else(|| dependency.name.clone()),
+                    optional: dependency.optional,
                 })
         };
-        key("flui")
-            .or_else(|| key("flui-app"))
-            .map_or(Self::Neither, Self::Named)
+        named("flui")
+            .or_else(|| named("flui-app"))
+            .unwrap_or(Self::Neither)
     }
 
-    /// `<key>/<feature>`, as `--features` takes it, when there is a key.
+    /// `<key>/<feature>` (`<key>?/<feature>` for an optional dependency), as
+    /// `--features` takes it, when there is a key.
     pub(crate) fn feature(&self, feature: &str) -> Option<String> {
         match self {
-            Self::Named(key) => Some(format!("{key}/{feature}")),
+            Self::Named {
+                key,
+                optional: false,
+            } => Some(format!("{key}/{feature}")),
+            Self::Named {
+                key,
+                optional: true,
+            } => Some(format!("{key}?/{feature}")),
             Self::Neither => None,
         }
     }
@@ -56,8 +71,9 @@ impl FrameworkDependency {
     /// beyond the package's defaults: the agent's `driver` feature
     /// (`agent_driver`, as `--features` takes it) when the agent connects to
     /// the build, else for a release build the release ceiling, so it holds
-    /// no `trace!` or `debug!` call site (ADR-0398 §2). An agent build keeps
-    /// them: its driver reads the frame's phase spans, which are DEBUG.
+    /// no `trace!` or `debug!` call site (ADR-0398 §2). An agent build is a
+    /// development build, not one that ships, and keeps them. A release build
+    /// of a package with no key has no feature to name, which it is warned of.
     pub(crate) fn mode_features(
         &self,
         profile: Profile,
@@ -65,7 +81,17 @@ impl FrameworkDependency {
     ) -> Vec<String> {
         match (profile, agent_driver) {
             (_, Some(driver)) => vec![driver.to_owned()],
-            (Profile::Release, None) => self.feature(RELEASE_CEILING_FEATURE).into_iter().collect(),
+            (Profile::Release, None) => {
+                let ceiling = self.feature(RELEASE_CEILING_FEATURE);
+                if ceiling.is_none() {
+                    let _ = crate::ui::warning(
+                        "this package depends on neither `flui` nor `flui-app`, whose \
+                         `release-max-level-info` feature leaves trace and debug call sites \
+                         out of a release build; it keeps them (ADR-0398 §2)",
+                    );
+                }
+                ceiling.into_iter().collect()
+            }
             (Profile::Debug, None) => Vec::new(),
         }
     }
@@ -82,39 +108,55 @@ mod tests {
     }
 
     fn dependency(name: &str, rename: Option<&str>, kind: Option<&str>) -> String {
+        optional_dependency(name, rename, kind, false)
+    }
+
+    fn optional_dependency(
+        name: &str,
+        rename: Option<&str>,
+        kind: Option<&str>,
+        optional: bool,
+    ) -> String {
         let rename = rename.map_or("null".to_owned(), |rename| format!(r#""{rename}""#));
         let kind = kind.map_or("null".to_owned(), |kind| format!(r#""{kind}""#));
         format!(
             r#"{{"name":"{name}","source":null,"req":"*","kind":{kind},"rename":{rename},
-            "optional":false,"uses_default_features":true,"features":[],"target":null,
+            "optional":{optional},"uses_default_features":true,"features":[],"target":null,
             "registry":null,"path":null}}"#
         )
     }
 
     /// The key is the one the manifest names the dependency under, the
-    /// facade before `flui-app`, and a dev-dependency never counts.
+    /// facade before `flui-app`, and a dev-dependency never counts; a
+    /// feature named through an optional one turns on only where it is.
     #[test]
     fn the_framework_key_is_the_normal_dependency_the_manifest_names() {
         for (deps, expected) in [
-            (vec![dependency("flui", None, None)], Some("flui")),
-            (vec![dependency("flui", Some("ui"), None)], Some("ui")),
+            (vec![dependency("flui", None, None)], Some("flui/driver")),
+            (
+                vec![dependency("flui", Some("ui"), None)],
+                Some("ui/driver"),
+            ),
+            (
+                vec![optional_dependency("flui", None, None, true)],
+                Some("flui?/driver"),
+            ),
             (
                 vec![
                     dependency("flui-app", None, None),
                     dependency("flui", None, None),
                 ],
-                Some("flui"),
+                Some("flui/driver"),
             ),
-            (vec![dependency("flui-app", None, None)], Some("flui-app")),
+            (
+                vec![dependency("flui-app", None, None)],
+                Some("flui-app/driver"),
+            ),
             (vec![dependency("flui", None, Some("dev"))], None),
             (vec![dependency("flui-widgets", None, None)], None),
         ] {
             let found = FrameworkDependency::of(&dependencies(&deps.join(",")));
-            assert_eq!(
-                found.feature("driver").as_deref(),
-                expected.map(|key| format!("{key}/driver")).as_deref(),
-                "{deps:?}"
-            );
+            assert_eq!(found.feature("driver").as_deref(), expected, "{deps:?}");
         }
     }
 
@@ -124,7 +166,10 @@ mod tests {
     /// ceiling.
     #[test]
     fn a_release_build_without_an_agent_is_the_one_with_the_ceiling() {
-        let named = FrameworkDependency::Named("ui".to_owned());
+        let named = FrameworkDependency::Named {
+            key: "ui".to_owned(),
+            optional: false,
+        };
         for (framework, profile, driver, expected) in [
             (
                 &named,

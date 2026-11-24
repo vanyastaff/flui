@@ -385,6 +385,103 @@ fn the_release_ceiling_reaches_tracing_only_through_its_feature() {
     }
 }
 
+/// A build without debug assertions and with `flui-log`'s
+/// `release-max-level-info` reports a filter that selects DEBUG through the
+/// subscriber `setup_with_env_fallback` installs, whichever arm installs it,
+/// and names the level in `compiled_out` (ADR-0398 §3); a filter at the
+/// ceiling, or a build without the feature, reports nothing.
+#[test]
+fn a_filter_above_the_release_ceiling_is_reported_where_the_log_goes() {
+    let Some(root) = checkout_root() else { return };
+    const MAIN: &str = r#"
+use flui_log::config::LogConfig;
+use flui_log::filter::FilterConfig;
+use flui_log::ownership::SubscriberPolicy;
+
+fn main() {
+    let config = LogConfig::builder()
+        .filter(FilterConfig::new("warn,flui_app=debug"))
+        .build();
+    let setup = flui_log::setup_with_env_fallback(&config, SubscriberPolicy::Auto)
+        .expect("the consumer's directives parse");
+    let compiled_out = setup
+        .compiled_out
+        .map_or_else(|| "none".to_owned(), |level| level.to_string());
+    println!("compiled_out={compiled_out}");
+}
+"#;
+    for (features, rust_log, expected) in [
+        (&["release-max-level-info"][..], None, Some("debug")),
+        // A rejected override: the configuration's own directives are installed.
+        (
+            &["release-max-level-info"][..],
+            Some("flui_view[frame]=debug"),
+            Some("debug"),
+        ),
+        (
+            &["release-max-level-info"][..],
+            Some("warn,flui_view=info"),
+            None,
+        ),
+        (&[][..], None, None),
+    ] {
+        let mut log = dependency("flui-log", &root.join("crates/flui-log"), false);
+        log.as_table_mut().expect("dependency table").insert(
+            "features".into(),
+            toml::Value::Array(features.iter().map(|&feature| feature.into()).collect()),
+        );
+        let mut dependencies = toml::Table::new();
+        dependencies.insert("flui-log".into(), log);
+        let project = consumer_project(dependencies, None, "");
+        std::fs::write(project.path().join("src/main.rs"), MAIN).expect("write consumer main");
+        let mut command = Command::new(env!("CARGO"));
+        command
+            .args(["run", "--offline", "--release", "--quiet", "--manifest-path"])
+            .arg(project.path().join("Cargo.toml"))
+            .arg("--target-dir")
+            .arg(workspace_target_dir(root).join("facade-consumer-check"))
+            // The ceiling follows `debug_assertions`, which the release
+            // profile turns off; the optimizer does not matter here.
+            .env("CARGO_PROFILE_RELEASE_OPT_LEVEL", "0")
+            .current_dir(project.path());
+        match rust_log {
+            Some(value) => command.env("RUST_LOG", value),
+            None => command.env_remove("RUST_LOG"),
+        };
+        let output = command.output().expect("run the log consumer");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "{features:?} {rust_log:?}: {stderr}"
+        );
+        assert!(
+            stdout
+                .lines()
+                .any(|line| line == format!("compiled_out={}", expected.unwrap_or("none"))),
+            "{features:?} {rust_log:?}: {stdout}"
+        );
+        // FLUI's desktop sink writes to standard output.
+        let report = stdout
+            .lines()
+            .find(|line| line.contains("flui_log::ceiling"));
+        match expected {
+            Some(level) => {
+                let report = report.unwrap_or_else(|| {
+                    panic!("{features:?} {rust_log:?}: no ceiling report in {stdout}")
+                });
+                assert!(
+                    report.contains("WARN")
+                        && report.contains(&format!("selected.public={level}"))
+                        && report.contains("ceiling.public=info"),
+                    "{features:?} {rust_log:?}: {report}"
+                );
+            }
+            None => assert!(report.is_none(), "{features:?} {rust_log:?}: {stdout}"),
+        }
+    }
+}
+
 #[test]
 fn external_consumers_extend_and_test_through_the_facade() {
     let Some(root) = checkout_root() else { return };

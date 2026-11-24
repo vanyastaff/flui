@@ -58,6 +58,11 @@ pub(crate) fn execute(
         build_overlay,
         register_associations,
     } = options;
+    // `--profile release` is `--release` on every target and in every step below: one mode
+    // decides the cargo profile, the ceiling, hot reload and the overlay (ADR-0398 §2).
+    let release = crate::build::Profile::of_run(release, profile.as_deref())
+        == crate::build::Profile::Release;
+    let profile = profile.filter(|_| !release);
     let mode = if release { "release" } else { "debug" };
     ui::intro(style(" flui run ").on_green().black())?;
     ui::info(format!("Mode: {}", style(mode).cyan()))?;
@@ -182,16 +187,30 @@ fn run_session(
     // The application runs on this desktop: refused before it is built when
     // it opens links or files a later launch could not hand to it.
     // An application's run names the binary it builds, selected once: a
-    // hot-reload session keeps it. A worker project's host is built by its
-    // own strategy.
-    let build = if let Project::Application { selected } = &project {
-        let root = std::env::current_dir().context("failed to resolve application directory")?;
-        let host = crate::build::DesktopBuilder::detect_host_target(&root)?;
-        let build = desktop_build(selected, release, agent.as_ref());
-        require_one_instance(&root, &host, &selected.built_package(), &build.features)?;
-        build
-    } else {
-        DesktopBuild::default()
+    // hot-reload session keeps it. A worker project's hot reload builds its
+    // host through its own strategy; a run without it (a release run among
+    // them) runs the host as an application, in the run's mode.
+    let build = match &project {
+        Project::Application { selected } => {
+            let root =
+                std::env::current_dir().context("failed to resolve application directory")?;
+            let host = crate::build::DesktopBuilder::detect_host_target(&root)?;
+            let build = desktop_build(selected, release, agent.as_ref());
+            require_one_instance(&root, &host, &selected.built_package(), &build.features)?;
+            build
+        }
+        Project::Worker(project) if !hot_reload => {
+            let unit = crate::build::BuildUnit::Package(project.config.host_package.clone());
+            let selected = select_unit(&project.workspace_root, &unit).map_err(|error| {
+                CliError::NotFluiProject {
+                    reason: format!(
+                        "`[hot_reload] host_package` names no binary of the workspace: {error}"
+                    ),
+                }
+            })?;
+            desktop_build(&selected, release, None)
+        }
+        Project::Worker(_) => DesktopBuild::default(),
     };
     if hot_reload {
         match project {
@@ -391,8 +410,8 @@ pub(super) struct DesktopBuild {
 }
 
 /// What a desktop run of `selected` builds, `release` or not, for `agent`.
-/// `--profile NAME` is not the release mode, whatever that profile
-/// optimizes, so it builds without the ceiling (ADR-0398 §2).
+/// `release` is the run's mode, which `execute` reads once
+/// ([`Profile::of_run`](crate::build::Profile::of_run)).
 fn desktop_build(
     selected: &crate::build::util::cargo::CargoTarget,
     release: bool,
@@ -432,6 +451,14 @@ fn with_build(cmd: &mut Command, build: &DesktopBuild, agent: Option<&Session>) 
 fn run_selection(
     root: &Path,
 ) -> crate::build::error::BuildResult<crate::build::util::cargo::CargoTarget> {
+    select_unit(root, &crate::build::BuildUnit::DefaultBinary)
+}
+
+/// The binary of `unit` in the workspace at `root`, as `flui build` selects it.
+fn select_unit(
+    root: &Path,
+    unit: &crate::build::BuildUnit,
+) -> crate::build::error::BuildResult<crate::build::util::cargo::CargoTarget> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -440,10 +467,7 @@ fn run_selection(
                 "could not start the target selection runtime: {error}"
             ))
         })?
-        .block_on(crate::build::util::cargo::select_target(
-            root,
-            &crate::build::BuildUnit::DefaultBinary,
-        ))
+        .block_on(crate::build::util::cargo::select_target(root, unit))
 }
 
 /// Refuse a desktop run for `host` of `package`, the application at `root`
