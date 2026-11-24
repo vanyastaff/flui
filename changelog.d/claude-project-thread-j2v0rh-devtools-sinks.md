@@ -1,6 +1,6 @@
 ### Changed
 
-- `flui_devtools::Capture::on_frame` returns a `CaptureSubscription`. Keep it for as long as the sink should run: the sink is removed when the handle drops or when you call `cancel()`, so `let _ = capture.on_frame(...)` removes it at once. The handle does not keep the capture alive.
+- `flui_devtools::Capture::on_frame` returns a `CaptureSubscription`. Keep it for as long as the sink should run: the sink is removed when the handle drops, so `let _ = capture.on_frame(...)` removes it at once. The handle does not keep the capture alive.
 - A frame sink that panics is reported as one `ERROR` event on target `flui.devtools` per frame, naming the first panic, and is not raised; the sinks after it still see the frame. The docs used to say the panic was resumed, which it never was.
 - `TimelineEvent::runtime` is an `Option<UiRuntimeId>` and `TimelineEvent::presentation` an `Option<PresentationId>` instead of their packed `u64`s; compare them with the ids you hold, or call `as_u64()` for the number. `Timeline::export_json` still writes the packed numbers, and reading back a number that is no valid id is an error.
 
