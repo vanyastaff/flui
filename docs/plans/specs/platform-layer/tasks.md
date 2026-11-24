@@ -5132,15 +5132,19 @@ GPU-память простаивающего или невидимого окн
   `android_tree::*`; на Windows 11 и WSL Ubuntu 24.04 2026-11-24 проходят. Семь ролей, чью метку FLUI публикует описанием
   (paragraph, caption, code, emphasis, strong, insertion, deletion), до TalkBack без текста:
   `accesskit_android` описание не передаёт (`docs/gaps.md`, «Accessibility bridge fidelity»).
-  iOS-Simulator-lane (FD15, `flui-driver::lane::ios_simulator`) читает то дерево, что читает
-  VoiceOver на iOS: Simulator.app (с Xcode 27 — DeviceHub) отдаёт элементы iOS-приложения в
+  iOS-Simulator-lane (FD15, `flui-driver::lane::ios_simulator`) читает дерево iOS-приложения
+  через мост Simulator, который Apple не документирует, поэтому за дерево VoiceOver на iOS оно
+  сходит лишь настолько, насколько это подтвердят прогоны: роли выведены, идентификатор не
+  подтверждён. Simulator.app (с Xcode 27 — DeviceHub) отдаёт элементы iOS-приложения в
   accessibility API Mac как элементы своего окна через приватный
   `AccessibilityPlatformTranslation` Apple (`AXPMacPlatformElement` — подкласс
   `NSAccessibilityElement`, по class dump в `idb`), и публичный клиент `AXUIElement` читает их
   детьми группы-экрана устройства в кадрах глобальных точек Mac и нажимает через `AXPress`
   (так читают `ldomaradzki/xctree` и `mgcrea/cupertino`; последний измерил это на macOS 26.6 с
   iOS 26.5 и в DeviceHub Xcode 27). Lane находит окно по заголовку `<устройство> – <рантайм>`
-  среди окон на экране, экран — по форме окна приложения, ставит кадры на окно в пикселях
+  среди окон на экране (два окна или заголовок, общий с другим симулятором списка, —
+  отказ), экран — среди всех групп окна до десяти уровней (`iOSContentGroup`, иначе самая
+  мелкая группа формы окна приложения), ставит кадры на окно в пикселях
   устройства и сопоставляет элементы с деревом приложения по роли (черта UIKit, которую
   `accesskit_ios` 0.2.2 даёт роли AccessKit, и роль моста для неё, таблица
   `lane::ios_simulator::roles`), метке, состояниям и границам среди потомков узла ближайшего
@@ -5148,10 +5152,12 @@ GPU-память простаивающего или невидимого окн
   неоднозначность — `Ambiguous`. Клиент AX общий с macOS-lane (`lane::ax`), `Lane::invoke`
   получает дерево приложения, как `read_tree`. Сценарии в коде: `roles` с плечом
   `AccessibilityApi::SimulatorAx` и `accessibility`; headless-половина —
-  `scenarios::the_ios_roles_scenario_passes_through_the_lane_on_the_headless_app` и
+  `scenarios::the_ios_roles_scenario_passes_through_the_lane_on_the_headless_app`,
+  `scenarios::an_ios_role_row_fails_when_the_bridge_serves_another_role` и
   `scenarios::the_ios_accessibility_scenario_passes_through_the_lane_but_the_activations_effect`
-  (через lane на окне Simulator по сценарию, которое отдаёт экран headless-приложения так, как
-  его отдали бы `accesskit_ios` и мост; нажатие доходит до окна по сценарию, а не до приложения),
+  (через lane на окне Simulator по сценарию, которое отвечает страницами headless-приложения,
+  записанными вручную по правилам `accesskit_ios` 0.2.2, а не таблицей lane; нажатие доходит до
+  окна по сценарию, а не до приложения),
   таблицы, сопоставление и отказы — `ios_simulator_tree::*`; на Windows 11 и WSL Ubuntu 24.04
   2026-11-24 проходят, Mac-часть проверена `cargo check` для aarch64-apple-darwin. Роли моста
   для каждой черты выведены из словаря ролей переводчика, который записал `idb`, а не из

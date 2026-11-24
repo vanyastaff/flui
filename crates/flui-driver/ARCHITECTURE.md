@@ -66,8 +66,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   device or button it lacks, a chord the OS shell takes. Nothing is pressed, so nothing is
   released.
 - **A lane imports no other lane.** What more than one lane uses is a module of `lane`:
-  `lane::walk` (the bounded accessibility walk), `lane::ax` (the macOS accessibility API's
-  client, which the macOS lane and the iOS Simulator lane read through, on macOS),
+  `lane::walk` (the bounded accessibility walk), `lane::ax` (the macOS accessibility API's rules,
+  such as an element's label, on every host, and its client on macOS, which the macOS lane and
+  the iOS Simulator lane read through),
   `lane::pacing` (the guard-watched slices of a pause and the echo deadline), `lane::screen` (a
   window's geometry from its device origin) and `lane::tool` (a host tool, `adb` or `xcrun`, run
   to its end within a deadline and a bound on what it prints).
@@ -138,15 +139,24 @@ app's trees, frames and input, and this crate composes that with what only the O
 - **The iOS Simulator lane reads what the Simulator serves the Mac, and matches it.** The
   Simulator vends the iOS app's elements to AppKit as elements of the device's window (Apple's
   private translation framework), which the public `AXUIElement` API reads; the lane takes no
-  private framework. It finds the window by its title (`<device> – <runtime>`) among the windows
-  on screen, not the Simulator's process by name, and the screen as the window's one group of
-  the app's window's shape; two are refused. The bridge's identifier is unconfirmed, so
-  `Lane::read_tree` and `Lane::invoke` are handed the app's own tree and `lane::ios_simulator::tree`
-  matches each element among the descendants of the node its nearest matched ancestor fits (the
-  bridge serves only the elements VoiceOver reads) by the role `lane::ios_simulator::roles` gives
-  `accesskit_ios`'s trait, its label, its checked and enabled state, an identifier it carries,
-  and its frame on the window; two candidates alike are `Error::Ambiguous`. A press finds its
-  element again by the facts the read gave and presses it through `AXPress`.
+  private framework. Apple documents none of it: the roles the bridge gives each trait are
+  inferred, whether it carries the app's identifier is unconfirmed, and until runs on a Mac pin
+  both the read stands for VoiceOver on iOS only as far as they confirm it (`docs/gaps.md`).
+  The read hands back the elements as served (`accessibility::ScreenElement`), and everything
+  after it is pure code both the Mac and the scripted window go through (`ios_simulator::tree`).
+  The window is the one on screen titled `<device> – <runtime>`, of those naming no other
+  simulator, found without looking the Simulator's process up by name; two windows, or a title
+  another listed simulator shares, are refused. The screen is found by walking every group of the
+  window within ten levels (`tree::find_screen`): an `iOSContentGroup` when there is one, else the
+  shallowest group of the app's window's shape. `Lane::read_tree` and `Lane::invoke` are handed
+  the app's own tree, and each element is matched among the descendants of the node its nearest
+  matched ancestor fits (the bridge serves only the elements VoiceOver reads), an app node once,
+  by the role `lane::ios_simulator::roles` gives `accesskit_ios`'s trait, its label (a static
+  text's from its value, the rule `lane::ax::label` the macOS lane shares), its checked and
+  enabled state, an identifier it carries, and its frame on the window; two candidates alike are
+  `Error::Ambiguous`. A press finds its element again by the facts the read gave, refusing none
+  and two (`tree::locate`), and presses it through `AXPress`. A failure while the process is no
+  longer trusted answers the Accessibility permission, wherever it comes.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

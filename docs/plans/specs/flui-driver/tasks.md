@@ -1385,17 +1385,29 @@ graph LR
     `each_trait_reads_as_the_bridges_role_and_folds_back`,
     `the_role_table_covers_the_vocabulary_once`,
     `the_window_is_titled_by_the_device_and_its_runtime`,
+    `a_title_two_simulators_share_is_refused`,
+    `a_window_naming_another_simulator_is_not_the_devices`,
+    `the_search_reaches_devicehubs_screen_seven_levels_down`,
+    `the_search_reaches_a_screen_inside_simulator_apps_bezel`,
+    `the_search_refuses_two_windows_and_finds_none_in_none`,
     `the_screen_is_the_group_with_the_windows_shape`,
-    `an_elements_points_land_on_the_windows_pixels`, `the_screen_projects_to_the_apps_tree`,
+    `an_elements_points_land_on_the_windows_pixels`, `a_static_texts_label_is_its_value`,
+    `the_screen_projects_to_the_apps_tree`,
     `the_elements_of_a_container_voiceover_skips_find_their_nodes`,
+    `an_app_node_is_matched_once`, `an_app_past_the_budget_projects_as_truncated`,
     `an_element_fits_only_the_node_whose_facts_it_shows`, `an_ambiguous_match_is_refused`,
+    `a_press_refuses_an_element_it_cannot_tell_apart`,
+    `a_permission_taken_back_mid_read_is_named`,
     `the_lane_reads_and_presses_through_the_simulators_window`,
     `the_lane_presses_nothing_it_cannot_match`,
-    `the_lane_refuses_a_window_it_cannot_see_and_a_read_it_was_not_handed`; through the lane on a
-    scripted Simulator window serving the headless app's screen,
-    `scenarios::the_ios_roles_scenario_passes_through_the_lane_on_the_headless_app` and
+    `the_lane_refuses_a_window_it_cannot_see_and_a_read_it_was_not_handed`,
+    `the_roles_page_has_a_row_for_each_role`; through the lane on a scripted Simulator window
+    answering with the headless app's pages written out by hand from `accesskit_ios` 0.2.2's
+    rules, `scenarios::the_ios_roles_scenario_passes_through_the_lane_on_the_headless_app`,
+    `scenarios::an_ios_role_row_fails_when_the_bridge_serves_another_role` and
     `scenarios::the_ios_accessibility_scenario_passes_through_the_lane_but_the_activations_effect`
-    (the press reaches the scripted window, not the headless app). The Mac's half
+    (the press reaches the scripted window, not the headless app); each fix of the review's round
+    taken out by hand fails one of them. The Mac's half
     (`accessibility::MacAccessibility`, the shared client `lane::ax`) type-checks for
     aarch64-apple-darwin (WSL, nightly `cargo check --lib`); its clippy is CI's cross-typecheck.
   - The scenarios on the headless target (CI): `scenarios::the_ios_input_scenario_passes_on_the_headless_target`,
@@ -1440,10 +1452,13 @@ graph LR
   - The `adb` and `xcrun` doors run their tools through one bounded runner, `lane::tool`.
   - The accessibility read is `lane::ios_simulator::accessibility` (`HostAccessibility`, the
     Mac's `MacAccessibility` on macOS, handed to the lane by `IosSimulatorLane::read_through`),
-    `tree` and `roles`. The Simulator's process is not looked up by name (AppKit reports
-    DeviceHub's pid as -1): every owner of a window on screen is asked within a second for a window
-    titled `<device> – <runtime>`, and the screen is the group of that window with the app's
-    window's shape (a child of the window in Simulator.app, an `iOSContentGroup` in DeviceHub).
+    `tree` and `roles`. The read hands back the elements as served; naming, placing and matching
+    them is pure code the scripted window goes through too. The Simulator's process is not looked
+    up by name (AppKit reports DeviceHub's pid as -1): every owner of a window on screen is asked
+    within a second for its windows titled `<device> – <runtime>`; two such windows, or a title
+    another listed simulator shares, are refused. The screen is found by walking every group of
+    the window within ten levels: an `iOSContentGroup` (DeviceHub) when there is one, else the
+    shallowest group of the app's window's shape (Simulator.app, inside its bezel or not).
     `accesskit_ios` serves the elements VoiceOver reads, so an element is matched among the
     descendants of the node its nearest matched ancestor fits. The client is shared with the macOS
     lane as `lane::ax`, and `Lane::invoke` is handed the app's tree as `read_tree` is.

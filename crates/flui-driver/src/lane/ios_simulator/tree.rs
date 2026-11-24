@@ -25,7 +25,9 @@
 //!   one. The match follows that: each element is matched among the descendants of the app node
 //!   its nearest matched ancestor fits, not among that node's children alone, and an app node
 //!   matched once is matched to nothing else. When the screen's one child is an unnamed group
-//!   (the app's root as a container), its children are read as the screen's.
+//!   (the app's root as a container), its children are read as the screen's, and FLUI's
+//!   announcers, which the app's read leaves out, are left out of the projection
+//!   ([`ANNOUNCERS`]).
 //! - **What fits.** An element fits an app node when its native role is the one
 //!   [`roles::native_for`] gives the app node's AccessKit role and toggled state, its label is the
 //!   app node's name, its enabled and checked states are the app node's, an identifier it carries
