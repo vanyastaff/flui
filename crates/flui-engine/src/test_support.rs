@@ -332,9 +332,19 @@ pub(crate) fn resolve_unavailable_gpu(reason: &str, require: bool) {
 /// is a narrower and legitimate skip, and is deliberately left soft: WARP's
 /// capability set is not this crate's to require, and forcing it would make CI
 /// fail on a fact about the runner rather than about the code.
+///
+/// The renderer comes back with its pipeline warm-up finished. A readback test
+/// often makes a device of its own next ([`test_device_and_queue`]), and on
+/// the Vulkan loader a device or instance made while the warm-up names its
+/// pipelines can crash the process (the reason `GpuContext::request` joins a
+/// warm-up first).
 pub(crate) fn renderer_or_skip() -> Option<crate::headless::HeadlessRenderer> {
     match pollster::block_on(crate::headless::HeadlessRenderer::new()) {
-        Ok(renderer) => Some(renderer),
+        Ok(renderer) => {
+            #[cfg(not(target_arch = "wasm32"))]
+            renderer.context().finish_warmup();
+            Some(renderer)
+        }
         Err(error) => {
             resolve_unavailable_gpu(&error.to_string(), require_gpu());
             None
