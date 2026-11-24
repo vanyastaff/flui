@@ -329,18 +329,21 @@ impl Banner {
             .collect()
     }
 
-    /// A chip whose one label has a font size no shaper takes, so it never records.
+    /// A chip that never records: its first label shapes, so each attempt to record it shapes
+    /// that label unless the context holds its layout, and its second has a font size no shaper
+    /// takes.
     #[cfg(test)]
     pub(crate) fn unshapeable() -> Self {
+        let label = |at: f64, font_size: f32| Label {
+            text: BUILDING.to_owned(),
+            at: Offset::new(16.0, at),
+            font_size,
+            color: CHIP_TEXT,
+        };
         Self {
-            bounds: Rect::from_ltrb(8.0, 8.0, 104.0, 32.0),
+            bounds: Rect::from_ltrb(8.0, 8.0, 104.0, 56.0),
             background: CHIP_BACKGROUND,
-            labels: Rc::new([Label {
-                text: BUILDING.to_owned(),
-                at: Offset::new(16.0, 12.0),
-                font_size: f32::NAN,
-                color: CHIP_TEXT,
-            }]),
+            labels: Rc::new([label(12.0, 12.0), label(32.0, f32::NAN)]),
         }
     }
 }
@@ -388,13 +391,19 @@ fn is_bidi_format(character: char) -> bool {
     )
 }
 
+/// The characters Unicode makes a mandatory line break (UAX #14's `BK`, `CR`, `LF` and `NL`):
+/// the shaper breaks a line at each, so a banner line holds none.
+const LINE_BREAKS: [char; 7] = [
+    '\n', '\r', '\u{000B}', '\u{000C}', '\u{0085}', '\u{2028}', '\u{2029}',
+];
+
 /// `text` as one line of at most `limit` characters, the ellipsis included: cut at its first
-/// line break when more than whitespace follows it, each other control character a space, every
-/// bidirectional formatting character dropped, and ended with an ellipsis where it is cut. It
-/// copies no more of `text` than the line it keeps.
+/// [line break](LINE_BREAKS) when more than whitespace follows it, each other control character a
+/// space, every bidirectional formatting character dropped, and ended with an ellipsis where it is
+/// cut. It copies no more of `text` than the line it keeps.
 fn one_line(text: &str, limit: usize) -> String {
     let (first, rest) = text
-        .find(['\n', '\r'])
+        .find(LINE_BREAKS)
         .map_or((text, ""), |at| text.split_at(at));
     let mut cut = !rest.trim().is_empty();
     let mut kept = String::new();
@@ -478,6 +487,12 @@ mod tests {
             ("first\nsecond", 20, "first\u{2026}"),
             ("first\r\nsecond", 20, "first\u{2026}"),
             ("trailing\n", 20, "trailing"),
+            ("first\u{2028}second", 20, "first\u{2026}"),
+            ("first\u{2029}second", 20, "first\u{2026}"),
+            ("first\u{0085}second", 20, "first\u{2026}"),
+            ("first\u{000B}second", 20, "first\u{2026}"),
+            ("first\u{000C}second", 20, "first\u{2026}"),
+            ("trailing\u{2029}", 20, "trailing"),
             ("tab\there", 20, "tab here"),
             ("a\u{202E}cba\u{202C}d", 20, "acbad"),
             (

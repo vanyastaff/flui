@@ -271,12 +271,19 @@ fn a_report_shows_a_node_until_it_succeeds() {
 }
 
 /// Beside the performance overlay the banner is slotted after it, under the device-pixel-ratio
-/// scale, and kept clear of its bounds. Fails if the two overlap or the banner is not scaled.
+/// scale, and kept clear of its bounds while the readout is on screen: the overlay switched off
+/// leaves its readout until a frame paints, and the banner a report publishes before then still
+/// keeps clear of it. Fails if the two overlap or the banner is not scaled.
 fn the_banner_and_the_performance_overlay_show_apart() {
     let (ui_runtime, _log, window) = ui_runtime_at(2.0);
     ui_runtime.set_performance_overlay(true);
     let _first = draw(&ui_runtime).expect("the first frame paints");
-    for state in [BuildState::Building, failed(MAX_DIAGNOSTICS, 0)] {
+    for (state, overlay_on) in [
+        (BuildState::Building, true),
+        (failed(MAX_DIAGNOSTICS, 0), true),
+        (BuildState::Building, false),
+    ] {
+        ui_runtime.set_performance_overlay(overlay_on);
         report(&ui_runtime, &window, state).expect("a report is served");
         let scene = draw(&ui_runtime).expect("the banner is published");
         let version = scene.version();
