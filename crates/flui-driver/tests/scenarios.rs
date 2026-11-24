@@ -34,13 +34,13 @@ use flui_driver::protocol::input::{
     ActionSequence, DeviceClass, ImeAction, InputKind, InputSource, PointerAction, PointerButton,
     PointerDevice, ScrollUnit, TrackpadAction, WheelAction,
 };
+use flui_driver::protocol::report::Check;
+use flui_driver::protocol::report::{Outcome, Report};
 use flui_driver::protocol::semantics::SemanticsRole;
 use flui_driver::protocol::tree::Node;
+use flui_driver::protocol::verdict::Verdict;
 use flui_driver::protocol::wire::Role;
-use flui_driver::report::Check;
-use flui_driver::{
-    Driver, Error, InputPath, Launch, Locator, Outcome, Report, Result, Verdict, expect,
-};
+use flui_driver::{Driver, Error, InputPath, Launch, Locator, Result, expect};
 use flui_foundation::geometry::EdgeInsets;
 use flui_platform::{TargetPlatform, WindowInsets};
 use flui_view::environment::PlatformConvention;
@@ -756,7 +756,7 @@ fn run(
     scenario: impl FnOnce(&mut Driver, &mut Report) -> Result<()>,
 ) -> Report {
     let mut report = Report::new();
-    report.run_scenario(name, &mut driver, scenario);
+    driver.run_scenario(&mut report, name, scenario);
     report
 }
 

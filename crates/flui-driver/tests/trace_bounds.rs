@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use flui_driver::protocol::input::{ActionSequence, InputSource};
 use flui_driver::protocol::native_recording::{MAX_LINE_BYTES, MAX_RECORDING_BYTES, MAX_ROWS};
+use flui_driver::protocol::report::Report;
 use flui_driver::trace::{self, GapReason, Row, Trace, TraceOptions, native};
-use flui_driver::{Driver, Error, Launch, Locator, Report};
+use flui_driver::{Driver, Error, Launch, Locator};
 
 use crate::fixtures::{Counter, Probe};
 

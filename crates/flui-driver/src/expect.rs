@@ -11,8 +11,8 @@ use flui_protocol::wire::Checked;
 
 use crate::compose;
 use crate::error::{Error, Result};
-use crate::report::{Check, Report};
 use crate::window::ElementLocator;
+use flui_protocol::report::{Check, Report};
 
 /// The assertions about what `subject` describes.
 pub fn expect(subject: ElementLocator<'_>) -> Expect<'_> {

@@ -596,3 +596,14 @@ impl Error {
         }
     }
 }
+
+/// A check whose attempt failed with a driver error is cannot-verify exactly when the error is.
+impl flui_protocol::report::CheckFailure for Error {
+    fn is_cannot_verify(&self) -> bool {
+        Self::is_cannot_verify(self)
+    }
+
+    fn missing_capability(&self) -> Option<String> {
+        Self::missing_capability(self)
+    }
+}

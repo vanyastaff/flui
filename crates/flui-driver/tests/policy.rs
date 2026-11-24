@@ -7,11 +7,12 @@ use flui_driver::lane;
 use flui_driver::os_input::OsDevice;
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{ActionSequence, InputSource, PointerAction, PointerDevice};
+use flui_driver::protocol::report::Report;
+use flui_driver::protocol::verdict::Verdict;
 use flui_driver::steps::OsEvent;
 use flui_driver::testing::{LaneLog, ScriptedLane};
 use flui_driver::{
-    Driver, Error, InputPath, InputPolicy, Isolation, Launch, Locator, Report, Scenario, Verdict,
-    WindowSpec,
+    Driver, Error, InputPath, InputPolicy, Isolation, Launch, Locator, Scenario, WindowSpec,
 };
 
 use crate::fixtures::{Counter, Probe};
@@ -118,7 +119,7 @@ fn a_certification_scenario_takes_the_os_path_announced_once_before_its_first_ev
         )
         .certification();
     let mut report = Report::new();
-    report.run_scenario("increments", &mut driver, |driver, report| {
+    driver.run_scenario(&mut report, "increments", |driver, report| {
         driver.declare(scenario)?;
         assert_eq!(driver.input_policy(), InputPolicy::require(InputPath::Os));
         let mut window = driver.main_window()?;
@@ -133,7 +134,10 @@ fn a_certification_scenario_takes_the_os_path_announced_once_before_its_first_ev
     assert_eq!(report.verdict(), Verdict::Pass, "{report}");
     assert_eq!(report.isolation(), Some(Isolation::Shared));
     assert_eq!(report.lane(), Some("scripted"), "the report names the lane");
-    assert_eq!(report.to_json()["lane"], "scripted");
+    assert_eq!(
+        serde_json::to_value(&report).expect("a report serializes")["lane"],
+        "scripted"
+    );
     let announced = report.announcements();
     assert_eq!(
         announced.len(),

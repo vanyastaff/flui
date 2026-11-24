@@ -8,11 +8,12 @@ use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
     ActionSequence, InputSource, PointerAction, PointerButton, PointerDevice,
 };
+use flui_driver::protocol::report::Report;
 use flui_driver::protocol::tree::ReadQuery;
+use flui_driver::protocol::verdict::Verdict;
 use flui_driver::testing::ScriptedLane;
 use flui_driver::{
-    Driver, Error, InputPath, InputPolicy, Isolation, Launch, Locator, Report, TextMatch, Verdict,
-    expect,
+    Driver, Error, InputPath, InputPolicy, Isolation, Launch, Locator, TextMatch, expect,
 };
 
 use crate::fixtures::{Counter, Gallery, Probe};

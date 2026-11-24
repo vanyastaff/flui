@@ -30,10 +30,10 @@ use crate::error::{Error, Result};
 use crate::lane::{Lane, LaneWorker};
 use crate::launch::{AppProcess, Launch};
 use crate::os_input::OsInputLock;
-use crate::report::Report;
 use crate::scenario::Scenario;
 use crate::trace::{self, TraceOptions, TraceSummary, TraceWriter};
 use crate::window::Window;
+use flui_protocol::report::Report;
 
 /// How long past the agent's own reply bound a call over a socket waits before it calls the app
 /// unresponsive: the agent answers `timeout` itself after 5 s, so this fires only for a peer that
@@ -822,6 +822,22 @@ impl Driver {
     /// The OS-input announcements made since the last take.
     pub fn take_announcements(&mut self) -> Vec<String> {
         std::mem::take(&mut self.announcements)
+    }
+
+    /// Run `scenario` against this session as `report`'s check `name` ([`Report::run`]); the
+    /// session's OS-input announcements, isolation and lane join the report.
+    pub fn run_scenario(
+        &mut self,
+        report: &mut Report,
+        name: impl Into<String>,
+        scenario: impl FnOnce(&mut Self, &mut Report) -> Result<()>,
+    ) {
+        report.run(name, |report| scenario(self, report));
+        report.set_isolation(self.isolation());
+        report.set_lane(self.lane_name().map(str::to_owned));
+        for line in self.take_announcements() {
+            report.announce(line);
+        }
     }
 
     /// End the session: the connection closes, a launched app exits on its driver's disconnect

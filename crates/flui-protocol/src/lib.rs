@@ -47,6 +47,7 @@
 //!   a reader such as the driver reads without it;
 //! - [`record`]: `record.start` and `record.stop`, a driver's recording of a window's UI runtime
 //!   in the input recording's format, sent to it row by row as `record` events;
+//! - [`report`]: a run's one [`Report`](report::Report), its checks and their one verdict;
 //! - [`version`]: the [`PROTOCOL_VERSION`](version::PROTOCOL_VERSION) the schema is published under,
 //!   versioned apart from this crate, and the rule for changing it.
 //!
@@ -85,6 +86,7 @@ pub mod motion;
 pub mod native_recording;
 pub mod perf;
 pub mod record;
+pub mod report;
 pub mod semantics;
 pub mod session;
 pub mod snapshot;

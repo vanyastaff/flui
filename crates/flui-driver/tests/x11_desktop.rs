@@ -20,11 +20,12 @@ use flui_driver::protocol::input::{
     ActionSequence, DeviceClass, InputKind, InputSource, PointerAction, PointerButton,
     PointerDevice,
 };
+use flui_driver::protocol::report::Report;
+use flui_driver::protocol::verdict::Verdict;
 use flui_driver::protocol::wire::Role;
 use flui_driver::steps::OsEvent;
 use flui_driver::{
-    Driver, Error, InputPath, InputPolicy, Isolation, Launch, Locator, Report, Scenario, Verdict,
-    WindowSpec, expect,
+    Driver, Error, InputPath, InputPolicy, Isolation, Launch, Locator, Scenario, WindowSpec, expect,
 };
 
 use crate::scenarios;
@@ -307,7 +308,7 @@ fn certify(driver: &mut Driver, name: &str, devices: &[OsDevice]) {
     assert_eq!(driver.input_policy(), InputPolicy::require(InputPath::Os));
 }
 
-fn failed(report: &Report) -> Vec<&flui_driver::report::Check> {
+fn failed(report: &Report) -> Vec<&flui_driver::protocol::report::Check> {
     report
         .checks()
         .iter()
@@ -359,7 +360,7 @@ fn every_role_reads_back_as_its_at_spi_role() {
         .to_have_count(1)
         .expect("the roles page shows");
     let mut report = Report::new();
-    report.run_scenario("roles", &mut driver, scenarios::roles);
+    driver.run_scenario(&mut report, "roles", scenarios::roles);
     assert_eq!(report.verdict(), Verdict::Pass, "{:#?}", failed(&report));
 }
 
@@ -523,7 +524,7 @@ fn the_conformance_scenario_runs_through_the_os_lane() {
     shown(&mut driver);
     certify(&mut driver, "conformance", &[OsDevice::Mouse]);
     let mut report = Report::new();
-    report.run_scenario("conformance", &mut driver, scenarios::conformance);
+    driver.run_scenario(&mut report, "conformance", scenarios::conformance);
     assert_eq!(report.lane(), Some("x11"));
     assert!(
         !report.announcements().is_empty(),
@@ -580,10 +581,10 @@ fn the_device_check_scenarios_run_through_the_os_lane() {
         let mut driver = desktop.session(app);
         certify(&mut driver, name, devices);
         let mut report = Report::new();
-        report.run_scenario(name, &mut driver, scenario);
+        driver.run_scenario(&mut report, name, scenario);
         assert_eq!(report.verdict(), expected, "{name}: {:#?}", failed(&report));
         if expected == Verdict::CannotVerify {
-            let refused: Vec<&flui_driver::report::Check> = failed(&report);
+            let refused: Vec<&flui_driver::protocol::report::Check> = failed(&report);
             assert!(
                 refused
                     .iter()

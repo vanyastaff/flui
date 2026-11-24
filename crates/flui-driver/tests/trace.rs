@@ -7,11 +7,13 @@ use std::time::Duration;
 use flui_driver::pixels::{CaptureSource, Image};
 use flui_driver::protocol::input::{ActionSequence, InputSource};
 use flui_driver::protocol::input_recording::REDACTED;
+use flui_driver::protocol::report::Report;
+use flui_driver::protocol::verdict::Verdict;
 use flui_driver::testing::ScriptedLane;
 use flui_driver::trace::{
     self, CodegenOptions, GapReason, Positions, Privacy, Row, Trace, TraceMode, TraceOptions,
 };
-use flui_driver::{Driver, Error, Isolation, Launch, Locator, Report, TextMatch, Verdict, expect};
+use flui_driver::{Driver, Error, Isolation, Launch, Locator, TextMatch, expect};
 use flui_view::prelude::*;
 use flui_view::{Signal, StatefulView, ViewState};
 use flui_widgets::{Column, RawButton, Text};
@@ -482,7 +484,7 @@ fn a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one(
         .expect("the trace finishes");
     assert_eq!(summary.dir, None);
     assert!(!dir.exists(), "a passing run leaves no trace");
-    assert!(report.to_json()["trace"].is_null());
+    assert!(serde_json::to_value(&report).expect("a report serializes")["trace"].is_null());
 
     let dir = trace_dir(&root, "failing");
     let mut driver = counter();
@@ -500,7 +502,10 @@ fn a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one(
         .finish_trace(&mut report)
         .expect("the trace finishes");
     assert_eq!(summary.dir.as_deref(), Some(dir.as_path()));
-    assert_eq!(report.to_json()["trace"], dir.display().to_string());
+    assert_eq!(
+        serde_json::to_value(&report).expect("a report serializes")["trace"],
+        dir.display().to_string()
+    );
     assert!(Trace::open(&dir).expect("kept").is_complete());
 
     // A run that could not be verified keeps its trace as a failing one does.
@@ -1206,9 +1211,9 @@ fn a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core() 
         .windows()
         .expect("a command between the start and the stop");
     let mut report = Report::new();
-    report.push(flui_driver::Check::new(
+    report.push(flui_driver::protocol::report::Check::new(
         "recorded",
-        flui_driver::Outcome::Passed,
+        flui_driver::protocol::report::Outcome::Passed,
     ));
     let summary = driver
         .finish_trace(&mut report)

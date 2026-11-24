@@ -17,11 +17,12 @@ use flui_driver::lane::macos::{MacosGuard, MacosLane, granted};
 use flui_driver::lane::{ActivityGuard, Lane};
 use flui_driver::os_input::OsDevice;
 use flui_driver::protocol::input::InputKind;
+use flui_driver::protocol::report::Report;
+use flui_driver::protocol::verdict::Verdict;
 use flui_driver::protocol::wire::Role;
 use flui_driver::steps::OsEvent;
 use flui_driver::{
-    Driver, Error, InputPath, InputPolicy, Launch, Locator, Report, Scenario, Verdict, WindowSpec,
-    expect,
+    Driver, Error, InputPath, InputPolicy, Launch, Locator, Scenario, WindowSpec, expect,
 };
 
 use crate::scenarios;
@@ -162,7 +163,7 @@ fn every_role_reads_back_as_its_ax_role_through_the_accessibility_api() {
         .to_have_count(1)
         .expect("the roles page shows");
     let mut report = Report::new();
-    report.run_scenario("macos-roles", &mut driver, scenarios::roles);
+    driver.run_scenario(&mut report, "macos-roles", scenarios::roles);
     assert_eq!(
         report.verdict(),
         Verdict::Pass,
@@ -333,7 +334,7 @@ fn certify(
         .expect("the window is the scenario's");
     assert_eq!(driver.input_policy(), InputPolicy::require(InputPath::Os));
     let mut report = Report::new();
-    report.run_scenario(name, &mut driver, scenario);
+    driver.run_scenario(&mut report, name, scenario);
     assert_eq!(report.lane(), Some("macos"), "{name}");
     let needed: &[Permission] = if sends_input {
         &[Permission::Accessibility, Permission::InputMonitoring]

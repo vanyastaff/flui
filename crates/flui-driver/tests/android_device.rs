@@ -14,7 +14,9 @@
 use std::time::Duration;
 
 use flui_driver::lane::android::{self, AndroidApp};
-use flui_driver::{Error, InputPath, InputPolicy, Outcome, Report, Result, Scenario, Verdict};
+use flui_driver::protocol::report::{Outcome, Report};
+use flui_driver::protocol::verdict::Verdict;
+use flui_driver::{Error, InputPath, InputPolicy, Result, Scenario};
 
 use crate::scenarios;
 
@@ -60,7 +62,7 @@ fn report_of(
             driver
                 .declare(Scenario::new(name).certification())
                 .expect("the scenario is declared");
-            report.run_scenario(name, &mut driver, scenario);
+            driver.run_scenario(&mut report, name, scenario);
         }
         Err(error) => {
             let _ = report.check("the scenario app starts on the device", || -> Result<()> {

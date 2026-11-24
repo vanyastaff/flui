@@ -1,27 +1,36 @@
-//! A scenario's one report: every check with its outcome, the isolation its OS input ran in,
-//! the OS-input announcements made, and one verdict with its exit code.
+//! A run's one report: every check with its outcome, the isolation its OS input ran in, the
+//! OS-input announcements made, and one verdict with its exit code. It lives beside the vocabulary
+//! so every client of a connection can write it (ADR-0400 §7).
 //!
 //! The verdict rule: `fail` when a check failed; else `cannot_verify` when a check that was asked
 //! for could not run, or when nothing was checked at all; else `pass`. A check whose failure
-//! [is cannot-verify](crate::Error::is_cannot_verify) (a capability the target lacks, a lane the host
-//! cannot run, the user taking the desktop back) is `cannot_verify`, never a failure and never a
-//! pass, and the capability it lacked joins the report's list. A pass therefore always says what
-//! it covered: the checks it lists.
+//! [is cannot-verify](CheckFailure::is_cannot_verify) (a capability the target lacks, a lane the
+//! host cannot run, the user taking the desktop back) is `cannot_verify`, never a failure and
+//! never a pass, and the capability it lacked joins the report's list. A pass therefore always
+//! says what it covered: the checks it lists.
 //!
 //! A report prints the same way everywhere: a human block, then one final line
-//! `FLUI_DRIVER_VERDICT=<pass|fail|cannot_verify>`; [`Report::to_json`] is the `--json` form.
+//! `FLUI_DRIVER_VERDICT=<pass|fail|cannot_verify>`; with the `serde` feature it serializes to the
+//! `--json` form.
 
 use std::fmt;
 use std::path::PathBuf;
 
-pub use flui_protocol::session::Isolation;
-pub use flui_protocol::verdict::Verdict;
-
-use crate::driver::Driver;
-use crate::error::Result;
+use crate::session::Isolation;
+use crate::verdict::Verdict;
 
 /// The line prefix a report's last line starts with.
 pub const VERDICT_LINE: &str = "FLUI_DRIVER_VERDICT=";
+
+/// What an error a check's attempt failed with says about that check.
+pub trait CheckFailure: fmt::Display {
+    /// Whether the check could not be made, rather than made and failed: a capability the
+    /// target lacks, a lane the host cannot run, the user taking the desktop back.
+    fn is_cannot_verify(&self) -> bool;
+
+    /// The capability whose absence made the check cannot-verify, when one was named.
+    fn missing_capability(&self) -> Option<String>;
+}
 
 /// How one check came out.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +62,22 @@ impl Outcome {
             Self::CannotVerify { .. } => Verdict::CannotVerify,
         }
     }
+
+    /// The outcome of an attempt that failed with `error`: cannot-verify when the error says
+    /// so, failed otherwise.
+    #[must_use]
+    pub fn of_failure(error: &impl CheckFailure) -> Self {
+        if error.is_cannot_verify() {
+            Self::CannotVerify {
+                reason: error.to_string(),
+                capability: error.missing_capability(),
+            }
+        } else {
+            Self::Failed {
+                reason: error.to_string(),
+            }
+        }
+    }
 }
 
 /// One check of a report.
@@ -78,19 +103,13 @@ impl Check {
         }
     }
 
-    /// The check `name` whose attempt answered `result`: passed on success, cannot-verify on a
-    /// [cannot-verify](crate::Error::is_cannot_verify) failure, failed on any other.
+    /// The check `name` whose attempt answered `result`: passed on success, as
+    /// [`Outcome::of_failure`] on an error.
     #[must_use]
-    pub fn from_result<T>(name: impl Into<String>, result: &Result<T>) -> Self {
+    pub fn from_result<T, E: CheckFailure>(name: impl Into<String>, result: &Result<T, E>) -> Self {
         let outcome = match result {
             Ok(_) => Outcome::Passed,
-            Err(error) if error.is_cannot_verify() => Outcome::CannotVerify {
-                reason: error.to_string(),
-                capability: error.missing_capability(),
-            },
-            Err(error) => Outcome::Failed {
-                reason: error.to_string(),
-            },
+            Err(error) => Outcome::of_failure(error),
         };
         Self::new(name, outcome)
     }
@@ -103,7 +122,61 @@ impl Check {
     }
 }
 
-/// A scenario's report: see the [module docs](self).
+/// A check that did not pass: what a connection's end of a test hands back
+/// ([`Connection::finish`](crate::client::Connection::finish)). A passed check is not one, so a
+/// list of them is empty exactly when nothing failed and nothing went unchecked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure(Check);
+
+impl Failure {
+    /// The check `name` that did not hold, and what was wrong.
+    #[must_use]
+    pub fn failed(name: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self(Check::new(
+            name,
+            Outcome::Failed {
+                reason: reason.into(),
+            },
+        ))
+    }
+
+    /// The check `name` that was asked for and could not be made, why, and the capability it
+    /// lacked when one was.
+    #[must_use]
+    pub fn cannot_verify(
+        name: impl Into<String>,
+        reason: impl Into<String>,
+        capability: Option<String>,
+    ) -> Self {
+        Self(Check::new(
+            name,
+            Outcome::CannotVerify {
+                reason: reason.into(),
+                capability,
+            },
+        ))
+    }
+
+    /// `check`, unless it passed.
+    #[must_use]
+    pub fn try_from_check(check: Check) -> Option<Self> {
+        (check.outcome != Outcome::Passed).then_some(Self(check))
+    }
+
+    /// The check, which did not pass.
+    #[must_use]
+    pub const fn check(&self) -> &Check {
+        &self.0
+    }
+
+    /// The check, to add to a report.
+    #[must_use]
+    pub fn into_check(self) -> Check {
+        self.0
+    }
+}
+
+/// A run's report: see the [module docs](self).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
     checks: Vec<Check>,
@@ -126,11 +199,15 @@ impl Report {
     }
 
     /// Run `attempt` as the check `name` and record how it came out; its result is handed back.
-    pub fn check<T>(
+    ///
+    /// # Errors
+    ///
+    /// What `attempt` failed with, after it is recorded.
+    pub fn check<T, E: CheckFailure>(
         &mut self,
         name: impl Into<String>,
-        attempt: impl FnOnce() -> Result<T>,
-    ) -> Result<T> {
+        attempt: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
         let result = attempt();
         self.push(Check::from_result(name, &result));
         result
@@ -148,32 +225,32 @@ impl Report {
         ));
     }
 
-    /// Run `scenario` against `driver` as the check `name`, the scenario adding its own checks.
-    /// What it fails with becomes the check's outcome; a scenario that returns having made no
-    /// check is `cannot_verify`, since it covered nothing. The driver's OS-input announcements,
-    /// isolation and lane join the report.
-    pub fn run_scenario(
+    /// Run `scenario` as the check `name`, the scenario adding its own checks. What it fails
+    /// with becomes the check's outcome; a scenario that returns having made no check is
+    /// `cannot_verify`, since it covered nothing.
+    pub fn run<E: CheckFailure>(
         &mut self,
         name: impl Into<String>,
-        driver: &mut Driver,
-        scenario: impl FnOnce(&mut Driver, &mut Self) -> Result<()>,
+        scenario: impl FnOnce(&mut Self) -> Result<(), E>,
     ) {
         let before = self.checks.len();
-        let result = scenario(driver, self);
+        let result = scenario(self);
         let checked_nothing = result.is_ok() && self.checks.len() == before;
         if checked_nothing {
             self.not_run(name, "the scenario made no check");
         } else {
             self.push(Check::from_result(name, &result));
         }
-        self.isolation = Some(driver.isolation());
-        self.lane = driver.lane_name().map(str::to_owned);
-        self.announcements.extend(driver.take_announcements());
     }
 
     /// Name the isolation the run's OS input ran in.
     pub fn set_isolation(&mut self, isolation: Isolation) {
         self.isolation = Some(isolation);
+    }
+
+    /// Name the OS lane the run's OS input went through, or none.
+    pub fn set_lane(&mut self, lane: Option<String>) {
+        self.lane = lane;
     }
 
     /// The OS lane the run's OS input went through, when it had one.
@@ -264,45 +341,6 @@ impl Report {
     pub fn exit_code(&self) -> i32 {
         verdict_exit_code(self.verdict())
     }
-
-    /// The report as JSON, the `--json` form of [`Display`](fmt::Display).
-    #[must_use]
-    pub fn to_json(&self) -> serde_json::Value {
-        let checks: Vec<serde_json::Value> = self
-            .checks
-            .iter()
-            .map(|check| {
-                let mut row = serde_json::json!({
-                    "name": check.name,
-                    "verdict": check.outcome.verdict().name(),
-                });
-                match &check.outcome {
-                    Outcome::Passed => {}
-                    Outcome::Failed { reason } => row["reason"] = reason.as_str().into(),
-                    Outcome::CannotVerify { reason, capability } => {
-                        row["reason"] = reason.as_str().into();
-                        if let Some(capability) = capability {
-                            row["capability"] = capability.as_str().into();
-                        }
-                    }
-                }
-                if !check.evidence.is_empty() {
-                    row["evidence"] = check.evidence.clone().into();
-                }
-                row
-            })
-            .collect();
-        serde_json::json!({
-            "verdict": self.verdict().name(),
-            "exit_code": self.exit_code(),
-            "checks": checks,
-            "cannot_verify": self.cannot_verify(),
-            "isolation": self.isolation.map(Isolation::name),
-            "lane": self.lane,
-            "announcements": self.announcements,
-            "trace": self.trace.as_ref().map(|path| path.display().to_string()),
-        })
-    }
 }
 
 /// The exit code of `verdict`: `0` pass, `1` fail, `2` cannot verify.
@@ -350,5 +388,52 @@ impl fmt::Display for Report {
             writeln!(f, "trace: {}", trace.display())?;
         }
         write!(f, "{VERDICT_LINE}{}", self.verdict().name())
+    }
+}
+
+/// The `--json` form: `verdict`, `exit_code`, `checks` (each with its `name` and `verdict`, and
+/// its `reason`, `capability` and `evidence` when it has them), `cannot_verify`, `isolation`,
+/// `lane`, `announcements` and `trace`.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Report {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let mut report = serializer.serialize_struct("Report", 8)?;
+        report.serialize_field("verdict", self.verdict().name())?;
+        report.serialize_field("exit_code", &self.exit_code())?;
+        report.serialize_field("checks", &self.checks)?;
+        report.serialize_field("cannot_verify", &self.cannot_verify())?;
+        report.serialize_field("isolation", &self.isolation.map(Isolation::name))?;
+        report.serialize_field("lane", &self.lane)?;
+        report.serialize_field("announcements", &self.announcements)?;
+        report.serialize_field(
+            "trace",
+            &self.trace.as_ref().map(|path| path.display().to_string()),
+        )?;
+        report.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Check {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        let mut row = serializer.serialize_map(None)?;
+        row.serialize_entry("name", &self.name)?;
+        row.serialize_entry("verdict", self.outcome.verdict().name())?;
+        match &self.outcome {
+            Outcome::Passed => {}
+            Outcome::Failed { reason } => row.serialize_entry("reason", reason)?,
+            Outcome::CannotVerify { reason, capability } => {
+                row.serialize_entry("reason", reason)?;
+                if let Some(capability) = capability {
+                    row.serialize_entry("capability", capability)?;
+                }
+            }
+        }
+        if !self.evidence.is_empty() {
+            row.serialize_entry("evidence", &self.evidence)?;
+        }
+        row.end()
     }
 }
