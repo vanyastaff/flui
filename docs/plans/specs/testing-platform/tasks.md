@@ -56,28 +56,37 @@
 - **Проверка:** nextest `flui-protocol` с таблицей написаний, схемой и таблицей методов;
   `rg 'flui_driver::report' --glob '*.rs'` = 0.
 - **Состояние:** сделано на ветке `claude/project-thread-5mrv8h`. `Connection` реализует
-  `flui_driver::Driver`; приватный трейт транспорта драйвера переименован в `Transport` и остался
-  под ним: протокольный `Connection` обобщён по методу и не может быть объектом, а транспорту
-  нужны hello, события и методы не окна. Ожидание кончается полем `end: WaitEnd`
+  `flui_driver::Driver` над окном, у которого было содержимое при первом вызове, и держит его всю
+  сессию; неотвеченный вызов отпускает ввод окна, которое он назвал. `Unanswered` даёт только
+  таймаут агента (`Error::Timeout { awaited: Awaited::Agent, .. }`); зависший инструмент хоста —
+  `Failed` со своим сообщением. Приватный трейт транспорта драйвера переименован в `Transport` и
+  остался под ним: протокольный `Connection` обобщён по методу и не может быть объектом, а
+  транспорту нужны hello, события и методы не окна. Ожидание кончается полем `end: WaitEnd`
   (`satisfied`, `unsatisfied`, `idle`) вместо `satisfied: bool`. `site` причины несёт
-  `build::SourceLocation`, а не новый тип. Значения до TP2: рантайм не отвечает `Idle` нигде (ему
-  нужны `HostHalf::Complete` и причины только `Test`); причины рантайма без `window`, `owner`,
-  `site`, `cleared_by` из его предикатов, `scope` всегда `runtime_only`; жесты в таблице за
-  агентом, рантайм отвечает на них `not_supported`, их собирает драйвер; `element.scroll_until`
+  `build::SourceLocation`, а не новый тип. Имена: `report::UnpassedCheck` (не прошедшая проверка:
+  провал или нельзя проверить), `client::ClockReading`, `input::TimedInput`. `plan` ограничивает
+  проигранный план (шаг на каждое движение без длительности), а не только длительности
+  последовательности; путь ОС отказывает в прокрутке строками (`os_line_scroll`); повтор трассы
+  другого протокола отказан `Error::Version`. Значения до TP2: рантайм не отвечает `Idle` нигде
+  (ему нужны `HostHalf::Complete` и причины только `Test`); причины рантайма без `window`,
+  `owner`, `site`, `cleared_by` из его предикатов, `scope` всегда `runtime_only`; жесты в таблице
+  за агентом, рантайм отвечает на них `not_supported`, их собирает драйвер; `element.scroll_until`
   не отвечает никто; `agent_input` рантайма ещё понижает последовательность сам, мимо
   `input::plan`. Протокол 0.32, схема `tests/schema/protocol-0.32.json`; в `BREAKING` записаны
   обязательные `UnsettledCause.cleared_by` и `WaitOutcome.end` и удалённое
   `WaitOutcome.satisfied`.
 - **Доказательства:** `cargo test` (heli и nextest на машине нет): `flui-protocol --all-features`
-  18 + 57 + 2, без фич 9 + 26 + 2; `flui-driver` 380 + 1 + 1; `flui-semantics --all-features`
-  68 + 81 + 7; `flui-runtime` 255; `flui-cli` 183 + 66; `flui-testing` 15 + 188 + 11 (3 ignored,
-  ни одного нового); `flui-app --lib agent::served` 11. clippy `--all-targets -D warnings` чист у
-  `flui-protocol` (с фичами и без), `flui-driver` (с фичами и без), `flui-semantics`,
-  `flui-runtime`, `flui-cli`, `flui-testing`, `flui-app`. `cargo check -p flui-driver
-  --all-targets` чист для `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `aarch64-apple-ios` и
-  `aarch64-linux-android` с подставным компилятором C (пустые объекты: SDK целей на машине нет,
-  код C не проверен). `rg 'flui_driver::report' --glob '*.rs'` = 0. Ни один случай trybuild не
-  называет изменённые типы.
+  18 + 58 + 2, без фич 9 + 27 + 2; `flui-driver` с фичами и без 390 + 1 + 1;
+  `flui-semantics --all-features` 68 + 81 + 7; `flui-runtime` 151 + 1 + 97 + 6 + 2; `flui-cli`
+  183 + 66; `flui-testing` 15 + 188 + 11 (3 ignored, ни одного нового); `flui-app --lib
+  agent::served` 11. clippy `--all-targets -D warnings` чист у `flui-protocol` и `flui-driver` (с
+  фичами и без) и `flui-runtime`. `cargo check -p flui-driver --all-targets` чист для
+  `aarch64-apple-darwin` и `x86_64-pc-windows-msvc` с подставным компилятором C (пустые объекты:
+  SDK целей на машине нет, код C не проверен). Новые тесты падают без строк, которые держат:
+  проверено, сломав каждую строку по очереди (окно соединения, адресованное окно отпускания, вид
+  таймаута, граница проигранного плана, `via`/`os` агента, фильтр возможностей, удержание жеста,
+  `cleared_by` каждой причины). `rg 'flui_driver::report' --glob '*.rs'` = 0. Ни один случай
+  trybuild не называет изменённые типы.
 
 ### TP2. Рантайм: один список причин, ответы на методы, жесты в агенте
 
