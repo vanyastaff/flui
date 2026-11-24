@@ -379,7 +379,11 @@ impl<E> Walked<E> {
     #[must_use]
     pub fn detached(&self) -> ScreenElement {
         let mut element = self.element.clone();
-        element.children = self.children.iter().map(Self::detached).collect();
+        element.children = self
+            .children
+            .iter()
+            .map(Self::detached)
+            .collect::<Vec<ScreenElement>>();
         element
     }
 }
@@ -399,8 +403,13 @@ impl<E> ScreenWalk<E> {
     /// The walk as a read of the screen at `frame`, without the handles.
     #[must_use]
     pub fn screen(&self, frame: PointFrame) -> HostScreen {
-        let mut screen =
-            HostScreen::new(frame, self.elements.iter().map(Walked::detached).collect());
+        let mut screen = HostScreen::new(
+            frame,
+            self.elements
+                .iter()
+                .map(Walked::detached)
+                .collect::<Vec<ScreenElement>>(),
+        );
         screen.children_unread = self.children_unread;
         screen.truncated = self.truncated;
         screen
