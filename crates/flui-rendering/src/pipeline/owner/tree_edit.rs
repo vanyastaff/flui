@@ -11,7 +11,7 @@ use flui_foundation::{CreationSite, RenderId, SlotSet};
 use crate::{
     RenderUpdateImpact,
     parent_data::ParentData,
-    storage::{RenderNode, RenderTree},
+    storage::{ParentEdge, RenderNode, RenderTree},
 };
 
 use super::PipelineOwner;
@@ -166,8 +166,12 @@ impl PipelineOwner {
     /// `Drop` on render objects remains strictly node-local (decoded
     /// images, shaped text, GPU handles).
     ///
-    /// Returns the number of nodes removed. Must not run mid-phase —
-    /// the layout/paint walks hold raw borrows into the slab.
+    /// Returns the number of nodes removed. Inside a removal batch for the
+    /// former parent of `id`
+    /// ([`PipelineCell::with_batched_removals`](crate::pipeline::PipelineCell::with_batched_removals))
+    /// that parent's child list keeps the stale id, and the parent is marked,
+    /// until the batch ends and compacts that list once. Must not run
+    /// mid-phase — the layout/paint walks hold raw borrows into the slab.
     pub fn remove_render_object(&mut self, id: RenderId) -> usize {
         debug_assert!(
             !self.scheduler.debug_doing_layout() && !self.scheduler.debug_doing_paint(),
@@ -175,16 +179,104 @@ impl PipelineOwner {
              the walks hold borrows into the slab; defer removal to \
              between-frame work",
         );
+        let former_parent = self.render_tree.parent(id);
+        let batched = former_parent.is_some() && former_parent == self.removal_batch.parent;
+        let edge = if batched {
+            ParentEdge::Compact
+        } else {
+            ParentEdge::Detach
+        };
 
+        let mut removed_nodes = std::mem::take(&mut self.removed_nodes);
+        if let Some(parent_id) = self.take_render_subtree(id, edge, &mut removed_nodes) {
+            if batched {
+                self.removal_batch.stale = true;
+            } else {
+                self.note_render_child_membership_changed(parent_id);
+            }
+        }
+        let count = removed_nodes.len();
+        tracing::debug!(?id, count, "remove_render_object: subtree disposed");
+        // Destructors run last, against a committed tree and owner (ADR-0252,
+        // ADR-0287): one that panics leaves nothing half-removed; in a batch,
+        // the stale list stays recorded for the compaction.
+        // `clear` drops every node even when one panics; the buffer is kept
+        // only when none did.
+        removed_nodes.clear();
+        self.removed_nodes = removed_nodes;
+        count
+    }
+
+    /// Opens a removal batch for the children of `parent`: until the
+    /// matching [`end_removal_batch`](Self::end_removal_batch),
+    /// [`remove_render_object`](Self::remove_render_object) of a child of
+    /// `parent` leaves `parent`'s list to the batch's end. Returns whether it
+    /// opened one: a batch already open for another parent stays the open one,
+    /// and this scope's removals write their lists at once.
+    pub(crate) fn begin_removal_batch(&mut self, parent: RenderId) -> bool {
+        match self.removal_batch.parent {
+            None => {
+                self.removal_batch.parent = Some(parent);
+                self.removal_batch.depth = 1;
+                true
+            }
+            Some(open) if open == parent => {
+                self.removal_batch.depth += 1;
+                true
+            }
+            Some(_) => false,
+        }
+    }
+
+    /// Closes the innermost scope of the open removal batch; closing the last
+    /// one compacts the batch's parent's child list.
+    pub(crate) fn end_removal_batch(&mut self) {
+        self.removal_batch.depth = self.removal_batch.depth.saturating_sub(1);
+        if self.removal_batch.depth == 0 {
+            self.close_removal_batch();
+        }
+    }
+
+    /// Closes the removal batch still open, if any, and compacts what it left.
+    ///
+    /// A batch whose end never ran (its scope unwound before the end) leaves
+    /// stale ids in its parent's list; the layout pass calls this first, so
+    /// no frame walks a list that names a removed node.
+    ///
+    /// The compaction drops the removed ids from the parent's list in one
+    /// pass and marks the parent as
+    /// [`remove_render_object`](Self::remove_render_object) marks one: `k`
+    /// removals from a parent of `n` children cost `O(n + k)`, not `O(k·n)`.
+    pub(super) fn close_removal_batch(&mut self) {
+        let batch = std::mem::take(&mut self.removal_batch);
+        // A parent removed later in the batch went with its list.
+        if batch.stale
+            && let Some(parent_id) = batch.parent
+            && self.render_tree.contains(parent_id)
+        {
+            self.render_tree.drop_removed_children(parent_id);
+            self.note_render_child_membership_changed(parent_id);
+        }
+    }
+
+    /// Steps 1–5 of [`remove_render_object`](Self::remove_render_object) for
+    /// the subtree at `id`: its nodes go into `removed_nodes`, undropped.
+    /// Returns the former parent of `id`, whose membership changed, or `None`
+    /// for a root or a stale `id`. Under [`ParentEdge::Compact`] the parent's
+    /// list still names `id` and the caller compacts it.
+    fn take_render_subtree(
+        &mut self,
+        id: RenderId,
+        edge: ParentEdge,
+        removed_nodes: &mut Vec<RenderNode>,
+    ) -> Option<RenderId> {
         let former_parent = self.render_tree.parent(id);
         let subtree = self
             .render_tree
             .collect_subtree(id, std::mem::take(&mut self.subtree_buffers));
         if subtree.ids().is_empty() {
-            self.subtree_buffers = self
-                .render_tree
-                .take_subtree(subtree, &mut self.removed_nodes);
-            return 0;
+            self.subtree_buffers = self.render_tree.take_subtree(subtree, edge, removed_nodes);
+            return None;
         }
 
         // Withdraw the entire subtree before any user-owned parent data or
@@ -221,23 +313,11 @@ impl PipelineOwner {
             }
         }
 
-        let mut removed_nodes = std::mem::take(&mut self.removed_nodes);
-        self.subtree_buffers = self.render_tree.take_subtree(subtree, &mut removed_nodes);
-        let count = removed_nodes.len();
+        self.subtree_buffers = self.render_tree.take_subtree(subtree, edge, removed_nodes);
         if self.root_id == Some(id) {
             self.root_id = None;
         }
-        if let Some(parent_id) = former_parent {
-            self.note_render_child_membership_changed(parent_id);
-        }
-        tracing::debug!(?id, count, "remove_render_object: subtree disposed");
-        // Destructors run last, against a committed tree and owner (ADR-0252,
-        // ADR-0287): one that panics leaves nothing half-removed.
-        // `clear` drops every node even when one panics; the buffer is kept
-        // only when none did.
-        removed_nodes.clear();
-        self.removed_nodes = removed_nodes;
-        count
+        former_parent
     }
 
     /// Adopt an existing render node and invalidate every parent phase whose
@@ -366,4 +446,22 @@ impl ParentDataSlot<'_> {
     pub fn clear(&mut self) -> bool {
         self.node.clear_parent_data()
     }
+}
+
+/// The removal batch open on an owner: the one parent whose child removals
+/// it leaves to its end, how many scopes opened it, and whether a removal
+/// left that parent's list naming a removed child. One owner for this state:
+/// it changes only in `PipelineOwner`'s batch methods.
+#[derive(Debug, Default)]
+pub(super) struct RemovalBatch {
+    /// The parent of the open batch; `None` between batches. One parent, not
+    /// a set: a reconcile removes the children of one render parent, and a
+    /// removal under any other parent (a row's own child, removed as its
+    /// element unmounts before the row) writes that list at once, so nothing
+    /// grows per removed row.
+    parent: Option<RenderId>,
+    /// Scopes open for `parent`; the batch ends when the last one closes.
+    depth: u32,
+    /// Whether `parent`'s list names a child removed in the batch.
+    stale: bool,
 }
