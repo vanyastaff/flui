@@ -954,6 +954,10 @@ fn text_decorations_contract() {
                 td::a_decoration_takes_its_glyphs_colour_unless_it_names_one,
             ),
             (
+                "a_recoloured_decoration_takes_its_glyphs_new_colour",
+                td::a_recoloured_decoration_takes_its_glyphs_new_colour,
+            ),
+            (
                 "a_child_clears_an_inherited_decoration",
                 td::a_child_clears_an_inherited_decoration,
             ),
@@ -1083,6 +1087,10 @@ fn shape_cache_contract() {
             (
                 "a_long_paragraph_is_not_kept",
                 sc::a_long_paragraph_is_not_kept,
+            ),
+            (
+                "a_paragraph_whose_painting_passes_the_entry_size_is_not_kept",
+                sc::a_paragraph_whose_painting_passes_the_entry_size_is_not_kept,
             ),
             (
                 "the_least_recently_used_paragraph_leaves_first",

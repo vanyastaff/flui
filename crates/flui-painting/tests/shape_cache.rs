@@ -283,6 +283,22 @@ pub(crate) fn a_long_paragraph_is_not_kept() {
     );
 }
 
+/// The painting a kept paragraph remembers counts toward the size an entry
+/// may have: 450 characters lay out within it, and their glyphs painted take
+/// them past it, so they are shaped every time.
+pub(crate) fn a_paragraph_whose_painting_passes_the_entry_size_is_not_kept() {
+    let mut context = TextContext::new(&fonts());
+    let text = TEXT.chars().cycle().take(450).collect::<String>();
+    let spans = plain(&text);
+    let paragraph = spec(&spans);
+    keep(&mut context, &paragraph);
+    assert_eq!(
+        lay_out(&mut context, &paragraph).1,
+        1,
+        "a painted paragraph of 450 characters is not kept"
+    );
+}
+
 /// Past the count the context keeps, the paragraph used longest ago leaves
 /// first, and the one used since stays.
 pub(crate) fn the_least_recently_used_paragraph_leaves_first() {

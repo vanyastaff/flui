@@ -43,9 +43,9 @@ const MAX_ENTRIES: usize = 128;
 /// first and this bounds one of paragraphs.
 const MAX_BYTES: usize = 512 * 1024;
 
-/// The largest paragraph kept, by [`held_bytes`]: about 500 characters of
-/// text on a few lines. A longer one is rarely laid out twice the same, and
-/// would push out many short ones.
+/// The largest paragraph kept, by [`held_bytes`]: about 400 characters of
+/// text on a few lines, with the painting it keeps. A longer one is rarely
+/// laid out twice the same, and would push out many short ones.
 const MAX_ENTRY_BYTES: usize = 32 * 1024;
 
 /// How many paragraphs laid out once are remembered by hash, waiting for the
