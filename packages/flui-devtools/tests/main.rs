@@ -6,6 +6,7 @@
     clippy::disallowed_methods,
     reason = "test code catches a panic to assert on it (ADR-0303 §5)"
 )]
+mod capture_sinks;
 mod frame_snapshots;
 mod gesture_inspector;
 mod profiler;

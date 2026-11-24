@@ -12,7 +12,7 @@ use flui_sdk::foundation::UiRuntimeId;
 use parking_lot::Mutex;
 use web_time::Duration;
 
-use crate::capture::{Capture, CapturedFrame};
+use crate::capture::{Capture, CaptureSubscription, CapturedFrame};
 use crate::phase::Phase;
 
 /// The period a frame that reports none is judged against: one 60 Hz frame.
@@ -290,6 +290,14 @@ impl ProfilerInner {
     }
 }
 
+/// A profiler's statistics and the registration of the sink that records them.
+struct ProfilerShared {
+    state: Mutex<ProfilerInner>,
+    /// Removes the sink from the capture when the last [`Profiler`] handle drops. The sink holds
+    /// this state weakly, so the two make no cycle.
+    _sink: CaptureSubscription,
+}
+
 /// Frame statistics of one UI runtime, read from a [`Capture`].
 ///
 /// The profiler records no spans itself. [`Capture::layer`] measures the frame span the
@@ -304,7 +312,8 @@ impl ProfilerInner {
 /// where it shares the capture's time base.
 ///
 /// A handle is cheap to clone, and every clone reads the same statistics. The capture holds
-/// the profiler only weakly: once the last handle is dropped, its frames are no longer
+/// the profiler only weakly, and the profiler holds its sink's [`CaptureSubscription`]: once
+/// the last handle is dropped, its sink leaves the capture and its frames are no longer
 /// recorded.
 ///
 /// # One runtime per profiler
@@ -339,36 +348,41 @@ impl ProfilerInner {
 /// ```
 #[derive(Clone)]
 pub struct Profiler {
-    inner: Arc<Mutex<ProfilerInner>>,
+    shared: Arc<ProfilerShared>,
 }
 
 impl Profiler {
-    /// A profiler of the frames `capture` closes, from now on.
+    /// A profiler of the frames `capture` closes, from now on, until its last handle drops.
     ///
     /// It records the outermost frames of the runtime [`ProfilerConfig::runtime`] selects, as
     /// [`Profiler`] describes.
     #[must_use]
     pub fn over(capture: &Capture, config: ProfilerConfig) -> Self {
-        let inner = Arc::new(Mutex::new(ProfilerInner::new(config)));
-        let reader: Weak<Mutex<ProfilerInner>> = Arc::downgrade(&inner);
-        capture.on_frame(move |_, frame| {
-            if let Some(inner) = reader.upgrade() {
-                inner.lock().ingest(frame);
+        let shared = Arc::new_cyclic(|reader: &Weak<ProfilerShared>| {
+            let reader = Weak::clone(reader);
+            let sink = capture.on_frame(move |_, frame| {
+                if let Some(shared) = reader.upgrade() {
+                    shared.state.lock().ingest(frame);
+                }
+            });
+            ProfilerShared {
+                state: Mutex::new(ProfilerInner::new(config)),
+                _sink: sink,
             }
         });
-        Self { inner }
+        Self { shared }
     }
 
     /// The most recent frame, unless no frame is retained.
     #[must_use]
     pub fn frame_stats(&self) -> Option<FrameStats> {
-        self.inner.lock().history.back().cloned()
+        self.shared.state.lock().history.back().cloned()
     }
 
     /// The retained frames, oldest first: at most [`ProfilerConfig::max_frame_history`].
     #[must_use]
     pub fn frame_history(&self) -> Vec<FrameStats> {
-        self.inner.lock().history.iter().cloned().collect()
+        self.shared.state.lock().history.iter().cloned().collect()
     }
 
     /// Frames per second over the retained history: one less than the number of retained
@@ -381,20 +395,20 @@ impl Profiler {
     /// once.
     #[must_use]
     pub fn frame_rate(&self) -> Option<f64> {
-        self.inner.lock().frame_rate()
+        self.shared.state.lock().frame_rate()
     }
 
     /// The percentage of recorded frames that were jank, retained or not.
     #[must_use]
     pub fn jank_percentage(&self) -> f64 {
-        self.inner.lock().jank_percentage()
+        self.shared.state.lock().jank_percentage()
     }
 }
 
 impl fmt::Debug for Profiler {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Profiler")
-            .field("frame_count", &self.inner.lock().total_frames)
+            .field("frame_count", &self.shared.state.lock().total_frames)
             .finish_non_exhaustive()
     }
 }
@@ -742,6 +756,28 @@ mod tests {
             history[0].phases().is_empty(),
             "the nested frame's paint is its own: {history:?}"
         );
+    }
+
+    /// A profiler's sink leaves the capture with the profiler's last handle, so making and
+    /// dropping profilers over one capture leaves no sink behind.
+    ///
+    /// Fails when the sink stays registered, a dead closure that runs on every frame.
+    #[test]
+    fn dropping_the_last_profiler_removes_its_sink() {
+        let capture = Capture::new();
+        let profiler = Profiler::over(&capture, ProfilerConfig::default());
+        let clone = profiler.clone();
+        assert_eq!(capture.sink_count(), 1);
+
+        drop(profiler);
+        assert_eq!(capture.sink_count(), 1, "a clone still records");
+        drop(clone);
+        assert_eq!(capture.sink_count(), 0, "the last handle took its sink");
+
+        for _ in 0..3 {
+            drop(Profiler::over(&capture, ProfilerConfig::default()));
+        }
+        assert_eq!(capture.sink_count(), 0);
     }
 
     /// The summary is one line for the frame and one per phase.

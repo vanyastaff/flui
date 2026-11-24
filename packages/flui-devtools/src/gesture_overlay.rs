@@ -22,7 +22,7 @@
 //! ```
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::rc::{Rc, Weak};
 use std::time::Duration;
@@ -41,6 +41,7 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, Column, IgnorePointer, Listener, Padding, Positioned, SizedBox, Stack, Text,
 };
+use rustc_hash::FxHashSet;
 
 use crate::gesture_inspector::{
     ContestReport, DEFAULT_CONTEST_CAPACITY, GestureInspector, Verdict,
@@ -296,8 +297,8 @@ impl Live {
     }
 
     /// The pointers of every contest the inspector still retains.
-    fn retained_pointers(&self) -> HashSet<PointerId> {
-        let mut pointers = HashSet::new();
+    fn retained_pointers(&self) -> FxHashSet<PointerId> {
+        let mut pointers = FxHashSet::default();
         if let Some(inspector) = self.inspector.borrow().as_ref() {
             inspector.visit_contests(|contest| {
                 pointers.insert(contest.pointer);

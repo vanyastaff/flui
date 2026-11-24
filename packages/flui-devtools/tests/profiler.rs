@@ -9,14 +9,14 @@ use tracing::Dispatch;
 use tracing_subscriber::layer::SubscriberExt;
 
 /// Runs `body` with `capture`'s layer installed on this thread.
-fn capturing(capture: &Capture, body: impl FnOnce()) {
+pub(crate) fn capturing(capture: &Capture, body: impl FnOnce()) {
     flui_testing::log_capture::disarm_interest_cache();
     let subscriber = tracing_subscriber::registry().with(capture.layer());
     tracing::dispatcher::with_default(&Dispatch::new(subscriber), body);
 }
 
 /// One frame span as the scheduler opens it, reporting `period_us` and running for `takes`.
-fn frame(period_us: Option<u64>, takes: Duration) {
+pub(crate) fn frame(period_us: Option<u64>, takes: Duration) {
     let frame = tracing::debug_span!(
         target: "flui.frame",
         "frame",
