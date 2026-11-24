@@ -15,6 +15,7 @@ const SCENARIOS: &[&str] = &[
     "caret_blink_in_10k_list",
     "full_reassemble",
     "idle_frame_retained_scene",
+    "label_change_kept",
     "label_change_large",
     "label_change_small",
     "list_10k_scroll_one_screen",
