@@ -5,10 +5,12 @@
 //! looks the paragraph's text, placeholders and styles up in its font
 //! collection's `ParagraphCache` (128 entries, least recently used out) and
 //! breaks the shaped runs it finds at the new width. Here an entry is the
-//! layout already broken into lines and aligned, shared through an [`Arc`],
-//! so a hit copies no glyph and breaks no line; the width, the alignment and
-//! the line limit are therefore part of the key, and a paragraph laid out at
-//! another width is shaped again.
+//! shaping already broken into lines and aligned, with its text and span
+//! records, shared through an [`Arc`], so a hit copies no glyph and breaks no
+//! line; the width, the alignment and the line limit are therefore part of the
+//! key, and a paragraph laid out at another width is shaped again. The entry
+//! also keeps the paragraph its first painter built for the display list, which
+//! the later painters share.
 //!
 //! A paragraph is kept only the second time it is laid out. Text seen once (a
 //! counter, a clock, a field being typed into, the rows of a long list
@@ -16,18 +18,20 @@
 //! allocates nothing, and does not push out the paragraphs that come back.
 //!
 //! The entries are bounded by count and by an estimate of the bytes their
-//! layouts and keys hold ([`held_bytes`]); a font registered on the
+//! layouts, paintings and keys hold ([`held_bytes`]); a font registered on the
 //! collection, or a [`reclaim`](crate::TextContext::reclaim), drops them all.
 
 use std::hash::Hasher as _;
 use std::mem::{size_of, size_of_val};
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use flui_foundation::TextDirection;
 use parley::Layout;
 
-use super::shape::{ParagraphLayout, ParagraphSpec, SpanBrush};
+use super::shape::{ParagraphLayout, ParagraphSpec, SpanBrush, SpanInfo};
+use crate::display_list::ShapedParagraph;
+use crate::styling::Color;
 use crate::text_layout::TextLayoutResult;
 use crate::typography::{TextAlign, TextStyle};
 
@@ -74,48 +78,106 @@ const LINE_ITEM_BYTES: usize = 40;
 /// `StyleMetrics`, rounded up.
 const STYLE_BYTES: usize = 128;
 
-/// A paragraph's layout: its own, or one it shares with the shape cache.
+/// What shaping a paragraph produced and nothing changes afterwards: the
+/// Parley layout, the text it holds, the span records and the colour each
+/// paint run was shaped with.
+#[derive(Default)]
+pub(super) struct Shaping {
+    pub(super) layout: Layout<SpanBrush>,
+    /// The text the layout holds, an appended ellipsis included.
+    pub(super) text: String,
+    pub(super) spans: Vec<SpanInfo>,
+    /// The colour each paint run paints with, by the run's index in its
+    /// glyph runs' [`SpanBrush`], as the spans gave them.
+    pub(super) run_colors: Box<[Option<Color>]>,
+}
+
+/// A shaping the cache keeps, with the paragraph it was first painted as.
+pub(super) struct KeptShaping {
+    shaping: Shaping,
+    /// The paragraph built from the shaping for paint, over the root colour
+    /// it was built for: a later layout with the shaped run colours under that
+    /// root shares it instead of collecting the glyphs again.
+    painted: OnceLock<Painted>,
+}
+
+struct Painted {
+    root: Option<Color>,
+    paragraph: Arc<ShapedParagraph>,
+}
+
+/// A paragraph's shaping: its own, or one it shares with the shape cache.
 ///
-/// A paragraph is laid out into a layout of its own, which allocates no
-/// `Arc`; the layout moves into one only when the cache keeps the paragraph.
-/// An `Arc` and not an `Rc`: a painter keeps its layout, and a render object
+/// A paragraph is shaped into a shaping of its own, which allocates no `Arc`;
+/// the shaping moves into one only when the cache keeps the paragraph. An
+/// `Arc` and not an `Rc`: a painter keeps its layout, and a render object
 /// holding the painter moves between threads.
 #[expect(
     clippy::large_enum_variant,
-    reason = "an own layout is what most paragraphs hold: boxing it would allocate on the shapings the cache does not keep"
+    reason = "an own shaping is what most paragraphs hold: boxing it would allocate on the shapings the cache does not keep"
 )]
-pub(super) enum HeldLayout {
-    Own(Layout<SpanBrush>),
-    Shared(Arc<Layout<SpanBrush>>),
+pub(super) enum HeldShaping {
+    Own(Shaping),
+    Shared(Arc<KeptShaping>),
 }
 
-impl HeldLayout {
-    /// The layout, shared from now on: one of its own moves into an `Arc`.
-    pub(super) fn share(&mut self) -> Arc<Layout<SpanBrush>> {
-        let layout = match std::mem::replace(self, Self::Own(Layout::default())) {
-            Self::Own(layout) => Arc::new(layout),
-            Self::Shared(layout) => layout,
+impl HeldShaping {
+    /// The shaping, shared from now on: one of its own moves into an `Arc`.
+    pub(super) fn share(&mut self) -> Arc<KeptShaping> {
+        let kept = match std::mem::replace(self, Self::Own(Shaping::default())) {
+            Self::Own(shaping) => Arc::new(KeptShaping {
+                shaping,
+                painted: OnceLock::new(),
+            }),
+            Self::Shared(kept) => kept,
         };
-        *self = Self::Shared(Arc::clone(&layout));
-        layout
+        *self = Self::Shared(Arc::clone(&kept));
+        kept
     }
 
     /// The layout's buffers, when nothing else holds them.
     pub(super) fn into_unshared(self) -> Option<Layout<SpanBrush>> {
         match self {
-            Self::Own(layout) => Some(layout),
-            Self::Shared(layout) => Arc::into_inner(layout),
+            Self::Own(shaping) => Some(shaping.layout),
+            Self::Shared(kept) => Arc::into_inner(kept).map(|kept| kept.shaping.layout),
         }
+    }
+
+    /// The paragraph a kept shaping was first painted as, when that was under
+    /// `root`; otherwise the one `paint` builds, which a kept shaping not yet
+    /// painted remembers.
+    pub(super) fn painted(
+        &self,
+        root: Option<Color>,
+        paint: impl FnOnce() -> ShapedParagraph,
+    ) -> Arc<ShapedParagraph> {
+        let Self::Shared(kept) = self else {
+            return Arc::new(paint());
+        };
+        if let Some(painted) = kept.painted.get() {
+            if painted.root == root {
+                return Arc::clone(&painted.paragraph);
+            }
+            return Arc::new(paint());
+        }
+        let paragraph = Arc::new(paint());
+        // A painting another holder of the shaping set first stays; this one
+        // is built from the same shaping and root.
+        let _ = kept.painted.set(Painted {
+            root,
+            paragraph: Arc::clone(&paragraph),
+        });
+        paragraph
     }
 }
 
-impl Deref for HeldLayout {
-    type Target = Layout<SpanBrush>;
+impl Deref for HeldShaping {
+    type Target = Shaping;
 
-    fn deref(&self) -> &Layout<SpanBrush> {
+    fn deref(&self) -> &Shaping {
         match self {
-            Self::Own(layout) => layout,
-            Self::Shared(layout) => layout,
+            Self::Own(shaping) => shaping,
+            Self::Shared(kept) => &kept.shaping,
         }
     }
 }
@@ -248,10 +310,11 @@ fn spec_hash(spec: &ParagraphSpec<'_>) -> u64 {
 /// An estimate of the bytes `paragraph`'s layout holds, from what Parley's
 /// public API counts (characters, glyphs, runs, lines) and the record sizes
 /// of Parley 0.13, with the text and span records the paragraph holds beside
-/// it. Lengths, not capacities: a buffer may hold up to twice its length.
+/// it and the [`ShapedParagraph`] its painting keeps. Lengths, not
+/// capacities: a buffer may hold up to twice its length.
 fn held_bytes(paragraph: &ParagraphLayout) -> usize {
-    let layout: &Layout<SpanBrush> = &paragraph.layout;
-    let characters = paragraph.text.chars().count();
+    let layout: &Layout<SpanBrush> = &paragraph.shaping.layout;
+    let characters = paragraph.shaping.text.chars().count();
     let mut glyphs = 0;
     // A run that spans lines counts once per line it is on, as its line item
     // does: an overestimate of its run records.
@@ -270,11 +333,27 @@ fn held_bytes(paragraph: &ParagraphLayout) -> usize {
         + glyphs.saturating_sub(characters) * GLYPH_BYTES
         + line_runs * (RUN_BYTES + LINE_ITEM_BYTES)
         + layout.len() * LINE_BYTES
-        + (paragraph.spans.len() + 1) * STYLE_BYTES
+        + (paragraph.shaping.spans.len() + 1) * STYLE_BYTES
         + size_of::<ParagraphLayout>()
-        + paragraph.text.len()
-        + size_of_val(paragraph.spans.as_slice())
-        + size_of_val(&*paragraph.run_colors)
+        + paragraph.shaping.text.len()
+        + size_of_val(paragraph.shaping.spans.as_slice())
+        + size_of_val(&*paragraph.shaping.run_colors)
+        + painted_bytes(paragraph, glyphs, line_runs)
+}
+
+/// What the [`ShapedParagraph`] a kept paragraph is painted as holds: a
+/// glyph per glyph and a run record per line run of its kept lines, the
+/// text, a baseline per line, a description per span and a face.
+fn painted_bytes(paragraph: &ParagraphLayout, glyphs: usize, line_runs: usize) -> usize {
+    use crate::display_list::{FontFace, ShapedGlyph, SpanDescription};
+    size_of::<ShapedParagraph>()
+        + 2 * size_of::<usize>()
+        + glyphs * size_of::<ShapedGlyph>()
+        + line_runs * size_of::<crate::display_list::RunData>()
+        + paragraph.shaping.text.len()
+        + paragraph.shaping.layout.len() * size_of::<f32>()
+        + paragraph.shaping.spans.len() * size_of::<SpanDescription>()
+        + size_of::<FontFace>()
 }
 
 struct Entry {
@@ -413,7 +492,7 @@ impl ShapeCache {
         let entry = self.entries.swap_remove(oldest);
         self.bytes -= entry.bytes;
         if spare.is_none() {
-            *spare = entry.paragraph.layout.into_unshared();
+            *spare = entry.paragraph.shaping.into_unshared();
         }
     }
 }

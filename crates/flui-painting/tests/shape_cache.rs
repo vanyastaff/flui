@@ -481,3 +481,92 @@ pub(crate) fn an_evicted_layout_is_built_into() {
         "a shaping into the evicted layout asked the heap for {into_evicted} blocks, a fresh one {fresh}"
     );
 }
+
+/// The paragraph `painter` paints, as its display list carries it.
+fn painted(painter: &TextPainter) -> std::sync::Arc<flui_painting::ShapedParagraph> {
+    use flui_foundation::geometry::Offset;
+    use flui_painting::{Canvas, DrawOp};
+    let mut canvas = Canvas::new();
+    painter.paint(&mut canvas, Offset::ZERO);
+    canvas
+        .finish()
+        .iter()
+        .find_map(|command| match &command.op {
+            DrawOp::Paragraph { paragraph, .. } => Some(std::sync::Arc::clone(paragraph)),
+            _ => None,
+        })
+        .expect("a laid-out painter paints its paragraph")
+}
+
+/// A painter of `span`, laid out on `context` at 400 pixels.
+fn laid_out(context: &mut TextContext, span: TextSpan) -> TextPainter {
+    let mut painter = TextPainter::new()
+        .with_text(span)
+        .with_text_direction(TextDirection::Ltr);
+    painter
+        .layout(context, 0.0, 400.0)
+        .expect("the fixture lays out");
+    painter
+}
+
+/// The painter whose layout the context keeps paints the glyphs it built,
+/// and every later painter of that paragraph paints those same glyphs
+/// instead of collecting them from the layout again; the painter before the
+/// paragraph was kept built its own.
+pub(crate) fn the_painters_of_a_kept_paragraph_share_its_glyphs() {
+    let mut context = TextContext::new(&fonts());
+    let first = laid_out(&mut context, TextSpan::new(TEXT));
+    let kept = laid_out(&mut context, TextSpan::new(TEXT));
+    let shared = laid_out(&mut context, TextSpan::new(TEXT));
+    assert!(
+        std::sync::Arc::ptr_eq(&painted(&kept), &painted(&shared)),
+        "a layout of a kept paragraph paints the glyphs its first painting built"
+    );
+    assert!(
+        !std::sync::Arc::ptr_eq(&painted(&first), &painted(&kept)),
+        "a paragraph laid out once is not kept, and its painter's glyphs are its own"
+    );
+    let glyphs = |painter: &TextPainter| -> Vec<flui_painting::ShapedGlyph> {
+        painted(painter)
+            .runs()
+            .flat_map(|run| run.glyphs().to_vec())
+            .collect()
+    };
+    assert_eq!(
+        glyphs(&first),
+        glyphs(&shared),
+        "the shared glyphs are the ones the layout gives"
+    );
+}
+
+/// A root colour is part of what keys a kept paragraph, through the root
+/// style its spans inherit: a painter under another root over the same span
+/// lays its own paragraph out and paints its own glyphs, and a painter under
+/// the kept root shares them.
+pub(crate) fn a_kept_paragraph_under_another_root_colour_is_painted_apart() {
+    let mut context = TextContext::new(&fonts());
+    let blue = TextStyle::default().with_color(Color::rgb(0, 0, 255));
+    let under = |root: Color| {
+        TextSpan::with_children(vec![TextSpan::styled(TEXT, blue.clone())])
+            .with_style(TextStyle::default().with_color(root))
+    };
+    let red = Color::rgb(255, 0, 0);
+    laid_out(&mut context, under(red));
+    let kept = laid_out(&mut context, under(red));
+    let before = text_context_shapings(&context);
+    let other_root = laid_out(&mut context, under(Color::rgb(0, 255, 0)));
+    assert_eq!(
+        text_context_shapings(&context) - before,
+        1,
+        "another root colour is another paragraph to the cache"
+    );
+    let same_root = laid_out(&mut context, under(red));
+    assert!(
+        std::sync::Arc::ptr_eq(&painted(&kept), &painted(&same_root)),
+        "under the root it was painted with, the kept paragraph's glyphs are shared"
+    );
+    assert!(
+        !std::sync::Arc::ptr_eq(&painted(&kept), &painted(&other_root)),
+        "under another root the paragraph is painted apart"
+    );
+}

@@ -1116,6 +1116,14 @@ fn shape_cache_contract() {
                 "an_evicted_layout_is_built_into",
                 sc::an_evicted_layout_is_built_into,
             ),
+            (
+                "the_painters_of_a_kept_paragraph_share_its_glyphs",
+                sc::the_painters_of_a_kept_paragraph_share_its_glyphs,
+            ),
+            (
+                "a_kept_paragraph_under_another_root_colour_is_painted_apart",
+                sc::a_kept_paragraph_under_another_root_colour_is_painted_apart,
+            ),
         ],
     );
 }

@@ -1,8 +1,6 @@
 //! `TextPainter` layout and measurement: `layout`, the cached metrics it
 //! produces, and the size / baseline / overflow queries over them.
 
-use std::sync::Arc;
-
 use crate::typography::{InlineSpan, TextStyle};
 use flui_foundation::TextDirection;
 use flui_foundation::geometry::Size;
@@ -67,7 +65,7 @@ impl TextPainter {
             .and_then(crate::text_layout::paint_color);
         // A fresh layout: its run colours are those of the text it shaped,
         // and `set_text` keeps them current while the layout is cached.
-        let paragraph = Arc::new(layout.to_shaped(root));
+        let paragraph = layout.painted(root);
         let decor = super::decor::SpanDecor::of(&resolved.spans);
 
         // The intrinsic widths come from the same shaping unless an ellipsis
