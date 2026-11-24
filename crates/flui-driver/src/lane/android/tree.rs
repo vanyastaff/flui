@@ -80,6 +80,13 @@ pub enum Unobservable {
     /// out, since they are no element of the interface. The root's last children of that shape
     /// that no app node fits are left out of the projection.
     Announcers,
+    /// A toggled state the app's read does not report: the read follows UI Automation, which
+    /// offers a grid cell, and a list box option, list item, menu list option, tab or tree item
+    /// that publishes a selection, as `SelectionItem`, reading its `selected` and no `checked`,
+    /// while the adapter publishes its toggled state as checkable and checked. The match does not
+    /// read the dump's checked state of such a node, and the projection reports its selection as
+    /// the read does (the `Toggle::Unread` case).
+    UnreportedToggle,
 }
 
 /// Where the app's surface sits on the display, as the lane maps it.
@@ -220,7 +227,8 @@ enum Toggle {
     /// A radio button's selection, which is its toggled state.
     RadioSelection(bool),
     /// A node of a selection role whose toggled state the read does not report: the dump's
-    /// checkable and checked are unobservable from the app's side.
+    /// checkable and checked are unobservable from the app's side
+    /// ([`Unobservable::UnreportedToggle`]).
     Unread,
 }
 

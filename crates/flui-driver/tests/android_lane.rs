@@ -452,7 +452,17 @@ fn what_the_device_prints_reads_into_its_facts() {
 fn the_windows_give_the_rotation_and_the_focused_apps_frame() {
     let windows = device::parse_windows(WINDOWS).expect("the fixture lists windows");
     assert_eq!(windows.rotation, 0);
-    assert_eq!(windows.windows.len(), 4);
+    assert_eq!(windows.windows.len(), 5);
+    // Two windows of the app's title, the one leaving as the activity starts again listed first:
+    // the focused one is found by its id.
+    let titled: Vec<&str> = windows
+        .windows
+        .iter()
+        .filter(|window| window.title == "dev.flui.scenario/android.app.NativeActivity")
+        .map(|window| window.id.as_str())
+        .collect();
+    assert_eq!(titled, vec!["7e3d2c1", "4f2a1b"]);
+    assert_eq!(windows.focus_id.as_deref(), Some("4f2a1b"));
     assert_eq!(
         windows.focus.as_deref(),
         Some("dev.flui.scenario/android.app.NativeActivity")
@@ -483,6 +493,20 @@ fn the_windows_give_the_rotation_and_the_focused_apps_frame() {
             right: 2400,
             bottom: 1080
         })
+    );
+    // The rotation is the default display's, wherever in its line the word stands: a secondary
+    // display listed first, with its own rotation, and a field before the word.
+    let secondary_first = WINDOWS.replace(
+        "  Display: mDisplayId=0 (organized) rootTasks=2 mUserId=0\n    mRotation=0 mDeferredRotationPauseCount=0\n",
+        "  Display: mDisplayId=2 (organized) rootTasks=1 mUserId=0\n    mRotation=1 mDeferredRotationPauseCount=0\n  \
+         Display: mDisplayId=0 (organized) rootTasks=2 mUserId=0\n    mDeferredRotationPauseCount=0 mRotation=3\n",
+    );
+    assert_ne!(secondary_first, WINDOWS);
+    assert_eq!(
+        device::parse_windows(&secondary_first)
+            .expect("windows")
+            .rotation,
+        3
     );
     // No rotation, or one `Surface` does not have, is no reply the lane reads.
     for refused in [

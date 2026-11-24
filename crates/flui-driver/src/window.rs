@@ -28,9 +28,14 @@ use crate::projection::Projection;
 use crate::scenario::WindowSpec;
 
 /// How long [`Window::os_tree`] and [`Window::compare_projection`] read the OS tree against the
-/// app's again while the app's tree moves between the two reads, before they report it busy: a
-/// bound in time, since an app that republishes every frame moves on any count of readings.
+/// app's again while the app's tree moves between the two reads, before they report it busy,
+/// counted from the end of the first reading: a bound in time, since an app that republishes
+/// every frame moves on any count of readings, and counted after one, since one reading through
+/// a device's lane (a `uiautomator dump`) can take longer than the bound.
 const TREE_SETTLE: Duration = Duration::from_secs(2);
+
+/// The fewest readings made before a moving tree is reported busy, however long they took.
+const MIN_TREE_READINGS: usize = 3;
 
 /// What reading the OS accessibility tree answers in a session without an OS lane.
 fn no_tree_lane() -> crate::Error {
@@ -103,7 +108,7 @@ impl<'d> Window<'d> {
     /// As [`Self::read`]; [`Error::NotSupported`](crate::Error::NotSupported) naming
     /// `os_accessibility_tree` without a lane that reads one; the lane's failures;
     /// [`Error::Busy`](crate::Error::Busy) when the app's tree changed while the OS tree was read
-    /// against it on every reading for two seconds.
+    /// against it on each of at least three readings, through two seconds after the first.
     pub fn os_tree(&mut self) -> Result<Tree> {
         if self.lane_matches_app_tree()? {
             return self.read_against().map(|(_, os)| os);
@@ -113,7 +118,8 @@ impl<'d> Window<'d> {
 
     /// The app's tree of the window and its OS tree read against it, both of one revision: the
     /// app's revision is read again once the OS tree is, and a tree that moved in between is
-    /// read again until [`TREE_SETTLE`] has passed, so a change of the app is never taken for a
+    /// read again, at least [`MIN_TREE_READINGS`] times and until [`TREE_SETTLE`] has passed
+    /// since the first reading ended, so a change of the app is never taken for a
     /// difference of the OS. A match the lane could not make (`NotFound`, `Ambiguous`) while the
     /// tree moved is read again the same way: it was made against a tree the app no longer
     /// showed. A read that reports no revision is taken as it is.
@@ -126,9 +132,9 @@ impl<'d> Window<'d> {
     /// # Errors
     ///
     /// As [`Self::read`] and [`Self::os_tree_against`]; [`Error::Busy`](crate::Error::Busy)
-    /// naming the revisions when the tree moved on every reading within [`TREE_SETTLE`].
+    /// naming the revisions when the tree moved on every one of those readings.
     fn read_against(&mut self) -> Result<(Tree, Tree)> {
-        let started = Instant::now();
+        let mut settle_from: Option<Instant> = None;
         let mut readings = 0_usize;
         loop {
             let app = self.read()?;
@@ -149,15 +155,17 @@ impl<'d> Window<'d> {
             if after == Some(before) {
                 return os.map(|os| (app, os));
             }
-            if started.elapsed() >= TREE_SETTLE {
+            // The bound starts once the first reading is over.
+            let settling = *settle_from.get_or_insert_with(Instant::now);
+            if readings >= MIN_TREE_READINGS && settling.elapsed() >= TREE_SETTLE {
                 let moved = after.map_or_else(
                     || format!("revision {before} became one that reports none"),
                     |after| format!("revision {before} became {after}"),
                 );
                 return Err(crate::Error::busy(format!(
                     "the app's tree changed while the OS tree was read against it, on each of \
-                     {readings} readings in {} ms (last, {moved}): the OS tree is not compared \
-                     with a tree the app no longer shows",
+                     {readings} readings over more than {} ms after the first (last, {moved}): \
+                     the OS tree is not compared with a tree the app no longer shows",
                     TREE_SETTLE.as_millis()
                 )));
             }

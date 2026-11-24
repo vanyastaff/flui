@@ -222,13 +222,17 @@ pub fn parse_focus(printed: &str) -> Option<String> {
     (!title.is_empty()).then(|| title.to_owned())
 }
 
-/// The line that prints where the windows are: the display's rotation (`DisplayRotation`'s
-/// `mRotation=`), then each window's header (`Window #N Window{hash uU title}:`), its frame
-/// (`frame=[l,t][r,b]` on its `Frames:` line from Android 11, `mFrame=[l,t][r,b]` before) and the
-/// window holding the input focus (`mCurrentFocus=`), as `dumpsys window` writes them. It reads
-/// no accessibility, so it pauses no accessibility service.
-pub const WINDOWS: &str = "dumpsys window displays | grep -m1 'mRotation='; \
+/// The line that prints where the windows are: each display's header (`Display: mDisplayId=N`)
+/// and its rotation (`DisplayRotation`'s `mRotation=`), then each window's header
+/// (`Window #N Window{hash uU title}:`), its frame (`frame=[l,t][r,b]` on its `Frames:` line from
+/// Android 11, `mFrame=[l,t][r,b]` before) and the window holding the input focus
+/// (`mCurrentFocus=`), as `dumpsys window` writes them. It reads no accessibility, so it pauses no
+/// accessibility service.
+pub const WINDOWS: &str = "dumpsys window displays | grep -E 'Display: mDisplayId=|mRotation='; \
                            dumpsys window windows | grep -E 'Window #|mCurrentFocus=|rame=\\['";
+
+/// The display the app's window is on: the default one.
+pub const DEFAULT_DISPLAY: &str = "0";
 
 /// The most bytes of the [`WINDOWS`] reply the lane reads.
 pub const MAX_WINDOWS_REPLY: usize = 256 * 1024;
@@ -240,6 +244,9 @@ pub const MAX_WINDOWS: usize = 512;
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct WindowFrame {
+    /// Its id, the hash `Window{…}` names it by: two windows of one title (an activity's window
+    /// leaving as it is started again, split screen) differ in it.
+    pub id: String,
     /// Its title: `package/activity` for an activity's window, `StatusBar` for the status bar.
     pub title: String,
     /// Its frame in display pixels as the display is turned; `None` when no frame was read.
@@ -250,59 +257,76 @@ pub struct WindowFrame {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct Windows {
-    /// The display's rotation from its natural orientation, in quarter turns
+    /// The default display's rotation from its natural orientation, in quarter turns
     /// (`Surface.ROTATION_0` to `ROTATION_270`).
     pub rotation: u8,
     /// The windows, in the order `dumpsys` lists them, at most [`MAX_WINDOWS`].
     pub windows: Vec<WindowFrame>,
     /// The title of the window holding the input focus; `None` when no window holds it.
     pub focus: Option<String>,
+    /// The id of the window holding the input focus.
+    pub focus_id: Option<String>,
 }
 
 impl Windows {
-    /// The frame of the window holding the input focus.
+    /// The frame of the window holding the input focus, found by its id: a window of the same
+    /// title is another window.
     #[must_use]
     pub fn focused_frame(&self) -> Option<Bounds> {
-        let focus = self.focus.as_deref()?;
+        let focus = self.focus_id.as_deref()?;
         self.windows
             .iter()
-            .find(|window| window.title == focus)
+            .find(|window| window.id == focus)
             .and_then(|window| window.frame)
     }
 }
 
-/// The windows the [`WINDOWS`] line printed as `printed`: see [`Windows`]. A window's frame is
-/// the first `frame=` or `mFrame=` after its header; a line the parser does not know is skipped.
+/// The windows the [`WINDOWS`] line printed as `printed`: see [`Windows`]. The rotation is the
+/// first `mRotation=` word inside the default display's section ([`DEFAULT_DISPLAY`]), or, in a
+/// reply that heads no display, the first one at all; a window's frame is the first `frame=` or
+/// `mFrame=` after its header; a line the parser does not know is skipped.
 ///
 /// # Errors
 ///
-/// When the reply names no rotation from 0 to 3, so the lane cannot tell how the display is
-/// turned.
+/// When the default display's section names no rotation from 0 to 3, so the lane cannot tell
+/// how the display is turned.
 pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
     let mut rotation = None;
+    // The display whose section the lines are in; `None` before any display's header.
+    let mut display: Option<&str> = None;
     let mut windows: Vec<WindowFrame> = Vec::new();
     let mut in_window = false;
     for line in printed.lines() {
         let line = line.trim();
-        if rotation.is_none()
-            && let Some(value) = line.strip_prefix("mRotation=")
+        if line.starts_with("Display:")
+            && let Some(id) = word_value(line, "mDisplayId=")
         {
-            let value = value.split_whitespace().next().unwrap_or_default();
-            rotation = match value {
+            display = Some(id.trim_end_matches(|c: char| !c.is_ascii_digit()));
+            continue;
+        }
+        if rotation.is_none()
+            && display.is_none_or(|display| display == DEFAULT_DISPLAY)
+            && let Some(value) = word_value(line, "mRotation=")
+        {
+            rotation = match value.trim_end_matches(',') {
                 "0" | "ROTATION_0" => Some(0),
                 "1" | "ROTATION_90" => Some(1),
                 "2" | "ROTATION_180" => Some(2),
                 "3" | "ROTATION_270" => Some(3),
-                _ => return Err(format!("`dumpsys` printed the rotation {value:?}")),
+                other => return Err(format!("`dumpsys` printed the rotation {other:?}")),
             };
             continue;
         }
         if line.starts_with("Window #") {
             in_window = false;
             if windows.len() < MAX_WINDOWS
-                && let Some(title) = window_title(line)
+                && let Some((id, title)) = window_named(line)
             {
-                windows.push(WindowFrame { title, frame: None });
+                windows.push(WindowFrame {
+                    id,
+                    title,
+                    frame: None,
+                });
                 in_window = true;
             }
             continue;
@@ -314,22 +338,34 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
             window.frame = frame_of(line);
         }
     }
-    let rotation = rotation.ok_or_else(|| "`dumpsys` printed no display rotation".to_owned())?;
+    let rotation = rotation
+        .ok_or_else(|| "`dumpsys` printed no rotation of the default display".to_owned())?;
+    let focused = printed
+        .lines()
+        .find_map(|line| line.split_once("mCurrentFocus="))
+        .and_then(|(_, window)| window_named(window.trim()));
     Ok(Windows {
         rotation,
         windows,
         focus: parse_focus(printed),
+        focus_id: focused.map(|(id, _)| id),
     })
 }
 
-/// The title of the window a `Window #N Window{hash uU title}:` header names.
-fn window_title(header: &str) -> Option<String> {
-    let inside = header.split_once("Window{")?.1.rsplit_once('}')?.0;
+/// The value of the word of `line` that starts with `key`, wherever in the line it stands.
+fn word_value<'l>(line: &'l str, key: &str) -> Option<&'l str> {
+    line.split_whitespace()
+        .find_map(|word| word.strip_prefix(key))
+}
+
+/// The id and title of the window `Window{hash uU title}` names.
+fn window_named(text: &str) -> Option<(String, String)> {
+    let inside = text.split_once("Window{")?.1.rsplit_once('}')?.0;
     let mut words = inside.splitn(3, ' ');
-    let _hash = words.next()?;
+    let id = words.next()?;
     let _user = words.next()?;
     let title = words.next()?.trim();
-    (!title.is_empty()).then(|| title.to_owned())
+    (!id.is_empty() && !title.is_empty()).then(|| (id.to_owned(), title.to_owned()))
 }
 
 /// The frame a window's line gives: its `frame=[l,t][r,b]` (Android 11 and later, on the

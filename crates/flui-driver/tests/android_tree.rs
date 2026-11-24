@@ -845,9 +845,12 @@ fn a_radio_buttons_selection_is_the_checked_state_the_adapter_publishes() {
 
 /// A grid cell, which the app's read always reports as a selection, and a multi-select list row
 /// that publishes one, have a toggled state the read does not report and the adapter publishes as
-/// checkable and checked: each is matched, and projects its selection as the read does.
+/// checkable and checked: each is matched, and projects its selection as the read does. The set
+/// of what the lane cannot observe names it.
 #[test]
 fn a_selection_roles_toggled_state_the_read_does_not_report_is_no_mismatch() {
+    let named: tree::Unobservable = tree::Unobservable::UnreportedToggle;
+    assert_ne!(named, tree::Unobservable::RangeValue);
     let os = edge_cases_read();
     let cell = find(&os.roots, "cell").expect("the grid cell is matched");
     assert_eq!((cell.checked, cell.selected), (None, None));
@@ -1141,6 +1144,47 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
         "{:?}",
         started.elapsed()
     );
+
+    // A device whose dump outlasts the bound alone, as a phone's can: the tree that moved during
+    // the first reading is read again, and holds.
+    let slow = Duration::from_millis(2_100);
+    let (_agent, mut driver, _reads, adb) = session(vec![1, 2]);
+    let _slow = adb
+        .clone()
+        .reply_once_after("exec-out uiautomator", AdbReply::new(0, CONTROLS), slow)
+        .reply_once_after("exec-out uiautomator", AdbReply::new(0, CONTROLS), slow);
+    let os = driver
+        .main_window()
+        .and_then(|mut window| window.os_tree())
+        .expect("the second reading holds though the first outlasted the bound");
+    assert!(find(&os.roots, "like").is_some());
+    assert_eq!(adb.commands("exec-out uiautomator dump").len(), 2);
+
+    // And a tree that keeps moving on such a device is read at least three times before it is
+    // busy, the bound counted from the end of the first reading.
+    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect());
+    let _slow = (0..3).fold(adb.clone(), |adb, _| {
+        adb.reply_once_after("exec-out uiautomator", AdbReply::new(0, CONTROLS), slow)
+    });
+    let moving = driver
+        .main_window()
+        .and_then(|mut window| window.os_tree())
+        .expect_err("the tree never held still");
+    assert!(matches!(moving, Error::Busy { .. }), "{moving:?}");
+    assert_eq!(adb.commands("exec-out uiautomator dump").len(), 3);
+
+    // Only the first dump slow: the bound, counted from its end, leaves room for readings past
+    // the third.
+    let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect());
+    let _slow =
+        adb.clone()
+            .reply_once_after("exec-out uiautomator", AdbReply::new(0, CONTROLS), slow);
+    let moving = driver
+        .main_window()
+        .and_then(|mut window| window.os_tree())
+        .expect_err("the tree never held still");
+    assert!(matches!(moving, Error::Busy { .. }), "{moving:?}");
+    assert!(adb.commands("exec-out uiautomator dump").len() > 3);
 }
 
 /// `xml` without the app's view, as a dump taken before the app serves its tree shows it.

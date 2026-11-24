@@ -14,6 +14,8 @@ use crate::lane::android::adb::{Adb, AdbCommand, AdbReply, AdbStream, Framing};
 #[derive(Debug, Clone)]
 enum Answer {
     Reply(AdbReply),
+    /// The reply, after the command has run this long: a slow device.
+    After(AdbReply, Duration),
     Timeout,
 }
 
@@ -108,6 +110,18 @@ impl ScriptedAdb {
     #[must_use]
     pub fn reply_once(self, prefix: impl Into<String>, reply: AdbReply) -> Self {
         self.rule(prefix.into(), Answer::Reply(reply), true)
+    }
+
+    /// Answer the next command starting with `prefix` with `reply` once it has run for `taking`,
+    /// as a device whose command is slow does, before any lasting rule.
+    #[must_use]
+    pub fn reply_once_after(
+        self,
+        prefix: impl Into<String>,
+        reply: AdbReply,
+        taking: Duration,
+    ) -> Self {
+        self.rule(prefix.into(), Answer::After(reply, taking), true)
     }
 
     /// Let the next command starting with `prefix` outlive its deadline.
@@ -316,7 +330,18 @@ impl Adb for ScriptedAdb {
         } else {
             script.rules[index].clone()
         };
-        match rule.answer {
+        // A slow command runs with the script let go of, as the device's command runs apart from
+        // the host's other commands.
+        drop(script);
+        let answer = match rule.answer {
+            Answer::After(reply, taking) => {
+                std::thread::sleep(taking);
+                Answer::Reply(reply)
+            }
+            answer => answer,
+        };
+        match answer {
+            Answer::After(..) => unreachable!("BUG: a slow answer was waited out just above"),
             Answer::Timeout => Err(Error::Timeout {
                 awaited: crate::error::Awaited::Host,
                 effect: Some(Effect::new(EffectKind::MayHaveRun)),
