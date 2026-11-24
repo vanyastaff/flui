@@ -2,8 +2,8 @@
 # counts, not timings.
 
 [list_10k_scroll_one_screen]
-allocated_bytes = 585008
-allocations = 1534
+allocated_bytes = 584392
+allocations = 1502
 builds_run = 126
 damage_full = 0
 damage_rects = 1

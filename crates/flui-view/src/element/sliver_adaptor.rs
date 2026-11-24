@@ -76,6 +76,7 @@ use super::{
 };
 use crate::{
     BoxedView, ElementOwner,
+    key::hash_index::KeyHashIndex,
     tree::ElementTree,
     view::{RenderView, View},
 };
@@ -202,13 +203,9 @@ type ChildMap = Rc<dyn Fn(usize, BoxedView) -> BoxedView>;
 /// `key_hash` and decided by `key_eq` inside the bucket; the adaptor's
 /// reconcile hands the callback the item's own key (the per-item wrapper's
 /// salt is stripped before the call).
-#[expect(
-    clippy::disallowed_types,
-    reason = "indexed by view keys, whose hashes an application derives from its own data, so the table keeps SipHash's random seed against chosen collisions"
-)]
 pub struct StaticChildren {
     children: Vec<BoxedView>,
-    key_to_index: std::cell::OnceCell<std::collections::HashMap<u64, Vec<usize>>>,
+    key_to_index: std::cell::OnceCell<KeyHashIndex>,
     /// Applied to each child as it is built (a per-item repaint boundary,
     /// say). The key map reads the raw children, so a wrapper that salts
     /// the key stays matchable through the unsalted callback key.
@@ -297,22 +294,17 @@ impl StaticChildren {
 
     /// The index of the first child carrying `key`.
     #[must_use]
-    #[expect(
-        clippy::disallowed_types,
-        reason = "indexed by view keys, whose hashes an application derives from its own data, so the table keeps SipHash's random seed against chosen collisions"
-    )]
     pub fn find_index_by_key(&self, key: &dyn ViewKey) -> Option<usize> {
         let map = self.key_to_index.get_or_init(|| {
-            let mut map: std::collections::HashMap<u64, Vec<usize>> =
-                std::collections::HashMap::new();
+            let mut map = KeyHashIndex::over(self.children.len());
             for (index, child) in self.children.iter().enumerate() {
                 if let Some(child_key) = child.key() {
-                    map.entry(child_key.key_hash()).or_default().push(index);
+                    map.insert(child_key.key_hash(), index);
                 }
             }
             map
         });
-        map.get(&key.key_hash())?.iter().copied().find(|&index| {
+        map.candidates(key.key_hash()).find(|&index| {
             self.children[index]
                 .key()
                 .is_some_and(|child_key| child_key.key_eq(key))

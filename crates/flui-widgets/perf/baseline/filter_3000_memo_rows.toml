@@ -2,8 +2,8 @@
 # counts, not timings.
 
 [filter_3000_memo_rows]
-allocated_bytes = 3848629
-allocations = 12198
+allocated_bytes = 3476809
+allocations = 4693
 builds_run = 21
 damage_full = 0
 damage_rects = 1
@@ -15,7 +15,7 @@ layout_passes = 1
 layout_roots = 1
 nodes_laid_out = 3
 nodes_painted = 3015
-reallocations = 1573
+reallocations = 74
 scene_depth_updates = 0
 scene_nodes_visited = 1
 scene_ops = 1
