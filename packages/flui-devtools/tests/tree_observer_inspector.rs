@@ -141,9 +141,8 @@ fn mount_root_with_pipeline(
 }
 
 /// Drives mount → first builds → keyed reorder → shrink (eager unmounts) →
-/// clear, asserting exact counts at each step. Any emission site silently
-/// removed fails a specific assertion here (red→green verified during
-/// development by disabling sites).
+/// clear, asserting exact counts at each step. Fails when any emission site is missing: a
+/// specific assertion names it.
 fn inspector_counts_mounts_moves_rebuilds_and_unmounts_exactly() {
     let counters = Arc::new(InspectorCounters::new());
     let mut owner = BuildOwner::new();
