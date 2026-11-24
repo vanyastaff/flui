@@ -45,7 +45,7 @@ fn build(drops: *const AtomicUsize) -> Box<dyn Fn() -> u32> {
     Box::new(move || callback.value())
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn flui_worker_init(register: extern "C" fn(u64, *const ())) {
+pub extern "C" fn flui_worker_init(register: extern "C" fn(u64, *const ()), _request_rebuild: extern "C-unwind" fn()) {
     register(0xC007_EA01, build as *const ());
 }
 #[unsafe(no_mangle)]
