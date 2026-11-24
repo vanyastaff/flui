@@ -10,7 +10,8 @@
 //! - [`ScriptedAdb`]: a device scripted for the Android lane.
 //! - [`ScriptedXcrun`]: a Simulator scripted for the iOS Simulator lane; [`host_xcrun_with`], the
 //!   host's `xcrun` door in an environment a test names, and [`simulator_lock_in`], a hold on a
-//!   simulator whose lock file is in a test's own directory.
+//!   simulator whose lock file is in a test's own directory; [`ScriptedSimulatorScreen`], the
+//!   Simulator's window as the Mac's accessibility API shows it, for the lane's tree read.
 //! - `ScriptedBrowser` (with the `chrome` feature): a stand-in for a ChromeDriver's WebDriver BiDi session on
 //!   a loopback WebSocket, playing a page whose agent a [`Script`] answers, so the Chrome lane and
 //!   the page's connection run without a browser, and `chrome`, the lane's host side (the page's
@@ -25,9 +26,11 @@ pub mod chrome;
 pub use browser::{BrowserLog, BrowserReply, BrowserScript, ScriptedBrowser};
 
 mod adb;
+mod simulator_screen;
 mod xcrun;
 
 pub use adb::{Responder, ScriptedAdb};
+pub use simulator_screen::ScriptedSimulatorScreen;
 pub use xcrun::{ScriptedXcrun, host_xcrun_with, simulator_lock_in};
 
 use std::io::{self, Read, Write};

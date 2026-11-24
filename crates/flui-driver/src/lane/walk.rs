@@ -308,6 +308,29 @@ pub fn find<P: Provider>(
     automation_id: &str,
     timeout: Duration,
 ) -> Result<P::Element> {
+    find_by(
+        provider,
+        root,
+        |node| node.automation_id.as_deref() == Some(automation_id),
+        &format!("whose automation id is {automation_id:?}"),
+        timeout,
+    )
+}
+
+/// The first element under `root`, in document order, whose node `matches` accepts; `wanted`
+/// says which, for people ("whose automation id is \"like\"").
+///
+/// # Errors
+///
+/// [`Error::NotFound`] when no element within the walk's budgets is accepted, saying whether the
+/// budget cut the search short; [`Error::Timeout`] and [`Error::Platform`] as [`read`].
+pub fn find_by<P: Provider>(
+    provider: &mut P,
+    root: P::Element,
+    mut matches: impl FnMut(&Node) -> bool,
+    wanted: &str,
+    timeout: Duration,
+) -> Result<P::Element> {
     let walk = Walk {
         next_id: 1,
         truncated: false,
@@ -339,7 +362,7 @@ pub fn find<P: Provider>(
             Err(ProviderError::Gone) => None,
             Err(error) => return Err(provider_error(error, timeout)),
         };
-        if node.is_some_and(|node| node.automation_id.as_deref() == Some(automation_id)) {
+        if node.is_some_and(|node| matches(&node)) {
             return Ok(element);
         }
         if depth > 1 {
@@ -357,7 +380,7 @@ pub fn find<P: Provider>(
         }
     }
     Err(Error::not_found(format!(
-        "the OS accessibility tree shows no element whose automation id is {automation_id:?}{}",
+        "the OS accessibility tree shows no element {wanted}{}",
         if cut_short {
             format!(" within its first {MAX_NODES} elements and {MAX_DEPTH} levels")
         } else {

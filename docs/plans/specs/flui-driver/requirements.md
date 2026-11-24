@@ -80,9 +80,11 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   reports one, and FLUI never sets it.
 - **No live pixels.** `flui-engine` reads back only offscreen (`HeadlessRenderer`). A presented
   window can be captured only through the OS, and only on Windows and macOS.
-- **No iOS or web accessibility tree the driver reads.** UIKit serves `accesskit_ios`'s tree only
-  inside the simulator, where no public host API reads it, and the Chrome lane reads none of a
-  page's; on those targets only the agent reads FLUI's semantics.
+- **No web accessibility tree the driver reads, and iOS's only on a Simulator.** The Chrome lane
+  reads none of a page's. UIKit serves `accesskit_ios`'s tree inside the simulator, and the
+  Simulator bridges it into the Mac's accessibility API on the device's window, which the iOS
+  Simulator lane reads; a device's tree no host API reads. Elsewhere only the agent reads FLUI's
+  semantics.
 
 ## Requirements
 
@@ -278,7 +280,9 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
     probed per device and reported as a capability, never assumed; `uiautomator` for system UI
     such as the soft keyboard; `screencap`;
   - iOS Simulator: no OS input until a supported channel exists, each input refused as
-    `not_supported` naming `ios_simulator_hid` (D23); `simctl` capture and process;
+    `not_supported` naming `ios_simulator_hid` (D23); the app's accessibility tree through the
+    Mac's AX API on the Simulator's window, matched to the app's tree, and `AXPress`; `simctl`
+    capture and process;
   - Chrome: WebDriver BiDi `input.performActions`, CDP IME composition, `captureScreenshot`.
 - **R32a.** OS-lane runs are **deterministic by rule**:
   - a scenario fixes its window size (logical size and scale factor), and the run refuses when the

@@ -732,7 +732,7 @@ fn an_activation_through_the_accessibility_api_is_refused_naming_os_invoke() {
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
     let before = adb.log().len();
     let refused = lane
-        .invoke(&placement(), "like")
+        .invoke(&placement(), "like", &controls())
         .expect_err("the lane activates nothing");
     assert_eq!(refused.missing_capability().as_deref(), Some("os_invoke"));
     assert!(refused.to_string().contains("ACTION_CLICK"), "{refused}");
@@ -926,6 +926,57 @@ fn a_dump_past_the_walk_budgets_projects_cut_and_says_so() {
             nodes.len()
         );
     }
+}
+
+/// An activation through the accessibility API is refused by the Android lane before the app's
+/// tree is read: the lane acts on nothing, so a read that fails never stands in for its refusal.
+#[cfg(any(unix, windows))]
+#[test]
+fn an_activation_is_refused_before_the_apps_tree_is_read() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use flui_driver::Driver;
+    use flui_driver::protocol::method::{self, Method as _};
+    use flui_driver::testing::{Reply, ScriptedAgent};
+
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&reads);
+    let placement = serde_json::to_value(placement()).expect("a placement serializes");
+    let tree = serde_json::to_value(controls()).expect("a tree serializes");
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::WindowPlacement::NAME,
+            method::SemanticsRead::NAME,
+        ],
+        Box::new(move |name, _| match name {
+            "window.placement" => Reply::Result(placement.clone()),
+            "semantics.read" => {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Reply::Result(tree.clone())
+            }
+            _ => Reply::Result(serde_json::json!({ "windows": ["w1"] })),
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let adb = scripted_showing(true, None, CONTROLS).refuse_stream("shell uinput -");
+    let lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches")
+        .with_lane(lane)
+        .expect("the lane starts");
+    let refused = driver
+        .main_window()
+        .and_then(|mut window| window.os_invoke("like"))
+        .expect_err("the lane activates nothing");
+    assert_eq!(refused.missing_capability().as_deref(), Some("os_invoke"));
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        0,
+        "the app's tree was not read"
+    );
 }
 
 /// The app's tree and the OS tree compared are of one revision: a tree that moved while the dump
