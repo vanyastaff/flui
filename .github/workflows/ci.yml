@@ -1222,6 +1222,11 @@ jobs:
         with:
           packages: valgrind
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
+        with:
+          tool: cargo-nextest@0.9
+
       # The features of the `test` job's run, so the windows build the same
       # tree as the files' other lines describe.
       - name: cargo nextest run --release --test perf (instructions, under callgrind)
