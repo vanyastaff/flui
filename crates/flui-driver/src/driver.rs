@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use flui_foundation::panic::FirstPanic;
 
-use crate::connection::{Call, Connection, Events};
+use crate::connection::{Call, Events, Transport};
 use crate::error::{Error, Result};
 use crate::lane::{Lane, LaneWorker};
 use crate::launch::{AppProcess, Launch};
@@ -53,7 +53,7 @@ pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 /// `Send` but not `Sync`: a front end that needs concurrency puts it behind a worker. Its methods
 /// are synchronous.
 pub struct Driver {
-    connection: Box<dyn Connection>,
+    connection: Box<dyn Transport>,
     /// The process a launch started, ended with the session.
     process: Option<AppProcess>,
     /// Whether the session launched the page it drives (a web build in a browser of its own),
@@ -224,7 +224,7 @@ impl Driver {
     }
 
     fn new(
-        connection: Box<dyn Connection>,
+        connection: Box<dyn Transport>,
         process: Option<AppProcess>,
         target_isolation: Isolation,
         reply_budget: Duration,
@@ -865,6 +865,12 @@ impl Driver {
     /// How long the session has run on the clock its waits are counted in.
     pub(crate) fn clock(&self) -> Duration {
         self.connection.clock()
+    }
+
+    /// Whether that clock is virtual: the in-process target's is the app's own, which only its
+    /// frames move; every other target's is the wall.
+    pub(crate) fn virtual_clock(&self) -> bool {
+        self.target_isolation == Isolation::InProcess
     }
 
     /// The OS lane the session's OS input goes through, when it has one.

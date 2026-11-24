@@ -380,6 +380,78 @@ impl Error {
         }
     }
 
+    /// The error as the wire states it: the inverse of [`Self::from_wire`] for the app's answers.
+    /// A failure only the driver sees takes the code a caller branches on the same way:
+    /// `not_supported` with the missing capability when the check could not be made
+    /// ([`Self::is_cannot_verify`]), `platform` otherwise, its message the whole failure.
+    #[must_use]
+    pub fn to_wire(&self) -> ErrorObject {
+        let code = self.code().unwrap_or(if self.is_cannot_verify() {
+            ErrorCode::NotSupported
+        } else {
+            ErrorCode::Platform
+        });
+        let message = match self {
+            Self::InvalidArgument { message, .. }
+            | Self::NotSupported { message, .. }
+            | Self::Busy { message, .. }
+            | Self::NotFound { message, .. }
+            | Self::UnknownHandle { message, .. }
+            | Self::Gone { message, .. }
+            | Self::Disabled { message, .. }
+            | Self::ActionUnsupported { message, .. }
+            | Self::NotForeground { message, .. }
+            | Self::FocusElsewhere { message, .. }
+            | Self::OutsideTarget { message, .. }
+            | Self::Timeout { message, .. }
+            | Self::InputHeld { message, .. }
+            | Self::ShuttingDown { message, .. }
+            | Self::Ambiguous { message, .. }
+            | Self::NotActionable { message, .. }
+            | Self::Stale { message, .. }
+            | Self::Version { message, .. }
+            | Self::NotDriver { message, .. }
+            | Self::Platform { message, .. } => message.clone(),
+            _ => self.to_string(),
+        };
+        let mut object = ErrorObject::new(code, message);
+        object.retry = self.retry();
+        object.effect = self.effect().cloned();
+        match self {
+            Self::NotSupported { capability, .. } => object.capability.clone_from(capability),
+            Self::NotFound { candidates, .. } | Self::Ambiguous { candidates, .. } => {
+                object.candidates.clone_from(candidates);
+            }
+            Self::UnknownHandle { kind, handle, .. } => {
+                object.kind = *kind;
+                object.handle.clone_from(handle);
+            }
+            Self::Gone {
+                kind, handle, exit, ..
+            } => {
+                object.kind = *kind;
+                object.handle.clone_from(handle);
+                object.exit = *exit;
+            }
+            Self::Stale { handle, .. } => object.handle.clone_from(handle),
+            Self::NotActionable {
+                failed, covered_by, ..
+            } => {
+                object.failed = *failed;
+                object.covered_by.clone_from(covered_by);
+            }
+            Self::Version { app, client, .. } => {
+                object.app = *app;
+                object.client = *client;
+            }
+            _ => {}
+        }
+        if self.code().is_none() && code == ErrorCode::NotSupported {
+            object.capability = self.missing_capability();
+        }
+        object
+    }
+
     /// The driver refuses a parameter or a rule the call broke.
     pub(crate) fn invalid_argument(message: impl Into<String>) -> Self {
         Self::InvalidArgument {

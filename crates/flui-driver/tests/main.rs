@@ -12,6 +12,7 @@ mod apps;
 mod chrome_browser;
 mod chrome_host;
 mod chrome_lane;
+mod connection;
 mod coordinates;
 mod failure_matrix;
 mod fixtures;

@@ -2,6 +2,7 @@
 
 mod action_span;
 mod build_report;
+mod client;
 mod envelope;
 mod framing;
 mod geometry;

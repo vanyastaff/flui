@@ -36,6 +36,7 @@
 //! - **Failures** are typed ([`Error`]), one variant per wire code, and a check that could not be
 //!   made is `cannot_verify` in the [`Report`](protocol::report::Report), never a pass.
 
+mod client;
 mod compose;
 mod connection;
 pub mod coordinates;

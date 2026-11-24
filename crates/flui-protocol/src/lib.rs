@@ -11,6 +11,8 @@
 //!
 //! On the wire vocabulary sits the driver protocol of ADR-0238, in ADR-0080's shapes:
 //!
+//! - [`client`]: the [`Connection`](client::Connection) a test drives one window through, at every
+//!   depth, and the [`CallError`](client::CallError) a call fails with;
 //! - [`method`]: the table of every operation, [`METHODS`](method::METHODS), each a sealed [`Method`](method::Method) with its
 //!   wire name, the side that serves it, its effect class, its MCP [`Tier`](method::Tier) and its typed
 //!   parameters and output;
@@ -71,6 +73,7 @@ pub mod act;
 pub mod audit;
 pub mod build;
 pub mod capture;
+pub mod client;
 pub mod envelope;
 pub mod error;
 pub mod events;

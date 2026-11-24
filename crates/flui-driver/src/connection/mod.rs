@@ -2,7 +2,7 @@
 //! time, each answered by the line that carries its id, with the events the app sends between
 //! answers kept aside.
 //!
-//! A [`Connection`] is a transport for that conversation: a local socket to a launched or attached
+//! A [`Transport`] carries that conversation: a local socket to a launched or attached
 //! app ([`socket`]), a web app's page export reached through the Chrome lane's BiDi session
 //! (`bidi`, feature `chrome`), or the headless target's agent served in process (`in_process`,
 //! feature `headless`). It is private: front ends see the `Driver`.
@@ -57,8 +57,8 @@ pub(crate) struct Call {
     pub(crate) budget: Duration,
 }
 
-/// A transport of the conversation.
-pub(crate) trait Connection: Send {
+/// A transport of the conversation, beneath the `Driver`'s typed calls.
+pub(crate) trait Transport: Send {
     /// What the app answered the hello with.
     fn hello(&self) -> &HelloReply;
 

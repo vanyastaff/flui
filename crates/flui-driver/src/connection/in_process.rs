@@ -31,7 +31,7 @@ use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use serde_json::Value;
 use web_time::Instant;
 
-use super::{Call, Connection, Events, Heard};
+use super::{Call, Events, Heard, Transport};
 use crate::error::{Error, Result};
 use crate::launch::HeadlessLaunch;
 
@@ -180,7 +180,7 @@ impl InProcess {
     }
 }
 
-impl Connection for InProcess {
+impl Transport for InProcess {
     fn hello(&self) -> &HelloReply {
         &self.hello
     }
