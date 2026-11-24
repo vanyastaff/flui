@@ -20,6 +20,32 @@ pub const DEFAULT_FINGERPRINT: u64 = 0;
 /// reloadable build functions without touching dylib-local statics.
 pub type RegisterWorkerBuildFn = extern "C" fn(fingerprint: u64, build: *const ());
 
+/// Host-side entry passed into `flui_worker_init` so the worker's
+/// `request_rebuild` reaches the hook the host registered: the worker image's
+/// own copy of this crate has a rebuild slot of its own, which no host hook
+/// is ever registered in. `C-unwind`, so a panicking hook unwinds into the
+/// worker's caller instead of aborting.
+pub type HostRequestRebuildFn = extern "C-unwind" fn();
+
+/// The entry this host hands a worker: the rebuild hook registry with the
+/// `app-plugin` feature, otherwise a warning that this host has none.
+fn host_request_rebuild_fn() -> HostRequestRebuildFn {
+    #[cfg(feature = "app-plugin")]
+    {
+        crate::dispatch::host_request_rebuild
+    }
+    #[cfg(not(feature = "app-plugin"))]
+    {
+        extern "C-unwind" fn no_rebuild_registry() {
+            tracing::warn!(
+                "a worker asked for a rebuild, but this host is built without \
+                 flui-hot-reload's `app-plugin` feature, which holds the rebuild hook"
+            );
+        }
+        no_rebuild_registry
+    }
+}
+
 static WORKER_BUILDS: OnceLock<Mutex<BTreeMap<u64, BuildPtr>>> = OnceLock::new();
 
 fn worker_builds() -> &'static Mutex<BTreeMap<u64, BuildPtr>> {
@@ -33,6 +59,43 @@ fn worker_builds() -> &'static Mutex<BTreeMap<u64, BuildPtr>> {
 /// logged), so it can never be pruned; workers must register from
 /// `flui_worker_init` only.
 static REGISTRATION_SESSION: Mutex<Option<Vec<(u64, BuildPtr)>>> = Mutex::new(None);
+
+/// Runs a worker's `flui_worker_init` and returns what it registered, or
+/// `None` when the init panicked, with those registrations pruned again.
+fn run_init(init_fn: WorkerInitFn) -> Option<Vec<(u64, BuildPtr)>> {
+    *REGISTRATION_SESSION
+        .lock()
+        .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state") = Some(Vec::new());
+    let initialized = init_fn(host_register_fn(), host_request_rebuild_fn());
+    let registered = REGISTRATION_SESSION
+        .lock()
+        .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
+        .take()
+        .unwrap_or_default();
+    if initialized {
+        Some(registered)
+    } else {
+        prune(registered);
+        None
+    }
+}
+
+/// Removes the registrations that are still the ones in `registered`. A newer
+/// worker registering the same fingerprint keeps its entry.
+fn prune(registered: Vec<(u64, BuildPtr)>) {
+    if registered.is_empty() {
+        return;
+    }
+    let mut builds = worker_builds()
+        .lock()
+        .expect("BUG: WORKER_BUILDS mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state");
+    for (fingerprint, ptr) in registered {
+        if builds.get(&fingerprint) == Some(&ptr) {
+            builds.remove(&fingerprint);
+            tracing::debug!(fingerprint, "worker build pruned");
+        }
+    }
+}
 
 /// Type-erased function pointer — safe to store in a `Sync` static.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -116,7 +179,7 @@ pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
         .map(|slot| slot.0)
 }
 
-type WorkerInitFn = extern "C" fn(RegisterWorkerBuildFn);
+type WorkerInitFn = extern "C" fn(RegisterWorkerBuildFn, HostRequestRebuildFn) -> bool;
 type WorkerVersionFn = extern "C" fn() -> u32;
 type WorkerFingerprintFn = extern "C" fn() -> u64;
 type WorkerAbiTokenFn = extern "C" fn() -> u64;
@@ -130,7 +193,6 @@ pub struct WorkerPlugin {
     // Admission is permanent: arbitrary Rust-ABI descendants can escape the
     // tree and carry image-owned code, vtables or storage (ADR-0111).
     lib: ManuallyDrop<DynLib>,
-    init_fn: WorkerInitFn,
     fingerprint_fn: Option<WorkerFingerprintFn>,
     version: u32,
     mtime: Option<std::time::SystemTime>,
@@ -197,16 +259,24 @@ impl WorkerPlugin {
                 .symbol("flui_worker_fingerprint")
                 .map(|ptr| std::mem::transmute::<_, WorkerFingerprintFn>(ptr));
 
+            // Before the image is admitted: an image whose init panicked is
+            // refused and closes when `lib` drops here.
+            let Some(registered) = run_init(init_fn) else {
+                tracing::error!(
+                    path = %lib_path.display(),
+                    "worker refused: its flui_worker_init panicked (the worker's \
+                     stderr or logcat has the panic); fix it and save again"
+                );
+                return None;
+            };
             let mtime = dynlib::file_revision(lib_path);
             let plugin = WorkerPlugin {
                 lib: ManuallyDrop::new(lib),
-                init_fn,
                 fingerprint_fn,
                 version,
                 mtime,
-                registered: Mutex::new(Vec::new()),
+                registered: Mutex::new(registered),
             };
-            plugin.init();
             tracing::info!(
                 version = plugin.version,
                 path = %lib_path.display(),
@@ -214,27 +284,6 @@ impl WorkerPlugin {
             );
             Some(plugin)
         }
-    }
-
-    /// Re-run the worker's registration hook (`flui_worker_init`), recording
-    /// what it registers so `Drop` can prune exactly those entries.
-    pub fn init(&self) {
-        {
-            let mut session = REGISTRATION_SESSION
-                .lock()
-                .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state");
-            *session = Some(Vec::new());
-        }
-        (self.init_fn)(host_register_fn());
-        let registered_now = REGISTRATION_SESSION
-            .lock()
-            .expect("BUG: REGISTRATION_SESSION mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
-            .take()
-            .unwrap_or_default();
-        self.registered
-            .lock()
-            .expect("BUG: WorkerPlugin::registered mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state")
-            .extend(registered_now);
     }
 
     /// Type-layout fingerprint exported by the worker (0 when absent).
@@ -272,27 +321,14 @@ impl WorkerPlugin {
 
 impl Drop for WorkerPlugin {
     fn drop(&mut self) {
-        // Remove only entries still owned by this registration. A newer worker
-        // registering the same fingerprint keeps its entry. The loader reference
-        // is permanently retained independently of this registry and its lock.
-        let registered = std::mem::take(
+        // The loader reference is permanently retained independently of this
+        // registry and its lock.
+        prune(std::mem::take(
             &mut *self
                 .registered
                 .lock()
                 .expect("BUG: WorkerPlugin::registered mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state"),
-        );
-        if registered.is_empty() {
-            return;
-        }
-        let mut builds = worker_builds()
-            .lock()
-            .expect("BUG: WORKER_BUILDS mutex is never held across a panic; poisoning means a bug elsewhere already corrupted host state");
-        for (fingerprint, ptr) in registered {
-            if builds.get(&fingerprint) == Some(&ptr) {
-                builds.remove(&fingerprint);
-                tracing::debug!(fingerprint, "worker build pruned on unload");
-            }
-        }
+        ));
     }
 }
 

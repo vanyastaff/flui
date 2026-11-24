@@ -4,8 +4,9 @@
 //! until it drops), [`Timeline::record_instant`] and [`Timeline::record_completed_event`]; each
 //! is a [`TimelineEventKind::Custom`] event. A timeline [over](Timeline::over) a
 //! [`Capture`](crate::Capture) shows the framework's frames, presentation segments and phases
-//! beside them on one time base, and [`Timeline::record_frame_snapshots`] adds a presentation's
-//! frame snapshots. Every event says what it is through its [`TimelineEventKind`].
+//! beside them on one time base, and each frame a presentation produced, from its runtime's
+//! frame telemetry, as a [`TimelineEventKind::ProducedFrame`] event. Every event says what it is
+//! through its [`TimelineEventKind`].
 //!
 //! # Example
 //!
@@ -30,8 +31,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use flui_sdk::foundation::{PresentationAddress, PresentationId, UiRuntimeId};
-use flui_sdk::hooks::FrameSnapshot;
+use flui_sdk::foundation::{PresentationId, UiRuntimeId};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -43,9 +43,11 @@ use crate::phase::Phase;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum TimelineEventKind {
-    /// A whole frame: a scheduler frame from a [`Capture`](crate::Capture), or a frame snapshot
-    /// from [`Timeline::record_frame_snapshots`].
+    /// A scheduler frame from a [`Capture`](crate::Capture): one pump of a UI runtime.
     Frame,
+    /// One frame a presentation produced, from its runtime's frame telemetry (a
+    /// [`ProducedFrame`](crate::ProducedFrame) of the capture).
+    ProducedFrame,
     /// One presentation's segment of a captured frame.
     Segment,
     /// A phase of a captured frame.
@@ -61,6 +63,7 @@ impl TimelineEventKind {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Frame => "Frame",
+            Self::ProducedFrame => "ProducedFrame",
             Self::Segment => "Segment",
             Self::Phase(phase) => phase.label(),
             Self::Custom => "Custom",
@@ -82,6 +85,7 @@ fn current_thread_id() -> std::thread::ThreadId {
 /// be a far worse failure mode than an implausible ceiling: it could make
 /// an enormous, clearly-bogus latency look like a small, plausible one in
 /// an exported trace).
+#[cfg(feature = "profiling")]
 fn saturating_micros(duration: Duration) -> u64 {
     u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
@@ -152,15 +156,13 @@ mod packed_id {
 }
 
 /// The Chrome-trace `args` object of `event`: every key of `event.args` when it is a JSON
-/// object (a frame snapshot's shape, see [`Timeline::record_frame_snapshots`]), then
+/// object (a captured span's `target` and `span`, a produced frame's ids and timings), then
 /// `category`, the [label](TimelineEventKind::label) of the event's kind, and `presentation`,
 /// the packed value of the presentation the event ran for, when it ran for one. An event the
-/// application recorded carries `args: Value::Null`, which adds nothing.
+/// application recorded carries `args: Value::Null` unless it gave its own.
 ///
 /// `category` and `presentation` are inserted after the event's own keys, so they win over a
-/// key of the same name: they always mean the event's kind and presentation. A frame
-/// snapshot's own `presentation`, the id as text, is therefore the packed number here, as it is
-/// on every other event of the presentation.
+/// key of the same name: they always mean the event's kind and presentation.
 fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
     let mut args = serde_json::Map::new();
     if let serde_json::Value::Object(extra) = &event.args {
@@ -177,9 +179,8 @@ fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
 
 /// A single timeline event
 ///
-/// `#[non_exhaustive]`: a future field is additive — this slice already
-/// added one (`args`), a semver break for any external constructor; marking
-/// it now stops the next addition from repeating that break.
+/// `#[non_exhaustive]`: a field added later is not a semver break for a constructor outside the
+/// crate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TimelineEvent {
@@ -191,11 +192,11 @@ pub struct TimelineEvent {
     pub duration_micros: u128,
     /// What the event is.
     pub kind: TimelineEventKind,
-    /// Extra structured data carried alongside this event — e.g. a
-    /// frame-telemetry event's coalesced input ids and latencies (see
-    /// [`Timeline::record_frame_snapshots`]). `Value::Null` for an event
-    /// recorded through [`Timeline::record_event`]/[`Timeline::record_instant`],
-    /// which carry no extra args of their own.
+    /// Extra structured data carried alongside this event — e.g. a produced frame's ids,
+    /// outcome, phase timings, inputs and GPU time (see [`TimelineEventKind::ProducedFrame`]).
+    /// `Value::Null` for an event recorded through
+    /// [`Timeline::record_event`]/[`Timeline::record_instant`], which carry no extra args of
+    /// their own.
     #[serde(default)]
     pub args: serde_json::Value,
     /// Thread ID (for multi-threaded applications)
@@ -203,9 +204,9 @@ pub struct TimelineEvent {
     /// Not serialized; restored to the deserializing thread's ID on load.
     #[serde(skip, default = "current_thread_id")]
     pub thread_id: std::thread::ThreadId,
-    /// The UI runtime that drove the frame this event is part of: a span from a
-    /// [`Capture`](crate::Capture), or a frame snapshot's. Application events carry none. The
-    /// JSON export writes it as its packed value.
+    /// The UI runtime that drove the frame this event is part of: a span or a produced frame
+    /// from a [`Capture`](crate::Capture). Application events carry none. The JSON export
+    /// writes it as its packed value.
     #[serde(default, with = "packed_id")]
     pub runtime: Option<UiRuntimeId>,
     /// The presentation the event ran for, when it ran for one. The JSON export writes it as its
@@ -357,7 +358,8 @@ impl TimelineInner {
 ///
 /// Every event says what it is with its [`TimelineEventKind`]: what the application records
 /// here is [`Custom`](TimelineEventKind::Custom), and a timeline [over](Self::over) a capture
-/// adds the framework's frames, presentation segments and phases.
+/// adds the framework's frames, presentation segments and phases, and the frames its presentations
+/// produced.
 #[derive(Clone)]
 pub struct Timeline {
     inner: Arc<Mutex<TimelineInner>>,
@@ -386,9 +388,9 @@ impl Timeline {
     }
 
     /// A timeline that is a view over `capture`: the frames, presentation segments and phases the
-    /// framework ran appear beside the events recorded here, on one time base, and
-    /// [`Self::clear`] clears both. The capture is the only recorder of framework spans; this
-    /// timeline keeps no copy of them.
+    /// framework ran, and the frames its presentations produced, appear beside the events
+    /// recorded here, on one time base, and [`Self::clear`] clears both. The capture is the only
+    /// recorder of framework spans and telemetry; this timeline keeps no copy of them.
     #[cfg(feature = "profiling")]
     #[must_use]
     pub fn over(capture: &crate::Capture) -> Self {
@@ -448,28 +450,8 @@ impl Timeline {
         duration: Duration,
         args: serde_json::Value,
     ) {
-        self.record_completed(
-            name.into(),
-            TimelineEventKind::Custom,
-            start,
-            duration,
-            args,
-            None,
-        );
-    }
-
-    /// Record an event of `kind` whose timing is already known, for the presentation `address`
-    /// names when given. `name` is converted by the caller, before the lock: a conversion may
-    /// read or clear this timeline.
-    fn record_completed(
-        &self,
-        name: String,
-        kind: TimelineEventKind,
-        start: Instant,
-        duration: Duration,
-        args: serde_json::Value,
-        address: Option<PresentationAddress>,
-    ) {
+        // Converted before the lock: a conversion may read or clear this timeline.
+        let name = name.into();
         let mut inner = self.inner.lock();
         let start_micros = start
             .saturating_duration_since(inner.start_time)
@@ -478,74 +460,12 @@ impl Timeline {
             name,
             start_micros,
             duration_micros: duration.as_micros(),
-            kind,
+            kind: TimelineEventKind::Custom,
             args,
             thread_id: std::thread::current().id(),
-            runtime: address.map(|address| address.ui_runtime_id),
-            presentation: address.map(|address| address.presentation_id),
+            runtime: None,
+            presentation: None,
         });
-    }
-
-    /// Record every produced-frame [`FrameSnapshot`] in `snapshots` as one
-    /// Chrome-trace-compatible timeline event per frame, each carrying its
-    /// coalesced input ids and (present − arrival) latencies as trace args
-    /// — issue #556's exportable, per-input-attributed frame telemetry.
-    ///
-    /// A presentation's frame clock produces the snapshots. That clock is
-    /// internal to the app host, and no public API hands its snapshots out
-    /// yet; the public source is the follow-up ADR-0088 names for move 4.
-    /// Reuses this module's own [`Self::export_chrome_trace`] serializer;
-    /// no second trace format exists anywhere in this crate.
-    ///
-    /// The event name embeds [`FrameSnapshot::address`], not just
-    /// `frame_id`: a `frame_id` is scoped to the presentation whose clock
-    /// minted it (each starts counting from 1), and a `PresentationId` is
-    /// scoped to the UI runtime that minted it (ADR-0266 §3). Two
-    /// presentations' snapshots recorded into the SAME `Timeline` — a UI
-    /// runtime hosting more than one presentation, or two UI runtimes whose
-    /// first presentations share an id — would otherwise collide in one
-    /// exported trace file. The event's [`TimelineEvent::runtime`] and
-    /// [`TimelineEvent::presentation`] are the address's, so the Chrome
-    /// export puts the frame in its runtime's process, and its `args` carry
-    /// both ids as text (`ui_runtime`, `presentation`) so a consumer of the
-    /// JSON export can group by them without parsing the name back apart.
-    pub fn record_frame_snapshots(&self, snapshots: &[FrameSnapshot]) {
-        for snapshot in snapshots {
-            let inputs: Vec<serde_json::Value> = snapshot
-                .latencies()
-                .map(|(id, latency)| {
-                    json!({
-                        "input_epoch_id": id.get(),
-                        "latency_us": saturating_micros(latency),
-                    })
-                })
-                .collect();
-            let mut args = json!({
-                "ui_runtime": snapshot.address.ui_runtime_id.to_string(),
-                "presentation": snapshot.address.presentation_id.to_string(),
-                "frame_id": snapshot.frame_id.to_string(),
-                "present_outcome": format!("{:?}", snapshot.present_outcome),
-                "inputs": inputs,
-            });
-            // A frame's GPU time arrives after its snapshot was recorded
-            // (ADR-0388): a snapshot pulled before it carries none.
-            if let Some(gpu) = snapshot.gpu_time {
-                args["gpu_us"] = json!(saturating_micros(gpu));
-            }
-            self.record_completed(
-                format!(
-                    "Frame {} [{} {}]",
-                    snapshot.frame_id,
-                    snapshot.address.ui_runtime_id,
-                    snapshot.address.presentation_id
-                ),
-                TimelineEventKind::Frame,
-                snapshot.segment_start,
-                snapshot.segment_span(),
-                args,
-                Some(snapshot.address),
-            );
-        }
     }
 
     /// Every recorded event, oldest first. A timeline [over](Self::over) a capture includes
@@ -615,6 +535,16 @@ impl Timeline {
                         .map(captured_event),
                 );
             });
+            capture.visit_produced_frames(|frame| {
+                let (start, duration) = produced_extent(frame);
+                if keep(
+                    TimelineEventKind::ProducedFrame,
+                    start.as_micros(),
+                    duration.as_micros(),
+                ) {
+                    events.push(produced_event(frame));
+                }
+            });
             events.sort_by_key(|event| event.start_micros);
         }
         events
@@ -639,6 +569,7 @@ impl Timeline {
         #[cfg(feature = "profiling")]
         if let Some(capture) = &self.capture {
             capture.visit_frames(|frame| count += 1 + frame.spans().len());
+            capture.visit_produced_frames(|_| count += 1);
         }
         count
     }
@@ -648,10 +579,11 @@ impl Timeline {
     /// Returns a JSON string that opens in `chrome://tracing` and `ui.perfetto.dev`. Every
     /// event is one complete (`X`) event with its duration, so nesting is the events' own
     /// containment; a span the capture could not close never appears half-open. Each UI runtime
-    /// is a process (named by metadata events) and each thread a thread of it. A timeline
-    /// [over](Self::over) a capture adds, for every frame, the counters `frame_ms` and `jank`
-    /// (`1` when the frame outlasted the display period it reported, 60 Hz when it reported
-    /// none).
+    /// is a process (named by metadata events) and each thread a thread of it; the frames its
+    /// presentations produced are a track of their own, `Produced frames`. A timeline
+    /// [over](Self::over) a capture adds, for every scheduler frame, the counters `frame_ms` and
+    /// `jank` (`1` when the frame outlasted the display period it reported, 60 Hz when it
+    /// reported none).
     ///
     /// # Example
     ///
@@ -673,7 +605,10 @@ impl Timeline {
         });
 
         let mut processes: Vec<Option<UiRuntimeId>> = Vec::new();
-        let mut threads: Vec<(i64, std::thread::ThreadId)> = Vec::new();
+        // A track is a thread of a process; a presentation's produced frames get a track of
+        // their own (`None`), since a frame's extent is placed by when its telemetry arrived and
+        // would partly overlap the spans of the thread that traced it.
+        let mut threads: Vec<(i64, Option<std::thread::ThreadId>)> = Vec::new();
         let mut trace_events: Vec<serde_json::Value> = Vec::new();
         let mut counters: Vec<serde_json::Value> = Vec::new();
         for event in &events {
@@ -685,11 +620,12 @@ impl Timeline {
                     processes.len() - 1
                 });
             let pid = process as i64 + 1;
+            let track = (event.kind != TimelineEventKind::ProducedFrame).then_some(event.thread_id);
             let thread = threads
                 .iter()
-                .position(|(owner, thread)| *owner == pid && *thread == event.thread_id)
+                .position(|(owner, thread)| *owner == pid && *thread == track)
                 .unwrap_or_else(|| {
-                    threads.push((pid, event.thread_id));
+                    threads.push((pid, track));
                     threads.len() - 1
                 });
             let tid = thread as i64 + 1;
@@ -736,9 +672,13 @@ impl Timeline {
             }));
         }
         for (index, (pid, thread)) in threads.iter().enumerate() {
+            let name = match thread {
+                Some(thread) => format!("{thread:?}"),
+                None => "Produced frames".to_string(),
+            };
             metadata.push(json!({
                 "name": "thread_name", "ph": "M", "pid": pid, "tid": index as i64 + 1,
-                "args": { "name": format!("{thread:?}") },
+                "args": { "name": name },
             }));
         }
         metadata.extend(trace_events);
@@ -811,6 +751,57 @@ fn captured_event(span: &crate::capture::CapturedSpan) -> TimelineEvent {
         thread_id: span.thread(),
         runtime: span.partition().runtime(),
         presentation: span.partition().presentation(),
+    }
+}
+
+/// When a produced frame lies on the capture's time base: its segment, ending when the capture
+/// received its telemetry. The segment's own instants are on the presentation's frame clock,
+/// which may be virtual, so only its length is read from it.
+#[cfg(feature = "profiling")]
+fn produced_extent(frame: &crate::ProducedFrame) -> (Duration, Duration) {
+    let start = frame.received().saturating_sub(frame.segment());
+    (start, frame.received().saturating_sub(start))
+}
+
+/// A produced frame as a timeline event. Its name holds the frame's whole address, since a frame
+/// number is scoped to its presentation and a presentation id to its runtime (ADR-0266 §3); its
+/// `args` carry the ids as packed numbers and the telemetry's timings in microseconds, under the
+/// telemetry's own field names.
+#[cfg(feature = "profiling")]
+fn produced_event(frame: &crate::ProducedFrame) -> TimelineEvent {
+    let (start, duration) = produced_extent(frame);
+    let mut args = json!({
+        "ui_runtime": frame.runtime().as_u64(),
+        "frame_id": frame.number().get(),
+        "present_outcome": frame.outcome().as_str(),
+        "segment_us": saturating_micros(frame.segment()),
+        "build_us": saturating_micros(frame.build()),
+        "layout_us": saturating_micros(frame.layout()),
+        "paint_us": saturating_micros(frame.paint()),
+        "composite_us": saturating_micros(frame.composite()),
+        "produce_to_present_us": saturating_micros(frame.produce_to_present()),
+        "input_count": frame.input_count(),
+        "input_latency_max_us": saturating_micros(frame.input_latency_max()),
+        "input_epochs_overflowed": frame.inputs_overflowed(),
+    });
+    // A frame's GPU time arrives after its telemetry (ADR-0388): until then it has none.
+    if let Some(gpu) = frame.gpu_time() {
+        args["gpu_us"] = json!(saturating_micros(gpu));
+    }
+    TimelineEvent {
+        name: format!(
+            "Frame {} [{} {}]",
+            frame.number(),
+            frame.runtime(),
+            frame.presentation()
+        ),
+        start_micros: start.as_micros(),
+        duration_micros: duration.as_micros(),
+        kind: TimelineEventKind::ProducedFrame,
+        args,
+        thread_id: frame.thread(),
+        runtime: Some(frame.runtime()),
+        presentation: Some(frame.presentation()),
     }
 }
 

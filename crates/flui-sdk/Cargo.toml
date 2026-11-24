@@ -37,7 +37,7 @@ flui-rendering = { workspace = true }
 flui-semantics = { workspace = true }
 flui-painting = { workspace = true }
 flui-objects = { workspace = true }
-# `hooks::FrameSnapshot`, which `flui-devtools`' timeline records. Already in
+# `scheduler`'s async and frame vocabulary (`AsyncDriver`, `Instant`, `PostFrameHandle`, …). Already in
 # this crate's closure through `flui-view`, so reach does not change.
 flui-scheduler = { workspace = true }
 # `hooks::Scene`, the plugin ABI of flui-hot-reload's dlopen path, and
@@ -60,6 +60,12 @@ flui-rendering = { workspace = true, features = ["testing"] }
 
 [features]
 animation-diagnostics = ["flui-animation/diagnostics"]
+# Embed an icon face in the application, so every `FontCollection` holds it
+# (flui-painting, ADR-0397). A package whose widgets draw with the family turns
+# its feature on in its own manifest, as `flui-material` does; `flui-cupertino`
+# draws no glyph of its family and turns nothing on.
+material-icons = ["flui-painting/material-icons"]
+cupertino-icons = ["flui-painting/cupertino-icons"]
 # Additive. Re-exports the handle-less input capabilities
 # (`platform::input_capabilities`) and the second haptic tier with its requests
 # and outcomes (`platform::haptics`) until every backend passes its conformance

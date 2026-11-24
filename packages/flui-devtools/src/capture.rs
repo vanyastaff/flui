@@ -25,6 +25,18 @@
 //! fabricated measurement. A phase is recognized by [`Phase::of`], so an application span named
 //! `paint` is not captured. A phase reentered inside the same phase is covered by the outer
 //! extent, and a span retained after it closed cannot restart a measurement.
+//!
+//! # Produced frames
+//!
+//! Beside the spans, the layer reads the two `TRACE` events the runtime traces for each frame a
+//! presentation produces: `frame_telemetry` (its outcome, phase durations, produce-to-present
+//! span and inputs) and `frame_gpu_time` (its GPU time, which arrives later and is joined to the
+//! frame by runtime, presentation and frame number). Each is a [`ProducedFrame`], kept in its
+//! runtime's ring. They are the only events the layer admits.
+
+mod telemetry;
+
+pub use telemetry::{FrameOutcome, ProducedFrame};
 
 use std::collections::VecDeque;
 use std::num::NonZeroU64;
@@ -60,18 +72,20 @@ fn is_segment(metadata: &Metadata<'_>) -> bool {
     metadata.is_span() && metadata.target() == FRAME_TARGET && metadata.name() == SEGMENT_SPAN
 }
 
-/// The spans a capture layer admits: frames, segments, phases, and the animation controller
-/// identities that keep an animation span's ancestry visible to the layer.
+/// What a capture layer admits: frames, segments, phases, and the animation controller
+/// identities that keep an animation span's ancestry visible to the layer; and of the events
+/// only the frame telemetry, with the `enabled!` gate the runtime asks before tracing it.
 fn is_captured(metadata: &Metadata<'_>) -> bool {
-    metadata.is_span()
+    let span = metadata.is_span()
         && (is_frame(metadata)
             || is_segment(metadata)
             || Phase::of(metadata).is_some()
             || (metadata.target() == "flui.animation.diagnostics"
-                && metadata.name() == "animation_controller"))
+                && metadata.name() == "animation_controller"));
+    span || telemetry::is_telemetry(metadata) || telemetry::is_telemetry_gate(metadata)
 }
 
-/// The filter a capture layer carries.
+/// The filter a capture layer carries: the framework's frame spans and its frame telemetry.
 pub type FrameSpanFilter = FilterFn<fn(&Metadata<'_>) -> bool>;
 
 /// Whose spans these are: the UI runtime that drove the frame and, for a span that ran for one
@@ -305,6 +319,7 @@ fn deliver(capture: &Capture, sinks: Vec<FrameSink>, frame: &CapturedFrame) {
 struct Ring {
     spans: VecDeque<CapturedSpan>,
     frames: VecDeque<CapturedFrame>,
+    produced: VecDeque<ProducedFrame>,
 }
 
 /// Which capture a value in a span's extensions belongs to: two captures on one registry see
@@ -330,7 +345,7 @@ struct Shared {
 /// How much of each runtime a [`Capture`] keeps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaptureLimits {
-    /// Frames kept per runtime.
+    /// Frames kept per runtime, and as many of its [`ProducedFrame`]s.
     pub frames: usize,
     /// Spans kept per runtime, which also bound the child spans the retained frames hold.
     pub spans: usize,
@@ -429,17 +444,26 @@ impl Capture {
     /// | `build`, `layout`, `compositing`, `paint`, `semantics`, `commit`, `submit` (target `flui.frame`) | the build owner, the pipeline owner and the runtime | [`Phase::Build`] … [`Phase::Submit`] |
     /// | `animation_tick`, `animation_sampling`, `animation_listeners` (target `flui.animation`) | `flui-animation`, when the `profiling` feature turns its instrumentation on (ADR-0202) | [`Phase::AnimationTick`], [`Phase::AnimationSampling`], [`Phase::AnimationListeners`] |
     ///
-    /// The layer carries its own per-layer filter, which admits those spans and the animation
-    /// controller spans that keep an animation span's ancestry visible, and no events. A log
-    /// layer with an `INFO` filter beside it (FLUI's default) therefore does not starve it: the
-    /// registry records a `DEBUG` frame span for this layer while the log layer never sees it.
-    /// And installing it does not switch `DEBUG` on for the rest of the process: an unfiltered
-    /// layer would declare interest in every callsite, and every event in the application would
-    /// pay the dispatch cost once profiling started.
+    /// And these `TRACE` events:
+    ///
+    /// | event (target `flui.frame`) | traced by | read as |
+    /// |------|-----------|---------|
+    /// | `frame_telemetry` | the UI runtime, for each frame it records for a presentation | a [`ProducedFrame`] of the runtime its `ui_runtime_id` names |
+    /// | `frame_gpu_time` | the UI runtime, once a frame's GPU time arrives (ADR-0388) | the [`ProducedFrame::gpu_time`] of the frame its `ui_runtime_id`, `presentation` and `frame_id` name |
+    ///
+    /// The layer carries its own per-layer filter, which admits those spans, the animation
+    /// controller spans that keep an animation span's ancestry visible, and of the events only
+    /// those two, with the `enabled!` gate at `flui.frame` `TRACE` the runtime asks before it
+    /// builds them. A log layer with an `INFO` filter beside it (FLUI's default) therefore does
+    /// not starve it: the registry records a `DEBUG` frame span or a `TRACE` telemetry event for
+    /// this layer while the log layer never sees it. And installing it does not switch `DEBUG` on
+    /// for the rest of the process: an unfiltered layer would declare interest in every callsite,
+    /// and every event in the application would pay the dispatch cost once profiling started.
     ///
     /// The `tests/frame_profile_end_to_end.rs` suite drives real frames through a headless UI
-    /// runtime and reads them back: it is the evidence that the framework still opens the spans
-    /// this table names.
+    /// runtime and reads them back, and `tests/produced_frames.rs` reads their telemetry: they
+    /// are the evidence that the framework still opens the spans and traces the events these
+    /// tables name.
     #[must_use]
     pub fn layer<S>(&self) -> Filtered<CaptureLayer, FrameSpanFilter, S>
     where
@@ -489,8 +513,8 @@ impl Capture {
         self.shared.sinks.lock().len()
     }
 
-    /// The runtimes that have captured a frame; `None` is frames that did not say which runtime
-    /// drove them.
+    /// The runtimes that have captured a frame or a produced frame; `None` is frames that did not
+    /// say which runtime drove them.
     #[must_use]
     pub fn runtimes(&self) -> Vec<Option<UiRuntimeId>> {
         let rings = self.shared.rings.lock();
@@ -556,6 +580,31 @@ impl Capture {
             .map_or_default(|ring| ring.frames.iter().cloned().collect())
     }
 
+    /// Every frame a presentation produced, from its runtime's frame telemetry, in the order the
+    /// capture received them.
+    #[must_use]
+    pub fn produced_frames(&self) -> Vec<ProducedFrame> {
+        let mut produced: Vec<_> = self
+            .shared
+            .rings
+            .lock()
+            .values()
+            .flat_map(|ring| ring.produced.iter().cloned())
+            .collect();
+        produced.sort_by_key(ProducedFrame::received);
+        produced
+    }
+
+    /// The frames `runtime`'s presentations produced, in the order the capture received them.
+    #[must_use]
+    pub fn produced_frames_of(&self, runtime: UiRuntimeId) -> Vec<ProducedFrame> {
+        self.shared
+            .rings
+            .lock()
+            .get(&Some(runtime))
+            .map_or_default(|ring| ring.produced.iter().cloned().collect())
+    }
+
     /// Calls `visit` with every retained frame, in no order and without copying it, while the
     /// capture's rings are locked: `visit` must not call back into this capture.
     #[cfg(feature = "timeline")]
@@ -565,9 +614,53 @@ impl Capture {
         }
     }
 
+    /// Calls `visit` with every retained produced frame, in no order and without copying it,
+    /// while the capture's rings are locked: `visit` must not call back into this capture.
+    #[cfg(feature = "timeline")]
+    pub(crate) fn visit_produced_frames(&self, mut visit: impl FnMut(&ProducedFrame)) {
+        for ring in self.shared.rings.lock().values() {
+            ring.produced.iter().for_each(&mut visit);
+        }
+    }
+
     /// Forget everything captured so far. Sinks stay registered.
     pub fn clear(&self) {
         self.shared.rings.lock().clear();
+    }
+
+    /// Files a telemetry event: a produced frame in its runtime's ring, bounded like its frames,
+    /// or a GPU time on the frame it names. A GPU time whose frame the ring no longer holds (or
+    /// never held, because the capture started after it) is dropped, and a frame keeps the
+    /// first time it was given.
+    fn record_telemetry(&self, telemetry: telemetry::Telemetry) {
+        let mut rings = self.shared.rings.lock();
+        match telemetry {
+            telemetry::Telemetry::Frame(frame) => {
+                let ring = rings.entry(Some(frame.runtime)).or_default();
+                ring.produced.push_back(frame);
+                while ring.produced.len() > self.shared.max_frames {
+                    ring.produced.pop_front();
+                }
+            }
+            telemetry::Telemetry::GpuTime {
+                runtime,
+                presentation,
+                number,
+                gpu,
+            } => {
+                let frame = rings.get_mut(&Some(runtime)).and_then(|ring| {
+                    ring.produced
+                        .iter_mut()
+                        .rev()
+                        .find(|frame| frame.presentation == presentation && frame.number == number)
+                });
+                if let Some(frame) = frame
+                    && frame.gpu_time.is_none()
+                {
+                    frame.gpu_time = Some(gpu);
+                }
+            }
+        }
     }
 
     fn publish(&self, frame: CapturedFrame) {
@@ -956,6 +1049,20 @@ where
             slot_modify(&frame, owner, |state: &mut FrameState| {
                 state.ended.push(ended);
             });
+        }
+    }
+
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+        // The filter admits no other event; checking again keeps a layer used without it (or
+        // with a filter of the caller's own) from reading another event's fields as telemetry.
+        if !telemetry::is_telemetry(event.metadata()) {
+            return;
+        }
+        let received = Instant::now().saturating_duration_since(self.capture.shared.epoch);
+        let mut fields = telemetry::TelemetryFields::default();
+        event.record(&mut fields);
+        if let Some(telemetry) = fields.into_telemetry(received, std::thread::current().id()) {
+            self.capture.record_telemetry(telemetry);
         }
     }
 }
@@ -1447,6 +1554,196 @@ mod tests {
             .find(|span| span.phase() == Some(Phase::Layout))
             .expect("the inner layout");
         assert_eq!(layout.partition().presentation(), None);
+    }
+
+    /// A `frame_telemetry` event in the runtime's shape, with `frame` as its number.
+    fn telemetry_of(runtime: u64, presentation: u64, frame: u64) {
+        tracing::trace!(
+            target: "flui.frame",
+            event = "frame_telemetry",
+            ui_runtime_id = runtime,
+            presentation = presentation,
+            frame_id = frame,
+            present_outcome = "presented",
+            segment_us = 900_u64,
+            build_us = 100_u64,
+            layout_us = 200_u64,
+            paint_us = 300_u64,
+            composite_us = 40_u64,
+            produce_to_present_us = 1_500_u64,
+            input_count = 2_u64,
+            input_latency_max_us = 700_u64,
+            input_epochs_overflowed = false,
+            produces_deferred = 0_u64,
+            frames_dropped = 0_u64,
+            "frame telemetry"
+        );
+    }
+
+    /// A `frame_gpu_time` event in the runtime's shape.
+    fn gpu_time_of(runtime: u64, presentation: u64, frame: u64, gpu_us: u64) {
+        tracing::trace!(
+            target: "flui.frame",
+            event = "frame_gpu_time",
+            ui_runtime_id = runtime,
+            presentation = presentation,
+            frame_id = frame,
+            epoch = 1_u64,
+            gpu_us = gpu_us,
+            "frame GPU time"
+        );
+    }
+
+    /// The capture reads each telemetry event as the produced frame it names, and joins a GPU
+    /// time to the frame of the same runtime, presentation and number, never to a frame of the
+    /// same number elsewhere.
+    #[test]
+    fn telemetry_events_are_produced_frames_with_their_gpu_time() {
+        let (r1, r2, p1) = (runtime(1), runtime(2), presentation(1));
+        let capture = capturing(|| {
+            telemetry_of(r1.as_u64(), p1.as_u64(), 1);
+            telemetry_of(r2.as_u64(), p1.as_u64(), 1);
+            gpu_time_of(r2.as_u64(), p1.as_u64(), 1, 420);
+            // No frame has this number: nothing is invented for it.
+            gpu_time_of(r1.as_u64(), p1.as_u64(), 9, 1);
+        });
+
+        let first = capture.produced_frames_of(r1);
+        assert_eq!(first.len(), 1);
+        let frame = &first[0];
+        assert_eq!(frame.partition(), Partition::new(Some(r1), Some(p1)));
+        assert_eq!(frame.number().get(), 1);
+        assert_eq!(frame.outcome(), FrameOutcome::Presented);
+        assert_eq!(frame.segment(), Duration::from_micros(900));
+        assert_eq!(
+            [
+                frame.build(),
+                frame.layout(),
+                frame.paint(),
+                frame.composite()
+            ],
+            [100, 200, 300, 40].map(Duration::from_micros)
+        );
+        assert_eq!(frame.produce_to_present(), Duration::from_micros(1_500));
+        assert_eq!(frame.input_count(), 2);
+        assert_eq!(frame.input_latency_max(), Duration::from_micros(700));
+        assert_eq!(
+            frame.gpu_time(),
+            None,
+            "the other runtime's time is not this frame's"
+        );
+        assert_eq!(
+            capture.produced_frames_of(r2)[0].gpu_time(),
+            Some(Duration::from_micros(420))
+        );
+        assert_eq!(capture.runtimes(), [Some(r1), Some(r2)]);
+    }
+
+    /// A number that is no valid id, or an id written as text, is refused: the event is skipped,
+    /// not filed under an id nobody minted.
+    #[test]
+    fn telemetry_naming_no_valid_id_is_skipped() {
+        let (r1, p1) = (runtime(1), presentation(1));
+        let capture = capturing(|| {
+            telemetry_of(0, p1.as_u64(), 1);
+            telemetry_of(r1.as_u64(), 0, 1);
+            telemetry_of(r1.as_u64(), p1.as_u64(), 0);
+            tracing::trace!(
+                target: "flui.frame",
+                event = "frame_telemetry",
+                ui_runtime_id = r1.as_u64(),
+                presentation = %p1,
+                frame_id = 1_u64,
+                "frame telemetry"
+            );
+        });
+
+        assert!(
+            capture.produced_frames().is_empty(),
+            "{:?}",
+            capture.produced_frames()
+        );
+    }
+
+    /// The runtime asks `enabled!(flui.frame, TRACE)` before it builds a frame's telemetry: the
+    /// capture's filter must admit that hint, or a capture with no other layer beside it never
+    /// gets the events it reads. It admits no other hint and no other `flui.frame` event.
+    #[test]
+    fn the_filter_admits_the_telemetry_gate_and_no_other_trace_callsite() {
+        /// A callsite's target (`flui.frame` or another), whether it is an event, and whether the
+        /// capture's filter admits it.
+        type Verdict = (&'static str, bool, bool);
+
+        /// Records the capture filter's verdict on each callsite this thread asks about: a callsite
+        /// registered on another thread reaches every dispatcher there.
+        struct Verdicts(ThreadId, Arc<Mutex<Vec<Verdict>>>);
+        impl<S: Subscriber> Layer<S> for Verdicts {
+            fn enabled(&self, metadata: &Metadata<'_>, _: Context<'_, S>) -> bool {
+                let target = match metadata.target() {
+                    FRAME_TARGET => FRAME_TARGET,
+                    _ => "other",
+                };
+                if std::thread::current().id() != self.0 {
+                    return true;
+                }
+                self.1
+                    .lock()
+                    .push((target, metadata.is_event(), is_captured(metadata)));
+                true
+            }
+        }
+
+        let verdicts = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry()
+            .with(Verdicts(std::thread::current().id(), Arc::clone(&verdicts)));
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            // Creating the dispatch asked it about every callsite registered so far.
+            verdicts.lock().clear();
+            let _ = tracing::enabled!(target: "flui.frame", tracing::Level::TRACE);
+            let _ = tracing::enabled!(target: "my_app", tracing::Level::TRACE);
+            let _ = tracing::event_enabled!(
+                target: "flui.frame",
+                tracing::Level::TRACE,
+                event = "tree_revision_advanced"
+            );
+        });
+
+        let mut seen = verdicts.lock().clone();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen,
+            [
+                (FRAME_TARGET, false, true),
+                (FRAME_TARGET, true, false),
+                ("other", false, false)
+            ],
+            "(target, is an event, admitted): only the hint at flui.frame TRACE"
+        );
+    }
+
+    /// The produced frames of a runtime are bounded like its frames.
+    #[test]
+    fn produced_frames_are_bounded_per_runtime() {
+        let capture = Capture::bounded(CaptureLimits {
+            frames: 2,
+            spans: 10,
+        });
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            for frame in 1..=5 {
+                telemetry_of(runtime(1).as_u64(), presentation(1).as_u64(), frame);
+            }
+        });
+
+        let numbers: Vec<u64> = capture
+            .produced_frames()
+            .iter()
+            .map(|frame| frame.number().get())
+            .collect();
+        assert_eq!(numbers, [4, 5]);
     }
 
     /// A frame whose task panics before the pipeline runs still says whose frame it was.

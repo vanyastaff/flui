@@ -263,15 +263,12 @@ impl ScenePlugin {
     /// `repr(Rust)` compilations is established at `load` by the ABI-token
     /// handshake (same compiler, same crate revision — see [`crate::abi_token`]).
     ///
-    /// Returns `None` when this is a [`PluginKind::App`] plugin and the
-    /// build function refused the call — the wrong-thread case
-    /// `app_plugin!`'s generated `flui_app_build` documents (see its
-    /// "Thread affinity" docs): the pipeline is pinned to whichever thread
-    /// first drove it, and every other thread gets a null pointer back
-    /// instead of a Scene. Treat that exactly like "no plugin loaded": skip
-    /// this frame, keep the plugin, try again later — never as a caller
-    /// error. A [`PluginKind::Scene`] plugin has no such refusal path, so a
-    /// null return there stays a hard contract violation (`assert!`s below).
+    /// Returns `None` when the build function answered null: the plugin's
+    /// code panicked (the image contained, reported and destroyed the panic),
+    /// or, for a [`PluginKind::App`] plugin, the call came from a thread other
+    /// than the one `app_plugin!` pinned (see its "Thread affinity" docs).
+    /// Treat it exactly like "no plugin loaded": skip this frame, keep the
+    /// plugin, try again later — never as a caller error.
     ///
     /// # Safety
     ///
@@ -302,16 +299,6 @@ impl ScenePlugin {
         unsafe {
             let ptr = (self.build_fn)(width, height);
             if ptr.is_null() {
-                let build_symbol = match self.kind {
-                    PluginKind::App => "flui_app_build",
-                    PluginKind::Scene => "flui_scene_build",
-                };
-                assert!(
-                    self.kind == PluginKind::App,
-                    "{build_symbol} returned null — scene_plugin! has no \
-                     legitimate null path (only app_plugin!'s wrong-thread \
-                     refusal does)"
-                );
                 return None;
             }
             let scene = std::ptr::read(ptr.cast::<Scene>());

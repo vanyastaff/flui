@@ -1066,13 +1066,13 @@ fn bold_text_changes_the_painted_glyphs() {
         .expect("the generated variable face loads");
     for (kind, override_weight) in [
         ("Text", None),
-        ("RichText", None),
+        ("Text::rich", None),
         ("EditableText", None),
         ("Text", Some(0)),
-        ("RichText", Some(0)),
+        ("Text::rich", Some(0)),
         ("EditableText", Some(0)),
         ("Text", Some(100)),
-        ("RichText", Some(100)),
+        ("Text::rich", Some(100)),
         ("EditableText", Some(100)),
     ] {
         let runtime = UiRuntime::try_new(
@@ -1092,9 +1092,7 @@ fn bold_text_changes_the_painted_glyphs() {
             .with_font_size(24.0);
         let text_root = |text: &str| match kind {
             "Text" => flui_widgets::Text::new(text).style(style.clone()).boxed(),
-            "RichText" => {
-                flui_widgets::RichText::new(TextSpan::styled(text, style.clone())).boxed()
-            }
+            "Text::rich" => flui_widgets::Text::rich(TextSpan::styled(text, style.clone())).boxed(),
             "EditableText" => flui_widgets::EditableText::new(
                 flui_widgets::TextEditingController::with_text(text),
                 flui_interaction::focus::FocusNode::new(),

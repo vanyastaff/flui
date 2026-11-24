@@ -816,6 +816,8 @@ fn every_text_field_of_the_wire_is_redacted_or_named_as_kept() {
         "persistent_key",
         "root",
         "token_file",
+        // The source file a compiler diagnostic names (`build.report`).
+        "file",
         "tree",
         // Names from a vocabulary: methods, capabilities, actions, kinds, roles, media types,
         // the driver's own reasons and details.

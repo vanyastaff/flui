@@ -22,10 +22,11 @@
 //! Measurement, paint and carets all read the one layout shaped on the
 //! collection, so a face registered on it reaches all three together; the
 //! scan is read once, to feed it, and never again.
-//! [`FontCollection::new`] holds the bundled faces alone; without
-//! `bundled-fonts` it starts empty, text shapes with no face until one is
-//! registered, and the first registered family that can set Latin text
-//! becomes every generic family ([`FontCollection::register_font`]).
+//! [`FontCollection::new`] holds the faces the build embeds alone
+//! (`crate::fonts`); without `bundled-fonts` it holds no text face, text
+//! shapes with no face until one is registered, and the first registered
+//! family that can set Latin text becomes every generic family
+//! ([`FontCollection::register_font`]).
 
 use std::borrow::Cow;
 use std::fmt;
@@ -67,13 +68,14 @@ struct FontCollectionInner {
 impl FontCollection {
     /// A new collection.
     ///
-    /// With `bundled-fonts` it holds the embedded Roboto, Material Icons and
-    /// Cupertino Icons faces, and binds the generic families (sans-serif,
-    /// serif, monospace, cursive, fantasy, system-ui) to Roboto, so text shapes the same on
-    /// every host. Without `bundled-fonts` it starts empty: text measures
-    /// with no face until one is registered, and the first registered family
-    /// that can set Latin text then serves as every generic family
-    /// ([`FontCollection::register_font`]).
+    /// With `bundled-fonts` it holds the embedded Roboto and binds the generic
+    /// families (sans-serif, serif, monospace, cursive, fantasy, system-ui) to
+    /// it, so text shapes the same on every host. Without `bundled-fonts` no
+    /// text face is held: text measures with no face until one is registered,
+    /// and the first registered family that can set Latin text then serves as
+    /// every generic family ([`FontCollection::register_font`]). With
+    /// `material-icons` or `cupertino-icons` it also holds that icon face
+    /// (ADR-0397).
     #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(FontCollectionInner::build(None)))
@@ -81,9 +83,11 @@ impl FontCollection {
 
     /// A collection fed from the host: [`FontCollection::new`]'s faces, then
     /// every face `host` found whose families the collection does not
-    /// already hold, every generic family the collection leaves unbound
-    /// bound to the family `host` picked for it (system-ui to sans-serif's),
-    /// and `host`'s fallback lists past a style's family.
+    /// already hold and that is not of an icon family FLUI embeds ("Material
+    /// Icons", "CupertinoIcons", ADR-0397 §2), every generic family the
+    /// collection leaves unbound bound to the family `host` picked for it
+    /// (system-ui to sans-serif's), and `host`'s fallback lists past a
+    /// style's family.
     ///
     /// With `bundled-fonts` the bundled Roboto keeps every generic and a
     /// host copy of a bundled family is never fed, so text naming no family
@@ -105,11 +109,12 @@ impl FontCollection {
     /// renders before the host is scanned. [`HostFontFeed::run`], on a thread
     /// other than the owner's, scans the host and adds what
     /// [`FontCollection::with_host_fonts`] would: every face whose families
-    /// the collection does not hold when the feed starts, the generics it
-    /// leaves unbound, and the host's fallback order. If that changed the
-    /// collection it then raises [`Self::generation`] by one, so text laid
-    /// out before measures again at each pipeline's next frame, as after a
-    /// registration; a feed that added nothing leaves it alone.
+    /// the collection does not hold when the feed starts, except a face of an
+    /// icon family FLUI embeds, the generics it leaves unbound, and the host's
+    /// fallback order. If that changed the collection it then raises
+    /// [`Self::generation`] by one, so text laid out before measures again at
+    /// each pipeline's next frame, as after a registration; a feed that added
+    /// nothing leaves it alone.
     ///
     /// Without `bundled-fonts` the collection would start with no face, and
     /// a first frame would draw no text at all; this then feeds the host's
@@ -325,8 +330,12 @@ impl FontCollectionInner {
             shared: false,
             system_fonts: false,
         });
-        #[cfg(feature = "bundled-fonts")]
-        bind_bundled_faces(&mut collection);
+        #[cfg(any(
+            feature = "bundled-fonts",
+            feature = "material-icons",
+            feature = "cupertino-icons"
+        ))]
+        register_embedded_faces(&mut collection);
         if let Some(host) = host {
             // A private build starts at generation zero whatever it holds,
             // so whether the feed changed anything does not matter here.
@@ -589,7 +598,11 @@ enum Registration {
 /// Adds `host`'s faces, generics and fallback order to `collection`.
 ///
 /// A source any of whose families the collection holds when the feed starts
-/// is left out, so a host copy never joins a bundled or registered family.
+/// is left out, so a host copy never joins a bundled or registered family,
+/// and so is a source of an icon family FLUI embeds ([`EMBEDDED_ICON_FAMILIES`])
+/// whether or not this build holds that face: an icon's glyph comes from the
+/// face FLUI pins or from the application's `register_font`, never from a
+/// copy the host happens to have (ADR-0397 §2).
 /// Each source is registered on its own, so on a shared collection
 /// fontique's lock is held for one file at a time. A generic the collection
 /// already binds keeps its binding (with `bundled-fonts`, Roboto keeps every
@@ -614,7 +627,11 @@ fn feed_host_faces(
 
     use super::fallback_chain::{install_into, resolve};
 
-    let held: HashSet<String> = collection.family_names().map(str::to_lowercase).collect();
+    let held: HashSet<String> = collection
+        .family_names()
+        .chain(EMBEDDED_ICON_FAMILIES)
+        .map(str::to_lowercase)
+        .collect();
     let mut fed = 0_usize;
     let mut bound = false;
     for source in &host.sources {
@@ -728,33 +745,48 @@ fn bind_unbound_generics(
     }
 }
 
-/// Registers the embedded faces, binds every generic family to Roboto and
-/// makes Roboto every script's fallback.
-///
-/// fontique has no last resort past a style's families and its script's
-/// fallbacks, so without the fallback a glyph the style's family lacks (a
-/// Cyrillic letter in an icon font) would measure and paint as `.notdef`.
-/// A host feed replaces the fallbacks with the host's order, which ends in
-/// Roboto too (`install_into`).
-#[cfg(feature = "bundled-fonts")]
-fn bind_bundled_faces(collection: &mut parley::fontique::Collection) {
-    use parley::fontique::{Blob, FallbackKey};
+/// The families of the icon faces FLUI embeds under `material-icons` and
+/// `cupertino-icons`. A host feed never supplies one (ADR-0397 §2), so without
+/// its feature the family is the application's to register.
+const EMBEDDED_ICON_FAMILIES: [&str; 2] = ["Material Icons", "CupertinoIcons"];
 
-    use crate::fonts::{CUPERTINO_ICONS, MATERIAL_ICONS_REGULAR, ROBOTO_REGULAR};
+/// Registers the faces this build embeds (`crate::fonts`).
+///
+/// With `bundled-fonts` it also binds every generic family to Roboto and
+/// makes Roboto every script's fallback: fontique has no last resort past a
+/// style's families and its script's fallbacks, so without the fallback a
+/// glyph the style's family lacks (a Cyrillic letter in an icon font) would
+/// measure and paint as `.notdef`. A host feed replaces the fallbacks with
+/// the host's order, which ends in Roboto too (`install_into`).
+#[cfg(any(
+    feature = "bundled-fonts",
+    feature = "material-icons",
+    feature = "cupertino-icons"
+))]
+fn register_embedded_faces(collection: &mut parley::fontique::Collection) {
+    use parley::fontique::Blob;
 
     let mut register =
         |bytes: &'static [u8]| collection.register_fonts(Blob::new(Arc::new(bytes)), None);
-    let roboto: Vec<_> = register(ROBOTO_REGULAR)
+    #[cfg(feature = "bundled-fonts")]
+    let roboto: Vec<_> = register(crate::fonts::ROBOTO_REGULAR)
         .into_iter()
         .map(|(family, _)| family)
         .collect();
-    register(MATERIAL_ICONS_REGULAR);
-    register(CUPERTINO_ICONS);
-    for generic in GENERICS {
-        collection.set_generic_families(generic, roboto.iter().copied());
-    }
-    for script in super::fallback_chain::fontique_scripts() {
-        collection.set_fallbacks(FallbackKey::new(script, None), roboto.iter().copied());
+    #[cfg(feature = "material-icons")]
+    register(crate::fonts::MATERIAL_ICONS_REGULAR);
+    #[cfg(feature = "cupertino-icons")]
+    register(crate::fonts::CUPERTINO_ICONS);
+    #[cfg(feature = "bundled-fonts")]
+    {
+        use parley::fontique::FallbackKey;
+
+        for generic in GENERICS {
+            collection.set_generic_families(generic, roboto.iter().copied());
+        }
+        for script in super::fallback_chain::fontique_scripts() {
+            collection.set_fallbacks(FallbackKey::new(script, None), roboto.iter().copied());
+        }
     }
 }
 
@@ -1193,6 +1225,55 @@ mod tests {
             .width;
         assert!(width > 1.0, "a context still shapes, got {width}");
         assert_eq!(fonts.register_font(ROBOTO), Ok(()));
+    }
+
+    /// A host never supplies an icon family FLUI embeds, whether this build
+    /// holds that face or not: its "Material Icons" and "CupertinoIcons" are
+    /// left out, and a text family beside them is fed. Without the feature
+    /// the family is then absent; with it, it holds the embedded face alone.
+    /// The families are spelled here, not taken from the feed's own list, so
+    /// a name dropped from or misspelt in that list fails its row.
+    #[test]
+    fn a_host_never_supplies_an_icon_family_flui_embeds() {
+        const PROBE: &str = "FLUI Probe Sans";
+        const ICONS: [(&str, bool); 2] = [
+            ("Material Icons", cfg!(feature = "material-icons")),
+            ("CupertinoIcons", cfg!(feature = "cupertino-icons")),
+        ];
+        let source = |family: &str| HostSource {
+            data: HostData::Blob(Arc::new(renamed(PROBE_SANS, family, None))),
+            families: vec![family.to_owned()],
+        };
+        let host = HostFaces {
+            sources: ICONS
+                .iter()
+                .map(|&(family, _)| source(family))
+                .chain(std::iter::once(source(PROBE)))
+                .collect(),
+            sans_serif: PROBE.to_owned(),
+            serif: PROBE.to_owned(),
+            monospace: PROBE.to_owned(),
+            cursive: PROBE.to_owned(),
+            fantasy: PROBE.to_owned(),
+            chain: FallbackChain::from_lists(&[PROBE], &[]),
+            system: crate::SystemFallback::none("en-US"),
+        };
+        let faces_of = |fonts: &FontCollection, family: &str| {
+            let mut collection = fonts.0.collection.clone();
+            collection
+                .family_id(family)
+                .and_then(|id| collection.family(id))
+                .map_or(0, |family| family.fonts().len())
+        };
+        let fed = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
+        assert_eq!(faces_of(&fed, PROBE), 1, "the text family is fed");
+        for (family, embeds) in ICONS {
+            assert_eq!(
+                faces_of(&fed, family),
+                usize::from(embeds),
+                "`{family}` holds the face this build embeds and no host copy"
+            );
+        }
     }
 
     /// A host copy of a bundled family never joins it: a host whose "Roboto"

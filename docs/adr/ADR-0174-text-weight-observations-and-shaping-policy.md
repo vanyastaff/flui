@@ -27,10 +27,10 @@ Apple's custom-font rendering. It preserves authored ordering until saturation
 and does not lower an authored W900 to W700. An explicitly nested `MediaQuery`
 remains a whole replacement and can author zero to preserve its subtree's weights.
 
-Text, RichText and EditableText pass this adjustment separately from their
-authored styles. The common Parley adapter applies it once after style inheritance
-and before font matching and shaping. It resolves the last valid explicit `wght`
-coordinate, otherwise the inherited authored weight, otherwise 400; adds in `f64`;
+Text and EditableText pass this adjustment separately from their authored styles,
+and a `RichText` passes the one it is given. The common Parley adapter applies it
+once after style inheritance and before font matching and shaping. It resolves the
+last valid explicit `wght` coordinate, otherwise the inherited authored weight, otherwise 400; adds in `f64`;
 and bounds the requested result to 1..1000 before narrowing. Matching and explicit
 weight-axis settings receive the same resolved value. Other valid axes retain
 their authored values. Span diagnostics retain the resolved floating-point

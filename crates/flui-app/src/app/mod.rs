@@ -18,6 +18,7 @@ pub(crate) mod capability;
 pub(crate) mod clipboard_expiry;
 mod config;
 pub(crate) mod dev_agent;
+pub(crate) mod dev_tree_observer;
 pub(crate) mod host_memory;
 pub(crate) mod hot_reload;
 #[cfg(feature = "http")]

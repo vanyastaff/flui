@@ -11,6 +11,7 @@ use flui_platform::WindowMode;
 
 use super::CloseRequestHandler;
 use super::dev_agent::DevAgent;
+use super::dev_tree_observer::DevTreeObserver;
 use super::hot_reload::DevReload;
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::ServiceDefinition;
@@ -130,6 +131,10 @@ pub struct AppConfig {
     /// The development agent hooks, installed with [`Self::dev_agent`].
     pub(crate) dev_agent: Option<DevAgent>,
 
+    /// The factory of development tree observers, installed with
+    /// [`Self::dev_tree_observer`].
+    pub(crate) dev_tree_observer: Option<DevTreeObserver>,
+
     /// Governs when the platform loop exits once every hosted window has
     /// closed. See [`ExitPolicy`]'s own doc for the drain-before-decide
     /// rule; `run_desktop`'s bootstrap installs this into the live platform
@@ -230,6 +235,7 @@ impl Default for AppConfig {
             input_latency: flui_platform::InputLatency::Balanced,
             dev_reload: None,
             dev_agent: None,
+            dev_tree_observer: None,
             exit_policy: ExitPolicy::default(),
             executors: None,
             frame_failure_handler: None,
@@ -280,6 +286,14 @@ impl AppConfig {
             factory
                 .install_on(runtime)
                 .expect("BUG: a fresh runtime issues its first tap registration");
+        }
+    }
+
+    /// Install an observer from [`Self::dev_tree_observer`] on a runtime just
+    /// built, before its first root is mounted.
+    pub(crate) fn install_dev_tree_observer(&self, runtime: &flui_runtime::ui_runtime::UiRuntime) {
+        if let Some(factory) = &self.dev_tree_observer {
+            factory.install_on(runtime);
         }
     }
 
@@ -562,6 +576,40 @@ impl AppConfig {
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn dev_agent(mut self, hook: impl flui_view::dev_agent::DevAgentHook) -> Self {
         self.dev_agent = Some(DevAgent::with(self.dev_agent.take(), hook));
+        self
+    }
+
+    /// Observe each UI runtime's element tree through observers `factory`
+    /// makes: a development tool of the application's own, such as
+    /// `flui-devtools`' `InspectorCounters`, that counts or logs mounts,
+    /// moves, rebuilds and unmounts (ADR-0040). Replaces any factory installed
+    /// before.
+    ///
+    /// For every UI runtime a runner builds for a window (the desktop, iOS,
+    /// Android and web runners, and a secondary window's isolated runtime),
+    /// the runner calls `factory` once with the runtime's id on its owner
+    /// thread, before its first root is mounted, and installs the observer it
+    /// returns through the seeded install, which replays what is already
+    /// mounted. The observer sees the tree of the runtime's primary
+    /// presentation; a presentation opened into an existing runtime with
+    /// `WindowPolicy::Shared`, which holds no content, gets none. When the
+    /// runtime retires, the observer's stream ends with `detached()`.
+    ///
+    /// `factory` is called with no lock held. One that panics is logged, its
+    /// panic is destroyed, and that runtime runs without an observer. The
+    /// factory is `Send + Sync` because the configuration crosses threads; the
+    /// observer it returns is used only on the runtime's owner thread.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn dev_tree_observer(
+        mut self,
+        factory: impl Fn(
+            flui_foundation::UiRuntimeId,
+        ) -> std::sync::Arc<dyn flui_foundation::observe::TreeObserver>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.dev_tree_observer = Some(DevTreeObserver::new(factory));
         self
     }
 

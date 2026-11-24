@@ -647,7 +647,7 @@ impl UiRuntime {
             phases.lap(FramePhase::Layout);
         }
         // Paint buffers its patch in the presentation's scene, and the root
-        // around the pipeline's frame node and the debug overlay joins it in
+        // around the pipeline's frame node and the debug overlays joins it in
         // the same patch. A semantics error drops the patch: the pipeline,
         // finding it never applied, repaints from the root on the retry.
         //
@@ -677,24 +677,50 @@ impl UiRuntime {
         // since the repaint the target change asked for carries the update.
         let textures_republish =
             scene.owes_texture_frame(presentation.texture_registry(), Some(target));
+        // The build banner a development tool reported, laid out for this frame's surface and
+        // kept clear of the performance overlay while that is drawn. A banner that changed is
+        // published even when the pipeline paints nothing (`PresentationScene::produce`).
+        let banner = presentation
+            .build_banner
+            .banner(
+                flui_foundation::geometry::Size::new(constraints.max_width, constraints.max_height),
+                presentation
+                    .performance_overlay_shown()
+                    .then_some(crate::performance_overlay::BOUNDS),
+            )
+            .and_then(|content| {
+                let owner = presentation
+                    .pipeline()
+                    .with(flui_rendering::pipeline::PipelineOwner::root_id)?;
+                Some(crate::presentation_scene::OverlayFrame {
+                    content,
+                    text,
+                    device_pixel_ratio: dpr.get(),
+                    owner,
+                })
+            });
         let painted = {
             let pipeline = presentation.pipeline();
             scene.produce(
                 |writer| pipeline.run_frame(writer),
+                banner,
+                || pipeline.scene_frame_node(),
                 || {
-                    let overlay = presentation.performance_overlay_readout().map(|readout| {
-                        crate::presentation_scene::OverlayFrame {
-                            readout,
-                            text,
-                            device_pixel_ratio: pipeline
-                                .with(flui_rendering::pipeline::PipelineOwner::device_pixel_ratio)
-                                .get(),
-                            owner: pipeline
-                                .with(flui_rendering::pipeline::PipelineOwner::root_id)
-                                .expect("BUG: a frame that painted has a root"),
-                        }
-                    });
-                    (pipeline.scene_frame_node(), overlay)
+                    pipeline
+                        .with(flui_rendering::pipeline::PipelineOwner::root_id)
+                        .and_then(|owner| {
+                            let readout = presentation.performance_overlay_readout()?;
+                            Some(crate::presentation_scene::OverlayFrame {
+                                content: readout,
+                                text,
+                                device_pixel_ratio: pipeline
+                                    .with(
+                                        flui_rendering::pipeline::PipelineOwner::device_pixel_ratio,
+                                    )
+                                    .get(),
+                                owner,
+                            })
+                        })
                 },
             )?
         };
@@ -712,7 +738,8 @@ impl UiRuntime {
 
         if !painted {
             phases.lap(FramePhase::Paint);
-            // A frame that painted nothing publishes nothing, unless the screen is owed the held
+            // A frame with no patch (the pipeline painted nothing and the build banner holds
+            // still) publishes nothing, unless the screen is owed the held
             // version: the surface withheld it, or a texture update it owes a publication for
             // waits for the raster host, which takes it with the publication and damages the
             // texture's users alone (ADR-0304 §7, §8).
@@ -1483,6 +1510,9 @@ impl UiRuntime {
         }
     }
 
+    /// Trace `snapshot` as a `flui.frame` `frame_telemetry` event. Its ids are primitives
+    /// (ADR-0242 §7): the runtime and the presentation as their packed `as_u64`, the frame as
+    /// its number, so a reader such as `flui-devtools`' capture rebuilds the typed ids from them.
     fn emit_frame_telemetry(presentation: &PresentationState, snapshot: &FrameSnapshot) {
         if !tracing::enabled!(target: "flui.frame", tracing::Level::TRACE) {
             return;
@@ -1503,8 +1533,8 @@ impl UiRuntime {
             target: "flui.frame",
             event = "frame_telemetry",
             ui_runtime_id = snapshot.address.ui_runtime_id.as_u64(),
-            presentation = %snapshot.address.presentation_id,
-            frame_id = %snapshot.frame_id,
+            presentation = snapshot.address.presentation_id.as_u64(),
+            frame_id = snapshot.frame_id.get(),
             present_outcome = outcome,
             segment_us = Self::duration_micros_saturated(snapshot.segment_span()),
             build_us = Self::duration_micros_saturated(snapshot.phase_duration(FramePhase::Build)),
@@ -1558,8 +1588,8 @@ impl UiRuntime {
             target: "flui.frame",
             event = "frame_gpu_time",
             ui_runtime_id = snapshot.address.ui_runtime_id.as_u64(),
-            presentation = %snapshot.address.presentation_id,
-            frame_id = %snapshot.frame_id,
+            presentation = snapshot.address.presentation_id.as_u64(),
+            frame_id = snapshot.frame_id.get(),
             epoch = snapshot.epoch.get(),
             gpu_us = Self::duration_micros_saturated(gpu),
             "frame GPU time"

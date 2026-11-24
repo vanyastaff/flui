@@ -214,7 +214,7 @@ impl From<PlaceholderSpan> for InlineSpan {
 /// Where a link span leads: a URL or a tag the app defines.
 ///
 /// A span carries its link as data. The widget that shows the paragraph
-/// owns what activating it does: `flui_widgets::RichText::on_link` receives
+/// owns what activating it does: `flui_widgets::Text::on_link` receives
 /// the link of the span a tap or assistive technology activated.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(

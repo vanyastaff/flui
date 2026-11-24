@@ -155,6 +155,7 @@ hanging.
 flui run                                    # debug, hot reload
 flui run --release                          # optimized, no hot reload
 flui run --no-hot-reload                    # build and run once
+flui run --no-build-overlay                 # rebuilds reported in the terminal only
 flui run --device 90D572B1-...              # an iOS simulator UDID from `flui devices`
 flui run --device browser:chrome            # wasm32 build, served on localhost, page reloads on rebuild
 flui run --device browser:firefox --web-port 8080 --no-open   # fixed port, URL printed only
@@ -195,6 +196,19 @@ Hot reload works in two modes, chosen automatically:
 - **Worker host** (projects created with `--hot-reload`): the host keeps
   running and only the worker `cdylib` is rebuilt, so widget state survives a
   reload. A change to the shared types crate triggers a host restart.
+
+A debug process restart shows each rebuild over the app's windows, as Vite's and
+Next.js's dev servers do over a page (Flutter's tool writes it to the console
+only): a chip while the build runs, and while the last build failed a panel of
+its errors with their `file:line:column`, until the next build. Nothing of it
+is in the app's tree and it takes no input, so a test or `flui mcp` that
+drives the app acts on the same app. `flui run --no-build-overlay` turns it
+off; a release run and a profile other than `dev` never show it. The run
+reports it as an observer of the app's agent, over a session of its own that
+writes no session file
+([ADR-0395](../../docs/adr/ADR-0395-a-rebuild-is-shown-over-the-app-it-will-replace.md)),
+so `flui mcp` still finds and drives the run started with `--agent`. On
+Windows the app is stopped while it builds, so the run sends no report there.
 
 Ctrl-C always stops the app before the CLI exits and reports exit code 130;
 `q` stops it and exits 0, so supervisors can tell the two apart. Hot-keys need

@@ -9,7 +9,7 @@ use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-fn bounded_output(mut command: Command, timeout: Duration) -> Output {
+pub(crate) fn bounded_output(mut command: Command, timeout: Duration) -> Output {
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -28,11 +28,6 @@ fn bounded_output(mut command: Command, timeout: Duration) -> Output {
 }
 
 fn build_fixture(directory: &Path, value: u32) -> std::path::PathBuf {
-    let source = directory.join(format!("worker_{value}.rs"));
-    let library = directory.join(format!(
-        "worker_{value}.{}",
-        std::env::consts::DLL_EXTENSION
-    ));
     let fixture = r#"
 use std::sync::atomic::{AtomicUsize, Ordering};
 struct Callback { value: u32, drops: *const AtomicUsize }
@@ -45,8 +40,9 @@ fn build(drops: *const AtomicUsize) -> Box<dyn Fn() -> u32> {
     Box::new(move || callback.value())
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn flui_worker_init(register: extern "C" fn(u64, *const ())) {
+pub extern "C" fn flui_worker_init(register: extern "C" fn(u64, *const ()), _request_rebuild: extern "C-unwind" fn()) -> bool {
     register(0xC007_EA01, build as *const ());
+    true
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
@@ -55,23 +51,33 @@ pub extern "C" fn flui_worker_version() -> u32 { VALUE }
 #[unsafe(no_mangle)]
 pub extern "C" fn flui_worker_fingerprint() -> u64 { 0xC007_EA01 }
 "#;
+    compile_fixture(
+        directory,
+        &format!("worker_{value}"),
+        &fixture.replace("VALUE", &value.to_string()),
+    )
+}
+
+/// Compiles `source` with the pinned `rustc` into a `cdylib` named `name` in
+/// `directory`. `TOKEN` in the source becomes this host's ABI token.
+pub(crate) fn compile_fixture(directory: &Path, name: &str, source: &str) -> std::path::PathBuf {
+    let source_path = directory.join(format!("{name}.rs"));
+    let library = directory.join(format!("{name}.{}", std::env::consts::DLL_EXTENSION));
     std::fs::write(
-        &source,
-        fixture
-            .replace("VALUE", &value.to_string())
-            .replace("TOKEN", &flui_hot_reload::abi_token().to_string()),
+        &source_path,
+        source.replace("TOKEN", &flui_hot_reload::abi_token().to_string()),
     )
     .expect("write actual dynamic fixture");
     let mut command = Command::new("rustc");
     command
         .args(["--edition=2024", "--crate-type=cdylib"])
-        .arg(&source)
+        .arg(&source_path)
         .arg("-o")
         .arg(&library);
     let output = bounded_output(command, Duration::from_secs(60));
     assert!(
         output.status.success(),
-        "worker fixture compilation failed: {output:?}"
+        "fixture compilation failed: {output:?}"
     );
     library
 }

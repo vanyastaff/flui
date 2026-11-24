@@ -213,17 +213,22 @@ fn measured_width_equals_painted_width_on_host_faces() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
-/// Every family the host scan found is a family of the fed collection:
-/// fontdb and fontique read the same files' names alike, so a style naming a
-/// host family by the name the scan reports finds it in the collection.
+/// Every family the host scan found, except an icon family FLUI embeds, is a
+/// family of the fed collection: fontdb and fontique read the same files'
+/// names alike, so a style naming a host family by the name the scan reports
+/// finds it in the collection. A host copy of "Material Icons" or
+/// "CupertinoIcons" is never fed (ADR-0397 §2), so the collection holds one
+/// of those only where the build embeds it.
 #[test]
 fn every_family_the_host_scan_finds_resolves_in_the_collection() {
+    const ICON_FAMILIES: [&str; 2] = ["material icons", "cupertinoicons"];
     let host = HostFonts::scan();
     let fonts = FontCollection::with_host_fonts(&host);
     let names = host_family_names(&host);
     assert!(!names.is_empty(), "the host has fonts");
     let missing: Vec<_> = names
         .iter()
+        .filter(|name| !ICON_FAMILIES.contains(&name.to_lowercase().as_str()))
         .filter(|name| !collection_holds(&fonts, name))
         .collect();
     assert!(

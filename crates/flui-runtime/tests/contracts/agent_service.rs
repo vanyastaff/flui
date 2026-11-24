@@ -14,7 +14,8 @@ use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform::PlatformInput;
 use flui_protocol::native_recording::Line as NativeLine;
 use flui_protocol::{
-    act::ActParams, geometry::LogicalPoint, input::ActionSequence, input::InputParams,
+    act::ActParams, build::BuildReportParams, build::BuildState, build::Diagnostic,
+    build::SourceLocation, geometry::LogicalPoint, input::ActionSequence, input::InputParams,
     input::InputSource, input::PointerAction, input::PointerButton, input::PointerDevice,
     locator::Locator, locator::Target, session::AppDescription, tree::WindowId, wire::ActionName,
 };
@@ -200,7 +201,7 @@ fn refused_hello(service: &Service, now: Instant, waker: &Waker, role: Option<&s
 /// until the first goes. An observer is admitted beside the driver, told only the methods it
 /// may call, and refused `not_driver` when it acts, which reaches the app no more.
 #[test]
-fn one_driver_at_a_time_and_an_observer_only_reads() {
+fn one_driver_at_a_time_and_an_observer_never_changes_the_app() {
     let service = service(Limits::default(), None);
     let (mut host, _agent, presses) = shown(&service);
     let waker = CountingWaker::new().shared().waker();
@@ -262,6 +263,111 @@ fn one_driver_at_a_time_and_an_observer_only_reads() {
     );
     drop(driver);
     let (_next, _) = greeted_as(&service, now, &waker, None);
+}
+
+/// An observer is told it may report a build, and the window serves its report; a call of its
+/// that acts is still refused `not_driver` and never reaches the app.
+#[test]
+fn an_observer_reports_a_build_and_is_still_refused_an_act() {
+    let service = service(Limits::default(), None);
+    let (mut host, _agent, presses) = shown(&service);
+    let waker = CountingWaker::new().shared().waker();
+    let now = Instant::now();
+    let (mut observer, welcome) = greeted_as(&service, now, &waker, Some("observer"));
+    let methods = &welcome["hello"]["capabilities"]["methods"];
+    assert!(
+        methods
+            .as_array()
+            .is_some_and(|methods| methods.contains(&json!("build.report"))),
+        "an observer is told it may annotate: {methods}"
+    );
+
+    observer.receive(
+        &line(&json!({ "id": 1, "method": "windows.list", "params": {} })),
+        now,
+    );
+    observer.poll(now, &waker);
+    let listed = transmitted(&mut observer);
+    let window = serde_json::from_value::<WindowId>(listed[0]["result"]["windows"][0].clone())
+        .expect("the window's id");
+    let report = BuildReportParams::new(
+        window,
+        BuildState::Failed {
+            diagnostics: vec![Diagnostic::new(
+                "expected `;`".to_owned(),
+                Some(SourceLocation::new("src/main.rs".to_owned(), 3, 7)),
+            )],
+            omitted: 0,
+        },
+    );
+    observer.receive(
+        &line(&json!({ "id": 2, "method": "build.report", "params": report })),
+        now,
+    );
+    observer.poll(now, &waker);
+    let _ = host.pump(Duration::ZERO);
+    observer.poll(now, &waker);
+    let answer = transmitted(&mut observer);
+    assert_eq!(answer.len(), 1, "{answer:?}");
+    assert_eq!(answer[0]["id"], 2, "{answer:?}");
+    assert!(
+        answer[0].get("result").is_some(),
+        "the window serves an observer's report: {answer:?}"
+    );
+
+    observer.receive(&press_go(3), now);
+    observer.poll(now, &waker);
+    let _ = host.pump(Duration::ZERO);
+    observer.poll(now, &waker);
+    let answer = transmitted(&mut observer);
+    assert_eq!(answer.len(), 1, "{answer:?}");
+    assert_eq!(answer[0]["error"]["code"], "not_driver", "{answer:?}");
+    assert_eq!(
+        presses.load(Ordering::SeqCst),
+        0,
+        "an observer's act never ran"
+    );
+}
+
+/// A build report the window has not answered by its deadline answers `timeout` with retry
+/// `soon`, as a read does, and no `may_have_run` effect: the window keeps only the last report,
+/// so the report still queued and a resend show the same.
+#[test]
+fn a_report_past_its_deadline_may_be_sent_again() {
+    let limits = Limits {
+        reply_timeout: Duration::from_millis(100),
+        ..Limits::default()
+    };
+    let service = service(limits, None);
+    let (mut host, _agent, _presses) = shown(&service);
+    let waker = CountingWaker::new().shared().waker();
+    let now = Instant::now();
+    let (mut observer, _) = greeted_as(&service, now, &waker, Some("observer"));
+    observer.receive(
+        &line(&json!({ "id": 1, "method": "windows.list", "params": {} })),
+        now,
+    );
+    observer.poll(now, &waker);
+    let listed = transmitted(&mut observer);
+    let window = serde_json::from_value::<WindowId>(listed[0]["result"]["windows"][0].clone())
+        .expect("the window's id");
+    let report = BuildReportParams::new(window, BuildState::Building);
+    observer.receive(
+        &line(&json!({ "id": 2, "method": "build.report", "params": report })),
+        now,
+    );
+    observer.poll(now, &waker);
+    let deadline = now + Duration::from_millis(100);
+    observer.poll(deadline, &waker);
+    let answer = transmitted(&mut observer);
+    assert_eq!(answer.len(), 1, "{answer:?}");
+    assert_eq!(answer[0]["error"]["code"], "timeout", "{answer:?}");
+    assert_eq!(answer[0]["error"]["retry"], "soon", "{answer:?}");
+    assert!(
+        answer[0]["error"].get("effect").is_none(),
+        "an annotation is resent, not read back: {answer:?}"
+    );
+    let _ = host.pump(Duration::ZERO);
 }
 
 /// The driver's end runs the obligation, once, and an observer's does not; after it the app is

@@ -15,3 +15,10 @@ mod plugin_pipeline_layout;
 
 #[path = "worker_lifetime.rs"]
 mod worker_lifetime;
+
+#[path = "refused_entries.rs"]
+mod refused_entries;
+
+#[cfg(feature = "app-plugin")]
+#[path = "worker_init.rs"]
+mod worker_init;

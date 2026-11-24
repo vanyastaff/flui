@@ -12,6 +12,11 @@
   [ADR-0309](ADR-0309-every-text-paint-attribute-crosses-the-display-list.md) for §4's clause
   "with span colour and decoration as today": a run carries its colour alone, and a span's
   shadows and background cross as ops of their own.
+  [ADR-0397](ADR-0397-an-icon-face-is-in-a-binary-only-where-a-package-or-the-application-asks-for-it.md)
+  for migration step 4a's clause that `bundled-fonts` installs Material Icons and
+  CupertinoIcons: `bundled-fonts` embeds Roboto, and each icon face has a feature of its own;
+  and for §7's clause that a host face of a family the collection does not hold is fed: no
+  host face of either icon family is fed, embedded or not.
 - **Status:** Accepted (2026-10-01)
 - **Date:** 2026-09-25
 - **Revised:** 2026-10-11 — retired font-stack records retain immutable history links; their surviving clauses are owned here. Current per-painter atlas ownership is distinguished from proposed threaded raster placement.

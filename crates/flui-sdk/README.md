@@ -25,6 +25,13 @@ The additive `animation-diagnostics` feature enables animation transition
 events and CPU spans through `tracing`. It is off by default; devtools'
 `profiling` feature enables it through this SDK (ADR-0202).
 
+## Icon faces
+
+`material-icons` and `cupertino-icons` embed the Material Icons and Cupertino
+Icons faces in every font collection (ADR-0397). A package that draws with one
+of the families turns its feature on, as `flui-material` does; both are off by
+default, and a host's own copy of either family is never used.
+
 ## What is not
 
 No `flui-app`, `flui-engine` or `wgpu` in its normal dependency graph. The facade

@@ -12,8 +12,10 @@
 //!
 //! - the exact `rustc -vV` identity (captured by this crate's build script) —
 //!   `repr(Rust)` layout may legally change between compiler versions;
-//! - this crate's version — the plugin ABI itself (symbol set, calling
-//!   conventions) is versioned with the crate;
+//! - this crate's version and `SYMBOL_REVISION` — the plugin ABI itself
+//!   (symbol set, signatures, calling conventions) changes between releases
+//!   too, and an image built before such a change must be refused rather
+//!   than called with arguments it does not take;
 //! - `size_of`/`align_of` of [`Scene`] — a direct tripwire for layout drift
 //!   of the payload type actually transferred (a plugin's hand-built tree is
 //!   made a version inside the plugin and never crosses).
@@ -28,6 +30,11 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 
 use flui_sdk::hooks::Scene;
 
+/// The revision of the generated symbol families' signatures. It changes
+/// with every change to a `flui_*` symbol a plugin macro emits or a loader
+/// calls, such as an argument `flui_worker_init` gains.
+const SYMBOL_REVISION: u32 = 2;
+
 /// The ABI-compatibility token for THIS compilation of the plugin boundary.
 ///
 /// Host and plugin each compute their own; the loaders refuse a library whose
@@ -38,6 +45,7 @@ pub fn abi_token() -> u64 {
     let mut hasher = DefaultHasher::new();
     env!("FLUI_HOT_RELOAD_RUSTC_VERSION").hash(&mut hasher);
     env!("CARGO_PKG_VERSION").hash(&mut hasher);
+    SYMBOL_REVISION.hash(&mut hasher);
     core::mem::size_of::<Scene>().hash(&mut hasher);
     core::mem::align_of::<Scene>().hash(&mut hasher);
     hasher.finish()

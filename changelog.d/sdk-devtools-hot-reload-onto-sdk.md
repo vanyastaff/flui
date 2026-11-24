@@ -1,9 +1,3 @@
-### Added
-
-- **`flui-sdk`**: `flui_sdk::hooks::FrameSnapshot`, an Evolving development hook that
-  `flui-devtools`' timeline records
-  ([ADR-0088](/docs/adr/ADR-0088-official-packages-sdk-and-facade.md) §4).
-
 ### Changed
 
 - **`flui-devtools`**: an official package under `packages/flui-devtools`, built on `flui-sdk`

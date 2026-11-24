@@ -282,3 +282,88 @@ fn dlclose_then_reload_distinct_paths_serve_fresh_images() {
     );
     assert_eq!(tick(&image), 2, "and the counter is image-local (1 → 2)");
 }
+
+/// A worker image links its own copy of `flui-hot-reload`, rebuild slot
+/// included, so its `request_rebuild` reaches the hook the host registered
+/// only through the entry `flui_worker_init` hands it. Fails when the
+/// worker's init does not bind that entry: the call then finds the image's
+/// own empty slot and only warns. The worker loads from a copy at a path of
+/// its own, because an admitted worker image stays mapped (ADR-0111) and the
+/// other tests reload the fixture's own path.
+#[test]
+fn a_worker_images_rebuild_request_runs_the_hosts_hook() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let copy = TempPath::new("worker_rebuild");
+    std::fs::copy(fixture_artifact_path(), copy.path())
+        .expect("copy the fixture for the worker load");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let hook_calls = Arc::clone(&calls);
+    let registration = flui_hot_reload::register_request_rebuild(move || {
+        hook_calls.fetch_add(1, Ordering::SeqCst);
+    });
+    let worker =
+        flui_hot_reload::WorkerPlugin::load(copy.path()).expect("the fixture loads as a worker");
+
+    let image = DynLib::open(copy.path()).expect("the worker image opens again by its path");
+    // SAFETY: `fixture_request_rebuild` is the fixture's own exported
+    // `extern "C-unwind" fn()` (examples/hot_reload_lifecycle_fixture/src/lib.rs),
+    // compiled from this workspace with this toolchain, and `image` keeps it
+    // mapped through the call.
+    #[expect(unsafe_code, reason = "transmutes the symbol to its signature")]
+    unsafe {
+        let ptr = image
+            .symbol("fixture_request_rebuild")
+            .expect("fixture must export fixture_request_rebuild");
+        let request = std::mem::transmute::<*mut c_void, extern "C-unwind" fn()>(ptr);
+        request();
+    }
+
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the worker image's request_rebuild must run the host's hook"
+    );
+    drop(image);
+    drop(worker);
+    drop(registration);
+}
+
+/// A panic in the developer's root view, its mount or its frame cannot unwind
+/// out of `flui_app_build`, an `extern "C"` entry: it aborts the host's
+/// process. Fails, by aborting the test binary, when the entry runs that code
+/// outside containment. The image loads from a copy at a path of its own, so
+/// its root mounts fresh.
+#[test]
+fn a_panicking_app_root_skips_the_frame_and_the_next_build_mounts() {
+    let copy = TempPath::new("panicking_root");
+    std::fs::copy(fixture_artifact_path(), copy.path()).expect("copy the fixture");
+    let plugin = ScenePlugin::load(copy.path()).expect("the fixture loads as a ScenePlugin");
+    let image = DynLib::open(copy.path()).expect("the image opens again by its path");
+    // SAFETY: `fixture_panic_next_mount` is the fixture's own exported
+    // `extern "C" fn()`, compiled from this workspace with this toolchain, and
+    // `image` keeps it mapped through the call.
+    #[expect(unsafe_code, reason = "transmutes the symbol to its signature")]
+    unsafe {
+        let ptr = image
+            .symbol("fixture_panic_next_mount")
+            .expect("fixture must export fixture_panic_next_mount");
+        std::mem::transmute::<*mut c_void, extern "C" fn()>(ptr)();
+    }
+
+    // SAFETY: the load's token handshake confirmed the layouts, and each
+    // scene is dropped before `plugin` unloads the image below.
+    #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
+    let (refused, mounted) = unsafe {
+        (
+            plugin.build_scene(64.0, 64.0),
+            plugin.build_scene(64.0, 64.0),
+        )
+    };
+    assert!(refused.is_none(), "a panicking root is a skipped frame");
+    assert!(mounted.is_some(), "the next build mounts the root again");
+    drop(mounted);
+    drop(image);
+    plugin.unload();
+}

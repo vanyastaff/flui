@@ -68,6 +68,7 @@ mod skip;
 
 pub mod act;
 pub mod audit;
+pub mod build;
 pub mod capture;
 pub mod envelope;
 pub mod error;

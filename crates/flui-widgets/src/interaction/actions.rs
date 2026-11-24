@@ -678,7 +678,7 @@ impl Intent for ActivationPressIntent {}
 /// Select to on key-down, around its links (ADR-0079, amendment for links).
 ///
 /// A link answers it with its paragraph's link handler
-/// ([`RichText::on_link`](crate::RichText::on_link)). Space is not bound: its
+/// ([`Text::on_link`](crate::Text::on_link)). Space is not bound: its
 /// release is [`ActivateIntent`], which a link declines, because a link is
 /// not a button.
 #[derive(Debug, Clone, Copy, Default)]

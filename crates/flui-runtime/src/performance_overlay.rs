@@ -143,26 +143,52 @@ impl Readout {
             &Paint::fill(BACKGROUND),
         );
         for label in &self.labels {
-            let spans = [(label.text.clone(), None)];
-            let paragraph = text
-                .shape(&ParagraphSpec {
-                    font_weight_adjustment: 0,
-                    spans: &spans,
-                    default_style: None,
-                    font_size: label.font_size,
-                    max_width: None,
-                    min_width: 0.0,
-                    text_align: flui_painting::typography::TextAlign::Start,
-                    line_height: None,
-                    direction: TextDirection::Ltr,
-                    max_lines: None,
-                    ellipsis: None,
-                })?
-                .to_shaped(None);
-            canvas.draw_paragraph(&Arc::new(paragraph), label.at, label.color);
+            draw_label(
+                &mut canvas,
+                text,
+                &label.text,
+                label.at,
+                label.font_size,
+                label.color,
+            )?;
         }
         Ok(canvas.finish())
     }
+}
+
+/// Draws `label` on `canvas` at `at`, its top-left corner in logical pixels, shaped through
+/// `text` as one unwrapped left-to-right line: a label of a debug overlay drawn over the scene
+/// (this readout, the build banner of `build_overlay`).
+///
+/// # Errors
+///
+/// The [`TextLayoutError`] of a label that does not shape.
+pub(crate) fn draw_label(
+    canvas: &mut Canvas,
+    text: &mut TextContext,
+    label: &str,
+    at: Offset<f64>,
+    font_size: f32,
+    color: Color,
+) -> Result<(), TextLayoutError> {
+    let spans = [(label.to_owned(), None)];
+    let paragraph = text
+        .shape(&ParagraphSpec {
+            font_weight_adjustment: 0,
+            spans: &spans,
+            default_style: None,
+            font_size,
+            max_width: None,
+            min_width: 0.0,
+            text_align: flui_painting::typography::TextAlign::Start,
+            line_height: None,
+            direction: TextDirection::Ltr,
+            max_lines: None,
+            ellipsis: None,
+        })?
+        .to_shaped(None);
+    canvas.draw_paragraph(&Arc::new(paragraph), at, color);
+    Ok(())
 }
 
 #[cfg(test)]

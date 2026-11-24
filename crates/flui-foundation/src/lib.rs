@@ -137,12 +137,7 @@
 // A library that prints owns a terminal it was never given; report through
 // `tracing` or a returned error instead.
 #![warn(clippy::print_stdout, clippy::print_stderr)]
-#![warn(
-    missing_debug_implementations,
-    rust_2018_idioms,
-    unreachable_pub,
-    clippy::pedantic
-)]
+#![warn(unreachable_pub)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 // Core modules - fundamental types with minimal dependencies

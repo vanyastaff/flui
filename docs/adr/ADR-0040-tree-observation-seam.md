@@ -235,8 +235,11 @@ The end-to-end proof needs both halves, so it lives with the inspector
 (`packages/flui-devtools/tests/tree_observer_inspector.rs`, which reaches the tree through
 `flui_sdk::view`): mount → rebuild →
 keyed reorder → GlobalKey reparent → unmount → detach against `InspectorCounters`, asserting exact
-counts, reason sets, the §4 balance invariant, and `detached()` on teardown. Tests install via
-`WidgetsBinding::install_tree_observer` / `remove_tree_observer`.
+counts, reason sets, the §4 balance invariant, and `detached()` on teardown; it installs on a
+bare `BuildOwner` with `set_tree_observer`. An application installs an observer with
+`flui_app::AppConfig::dev_tree_observer`: every UI runtime a runner builds for a window asks its
+factory once and installs the result through `WidgetsBinding::install_tree_observer`, and
+`packages/flui-devtools/tests/dev_tree_observer.rs` runs that path on the headless platform.
 
 ## Alternatives rejected
 

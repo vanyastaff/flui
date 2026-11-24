@@ -3,7 +3,7 @@
 
 [filter_chip_over_text]
 allocations = 135
-bytes = 25025
+bytes = 25287
 elements = 15
 reallocations = 2
 render_nodes = 10

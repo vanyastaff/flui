@@ -243,9 +243,10 @@ pub struct FrameSnapshot {
     /// across UI runtimes and their incarnations. The address's
     /// `ui_runtime_id` is generational, unique per UI runtime incarnation,
     /// so a consumer that pulls snapshots across windows (or exports them
-    /// into one trace file, as `flui-devtools`' `Timeline::record_frame_snapshots`
-    /// does) tells every frame's producer apart, and sees which UI runtime
-    /// made a frame slow (ADR-0266 §3). [`InputEpochId`]'s own doc makes the
+    /// into one trace file, as `flui-devtools`' timeline does with the
+    /// `frame_telemetry` event each snapshot is traced as) tells every
+    /// frame's producer apart, and sees which UI runtime made a frame slow
+    /// (ADR-0266 §3). [`InputEpochId`]'s own doc makes the
     /// same point about pairing an epoch id with its presentation.
     pub address: PresentationAddress,
     /// This presentation's own produce-count-derived frame identity (see

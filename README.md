@@ -74,6 +74,8 @@ flui = { path = "…" }
 |---|---|---|
 | `material` | off | `flui::material` and the Material half of `flui::prelude` |
 | `cupertino` | off | `flui::cupertino` |
+| `material-icons` | off | the Material Icons face, for an application that draws `"Material Icons"` with `Icon` and no `material` catalog (which brings it) |
+| `cupertino-icons` | off | the Cupertino Icons face, for an application that draws `"CupertinoIcons"` with `Icon`; the `cupertino` catalog does not bring it |
 | `localizations` | off | nothing: deprecated and empty; the global widgets localizations are in `flui::widgets` |
 | `testing` | off | `flui::testing` for headless application tests; add it to the development dependency, as the counter template does |
 | `serde` | off | serialization for supported geometry, painting, locale, layout, interaction, and animation values |

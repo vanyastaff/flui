@@ -67,13 +67,16 @@ const PADDING: f64 = 8.0;
 /// already name for button padding).
 const LABEL_PADDING_HORIZONTAL: f64 = 8.0;
 
-/// The `cancel` icon's codepoint (`MaterialIcons`), [`Chip`]'s default delete
-/// glyph.
-const DELETE_ICON_CANCEL_CODEPOINT: u32 = 0xE139;
+/// The `cancel` icon's codepoint in the embedded Material Icons face, [`Chip`]'s
+/// default delete glyph. The face is upstream `material-design-icons`, whose
+/// numbering is its own: Flutter's `Icons` numbers the same set differently, so
+/// a value copied from there draws another glyph or none
+/// (`a_widget_draws_the_glyph_the_face_names_for_its_icon`).
+const DELETE_ICON_CANCEL_CODEPOINT: u32 = 0xE5C9;
 
-/// The `clear` icon's codepoint (`MaterialIcons`), [`FilterChip`]'s default
-/// delete glyph.
-const DELETE_ICON_CLEAR_CODEPOINT: u32 = 0xE168;
+/// The `clear` icon's codepoint in the same face, [`FilterChip`]'s default delete
+/// glyph.
+const DELETE_ICON_CLEAR_CODEPOINT: u32 = 0xE14C;
 
 /// The opacity a disabled chip's avatar/label/delete content settles at
 /// (`0x61`) — see [`Chip`]'s "Disabled content" section for why this is

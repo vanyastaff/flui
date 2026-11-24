@@ -1100,14 +1100,13 @@ impl flui_view::ViewState<Gap> for GapState {
 /// build (they keep the tall line).
 pub(crate) fn shown_handles_follow_a_relayout_without_a_build() {
     use flui_painting::typography::TextSpan;
-    use flui_widgets::{Expanded, RichText, Row};
+    use flui_widgets::{Expanded, Row, Text};
 
     let width = Rc::new(Cell::new(0.0));
     let rebuild = Rc::default();
     let marked = Marked::default();
     let tall = TextStyle::new().with_font_size(40.0);
-    let text =
-        RichText::new(TextSpan::new("alpha beta ").with_child(TextSpan::styled("GAMMA", tall)));
+    let text = Text::rich(TextSpan::new("alpha beta ").with_child(TextSpan::styled("GAMMA", tall)));
     let app = WidgetsApp::new(Row::new((
         Gap {
             width: Rc::clone(&width),

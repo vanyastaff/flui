@@ -626,6 +626,10 @@ pub struct PresentationState {
     /// Whether the performance overlay is drawn. Its numbers come from the
     /// clock's frame history, which is kept either way.
     performance_overlay: Cell<bool>,
+    /// The build a development tool reported last, drawn over the scene
+    /// (`build.report`): the one state of the presentation an annotating
+    /// agent method reaches. Owner thread only.
+    pub(crate) build_banner: crate::build_overlay::BuildBanner,
     /// This presentation's own wake-only redraw mark (ADR-0043 §3's pump
     /// segment). Set alongside the UI runtime's own coalesced `needs_redraw` flag
     /// by every presentation-scoped operation that isn't otherwise
@@ -1005,6 +1009,12 @@ impl PresentationState {
     /// frame history, the same window its latency percentiles come from.
     pub(crate) fn set_performance_overlay(&self, enabled: bool) {
         self.performance_overlay.set(enabled);
+    }
+
+    /// Whether the performance overlay is drawn, at its
+    /// [`BOUNDS`](crate::performance_overlay::BOUNDS).
+    pub(crate) fn performance_overlay_shown(&self) -> bool {
+        self.performance_overlay.get()
     }
 
     /// This frame's debug readout, to draw above the presentation's content,
