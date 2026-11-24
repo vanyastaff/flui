@@ -122,7 +122,7 @@ impl<'a> TextMeasurement<'a> {
                 shape_max,
                 LineOverflow::Enforce,
             )?
-            .metrics();
+            .1;
         Ok(Some(TextPainter::metrics_from(&result, min_width)))
     }
 
