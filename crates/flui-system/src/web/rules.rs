@@ -528,16 +528,16 @@ mod tests {
 
     fn images() -> FileFilter {
         FileFilter::new("Images")
-            .with_extension("png")
-            .with_extension("JPG")
-            .with_mime_type("image/webp")
+            .extension("png")
+            .extension("JPG")
+            .mime_type("image/webp")
     }
 
     #[test]
     fn the_accept_attribute_is_the_union_of_the_filters() {
         let archives = FileFilter::new("Archives")
-            .with_extension("tar.gz")
-            .with_extension("png");
+            .extension("tar.gz")
+            .extension("png");
         assert_eq!(
             accept_attribute(&[images(), archives]),
             ".png,.jpg,image/webp,.tar.gz"
@@ -548,7 +548,7 @@ mod tests {
     #[test]
     fn a_picker_type_keeps_each_filter_and_puts_extensions_under_a_type() {
         let images = images();
-        let text = FileFilter::new("Text").with_extension("txt");
+        let text = FileFilter::new("Text").extension("txt");
         let filters = [images, text];
         let types = picker_types(&filters)
             .expect("every extension is taken")
@@ -567,8 +567,8 @@ mod tests {
             ]
         );
         let two_types = FileFilter::new("Pictures")
-            .with_mime_type("image/png")
-            .with_mime_type("image/*");
+            .mime_type("image/png")
+            .mime_type("image/*");
         assert_eq!(
             picker_types(std::slice::from_ref(&two_types))
                 .expect("mime types are taken")
@@ -582,9 +582,9 @@ mod tests {
     fn every_file_and_a_named_file_keep_the_browsers_entry_of_every_file() {
         let every = FileFilter::all_files("All files");
         let build = FileFilter::new("Build files")
-            .with_file_name("Makefile")
-            .with_extension("mk");
-        let make_only = FileFilter::new("Makefiles").with_file_name("Makefile");
+            .file_name("Makefile")
+            .extension("mk");
+        let make_only = FileFilter::new("Makefiles").file_name("Makefile");
         // The filters, the descriptions of the picker's types, whether it
         // keeps its entry of every file, and the input's `accept`.
         let cases: [(Vec<FileFilter>, &[&str], bool, &str); 5] = [
@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn an_extension_the_picker_refuses_sends_the_request_to_the_input() {
         for extension in ["my-ext", "my_ext", "abcdefghijklmnop"] {
-            let filter = FileFilter::new("Odd").with_extension(extension);
+            let filter = FileFilter::new("Odd").extension(extension);
             assert_eq!(
                 picker_types(std::slice::from_ref(&filter)),
                 None,
@@ -629,9 +629,9 @@ mod tests {
                 "the input takes {extension}"
             );
         }
-        let longest = FileFilter::new("Long").with_extension("abcdefghijklmno");
+        let longest = FileFilter::new("Long").extension("abcdefghijklmno");
         assert!(picker_types(std::slice::from_ref(&longest)).is_some());
-        let parts = FileFilter::new("Parts").with_extension("tar.gz");
+        let parts = FileFilter::new("Parts").extension("tar.gz");
         assert!(picker_types(std::slice::from_ref(&parts)).is_some());
     }
 
@@ -649,14 +649,14 @@ mod tests {
         assert_eq!(save_name(None, &filters), "download.png");
         assert_eq!(save_name(None, &[]), "download");
         assert_eq!(save_name(Some("photo"), &[]), "photo");
-        let typed = FileFilter::new("Pictures").with_mime_type("image/png");
+        let typed = FileFilter::new("Pictures").mime_type("image/png");
         assert_eq!(save_name(Some("photo"), &[typed]), "photo");
     }
 
     #[test]
     fn a_download_is_typed_after_the_first_concrete_type_of_the_first_filter() {
         assert_eq!(download_type(&[images()]), "image/webp");
-        let any_image = FileFilter::new("Any").with_mime_type("image/*");
+        let any_image = FileFilter::new("Any").mime_type("image/*");
         assert_eq!(download_type(&[any_image]), "application/octet-stream");
         assert_eq!(download_type(&[]), "application/octet-stream");
     }
@@ -782,7 +782,7 @@ mod tests {
 
     #[test]
     fn a_pick_the_filters_do_not_mean_refuses_the_whole_answer() {
-        let filters = [images(), FileFilter::new("Text").with_mime_type("text/*")];
+        let filters = [images(), FileFilter::new("Text").mime_type("text/*")];
         let cases: [(&[Described<'_>], Result<(), DialogError>); 7] = [
             (&[("photo.PNG", None)], Ok(())),
             (&[("photo.jpg", Some(""))], Ok(())),

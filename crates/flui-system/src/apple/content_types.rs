@@ -381,13 +381,13 @@ mod tests {
     fn a_filter_allows_each_type_once_and_a_several_part_extension_by_its_last_part() {
         let filters = [
             FileFilter::new("Archives")
-                .with_extension("tar.gz")
-                .with_extension("zip"),
+                .extension("tar.gz")
+                .extension("zip"),
             FileFilter::new("Images")
-                .with_extension("PNG")
-                .with_extension("zip")
-                .with_mime_type("image/*")
-                .with_mime_type("image/webp"),
+                .extension("PNG")
+                .extension("zip")
+                .mime_type("image/*")
+                .mime_type("image/webp"),
         ];
         let filter = content_filter(&filters)
             .expect("every pattern maps")
@@ -408,7 +408,7 @@ mod tests {
         );
         assert_eq!(filter.file_types(), None, "a MIME pattern needs a type");
 
-        let plain = content_filter(&[FileFilter::new("Archives").with_extension("tar.gz")])
+        let plain = content_filter(&[FileFilter::new("Archives").extension("tar.gz")])
             .expect("maps")
             .expect("given");
         assert_eq!(
@@ -421,7 +421,7 @@ mod tests {
 
     #[test]
     fn a_filter_of_every_file_frees_the_dialog_and_a_named_file_leaves_it_to_the_rule() {
-        let text = || FileFilter::new("Text").with_extension("txt");
+        let text = || FileFilter::new("Text").extension("txt");
         assert_eq!(
             content_filter(&[text(), FileFilter::all_files("All files")]),
             Ok(None),
@@ -430,7 +430,7 @@ mod tests {
         assert!(
             content_filter(&[
                 FileFilter::all_files("All files"),
-                FileFilter::new("Models").with_mime_type("model/*"),
+                FileFilter::new("Models").mime_type("model/*"),
             ])
             .is_err(),
             "a pattern the systems cannot express is refused beside it, not dropped"
@@ -439,8 +439,8 @@ mod tests {
         let build = content_filter(&[
             text(),
             FileFilter::new("Build files")
-                .with_file_name("Makefile")
-                .with_extension("mk"),
+                .file_name("Makefile")
+                .extension("mk"),
         ])
         .expect("maps")
         .expect("given");
@@ -480,12 +480,12 @@ mod tests {
     fn a_mime_family_the_systems_have_no_type_for_is_refused_rather_than_widened() {
         for family in ["image/*", "audio/*", "video/*", "text/*", "font/*"] {
             assert!(
-                content_filter(&[FileFilter::new("F").with_mime_type(family)]).is_ok(),
+                content_filter(&[FileFilter::new("F").mime_type(family)]).is_ok(),
                 "{family}"
             );
         }
         assert_eq!(
-            content_filter(&[FileFilter::new("Models").with_mime_type("model/*")]),
+            content_filter(&[FileFilter::new("Models").mime_type("model/*")]),
             Err(DialogError::Unsupported(Unsupported::of::<
                 FileDialogCapability,
             >(
@@ -498,11 +498,11 @@ mod tests {
     fn a_name_matches_as_the_contract_says() {
         let rule = [
             FileFilter::new("Archives")
-                .with_extension("tar.gz")
-                .with_extension("zip"),
+                .extension("tar.gz")
+                .extension("zip"),
             FileFilter::new("Pictures and text")
-                .with_extension("png")
-                .with_extension("txt"),
+                .extension("png")
+                .extension("txt"),
         ];
         let cases: [(&[u8], bool); 13] = [
             (b"backup.tar.gz", true),
@@ -535,8 +535,8 @@ mod tests {
     #[test]
     fn an_items_name_admits_it_before_anything_of_it_is_read() {
         let rule = [FileFilter::new("Pictures and archives")
-            .with_extension("png")
-            .with_extension("tar.gz")];
+            .extension("png")
+            .extension("tar.gz")];
         assert_eq!(
             judge_item(Some(b"photo.PNG"), &rule, || panic!(
                 "a name that admits its file reads nothing of it"
