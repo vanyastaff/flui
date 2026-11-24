@@ -56,10 +56,10 @@
 //!
 //! The spans a capture reads are `DEBUG`; the `frame_telemetry` and `frame_gpu_time` events
 //! behind each [`ProducedFrame`] are `TRACE`. Today the framework sets no `max_level_*` feature
-//! (ADR-0242 §7), so a release build still traces them for a capture that asks. A build-mode
-//! decision to follow ADR-0397 is to cut release builds' tracing to `info`: from then on a
-//! release build's devtools will not see these `TRACE` events, and only a profiling build keeps
-//! them.
+//! (ADR-0242 §7), so a release build still traces them for a capture that asks. A build that
+//! caps `tracing` below `TRACE` (a `max_level_*` or `release_max_level_*` feature) compiles the
+//! two events out, and its capture then records no produced frames; one capped below `DEBUG`
+//! loses the spans too.
 //!
 //! # Feature flags
 //!
