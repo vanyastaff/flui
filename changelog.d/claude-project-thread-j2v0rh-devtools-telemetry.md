@@ -10,4 +10,3 @@
 ### Removed
 
 - **`flui-devtools`**: `Timeline::record_frame_snapshots`. Nothing public produced the snapshots it took; a timeline over a `Capture` shows the produced frames from the runtime's frame telemetry.
-- **`flui-sdk`**: `hooks::FrameSnapshot`, which only `Timeline::record_frame_snapshots` used.
