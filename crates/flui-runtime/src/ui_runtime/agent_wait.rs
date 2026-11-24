@@ -242,10 +242,11 @@ impl UiRuntime {
             ));
         }
         if let Some(due) = self.next_wake_excluding_agent_waits() {
-            let mut cause = UnsettledCause::new(UnsettledReason::Timer, ClearedBy::Deadline);
             let remaining = due.saturating_duration_since(now);
-            cause.due_in_ms = Some(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX));
-            causes.push(cause);
+            causes.push(
+                UnsettledCause::new(UnsettledReason::Timer, ClearedBy::Deadline)
+                    .due_in_ms(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)),
+            );
         }
         causes
     }

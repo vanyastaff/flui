@@ -410,7 +410,7 @@ impl Serve for method::WindowPlacement {
         let media = ctx.state.media_query.snapshot();
         let size = LogicalSize::new(media.size.width, media.size.height);
         let safe = media.view_padding;
-        let mut placement = Placement::new(ctx.window, size, media.device_pixel_ratio)
+        let placement = Placement::new(ctx.window, size, media.device_pixel_ratio)
             .visible(ctx.state.window_visible.get())
             .focused(ctx.state.window_focused.get())
             .safe_area(LogicalInsets::new(
@@ -419,8 +419,10 @@ impl Serve for method::WindowPlacement {
                 safe.bottom,
                 safe.left,
             ));
-        placement.platform = wire_platform(ctx.state.platform);
-        Answer::Now(Ok(placement))
+        Answer::Now(Ok(match wire_platform(ctx.state.platform) {
+            Some(platform) => placement.platform(platform),
+            None => placement,
+        }))
     }
 }
 

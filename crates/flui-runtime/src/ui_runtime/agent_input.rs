@@ -267,6 +267,16 @@ fn source_name(source: &InputSource) -> Option<&str> {
     }
 }
 
+/// The pointer devices `input.inject` delivers, as the agent's hello lists them: each one
+/// [`pointer_kind`] maps.
+pub(crate) fn injected_pointers() -> Vec<PointerDevice> {
+    PointerDevice::ALL
+        .iter()
+        .copied()
+        .filter(|device| pointer_kind(*device).is_ok())
+        .collect()
+}
+
 fn pointer_kind(device: PointerDevice) -> Result<PointerKind, AgentError> {
     Ok(match device {
         PointerDevice::Mouse => PointerKind::Mouse,

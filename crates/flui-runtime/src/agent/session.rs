@@ -8,7 +8,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 use flui_protocol::framing::{LineReader, MAX_LINE};
-use flui_protocol::method::{Method as _, RecordStart};
+use flui_protocol::method::{InputInject, Method as _, RecordStart};
 use flui_protocol::version::PROTOCOL_VERSION;
 use flui_protocol::{
     envelope::Greeting, envelope::Request, envelope::RequestId, envelope::ServerLine,
@@ -363,6 +363,13 @@ impl Session {
         let mut capabilities = Capabilities::default();
         capabilities.paths = vec![InputPath::Semantic];
         capabilities.methods = dispatch::served(hello.role);
+        if capabilities
+            .methods
+            .iter()
+            .any(|method| method == InputInject::NAME)
+        {
+            capabilities.pointers = crate::ui_runtime::injected_pointers();
+        }
         if capabilities
             .methods
             .iter()
