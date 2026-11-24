@@ -160,6 +160,8 @@ mod recovered_panic_context;
 mod session_end_report;
 #[path = "contracts/session_end_steps.rs"]
 mod session_end_steps;
+#[path = "contracts/settledness.rs"]
+mod settledness;
 #[path = "../src/table_test.rs"]
 mod table_test;
 #[path = "contracts/text_frame.rs"]
