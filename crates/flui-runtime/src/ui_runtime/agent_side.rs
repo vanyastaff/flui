@@ -11,9 +11,10 @@
 //! window was vended, so a runtime without the reference has nothing of the agent's to serve or
 //! abandon; what such a binary keeps is the drop glue of the agent's state fields.
 //!
-//! Until a presentation's first window is vended no frame reports to its agent, so vending it
-//! first brings its event hub up to the frames and the tree already shown: a subscriber hears
-//! only what comes after it.
+//! Until a presentation's first window is vended no frame reports to its agent, and once
+//! collection stops its tree may be a new owner's: a vend that starts collection with no subscriber
+//! listening brings its event hub up to the frames and the tree already shown, so a subscriber
+//! hears only what comes after it.
 
 use web_time::Instant;
 

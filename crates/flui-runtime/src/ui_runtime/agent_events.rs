@@ -286,15 +286,20 @@ impl PresentationState {
         wake_readers(woken);
     }
 
-    /// The presentation's first agent window is vended: its hub counts as having reported the
-    /// frames already presented or skipped and the tree already published, which no frame
-    /// reported while no agent served it (ADR-0402).
+    /// A window vend starts semantics collection: with no subscriber listening, the hub counts
+    /// as having reported the frames already presented or skipped and the tree already published.
+    /// No frame reported to an agent before the presentation's first vend (ADR-0402), and after
+    /// collection stopped the tree may be a new owner's whose revisions start again. A subscriber
+    /// still listening was reported every frame since it registered, so its hub is kept.
     pub(crate) fn begin_agent_events(&self) {
         let frames = (self.frames_rendered(), self.frames_dropped());
         let revision = self.published_revision();
         let mut hub = self.agent_events.borrow_mut();
-        hub.frames = frames;
-        hub.revision = revision;
+        hub.prune();
+        if hub.subscribers.is_empty() {
+            hub.frames = frames;
+            hub.revision = revision;
+        }
     }
 
     /// The tree revision the semantics owner last published; revision 0 is an owner that has

@@ -8,12 +8,12 @@
 - **A release application that installs no development-agent hook links none of the agent**
   (ADR-0402): the UI runtime reaches the agent only through the side a vended window installs,
   and only `AppConfig::dev_agent` (and the driver agent's own installation) names the vending.
-  About 0.58 MB of a generated counter's Linux x86_64 release binary and 0.65 MB of its wasm32
-  module. An application that installs its own hook keeps a working agent in every build.
+  About 0.6 MB of a generated counter's release binary, on Linux x86_64 and on wasm32 alike.
+  An application that installs its own hook keeps a working agent in every build.
 - **`flui_runtime::dev_agent::DevAgentHost::attach` takes an `AgentWindowSource`** before the
   hooks.
 
 ### Fixed
 
-- **A presentation's close holds the panic of an agent reply it delivers** like every other
-  step's, so the rest of the close still runs and an earlier failure stays the one resumed.
+- **A presentation's close holds the panic of an agent reply it delivers** as it holds any other
+  step's: the close goes on, preserving, and an earlier failure stays the one resumed.

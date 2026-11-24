@@ -195,7 +195,8 @@ impl std::fmt::Debug for UiCommand {
 pub struct DrainReport {
     /// Owner commands successfully applied.
     pub invoked: usize,
-    /// Commands whose typed owner target is stale or no longer live.
+    /// Commands whose typed owner target is stale or no longer live, and agent commands that
+    /// reached a runtime no agent window was vended from (ADR-0402).
     pub dropped_stale: usize,
 }
 

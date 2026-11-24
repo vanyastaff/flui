@@ -23,10 +23,10 @@ every release binary carried the agent's owner side. What bears on that:
 
 | Fact | Evidence |
 |---|---|
-| The UI runtime's own paths call into the agent directly: the command drain matches `UiCommand::Agent`, `AgentSubscribe` and `AgentRecord` and counts and releases leases; a frame's end completes agents' readings, publishes their events and evaluates their waits; an owner turn evaluates waits; platform input is journalled; a scene's settlement reads parked layer reads; a presentation's close answers every job an agent parked | `crates/flui-runtime/src/ui_runtime/commands.rs`, `frame.rs`, `pump.rs`, `input.rs`, `settlement.rs`, `presentation/close.rs` before this change |
+| The UI runtime's own paths call into the agent directly: the command drain matches `UiCommand::Agent`, `AgentSubscribe` and `AgentRecord` and counts and releases leases; a frame's end completes agents' readings, publishes their events and evaluates their waits; an owner turn evaluates waits; platform input is journalled; a scene's settlement reads parked layer reads; a presentation's close answers every job an agent parked | `crates/flui-runtime/src/ui_runtime/commands.rs`, `frame.rs`, `pump.rs`, `input.rs`, `settlement.rs`, `presentation/close.rs` at `40af5f05d` |
 | Every runner vends a window to the loop's hooks through `DevAgentHost::vend`, which named `UiRuntime::dev_agent_window`, whether or not a hook was installed | `crates/flui-app/src/app/runner/dev_agents.rs`, `crates/flui-runtime/src/dev_agent.rs` |
 | A linker keeps what a reachable function names: a direct call, a match arm or a vtable keeps the window methods, the protocol's answers and their serialization, `flui-semantics`' agent reads and the recordings' wire forms | the release counter's symbols |
-| Built as CI's `size` job builds it, the generated counter's Linux x86_64 release binary is 21,157,744 bytes on `main` and 20,572,784 with the seam below (584,960, 2.8%); with the seam, its wasm32 module is 12,803,927 bytes and the `--hot-reload` host 20,743,272, against 13,450,375 and 21,408,760 in `main`'s `perf/size.toml` | local builds of `main` at `40af5f05d` and of this change, 2026-11-24 |
+| Built as CI's `size` job builds it, the generated counter's Linux x86_64 release binary is 21,157,744 bytes on `main` and 20,572,784 with the seam below (584,960, 2.8%); with the seam, its wasm32 module is 12,803,927 bytes and the `--hot-reload` host 20,743,272, against 13,450,375 and 21,408,760 in `main`'s `perf/size.toml` | local builds with the `size` job's commands of `40af5f05d` and of the seam at `661e5d6b9`, 2026-11-24; the wasm32 and host figures are measured against the recorded lines, the Linux one against a local build of `main`, 0.4% under its line |
 | ADR-0288 §1 keeps the service out of a feature because a feature of `flui-runtime` cannot follow `debug_assertions`, and `flui-app`'s build would always turn it on | ADR-0288 §1 |
 | Flutter registers its service extensions only where the build mode allows them, so that its tree shaker removes their code from a release build: removal by reachability, not by a second build of the framework | Sources |
 
@@ -68,9 +68,11 @@ an `AgentWindow`) and never cleared, so the jobs an agent left on a presentation
 after its agent slot goes. Every path calls the agent only through it; what a binary without an
 agent keeps is the drop glue of the agent's state fields.
 
-No frame reports to a presentation's agent before its first window is vended, so vending that
-window first brings the presentation's event hub up to the frames and the tree already shown: a
-subscriber hears only what follows its registration, never a replay.
+No frame reports to a presentation's agent before its first window is vended, and once collection
+stops the tree may be a new owner's, so a vend that starts collection with no subscriber listening
+brings the presentation's event hub up to the frames and the tree already shown: a subscriber
+hears only what follows its registration, never a replay. A close drops its presentation's
+unsettled frames whether or not an agent served it.
 
 An agent command that reaches a runtime with no side was not sent through its ports: it is
 dropped as stale, and its reply with it, which the caller reads as `shutting_down`, the answer
@@ -105,18 +107,21 @@ installs a hook names neither, and the linker drops the agent's owner side.
 
 ### Confirmation
 
-- `counter_release_bytes`, `counter_wasm_bytes` and `hot_reload_host_release_bytes` in
-  `perf/size.toml` were measured with this change by the `size` job's own commands, run locally;
-  a change that links most of the agent again moves them past the job's 2%.
+- The `size` job fails a binary more than 2% over `counter_release_bytes`,
+  `counter_wasm_bytes` or `hot_reload_host_release_bytes` in `perf/size.toml`, which a change
+  that links most of the agent again passes.
 - A reader of a change to `flui-runtime`'s `ui_runtime` checks that a call into an agent module
-  goes through `AgentSide` (§1): this is what holds a call that relinks less.
+  goes through `AgentSide` (§1; AGENTS.md, "Rules a reader holds"): this is what holds a call
+  that relinks less.
 - Every test of the agent (`flui-runtime`'s agent and dev-agent suites, `flui-app`'s
   `a_loop_takes_every_installed_hook_once_and_one_that_panics_is_dropped_alone`,
   `flui-testing`'s and `flui-driver`'s headless runs) vends its windows through
   `dev_agent_window`, so a window that installed no side fails them.
-- `frames_drawn_before_the_first_window_is_vended_are_not_replayed` holds the hub's start (§1);
-  `a_runtime_that_vended_no_window_drops_agent_commands_unanswered` holds the command a runtime
-  without a side drops.
+- `frames_drawn_before_the_first_window_is_vended_are_not_replayed` and
+  `a_window_vended_again_after_collection_stopped_reports_the_rebuilt_tree` hold the hub's start
+  (§1); `a_runtime_that_vended_no_window_drops_agent_commands_unanswered` holds the command a
+  runtime without a side drops; `a_frame_queued_before_its_presentation_closed_settles_stale`
+  holds that a close with no agent drops its frames all the same.
 
 ## Pros and cons of the options
 

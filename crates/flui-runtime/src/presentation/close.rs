@@ -125,10 +125,14 @@ impl PresentationState {
         }
         let agent = self.dev_agent.take();
         if let Some(side) = agent_side {
-            // A delivery's panic is held like any other step's, so the rest of the close runs.
+            // A delivery's panic is held like any other step's failure: the close goes on,
+            // preserving.
             let abandoned = side.abandon_jobs(self);
             failure.invoke(|| abandoned.resume());
         }
+        // A closed presentation settles no frame it queued: a later settlement finds no record
+        // and is stale.
+        failure.retire(self.take_pending_frames());
         let window_control = self.window_control.take();
         if let Some(window) = &window_control {
             failure.invoke(|| window.close());
@@ -229,9 +233,10 @@ impl PresentationState {
     /// before any closes: dispatch targets, liveness, held input, the graph,
     /// rebuild and key authority, agent ports, focus and text input become
     /// unavailable, so a sibling's callbacks cannot drive this presentation
-    /// (ADR-0123). The withdrawn key owners are returned for the caller to
-    /// retire, with the first panic of the agent's replies, each delivered
-    /// contained when its jobs are answered; the presentation's own close
+    /// (ADR-0123). Its unsettled frames are dropped, so none settles. The
+    /// withdrawn key owners are returned for the caller to retire, with the
+    /// first panic of the agent's replies (each delivered contained when its
+    /// jobs are answered) or of a dropped frame; the presentation's own close
     /// later retires everything else.
     pub(crate) fn withdraw_for_ui_runtime_close(
         &self,
@@ -257,13 +262,20 @@ impl PresentationState {
         self.alive.borrow_mut().take();
         self.held_pointer_input.borrow_mut().clear();
         let keys = self.widgets.withdraw_owner_authority();
-        let abandoned = self.agent_side.get().map_or_default(|side| {
+        let mut failure = self.agent_side.get().map_or_default(|side| {
             side.withdraw_window(self);
             side.abandon_jobs(self)
         });
+        failure.retire(self.take_pending_frames());
         flui_interaction::__runtime::withdraw_focus(&self.focus);
         flui_interaction::__runtime::withdraw_text_input(&self.text_input);
-        (keys, abandoned)
+        (keys, failure)
+    }
+
+    /// The frames this presentation handed its sink that have not settled, taken so that none
+    /// settles once it closes. An agent's layer reads parked on them were answered first.
+    fn take_pending_frames(&self) -> std::collections::VecDeque<crate::ui_runtime::PendingFrame> {
+        std::mem::take(&mut *self.pending_frames.borrow_mut())
     }
 
     fn withdraw_animation(&self) {

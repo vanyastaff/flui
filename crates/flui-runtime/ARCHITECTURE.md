@@ -1300,11 +1300,13 @@ only `AgentWindowSource::dev_agent` names `dev_agent_window`. A direct call from
 an agent module is the defect this rule exists to catch (ADR-0402).
 
 **Why here.** Linking follows reachability: a binary in which no code installs a hook names
-neither `AgentWindowSource::dev_agent` nor `dev_agent_window`, so it links none of the agent's owner
-side (ADR-0402 gives the bytes), in every build mode and with no feature for two crates to
+neither `AgentWindowSource::dev_agent` nor `dev_agent_window`, so it links none of the agent's
+owner side (ADR-0402 gives the bytes), in every build mode and with no feature for two crates to
 disagree on. Flutter's counterpart is `BindingBase.initServiceExtensions`, guarded so its tree
-shaker drops the extensions from a release build. Pinned by the `*_bytes` lines of
-`perf/size.toml`, and by every agent test, which vends its windows through `dev_agent_window`.
+shaker drops the extensions from a release build. The `*_bytes` lines of `perf/size.toml` see a
+change that links back more than 2% of a binary; a smaller one is held by its reader (AGENTS.md,
+"Rules a reader holds"). Every agent test vends its windows through `dev_agent_window`, so a vend
+that installed no side fails them.
 
 ### The agent's conversation is one service, and it does no I/O
 
