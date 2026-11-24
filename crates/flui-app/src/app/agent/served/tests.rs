@@ -1046,8 +1046,10 @@ fn a_wait_without_a_timeout_is_answered_by_the_window() {
     owner.drive(move |_| {
         let mut client = Client::hello(&at);
         let window = client.only_window();
-        let condition = serde_json::to_value(Condition::Appears(Locator::named("Missing")))
-            .expect("a condition serializes");
+        // A frame count it never reaches keeps the window drawing, so the headless host, which
+        // ends a false wait idle once nothing but the test can change the app, holds it out.
+        let condition =
+            serde_json::to_value(Condition::Frames(u32::MAX)).expect("a condition serializes");
         // No `timeout_ms`: the window's default, longer than the transport's own wait.
         let reply = client.call(
             "wait.until",

@@ -245,6 +245,26 @@ Its frame driver is `HeadlessHost`, which pumps a
   recordings see frames where deadlines fire, and its wake sets the redraw
   flag, as a runner's does, so `pump_until_settled` observes a running
   animation's demand.
+- **The host owns one list of what keeps the application from being idle**
+  (ADR-0400 §3). `HeadlessHost::unsettled` gathers the runtime's half and the
+  host's own: held background work (only the test releases it), runnable work
+  (the next turn's) and a parked future (something outside wakes it); a turn
+  owed for a close or a quit; a window observation not yet delivered; a
+  window's timed frame request at its instant, and the owed surface frame once
+  that instant has come; the scenario's next step. While a dropped frame's
+  retry is armed the host's next-turn causes wait for it too, as its loop
+  always has. `time_to_next_frame` is the list's wake, `pump_until_settled`
+  settles when it is empty, and each pump hands it to the runtime once its own
+  steps are done (`answer_settled`, after the owed frames are asked and the
+  observations delivered), so the agent's settled waits, timeouts and idle
+  ends are answered from the list the settle reads, with
+  `SettleScope::Complete`. The host builds its runtime with
+  `composes_host_half`, so no wait is answered from the runtime's half alone.
+  `run_until_answered` runs turns for a parked request on the virtual clock:
+  each at the list's wake, a re-armed next-turn cause a frame later, until the
+  answer, `limit` of virtual time, or `TURNS_AT_ONE_INSTANT` turns without the
+  clock moving. Tests: `tests/settledness.rs`
+  (`the_host_settle_and_wait_settled_agree_on_every_cause`, one row per cause).
 
 ## Mapping decisions
 

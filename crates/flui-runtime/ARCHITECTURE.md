@@ -1169,24 +1169,46 @@ stream, and that stream's next line, or the recording's end, is preceded by a `g
 flooding backend never costs the input a row. The rows reach the connection as `record_native`
 events, counted apart as `native_lost_rows`.
 
-**Waits.** `wait.until` parks a condition on the presentation
-(`agent_waits`) instead of polling it. The owner evaluates it when it arrives, so one that holds
+**Waits.** `wait.until`, `wait.settled` (`Condition::Settled`) and `wait.frames`
+(`Condition::Frames`) park a condition on the presentation (`agent_waits`) instead of polling it.
+A condition that holds without reading settledness is evaluated when it arrives, so one that holds
 already answers at the drain; after each frame `drive_frame` ran, which also counts that frame
-for `Frames`; and at every owner wake that ran none (`drain_owner_inbox`), so a deadline or a
-timer that ran out is seen. The tree part of a condition is a pure function of the committed tree
-(`SemanticsOwner::evaluate_wait`); `Settled` and the unsettled causes come from the runtime's own
-predicates (`needs_redraw`, a scheduled frame, pending work, the next timer),
-which `UiRuntime::unsettled_causes` reads without the agent's own waits, so a parked wait is never
-why the window is busy. A condition that counts frames asks for a redraw while it is parked,
+for `Frames`; and at every owner wake that ran none (`drain_owner_inbox`). The tree part of a
+condition is a pure function of the committed tree (`SemanticsOwner::evaluate_wait`). A condition
+that contains `Settled`, every wait's timeout and the idle end are answered only from the list of
+what keeps the application from being idle (ADR-0400 §3, below), so no host's answer can be made
+from a half it does not see. A condition that counts frames asks for a redraw while it is parked,
 because an idle window presents none. The deadline is on the presentation's clock (a manual clock
-expires it deterministically) and joins `next_wake`, so a window that draws nothing still times
-out; a timeout is an answer, ending `unsatisfied` with the last observation and the causes, and the
-window closing answers `gone`. A presentation holds 256 waits: the next is refused with
-`TooManyWaits` (`busy`, retry `soon`), never dropped and never in place of an older one. A
-condition on an event holds once the window emitted an event of that kind after the wait began
-(see Events). Image loads are not among the causes: the runtime sits below the layer that loads
-images. Pinned by `src/ui_runtime/tests/agent_wait.rs` and
-`crates/flui-semantics/tests/wait.rs`.
+expires it deterministically) and is a wake of the list (`Unsettled::wake_at`), so a window that
+draws nothing still times out; a timeout is an answer, ending `unsatisfied` with the last
+observation and the causes, and the window closing answers `gone`. A presentation holds 256
+waits: the next is refused with `TooManyWaits` (`busy`, retry `soon`), never dropped and never in
+place of an older one. A condition on an event holds once the window emitted an event of that kind
+after the wait began (see Events). Pinned by `src/ui_runtime/tests/agent_wait.rs`,
+`tests/contracts/settledness.rs` and `crates/flui-semantics/tests/wait.rs`.
+
+**Settledness** (ADR-0400 §3). The host that runs the runtime's turns owns one list
+(`flui_runtime::settledness::Unsettled`): after each turn and its own steps it gathers the
+runtime's half (`UiRuntime::unsettled`) and its own, its loop wakes at `Unsettled::wake`, a settle
+ends when the list names no cause, and it hands the list to `UiRuntime::answer_settled`
+(`HostHalf::Complete`). A cause is added through the method of what discharges it (`next_frame`,
+`deadline` with its exact instant, `test`, `outside`), which writes `cleared_by` and the rounded
+`due_in_ms`; a parked wait's deadline is a wake alone, never a cause. The runtime's half: a redraw,
+a scheduled frame, work a frame takes (tree work, due work, pointer motion) and each
+presentation's running animation (`Ticker`, painted or not) are the next turn's while frames are
+on, listed at a dropped frame's retry while one is armed and not due, and not listed with frames
+off; every deadline it wakes for is a `Timer` at its instant, read from the one enumeration
+`next_wake_owing_floors` also reads (`visit_armed_deadlines`), so the two cannot disagree. A frame
+a covered window owes its surface is the host's half. Whether a host composes a half is fixed at
+construction (`RuntimeHostServices::composes_host_half`): a runtime whose host does not answers
+its settled waits itself at the end of each turn from its own half (`HostHalf::Absent`), with
+`SettleScope::RuntimeOnly`, and never idle. On a complete half a false wait ends `idle` when every
+cause listed, in any window, is one only the test discharges, none at all included; `wait.settled`
+on a window counts that window's causes and the application's. A wait answered 10 000 times at one
+instant (`TURNS_AT_ONE_INSTANT`) ends `unsatisfied`, naming the causes due then. Image loads are
+not among the runtime's causes: the runtime sits below the layer that loads images. A running
+ticker carries its window but no owner or site: the registry that knows it runs does not expose
+where its controller was made.
 
 **Events.** `AgentWindow::subscribe` (`UiCommand::AgentSubscribe`) registers a subscriber on the
 presentation (`agent_events`, an `EventHub`) and answers with an `EventStream`; dropping the
