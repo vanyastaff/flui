@@ -48,12 +48,12 @@ animation controller span identities and, of the events, only the runtime's
 `INFO` log filter therefore does not starve it, and
 attaching it does not turn on `DEBUG` or `TRACE` logging for the whole process.
 
-The spans are `DEBUG` and the two telemetry events `TRACE`. Today the framework
-sets no `max_level_*` feature (ADR-0242 §7), so a release build still traces
-them for a capture that asks. A build that caps `tracing` below `TRACE` (a
-`max_level_*` or `release_max_level_*` feature) compiles the two events out, and
-its capture then records no produced frames; one capped below `DEBUG` loses the
-spans too.
+The spans are `DEBUG` and the two telemetry events `TRACE`. The release build
+`flui build --release` makes is capped at `INFO` (ADR-0398), so it records no
+produced frames and no spans; a capture is taken from a debug build, a
+`--profile profiling` build or a `flui run --agent` build, which keep both. A
+build capped below `TRACE` some other way (a `max_level_*` feature) loses the
+two events, and one capped below `DEBUG` the spans too.
 
 Animation timings are inclusive: tick includes sampling and listeners, so
 adding the three is not a frame CPU total. Reentrant work inside the same

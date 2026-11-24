@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-18
+- **Superseded-by:** [ADR-0398](ADR-0398-the-release-build-mode-leaves-trace-and-debug-events-out.md)
+  for §7's bullet on `max_level_*` features (the CLI's release mode sets `tracing`'s ceiling)
 - **Amends:** [ADR-0040](ADR-0040-tree-observation-seam.md) (consumers of the observer seam join
   span time by element id) and [ADR-0202](ADR-0202-animation-observation-through-tracing.md)
   (animation spans move to the `flui.animation` target and are matched by `(target, name)`)
@@ -75,7 +77,8 @@ properties.
    - Phase spans (build, layout, compositing, paint, semantics, commit, submit) are DEBUG. Per-node
      spans are TRACE, at relayout-boundary and rebuild roots only.
    - Costly fields are gated behind `tracing::enabled!`, and nothing allocates while disabled.
-   - Framework crates set no `max_level_*` feature.
+   - No framework crate turns a `max_level_*` feature on: `flui-log`'s `release-max-level-info`
+     is the one ceiling, and the CLI's release mode turns it on (ADR-0398).
    - Old targets keep a one-release alias, which lands only after a test of `flui-log`'s
      filter confirms prefix matching.
 8. **One span stream.** A capture layer partitioned by runtime and presentation id feeds the

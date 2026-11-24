@@ -55,11 +55,11 @@
 //! # Frame telemetry and build levels
 //!
 //! The spans a capture reads are `DEBUG`; the `frame_telemetry` and `frame_gpu_time` events
-//! behind each [`ProducedFrame`] are `TRACE`. Today the framework sets no `max_level_*` feature
-//! (ADR-0242 §7), so a release build still traces them for a capture that asks. A build that
-//! caps `tracing` below `TRACE` (a `max_level_*` or `release_max_level_*` feature) compiles the
-//! two events out, and its capture then records no produced frames; one capped below `DEBUG`
-//! loses the spans too.
+//! behind each [`ProducedFrame`] are `TRACE`. The release build `flui build --release` makes is
+//! capped at `INFO` (ADR-0398), so it records no produced frames and no spans; a capture is taken
+//! from a debug build, a `--profile profiling` build or a `flui run --agent` build, which keep
+//! both. A build capped below `TRACE` some other way (a `max_level_*` feature) loses the two
+//! events, and one capped below `DEBUG` the spans too.
 //!
 //! # Feature flags
 //!

@@ -17,6 +17,13 @@ installed, and the repository's
 [platform status](https://github.com/vanyastaff/flui/blob/main/docs/platform-parity.md) records
 what has been run on each.
 
+A release build (`flui build --release`, `flui run --release`) is the one an application ships,
+and it holds no `trace!` or `debug!` call site, FLUI's or the application's: the CLI turns on the
+facade's `release-max-level-info` feature, as `flutter build` compiles a release without its
+debug-only code. A plain `cargo build --release` keeps them, and so do a `--profile profiling`
+build and a `flui run --agent` build, whose timelines read the frame's spans. An application that
+ships through cargo alone passes `--features flui/release-max-level-info` itself.
+
 ## Following the platform's conventions
 
 Some details differ by platform: the shortcut a menu shows, where a dialog puts its buttons. A

@@ -66,10 +66,13 @@ the whole application.
 
 `flui build --release` and `flui run --release` add `--features <key>/release-max-level-info` for
 every platform, where `<key>` is the name under which the built package depends on the facade
-(`flui`, or its rename). The arguments come from the one place that selects the built package's
-cargo target, so every platform's build gets them. They are left out of a debug build, of a
-named `--profile` (`profiling` keeps its spans) and of an agent build (`flui run --agent`), whose
-driver reads the phase spans. A package that does not depend on the facade builds without the
+(`flui`, or its rename), else on `flui-app`, both read from the cargo metadata of the target the
+build selects. One function decides the features of a build mode,
+`FrameworkDependency::mode_features` in `flui-cli`: every platform's builder takes them through
+`BuilderContext::mode_args`, and the desktop run through the build it names to each of its cargo
+commands. They are left out of a debug build, of a named `--profile` (`profiling` keeps its
+spans) and of an agent build (`flui run --agent`), whose driver reads the phase spans and gets
+the `driver` feature in their place. A package that depends on neither builds without the
 ceiling.
 
 A plain `cargo build --release` is a cargo build, not FLUI's release mode, and keeps its events;
@@ -94,18 +97,24 @@ it concerns `tracing` call sites.
   reader of the manifest does not see why. The book and the facade's feature table say so.
 - Bad, because an application that wants debug events in a shipped build cannot have them from
   `flui build --release`; it builds through cargo.
+- Bad, because a facade older than the feature fails cargo's resolution of a `--release` build,
+  naming the feature; the CLI and the facade are updated together.
 - Neutral, because CI's `size` job measures the shipping build, so it builds with the feature on.
 
 ### Confirmation
 
 - `flui-log`'s `release-max-level-info` is the only `tracing` level feature in a framework
   manifest; a reader of a manifest change checks it.
-- A test of `flui-cli` reads the arguments the release, debug, profile and agent builds pass, and
-  one reads the facade key from a manifest that renames it.
-- A test of the facade reads `tracing`'s features in the graph of a consumer outside the
-  workspace with and without the facade feature.
-- A test of `flui-log` reports the level a filter selects above a ceiling, for a subscriber it
-  installed and for one it did not.
+- `flui-cli`'s `a_release_build_without_an_agent_is_the_one_with_the_ceiling` holds the features
+  of each mode, `a_build_mode_is_its_profile_flag_and_its_features` the builders' arguments,
+  `a_desktop_run_checks_what_it_builds` the desktop run's cargo arguments for a debug, a release
+  and an agent run, and `the_framework_key_is_the_normal_dependency_the_manifest_names` and
+  `the_framework_key_is_named_by_the_package_the_run_builds` the key of a renamed facade.
+- The facade's `the_release_ceiling_reaches_tracing_only_through_its_feature` reads `tracing`'s
+  features in the graph of a consumer outside the workspace with and without the feature.
+- `flui-log`'s `a_filter_is_beyond_the_ceiling_by_its_most_verbose_directive` and
+  `a_setup_reports_the_level_above_the_ceiling_only_for_the_subscriber_it_installed` hold the
+  level a filter selects above a ceiling, for a subscriber it installed and for one it did not.
 - `counter_release_bytes` and `counter_wasm_bytes` in `perf/size.toml`, built with the feature.
 
 ## Pros and cons of the options

@@ -1323,11 +1323,14 @@ jobs:
           }
           # size_of <project> <binary> [<target>]: the bytes of the binary
           # Cargo reports for this build (a wasm32 module is the `.wasm` among
-          # its files), never a path guessed under the target directory.
+          # its files), never a path guessed under the target directory. The
+          # build is the one `flui build --release` makes: with the facade's
+          # release ceiling (ADR-0398 §2).
           size_of() {
             local artifact
             artifact=$(cd "$projects/$1" \
               && cargo build --locked --release --package "$2" --bin "$2" \
+                --features flui/release-max-level-info \
                 --target-dir "$target_dir" ${3:+--target "$3"} \
                 --message-format json-render-diagnostics \
               | jq -r --arg name "$2" 'select(.reason == "compiler-artifact"
