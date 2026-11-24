@@ -327,6 +327,25 @@ struct Shared {
     sink_ids: AtomicIdMint<NonZeroU64>,
 }
 
+/// How much of each runtime a [`Capture`] keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaptureLimits {
+    /// Frames kept per runtime.
+    pub frames: usize,
+    /// Spans kept per runtime, which also bound the child spans the retained frames hold.
+    pub spans: usize,
+}
+
+impl Default for CaptureLimits {
+    /// 600 frames and 20,000 spans.
+    fn default() -> Self {
+        Self {
+            frames: 600,
+            spans: 20_000,
+        }
+    }
+}
+
 /// The spans of every frame the framework has driven under a [`CaptureLayer`], bounded per
 /// runtime.
 ///
@@ -352,25 +371,25 @@ impl Default for Capture {
 }
 
 impl Capture {
-    /// A capture keeping the last 600 frames and 20,000 spans of each runtime.
+    /// A capture keeping the last [`CaptureLimits::default`] frames and spans of each runtime.
     ///
     /// # Panics
     ///
-    /// After 2^64 - 1 captures in one process, as [`Self::with_capacity`] says.
+    /// After 2^64 - 1 captures in one process, as [`Self::bounded`] says.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_capacity(600, 20_000)
+        Self::bounded(CaptureLimits::default())
     }
 
-    /// A capture keeping the last `max_frames` frames and `max_spans` spans of each runtime. A
-    /// capture of one runtime never evicts another's.
+    /// A capture keeping the last `limits.frames` frames and `limits.spans` spans of each
+    /// runtime. A capture of one runtime never evicts another's.
     ///
     /// # Panics
     ///
     /// After 2^64 - 1 captures in one process, which a process creating one a nanosecond
     /// reaches in 584 years; the identity mint never wraps, so no two captures share one.
     #[must_use]
-    pub fn with_capacity(max_frames: usize, max_spans: usize) -> Self {
+    pub fn bounded(limits: CaptureLimits) -> Self {
         let id = CAPTURE_IDS
             .next()
             .expect("BUG: a process creates fewer than 2^64 - 1 captures");
@@ -378,8 +397,8 @@ impl Capture {
             shared: Arc::new(Shared {
                 id: CaptureId(id),
                 epoch: Instant::now(),
-                max_frames,
-                max_spans,
+                max_frames: limits.frames,
+                max_spans: limits.spans,
                 rings: Mutex::new(FxHashMap::default()),
                 sinks: Mutex::new(Vec::new()),
                 sink_ids: AtomicIdMint::new(),
@@ -537,6 +556,15 @@ impl Capture {
             .map_or_default(|ring| ring.frames.iter().cloned().collect())
     }
 
+    /// Calls `visit` with every retained frame, in no order and without copying it, while the
+    /// capture's rings are locked: `visit` must not call back into this capture.
+    #[cfg(feature = "timeline")]
+    pub(crate) fn visit_frames(&self, mut visit: impl FnMut(&CapturedFrame)) {
+        for ring in self.shared.rings.lock().values() {
+            ring.frames.iter().for_each(&mut visit);
+        }
+    }
+
     /// Forget everything captured so far. Sinks stay registered.
     pub fn clear(&self) {
         self.shared.rings.lock().clear();
@@ -608,7 +636,7 @@ struct Ended {
 }
 
 /// A phase or segment span's outermost entered visit, parked in its extensions.
-struct Visit_ {
+struct SpanVisit {
     start: Instant,
     thread: ThreadId,
     entries: usize,
@@ -857,18 +885,18 @@ where
             .take_while(|ancestor| !is_frame(ancestor.metadata()))
             .any(|ancestor| {
                 (ancestor.metadata().target(), ancestor.metadata().name()) == key
-                    && slot_has::<Visit_, S>(&ancestor, owner)
+                    && slot_has::<SpanVisit, S>(&ancestor, owner)
             });
         if covered {
             return;
         }
         // Re-entered without closing: the visit already running measures the full extent.
-        let reentered = slot_modify(&span, owner, |visit: &mut Visit_| visit.entries += 1);
+        let reentered = slot_modify(&span, owner, |visit: &mut SpanVisit| visit.entries += 1);
         if reentered.is_none() {
             slot_put(
                 &span,
                 owner,
-                Visit_ {
+                SpanVisit {
                     start: Instant::now(),
                     thread: std::thread::current().id(),
                     entries: 1,
@@ -897,13 +925,13 @@ where
             return;
         }
         // The outermost exit ends the visit: a clone retained by user code cannot extend it.
-        let last = slot_modify(&span, owner, |visit: &mut Visit_| {
+        let last = slot_modify(&span, owner, |visit: &mut SpanVisit| {
             visit.entries = visit.entries.saturating_sub(1);
             visit.entries == 0
         });
         let visit = match last {
             Some(true) => {
-                let visit = slot_take::<Visit_, S>(&span, owner);
+                let visit = slot_take::<SpanVisit, S>(&span, owner);
                 slot_put(&span, owner, Closed);
                 visit
             }
@@ -1131,7 +1159,10 @@ mod tests {
     /// The span budget bounds what the retained frames hold, not only the flat span list.
     #[test]
     fn the_span_capacity_bounds_the_retained_frames_contents() {
-        let capture = Capture::with_capacity(10, 2);
+        let capture = Capture::bounded(CaptureLimits {
+            frames: 10,
+            spans: 2,
+        });
         let delivered = Arc::new(Mutex::new(Vec::new()));
         let _sink = {
             let delivered = Arc::clone(&delivered);
@@ -1160,7 +1191,10 @@ mod tests {
 
     #[test]
     fn a_runtime_never_evicts_another_runtimes_frames() {
-        let capture = Capture::with_capacity(2, 100);
+        let capture = Capture::bounded(CaptureLimits {
+            frames: 2,
+            spans: 100,
+        });
         let subscriber = tracing_subscriber::registry().with(capture.layer());
         flui_testing::log_capture::disarm_interest_cache();
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {

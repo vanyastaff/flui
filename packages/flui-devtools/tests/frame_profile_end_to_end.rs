@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_devtools::{Capture, FrameStats, Phase, PhaseInfo, Profiler, ProfilerConfig};
+use flui_devtools::{Capture, FrameStats, Phase, PhaseTiming, Profiler, ProfilerConfig};
 use flui_objects::RenderSizedBox;
 use flui_sdk::animation::Vsync;
 use flui_sdk::geometry::Size;
@@ -70,7 +70,7 @@ fn profiled() -> (Capture, Profiler) {
 }
 
 fn phases(stats: &FrameStats) -> Vec<Phase> {
-    stats.phases().iter().map(PhaseInfo::phase).collect()
+    stats.phases().iter().map(PhaseTiming::phase).collect()
 }
 
 #[test]
@@ -727,7 +727,7 @@ fn a_guard_before_clear_cannot_update_a_new_event() {
         serde_json::Value::Null,
     );
     drop(old);
-    let events = timeline.get_events();
+    let events = timeline.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].name, "new");
     assert_eq!(events[0].duration_micros, duration.as_micros());
@@ -742,7 +742,7 @@ fn a_guard_after_clear_updates_its_own_event() {
     let current = timeline.record_event("current");
     std::thread::sleep(Duration::from_millis(1));
     drop(current);
-    let events = timeline.get_events();
+    let events = timeline.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].name, "current");
     assert!(events[0].duration_micros > 0);
@@ -759,8 +759,8 @@ fn completed_event_duration_preserves_large_values() {
         duration,
         serde_json::Value::Null,
     );
-    assert_eq!(timeline.get_events()[0].duration(), duration);
-    let mut event = timeline.get_events().remove(0);
+    assert_eq!(timeline.events()[0].duration(), duration);
+    let mut event = timeline.events().remove(0);
     event.duration_micros = u128::MAX;
     assert_eq!(event.duration(), Duration::MAX);
 }
@@ -789,7 +789,7 @@ fn run_reentrant_name_case(kind: &str) {
         ),
         _ => panic!("unknown name case"),
     }
-    let events = timeline.get_events();
+    let events = timeline.events();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].name, "reentrant");
     timeline.record_instant("next");
@@ -1002,19 +1002,19 @@ fn a_real_runtime_frame_is_partitioned_and_exported() {
 
     // Each event says what it is: the capture's phases, segments and frames, and the
     // application's own event.
-    let layouts = timeline.get_events_by_kind(TimelineEventKind::Phase(Phase::Layout));
+    let layouts = timeline.events_of(TimelineEventKind::Phase(Phase::Layout));
     assert!(
         !layouts.is_empty() && layouts.iter().all(|event| event.name == "Layout"),
         "the captured layout is a Layout phase event: {layouts:?}"
     );
     for kind in [TimelineEventKind::Frame, TimelineEventKind::Segment] {
         assert!(
-            !timeline.get_events_by_kind(kind).is_empty(),
+            !timeline.events_of(kind).is_empty(),
             "the capture's {kind:?} spans are {kind:?} events"
         );
     }
     let custom: Vec<String> = timeline
-        .get_events_by_kind(TimelineEventKind::Custom)
+        .events_of(TimelineEventKind::Custom)
         .into_iter()
         .map(|event| event.name)
         .collect();

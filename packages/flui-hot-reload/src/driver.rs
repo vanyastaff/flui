@@ -96,7 +96,7 @@ impl HotReloadDriver {
     }
 
     /// Set the polling interval for mtime checks (default:
-    /// [`timing::ARTIFACT_POLL`](crate::strategy::timing::ARTIFACT_POLL)).
+    /// [`timing::ARTIFACT_POLL`]).
     pub fn with_poll_interval(mut self, interval: Duration) -> Self {
         self.poll_interval = interval;
         self

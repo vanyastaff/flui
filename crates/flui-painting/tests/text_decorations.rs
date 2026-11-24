@@ -429,6 +429,41 @@ pub(crate) fn a_decoration_takes_its_glyphs_colour_unless_it_names_one() {
     }
 }
 
+/// A colour-only change repaints a decoration that takes its glyphs' colour
+/// in their new one, whether a span's own colour changed or the root's that
+/// every span inherits, and back to the colour the text was shaped with.
+pub(crate) fn a_recoloured_decoration_takes_its_glyphs_new_colour() {
+    let fonts = FontCollection::new();
+    let underlined = |color: Color| TextStyle {
+        color: Some(color),
+        ..decorated(TextDecoration::UNDERLINE)
+    };
+    let own = |color: Color| middle_span(underlined(color));
+    let inherited = |color: Color| TextSpan::styled("abcdef", underlined(color));
+    let cases: [(&str, &dyn Fn(Color) -> TextSpan); 2] = [
+        ("a span's own colour", &own),
+        ("the root's colour", &inherited),
+    ];
+    for (case, text) in cases {
+        let mut painter = painter_of(&fonts, text(Color::BLUE));
+        for color in [Color::GREEN, Color::RED, Color::BLUE] {
+            assert_eq!(
+                painter.set_text(Some(text(color).into())),
+                Invalidation::Paint,
+                "{case} changed to {color:?} is paint only"
+            );
+            let colors = drawn(&record(&painter, Offset::ZERO))
+                .into_iter()
+                .filter_map(|op| match op {
+                    Drawn::Bar { color, .. } => Some(color),
+                    _ => None,
+                })
+                .collect::<Vec<Color>>();
+            assert_eq!(colors, vec![color], "{case} changed to {color:?}");
+        }
+    }
+}
+
 /// A child span styled [`TextDecoration::NONE`] draws no line under its own
 /// text, though its parent's decoration runs on either side.
 pub(crate) fn a_child_clears_an_inherited_decoration() {

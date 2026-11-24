@@ -18,7 +18,7 @@
 //!     // the work being measured
 //! } // the event's duration is recorded here
 //!
-//! for event in timeline.get_events_by_kind(TimelineEventKind::Custom) {
+//! for event in timeline.events_of(TimelineEventKind::Custom) {
 //!     println!("{}: {:.2} ms", event.name, event.duration_ms());
 //! }
 //!
@@ -27,12 +27,12 @@
 //! # drop(json);
 //! ```
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use flui_sdk::foundation::{PresentationAddress, PresentationId, UiRuntimeId};
 use flui_sdk::hooks::FrameSnapshot;
 use parking_lot::Mutex;
-use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use web_time::{Duration, Instant};
@@ -235,19 +235,9 @@ impl TimelineEvent {
     }
 }
 
-/// A stable identity for one recorded-but-not-yet-closed event, minted by
-/// [`TimelineInner::push_event`].
-///
-/// Deliberately NOT a `Vec` index: `push_event` applies capacity trimming
-/// (dropping the oldest entries once `max_events` is exceeded), which
-/// shifts every surviving event's POSITION in `events`. A plain index
-/// handed out before a later `push_event` call triggers that trim would
-/// silently identify a different (or no) event by the time
-/// [`TimelineInner::end_event`] used it — closing the wrong event, or
-/// closing none at all with no signal that anything went wrong. A handle
-/// is immune: it names an event by MINT ORDER, not by current position,
-/// and `end_event` translates it back to a position (or recognizes it was
-/// already trimmed out) using [`TimelineInner::base_event_id`].
+/// Names one recorded event by mint order, which a trim of the oldest events does not change:
+/// [`TimelineInner::index_of`] turns it into a position, or into `None` once the event was
+/// trimmed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EventHandle(u64);
 
@@ -275,18 +265,14 @@ impl Drop for EventGuard {
 struct TimelineInner {
     /// Timeline start time (for relative timestamps)
     start_time: Instant,
-    /// All recorded events
-    events: Vec<TimelineEvent>,
+    /// The recorded events, oldest first; the oldest is dropped when `max_events` is exceeded.
+    events: VecDeque<TimelineEvent>,
     /// Maximum number of events to keep
     max_events: usize,
-    /// The [`EventHandle`] the NEXT `push_event` call mints.
+    /// The [`EventHandle`] the next `push_event` mints.
     next_event_id: u64,
-    /// The [`EventHandle`] of `events[0]`, if `events` is non-empty.
-    /// `events` is FIFO by push order and trimming only ever removes from
-    /// the front, so `events[i]`'s handle is always `base_event_id + i` —
-    /// no per-event id needs to be stored inline on [`TimelineEvent`]
-    /// itself (which stays a plain, serializable value with no notion of
-    /// this internal bookkeeping).
+    /// The [`EventHandle`] of `events[0]`: events leave only from the front, so `events[i]` has
+    /// the handle `base_event_id + i`, and [`TimelineEvent`] stores none.
     base_event_id: u64,
     /// Whether `start_time` is a capture's epoch, which [`TimelineInner::clear`] must keep: the
     /// capture's spans are measured from it.
@@ -301,7 +287,7 @@ impl TimelineInner {
     fn starting_at(max_events: usize, start_time: Instant, shared_epoch: bool) -> Self {
         Self {
             start_time,
-            events: Vec::new(),
+            events: VecDeque::new(),
             max_events,
             next_event_id: 0,
             base_event_id: 0,
@@ -327,52 +313,32 @@ impl TimelineInner {
         self.push_event(event)
     }
 
-    /// Push an already-fully-formed event (known start/duration/args up
-    /// front, unlike [`Self::start_event`]'s RAII start-then-later-end
-    /// shape) and apply the same capacity trim. Returns a stable
-    /// [`EventHandle`] — see that type's own doc for why a `Vec` index
-    /// would not survive a LATER call to this same method trimming the
-    /// event out from under an earlier caller still holding one (an
-    /// [`EventGuard`] that outlives the trim). No current caller of THIS
-    /// particular return value needs it (a fully-formed event pushed here
-    /// is never later mutated via [`Self::end_event`]) — kept for
-    /// signature symmetry with `start_event`, whose callers do.
+    /// Push a fully formed event and drop the oldest ones beyond `max_events`, advancing
+    /// `base_event_id` by the number dropped so every surviving handle still resolves.
     fn push_event(&mut self, event: TimelineEvent) -> EventHandle {
         let handle = EventHandle(self.next_event_id);
         self.next_event_id += 1;
-        self.events.push(event);
-
-        // Trim old events if we exceed max, advancing `base_event_id` by
-        // exactly how many were dropped so every SURVIVING event's handle
-        // still resolves to its correct (new) position.
-        if self.events.len() > self.max_events {
-            let removed = self.events.len() - self.max_events;
-            self.events.drain(0..removed);
-            self.base_event_id += removed as u64;
+        self.events.push_back(event);
+        while self.events.len() > self.max_events {
+            self.events.pop_front();
+            self.base_event_id += 1;
         }
         handle
     }
 
-    /// Resolve `handle` back to a live position in `events`, or `None` if
-    /// it was already trimmed out by a later `push_event` call.
+    /// The position of `handle`'s event, or `None` when it is not (or no longer) recorded.
     fn index_of(&self, handle: EventHandle) -> Option<usize> {
-        handle.0.checked_sub(self.base_event_id).map(|i| i as usize)
+        let offset = handle.0.checked_sub(self.base_event_id)?;
+        usize::try_from(offset).ok()
     }
 
     fn end_event(&mut self, handle: EventHandle, duration: Duration) {
         let Some(index) = self.index_of(handle) else {
-            // Trimmed out before this event could be closed -- nothing
-            // left to update, and nothing to close a wrong event with
-            // either, which is the whole point of a stable handle.
             return;
         };
         if let Some(event) = self.events.get_mut(index) {
             event.duration_micros = duration.as_micros();
         }
-    }
-
-    fn get_events(&self) -> Vec<TimelineEvent> {
-        self.events.clone()
     }
 
     fn clear(&mut self) {
@@ -381,10 +347,6 @@ impl TimelineInner {
         if !self.shared_epoch {
             self.start_time = Instant::now();
         }
-    }
-
-    fn event_count(&self) -> usize {
-        self.events.len()
     }
 }
 
@@ -409,15 +371,13 @@ impl Timeline {
     ///
     /// Events will be kept in memory up to a default limit (10,000 events).
     pub fn new() -> Self {
-        Self::with_capacity(10_000)
+        Self::bounded(10_000)
     }
 
-    /// Create a new timeline with custom event capacity
-    ///
-    /// # Arguments
-    ///
-    /// - `max_events`: Maximum number of events to keep in memory
-    pub fn with_capacity(max_events: usize) -> Self {
+    /// A timeline that keeps the newest `max_events` events recorded here: recording one more
+    /// drops the oldest, and an [`EventGuard`] whose event was dropped closes nothing. Nothing
+    /// is allocated up front.
+    pub fn bounded(max_events: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(TimelineInner::new(max_events))),
             #[cfg(feature = "profiling")]
@@ -588,54 +548,76 @@ impl Timeline {
         }
     }
 
-    /// Get all recorded events, oldest first. A timeline [over](Self::over) a capture includes
+    /// Every recorded event, oldest first. A timeline [over](Self::over) a capture includes
     /// the framework spans the capture holds.
-    pub fn get_events(&self) -> Vec<TimelineEvent> {
+    pub fn events(&self) -> Vec<TimelineEvent> {
+        self.collect_events(|_, _, _| true)
+    }
+
+    /// The events of `kind`, oldest first.
+    pub fn events_of(&self, kind: TimelineEventKind) -> Vec<TimelineEvent> {
+        self.collect_events(|event_kind, _, _| event_kind == kind)
+    }
+
+    /// The events that lie wholly inside `start..=end`, measured from the timeline's start,
+    /// oldest first.
+    pub fn events_between(&self, start: Duration, end: Duration) -> Vec<TimelineEvent> {
+        let (start, end) = (start.as_micros(), end.as_micros());
+        self.collect_events(|_, event_start, duration| {
+            event_start >= start && event_start.saturating_add(duration) <= end
+        })
+    }
+
+    /// The events `keep` accepts, given an event's kind, start and duration in microseconds,
+    /// oldest first. A rejected event is never copied or built.
+    fn collect_events(
+        &self,
+        keep: impl Fn(TimelineEventKind, u128, u128) -> bool,
+    ) -> Vec<TimelineEvent> {
         #[cfg_attr(
             not(feature = "profiling"),
             expect(unused_mut, reason = "only a profiling build appends captured frames")
         )]
-        let mut events = self.inner.lock().get_events();
+        let mut events: Vec<TimelineEvent> = self
+            .inner
+            .lock()
+            .events
+            .iter()
+            .filter(|event| keep(event.kind, event.start_micros, event.duration_micros))
+            .cloned()
+            .collect();
         #[cfg(feature = "profiling")]
         if let Some(capture) = &self.capture {
-            for frame in capture.frames() {
-                let mut event = captured_event(frame.span());
-                if let Some(period) = frame.period() {
-                    event.args["period_us"] = json!(saturating_micros(period));
+            capture.visit_frames(|frame| {
+                let span = frame.span();
+                if keep(
+                    captured_kind(span),
+                    span.start().as_micros(),
+                    span.duration().as_micros(),
+                ) {
+                    let mut event = captured_event(span);
+                    if let Some(period) = frame.period() {
+                        event.args["period_us"] = json!(saturating_micros(period));
+                    }
+                    events.push(event);
                 }
-                events.push(event);
-                events.extend(frame.spans().iter().map(captured_event));
-            }
+                events.extend(
+                    frame
+                        .spans()
+                        .iter()
+                        .filter(|span| {
+                            keep(
+                                captured_kind(span),
+                                span.start().as_micros(),
+                                span.duration().as_micros(),
+                            )
+                        })
+                        .map(captured_event),
+                );
+            });
             events.sort_by_key(|event| event.start_micros);
         }
         events
-    }
-
-    /// Get the events of one kind, oldest first.
-    pub fn get_events_by_kind(&self, kind: TimelineEventKind) -> Vec<TimelineEvent> {
-        self.get_events()
-            .into_iter()
-            .filter(|event| event.kind == kind)
-            .collect()
-    }
-
-    /// Get events within a time range
-    ///
-    /// # Arguments
-    ///
-    /// - `start_ms`: Start time in milliseconds (relative to timeline start)
-    /// - `end_ms`: End time in milliseconds (relative to timeline start)
-    pub fn get_events_in_range(&self, start_ms: f64, end_ms: f64) -> Vec<TimelineEvent> {
-        let start_micros = (start_ms * 1000.0) as u128;
-        let end_micros = (end_ms * 1000.0) as u128;
-
-        self.get_events()
-            .into_iter()
-            .filter(|e| {
-                let event_end = e.start_micros + e.duration_micros;
-                e.start_micros >= start_micros && event_end <= end_micros
-            })
-            .collect()
     }
 
     /// Clear all events
@@ -647,13 +629,18 @@ impl Timeline {
         }
     }
 
-    /// Get the number of recorded events
+    /// The number of events [`Self::events`] returns, counted without copying any.
     pub fn event_count(&self) -> usize {
+        #[cfg_attr(
+            not(feature = "profiling"),
+            expect(unused_mut, reason = "only a profiling build counts captured frames")
+        )]
+        let mut count = self.inner.lock().events.len();
         #[cfg(feature = "profiling")]
-        if self.capture.is_some() {
-            return self.get_events().len();
+        if let Some(capture) = &self.capture {
+            capture.visit_frames(|frame| count += 1 + frame.spans().len());
         }
-        self.inner.lock().event_count()
+        count
     }
 
     /// Export events as a Chrome / Perfetto trace.
@@ -677,7 +664,7 @@ impl Timeline {
     /// // Then open chrome://tracing or ui.perfetto.dev and load trace.json
     /// ```
     pub fn export_chrome_trace(&self) -> String {
-        let mut events = self.get_events();
+        let mut events = self.events();
         // Parents first among events that start together, so a viewer nests them.
         events.sort_by(|a, b| {
             a.start_micros
@@ -772,45 +759,8 @@ impl Timeline {
     /// This is a simpler format than Chrome trace, useful for custom
     /// visualization.
     pub fn export_json(&self) -> String {
-        let events = self.get_events();
+        let events = self.events();
         serde_json::to_string_pretty(&events).unwrap_or_default()
-    }
-
-    /// Print a summary of events
-    pub fn print_summary(&self) {
-        let events = self.get_events();
-
-        println!("=== Timeline Summary ===");
-        println!("Total events: {}", events.len());
-
-        if events.is_empty() {
-            return;
-        }
-
-        // Group by kind
-        let mut by_kind: FxHashMap<TimelineEventKind, Vec<&TimelineEvent>> = FxHashMap::default();
-
-        for event in &events {
-            by_kind.entry(event.kind).or_default().push(event);
-        }
-
-        for (kind, kind_events) in by_kind {
-            let total_ms: f64 = kind_events.iter().map(|e| e.duration_ms()).sum();
-            let avg_ms = total_ms / kind_events.len() as f64;
-
-            println!("\n{} ({} events):", kind.label(), kind_events.len());
-            println!("  Total: {total_ms:.2}ms");
-            println!("  Average: {avg_ms:.2}ms");
-
-            // Show longest events
-            let mut sorted = kind_events.clone();
-            sorted.sort_by_key(|e| std::cmp::Reverse(e.duration_micros));
-
-            println!("  Longest events:");
-            for event in sorted.iter().take(3) {
-                println!("    {}: {:.2}ms", event.name, event.duration_ms());
-            }
-        }
     }
 }
 
@@ -823,7 +773,7 @@ impl Default for Timeline {
 impl std::fmt::Debug for Timeline {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Timeline")
-            .field("event_count", &self.inner.lock().event_count())
+            .field("event_count", &self.event_count())
             .finish_non_exhaustive()
     }
 }
@@ -833,13 +783,24 @@ fn saturating_micros_u128(micros: u128) -> u64 {
     u64::try_from(micros).unwrap_or(u64::MAX)
 }
 
+/// What a captured span is as a timeline event.
+#[cfg(feature = "profiling")]
+fn captured_kind(span: &crate::capture::CapturedSpan) -> TimelineEventKind {
+    match span.phase() {
+        Some(phase) => TimelineEventKind::Phase(phase),
+        None if span.is_frame() => TimelineEventKind::Frame,
+        None => TimelineEventKind::Segment,
+    }
+}
+
 /// A captured span as a timeline event.
 #[cfg(feature = "profiling")]
 fn captured_event(span: &crate::capture::CapturedSpan) -> TimelineEvent {
-    let (name, kind) = match span.phase() {
-        Some(phase) => (phase.label(), TimelineEventKind::Phase(phase)),
-        None if span.is_frame() => ("Frame", TimelineEventKind::Frame),
-        None => ("Presentation", TimelineEventKind::Segment),
+    let kind = captured_kind(span);
+    let name = match kind {
+        TimelineEventKind::Phase(phase) => phase.label(),
+        TimelineEventKind::Frame => "Frame",
+        _ => "Presentation",
     };
     TimelineEvent {
         name: name.to_string(),
