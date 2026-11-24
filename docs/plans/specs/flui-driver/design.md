@@ -213,7 +213,7 @@ pub enum Condition {
     Settled, Frames(u32), Event(EventFilter), All(Vec<Condition>), Any(Vec<Condition>),
 }
 pub enum Expectation { Name(TextMatch), Value(TextMatch), State(StateFilter), Count(u32), Focused }
-pub struct WaitOutcome { pub satisfied: bool, pub frames: u64, pub observation: Observation,
+pub struct WaitOutcome { pub end: WaitEnd, pub frames: u64, pub observation: Observation,
                          pub unsettled: Vec<UnsettledCause> }   // pending frame, transient callbacks, timers, images
 pub struct InspectNode { pub id: InspectId, pub type_name: String, pub properties: Vec<Property>,
                          pub rect: Option<Rect>, pub links: Links, pub children: Vec<InspectNode>,
