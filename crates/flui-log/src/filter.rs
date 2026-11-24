@@ -339,19 +339,20 @@ mod ceiling_tests {
         for (directives, ceiling, reported) in [
             ("warn,flui_log=off,flui_view=debug", LevelFilter::INFO, true),
             ("off,flui_view=trace", LevelFilter::INFO, true),
-            ("warn,flui_log=off", LevelFilter::INFO, false),
+            ("error,flui_log=off", LevelFilter::INFO, false),
             ("debug", LevelFilter::TRACE, false),
         ] {
-            let (filter, selected) = admitting_the_ceiling_report(
-                parse_directives(directives).expect("valid directives"),
-                ceiling,
-            );
+            let written = parse_directives(directives).expect("valid directives");
+            let (filter, selected) = admitting_the_ceiling_report(written.clone(), ceiling);
             assert_eq!(selected.is_some(), reported, "`{directives}`");
-            assert_eq!(
-                filter.would_enable(CEILING_TARGET, &tracing::Level::WARN),
-                reported,
-                "`{directives}` under a ceiling of {ceiling}"
-            );
+            if reported {
+                assert!(
+                    filter.would_enable(CEILING_TARGET, &tracing::Level::WARN),
+                    "`{directives}` under a ceiling of {ceiling}: {filter}"
+                );
+            } else {
+                assert_eq!(filter.to_string(), written.to_string(), "`{directives}`");
+            }
         }
     }
 }

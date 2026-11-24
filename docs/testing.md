@@ -901,7 +901,9 @@ line: a change that adds a package to an application's default graph raises
 that line in the same PR and says why, and one that removes a package lowers
 it. The
 `size` job, on `main` (ADR-0375), builds projects `flui create --local`
-generates in release, with the release profile the templates write: a counter
+generates in release, as `flui build --release` builds them: the release
+profile the templates write and the facade's `release-max-level-info`
+(ADR-0398). A counter
 for the host and for wasm32, and the host of a `--hot-reload` project, which
 links the logic crate and installs no reload hook. A binary grows with every
 change to the code it links, so a size fails only past 2% over its line, and

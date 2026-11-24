@@ -7,6 +7,8 @@ use crate::build::platform::Profile;
 
 /// The facade feature a release build turns on: `tracing`'s static maximum
 /// level, so the build holds no `trace!` or `debug!` call site (ADR-0398).
+/// CI's `size` job builds generated projects with cargo and names it by
+/// hand (`size_of` in `.github/workflows/ci.yml`): a rename changes it there.
 pub(crate) const RELEASE_CEILING_FEATURE: &str = "release-max-level-info";
 
 /// Which of a package's normal dependencies carries FLUI's build switches

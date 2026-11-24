@@ -23,11 +23,11 @@ and is filtered out at run time. What bears on that:
 | Fact | Evidence |
 |---|---|
 | `tracing`'s `release_max_level_info` feature compiles every call site above INFO out of a build without debug assertions. On a generated counter it took 720,696 bytes off the Linux x86_64 release binary and 449,924 off wasm32 | release builds of `flui create --template counter`, 2026-11-23, with `tracing` named in the application's own manifest |
-| The frame's phase spans are DEBUG and per-node spans are TRACE (ADR-0242 §7). `FrameTimingLayer`, the Chrome and Tracy export and the driver's perf read them, so a build without them has no frame timeline | ADR-0242 §7 and §8 |
+| The frame's phase spans are DEBUG and per-node spans are TRACE (ADR-0242 §7). `flui-devtools`' capture (its profiler and timeline) and a Chrome or Tracy layer an application adds read them, and the protocol's `perf` methods are to (the runtime does not serve them yet), so a build without them has no frame timeline | ADR-0242 §7 and §8; `packages/flui-devtools/src/capture.rs`; `not_answered!` in `crates/flui-runtime/src/ui_runtime/agent_serve.rs` |
 | The `profiling` profile of a generated project inherits `release` and keeps the symbols a profiler needs; it is the build a timeline is taken from | `crates/flui-cli/src/templates/mod.rs`, `[profile.profiling]` |
 | A Cargo feature cannot differ by profile: a feature written into the manifest is on for `release` and for `profiling` alike | Cargo's feature resolver |
 | An application has one `tracing` and one static maximum level: any crate in the graph that turns the feature on sets it for every crate | `tracing`'s `level_filters` |
-| `flui build` and `flui run` choose the build: `--release` (every platform), a named `--profile`, or a debug build, and `flui run --agent` adds the facade's `driver` feature | `crates/flui-cli/src/build/`, `crates/flui-cli/src/commands/run.rs` |
+| `flui build` chooses `--release` or a debug build on every platform; `flui run` also takes a cargo `--profile`, which its desktop run passes to cargo, and `flui run --agent` adds the facade's `driver` feature | `crates/flui-cli/src/main.rs`, `crates/flui-cli/src/commands/run.rs` |
 | Flutter's tool, not the application's manifest, picks the build mode, and a release compiles debug-only code out | Sources |
 
 Who decides whether a binary holds its trace and debug events?
@@ -67,24 +67,34 @@ the whole application.
 `flui build --release` and `flui run --release` add `--features <key>/release-max-level-info` for
 every platform, where `<key>` is the name under which the built package depends on the facade
 (`flui`, or its rename), else on `flui-app`, both read from the cargo metadata of the target the
-build selects. One function decides the features of a build mode,
+build selects; an `optional` dependency gets `<key>?/release-max-level-info`, which turns the
+feature on only where the dependency already is. `flui run --profile release` is `--release`,
+read once for every target (`Profile::of_run`), and a worker project's run without hot reload
+builds its host in the run's mode. One function decides the features of a build mode,
 `FrameworkDependency::mode_features` in `flui-cli`: every platform's builder takes them through
 `BuilderContext::mode_args`, and the desktop run through the build it names to each of its cargo
-commands. They are left out of a debug build, of a named `--profile` (`profiling` keeps its
-spans) and of an agent build (`flui run --agent`), whose driver reads the phase spans and gets
-the `driver` feature in their place. A package that depends on neither builds without the
-ceiling.
+commands. They are left out of a debug build, of any other `--profile` (`profiling` keeps its
+spans) and of an agent build (`flui run --agent`), a development build that gets the `driver`
+feature in their place. A package that depends on neither builds without the ceiling, and its
+release build says so.
 
 A plain `cargo build --release` is a cargo build, not FLUI's release mode, and keeps its events;
-an application that ships through cargo alone names the feature itself.
+an application that ships through cargo alone names the feature itself. A release build of an
+application that links `flui-devtools` records no frames, as Flutter's release mode has no
+profiler: its capture is taken from a `profiling`, debug or agent build, which its crate
+documentation says.
 
-### §3. A filter above the ceiling is reported outside the filter
+### §3. A filter above the ceiling is reported past the filter
 
-When the subscriber FLUI installs selects a level its build compiled out, the application runner
-writes one line to standard error naming the level the filter asks for and the ceiling, once per
-process, so a `RUST_LOG=flui_view=debug` that the filter would otherwise silence is still told.
-Events bridged from `log` (wgpu's, for one) are not compiled out by the ceiling, and the line says
-it concerns `tracing` call sites.
+When the subscriber `flui-log`'s `setup` installs has a filter that selects a level its build
+compiled out, that filter also admits target `flui_log::ceiling` at WARN, and the subscriber
+reports there, once per installation, the level the filter asks for and the ceiling, through the
+platform's sink (the terminal, logcat, the unified log, the browser console). So a
+`RUST_LOG=flui_view=debug` that would otherwise silence every other warning is still told, on
+every host and from every caller of `setup`, and `ResilientSetup::compiled_out` names the level.
+Events bridged from `log` (wgpu's, for one) are not compiled out by the ceiling, and the report
+says it concerns `tracing` call sites. A build whose static maximum level is below WARN cannot
+hold the report either.
 
 ### Consequences
 
@@ -99,6 +109,8 @@ it concerns `tracing` call sites.
   `flui build --release`; it builds through cargo.
 - Bad, because a facade older than the feature fails cargo's resolution of a `--release` build,
   naming the feature; the CLI and the facade are updated together.
+- Bad, because an application that links `flui-devtools` gets an empty capture from its release
+  build, with no warning from the CLI; the crate's documentation names the builds to take one from.
 - Neutral, because CI's `size` job measures the shipping build, so it builds with the feature on.
 
 ### Confirmation
@@ -106,16 +118,26 @@ it concerns `tracing` call sites.
 - `flui-log`'s `release-max-level-info` is the only `tracing` level feature in a framework
   manifest; a reader of a manifest change checks it.
 - `flui-cli`'s `a_release_build_without_an_agent_is_the_one_with_the_ceiling` holds the features
-  of each mode, `a_build_mode_is_its_profile_flag_and_its_features` the builders' arguments,
-  `a_desktop_run_checks_what_it_builds` the desktop run's cargo arguments for a debug, a release
-  and an agent run, and `the_framework_key_is_the_normal_dependency_the_manifest_names` and
-  `the_framework_key_is_named_by_the_package_the_run_builds` the key of a renamed facade.
+  of each mode, `a_build_mode_is_its_profile_flag_and_its_features` the arguments `mode_args`
+  gives a builder, `a_run_is_the_release_mode_whichever_flag_names_the_release_profile` the mode
+  of a run, `a_desktop_run_checks_what_it_builds` the desktop run's cargo arguments for a debug,
+  a release and an agent run, and `the_framework_key_is_the_normal_dependency_the_manifest_names`
+  and `the_framework_key_is_named_by_the_package_the_run_builds` the key of a renamed or optional
+  facade.
+- `flui-cli`'s `a_desktop_release_build_compiles_the_facade_with_its_ceiling` builds against a
+  stand-in facade that does not compile without the feature, and
+  `web_release_build_names_the_facade_ceiling` reads the web builder's cargo arguments. The
+  Android and iOS builders take the same `mode_args` and run only where their SDKs are.
 - The facade's `the_release_ceiling_reaches_tracing_only_through_its_feature` reads `tracing`'s
-  features in the graph of a consumer outside the workspace with and without the feature.
+  features in the graph of a consumer outside the workspace with and without the feature, and
+  `a_filter_above_the_release_ceiling_is_reported_where_the_log_goes` builds a consumer of
+  `flui-log` without debug assertions and reads the report and `compiled_out` for a filter above
+  the ceiling, a rejected override and a filter at it, and without the feature.
 - `flui-log`'s `a_filter_is_beyond_the_ceiling_by_its_most_verbose_directive` and
-  `a_setup_reports_the_level_above_the_ceiling_only_for_the_subscriber_it_installed` hold the
-  level a filter selects above a ceiling, for a subscriber it installed and for one it did not.
-- `counter_release_bytes` and `counter_wasm_bytes` in `perf/size.toml`, built with the feature.
+  `a_filter_above_the_ceiling_admits_its_report` hold the level a filter selects above a ceiling
+  and the filter the report passes.
+- `counter_release_bytes`, `counter_wasm_bytes` and `hot_reload_host_release_bytes` in
+  `perf/size.toml`, measured with the feature, as the `size` job builds them.
 
 ## Pros and cons of the options
 
@@ -129,7 +151,12 @@ it concerns `tracing` call sites.
 - Good, because the application's choice is written where it can be read.
 - Bad, because a feature in the manifest is on for `profiling` too, which then has no phase spans
   and no timeline: the profile a timeline is taken from stops giving one (ADR-0242 §7).
-- Bad, because an agent build of the same manifest loses the driver's perf.
+- Bad, because an agent build of the same manifest loses the spans the protocol's `perf` methods
+  are to read.
+- A variant sets `debug-assertions = true` in `[profile.profiling]`, which `release_max_level_*`
+  does not cap. Bad, because every `debug_assert!` and `cfg(debug_assertions)` path then runs in
+  the profiled binary, so its timeline measures code the shipped build does not run, and the
+  template's profile stops being the release build with symbols.
 
 ### 3. The CLI's release build mode turns the feature on
 

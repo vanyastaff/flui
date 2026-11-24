@@ -138,7 +138,7 @@ fn live_desktop_build_produces_an_artifact_on_disk() {
     );
 }
 
-fn web_selector_reaches_cargo(selector: &str, selected: &str) {
+fn web_selector_reaches_cargo(selector: &str, selected: &str, release: bool) {
     let fixture = TempDir::new().expect("web selector fixture");
     let root = fixture.path();
     std::fs::create_dir_all(root.join("src")).expect("source directory");
@@ -150,10 +150,20 @@ fn web_selector_reaches_cargo(selector: &str, selected: &str) {
     std::fs::create_dir_all(member.join("src")).expect("selected package directory");
     std::fs::write(
         member.join("Cargo.toml"),
-        "[package]\nname = \"selected-web-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        "[package]\nname = \"selected-web-app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\nflui = { path = \"../../facade\" }\n",
     )
     .expect("selected package manifest");
     std::fs::write(member.join("src/main.rs"), "fn main() {}\n").expect("selected package main");
+    // The selected package names the facade, under whose key a release
+    // build turns the ceiling on (ADR-0398 §2).
+    let facade = root.join("facade");
+    std::fs::create_dir_all(facade.join("src")).expect("facade directory");
+    std::fs::write(
+        facade.join("Cargo.toml"),
+        "[package]\nname = \"flui\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[features]\nrelease-max-level-info = []\n",
+    )
+    .expect("facade manifest");
+    std::fs::write(facade.join("src/lib.rs"), "").expect("facade library");
     let tools = root.join("tools");
     std::fs::create_dir(&tools).expect("tool directory");
     // Metadata and target selection remain real Cargo operations. Only native
@@ -235,6 +245,7 @@ fn main() {
         .env("CARGO_NET_OFFLINE", "true")
         .env("CARGO_TARGET_DIR", root.join("target"))
         .args(["build", "web", selector, selected, "--json"])
+        .args(release.then_some("--release"))
         .output()
         .expect("run web build selector");
     assert!(!output.status.success(), "fixture compilation must refuse");
@@ -252,14 +263,30 @@ fn main() {
             .is_some_and(|spec| spec.ends_with(&format!("#{selected}@0.1.0")))
     };
     assert!(reached, "{stderr}");
+    // The web builder takes its mode from `mode_args`: a release build is
+    // cargo's release profile with the facade's ceiling, a debug build
+    // neither.
+    let mode = [
+        "\"--release\"",
+        "\"--features\", \"flui/release-max-level-info\"",
+    ];
+    assert_eq!(
+        mode.map(|arg| stderr.contains(arg)),
+        [release; 2],
+        "release {release}: {stderr}"
+    );
 }
 
 fn web_example_selector_reaches_the_requested_example() {
-    web_selector_reaches_cargo("--example", "selected-demo");
+    web_selector_reaches_cargo("--example", "selected-demo", false);
 }
 
 fn web_package_selector_reaches_the_requested_package() {
-    web_selector_reaches_cargo("--package", "selected-web-app");
+    web_selector_reaches_cargo("--package", "selected-web-app", false);
+}
+
+fn web_release_build_names_the_facade_ceiling() {
+    web_selector_reaches_cargo("--package", "selected-web-app", true);
 }
 
 fn android_example_selection_is_rejected_before_sdk_discovery() {
@@ -294,6 +321,10 @@ fn platform_build_selectors_reach_the_selected_cargo_unit_or_refuse() {
         (
             "web_package_selector_reaches_the_requested_package",
             web_package_selector_reaches_the_requested_package,
+        ),
+        (
+            "web_release_build_names_the_facade_ceiling",
+            web_release_build_names_the_facade_ceiling,
         ),
         (
             "android_example_selection_is_rejected_before_sdk_discovery",
@@ -412,4 +443,47 @@ fn a_platform_min_flui_cannot_honour_is_refused_before_building() {
         }
     }
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// `flui build desktop --release` builds through the facade's release
+/// ceiling (ADR-0398 §2): the stand-in facade refuses to compile without it,
+/// so the build succeeds only when the desktop builder names it.
+#[test]
+fn a_desktop_release_build_compiles_the_facade_with_its_ceiling() {
+    let fixture = TempDir::new().expect("desktop release fixture");
+    let root = fixture.path();
+    let facade = root.join("facade");
+    std::fs::create_dir_all(facade.join("src")).expect("facade directory");
+    std::fs::write(
+        facade.join("Cargo.toml"),
+        "[package]\nname = \"flui\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[features]\nrelease-max-level-info = []\n",
+    )
+    .expect("facade manifest");
+    std::fs::write(
+        facade.join("src/lib.rs"),
+        "#[cfg(not(feature = \"release-max-level-info\"))]\ncompile_error!(\"FLUI_BUILT_WITHOUT_THE_CEILING\");\n",
+    )
+    .expect("facade library");
+    let app = root.join("app");
+    std::fs::create_dir_all(app.join("src")).expect("app directory");
+    std::fs::write(
+        app.join("Cargo.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[workspace]\n[dependencies]\nflui = { path = \"../facade\" }\n",
+    )
+    .expect("app manifest");
+    std::fs::write(app.join("src/main.rs"), "use flui as _;\n\nfn main() {}\n").expect("app main");
+    let output = flui()
+        .current_dir(&app)
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("CARGO_TARGET_DIR", root.join("target"))
+        .args(["build", "desktop", "--release", "--json"])
+        .output()
+        .expect("run flui build desktop --release");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Finished `release` profile"), "{stderr}");
 }

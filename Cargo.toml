@@ -943,8 +943,8 @@ driver = ["flui-app/driver"]
 # without debug assertions (ADR-0398): `tracing`'s `release_max_level_info`.
 # `flui build --release` and `flui run --release` turn it on; a plain
 # `cargo build --release` does not, and a `profiling` or agent build keeps
-# every span for its timeline. A filter that asks for more is told so on
-# standard error at start.
+# every span for its timeline. A filter that asks for more is told so at
+# start, through the platform's log (target `flui_log::ceiling`).
 release-max-level-info = ["flui-app/release-max-level-info"]
 
 # === Core Features ===

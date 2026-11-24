@@ -100,7 +100,8 @@ For application logs, set `RUST_LOG=flui_app=debug,flui_engine=debug` before
 PowerShell: `$env:RUST_LOG = "flui_app=debug,flui_engine=debug"`). CLI diagnostics
 use `flui -v run`; they are separate from application logs. A release build from
 `flui run --release` or `flui build --release` holds application events up to `info` only, and
-says so on standard error when `RUST_LOG` asks for more. A successful compile
+says so in its log (a `flui_log::ceiling` warning) when `RUST_LOG` asks for more.
+A successful compile
 does not verify your window system or GPU: consult the
 [platform status](https://github.com/vanyastaff/flui/blob/main/docs/platform-parity.md)
 before choosing a deployment target.
