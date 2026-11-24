@@ -29,6 +29,7 @@ pub(crate) mod forward;
 pub(crate) mod listener;
 pub(crate) mod mcp;
 pub(crate) mod record;
+pub(crate) mod supervisor;
 
 use std::fmt;
 use std::fs;
@@ -87,6 +88,10 @@ pub(crate) struct Credentials {
     pub(crate) token: String,
     /// The `flui run` process that owns the session.
     pub(crate) pid: u32,
+    /// Where that `flui run` serves `run.reload`, on this host, admitting the same token
+    /// ([`supervisor`], ADR-0401); absent when the run does not rebuild the app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) run: Option<String>,
 }
 
 impl fmt::Debug for Credentials {
@@ -95,6 +100,7 @@ impl fmt::Debug for Credentials {
             .field("endpoint", &self.endpoint)
             .field("token", &"<redacted>")
             .field("pid", &self.pid)
+            .field("run", &self.run)
             .finish()
     }
 }
@@ -109,6 +115,7 @@ impl Credentials {
             endpoint: Endpoint::Local(endpoint),
             token,
             pid: 0,
+            run: None,
         })
     }
 
@@ -229,23 +236,12 @@ impl Session {
     /// holding it knows the credentials, so no other client finds the app through it and a
     /// session file another `flui run --agent` wrote is left as it is.
     pub(crate) fn create_unlisted() -> CliResult<Self> {
-        let dir = tempfile::Builder::new()
-            .prefix("flui-agent-")
-            .tempdir()
-            .context("could not create the agent session directory")?;
-        // The server refuses a socket in a directory anyone else can enter,
-        // and the temp directory's mode follows the umask.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))
-                .context("could not make the agent session directory private")?;
-        }
-        let endpoint = endpoint_in(dir.path(), &random_hex(4)?)?;
+        let (dir, endpoint) = private_endpoint("agent")?;
         let credentials = Credentials {
             endpoint: Endpoint::Local(endpoint.clone()),
             token: launch_token()?,
             pid: std::process::id(),
+            run: None,
         };
         Ok(Self {
             credentials,
@@ -272,6 +268,7 @@ impl Session {
             endpoint: Endpoint::Forwarded(forward.address()),
             token: launch_token()?,
             pid: std::process::id(),
+            run: None,
         };
         let file = session_file_for_writing(start, workspace_root, target_dir);
         write_private(&file, &credentials).context("could not write the agent session file")?;
@@ -320,6 +317,24 @@ impl Session {
     /// [unlisted](Self::create_unlisted).
     pub(crate) fn file(&self) -> Option<&Path> {
         self.file.as_deref()
+    }
+
+    /// Names `address` as where the run serves `run.reload` ([`supervisor::RunEndpoint`]),
+    /// rewriting the session file, so `flui mcp` finds it with the app. Called once the endpoint
+    /// is bound: the file never names one nobody serves.
+    ///
+    /// # Errors
+    ///
+    /// The session is unlisted, or its file could not be written.
+    pub(crate) fn name_run(&mut self, address: &str) -> CliResult<()> {
+        let Some(file) = &self.file else {
+            return Err(CliError::Unsupported {
+                what: "a run endpoint for an unlisted session".into(),
+                reason: "no client finds an unlisted session".into(),
+            });
+        };
+        self.credentials.run = Some(address.to_owned());
+        write_private(file, &self.credentials).context("could not write the agent session file")
     }
 
     /// The `--features` value a build without debug assertions needs to keep
@@ -399,9 +414,29 @@ impl fmt::Debug for Session {
     }
 }
 
+/// A fresh endpoint address only the current user reaches, named for `stem` (`agent`, `run`),
+/// and the private directory that keeps it, removed when dropped: a socket in a `0700`
+/// directory, or a pipe of a unique name, whose DACL the binding side sets.
+pub(crate) fn private_endpoint(stem: &str) -> CliResult<(tempfile::TempDir, String)> {
+    let dir = tempfile::Builder::new()
+        .prefix(&format!("flui-{stem}-"))
+        .tempdir()
+        .context("could not create the agent session directory")?;
+    // The server refuses a socket in a directory anyone else can enter,
+    // and the temp directory's mode follows the umask.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(dir.path(), fs::Permissions::from_mode(0o700))
+            .context("could not make the agent session directory private")?;
+    }
+    let endpoint = endpoint_in(dir.path(), stem, &random_hex(4)?)?;
+    Ok((dir, endpoint))
+}
+
 #[cfg(unix)]
-fn endpoint_in(dir: &Path, _unique: &str) -> CliResult<String> {
-    let path = dir.join("agent.sock");
+fn endpoint_in(dir: &Path, stem: &str, _unique: &str) -> CliResult<String> {
+    let path = dir.join(format!("{stem}.sock"));
     let path = path.to_str().ok_or_else(|| CliError::Unsupported {
         what: "an agent endpoint".into(),
         reason: "the temporary directory's path is not UTF-8".into(),
@@ -422,8 +457,8 @@ fn endpoint_in(dir: &Path, _unique: &str) -> CliResult<String> {
     clippy::unnecessary_wraps,
     reason = "same signature as the Unix endpoint, which can fail on a long path"
 )]
-fn endpoint_in(_dir: &Path, unique: &str) -> CliResult<String> {
-    Ok(format!("flui-agent-{}-{unique}", std::process::id()))
+fn endpoint_in(_dir: &Path, stem: &str, unique: &str) -> CliResult<String> {
+    Ok(format!("flui-{stem}-{}-{unique}", std::process::id()))
 }
 
 /// `bytes` random bytes from the OS, as lowercase hex.
@@ -542,6 +577,7 @@ mod tests {
             endpoint: Endpoint::Local("elsewhere".into()),
             token: "t".repeat(32),
             pid: std::process::id() + 1,
+            run: None,
         };
         write_private(&file, &replacement).unwrap();
         drop(older);
@@ -554,6 +590,7 @@ mod tests {
             endpoint: Endpoint::Local("e".into()),
             token: "super-secret-token".into(),
             pid: 1,
+            run: None,
         };
         assert!(!format!("{credentials:?}").contains("super-secret"));
     }

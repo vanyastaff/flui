@@ -4,8 +4,8 @@
 use crate::capture::CaptureSource;
 use crate::geometry::{LogicalPoint, LogicalSize};
 use crate::input::{InputPath, InputPolicy, PointerDevice};
-use crate::tree::WindowId;
 use crate::method::MethodEffect;
+use crate::tree::WindowId;
 use crate::version::ProtocolVersion;
 
 /// Parameters of a method that takes none: `{}`.

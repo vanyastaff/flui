@@ -19,6 +19,7 @@ use crate::agent::browser::launch::{LaunchError, LaunchedBrowser};
 use crate::agent::browser::relay::Relay;
 use crate::agent::browser::{self, Dialect};
 use crate::agent::build_report::BuildReporter;
+use crate::agent::supervisor::{ReloadRequest, RunEndpoint};
 use crate::agent::{self, Session};
 use crate::build::web_page::WebPage;
 use crate::build::{BuilderContextBuilder, Platform, Profile, WebBuilder};
@@ -28,6 +29,8 @@ use crate::serve::DevServer;
 use crate::ui;
 use crate::watch::SourceWatcher;
 use console::style;
+use flui_protocol::build::Diagnostics;
+use flui_protocol::reload::{ReloadReport, ReloadTier, Reloaded};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -153,7 +156,7 @@ fn run_session(
 ) -> CliResult<()> {
     let SessionExtras {
         web,
-        agent,
+        mut agent,
         build_overlay,
         register_associations,
     } = extras;
@@ -164,8 +167,9 @@ fn run_session(
                 reason: "the host/worker split targets the desktop; use `flui run --scene` for Android scene reload".into(),
             });
         }
+        let endpoint = serve_reloads(agent.as_mut())?;
         let mut strategy = AndroidSession::new(device.clone(), release, hot_reload, agent)?;
-        return dev_loop(&mut strategy);
+        return dev_loop(&mut strategy, endpoint);
     }
     if let Target::Browser(browser) = target {
         if matches!(project, Project::Worker(_)) {
@@ -176,8 +180,9 @@ fn run_session(
                         .into(),
             });
         }
+        let endpoint = serve_reloads(agent.as_mut())?;
         let mut strategy = BrowserSession::new(browser.clone(), release, hot_reload, web, agent)?;
-        return dev_loop(&mut strategy);
+        return dev_loop(&mut strategy, endpoint);
     }
     // The application runs on this desktop: refused before it is built when
     // it opens links or files a later launch could not hand to it.
@@ -209,10 +214,11 @@ fn run_session(
                     floor_env,
                     register_associations,
                 };
-                dev_loop(&mut strategy)?;
+                dev_loop(&mut strategy, None)?;
             }
             Project::Application { .. } => {
                 ui::success("Hot reload enabled (process restart)")?;
+                let endpoint = serve_reloads(agent.as_mut())?;
                 // The overlay reaches the app through its agent, so a run without `--agent`
                 // opens a session of its own, unlisted: `flui mcp` keeps finding the session
                 // a `flui run --agent` wrote. A run that cannot open one runs without the
@@ -242,7 +248,7 @@ fn run_session(
                     build_report,
                     register_associations,
                 };
-                dev_loop(&mut strategy)?;
+                dev_loop(&mut strategy, endpoint)?;
             }
         }
     } else {
@@ -268,6 +274,27 @@ fn start_build_reporter(session: &Session) -> CliResult<Option<BuildReporter>> {
             Ok(None)
         }
     }
+}
+
+/// The run endpoint where `flui mcp` asks this run for reloads (`run.reload`, ADR-0401), named
+/// in the session file `--agent` wrote; none without `--agent`, or, with a warning, when it
+/// cannot start: the run goes on without it.
+fn serve_reloads(session: Option<&mut Session>) -> CliResult<Option<RunEndpoint>> {
+    let Some(session) = session.filter(|session| session.file().is_some()) else {
+        return Ok(None);
+    };
+    let endpoint = match RunEndpoint::start(session.credentials().token.clone()) {
+        Ok(endpoint) => endpoint,
+        Err(why) => {
+            ui::warning(format!("an agent cannot ask this run for reloads: {why}"))?;
+            return Ok(None);
+        }
+    };
+    if let Err(why) = session.name_run(endpoint.address()) {
+        ui::warning(format!("an agent cannot ask this run for reloads: {why}"))?;
+        return Ok(None);
+    }
+    Ok(Some(endpoint))
 }
 
 /// What `--agent` needs before anything is built: this desktop, an Android
@@ -831,6 +858,8 @@ impl HotKey {
 enum LoopEvent {
     Changed(Vec<PathBuf>),
     Key(HotKey),
+    /// A client of the run endpoint asked for a reload (`run.reload`).
+    Asked(ReloadRequest),
     Interrupted,
     ChildExited(ExitStatus),
     /// The watcher channel closed; nothing more will arrive.
@@ -842,16 +871,20 @@ enum LoopEvent {
 /// Strategies borrow the running app through `&mut Option<AppChild>` and never
 /// take it by value: the loop keeps ownership, so an error anywhere inside a
 /// strategy still leaves the child where the loop's cleanup can stop it.
+///
+/// Each step that builds answers what it came to, which the loop reports
+/// (`run.reload`) and answers a client that asked for it with.
 trait ReloadStrategy {
     /// Paths to watch (`recursive` flag per path).
     fn watch_paths(&self) -> Vec<(PathBuf, bool)>;
     /// Build everything and start the app into `child`. Leaves `None` when
     /// the build failed (the loop keeps watching so the user can fix and save).
-    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()>;
+    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<Reloaded>;
     /// React to changed sources with the app possibly still running.
-    fn on_change(&mut self, paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()>;
+    fn on_change(&mut self, paths: &[PathBuf], child: &mut Option<AppChild>)
+    -> CliResult<Reloaded>;
     /// The cheapest reload (`r`). Defaults to a change with no paths.
-    fn reload(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
+    fn reload(&mut self, child: &mut Option<AppChild>) -> CliResult<Reloaded> {
         self.on_change(&[], child)
     }
     /// What `r` does, for the legend.
@@ -864,11 +897,13 @@ trait ReloadStrategy {
     }
 }
 
-/// Drive `strategy` until `q`, Ctrl-C, or the watcher going away.
+/// Drive `strategy` until `q`, Ctrl-C, or the watcher going away, applying
+/// the reloads the clients of `endpoint` ask for too.
 ///
 /// The child is always stopped on the way out — including when a step
 /// returns an error — so a failed `flui run` never leaves an orphaned app.
-fn dev_loop(strategy: &mut dyn ReloadStrategy) -> CliResult<()> {
+/// The endpoint goes after it, answering what it still owes `shutting_down`.
+fn dev_loop(strategy: &mut dyn ReloadStrategy, endpoint: Option<RunEndpoint>) -> CliResult<()> {
     let interrupted = install_interrupt_flag();
     let keys = KeyReader::start();
 
@@ -876,7 +911,7 @@ fn dev_loop(strategy: &mut dyn ReloadStrategy) -> CliResult<()> {
     let mut child = None;
     let result = strategy
         .build_and_spawn(&mut child)
-        .and_then(|()| {
+        .and_then(|_| {
             if !strategy.is_running(child.as_ref()) {
                 ui::warning(
                     "Build failed. Watching for changes... (fix errors and save to retry)",
@@ -888,25 +923,39 @@ fn dev_loop(strategy: &mut dyn ReloadStrategy) -> CliResult<()> {
             if keys.is_some() {
                 print_key_legend(strategy)?;
             }
-            drive(strategy, interrupted, keys.as_ref(), &watcher, &mut child)
+            let sources = Sources {
+                interrupted,
+                keys: keys.as_ref(),
+                watcher: &watcher,
+                endpoint: endpoint.as_ref(),
+            };
+            drive(strategy, &sources, &mut child)
         });
 
     // Cleanup runs for every outcome above, then the terminal is restored
     // (the key reader drops here) before anything else is printed.
     stop_and_report(&mut child);
     drop(keys);
+    drop(endpoint);
     result
+}
+
+/// What the loop waits on.
+struct Sources<'a> {
+    interrupted: &'a AtomicBool,
+    keys: Option<&'a KeyReader>,
+    watcher: &'a SourceWatcher,
+    endpoint: Option<&'a RunEndpoint>,
 }
 
 fn drive(
     strategy: &mut dyn ReloadStrategy,
-    interrupted: &AtomicBool,
-    keys: Option<&KeyReader>,
-    watcher: &SourceWatcher,
+    sources: &Sources<'_>,
     child: &mut Option<AppChild>,
 ) -> CliResult<()> {
     loop {
-        match next_event(interrupted, keys, watcher, child.as_mut()) {
+        let started = Instant::now();
+        match next_event(sources, child.as_mut()) {
             LoopEvent::Interrupted => {
                 ui::info("Interrupted, stopping...")?;
                 return Err(CliError::Interrupted);
@@ -926,24 +975,30 @@ fn drive(
             LoopEvent::Changed(paths) => {
                 log_changed_paths(&paths);
                 ui::emit("run.change", &serde_json::json!({ "paths": paths }));
-                strategy.on_change(&paths, child)?;
+                report_reload(strategy.on_change(&paths, child)?, started);
             }
             LoopEvent::Key(HotKey::Reload) => {
                 ui::step(format!("{} (r)", strategy.reload_label()))?;
-                strategy.reload(child)?;
+                report_reload(strategy.reload(child)?, started);
             }
             LoopEvent::Key(HotKey::Restart) => {
                 ui::step("Restarting (R)...")?;
-                stop_and_report(child);
-                strategy.build_and_spawn(child)?;
-                let ok = strategy.is_running(child.as_ref());
-                ui::emit(
-                    "run.reload",
-                    &serde_json::json!({ "kind": "restart", "ok": ok }),
-                );
-                if !ok {
-                    ui::warning("Build failed — fix errors and save to retry")?;
-                }
+                report_reload(restart(strategy, child)?, started);
+            }
+            LoopEvent::Asked(request) => {
+                let reloaded = match request.at_least() {
+                    None | Some(ReloadTier::Reassemble) => {
+                        ui::step(format!("{} (asked by a client)", strategy.reload_label()))?;
+                        strategy.reload(child)?
+                    }
+                    // No mechanism restarts in the process yet, so a restart is a process
+                    // restart (ADR-0393 §2).
+                    Some(_) => {
+                        ui::step("Restarting (asked by a client)...")?;
+                        restart(strategy, child)?
+                    }
+                };
+                request.answer(&report_reload(reloaded, started));
             }
             LoopEvent::Key(HotKey::Clear) => {
                 let _ = console::Term::stderr().clear_screen();
@@ -953,20 +1008,38 @@ fn drive(
     }
 }
 
+/// `R`: stop the app, then build and start it again.
+fn restart(strategy: &mut dyn ReloadStrategy, child: &mut Option<AppChild>) -> CliResult<Reloaded> {
+    stop_and_report(child);
+    let reloaded = strategy.build_and_spawn(child)?;
+    if !reloaded.is_applied() {
+        ui::warning("Build failed — fix errors and save to retry")?;
+    }
+    Ok(reloaded)
+}
+
+/// Reports what a reload `started` at came to (`run.reload`): the report a client that asked
+/// for the reload is answered with.
+fn report_reload(outcome: Reloaded, started: Instant) -> ReloadReport {
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let report = ReloadReport::new(outcome, elapsed_ms);
+    ui::emit("run.reload", &report);
+    report
+}
+
 /// Poll every source once, in priority order, waiting on the watcher for at
-/// most 100 ms so key presses and Ctrl-C are picked up promptly.
-fn next_event(
-    interrupted: &AtomicBool,
-    keys: Option<&KeyReader>,
-    watcher: &SourceWatcher,
-    mut child: Option<&mut AppChild>,
-) -> LoopEvent {
+/// most 100 ms so key presses, Ctrl-C and a client's reload are picked up
+/// promptly.
+fn next_event(sources: &Sources<'_>, mut child: Option<&mut AppChild>) -> LoopEvent {
     loop {
-        if interrupted.swap(false, Ordering::SeqCst) {
+        if sources.interrupted.swap(false, Ordering::SeqCst) {
             return LoopEvent::Interrupted;
         }
-        if let Some(key) = keys.and_then(KeyReader::try_recv) {
+        if let Some(key) = sources.keys.and_then(KeyReader::try_recv) {
             return LoopEvent::Key(key);
+        }
+        if let Some(request) = sources.endpoint.and_then(RunEndpoint::next_request) {
+            return LoopEvent::Asked(request);
         }
         if let Some(child) = child.as_deref_mut() {
             match child.try_wait() {
@@ -977,7 +1050,7 @@ fn next_event(
                 }
             }
         }
-        match watcher.recv_timeout(Duration::from_millis(100)) {
+        match sources.watcher.recv_timeout(Duration::from_millis(100)) {
             Ok(paths) => return LoopEvent::Changed(paths),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return LoopEvent::WatcherClosed,
@@ -1467,6 +1540,16 @@ struct DrivenBrowser {
 }
 
 impl BrowserSession {
+    /// What the last build came to: a page reloaded with it, or a failure whose errors this run
+    /// does not read for the browser target.
+    fn reloaded(&self) -> Reloaded {
+        if self.built {
+            Reloaded::applied(ReloadTier::ProcessRestart)
+        } else {
+            Reloaded::Failed(Diagnostics::new())
+        }
+    }
+
     fn new(
         browser: Browser,
         release: bool,
@@ -1657,10 +1740,10 @@ impl ReloadStrategy for BrowserSession {
         ]
     }
 
-    fn build_and_spawn(&mut self, _child: &mut Option<AppChild>) -> CliResult<()> {
+    fn build_and_spawn(&mut self, _child: &mut Option<AppChild>) -> CliResult<Reloaded> {
         self.built = self.build()?;
         if !self.built {
-            return Ok(());
+            return Ok(self.reloaded());
         }
         if let Some(server) = &self.server {
             server.reload();
@@ -1674,7 +1757,7 @@ impl ReloadStrategy for BrowserSession {
                 let url = server.url();
                 self.drive(&url)?;
             }
-            return Ok(());
+            return Ok(self.reloaded());
         }
         let server = DevServer::start(
             self.output_dir(),
@@ -1696,20 +1779,20 @@ impl ReloadStrategy for BrowserSession {
         } else {
             ui::info(format!("Open {url} in {}", self.browser.name))?;
         }
-        Ok(())
+        Ok(self.reloaded())
     }
 
-    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
+    fn on_change(
+        &mut self,
+        _paths: &[PathBuf],
+        child: &mut Option<AppChild>,
+    ) -> CliResult<Reloaded> {
         ui::step("Rebuilding...")?;
-        self.build_and_spawn(child)?;
-        ui::emit(
-            "run.reload",
-            &serde_json::json!({ "kind": "page", "ok": self.built }),
-        );
+        let reloaded = self.build_and_spawn(child)?;
         if !self.built {
             ui::warning("Build failed. Watching for changes... (fix errors and save to retry)")?;
         }
-        Ok(())
+        Ok(reloaded)
     }
 
     fn reload_label(&self) -> &'static str {
@@ -2015,7 +2098,9 @@ impl ReloadStrategy for AndroidSession {
         ]
     }
 
-    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
+    /// A build that failed reports no errors: this run does not read cargo's messages for the
+    /// Android target.
+    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<Reloaded> {
         let Some(apk) = self.build()? else {
             if !self.hot_reload {
                 return Err(CliError::BuildFailed {
@@ -2023,24 +2108,24 @@ impl ReloadStrategy for AndroidSession {
                     details: "native compilation or APK packaging failed".into(),
                 });
             }
-            return Ok(());
+            return Ok(Reloaded::Failed(Diagnostics::new()));
         };
         *child = Some(self.install_and_start(&apk)?);
-        Ok(())
+        Ok(Reloaded::applied(ReloadTier::ProcessRestart))
     }
 
-    fn on_change(&mut self, _paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
+    fn on_change(
+        &mut self,
+        _paths: &[PathBuf],
+        child: &mut Option<AppChild>,
+    ) -> CliResult<Reloaded> {
         stop_and_report(child);
         ui::step("Rebuilding...")?;
-        self.build_and_spawn(child)?;
-        ui::emit(
-            "run.reload",
-            &serde_json::json!({ "kind": "restart", "ok": child.is_some() }),
-        );
+        let reloaded = self.build_and_spawn(child)?;
         if child.is_none() {
             ui::warning("Build failed. Watching for changes... (fix errors and save to retry)")?;
         }
-        Ok(())
+        Ok(reloaded)
     }
 
     fn reload_label(&self) -> &'static str {
@@ -2189,9 +2274,11 @@ impl ReloadStrategy for WorkerHost {
         paths
     }
 
-    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
+    /// A build that failed reports no errors: this run does not read cargo's messages for a
+    /// worker and its host.
+    fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<Reloaded> {
         if !self.build_both() {
-            return Ok(());
+            return Ok(Reloaded::Failed(Diagnostics::new()));
         }
         let staged = self.publish()?;
         let host = self.spawn_host(&staged)?;
@@ -2205,10 +2292,14 @@ impl ReloadStrategy for WorkerHost {
             style(staged.display()).dim()
         ))?;
         *child = Some(host);
-        Ok(())
+        Ok(Reloaded::applied(ReloadTier::ProcessRestart))
     }
 
-    fn on_change(&mut self, paths: &[PathBuf], child: &mut Option<AppChild>) -> CliResult<()> {
+    fn on_change(
+        &mut self,
+        paths: &[PathBuf],
+        child: &mut Option<AppChild>,
+    ) -> CliResult<Reloaded> {
         let types_changed = self
             .types_src()
             .is_some_and(|types| paths.iter().any(|p| p.starts_with(&types)));
@@ -2216,15 +2307,11 @@ impl ReloadStrategy for WorkerHost {
         if types_changed {
             ui::step("Types changed — rebuilding host (hot restart)...")?;
             stop_and_report(child);
-            self.build_and_spawn(child)?;
-            ui::emit(
-                "run.reload",
-                &serde_json::json!({ "kind": "restart", "ok": child.is_some() }),
-            );
+            let reloaded = self.build_and_spawn(child)?;
             if child.is_none() {
                 ui::warning("Build failed — fix errors and save to retry")?;
             }
-            return Ok(());
+            return Ok(reloaded);
         }
 
         ui::step("Rebuilding worker (state preserved in host)...")?;
@@ -2234,37 +2321,24 @@ impl ReloadStrategy for WorkerHost {
         // host's. The host itself is unchanged and therefore not relinked.
         if !self.build_both() {
             ui::warning("Worker build failed — fix errors and save to retry")?;
-            ui::emit(
-                "run.reload",
-                &serde_json::json!({ "kind": "hot", "ok": false }),
-            );
-            return Ok(());
+            return Ok(Reloaded::Failed(Diagnostics::new()));
         }
         let staged = self.publish()?;
         // A host that exited while the worker built is reported as that exit,
         // and one that cannot be polled is stopped, so a successor never runs
         // beside it.
         let host_alive = matches!(child.as_mut().map(|host| host.try_wait()), Some(Ok(None)));
-        if !host_alive {
-            stop_and_report(child);
-        }
         if host_alive {
-            // The host's artifact watcher wakes it for the new worker.
+            // The host's artifact watcher wakes it for the new worker: the build is handed to
+            // the running host, which reports nothing back yet (ADR-0393 §3).
             ui::success("Worker rebuilt — the running host is reloading it")?;
-            ui::emit(
-                "run.reload",
-                &serde_json::json!({ "kind": "hot", "ok": true, "worker": staged }),
-            );
-        } else {
-            let host = self.spawn_host(&staged)?;
-            announce_started(&host, "Host restarted");
-            *child = Some(host);
-            ui::emit(
-                "run.reload",
-                &serde_json::json!({ "kind": "restart", "ok": true }),
-            );
+            return Ok(Reloaded::applied(ReloadTier::Reassemble));
         }
-        Ok(())
+        stop_and_report(child);
+        let host = self.spawn_host(&staged)?;
+        announce_started(&host, "Host restarted");
+        *child = Some(host);
+        Ok(Reloaded::applied(ReloadTier::ProcessRestart))
     }
 
     fn reload_label(&self) -> &'static str {

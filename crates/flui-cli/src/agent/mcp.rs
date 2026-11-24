@@ -12,6 +12,10 @@
 //! | `flui_act` | `semantics.act` | performs an advertised action on an element |
 //! | `flui_wait` | `wait.until` | holds out until a condition holds or its timeout passes |
 //! | `flui_motion` | `motion.set` | reads, pauses or steps the animation clock |
+//! | `flui_reload` | `run.reload` | rebuilds the app and applies the build, through the `flui run` that started it |
+//!
+//! `run.reload` is the run's, not the app's (ADR-0401): it goes to the run endpoint the session
+//! file names, over a connection of its own, which outlives the process a restart replaces.
 //!
 //! A tool that takes a `window` may leave it out when the app has exactly one.
 //! Each call's parameters are checked against the method's parameter type
@@ -27,12 +31,12 @@
 //! transport). Nothing but protocol goes to stdout.
 
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flui_protocol::method::{
-    Addressed, Method, MotionSet, SemanticsAct, SemanticsLocate, SemanticsRead, WaitUntil,
-    WindowsList,
+    Addressed, Method, MotionSet, RunReload, SemanticsAct, SemanticsLocate, SemanticsRead,
+    ServedBy, WaitUntil, WindowsList,
 };
 use flui_protocol::session::ClientRole;
 use serde::Serialize;
@@ -50,6 +54,11 @@ const PROTOCOL_VERSIONS: [&str; 3] = ["2025-06-18", "2025-03-26", "2024-11-05"];
 /// yet (still building, or restarting).
 const CONNECT_WAIT: Duration = Duration::from_secs(10);
 
+/// How long a reload may take before its call times out: a build of a workspace whose
+/// dependencies changed can take minutes. One that times out may have run, and is not sent
+/// again (`run.reload` is destructive).
+const RELOAD_WAIT: Duration = Duration::from_secs(600);
+
 const INSTRUCTIONS: &str = "\
 Drives a running FLUI app through its accessibility tree. Start the app with \
 `flui run --agent`, then: flui_windows lists its windows; flui_read returns a \
@@ -59,7 +68,9 @@ state) matches; flui_act performs one of those actions on a handle. A handle \
 is valid for the window and tree that reported it: read again after the app \
 changes. After an action, flui_wait holds out until something appears, goes, \
 matches or the window settles, instead of reading in a loop. flui_motion \
-pauses or steps the animation clock so a read sees a settled frame. A \
+pauses or steps the animation clock so a read sees a settled frame. After an \
+edit to the app's sources, flui_reload rebuilds it and says whether the build \
+failed and why. A \
 failure carries a stable `code` and a `retry` hint; \
 `busy` and `timeout` with retry `soon` are worth repeating.";
 
@@ -227,6 +238,18 @@ fn tools() -> Value {
                 "additionalProperties": false
             },
             "annotations": { "readOnlyHint": false, "idempotentHint": false },
+        },
+        {
+            "name": "flui_reload",
+            "description": "Rebuild the app from its sources and apply the build, through the `flui run --agent` that started it. Absent `at_least`, the run places the reload; `restart` and `process_restart` start the app again, losing its state. The reply is the outcome, `applied` with the tier or `failed` with the compiler's errors (the running app is then left as it was), and `elapsed_ms`. Read the app again after it: handles from before a restart are gone.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "at_least": { "type": "string", "enum": ["reassemble", "restart", "process_restart"], "description": "The cheapest tier the reload may apply." }
+                },
+                "additionalProperties": false
+            },
+            "annotations": { "readOnlyHint": false, "destructiveHint": true, "idempotentHint": false },
         }
     ])
 }
@@ -281,6 +304,10 @@ fn call_tool(params: &Value, agent: &mut impl Agent) -> Result<Value, (i32, Stri
             let request = picked(args, &["rate", "step_ms"]);
             send::<MotionSet>(agent, json!({ "window": window, "request": request }))
         }),
+        "flui_reload" => {
+            let params = picked(args, &["at_least"]);
+            checked_send::<RunReload>(agent, params, |_| RELOAD_WAIT)
+        }
         other => return Err((-32602, format!("unknown tool: {other}"))),
     };
     Ok(tool_result(outcome))
@@ -408,11 +435,14 @@ fn tool_result(outcome: Result<Value, Failure>) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
 }
 
-/// The running app, found and connected on demand.
+/// The running app, found and connected on demand, and the `flui run` that started it.
 pub(crate) struct Live {
     /// A session file named with `--session`, which wins over discovery.
     session: Option<PathBuf>,
+    /// The app's endpoint.
     connection: Option<Connection>,
+    /// The run endpoint, for what the table marks [`ServedBy::Supervisor`].
+    run: Option<Connection>,
 }
 
 impl Live {
@@ -420,38 +450,35 @@ impl Live {
         Self {
             session,
             connection: None,
+            run: None,
         }
-    }
-
-    fn connect(&self) -> Result<Connection, Failure> {
-        let credentials = Credentials::find(self.session.as_deref()).map_err(Failure::Transport)?;
-        Connection::connect(&credentials, ClientRole::Driver, CONNECT_WAIT).map_err(|why| {
-            Failure::Transport(format!(
-                "{why}. Is the app running? Start it with `flui run --agent`."
-            ))
-        })
     }
 }
 
 impl Agent for Live {
     fn call(&mut self, method: &str, params: Value, holds: Duration) -> Result<Value, Failure> {
+        let to_run = flui_protocol::method::find(method)
+            .is_some_and(|row| row.served_by == ServedBy::Supervisor);
+        let session = self.session.as_deref();
+        let slot = if to_run {
+            &mut self.run
+        } else {
+            &mut self.connection
+        };
         // Once more when the connection broke: the app may have restarted
         // since the last call and left a dead socket behind. A request that
         // never reached it goes again; one that did, only when it `may_resend`.
         let may_resend = resendable(method);
         for attempt in 0..2 {
-            if self.connection.is_none() {
-                self.connection = Some(self.connect()?);
+            if slot.is_none() {
+                *slot = Some(connect(session, to_run)?);
             }
-            let connection = self
-                .connection
-                .as_mut()
-                .expect("BUG: connected one line above");
+            let connection = slot.as_mut().expect("BUG: connected one line above");
             match connection.request(method, params.clone(), holds) {
-                Err(Failure::Unsent(_)) if attempt == 0 => self.connection = None,
-                Err(Failure::Transport(_)) if attempt == 0 && may_resend => self.connection = None,
+                Err(Failure::Unsent(_)) if attempt == 0 => *slot = None,
+                Err(Failure::Transport(_)) if attempt == 0 && may_resend => *slot = None,
                 Err(failure @ (Failure::Transport(_) | Failure::Unsent(_))) => {
-                    self.connection = None;
+                    *slot = None;
                     return Err(failure);
                 }
                 other => return other,
@@ -459,6 +486,28 @@ impl Agent for Live {
         }
         unreachable!("BUG: the second attempt returns")
     }
+}
+
+/// A connection to the app `session` (or discovery) names, or to the run that started it when
+/// `to_run`.
+fn connect(session: Option<&Path>, to_run: bool) -> Result<Connection, Failure> {
+    let mut credentials = Credentials::find(session).map_err(Failure::Transport)?;
+    if to_run {
+        let Some(run) = credentials.run.take() else {
+            return Err(Failure::Wire(json!({
+                "code": "not_supported",
+                "message": "the app was not started by a `flui run --agent` that rebuilds it, \
+                            so nothing serves a reload",
+                "retry": "never",
+            })));
+        };
+        credentials.endpoint = super::Endpoint::Local(run);
+    }
+    Connection::connect(&credentials, ClientRole::Driver, CONNECT_WAIT).map_err(|why| {
+        Failure::Transport(format!(
+            "{why}. Is the app running? Start it with `flui run --agent`."
+        ))
+    })
 }
 
 /// Whether a call of `method` that reached the app before its connection broke may go again on a
@@ -499,6 +548,7 @@ mod tests {
             ),
             token: "0123456789abcdef0123456789abcdef".into(),
             pid: 0,
+            run: None,
         };
         std::fs::write(&session, serde_json::to_vec(&credentials).expect("json"))
             .expect("the session file");
@@ -585,6 +635,88 @@ mod tests {
         assert!(
             !resendable("no.such_method"),
             "nor what the table does not know"
+        );
+    }
+
+    /// `flui_reload` checks its tier and waits as long as a build may take; the run, not the
+    /// app, answers it.
+    #[test]
+    fn a_reload_asks_the_run_with_its_tier_and_waits_for_the_build() {
+        let mut agent = Canned::with_windows(&["w1"]);
+        let reply = call(
+            &mut agent,
+            "flui_reload",
+            json!({ "at_least": "process_restart" }),
+        );
+        assert_eq!(reply["result"]["isError"], false, "{reply}");
+        assert_eq!(
+            agent.asked,
+            [(
+                "run.reload".to_owned(),
+                json!({ "at_least": "process_restart" })
+            )]
+        );
+        assert_eq!(agent.held, [RELOAD_WAIT]);
+
+        let refused = call(&mut agent, "flui_reload", json!({ "at_least": "hot" }));
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        assert_eq!(agent.asked.len(), 1, "an unknown tier is not sent");
+    }
+
+    /// A call the table marks `supervisor` goes to the run endpoint the session file names, and
+    /// a session that names none answers `not_supported` without connecting anywhere.
+    #[test]
+    fn a_reload_goes_to_the_run_the_session_file_names() {
+        use crate::agent::supervisor::RunEndpoint;
+        use flui_protocol::reload::{ReloadReport, ReloadTier, Reloaded};
+
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let token = "0123456789abcdef0123456789abcdef".to_owned();
+        let endpoint = RunEndpoint::start(token.clone()).expect("the run endpoint");
+        let session = dir.path().join("flui-agent.json");
+        let mut credentials = Credentials {
+            // Nothing listens here: a call that went to the app would fail to connect.
+            endpoint: super::super::Endpoint::Local(
+                dir.path()
+                    .join("gone.sock")
+                    .to_str()
+                    .expect("UTF-8")
+                    .to_owned(),
+            ),
+            token,
+            pid: 0,
+            run: Some(endpoint.address().to_owned()),
+        };
+        std::fs::write(&session, serde_json::to_vec(&credentials).expect("json"))
+            .expect("the session file");
+        let report = ReloadReport::new(Reloaded::applied(ReloadTier::Reassemble), 7);
+        let answered = report.clone();
+        let run = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(request) = endpoint.next_request() {
+                    request.answer(&answered);
+                    return endpoint;
+                }
+                assert!(std::time::Instant::now() < deadline, "no reload arrived");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+        let mut live = Live::new(Some(session.clone()));
+        let outcome = live.call("run.reload", json!({}), Duration::from_secs(10));
+        drop(run.join().expect("the run"));
+        assert_eq!(
+            outcome.expect("the run answered"),
+            serde_json::to_value(&report).expect("json")
+        );
+
+        credentials.run = None;
+        std::fs::write(&session, serde_json::to_vec(&credentials).expect("json"))
+            .expect("the session file");
+        let outcome = Live::new(Some(session)).call("run.reload", json!({}), Duration::ZERO);
+        assert!(
+            matches!(&outcome, Err(Failure::Wire(error)) if error["code"] == "not_supported"),
+            "{outcome:?}"
         );
     }
 
@@ -686,7 +818,8 @@ mod tests {
                 "flui_locate",
                 "flui_act",
                 "flui_wait",
-                "flui_motion"
+                "flui_motion",
+                "flui_reload"
             ]
         );
 

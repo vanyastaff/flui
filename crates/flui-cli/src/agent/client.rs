@@ -529,6 +529,7 @@ mod tests {
             endpoint: Endpoint::Local(socket.to_str().expect("a UTF-8 path").to_owned()),
             token: "0123456789abcdef0123456789abcdef".into(),
             pid: 0,
+            run: None,
         };
         let app = std::thread::spawn(move || {
             let (stream, _) = listener.accept().expect("accept");
