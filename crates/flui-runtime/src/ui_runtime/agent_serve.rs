@@ -381,7 +381,6 @@ macro_rules! not_answered {
 }
 
 not_answered!(
-    AuditA11y,
     CapturePresented,
     CaptureRendered,
     ElementDoubleTap,
@@ -395,8 +394,6 @@ not_answered!(
     ElementSwipe,
     ElementTap,
     ElementTypeText,
-    PerfStart,
-    PerfStop,
 );
 
 impl Serve for method::WindowPlacement {
