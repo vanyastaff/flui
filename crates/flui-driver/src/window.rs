@@ -229,7 +229,8 @@ impl<'d> Window<'d> {
     ///
     /// The two trees are of one revision of the app's tree, on every lane. The app's tree is read,
     /// then the OS tree, then the app's revision again; a tree that moved in between is read
-    /// again, and so is a match the lane could not make (`NotFound`, `Ambiguous`) while it moved.
+    /// again, and so is a match the lane could not make (`NotFound`, `Ambiguous`) while it moved;
+    /// any other failure of the lane (a refusal, its own `Busy`) is the answer, after one reading.
     /// The reading is made at least three times and until two seconds have passed since the first
     /// reading ended, since one reading through a device's lane can take longer than that; a tree
     /// that moved on every one of them answers [`Error::Busy`](crate::Error::Busy) with

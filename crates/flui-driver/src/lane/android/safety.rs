@@ -15,9 +15,11 @@
 //!   the navigation bar's buttons there, back from the sides). The rule reads where the press
 //!   goes down, since that is where the system decides.
 //!
-//! Before every press, key and text the app's window must hold the input focus
+//! Before every press, key, text and scroll the app's window must hold the input focus
 //! ([`check_focus`]): a press with the shade, the lock screen or another app in front lands
-//! there, and the window holding it must be the one the lane located, by its hash. The read of the
+//! there. The lane also holds it to the window it located, compared by hash, frame and rotation:
+//! another window of the app's title is not in front, and the same window moved or turned is
+//! busy until the lane locates it again. The read of the
 //! tree takes a `uiautomator dump`, which suspends every accessibility service while it runs
 //! (TalkBack, Voice Access and Switch Access among them), so it is refused while one runs
 //! ([`check_dump`]); locating the window, input and capture take no dump.

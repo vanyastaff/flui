@@ -13,8 +13,9 @@
 //! - **Fidelity.** Order only: Android resamples moves, and each command is its own process, so
 //!   the timing between events is not the sequence's.
 //! - **Safety.** Before a sequence, `Lane::check` refuses what leaves the app or changes the device
-//!   ([`safety`]); before each press, key, text and scroll, the app's window must hold the input
-//!   focus. What the lane holds is released on every exit ([`held`]), and what stays held is named
+//!   ([`safety`]); before each press, key, text and scroll, one `dumpsys window` must show the
+//!   window the lane located holding the input focus, by its hash, at the frame and turn the lane
+//!   located it at. What the lane holds is released on every exit ([`held`]), and what stays held is named
 //!   ([`crate::Error::ReleaseFailed`]).
 //! - **Isolation.** An emulator is isolated: nobody holds it. A device is someone's, so it runs
 //!   guarded: `getevent` watched for input from any device but the lane's own ([`guard`]).
@@ -413,16 +414,7 @@ impl AndroidLane {
     /// accessibility is read, so no accessibility service is paused: input and capture go on
     /// whatever services run.
     fn find(&mut self, placement: &Placement) -> Result<Screen> {
-        let run = Run {
-            limit: device::MAX_WINDOWS_REPLY,
-            ..DATA
-        };
-        let printed = run_shell(self.adb.as_mut(), device::WINDOWS, run)?.text();
-        let windows = device::parse_windows(&printed)
-            .map_err(|why| lane_error(format!("`dumpsys window` answered no windows: {why}")))?;
-        let focus = windows.focus.as_ref();
-        safety::check_focus(focus.map(|name| name.title.as_str()), &self.package)
-            .map_err(Refusal::into_error)?;
+        let windows = self.read_windows()?;
         if let Some(window) = windows.focused_window()
             && window.display != Some(device::DEFAULT_DISPLAY)
         {
@@ -462,30 +454,51 @@ impl AndroidLane {
         Ok(screen)
     }
 
-    /// The safety rule before a command that acts on the app: its window holds the focus, and,
-    /// once the lane has located the window, it is that window by its hash, the rule
-    /// [`Self::find`] locates it by: a window of the same title (an activity's window leaving as
-    /// it is started again, split screen) is another window, at another place.
+    /// Where the windows are, from one `dumpsys window` ([`device::WINDOWS`]), whose focused
+    /// window must be the app's.
+    fn read_windows(&mut self) -> Result<device::Windows> {
+        let run = Run {
+            limit: device::MAX_WINDOWS_REPLY,
+            ..DATA
+        };
+        let printed = run_shell(self.adb.as_mut(), device::WINDOWS, run)?.text();
+        let windows = device::parse_windows(&printed)
+            .map_err(|why| lane_error(format!("`dumpsys window` answered no windows: {why}")))?;
+        let focus = windows.focus.as_ref();
+        safety::check_focus(focus.map(|name| name.title.as_str()), &self.package)
+            .map_err(Refusal::into_error)?;
+        Ok(windows)
+    }
+
+    /// The safety rule before a command that acts on the app, from one reading of the windows:
+    /// its window holds the focus, and, once the lane has located the window, the reading shows
+    /// the [`Screen`] the lane located. A window of the same title (an activity's window leaving
+    /// as it is started again, split screen) is another window, so the app is not in front; the
+    /// same window moved, resized or turned would take the command at another place than the
+    /// lane computed it for, so it is busy until the lane locates it again.
     fn check_focus(&mut self) -> Result<()> {
-        let printed = run_shell(self.adb.as_mut(), device::FOCUS, DATA)?.text();
-        let focus = device::parse_focus(&printed);
-        safety::check_focus(
-            focus.as_ref().map(|name| name.title.as_str()),
-            &self.package,
-        )
-        .map_err(Refusal::into_error)?;
-        match (&self.screen, focus) {
-            (Some(located), Some(focus)) if focus.hash != located.window => {
-                Err(Refusal::NotForeground {
-                    focus: Some(format!(
-                        "{} as window {}, not window {}, the one the lane located",
-                        focus.title, focus.hash, located.window
-                    )),
-                }
-                .into_error())
+        let windows = self.read_windows()?;
+        let (Some(located), Some(focus)) = (&self.screen, &windows.focus) else {
+            return Ok(());
+        };
+        if focus.hash != located.window {
+            return Err(Refusal::NotForeground {
+                focus: Some(format!(
+                    "{} as window {}, not window {}, the one the lane located",
+                    focus.title, focus.hash, located.window
+                )),
             }
-            _ => Ok(()),
+            .into_error());
         }
+        let surface = windows.focused_frame();
+        if surface != Some(located.surface) || windows.rotation != located.rotation {
+            return Err(Error::busy(format!(
+                "the app's window {} moved or the display turned since the {LANE} lane located \
+                 it (at {:?} turned {} then, at {surface:?} turned {} now): locate it again",
+                located.window, located.surface, located.rotation, windows.rotation
+            )));
+        }
+        Ok(())
     }
 
     /// Send `command`, recording what the device took.

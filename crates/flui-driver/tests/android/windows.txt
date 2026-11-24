@@ -1,5 +1,9 @@
+WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
   Display: mDisplayId=0 (organized) rootTasks=2 mUserId=0
+    mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}
     mRotation=0 mDeferredRotationPauseCount=0
+WINDOW MANAGER TOKENS (dumpsys window tokens)
+WINDOW MANAGER WINDOWS (dumpsys window windows)
   Window #0 Window{3c2b1a9 u0 NavigationBar0}:
     mDisplayId=0 rootTaskId=1 mSession=Session{5d4c3b2 1234:u0a10123} mClient=android.os.BinderProxy@6a1b2c3
     Frames: parent=[0,2337][1080,2400] display=[-10000,-10000][10000,10000] frame=[0,2337][1080,2400] last=[0,2337][1080,2400] insetsChanged=false
@@ -15,4 +19,4 @@
   Window #4 Window{1a2b3c4 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}:
     mDisplayId=0 rootTaskId=1 mSession=Session{1f2e3d4 2345:u0a10100} mClient=android.os.BinderProxy@ae5f6a7
     Frames: parent=[0,0][1080,2400] display=[0,0][1080,2400] frame=[0,0][1080,2400] last=[0,0][1080,2400] insetsChanged=false
-  mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}
+  mRotation=0
