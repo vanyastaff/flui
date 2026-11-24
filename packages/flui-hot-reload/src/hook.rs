@@ -249,8 +249,19 @@ impl Drop for ArtifactWatcher {
         // Signal first, then join: the thread sleeps one interval at a time,
         // so the join is bounded by it.
         self.stop.store(true, Ordering::Release);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+        if let Some(handle) = self.handle.take()
+            && let Err(payload) = handle.join()
+        {
+            // The thread's `tracing` events are user code. A panic in one
+            // ended the watching early; its payload is destroyed contained,
+            // so detaching still finishes.
+            tracing::warn!(
+                panic = flui_sdk::foundation::panic::payload_text(payload.as_ref())
+                    .unwrap_or("a payload that is not text"),
+                "hot reload: the worker watcher had stopped on a panic; edits were picked up \
+                 only at frame boundaries"
+            );
+            flui_sdk::foundation::panic::discard_payload(payload);
         }
     }
 }
