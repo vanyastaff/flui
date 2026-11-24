@@ -37,11 +37,11 @@ use std::io::{self, ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use flui_platform::SystemFailure;
 use flui_platform::capability::{CompletionSource, Resolver};
-use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
-use super::{DialogError, FileDialogCapability, SaveLocation, SaveResult};
-use crate::off_owner::{NotRun, OffOwner};
+use super::{DialogError, SaveLocation, SaveResult, off_owner_refusal};
+use crate::off_owner::OffOwner;
 
 /// Write `contents` to `path` on a thread of its own, holding one of the
 /// runtime's off-owner places, then answer `caller` with `location`, or with
@@ -76,19 +76,6 @@ pub(super) fn write_file(
     off_owner.run("flui-system-save", answer, off_owner_refusal, move || {
         write_replacing(&path, &contents).map_err(|error| write_failure(&error))
     });
-}
-
-/// What a dialog answers a piece of its work that no thread took: a save's
-/// write, an Android picker's read.
-pub(crate) fn off_owner_refusal<T>(reason: NotRun) -> Result<T, DialogError> {
-    Err(match reason {
-        NotRun::Busy => DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(
-            UnsupportedReason::Unavailable,
-        )),
-        NotRun::NoThread(code) => {
-            DialogError::Failed(code.map_or(SystemFailure::MalformedAnswer, SystemFailure::Os))
-        }
-    })
 }
 
 /// How many names beside the chosen file a save tries for its new file

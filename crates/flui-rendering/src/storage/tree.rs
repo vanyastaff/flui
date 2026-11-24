@@ -269,8 +269,7 @@ impl RenderTree {
     /// parent link into construction (`RenderNode::new_*_with_parent`), so
     /// they do not need this. This primitive is for the shape
     /// `RenderBehavior::on_mount` needs instead: the `RenderObject` is
-    /// minted with [`insert_box`](Self::insert_box) /
-    /// [`insert_sliver`](Self::insert_sliver) — no parent yet, because the
+    /// minted with [`insert`](Self::insert) — no parent yet, because the
     /// element does not know its render parent until after the object
     /// exists — and is adopted under its parent as a second step. Before
     /// this primitive existed, every such call site wrote `set_parent` and
