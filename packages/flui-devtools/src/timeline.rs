@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_devtools::timeline::{EventCategory, Timeline};
+//! use flui_devtools::{EventCategory, Timeline};
 //!
 //! let mut timeline = Timeline::new();
 //!
@@ -163,7 +163,7 @@ pub struct TimelineEvent {
     #[serde(skip, default = "current_thread_id")]
     pub thread_id: std::thread::ThreadId,
     /// The UI runtime that drove the frame this event is part of, as its packed id, when the
-    /// event came from a [`Capture`](crate::capture::Capture). Manual events carry none.
+    /// event came from a [`Capture`](crate::Capture). Manual events carry none.
     #[serde(default)]
     pub runtime: Option<u64>,
     /// The presentation the event ran for, as its packed id, when it ran for one.
@@ -354,7 +354,7 @@ pub struct Timeline {
     inner: Arc<Mutex<TimelineInner>>,
     /// The capture of framework spans this timeline is a view over, if any.
     #[cfg(feature = "profiling")]
-    capture: Option<crate::capture::Capture>,
+    capture: Option<crate::Capture>,
 }
 
 impl Timeline {
@@ -384,7 +384,7 @@ impl Timeline {
     /// timeline keeps no copy of them.
     #[cfg(feature = "profiling")]
     #[must_use]
-    pub fn over(capture: &crate::capture::Capture) -> Self {
+    pub fn over(capture: &crate::Capture) -> Self {
         Self {
             inner: Arc::new(Mutex::new(TimelineInner::starting_at(
                 10_000,
@@ -402,7 +402,7 @@ impl Timeline {
     /// # Example
     ///
     /// ```rust
-    /// # use flui_devtools::timeline::{Timeline, EventCategory};
+    /// # use flui_devtools::{Timeline, EventCategory};
     /// # let timeline = Timeline::new();
     /// {
     ///     let _guard = timeline.record_event("My Operation", EventCategory::Custom);
@@ -604,7 +604,7 @@ impl Timeline {
     /// # Example
     ///
     /// ```rust
-    /// # use flui_devtools::timeline::Timeline;
+    /// # use flui_devtools::Timeline;
     /// # let timeline = Timeline::new();
     /// let json = timeline.export_chrome_trace();
     /// // std::fs::write("trace.json", &json)?;
@@ -804,7 +804,7 @@ fn captured_event(span: &crate::capture::CapturedSpan) -> TimelineEvent {
 #[cfg(all(test, feature = "profiling"))]
 mod tests {
     use super::*;
-    use crate::capture::Capture;
+    use crate::Capture;
     use tracing::dispatcher::Dispatch;
     use tracing_subscriber::layer::SubscriberExt as _;
 

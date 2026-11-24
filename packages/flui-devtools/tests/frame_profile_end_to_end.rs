@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_devtools::profiler::{FramePhase, FrameStats};
+use flui_devtools::{FramePhase, FrameStats};
 use flui_devtools::{FrameTimingLayer, Profiler};
 use flui_objects::RenderSizedBox;
 use flui_sdk::animation::Vsync;
@@ -724,7 +724,7 @@ fn animation_phase_names_and_inclusive_extents_are_respected() {
 
 #[cfg(feature = "timeline")]
 fn a_guard_before_clear_cannot_update_a_new_event() {
-    use flui_devtools::timeline::{EventCategory, Timeline};
+    use flui_devtools::{EventCategory, Timeline};
     let timeline = Timeline::new();
     let old = timeline.record_event("old", EventCategory::Custom);
     timeline.clear();
@@ -745,7 +745,7 @@ fn a_guard_before_clear_cannot_update_a_new_event() {
 
 #[cfg(feature = "timeline")]
 fn a_guard_after_clear_updates_its_own_event() {
-    use flui_devtools::timeline::{EventCategory, Timeline};
+    use flui_devtools::{EventCategory, Timeline};
     let timeline = Timeline::new();
     timeline.record_instant("old", EventCategory::Custom);
     timeline.clear();
@@ -760,7 +760,7 @@ fn a_guard_after_clear_updates_its_own_event() {
 
 #[cfg(feature = "timeline")]
 fn completed_event_duration_preserves_large_values() {
-    use flui_devtools::timeline::{EventCategory, Timeline};
+    use flui_devtools::{EventCategory, Timeline};
     let timeline = Timeline::new();
     let duration = Duration::new(18_446_744_073_710, 123_456_000);
     timeline.record_completed_event(
@@ -778,7 +778,7 @@ fn completed_event_duration_preserves_large_values() {
 
 #[cfg(feature = "timeline")]
 fn run_reentrant_name_case(kind: &str) {
-    use flui_devtools::timeline::{EventCategory, Timeline};
+    use flui_devtools::{EventCategory, Timeline};
     struct Name(Timeline);
     impl From<Name> for String {
         fn from(name: Name) -> Self {
@@ -994,7 +994,7 @@ fn a_real_frame_is_judged_against_the_period_its_scheduler_reports() {
 /// `presentation` span, because every span would then fall into the unknown partition.
 #[cfg(feature = "timeline")]
 fn a_real_runtime_frame_is_partitioned_and_exported() {
-    use flui_devtools::timeline::Timeline;
+    use flui_devtools::Timeline;
     use flui_devtools::{Capture, Phase};
     use flui_sdk::animation::Vsync;
     use flui_sdk::rendering::BoxConstraints;

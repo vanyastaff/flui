@@ -226,7 +226,7 @@ devtools type above them in the DAG.
 cost by not depending on the crate) pulls in `tracing` and names only the seam, as
 `flui_sdk::foundation::observe`. Devtools depends on `flui-sdk`, not on `flui-foundation` alone
 (amended by ADR-0088): the SDK's closure holds the tree stack, but the inspector's code and
-public surface name nothing from it. It compiles for `wasm32-unknown-unknown`. `flui_devtools::inspector::InspectorCounters`
+public surface name nothing from it. It compiles for `wasm32-unknown-unknown`. `flui_devtools::InspectorCounters`
 is a counting/logging observer over private atomics; `snapshot()` returns an `InspectorSnapshot`
 (`mounts`, `unmounts`, `rebuilds`, `moves`, `rebuilds_for(RebuildReason)`, `is_final()`). Each
 counter is individually monotonic; cross-counter consistency within a snapshot is not guaranteed.

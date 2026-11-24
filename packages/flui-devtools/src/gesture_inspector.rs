@@ -15,7 +15,7 @@
 //! seam allocates nothing while no observer is registered.
 //!
 //! ```
-//! use flui_devtools::gesture_inspector::GestureInspector;
+//! use flui_devtools::GestureInspector;
 //! use flui_sdk::interaction::GestureArena;
 //!
 //! let arena = GestureArena::new();

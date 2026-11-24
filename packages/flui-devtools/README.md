@@ -96,7 +96,7 @@ reads the profile back.
 ## Timeline
 
 ```rust
-use flui_devtools::timeline::{EventCategory, Timeline};
+use flui_devtools::{EventCategory, Timeline};
 
 let timeline = Timeline::new();
 {
@@ -121,7 +121,7 @@ out yet (ADR-0088, move 4, names the follow-up).
 ```rust
 use std::sync::Arc;
 
-use flui_devtools::inspector::InspectorCounters;
+use flui_devtools::InspectorCounters;
 use flui_sdk::foundation::observe::TreeObserver;
 
 let counters = Arc::new(InspectorCounters::new());

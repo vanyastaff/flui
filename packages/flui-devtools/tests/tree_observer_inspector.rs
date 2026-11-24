@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use flui_devtools::inspector::InspectorCounters;
+use flui_devtools::InspectorCounters;
 use flui_objects::RenderSizedBox;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
 use flui_sdk::foundation::observe::TreeObserver;

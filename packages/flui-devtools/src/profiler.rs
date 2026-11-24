@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_devtools::profiler::{FramePhase, Profiler};
+//! use flui_devtools::{FramePhase, Profiler};
 //!
 //! let mut profiler = Profiler::new();
 //!
@@ -452,7 +452,7 @@ impl Profiler {
     /// # Example
     ///
     /// ```rust
-    /// # use flui_devtools::profiler::{Profiler, FramePhase};
+    /// # use flui_devtools::{Profiler, FramePhase};
     /// # let profiler = Profiler::new();
     /// # profiler.begin_frame();
     /// {

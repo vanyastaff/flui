@@ -13,10 +13,10 @@
 //! # One recorder
 //!
 //! The layer is a [`CaptureLayer`] with the profiler as one reader of what it captures. It
-//! recognizes nothing itself: [`Phase::of`] says which spans are phases, and [`crate::capture`]
+//! recognizes nothing itself: [`Phase::of`] says which spans are phases, and [`Capture`]
 //! says how a span is measured, attributed to its frame, and partitioned by the runtime and
 //! presentation it ran for. [`FrameTimingLayer::over`] shares one [`Capture`] with a
-//! [`Timeline`](crate::timeline::Timeline) and the trace export, so every tool shows the same
+//! [`Timeline`](crate::Timeline) and the trace export, so every tool shows the same
 //! measurement.
 //!
 //! # What it listens to
@@ -24,9 +24,9 @@
 //! | span | opened by | phase |
 //! |------|-----------|-------|
 //! | `frame` | `UpdateScheduler::drive_frame` (`flui-scheduler`) | the frame itself; its `period_us` field is the display period the jank line follows, its `runtime` field the runtime that drove it |
-//! | `build` | `BuildOwner::build_scope` (`flui-view`) | [`Build`](crate::profiler::FramePhase::Build) |
-//! | `layout` | `PipelineOwner::run_layout` (`flui-rendering`) | [`Layout`](crate::profiler::FramePhase::Layout) |
-//! | `paint` | `PipelineOwner::run_paint` (`flui-rendering`) | [`Paint`](crate::profiler::FramePhase::Paint) |
+//! | `build` | `BuildOwner::build_scope` (`flui-view`) | [`Build`](crate::FramePhase::Build) |
+//! | `layout` | `PipelineOwner::run_layout` (`flui-rendering`) | [`Layout`](crate::FramePhase::Layout) |
+//! | `paint` | `PipelineOwner::run_paint` (`flui-rendering`) | [`Paint`](crate::FramePhase::Paint) |
 //! | `compositing`, `semantics`, `commit`, `submit` | the pipeline and the runtime | `Custom("Compositing")`, … |
 //! | `animation_tick`, `animation_sampling`, `animation_listeners` | `flui-animation` | `Custom("Animation tick")`, … |
 //!
@@ -92,12 +92,11 @@ use tracing_subscriber::filter::Filtered;
 use tracing_subscriber::layer::{Context, Layer};
 use tracing_subscriber::registry::LookupSpan;
 
-pub use crate::capture::FrameSpanFilter;
 use crate::capture::{Capture, CaptureLayer};
 use crate::profiler::{FramePhase, Profiler};
 
 /// Subscriber layer that turns the framework's frame spans into
-/// [frame statistics](crate::profiler::FrameStats).
+/// [frame statistics](crate::FrameStats).
 ///
 /// Install it on any `tracing_subscriber` registry:
 ///
@@ -131,7 +130,7 @@ impl FrameTimingLayer {
     }
 
     /// Like [`Self::new`], over a capture other readers share: the same measurement then feeds
-    /// the profiler, a [`Timeline`](crate::timeline::Timeline) and the trace export.
+    /// the profiler, a [`Timeline`](crate::Timeline) and the trace export.
     #[must_use]
     pub fn over<S>(
         capture: &Capture,
@@ -339,18 +338,16 @@ mod tests {
         flui_testing::log_capture::disarm_interest_cache();
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
             let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
-            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("app work")));
+            drop(profiler.profile_phase(crate::FramePhase::Custom("app work")));
             let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
         });
 
         let stats = profiler.frame_stats().expect("a frame was recorded");
         assert!(
-            stats
-                .phase(crate::profiler::FramePhase::Custom("app work"))
-                .is_some(),
+            stats.phase(crate::FramePhase::Custom("app work")).is_some(),
             "the hand-measured phase is kept: {stats:?}"
         );
-        assert!(stats.phase(crate::profiler::FramePhase::Paint).is_some());
+        assert!(stats.phase(crate::FramePhase::Paint).is_some());
     }
 
     /// This side of the wiring contract: the names this layer maps to phases.
@@ -498,7 +495,7 @@ mod tests {
             tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
         flui_testing::log_capture::disarm_interest_cache();
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("between frames")));
+            drop(profiler.profile_phase(crate::FramePhase::Custom("between frames")));
             let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
             let _paint = tracing::debug_span!(target: "flui.frame", "paint").entered();
         });
@@ -506,11 +503,11 @@ mod tests {
         let stats = profiler.frame_stats().expect("a frame was recorded");
         assert!(
             stats
-                .phase(crate::profiler::FramePhase::Custom("between frames"))
+                .phase(crate::FramePhase::Custom("between frames"))
                 .is_none(),
             "work done before the frame began is not the frame's: {stats:?}"
         );
-        assert!(stats.phase(crate::profiler::FramePhase::Paint).is_some());
+        assert!(stats.phase(crate::FramePhase::Paint).is_some());
     }
 
     /// A measurement taken between frames must not displace or merge with the ones taken inside
@@ -522,23 +519,21 @@ mod tests {
             tracing_subscriber::registry().with(FrameTimingLayer::new(Arc::clone(&profiler)));
         flui_testing::log_capture::disarm_interest_cache();
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
-            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("between frames")));
+            drop(profiler.profile_phase(crate::FramePhase::Custom("between frames")));
             let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
             for _ in 0..1000 {
-                drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("inside")));
+                drop(profiler.profile_phase(crate::FramePhase::Custom("inside")));
             }
         });
 
         let stats = profiler.frame_stats().expect("a frame was recorded");
         assert!(
             stats
-                .phase(crate::profiler::FramePhase::Custom("between frames"))
+                .phase(crate::FramePhase::Custom("between frames"))
                 .is_none()
         );
         assert!(
-            stats
-                .phase(crate::profiler::FramePhase::Custom("inside"))
-                .is_some(),
+            stats.phase(crate::FramePhase::Custom("inside")).is_some(),
             "{stats:?}"
         );
     }
@@ -564,7 +559,7 @@ mod tests {
                 runtime = followed.as_u64()
             )
             .entered();
-            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("followed work")));
+            drop(profiler.profile_phase(crate::FramePhase::Custom("followed work")));
             std::thread::scope(|scope| {
                 scope.spawn(|| {
                     tracing::dispatcher::with_default(&dispatch, || {
@@ -586,7 +581,7 @@ mod tests {
             .expect("the followed frame was recorded");
         assert!(
             stats
-                .phase(crate::profiler::FramePhase::Custom("followed work"))
+                .phase(crate::FramePhase::Custom("followed work"))
                 .is_some(),
             "{stats:?}"
         );
@@ -603,7 +598,7 @@ mod tests {
         let dispatch = Dispatch::new(subscriber);
         tracing::dispatcher::with_default(&dispatch, || {
             let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
-            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("admitted work")));
+            drop(profiler.profile_phase(crate::FramePhase::Custom("admitted work")));
             std::thread::scope(|scope| {
                 scope.spawn(|| {
                     tracing::dispatcher::with_default(&dispatch, || {
@@ -618,7 +613,7 @@ mod tests {
             .expect("the admitted frame was recorded");
         assert!(
             stats
-                .phase(crate::profiler::FramePhase::Custom("admitted work"))
+                .phase(crate::FramePhase::Custom("admitted work"))
                 .is_some(),
             "{stats:?}"
         );
@@ -634,12 +629,12 @@ mod tests {
         tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
             let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
             std::thread::sleep(std::time::Duration::from_millis(30));
-            drop(profiler.profile_phase(crate::profiler::FramePhase::Custom("late work")));
+            drop(profiler.profile_phase(crate::FramePhase::Custom("late work")));
         });
 
         let stats = profiler.frame_stats().expect("a frame was recorded");
         let late = stats
-            .phase(crate::profiler::FramePhase::Custom("late work"))
+            .phase(crate::FramePhase::Custom("late work"))
             .expect("the hand-measured phase is kept");
         assert!(
             late.start_offset >= std::time::Duration::from_millis(25),
