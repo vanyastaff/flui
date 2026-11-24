@@ -48,13 +48,13 @@ mod share;
 mod tests;
 
 #[cfg(target_arch = "wasm32")]
-pub(crate) use registration::register;
+pub(crate) use services::providers;
 
 #[cfg(target_arch = "wasm32")]
-mod registration {
+mod services {
     use std::rc::Rc;
 
-    use flui_platform::capability::{Capability, CapabilityRegistrar, ProviderContext};
+    use flui_platform::capability::{Capability, ProviderContext};
     use flui_platform::launch::{Launcher, LauncherCapability};
     use flui_platform::{Unsupported, UnsupportedReason};
 
@@ -64,14 +64,10 @@ mod registration {
     use super::message_box::WebMessageBoxes;
     use super::page::Page;
     use super::share::WebShare;
-    use crate::autostart::AutostartCapability;
     use crate::dialog::{FileDialogCapability, FileDialogs, MessageBoxCapability, MessageBoxes};
-    use crate::jump_list::JumpListCapability;
-    use crate::os::OsCapability;
+    use crate::providers::{Providers, Provision};
     use crate::share::{Share, ShareCapability};
-    use crate::shortcuts::GlobalShortcutCapability;
     use crate::taskbar::{TaskbarCapability, TaskbarEntry};
-    use crate::user_dirs::UserDirCapability;
 
     /// The page of the acquiring widget's window, refused as `C` with
     /// `NoWindow` when there is none.
@@ -83,50 +79,44 @@ mod registration {
             .ok_or(Unsupported::of::<C>(UnsupportedReason::NoWindow))
     }
 
-    /// Provide `C` as a refusal: a page has no such thing.
-    fn not_a_page<C: Capability>(registrar: &mut CapabilityRegistrar) {
-        registrar.provide::<C>(|_: &ProviderContext<'_>| {
-            Err::<C::Handle, _>(Unsupported::of::<C>(UnsupportedReason::NotOnThisPlatform))
-        });
-    }
-
-    /// Register the web providers of every service.
-    pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
-        registrar.provide::<LauncherCapability>(|ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(Launcher::new(
-                WebLauncher::new(page::<LauncherCapability>(ctx)?),
-                ctx,
-            ))
-        });
-        registrar.provide::<FileDialogCapability>(|ctx: &ProviderContext<'_>| {
-            FileDialogs::try_new(WebDialogs::new(page::<FileDialogCapability>(ctx)?), ctx)
-        });
-        registrar.provide::<MessageBoxCapability>(|ctx: &ProviderContext<'_>| {
-            MessageBoxes::try_new(
-                WebMessageBoxes::new(page::<MessageBoxCapability>(ctx)?),
-                ctx,
-            )
-        });
-        registrar.provide::<ShareCapability>(|ctx: &ProviderContext<'_>| {
-            Share::try_new(WebShare::try_new(page::<ShareCapability>(ctx)?)?, ctx)
-        });
-        registrar.provide::<TaskbarCapability>(|ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(TaskbarEntry::new(
-                WebBadge::try_new(&page::<TaskbarCapability>(ctx)?)?,
-                ctx,
-            ))
-        });
-        not_a_page::<AutostartCapability>(registrar);
-        not_a_page::<GlobalShortcutCapability>(registrar);
-        not_a_page::<UserDirCapability>(registrar);
-        not_a_page::<JumpListCapability>(registrar);
-        not_a_page::<OsCapability>(registrar);
-        // A browser's lasting access is a `FileSystemHandle` kept in the
-        // page's IndexedDB, an object and not bytes; no provider keeps one.
-        registrar.provide::<crate::grant::GrantCapability>(|_: &ProviderContext<'_>| {
-            Err::<crate::grant::Grants, _>(Unsupported::of::<crate::grant::GrantCapability>(
-                UnsupportedReason::NotYetOnThisHost,
-            ))
-        });
+    /// The web providers of the services a page has, and the refusals of the
+    /// others.
+    pub(crate) fn providers() -> Providers {
+        Providers {
+            launcher: Provision::provided(|ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(Launcher::new(
+                    WebLauncher::new(page::<LauncherCapability>(ctx)?),
+                    ctx,
+                ))
+            }),
+            file_dialogs: Provision::provided(|ctx: &ProviderContext<'_>| {
+                FileDialogs::try_new(WebDialogs::new(page::<FileDialogCapability>(ctx)?), ctx)
+            }),
+            message_boxes: Provision::provided(|ctx: &ProviderContext<'_>| {
+                MessageBoxes::try_new(
+                    WebMessageBoxes::new(page::<MessageBoxCapability>(ctx)?),
+                    ctx,
+                )
+            }),
+            share: Provision::provided(|ctx: &ProviderContext<'_>| {
+                Share::try_new(WebShare::try_new(page::<ShareCapability>(ctx)?)?, ctx)
+            }),
+            taskbar: Provision::provided(|ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(TaskbarEntry::new(
+                    WebBadge::try_new(&page::<TaskbarCapability>(ctx)?)?,
+                    ctx,
+                ))
+            }),
+            // A page has no autostart, global shortcut, user's folder, jump
+            // list or system information of its own.
+            autostart: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+            global_shortcuts: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+            user_dirs: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+            jump_list: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+            os: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+            // A browser's lasting access is a `FileSystemHandle` kept in the
+            // page's IndexedDB, an object and not bytes; no provider keeps one.
+            grants: Provision::Refused(UnsupportedReason::NotYetOnThisHost),
+        }
     }
 }

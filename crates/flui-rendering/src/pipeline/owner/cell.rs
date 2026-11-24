@@ -14,6 +14,7 @@ use std::{
     rc::Rc,
 };
 
+use flui_foundation::RenderId;
 use flui_foundation::inspect::{SnapshotError, SnapshotNode, SnapshotQuery};
 
 use flui_layer::LayerLink;
@@ -201,6 +202,79 @@ impl PipelineCell {
         if !Rc::ptr_eq(&owner.leader_watches, &self.0.leader_watches) {
             owner.leader_watches = Rc::clone(&self.0.leader_watches);
         }
+        result
+    }
+
+    /// Runs `f`, during which every
+    /// [`remove_render_object`](PipelineOwner::remove_render_object) of a
+    /// child of `parent` on this owner removes its subtree but leaves the
+    /// stale id in `parent`'s child list; when `f` returns, that list is
+    /// compacted once and `parent` marked. A reconcile that drops `k` of a
+    /// parent's `n` children pays `O(n + k)` for the list instead of `O(k·n)`.
+    /// A removal under any other parent writes its list at once.
+    ///
+    /// Until `f` returns `parent`'s list may name a removed node, which a
+    /// walk of the list must skip (`RenderTree::get` misses it). A batch for
+    /// the same parent nests, and the outermost compacts; one for another
+    /// parent while a batch is open, or one opened while the owner is checked
+    /// out (a build during layout), runs `f` unbatched. If `f` unwinds, the
+    /// batch stays open and the next
+    /// [`layout_pass`](PipelineOwner::layout_pass) closes it first, so no
+    /// frame lays out a list that names a removed node: correctness needs no
+    /// destructor.
+    pub fn with_batched_removals<R>(&self, parent: RenderId, f: impl FnOnce() -> R) -> R {
+        let opened = self
+            .0
+            .owner
+            .try_borrow_mut()
+            .is_ok_and(|mut owner| owner.begin_removal_batch(parent));
+        let result = f();
+        if opened {
+            self.with_mut(PipelineOwner::end_removal_batch);
+        }
+        result
+    }
+
+    /// Runs `f`, the unmount of a subtree of elements whose render objects on
+    /// this owner are `members`. During `f`, a
+    /// [`remove_render_object`](PipelineOwner::remove_render_object) of a
+    /// member whose parent is a member leaves it in place, and the parent's
+    /// removal takes it out with the rest of its subtree: a row of `k` render
+    /// nodes leaves the tree once, not `k` times. When `f` returns, any member
+    /// still in the tree is removed, and `members` is handed back empty with
+    /// its capacity, for the next teardown to fill.
+    ///
+    /// Each member's own element must unmount within `f`, deepest first, so
+    /// a member's parent is removed after the member's element let it go. A
+    /// teardown opened while one is open, or while the owner is checked out,
+    /// runs `f` without one. If `f` unwinds, the teardown closes without
+    /// removing: the members left belong to elements that did not finish.
+    pub fn with_teardown<R>(&self, members: &mut Vec<RenderId>, f: impl FnOnce() -> R) -> R {
+        /// Closes the teardown on an unwind; after `end_teardown` it finds
+        /// none open.
+        struct Abandon<'c>(&'c PipelineCell);
+        impl Drop for Abandon<'_> {
+            fn drop(&mut self) {
+                if let Ok(mut owner) = self.0.0.owner.try_borrow_mut() {
+                    owner.abandon_teardown();
+                }
+            }
+        }
+
+        let lent = std::mem::take(members);
+        let opened = match self.0.owner.try_borrow_mut() {
+            Ok(mut owner) => owner.begin_teardown(lent),
+            Err(_) => Err(lent),
+        };
+        if let Err(unopened) = opened {
+            *members = unopened;
+            members.clear();
+            return f();
+        }
+        let abandon = Abandon(self);
+        let result = f();
+        *members = self.with_mut(PipelineOwner::end_teardown);
+        drop(abandon);
         result
     }
 

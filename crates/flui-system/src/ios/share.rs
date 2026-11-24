@@ -34,22 +34,22 @@ mod uikit {
     use objc2_ui_kit::{UIActivityType, UIActivityViewController, UIViewController};
 
     use super::super::presenter::{Refusal, dismiss, guarded, present, when_presentable};
-    use crate::apple::queue::WorkQueue;
     use crate::apple::share::{objects, share_checked};
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
+    use crate::off_owner::OffOwner;
     use crate::share::{ShareBackend, ShareError, ShareRequest, ShareResult};
+    use flui_foundation::panic::{AfterPanic, os_entry};
 
     /// [`ShareBackend`] over the share sheet.
     pub(crate) struct IOSShare {
         mtm: MainThreadMarker,
-        queue: Rc<WorkQueue>,
+        queue: Rc<OffOwner>,
         completions: CompletionSource,
     }
 
     impl IOSShare {
         pub(crate) fn new(
             mtm: MainThreadMarker,
-            queue: Rc<WorkQueue>,
+            queue: Rc<OffOwner>,
             completions: CompletionSource,
         ) -> Self {
             Self {

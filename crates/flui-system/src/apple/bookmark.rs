@@ -102,13 +102,13 @@ mod foundation {
     };
 
     use super::{Waited, resolution_error};
-    use crate::apple::queue::WorkQueue;
     use crate::apple::{error_code, url_path};
     use crate::dialog::PickedFile;
     use crate::grant::{
         Access, AccessScope, Grant, GrantBackend, GrantCapability, GrantError, GrantKind,
         GrantResult, ResolveHold,
     };
+    use crate::off_owner::OffOwner;
     use crate::sandbox::Sandbox;
 
     /// How a bookmark is made: security-scoped on macOS, which an App Sandbox
@@ -198,12 +198,12 @@ mod foundation {
     /// [`GrantBackend`] over Foundation's bookmarks, on the runtime's work
     /// queue, in the sandbox the process's environment describes.
     pub(crate) struct AppleGrants {
-        queue: Rc<WorkQueue>,
+        queue: Rc<OffOwner>,
         sandbox: Sandbox,
     }
 
     impl AppleGrants {
-        pub(crate) fn new(queue: Rc<WorkQueue>, sandbox: Sandbox) -> Self {
+        pub(crate) fn new(queue: Rc<OffOwner>, sandbox: Sandbox) -> Self {
             Self { queue, sandbox }
         }
     }
@@ -233,7 +233,7 @@ mod foundation {
             // A resolution under way finishes; dropped before its scope, the
             // hold keeps the scope from being started for nobody.
             Waited::hold(
-                |work| self.queue.run(answer, busy, work),
+                |work| self.queue.dispatch(answer, busy, work),
                 move |waited| resolve(grant.payload(), waited),
             )
         }

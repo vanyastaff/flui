@@ -163,7 +163,7 @@ impl FileFilter {
     /// (`tar.gz`), each of ASCII letters, digits, `-`, `_` and `+`, so no
     /// host reads one of its characters as a wildcard or a separator.
     #[must_use]
-    pub fn with_extension(self, extension: impl Into<String>) -> Self {
+    pub fn extension(self, extension: impl Into<String>) -> Self {
         let mut extension: String = extension.into();
         if extension.starts_with('.') {
             extension.remove(0);
@@ -189,7 +189,7 @@ impl FileFilter {
     /// Kept as written, since a host that compares names case-sensitively is
     /// sent that spelling; one added twice, in whatever case, is kept once.
     #[must_use]
-    pub fn with_file_name(self, file_name: impl Into<String>) -> Self {
+    pub fn file_name(self, file_name: impl Into<String>) -> Self {
         self.add(
             file_name.into(),
             |kind| match kind {
@@ -204,7 +204,7 @@ impl FileFilter {
     /// or of every subtype of a type, such as `image/*`. Compared ignoring
     /// ASCII case, as RFC 2045 §5.1 compares them; no parameters.
     #[must_use]
-    pub fn with_mime_type(self, mime_type: impl Into<String>) -> Self {
+    pub fn mime_type(self, mime_type: impl Into<String>) -> Self {
         let mut mime_type: String = mime_type.into();
         mime_type.make_ascii_lowercase();
         self.add(
@@ -1508,9 +1508,9 @@ mod tests {
     #[test]
     fn a_typed_name_without_an_extension_is_completed_by_the_selected_filters_first() {
         let text = FileFilter::new("Text")
-            .with_extension("txt")
-            .with_extension("tar.gz")
-            .with_file_name("README");
+            .extension("txt")
+            .extension("tar.gz")
+            .file_name("README");
         let cases: [(&[u8], Option<&[u8]>); 13] = [
             (b"report", Some(b"report.txt")),
             // An empty extension is replaced, not followed by a second dot.
@@ -1545,8 +1545,8 @@ mod tests {
 
         let no_extension = [
             FileFilter::all_files("All files"),
-            FileFilter::new("Images").with_mime_type("image/*"),
-            FileFilter::new("Build files").with_file_name("Makefile"),
+            FileFilter::new("Images").mime_type("image/*"),
+            FileFilter::new("Build files").file_name("Makefile"),
         ];
         for filter in no_extension {
             assert_eq!(

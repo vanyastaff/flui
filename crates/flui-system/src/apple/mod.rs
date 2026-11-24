@@ -25,6 +25,7 @@ pub(crate) mod content_types;
 mod floor;
 pub(crate) mod modal;
 pub(crate) mod os;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) mod queue;
 pub(crate) mod share;
 pub(crate) mod user_dirs;

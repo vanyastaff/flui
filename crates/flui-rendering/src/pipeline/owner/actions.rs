@@ -1,8 +1,9 @@
 //! Owner-local accessibility action resolution.
 //!
-//! Platform input is committed only while the pipeline is [`Idle`]. This
-//! module intentionally returns a detached invocation instead of calling user
-//! code under the pipeline owner's outer lock.
+//! Platform input is committed only between frames, while no
+//! [`FramePass`](super::FramePass) holds the owner. This module intentionally
+//! returns a detached invocation instead of calling user code under the
+//! pipeline owner's outer lock.
 
 use flui_semantics::{
     ActionDecodeError, AssistiveFocusChange, SemanticsActionError, SemanticsActionInvocation,

@@ -186,7 +186,7 @@ compiler reports the expectation left behind.
 
 `std::panic::catch_unwind` is a disallowed method in `clippy.toml` (ADR-0303 §6): user code runs
 through `flui_foundation::panic` (`commit`, `FirstPanic`, ADR-0287) and an OS entry through
-`owner::panic_boundary::os_entry`. A production site that still catches by hand carries
+`flui_foundation::panic::os_entry`. A production site that still catches by hand carries
 `#[expect(clippy::disallowed_methods, reason = "ADR-0287: …")]` on its `let` or expression
 statement, or on its function, never on a file or module; the primitives carry one that names them
 as the boundary. Test code is exempt per crate, by `#![cfg_attr(test, allow(..))]` on the crate
@@ -818,15 +818,31 @@ ids is slot-indexed (`flui_foundation::SlotIndex`, `SlotSet`) or hashed with a
 fixed hasher, never `std`'s `RandomState`, whose tombstones decide when a table
 reallocates.
 
-A `perf_scaling_` scenario runs one change on a `small` and a `large` tree
-(`FLUI_PERF_SIZE` selects one) and asserts equal heap counts on both.
-The `perf-gates` job runs each size alone under `valgrind --tool=callgrind`,
-counting only inside the target's `perf_measured`, and fails when the large
-tree costs more than 5% over the small one: a frame that clears a table the
-mount grew or walks the whole tree for what a few nodes report is caught there,
-while every counter of its work stays put. The budget assertions and the
-baseline check run in the `test` job on every PR; `perf-gates` runs only the
-callgrind step, in the `full` lane, which main runs.
+A scenario measures its frames inside `flui_testing::perf::measure`, which
+returns their result and their `Cost`, and holds that cost with
+`Baselines::hold_measured`. With `FLUI_PERF_INSTRUCTIONS=callgrind` set, each
+such hold also counts the window's instructions: it runs its own test again
+under `valgrind --tool=callgrind`, collecting only inside that one window, and
+holds the count to the file's `instructions` line, which may rise 3% and pass
+([ADR-0396](adr/ADR-0396-a-perf-scenario-is-one-workload-every-instrument-measures-and-its-costs-are-a-file-beside-it.md) §3).
+A missing valgrind fails the hold. The `perf-gates` job runs the perf targets
+that way, in release, in the `full` lane, which main runs; it owns the
+`instructions` lines and the `test` job owns the rest, at opt-level 0, and
+each run writes the other's lines back unchanged. Release and opt-level 0 do
+different work for the same frame, so no line is compared across the two.
+Instructions are blessed on the runner alone, since callgrind's counts follow
+the host's valgrind and processor: on a miss `perf-gates` blesses them, prints
+the diff, and uploads the files as its `perf-instructions` artifact. A pull
+request whose change raises a window's cost runs the full lane on its branch
+(`gh workflow run CI --ref <branch>`) and commits the artifact's files, so
+main's `perf-gates` stays green when it merges.
+
+A `perf_scaling_` scenario runs one change on a small and a large tree and
+holds both with `Baselines::hold_scaling`, which asserts equal heap counts on
+both and, when instructions are counted, fails when the large tree costs more
+than 5% over the small one: a frame that clears a table the mount grew or
+walks the whole tree for what a few nodes report is caught there, while every
+counter of its work stays put.
 
 The perf targets of flui-widgets and flui-material also hold the heap level:
 `flui_testing::heap::assert_rounds_plateau`

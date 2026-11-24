@@ -62,15 +62,15 @@ is why ADR-0360 excluded them. Option 4 leaves both needs unmet.
 
 §1. **A filter of every file.** `FileFilter::all_files(name)` builds a filter that matches every
 file; `FileFilter::is_all_files` says so. Its kind is its own (`FileFilter`'s private
-`Kind::EveryFile`, beside `Kind::Patterns`), so it holds no pattern: `with_extension`,
-`with_file_name` or `with_mime_type` on it keeps no pattern and records that one was given, and a
+`Kind::EveryFile`, beside `Kind::Patterns`), so it holds no pattern: `extension`,
+`file_name` or `mime_type` on it keeps no pattern and records that one was given, and a
 request offering it is refused with `MalformedRequest::PatternOnAllFiles` rather than dropping
 what its author wrote. It is checked as any filter is for its name, and is not `EmptyFilter`. A
 request that offers one admits every pick, whichever filter was
 selected on accept: the request offered every file, and no host reports the selection of an open
 dialog.
 
-§2. **An exact file name.** `FileFilter::with_file_name(name)` adds a name the filter matches
+§2. **An exact file name.** `FileFilter::file_name(name)` adds a name the filter matches
 whole, compared ignoring ASCII case as an extension is. A name is at most
 `FileFilter::MAX_PATTERN_LEN` bytes of ASCII letters, digits, `-`, `_`, `+` and `.`, is not `.` or
 `..` and does not end in a dot (Windows drops one), so it holds no wildcard, separator or space;
@@ -115,7 +115,7 @@ holds the answer to the filters.
 ### Confirmation
 
 - The compiler: a filter of every file is built by `FileFilter::all_files` only, and a file name
-  by `with_file_name` only; the filter's kind is private, so no caller builds one of every file
+  by `file_name` only; the filter's kind is private, so no caller builds one of every file
   that holds a pattern.
 - Tests in `flui-system`'s `system_it`:
   `a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answer` (rows for a

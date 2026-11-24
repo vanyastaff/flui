@@ -16,16 +16,17 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use flui_foundation::PresentationId;
 use flui_protocol::{
     events::Event, events::EventFilter, events::EventKind, events::FrameEvent, events::GapEvent,
     events::SemanticsEvent, events::WindowEvent, tree::WindowId,
 };
-use flui_view::__runtime::{EventSource, WakeSlot};
+use flui_view::__runtime::{EventSource, Reply, WakeSlot};
 use flui_view::dev_agent::AgentEvents;
 use parking_lot::{Condvar, Mutex};
 
-use super::UiRuntime;
 use super::agent::{AgentError, ReplySender, send_reply};
+use super::{DrainReport, UiRuntime};
 use crate::presentation::PresentationState;
 use crate::semantics_host::SemanticsHandle;
 
@@ -285,6 +286,33 @@ impl PresentationState {
         wake_readers(woken);
     }
 
+    /// A window vend starts semantics collection: with no subscriber listening, the hub counts
+    /// as having reported the frames already presented or skipped and the tree already published.
+    /// No frame reported to an agent before the presentation's first vend (ADR-0402), and after
+    /// collection stopped the tree may be a new owner's whose revisions start again. A subscriber
+    /// still listening was reported every frame since it registered, so its hub is kept.
+    pub(crate) fn begin_agent_events(&self) {
+        let frames = (self.frames_rendered(), self.frames_dropped());
+        let revision = self.published_revision();
+        let mut hub = self.agent_events.borrow_mut();
+        hub.prune();
+        if hub.subscribers.is_empty() {
+            hub.frames = frames;
+            hub.revision = revision;
+        }
+    }
+
+    /// The tree revision the semantics owner last published; revision 0 is an owner that has
+    /// published nothing yet, not a tree to report.
+    fn published_revision(&self) -> Option<flui_protocol::tree::TreeRevision> {
+        self.pipeline().with(|pipeline| {
+            pipeline
+                .semantics_owner()
+                .map(flui_semantics::SemanticsOwner::revision)
+                .filter(|revision| *revision != flui_protocol::tree::TreeRevision::ZERO)
+        })
+    }
+
     /// Emits what a frame left to report: the frames presented or skipped since the last report,
     /// and the tree revision when it changed.
     pub(crate) fn publish_frame_events(&self) {
@@ -306,14 +334,7 @@ impl PresentationState {
                 self.emit_agent_event(Event::Frame(FrameEvent::new(window, number, presented)));
             }
         }
-        // Revision 0 is an owner that has published nothing yet: not a tree to report.
-        let revision = self.pipeline().with(|pipeline| {
-            pipeline
-                .semantics_owner()
-                .map(flui_semantics::SemanticsOwner::revision)
-                .filter(|revision| *revision != flui_protocol::tree::TreeRevision::ZERO)
-        });
-        if let Some(revision) = revision {
+        if let Some(revision) = self.published_revision() {
             let changed = {
                 let mut hub = self.agent_events.borrow_mut();
                 hub.revision.replace(revision) != Some(revision)
@@ -337,6 +358,26 @@ impl PresentationState {
 }
 
 impl UiRuntime {
+    /// A subscription the drain took for `presentation`: answered `gone` when the presentation
+    /// closed after it was sent, registered otherwise.
+    pub(super) fn serve_subscription(
+        &self,
+        presentation: PresentationId,
+        filters: Vec<EventFilter>,
+        reply: Reply<AgentEvents>,
+        report: &mut DrainReport,
+    ) {
+        let window = super::agent::window_of(presentation);
+        let Some(state) = self.presentations.get(presentation) else {
+            reply.send(Err(AgentError::PresentationGone.into_error(window)));
+            report.dropped_stale += 1;
+            return;
+        };
+        let reply = ReplySender::new(reply, window, super::agent::issued_of(state), |_, _| {});
+        self.subscribe_agent_events(state, filters, &reply);
+        report.invoked += 1;
+    }
+
     /// The owner half of `AgentWindow::subscribe`: registers the subscription and answers with
     /// its stream.
     pub(super) fn subscribe_agent_events(

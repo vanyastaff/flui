@@ -47,7 +47,7 @@ impl DirtyNode {
 
 /// A single dirty set with O(1) dedup through a slot-addressed index.
 ///
-/// The `Vec` preserves insertion order for sort-at-flush; the [`SlotIndex`]
+/// The `Vec` is sorted at flush, so it keeps no order of its own; the [`SlotIndex`]
 /// answers the mark-dirty dedup check by the node's slot and confirms the
 /// full id. Clearing costs the entries held, not the largest set ever held:
 /// a hash set's `clear` walks every bucket it grew during a mount that
@@ -124,10 +124,18 @@ impl DirtySet {
         self.vec.drain(..)
     }
 
-    /// Evicts entries whose id is in `removed`.
-    #[inline]
+    /// Evicts entries whose id is in `removed`, at the cost of the smaller
+    /// of the two: a removal of a few nodes while many are dirty looks each
+    /// one up, and one of many walks the set once. Eviction may reorder the
+    /// set, which is sorted before it is read.
     pub fn evict(&mut self, removed: &FxHashSet<RenderId>) {
-        self.retain(|d| !removed.contains(&d.id));
+        if removed.len() < self.vec.len() {
+            for &id in removed {
+                self.index.swap_remove(&mut self.vec, id, |n| n.id);
+            }
+        } else {
+            self.retain(|d| !removed.contains(&d.id));
+        }
     }
 
     /// Clears the set. The vector and the index retain capacity.
@@ -309,9 +317,17 @@ impl PaintQueue {
         self.index.reindex(self.entries.iter().map(|e| e.id));
     }
 
-    /// Drops entries whose id is in `removed`.
+    /// Drops entries whose id is in `removed`, at the cost of the smaller of
+    /// the two, as [`DirtySet::evict`] does. Eviction may reorder the queue,
+    /// which is sorted before it is read.
     pub fn evict(&mut self, removed: &FxHashSet<RenderId>) {
-        self.retain(|e| !removed.contains(&e.id));
+        if removed.len() < self.entries.len() {
+            for &id in removed {
+                self.index.swap_remove(&mut self.entries, id, |e| e.id);
+            }
+        } else {
+            self.retain(|e| !removed.contains(&e.id));
+        }
     }
 
     /// Drops entries matching `remove_ids`.

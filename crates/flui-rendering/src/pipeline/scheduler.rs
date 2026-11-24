@@ -1128,6 +1128,10 @@ mod tests {
                 "exhausted_layout_premise_keeps_work_deliverable",
                 exhausted_layout_premise_keeps_work_deliverable,
             ),
+            (
+                "eviction_drops_exactly_the_removed_nodes_whichever_side_is_smaller",
+                eviction_drops_exactly_the_removed_nodes_whichever_side_is_smaller,
+            ),
         ];
         for &(name, case) in cases {
             if let Err(payload) = std::panic::catch_unwind(case) {
@@ -1240,6 +1244,70 @@ mod tests {
     // =========================================================================
     // Mid-phase routing + drain tests
     // =========================================================================
+
+    /// A removal evicts exactly its nodes from every dirty set, by looking
+    /// each one up when it removes fewer nodes than a set holds and by one
+    /// walk otherwise; the nodes that stay stay queued, and a stale
+    /// generation of a queued slot evicts nothing.
+    fn eviction_drops_exactly_the_removed_nodes_whichever_side_is_smaller() {
+        let (mut tracker, _tree) = DirtyTracker::new_test_pair();
+        let ids: Vec<RenderId> = (1..=40).map(RenderId::new).collect();
+        for (depth, &id) in ids.iter().enumerate() {
+            tracker.add_node_needing_layout(id, depth);
+            tracker.enqueue_paint(id, depth, PaintKind::Repaint);
+        }
+        let queued = |tracker: &DirtyTracker| {
+            let mut layout: Vec<RenderId> = tracker
+                .nodes_needing_layout()
+                .iter()
+                .map(|node| node.id)
+                .collect();
+            layout.sort();
+            let mut paint: Vec<RenderId> = ids
+                .iter()
+                .copied()
+                .filter(|id| tracker.dirty.needs_paint.contains(id))
+                .collect();
+            paint.sort();
+            (layout, paint)
+        };
+
+        // Fewer removed than queued: each is looked up, the last entry moved
+        // into its place stays findable.
+        let few: FxHashSet<RenderId> = [ids[0], ids[17], ids[39]].into_iter().collect();
+        tracker.evict(&few);
+        let kept: Vec<RenderId> = ids.iter().copied().filter(|id| !few.contains(id)).collect();
+        assert_eq!(queued(&tracker), (kept.clone(), kept.clone()));
+        for &id in &kept {
+            assert!(
+                tracker.dirty.needs_paint.kind_for_test(id).is_some(),
+                "{id:?}"
+            );
+        }
+
+        // A stale generation of a queued slot names another node.
+        let stale = RenderId::new_gen(
+            kept[0].index(),
+            kept[0].generation().next().expect("a later generation"),
+        );
+        tracker.evict(&std::iter::once(stale).collect());
+        assert_eq!(queued(&tracker), (kept.clone(), kept.clone()));
+
+        // More removed than queued: one walk of each set.
+        let many: FxHashSet<RenderId> = ids
+            .iter()
+            .copied()
+            .skip(10)
+            .chain((100..200).map(RenderId::new))
+            .collect();
+        tracker.evict(&many);
+        let left: Vec<RenderId> = kept
+            .iter()
+            .copied()
+            .filter(|id| !many.contains(id))
+            .collect();
+        assert_eq!(queued(&tracker), (left.clone(), left));
+    }
 
     /// Direct test of the mid-phase routing → drain integration using a
     /// DirtyTracker pair directly (no PipelineOwner needed for this path).

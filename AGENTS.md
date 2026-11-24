@@ -239,9 +239,14 @@ and the readers of "Before a merge" look for a change that breaks one:
 - No process-global state: a `static` or `thread_local!` outside tests is immutable data, a
   private ID counter, or granted by ADR-0097; one an ADR is to remove is debt with its bullet in
   `docs/gaps.md`.
-- Every OS entry into `flui-native` (an `extern` fn, an Objective-C or COM method, an AccessKit
-  handler, a closure handed to the OS) is a constant or one call of
-  `owner::panic_boundary::os_entry`, or of an adapter of its file that is (ADR-0151 §16).
+- A UI runtime path (the drain, a frame, an owner turn, input, settlement, a close, the
+  runtime's drop) reaches the development agent only through `ui_runtime::agent_side::AgentSide`,
+  and only `AgentWindowSource::dev_agent` names `UiRuntime::dev_agent_window`: a direct call
+  links the agent into every release binary, and the `size` job sees it only past 2% (ADR-0402).
+- Every OS entry into `flui-native` or a capability crate (an `extern` fn, an Objective-C or COM
+  method, an AccessKit handler, a closure handed to the OS) is a constant or one call of
+  `flui_foundation::panic::os_entry` (`owner::panic_boundary::os_entry` in `flui-native`), or of
+  an adapter of its file that is (ADR-0151 §16).
 - No new `unsafe impl Send` or `Sync` (ADR-0323 §3), and a `Send` or `Sync` position in the
   facade's API is one of the seven kinds of value ADR-0323 §2 lets cross a thread.
 - A Stable crate's public API names an upstream type only as ADR-0089 §2 allows, and the core

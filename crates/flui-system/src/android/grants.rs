@@ -19,11 +19,11 @@ use flui_platform::capability::Resolver;
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
 use super::documents::{Interrupt, LetGo, PickedDocuments};
-use super::workers::{NotRun, Workers};
 use crate::dialog::{DialogError, PickedFile};
 use crate::grant::{
     Access, Grant, GrantBackend, GrantCapability, GrantError, GrantKind, GrantResult, ResolveHold,
 };
+use crate::off_owner::{NotRun, OffOwner};
 use crate::sandbox::{Sandbox, android_app};
 
 /// `EACCES`, on Linux and so on Android.
@@ -103,11 +103,11 @@ pub(crate) trait DocumentReach: 'static {
 /// [`GrantBackend`] over persisted URI permissions, on the runtime's workers.
 pub(crate) struct AndroidGrants<R: DocumentReach> {
     reach: Rc<R>,
-    workers: Rc<Workers>,
+    workers: Rc<OffOwner>,
 }
 
 impl<R: DocumentReach> AndroidGrants<R> {
-    pub(crate) fn new(reach: Rc<R>, workers: Rc<Workers>) -> Self {
+    pub(crate) fn new(reach: Rc<R>, workers: Rc<OffOwner>) -> Self {
         Self { reach, workers }
     }
 }

@@ -52,6 +52,20 @@ pub const PAGE_EXPORT_VERSION: u32 = 1;
 /// The shortest token an app accepts, in bytes. A shorter one leaves the agent inert.
 pub const MIN_TOKEN_LEN: usize = 32;
 
+/// Whether the token a hello presents is the one a server expects, compared in time that
+/// depends on their lengths only, so a client cannot learn the token a byte at a time from how
+/// long a refusal takes. Every server of the protocol compares with it.
+#[must_use]
+pub fn same_token(presented: &[u8], expected: &[u8]) -> bool {
+    let mut difference = presented.len() ^ expected.len();
+    for index in 0..presented.len().max(expected.len()) {
+        let a = presented.get(index).copied().unwrap_or(0);
+        let b = expected.get(index).copied().unwrap_or(0);
+        difference |= usize::from(a ^ b);
+    }
+    std::hint::black_box(difference) == 0
+}
+
 /// The exit code of an app that ended because its driver's connection closed under
 /// [`EXIT_ON_DISCONNECT_ENV`]: apart from a normal exit (`0`) and a panic (`101`), so a
 /// driver and CI tell the three apart.

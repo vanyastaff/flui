@@ -40,6 +40,9 @@ vocabulary! {
         Driver => "driver",
         /// A platform lane of the driver: OS input, OS trees, devices.
         Lane => "lane",
+        /// The tool that started the app and rebuilds it (`flui run`), at the run endpoint its
+        /// session file names (ADR-0401); the app never sees it.
+        Supervisor => "supervisor",
     }
 }
 
@@ -566,6 +569,11 @@ macro_rules! __method_table {
             /// End a recording, once its `end` row was sent.
             RecordStop = "record.stop", Agent, ReadOnly, Record,
                 $crate::record::RecordStopParams => $crate::record::RecordSummary;
+            /// Rebuild the application and apply the build at a tier, at least the one asked
+            /// for; answered once the build is applied (a new process is applied once it is
+            /// started) or failed.
+            RunReload = "run.reload", Supervisor, Destructive, Session,
+                $crate::reload::ReloadParams => $crate::reload::ReloadReport;
             /// One semantics action on one element.
             SemanticsAct = "semantics.act", Agent(window), Acts, Core,
                 $crate::act::ActParams => $crate::act::ActOutcome;

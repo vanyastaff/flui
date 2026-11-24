@@ -1,7 +1,9 @@
-# Written by `FLUI_PERF_BASELINE=bless CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo nextest run --locked --no-fail-fast --workspace --exclude flui-native --features flui/material,flui/cupertino,flui/native --test perf`;
+# Written by `FLUI_PERF_BASELINE=bless CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo nextest run --locked --no-fail-fast --workspace --exclude flui-native --features flui/material,flui/cupertino,flui/native --test perf`,
+# `instructions` by CI's perf-gates job;
 # counts, not timings.
 
 [list_10k_scroll_warm]
 allocated_bytes = 216033
 allocations = 996
+instructions = 3422868
 reallocations = 84

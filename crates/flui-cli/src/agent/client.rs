@@ -17,8 +17,8 @@
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
-#[cfg(not(unix))]
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -67,6 +67,9 @@ pub(crate) struct Connection {
     outgoing: mpsc::Sender<String>,
     /// Every line the app sent, and the failure that ended either thread.
     incoming: mpsc::Receiver<Result<String, Failure>>,
+    /// Set once the reading thread meets the end of the conversation (the app closed its end, a
+    /// read failed, a line could not be read), before it reports it: a request is not sent then.
+    ended: Arc<AtomicBool>,
     next_id: u64,
     /// Shuts the socket down when the connection is dropped.
     closer: Closer,
@@ -107,18 +110,21 @@ impl Connection {
         let (outgoing, to_write) = mpsc::channel::<String>();
         let (lines, incoming) = mpsc::channel();
         let failures = lines.clone();
+        let ended = Arc::new(AtomicBool::new(false));
+        let read_to_end = Arc::clone(&ended);
         thread::Builder::new()
             .name("flui-agent-client-write".into())
             .spawn(move || send(writer, &to_write, &failures))
             .map_err(|e| format!("could not start the connection's writer: {e}"))?;
         thread::Builder::new()
             .name("flui-agent-client-read".into())
-            .spawn(move || receive(reader, &lines))
+            .spawn(move || receive(reader, &lines, &read_to_end))
             .map_err(|e| format!("could not start the connection's reader: {e}"))?;
 
         let connection = Self {
             outgoing,
             incoming,
+            ended,
             next_id: 1,
             closer,
         };
@@ -239,6 +245,11 @@ impl Connection {
     }
 
     fn send(&self, line: String) -> Result<(), Failure> {
+        // An app that restarted since the last call closed this connection: what is sent now
+        // reaches nobody, so it is unsent, and a caller sends it again on a new connection.
+        if self.ended.load(Ordering::SeqCst) {
+            return Err(Failure::Unsent("the app closed the connection".into()));
+        }
         self.outgoing
             .send(line)
             .map_err(|_| Failure::Unsent("the connection closed".into()))
@@ -291,8 +302,13 @@ fn send(
 }
 
 /// Reads every line the app sends until it closes, a read fails or a line runs past
-/// [`MAX_REPLY`]; the end is reported once, on the lines' channel.
-fn receive(mut stream: Box<dyn Read + Send>, lines: &mpsc::Sender<Result<String, Failure>>) {
+/// [`MAX_REPLY`]; the end is reported once, on the lines' channel, after `ended` is set, so a
+/// request made once the end is queued is never written.
+fn receive(
+    mut stream: Box<dyn Read + Send>,
+    lines: &mpsc::Sender<Result<String, Failure>>,
+    ended: &AtomicBool,
+) {
     let mut reader = LineReader::new(MAX_REPLY);
     let mut chunk = vec![0_u8; 64 << 10];
     loop {
@@ -307,6 +323,9 @@ fn receive(mut stream: Box<dyn Read + Send>, lines: &mpsc::Sender<Result<String,
                 )),
             };
             let failed = line.is_err();
+            if failed {
+                ended.store(true, Ordering::SeqCst);
+            }
             if lines.send(line).is_err() || failed {
                 return;
             }
@@ -320,6 +339,7 @@ fn receive(mut stream: Box<dyn Read + Send>, lines: &mpsc::Sender<Result<String,
         match read {
             Ok(read) => reader.push(&chunk[..read]),
             Err(why) => {
+                ended.store(true, Ordering::SeqCst);
                 let _ = lines.send(Err(Failure::Transport(why)));
                 return;
             }
@@ -529,6 +549,7 @@ mod tests {
             endpoint: Endpoint::Local(socket.to_str().expect("a UTF-8 path").to_owned()),
             token: "0123456789abcdef0123456789abcdef".into(),
             pid: 0,
+            run: None,
         };
         let app = std::thread::spawn(move || {
             let (stream, _) = listener.accept().expect("accept");
@@ -555,5 +576,54 @@ mod tests {
             Ok(0),
             "the app reads the end of the conversation"
         );
+    }
+
+    /// A request on a connection whose app closed its end since the last call is unsent, not
+    /// lost: a caller sends it again on a new connection, whatever the method. Fails if it is
+    /// handed to the writer and answered with the failure the reader queued.
+    #[cfg(unix)]
+    #[test]
+    fn a_request_after_the_app_closed_the_connection_is_unsent() {
+        use std::io::{BufRead as _, BufReader};
+        use std::os::unix::net::UnixListener;
+        use std::time::{Duration, Instant};
+
+        use flui_protocol::session::ClientRole;
+        use flui_protocol::version::PROTOCOL_VERSION;
+        use serde_json::json;
+
+        use super::Connection;
+        use crate::agent::{Credentials, Endpoint};
+
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let socket = dir.path().join("agent.sock");
+        let listener = UnixListener::bind(&socket).expect("bind");
+        let credentials = Credentials {
+            endpoint: Endpoint::Local(socket.to_str().expect("a UTF-8 path").to_owned()),
+            token: "0123456789abcdef0123456789abcdef".into(),
+            pid: 0,
+            run: None,
+        };
+        let app = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept");
+            let mut hello = String::new();
+            BufReader::new(stream.try_clone().expect("clone"))
+                .read_line(&mut hello)
+                .expect("a hello");
+            let mut out = stream;
+            writeln!(out, r#"{{"hello":{{"protocol":"{PROTOCOL_VERSION}"}}}}"#).expect("hello");
+            // The app restarts: this conversation ends with it.
+        });
+        let mut connection =
+            Connection::connect(&credentials, ClientRole::Driver, Duration::from_secs(5))
+                .expect("the stand-in greets");
+        app.join().expect("the stand-in app");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !connection.ended.load(std::sync::atomic::Ordering::SeqCst) {
+            assert!(Instant::now() < deadline, "the reader sees the end");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let outcome = connection.request("semantics.act", json!({}), Duration::ZERO);
+        assert!(matches!(outcome, Err(Failure::Unsent(_))), "{outcome:?}");
     }
 }

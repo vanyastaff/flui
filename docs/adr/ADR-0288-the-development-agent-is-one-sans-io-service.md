@@ -16,7 +16,9 @@
   [ADR-0395](ADR-0395-a-rebuild-is-shown-over-the-app-it-will-replace.md) for §4's timeout
   answers and §8's sentence on what an observer may call only: an observer may also call a
   method whose effect is `annotates`, and a timed-out call is retried `soon` whenever it does not
-  change the app.
+  change the app; and [ADR-0402](ADR-0402-a-binary-links-the-development-agent-only-where-a-hook-is-installed.md)
+  for §1's last sentence only: an app that installs no hook links none of the agent's owner
+  side.
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md) (the protocol);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (user code runs after
   the state is committed); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (what
@@ -158,7 +160,7 @@ a thread: stopping stops the service at once, and at the page's next turn the gl
 every connection ends.
 
 §7. **The loop owns the hooks.** `DevAgentHost` is a value the event loop owns, with no
-`Arc<Mutex>`: `DevAgentHost::attach(hooks)` attaches the hooks the loop took from its
+`Arc<Mutex>`: `DevAgentHost::attach(windows, hooks)` attaches the hooks the loop took from its
 configuration, every call that runs a hook takes `&mut self`, so a hook cannot reach the host and
 nothing re-enters it, and dropping the host detaches each hook, then drops it, each contained. A
 configuration holds each hook until the first loop that starts with it takes it. `flui-app` keeps

@@ -1876,6 +1876,49 @@ pub(crate) fn patch_damage_covers_diff_damage() {
     );
 }
 
+/// Random trees, marks, moves and followers, each run on two owners from one
+/// seed: the damage of every patch read through each node's chain folded
+/// once for all its chunks equals the damage read entry by entry, each
+/// through its own chain, as it equals the damage of an effect update read
+/// from what the versions share.
+pub(crate) fn shared_chain_reads_damage_as_each_entry_read_alone() {
+    let mut damaged = 0_u32;
+    for case in 0..2_000_u64 {
+        let seed = 0x6A09_E667_F3BC_C909 ^ (case + 1).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        let run = |unshared: bool| {
+            let mut rng = Rng(seed);
+            let mut owner = SceneOwner::new();
+            if unshared {
+                owner.force_unshared_damage();
+            }
+            let mut model = Model {
+                ids: Vec::new(),
+                items: Vec::new(),
+                owners: 0,
+                leader: None,
+            };
+            initial(&mut rng, &mut owner, &mut model);
+            let mut seen = vec![owner.patch_damage()];
+            for _ in 0..3 {
+                mutate(&mut rng, &mut owner, &mut model, false);
+                seen.push(owner.patch_damage());
+            }
+            seen
+        };
+        let (shared, alone) = (run(false), run(true));
+        assert_eq!(shared, alone, "case {case} (seed {seed:#x})");
+        damaged += u32::from(
+            shared
+                .iter()
+                .any(|damage| matches!(damage, DamageRegion::Region(_))),
+        );
+    }
+    assert!(
+        damaged > 0,
+        "no case damaged a region, so no chunk was landed"
+    );
+}
+
 /// Whether the chunk at `at` can land in `rect`, asked of a cull of its own;
 /// `false` for an address that names no chunk.
 fn chunk_meets(version: &SceneVersion, rect: Rect<f64>, at: EntryAddress) -> bool {

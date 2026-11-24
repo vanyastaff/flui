@@ -115,6 +115,7 @@ mod agent_inspect;
 mod agent_journal;
 mod agent_record;
 mod agent_serve;
+mod agent_side;
 mod agent_stability;
 mod agent_wait;
 mod attach;
@@ -139,6 +140,7 @@ pub(crate) use agent_input::{Abandoned as AbandonedInput, AgentInput};
 pub(crate) use agent_inspect::{PendingLayerRead, StagedLayerRead, deliver_each};
 pub use agent_record::{NativeForms, NativeLines};
 pub(crate) use agent_serve::window_answers;
+pub(crate) use agent_side::AgentSide;
 pub(crate) use agent_stability::AgentStability;
 pub(crate) use agent_wait::PendingWait;
 pub use commands::{CommandSendError, DrainReport, UiCommand, UiCommandSender};
@@ -290,6 +292,9 @@ pub struct UiRuntime {
     /// The recordings agents asked of this runtime (`record.start`), each a tap beside the
     /// application's.
     agent_recordings: agent_record::AgentRecordings,
+    /// The development agent's owner side, once [`Self::dev_agent_window`] vended a window here:
+    /// until then nothing of the agent's exists to serve (ADR-0402).
+    agent_side: Cell<Option<&'static dyn agent_side::AgentSide>>,
     /// The fan-out of the host's native journal, once the host attached one: the recordings of
     /// the `native` layer join it.
     native_lines: RefCell<Option<agent_record::NativeLines>>,
@@ -461,9 +466,12 @@ impl Drop for UiRuntime {
         let mut keys = Vec::new();
         for presentation in &presentations {
             // Withdrawing a presentation runs contained so siblings are withdrawn.
-            first.contain(|| {
-                keys.extend(presentation.withdraw_for_ui_runtime_close(&self.interaction_lane));
-            });
+            if let Some((withdrawn, abandoned)) =
+                first.contain(|| presentation.withdraw_for_ui_runtime_close(&self.interaction_lane))
+            {
+                keys.extend(withdrawn);
+                first.absorb(abandoned);
+            }
         }
         for key in keys {
             // A withdrawn key's drop runs contained at close.
@@ -490,7 +498,9 @@ impl Drop for UiRuntime {
         // The agents' recordings end with their `end` rows: the runtime they
         // record goes. Delivering the rows still queued reaches the
         // application's taps too, each call contained by the registry.
-        first.absorb(self.agent_recordings.end_all());
+        if let Some(agent) = self.agent_side.get() {
+            first.absorb(agent.end_all_recordings(self));
+        }
         // The ui_runtime is the only strong owner of its owner-local post-frame
         // callbacks and async tasks: retire them here, on the owner thread,
         // after the presentations (whose widgets may still cancel tasks) and

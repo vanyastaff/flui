@@ -23,10 +23,11 @@
 //! - **On Java's main thread**: starting an activity (a view, the share
 //!   sheet) and the message box, each work the host runs there for the
 //!   provider (`Activity::on_main_thread`).
-//! - **On a thread of its own** ([`workers`]): whatever reads another
-//!   application's content provider (a picked document's name, size and
-//!   contents, a save's write) or the file system (the file a launch or a
-//!   share hands over), since a provider answers when it will.
+//! - **On a thread of its own**, bounded by the runtime's off-owner places
+//!   ([`crate::off_owner`]): whatever reads another application's content
+//!   provider (a picked document's name, size and contents, a save's write)
+//!   or the file system (the file a launch or a share hands over), since a
+//!   provider answers when it will.
 //!
 //! The native methods go through `owner::android::native_call`, the crate's
 //! panic boundary for a JNI entry (ADR-0151 §16). The rules of each provider (what a
@@ -49,7 +50,6 @@ mod opened;
 mod os;
 mod share;
 mod user_dirs;
-mod workers;
 
 use flui_platform::SystemFailure;
 
@@ -114,7 +114,7 @@ pub(crate) const UNNAMED_FAILURE: SystemFailure = SystemFailure::MalformedAnswer
 pub(crate) const TOO_MANY_OFFERED: SystemFailure = SystemFailure::Os(24);
 
 #[cfg(target_os = "android")]
-pub(crate) use java::register;
+pub(crate) use java::providers;
 
 /// The Java source of the class named `binary_name`, from the sources the
 /// checked-in dex is compiled from (the crate's `android_dex` test holds the

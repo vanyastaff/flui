@@ -73,7 +73,7 @@ pub(super) fn serves(method: &MethodRow) -> bool {
 /// nothing else (the `Annotate` path of `ui_runtime::agent_serve`), so an observer that calls one
 /// reaches no state of the app.
 pub(super) fn may_call(role: ClientRole, method: &MethodRow) -> bool {
-    role.is_driver() || !method.effect.changes_app()
+    role.may_call(method.effect)
 }
 
 /// The methods the agent answers a connection admitted as `role`, by wire name, in table order.

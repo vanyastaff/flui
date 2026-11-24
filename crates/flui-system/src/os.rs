@@ -101,7 +101,7 @@ impl Os {
     /// A handle over `backend`, for an acquisition, as every handle of the
     /// crate is made; it keeps nothing of the acquisition.
     #[must_use]
-    pub fn new(backend: impl OsBackend, _acquisition: &ProviderContext<'_>) -> Self {
+    pub fn new(backend: impl OsBackend, _ctx: &ProviderContext<'_>) -> Self {
         Self {
             backend: Rc::new(backend),
         }

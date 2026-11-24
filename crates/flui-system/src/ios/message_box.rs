@@ -104,7 +104,7 @@ mod uikit {
     use crate::dialog::{
         DialogHold, MessageBoxBackend, MessageBoxCapability, MessageBoxRequest, MessageBoxResult,
     };
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
+    use flui_foundation::panic::{AfterPanic, os_entry};
 
     /// [`MessageBoxBackend`] over `UIAlertController`.
     pub(crate) struct IOSMessageBoxes {

@@ -8,6 +8,21 @@ under `testing`. What each platform provides is in [`docs/gaps.md`](../../docs/g
 System services rows of [`platform-parity.toml`](../flui-native/platform-parity.toml); this file
 states the rules the code keeps.
 
+A platform answers for every service in one `Providers` literal (`src/providers.rs`): a field per
+service, each a `Provision`, either a provider or a refusal with its reason. A service added to
+the crate is a field, so no platform compiles until it says how it answers it, and
+`SystemPlugin::register` registers the platform's literal and decides nothing. `PortalOnBus`
+registers the Linux literal over another bus, refusals included.
+
+Work off the owner thread (ADR-0360 §2) is bounded once per UI runtime, on every platform: each
+piece (an Apple dispatch work item, an Android or Windows thread, a portal request that reads the
+file system or waits on the portal, a save's write) takes one of `off_owner::MAX_IN_FLIGHT` places
+in the runtime's `OffOwner` before it starts and gives it back on every exit, a panic included,
+and a request past the bound is refused at once with `Unavailable`, never queued. A request whose
+number something else bounds (a window's one dialog, a shortcut binding's watch, the launcher
+entry's one sender) takes none. On Windows the count is the shell threads', which may also reclaim
+the place of a request past its deadline; on Linux it is the portal's.
+
 ## Handles and backends
 
 | Service | Handle | Backend | Answer |
@@ -51,9 +66,6 @@ have them:
   the one queued) and the end, which is answered again after it.
 - `TaskbarEntry` is the application's: the handles of one UI runtime share one state, a change
   that changes nothing is not sent, and the backend is always handed the whole state.
-- The message box, the share sheet and the jump list came with their Windows provider. No portal
-  has a message box or a share sheet, and the jump list is Windows', so the Linux provider refuses
-  the three with `NotOnThisPlatform`.
 - A provider that hands a pick over without a path (the browser, iOS, Android) reads it itself, by the
   one set of rules in `dialog::handed_over`: the picks are held to the filters by name and type,
   their declared sizes to the request's `max_bytes` before a byte is read, and the bytes read are
@@ -61,13 +73,13 @@ have them:
 - A message box names its default button and may label its buttons and carry a detail
   (`MessageBoxRequest`). The handle refuses a default or a label for a button the box does not
   offer, a blank label, and two buttons labelled alike. A box without a title shows none on any
-  host. A host that cannot show a label shows its standard one for that button, which still means
-  the button's `MessageAnswer`; none refuses the request for it. What each host shows is under its
-  heading below, and in `MessageBoxRequest`'s documentation.
+  host. A host that cannot label a button refuses a request that labels one before anything is
+  shown (`NotYetOnThisHost`), rather than show other words than its author wrote. What each host
+  shows is under its heading below, and in `MessageBoxRequest`'s documentation.
 
 ## Windows (`win32`)
 
-The `win32` module provides every service. Each OS call sits behind a trait of its file
+Each OS call of the `win32` module sits behind a trait of its file
 (`DialogSystem`, `ShellSystem`, `MessageBoxSystem`, `ShareSystem`, `LoginRegistry`,
 `HotkeySystem`, `TaskbarSystem`, `JumpListSystem`, the known folders' lookup), whose one real
 implementation calls Win32 or COM; the provider's rules (what a request becomes, what an answer
@@ -76,9 +88,10 @@ no test shows a dialog, launches a handler, registers a hot key, writes a start-
 the taskbar. The owed desktop runs are in the parity rows.
 
 Every OS entry of the crate (each window procedure, subclass, enumeration callback and WinRT
-delegate) is one call of `owner::panic_boundary::os_entry`, the crate's boundary of the same
-contract as `flui-native`'s (ADR-0151 §16): a panic is logged and contained, its payload destroyed
-under containment, and the OS gets the entry's answer after a panic.
+delegate) is one call of `flui_foundation::panic::os_entry`, the boundary `flui-native`'s entries
+go through too (ADR-0151 §16): a panic is logged and contained, its payload destroyed under
+containment, and the OS gets the entry's answer after a panic, or the process ends when that
+answer panics as well.
 
 Threads and apartments:
 
@@ -102,8 +115,8 @@ Threads and apartments:
   `DialogError::Busy` rather than come up under a window the old one re-enables.
 - **The shell's other work runs a request per thread** (`ShellThreads`): the launcher, autostart,
   the jump list, the user's folders, the share sheet's file check and its file resolution, each
-  inside the apartment its calls ask for, at most `threads::MAX_IN_FLIGHT` per runtime in one count
-  (`ShellPool`); a request past that answers `Unavailable`, and a thread that unwinds gives back its
+  inside the apartment its calls ask for, each holding one of the runtime's off-owner places
+  (`ShellPool` over `off_owner`); a request past that answers `Unavailable`, and a thread that unwinds gives back its
   place and drops its resolver. A request still running `ShellThreads::ABANDON_AFTER` after it
   started is abandoned when the owner next needs a place: its place is reclaimed, its caller
   answered with the request's refusal, the abandonment logged, and its late answer discarded (the
@@ -188,8 +201,8 @@ a relative path the system's contract excludes is `MalformedAnswer`.
 
 ## macOS (`macos`)
 
-The `macos` module provides every service but the jump list, which macOS has no form of (the
-Dock menu is the application delegate's, the host's). Each provider's rules (what a request
+macOS's nearest form of a jump list, the Dock menu, is the application delegate's, the host's, so
+the `macos` module has no jump list. Each provider's rules (what a request
 becomes, what an answer means) are functions of its file over plain values, compiled and tested on
 every host (`macos::*::tests`, and `apple::*::tests` for what iOS shares); the AppKit, Foundation,
 ServiceManagement and Carbon calls are the
@@ -203,13 +216,13 @@ Threads:
   `MainThreadMarker`, and a runtime whose owner thread is not the main thread (the headless host)
   is refused them with `NotYetOnThisHost` before AppKit is touched.
 - **Work that touches the file system or waits on a daemon runs on a global dispatch queue**
-  (`apple::queue::WorkQueue`): the launcher, the share picker's file check, the login item and the
-  user's folders, at most `WorkQueue::MAX_IN_FLIGHT` per runtime; a request past that answers its
+  (`apple::queue`, holding one of the runtime's off-owner places): the launcher, the share picker's file check, the login item and the
+  user's folders; a request past the bound answers its
   refusal with `Unavailable`, and a work item gives its place back on every exit. No file system
   call runs on the main thread (ADR-0360 §2).
 
 Every block, work item, Objective-C method and Carbon handler the system calls is one call of
-`owner::panic_boundary::os_entry`, and the one class the crate declares (the open panel's name
+`flui_foundation::panic::os_entry`, and the one class the crate declares (the open panel's name
 check) keeps its ivars in `ContainedIvars`, as in
 `flui-native`.
 
@@ -321,12 +334,7 @@ read once per runtime, and the machine's processor, Arm64 for a process Rosetta 
 
 ## iOS (`ios`)
 
-The `ios` module provides the launcher's links, the file dialogs, the message box, the share sheet,
-the user's folders and the system information. iOS has no form of opening a document in a default
-application, of revealing or trashing a file, of starting at login, of a shortcut heard while
-another application is in front or of a jump list: those answer `NotOnThisPlatform`. Its form of
-the launcher entry is the count on the application's icon, which needs the user's permission for
-notifications and is not built: `NotYetOnThisHost`. Foundation's side of a provider is the `apple`
+Foundation's side of an `ios` provider is the `apple`
 module, shared with macOS (the work queue, the version gate, the content types, a share's items,
 the folders, the system information); each provider's rules are functions over plain values,
 tested on every host (`ios::*::tests`, `apple::*::tests`), and the UIKit calls are the file's
@@ -336,7 +344,7 @@ parity rows.
 Threads, as on macOS: UIKit runs on the main thread, and a runtime whose owner thread is another
 one is refused the launcher, the dialogs, the message box, the share sheet and the system
 information with `NotYetOnThisHost`; judging and reading a picked document, writing the file a
-save exports, checking a shared file and naming a folder run on `apple::queue::WorkQueue`. Every
+save exports, checking a shared file and naming a folder run on `apple::queue`. Every
 block, delegate method and work item is one call of `os_entry`, and the picker's delegate keeps
 its ivars in `ContainedIvars`.
 
@@ -462,17 +470,13 @@ container's, and the folders a container does not hold none. The system's name i
 - A user folder is the one `user-dirs.dirs` names, answered only when it is there for the process:
   a Flatpak sees the user's folders only as its manifest exposes them, which nothing but the file
   system shows, and the layer names no folder the process cannot open.
-- The system information has no Linux provider yet and answers `NotYetOnThisHost`.
 
 ## Android (`android`)
 
-The `android` module provides the launcher, the file dialogs, the message box, the share sheet, the
-user's folders and the system information; autostart, global shortcuts, the launcher entry and the
-jump list answer `NotOnThisPlatform`, since an Android application has none of them, as do reveal,
-trash and opening a folder. Each provider's rules are functions of its file over plain values,
-compiled and tested on every host (`android::*::tests`), and the dialogs' whole path runs there over
-a stand-in Activity and picker (`testing::android`); the JNI calls are the module's Android-only
-`java` module, checked by CI's Android type-check. The owed device runs are in the parity rows.
+Each `android` provider's rules are functions of its file over plain values, compiled and tested
+on every host (`android::*::tests`), and the dialogs' whole path runs there over a stand-in
+Activity and picker (`testing::android`); the JNI calls are the module's Android-only `java`
+module, checked by CI's Android type-check. The owed device runs are in the parity rows.
 
 **Java only as a leaf (ADR-0377).** Android's own classes (`Intent`, `ContentResolver`,
 `AlertDialog.Builder`, `Environment`) are called from Rust. The crate ships two classes
@@ -515,7 +519,7 @@ Threads:
   once. The host answers `TooMuchPosted` only once a place has freed and `HandOffFailed` at its
   deadline, so the retry never spins the owner.
 - **Whatever reads a content provider or the file system runs on a thread of its own**
-  (`android::workers`), at most `Workers::MAX_IN_FLIGHT` per runtime; a request past that answers
+  holding one of the runtime's off-owner places; a request past that answers
   `Unavailable`, and a worker gives its place back on every exit. A provider answers when it will
   and may ignore a cancellation, so a worker can stay inside a call.
 
@@ -701,8 +705,7 @@ what is not built is in [`docs/gaps.md`](../../docs/gaps.md#sandbox-aware-file-a
   giving a permission back when no grant can hold its URI, and reacquires the document on a
   worker as its contents, refused `Revoked` once the permission is no longer held; Linux and
   Windows keep the path and ask the file system on the portal's pool or a shell thread, a file
-  gone from the document portal's folder answering `Revoked`, one gone elsewhere `Missing`. The
-  web refuses the capability (`NotYetOnThisHost`).
+  gone from the document portal's folder answering `Revoked`, one gone elsewhere `Missing`.
 - The scripted double (`testing::ScriptedGrants`) resolves from a `GrantStore` that outlives the
   providers, as a system's permission store outlives the process, in the `Sandbox` the test set:
   a restart is a new host over the same store. Its grants stand in for the host's kind of grant

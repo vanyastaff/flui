@@ -457,3 +457,121 @@ fn a_wake_that_panics_while_a_frame_is_reported_does_not_replace_the_frames_fail
         "the wake's panic did not replace it"
     );
 }
+
+#[test]
+fn frames_drawn_before_the_first_window_is_vended_are_not_replayed() {
+    let clock = ManualClock::new();
+    let ui_runtime = manual_clock_ui_runtime(&clock);
+    let _presses = counter(&ui_runtime, None);
+    // The first frame is skipped and its retry presented, so the presentation has frames of
+    // both kinds before any agent serves it, and no frame reports to one.
+    let mut sink = ScriptedSink::fails_once_then_presents(SubmitVerdict::Retry);
+    frame(&ui_runtime, &mut sink);
+    frame(&ui_runtime, &mut sink);
+    let (presented, skipped) = {
+        let state = ui_runtime
+            .presentations
+            .get(ui_runtime.presentation_id())
+            .expect("the primary presentation");
+        (state.frames_rendered(), state.frames_dropped())
+    };
+    assert!(
+        presented > 0 && skipped > 0,
+        "a frame of each kind was shown before the vend: {presented} presented, {skipped} skipped"
+    );
+
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
+        .expect("the ui_runtime hosts its primary presentation");
+    let mut stream =
+        subscribe(&ui_runtime, &window, &[EventKind::Frame]).expect("the window admits it");
+    // Vending the window asks for a frame, which builds the tree it reads; the tap then has the
+    // next frame present the new count.
+    frame(&ui_runtime, &mut sink);
+    tap(&ui_runtime, &window);
+    frame(&ui_runtime, &mut sink);
+
+    let heard: Vec<(u64, bool)> = drain(&mut stream)
+        .iter()
+        .map(|event| match event {
+            Event::Frame(frame) => (frame.frame, frame.presented),
+            other => panic!("only frame events were asked for: {other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        heard,
+        [(presented + skipped + 1, true)],
+        "the subscriber hears the one frame presented after it, numbered after the frames \
+         already presented and skipped"
+    );
+}
+
+#[test]
+fn a_runtime_that_vended_no_window_drops_agent_commands_unanswered() {
+    use flui_protocol::record::RecordParams;
+
+    let clock = ManualClock::new();
+    let ui_runtime = manual_clock_ui_runtime(&clock);
+    let presentation_id = ui_runtime.presentation_id();
+    let sender = ui_runtime.command_sender();
+    let (reply, mut subscribed) = flui_view::__runtime::reply_pair();
+    sender
+        .send(UiCommand::AgentSubscribe {
+            presentation_id,
+            filters: vec![EventFilter::new(EventKind::Frame)],
+            reply,
+        })
+        .expect("the inbox has room");
+    let (reply, mut recording) = flui_view::__runtime::reply_pair();
+    sender
+        .send(UiCommand::AgentRecord {
+            presentation_id,
+            params: RecordParams::input(None),
+            reply,
+        })
+        .expect("the inbox has room");
+
+    let report = ui_runtime.drain_commands();
+    assert_eq!(
+        (report.invoked, report.dropped_stale),
+        (0, 2),
+        "no agent side serves them: each is dropped as stale"
+    );
+    let codes = [
+        subscribed
+            .try_take()
+            .expect("a dropped reply answers at once")
+            .expect_err("the subscription was never served")
+            .code,
+        recording
+            .try_take()
+            .expect("a dropped reply answers at once")
+            .expect_err("the recording was never started")
+            .code,
+    ];
+    assert_eq!(
+        codes,
+        [ErrorCode::ShuttingDown, ErrorCode::ShuttingDown],
+        "a dropped reply reads as an owner that went without answering"
+    );
+}
+
+#[test]
+fn a_window_vended_again_after_collection_stopped_reports_the_rebuilt_tree() {
+    let (ui_runtime, window, mut sink) = shown();
+    drop(window);
+    // With every handle gone, collection stops on the next frame.
+    frame(&ui_runtime, &mut sink);
+
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
+        .expect("the ui_runtime hosts its primary presentation");
+    let mut trees =
+        subscribe(&ui_runtime, &window, &[EventKind::Semantics]).expect("the window admits it");
+    frame(&ui_runtime, &mut sink);
+    assert_eq!(
+        kinds(&drain(&mut trees)),
+        [EventKind::Semantics],
+        "the tree collection rebuilt is a new one to the subscriber, whatever its revision"
+    );
+}

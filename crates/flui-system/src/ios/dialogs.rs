@@ -126,13 +126,13 @@ mod uikit {
     };
     use crate::apple::file_url;
     use crate::apple::modal::{Pending, WeakPending};
-    use crate::apple::queue::WorkQueue;
     use crate::apple::version::{IOSVersion, Since};
     use crate::dialog::{
         DialogError, DialogHold, FileDialogBackend, FileDialogCapability, OpenRequest, OpenResult,
         SaveRequest, SaveResult,
     };
-    use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
+    use crate::off_owner::OffOwner;
+    use flui_foundation::panic::{AfterPanic, ContainedIvars, os_entry};
 
     /// The uniform type identifier every document conforms to.
     const EVERY_DOCUMENT: &str = "public.item";
@@ -296,7 +296,7 @@ mod uikit {
         mtm: MainThreadMarker,
         content_types: Option<HasContentTypes>,
         export_initializer: Option<Since<ExportInitializer>>,
-        queue: Rc<WorkQueue>,
+        queue: Rc<OffOwner>,
         completions: CompletionSource,
     }
 
@@ -319,7 +319,7 @@ mod uikit {
         pub(crate) fn new(
             mtm: MainThreadMarker,
             version: IOSVersion,
-            queue: Rc<WorkQueue>,
+            queue: Rc<OffOwner>,
             completions: CompletionSource,
         ) -> Self {
             Self {
@@ -468,7 +468,7 @@ mod uikit {
                     };
                     let busy = Err(unsupported(UnsupportedReason::Unavailable));
                     let filter = filter.clone();
-                    queue.run(answer, busy, move || {
+                    queue.dispatch(answer, busy, move || {
                         read_picks(urls, filter.as_ref(), content_types, limit, keep_access)
                     });
                 }
@@ -510,7 +510,7 @@ mod uikit {
             let busy = Err(unsupported(UnsupportedReason::Unavailable));
             let to_write = Arc::clone(&contents);
             self.queue
-                .run(write, busy, move || ExportFile::write(&name, &to_write));
+                .dispatch(write, busy, move || ExportFile::write(&name, &to_write));
 
             let pending = Pending::new(answer);
             let hold = PickerHold {
@@ -623,7 +623,7 @@ mod tests {
         let contents: Arc<[u8]> = Arc::from(&b"hello"[..]);
         let request = SaveRequest::new()
             .suggested_name("notes")
-            .filter(FileFilter::new("Text").with_extension("txt"))
+            .filter(FileFilter::new("Text").extension("txt"))
             .contents(Arc::clone(&contents));
         assert_eq!(export_of(&request), Ok(("notes.txt".to_owned(), contents)));
         let unnamed = SaveRequest::new().contents(Arc::<[u8]>::from(&b""[..]));

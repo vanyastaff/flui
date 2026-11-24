@@ -35,18 +35,18 @@ use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use flui_platform::capability::{
-    CapabilityRegistrar, CompletionSource, PortalParent, ProviderContext, WindowRef,
-};
-use flui_platform::launch::{Launcher, LauncherCapability};
+use flui_platform::capability::{CompletionSource, PortalParent, ProviderContext, WindowRef};
+use flui_platform::launch::Launcher;
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
-use crate::autostart::{Autostart, AutostartCapability};
-use crate::dialog::{FileDialogCapability, FileDialogs};
-use crate::grant::{GrantCapability, Grants};
-use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
-use crate::taskbar::{TaskbarCapability, TaskbarEntry};
-use crate::user_dirs::{UserDirCapability, UserDirs};
+use crate::autostart::Autostart;
+use crate::dialog::FileDialogs;
+use crate::grant::Grants;
+use crate::off_owner::{OffOwner, Place};
+use crate::providers::{Providers, Provision};
+use crate::shortcuts::GlobalShortcuts;
+use crate::taskbar::TaskbarEntry;
+use crate::user_dirs::UserDirs;
 
 pub(crate) use background::PortalAutostart;
 pub(crate) use dialogs::PortalDialogs;
@@ -513,7 +513,14 @@ pub(crate) struct Portal {
     next_token: Cell<u64>,
     address: RefCell<Option<Arc<str>>>,
     app_id: RefCell<Option<AppName>>,
+    /// The runtime's off-owner places, on Linux the portal's.
+    off_owner: OffOwner,
 }
+
+/// A request's place among the runtime's off-owner places, taken once the
+/// portal's thread runs: what proves [`Portal::spawn_reserved`] may run it.
+#[must_use = "the place is given back when it drops"]
+pub(crate) struct Reservation(#[expect(dead_code, reason = "held for its drop")] Place);
 
 impl Portal {
     /// Talk to the portal on the bus at `address` instead of the session
@@ -541,7 +548,50 @@ impl Portal {
         Ok(())
     }
 
-    /// Run `request` on the portal's thread, with the session bus.
+    /// Start the portal's thread unless it runs, and take one of the
+    /// runtime's off-owner places for a request that reads the file system
+    /// or waits on the portal: what [`Portal::spawn_reserved`] runs.
+    ///
+    /// # Errors
+    ///
+    /// The thread could not be made, or every place is taken
+    /// (`Unavailable` either way).
+    pub(crate) fn reserve(&self) -> Result<Reservation, PortalError> {
+        self.start()?;
+        self.off_owner
+            .place()
+            .map(Reservation)
+            .ok_or(PortalError::Unsupported(Unsupported::new(
+                UnsupportedReason::Unavailable,
+            )))
+    }
+
+    /// The runtime's off-owner places, which the portal's requests take and
+    /// every other piece of work off the owner thread (a save's write)
+    /// takes its place in too.
+    pub(crate) fn off_owner(&self) -> &OffOwner {
+        &self.off_owner
+    }
+
+    /// Run `request` on the portal's thread, with the session bus, holding
+    /// `reservation`'s place until it ends, cancelled at the drain included.
+    pub(crate) fn spawn_reserved<F, Fut>(&self, reservation: Reservation, request: F)
+    where
+        F: FnOnce(Arc<Bus>) -> Fut,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.spawn(move |bus| {
+            let request = request(bus);
+            async move {
+                let _place = reservation;
+                request.await;
+            }
+        });
+    }
+
+    /// Run `request` on the portal's thread, with the session bus, holding
+    /// no place: a request whose number something else bounds (a window's
+    /// one dialog, a binding's watch, the launcher entry's latest state).
     ///
     /// # Panics
     ///
@@ -596,74 +646,65 @@ pub(crate) fn with_parent(
     });
 }
 
-/// Register the portal's providers: on the session bus, or on the bus at
+/// The Linux providers, the portal's: on the session bus, or on the bus at
 /// `address`, naming the application by `app_id` when given, else by the id
 /// the composition root names it by.
-pub(crate) fn register(
-    registrar: &mut CapabilityRegistrar,
-    address: Option<Arc<str>>,
-    app_id: Option<AppName>,
-) {
+pub(crate) fn providers(address: Option<Arc<str>>, app_id: Option<AppName>) -> Providers {
     let configure = move |ctx: &ProviderContext<'_>| {
         let portal = ctx.runtime_local::<Portal>();
         portal.configure(address.clone(), app_id.clone().or_else(|| AppName::of(ctx)));
         portal
     };
     let launcher = configure.clone();
-    registrar.provide::<LauncherCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Launcher::new(
-            PortalLauncher::new(launcher(ctx), ctx.window(), ctx.completions().clone()),
-            ctx,
-        ))
-    });
     let dialogs = configure.clone();
-    registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
-        FileDialogs::try_new(
-            PortalDialogs::new(dialogs(ctx), ctx.completions().clone()),
-            ctx,
-        )
-    });
     let autostart = configure.clone();
-    registrar.provide::<AutostartCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Autostart::new(
-            PortalAutostart::new(autostart(ctx), ctx),
-            ctx,
-        ))
-    });
     let shortcuts = configure.clone();
-    registrar.provide::<GlobalShortcutCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(GlobalShortcuts::new(
-            PortalShortcuts::new(shortcuts(ctx), ctx),
-            ctx,
-        ))
-    });
     let entry = configure.clone();
-    registrar.provide::<TaskbarCapability>(move |ctx: &ProviderContext<'_>| {
-        let portal = entry(ctx);
-        let app_id = portal.app_id.borrow().clone();
-        let feed = std::sync::Arc::clone(&ctx.runtime_local::<EntryFeedSlot>().0);
-        LauncherEntry::try_new(portal, app_id, feed).map(|entry| TaskbarEntry::new(entry, ctx))
-    });
     let dirs = configure.clone();
-    registrar.provide::<UserDirCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(UserDirs::new(XdgUserDirs::new(dirs(ctx)), ctx))
-    });
     let grants = configure;
-    registrar.provide::<GrantCapability>(move |ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Grants::new(grants::PortalGrants::new(grants(ctx)), ctx))
-    });
-    // No portal shows a message box or a share sheet, and the jump list is
-    // Windows': refused for good, never faked.
-    refuse_for_good::<crate::dialog::MessageBoxCapability>(registrar);
-    refuse_for_good::<crate::share::ShareCapability>(registrar);
-    refuse_for_good::<crate::jump_list::JumpListCapability>(registrar);
-}
-
-/// Provide `C` as a refusal with `NotOnThisPlatform`.
-fn refuse_for_good<C: flui_platform::capability::Capability>(registrar: &mut CapabilityRegistrar) {
-    registrar.provide::<C>(|_: &ProviderContext<'_>| {
-        Err::<C::Handle, _>(Unsupported::of::<C>(
-            flui_platform::UnsupportedReason::NotOnThisPlatform,
-        ))
-    });
+    Providers {
+        launcher: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Launcher::new(
+                PortalLauncher::new(launcher(ctx), ctx.window(), ctx.completions().clone()),
+                ctx,
+            ))
+        }),
+        file_dialogs: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            FileDialogs::try_new(
+                PortalDialogs::new(dialogs(ctx), ctx.completions().clone()),
+                ctx,
+            )
+        }),
+        autostart: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Autostart::new(
+                PortalAutostart::new(autostart(ctx), ctx),
+                ctx,
+            ))
+        }),
+        global_shortcuts: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(GlobalShortcuts::new(
+                PortalShortcuts::new(shortcuts(ctx), ctx),
+                ctx,
+            ))
+        }),
+        taskbar: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            let portal = entry(ctx);
+            let app_id = portal.app_id.borrow().clone();
+            let feed = std::sync::Arc::clone(&ctx.runtime_local::<EntryFeedSlot>().0);
+            LauncherEntry::try_new(portal, app_id, feed).map(|entry| TaskbarEntry::new(entry, ctx))
+        }),
+        user_dirs: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(UserDirs::new(XdgUserDirs::new(dirs(ctx)), ctx))
+        }),
+        grants: Provision::provided(move |ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Grants::new(grants::PortalGrants::new(grants(ctx)), ctx))
+        }),
+        // No portal shows a message box or a share sheet, and the jump list
+        // is Windows': refused for good, never faked.
+        message_boxes: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+        share: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+        jump_list: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+        // The system information has no Linux provider yet.
+        os: Provision::Refused(UnsupportedReason::NotYetOnThisHost),
+    }
 }

@@ -32,9 +32,11 @@ pub(crate) struct PatchFacts<'p> {
     /// A node whose operations leave no footprint: the planted defect the
     /// property test must catch.
     pub(crate) skip: Option<NodeKey>,
-    /// Whether an effect update reads the inside and the chain both
-    /// versions share once; `false` reads each version's own, the path a
-    /// test holds the shared one equal to.
+    /// Whether the pass reads once what many footprints share: an effect
+    /// update's inside and the chain both versions share, and the chain into
+    /// a republished content for each of its chunks. `false` reads each
+    /// version's and each entry's own, the path a test holds the shared one
+    /// equal to.
     pub(crate) share: bool,
 }
 
@@ -653,14 +655,19 @@ fn content_damage(
                 .parent()
                 .is_none_or(|parent| flags[parent.get()])
     };
+    // A content that moved many chunks (a list that dropped its first rows)
+    // damages each under both versions: each version's chain into the
+    // content is folded once for all of them.
+    let mut landing = new.landing(key, facts.share);
     for index in 0..new_entries.len() {
         if top(new_entries, stable, index) {
-            footprints.add(new.entry_reach(key, EntryIndex::at(index)));
+            footprints.add(landing.entry_reach(EntryIndex::at(index)));
         }
     }
+    let mut landing = old.landing(key, facts.share);
     for index in 0..old_entries.len() {
         if top(old_entries, kept, index) {
-            footprints.add(old.entry_reach(key, EntryIndex::at(index)));
+            footprints.add(landing.entry_reach(EntryIndex::at(index)));
         }
     }
 }

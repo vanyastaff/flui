@@ -66,8 +66,8 @@ fn an_open_dialog_is_modal_to_the_widgets_window_and_answers_its_picks() {
         .directory(std::env::temp_dir())
         .filter(
             FileFilter::new("Images")
-                .with_extension(".png")
-                .with_mime_type("image/png"),
+                .extension(".png")
+                .mime_type("image/png"),
         );
     let answered = land(handle.open(request.clone()));
     turn(&mut host);
@@ -195,8 +195,8 @@ fn a_save_reports_the_filter_selected_when_the_user_accepted() {
     let handle = handle.expect("the scripted plugin provides dialogs");
     let request = || {
         SaveRequest::new()
-            .filter(FileFilter::new("PNG").with_extension("png"))
-            .filter(FileFilter::new("JPEG").with_extension("jpg"))
+            .filter(FileFilter::new("PNG").extension("png"))
+            .filter(FileFilter::new("JPEG").extension("jpg"))
     };
 
     dialogs.answer_next_save(Ok(Some(SaveLocation::new(file("picture"), Some(1)))));
@@ -339,31 +339,25 @@ fn a_pick_whose_name_ends_in_no_extension_of_the_filters_refuses_the_whole_answe
     let handle = handle.expect("the scripted plugin provides dialogs");
     let by_name = || {
         vec![
-            FileFilter::new("Text").with_extension("txt"),
-            FileFilter::new("Archives").with_extension("tar.gz"),
+            FileFilter::new("Text").extension("txt"),
+            FileFilter::new("Archives").extension("tar.gz"),
         ]
     };
-    let by_name_or_type = || {
-        vec![
-            FileFilter::new("Text")
-                .with_extension("txt")
-                .with_mime_type("text/*"),
-        ]
-    };
+    let by_name_or_type = || vec![FileFilter::new("Text").extension("txt").mime_type("text/*")];
     // "All files" offered beside a specific filter, as an application does
     // so the user can reach a file the filter does not name.
     let with_all_files = || {
         vec![
-            FileFilter::new("Text").with_extension("txt"),
+            FileFilter::new("Text").extension("txt"),
             FileFilter::all_files("All files"),
         ]
     };
     let by_file_name = || {
         vec![
             FileFilter::new("Build files")
-                .with_file_name("Makefile")
-                .with_file_name(".env")
-                .with_extension("mk"),
+                .file_name("Makefile")
+                .file_name(".env")
+                .extension("mk"),
         ]
     };
     let cases: [(Vec<FileFilter>, &[&str], bool); 19] = [
@@ -554,13 +548,13 @@ fn a_dropped_dialog_is_dismissed_and_frees_its_window() {
 #[test]
 fn a_filter_keeps_each_pattern_once_as_the_dialog_compares_it() {
     let filter = FileFilter::new("Archives")
-        .with_extension(".TAR.GZ")
-        .with_extension("tar.gz")
-        .with_extension("Zip")
-        .with_extension(".zip")
-        .with_mime_type("Application/ZIP")
-        .with_mime_type("application/zip")
-        .with_mime_type("image/*");
+        .extension(".TAR.GZ")
+        .extension("tar.gz")
+        .extension("Zip")
+        .extension(".zip")
+        .mime_type("Application/ZIP")
+        .mime_type("application/zip")
+        .mime_type("image/*");
     assert_eq!(
         filter.extensions(),
         ["tar.gz", "zip"],
@@ -568,15 +562,15 @@ fn a_filter_keeps_each_pattern_once_as_the_dialog_compares_it() {
     );
     assert_eq!(filter.mime_types(), ["application/zip", "image/*"]);
     assert_eq!(
-        FileFilter::new("Images").with_extension("PNG"),
-        FileFilter::new("Images").with_extension("png"),
+        FileFilter::new("Images").extension("PNG"),
+        FileFilter::new("Images").extension("png"),
         "two spellings of one extension are one filter"
     );
 
     let build = FileFilter::new("Build files")
-        .with_file_name("Makefile")
-        .with_file_name("makefile")
-        .with_file_name(".env");
+        .file_name("Makefile")
+        .file_name("makefile")
+        .file_name(".env");
     assert_eq!(
         build.file_names(),
         ["Makefile", ".env"],
@@ -585,9 +579,9 @@ fn a_filter_keeps_each_pattern_once_as_the_dialog_compares_it() {
     assert!(!build.is_all_files());
 
     let every = FileFilter::all_files("All files")
-        .with_extension("png")
-        .with_file_name("Makefile")
-        .with_mime_type("image/*");
+        .extension("png")
+        .file_name("Makefile")
+        .mime_type("image/*");
     assert!(every.is_all_files());
     assert!(
         every.extensions().is_empty()
@@ -641,23 +635,22 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
     let (dialogs, plugin) = scripted();
     let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides dialogs");
-    let images = || FileFilter::new("Images").with_extension("png");
+    let images = || FileFilter::new("Images").extension("png");
     let longest = "a".repeat(FileFilter::MAX_PATTERN_LEN);
     let too_long = "a".repeat(FileFilter::MAX_PATTERN_LEN + 1);
 
     let opens = [
         (
-            OpenRequest::files().filter(FileFilter::new("").with_extension("png")),
+            OpenRequest::files().filter(FileFilter::new("").extension("png")),
             MalformedRequest::FilterName,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Bell\u{7}").with_extension("png")),
+            OpenRequest::files().filter(FileFilter::new("Bell\u{7}").extension("png")),
             MalformedRequest::FilterName,
         ),
         (
-            OpenRequest::files().filter(
-                FileFilter::new("n".repeat(FileFilter::MAX_NAME_LEN + 1)).with_extension("png"),
-            ),
+            OpenRequest::files()
+                .filter(FileFilter::new("n".repeat(FileFilter::MAX_NAME_LEN + 1)).extension("png")),
             MalformedRequest::FilterName,
         ),
         (
@@ -667,118 +660,116 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
         // A pattern given to a filter of every file would be dropped
         // unseen: the filter would not mean what its author wrote.
         (
-            OpenRequest::files().filter(FileFilter::all_files("All files").with_extension("png")),
+            OpenRequest::files().filter(FileFilter::all_files("All files").extension("png")),
             MalformedRequest::PatternOnAllFiles,
         ),
         (
-            OpenRequest::files()
-                .filter(FileFilter::all_files("All files").with_file_name("Makefile")),
+            OpenRequest::files().filter(FileFilter::all_files("All files").file_name("Makefile")),
             MalformedRequest::PatternOnAllFiles,
         ),
         (
-            OpenRequest::files()
-                .filter(FileFilter::all_files("All files").with_mime_type("image/*")),
+            OpenRequest::files().filter(FileFilter::all_files("All files").mime_type("image/*")),
             MalformedRequest::PatternOnAllFiles,
         ),
         (
             OpenRequest::files().filter(
                 (0..=FileFilter::MAX_PATTERNS).fold(FileFilter::new("Many"), |filter, index| {
-                    filter.with_extension(format!("e{index}"))
+                    filter.extension(format!("e{index}"))
                 }),
             ),
             MalformedRequest::TooManyPatterns,
         ),
         (
             (0..=FileFilter::MAX_PER_REQUEST).fold(OpenRequest::files(), |request, index| {
-                request.filter(FileFilter::new(format!("F{index}")).with_extension("png"))
+                request.filter(FileFilter::new(format!("F{index}")).extension("png"))
             }),
             MalformedRequest::TooManyFilters,
         ),
         // A wildcard, a separator or an empty part reads differently on
         // each system, so no extension holds one.
         (
-            OpenRequest::files().filter(FileFilter::new("Glob").with_extension("*.png")),
+            OpenRequest::files().filter(FileFilter::new("Glob").extension("*.png")),
             MalformedRequest::Extension,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("One").with_extension("pn?")),
+            OpenRequest::files().filter(FileFilter::new("One").extension("pn?")),
             MalformedRequest::Extension,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Set").with_extension("[pP]ng")),
+            OpenRequest::files().filter(FileFilter::new("Set").extension("[pP]ng")),
             MalformedRequest::Extension,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("List").with_extension("png;exe")),
+            OpenRequest::files().filter(FileFilter::new("List").extension("png;exe")),
             MalformedRequest::Extension,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Path").with_extension("a/b")),
+            OpenRequest::files().filter(FileFilter::new("Path").extension("a/b")),
             MalformedRequest::Extension,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Gap").with_extension("tar..gz")),
+            OpenRequest::files().filter(FileFilter::new("Gap").extension("tar..gz")),
             MalformedRequest::Extension,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Dot").with_extension(".")),
+            OpenRequest::files().filter(FileFilter::new("Dot").extension(".")),
             MalformedRequest::Extension,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Space").with_extension("p ng")),
+            OpenRequest::files().filter(FileFilter::new("Space").extension("p ng")),
             MalformedRequest::Extension,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Accent").with_extension("pñg")),
+            OpenRequest::files().filter(FileFilter::new("Accent").extension("pñg")),
             MalformedRequest::Extension,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Long").with_extension(too_long.as_str())),
+            OpenRequest::files().filter(FileFilter::new("Long").extension(too_long.as_str())),
             MalformedRequest::Extension,
         ),
         // A file name is matched whole, so it holds no wildcard, separator
         // or space, is not a folder's own name, and ends in no dot, which
         // Windows drops.
         (
-            OpenRequest::files().filter(FileFilter::new("Glob").with_file_name("Make*")),
+            OpenRequest::files().filter(FileFilter::new("Glob").file_name("Make*")),
             MalformedRequest::FileName,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Path").with_file_name("src/Makefile")),
+            OpenRequest::files().filter(FileFilter::new("Path").file_name("src/Makefile")),
             MalformedRequest::FileName,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("List").with_file_name("a;b")),
+            OpenRequest::files().filter(FileFilter::new("List").file_name("a;b")),
             MalformedRequest::FileName,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Space").with_file_name("READ ME")),
+            OpenRequest::files().filter(FileFilter::new("Space").file_name("READ ME")),
             MalformedRequest::FileName,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("None").with_file_name("")),
+            OpenRequest::files().filter(FileFilter::new("None").file_name("")),
             MalformedRequest::FileName,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Here").with_file_name(".")),
+            OpenRequest::files().filter(FileFilter::new("Here").file_name(".")),
             MalformedRequest::FileName,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Up").with_file_name("..")),
+            OpenRequest::files().filter(FileFilter::new("Up").file_name("..")),
             MalformedRequest::FileName,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Dot").with_file_name("notes.")),
+            OpenRequest::files().filter(FileFilter::new("Dot").file_name("notes.")),
             MalformedRequest::FileName,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Long").with_file_name(too_long.as_str())),
+            OpenRequest::files().filter(FileFilter::new("Long").file_name(too_long.as_str())),
             MalformedRequest::FileName,
         ),
         (
             OpenRequest::files().filter((0..FileFilter::MAX_PATTERNS).fold(
-                FileFilter::new("Many").with_file_name("Makefile"),
-                |filter, index| filter.with_extension(format!("e{index}")),
+                FileFilter::new("Many").file_name("Makefile"),
+                |filter, index| filter.extension(format!("e{index}")),
             )),
             MalformedRequest::TooManyPatterns,
         ),
@@ -791,22 +782,22 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
             MalformedRequest::FiltersOnFolders,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Mime").with_mime_type("image")),
+            OpenRequest::files().filter(FileFilter::new("Mime").mime_type("image")),
             MalformedRequest::MimeType,
         ),
         (
-            OpenRequest::files().filter(FileFilter::new("Any").with_mime_type("*/*")),
+            OpenRequest::files().filter(FileFilter::new("Any").mime_type("*/*")),
             MalformedRequest::MimeType,
         ),
         (
             OpenRequest::files()
-                .filter(FileFilter::new("Charset").with_mime_type("text/plain;charset=utf-8")),
+                .filter(FileFilter::new("Charset").mime_type("text/plain;charset=utf-8")),
             MalformedRequest::MimeType,
         ),
         (
             OpenRequest::files()
                 .filter(images())
-                .filter(FileFilter::new(" Images ").with_extension("jpg")),
+                .filter(FileFilter::new(" Images ").extension("jpg")),
             MalformedRequest::DuplicateFilterName,
         ),
         (
@@ -893,12 +884,12 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
         handle.open(
             OpenRequest::files().filter(
                 FileFilter::new("Many")
-                    .with_extension("tar.gz")
-                    .with_extension("c++")
-                    .with_extension("my_ext-2")
-                    .with_extension(longest.as_str())
-                    .with_mime_type("image/*")
-                    .with_mime_type("application/vnd.ms-excel"),
+                    .extension("tar.gz")
+                    .extension("c++")
+                    .extension("my_ext-2")
+                    .extension(longest.as_str())
+                    .mime_type("image/*")
+                    .mime_type("application/vnd.ms-excel"),
             ),
         ),
     );
@@ -914,11 +905,11 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
                 .filter(FileFilter::all_files("All files"))
                 .filter(
                     FileFilter::new("Named")
-                        .with_file_name("Makefile")
-                        .with_file_name(".env.local")
-                        .with_file_name("CMakeLists.txt")
-                        .with_file_name("my_file-2+")
-                        .with_file_name(longest.as_str()),
+                        .file_name("Makefile")
+                        .file_name(".env.local")
+                        .file_name("CMakeLists.txt")
+                        .file_name("my_file-2+")
+                        .file_name(longest.as_str()),
                 ),
         ),
     );
@@ -928,10 +919,10 @@ fn a_malformed_request_is_refused_without_showing_a_dialog() {
     // Each bound is taken at its limit.
     let at_limits = (1..FileFilter::MAX_PER_REQUEST).fold(
         OpenRequest::files().filter((1..FileFilter::MAX_PATTERNS).fold(
-            FileFilter::new("n".repeat(FileFilter::MAX_NAME_LEN)).with_extension("e0"),
-            |filter, index| filter.with_extension(format!("e{index}")),
+            FileFilter::new("n".repeat(FileFilter::MAX_NAME_LEN)).extension("e0"),
+            |filter, index| filter.extension(format!("e{index}")),
         )),
-        |request, index| request.filter(FileFilter::new(format!("F{index}")).with_extension("png")),
+        |request, index| request.filter(FileFilter::new(format!("F{index}")).extension("png")),
     );
     assert_eq!(at_limits.filters.len(), FileFilter::MAX_PER_REQUEST);
     assert_eq!(
@@ -1143,7 +1134,7 @@ fn a_save_with_contents_answers_once_they_are_written_where_the_user_chose() {
     let answered = land(
         handle.save(
             SaveRequest::new()
-                .filter(FileFilter::new("Text").with_extension("txt"))
+                .filter(FileFilter::new("Text").extension("txt"))
                 .contents(b"written".to_vec()),
         ),
     );
@@ -1181,6 +1172,78 @@ fn a_save_whose_write_fails_answers_the_systems_failure() {
         "the system's code: {failure:?}"
     );
     assert!(!unwritable.exists());
+}
+
+/// The writes of saves are work off the owner thread, bounded per UI
+/// runtime: while every place is held by a write that cannot end (a named
+/// pipe with no reader), the next save is refused at once, `Unavailable`,
+/// instead of starting another thread; the held writes end as the pipe is
+/// read.
+#[test]
+#[cfg(unix)]
+fn a_save_past_the_runtimes_bound_on_writes_is_refused_at_once() {
+    /// More saves than any bound a runtime keeps.
+    const ATTEMPTS: usize = 64;
+    let (dialogs, plugin) = scripted();
+    let (mut host, handle) = acquire::<FileDialogCapability>(&plugin);
+    let handle = handle.expect("the scripted plugin provides dialogs");
+    let folder = tempfile::tempdir().expect("a test folder");
+    let fifo = folder.path().join("pipe");
+    let made = std::process::Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
+    assert!(made.success(), "a named pipe is made");
+    let chosen = SaveLocation::new(PickedFile::try_new(&fifo).expect("an absolute path"), None);
+
+    let mut held = Vec::new();
+    let mut refused = None;
+    for _ in 0..ATTEMPTS {
+        dialogs.answer_next_save(Ok(Some(chosen.clone())));
+        let answered = land(handle.save(SaveRequest::new().contents(b"held".to_vec())));
+        // The chooser's answer, the write's refusal and the caller's answer
+        // each settle at an owner turn; a write that runs answers nothing
+        // until the pipe is read.
+        for _ in 0..8 {
+            turn(&mut host);
+        }
+        if answered.borrow().is_some() {
+            refused = answered.borrow_mut().take();
+            break;
+        }
+        held.push(answered);
+    }
+    // Read the pipe until every held write wrote, whatever the outcome: a
+    // writer that opens after the others closed meets a reader again.
+    let expected = held.len() * b"held".len();
+    let reader = std::thread::spawn(move || {
+        let mut read = 0;
+        while read < expected {
+            read += std::fs::read(&fifo).expect("the pipe is read").len();
+        }
+        read
+    });
+    let Some(refused) = refused else {
+        panic!("{ATTEMPTS} saves started a write each: none was refused");
+    };
+    assert!(
+        !held.is_empty(),
+        "a write holds a place before any is refused"
+    );
+    match refused {
+        Ok(Err(DialogError::Unsupported(unsupported))) => {
+            assert_eq!(
+                unsupported.reason,
+                flui_platform::UnsupportedReason::Unavailable
+            );
+        }
+        other => panic!("the save past the bound is refused: {other:?}"),
+    }
+    for answered in &held {
+        turn_until_landed(&mut host, answered);
+        assert_eq!(*answered.borrow(), Some(Ok(Ok(Some(chosen.clone())))));
+    }
+    assert_eq!(reader.join().expect("the reader ends"), expected);
 }
 
 #[test]
@@ -1486,10 +1549,10 @@ fn what_a_system_hands_over_is_held_to_the_requests_bounds_on_every_host() {
 #[test]
 fn a_filter_means_a_files_name_or_its_type_ignoring_ascii_case() {
     let images = FileFilter::new("Images")
-        .with_extension("png")
-        .with_extension("tar.gz")
-        .with_mime_type("image/*")
-        .with_mime_type("application/pdf");
+        .extension("png")
+        .extension("tar.gz")
+        .mime_type("image/*")
+        .mime_type("application/pdf");
     let cases: [(&str, Option<&str>, bool); 11] = [
         ("photo.png", None, true),
         ("PHOTO.PNG", None, true),
@@ -1512,8 +1575,8 @@ fn a_filter_means_a_files_name_or_its_type_ignoring_ascii_case() {
     }
 
     let build = FileFilter::new("Build files")
-        .with_file_name("Makefile")
-        .with_file_name(".env");
+        .file_name("Makefile")
+        .file_name(".env");
     let named: [(&str, Option<&str>, bool); 8] = [
         ("Makefile", None, true),
         ("MAKEFILE", None, true),

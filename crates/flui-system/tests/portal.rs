@@ -922,7 +922,7 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
         .title("Pictures")
         .directory("/home/me")
         .accept_label("Use")
-        .filter(FileFilter::new("Images").with_extension("png"));
+        .filter(FileFilter::new("Images").extension("png"));
     assert_eq!(
         settle(&mut host, dialogs.open(request)),
         Ok(Ok(Picks::try_new(vec![
@@ -1065,11 +1065,11 @@ fn a_portal_save_without_an_extension_is_named_after_the_selected_filter() {
     let file = |name: &str| PickedFile::try_new(at(name)).expect("an absolute path");
     let request = || {
         SaveRequest::new()
-            .filter(FileFilter::new("PNG").with_extension("png"))
+            .filter(FileFilter::new("PNG").extension("png"))
             .filter(
                 FileFilter::new("Archive")
-                    .with_extension("tar.gz")
-                    .with_file_name("backup"),
+                    .extension("tar.gz")
+                    .file_name("backup"),
             )
             .filter(FileFilter::all_files("All files"))
     };
@@ -1172,8 +1172,8 @@ fn a_save_dialog_reports_the_filter_the_portal_says_was_selected() {
     let dialogs = dialogs.expect("the portal provides dialogs on Linux");
     let request = || {
         SaveRequest::new()
-            .filter(FileFilter::new("PNG").with_extension("png"))
-            .filter(FileFilter::new("JPEG").with_extension("jpg"))
+            .filter(FileFilter::new("PNG").extension("png"))
+            .filter(FileFilter::new("JPEG").extension("jpg"))
     };
     // A name with its extension, which no filter completes.
     let answer = |current: Option<(&str, &str)>| saved_as("file:///home/me/picture.jpeg", current);
@@ -1504,4 +1504,76 @@ fn a_dropped_dialog_closes_its_portal_request_and_frees_the_window() {
     let (_, next_path) = portal.held().remove(1);
     portal.release(&next_path, 1, Results::new());
     assert_eq!(settle(&mut host, next), Ok(Ok(None)));
+}
+
+/// The portal's launches are work off the owner thread, bounded per UI
+/// runtime: while every place is held by a launch the portal has not
+/// answered, the next one is refused at once, `Unavailable`, without a call
+/// to the portal; each answered launch gives its place back.
+#[test]
+fn a_launch_past_the_runtimes_bound_on_requests_is_refused_at_once() {
+    /// More launches than any bound a runtime keeps.
+    const ATTEMPTS: usize = 64;
+    let portal = StandIn::serve();
+    portal.hold();
+    let (mut host, launcher) = acquire::<LauncherCapability>(&portal.plugin());
+    let launcher = launcher.expect("the portal provides a launcher on Linux");
+    let uri = ExternalUri::try_new("https://example.com/", &[Scheme::HTTPS]).expect("a web URI");
+
+    let mut held = Vec::new();
+    let mut refused = None;
+    for _ in 0..ATTEMPTS {
+        let slot = outcome_slot::<Result<LaunchResult, Abandoned>>();
+        let into = Rc::clone(&slot);
+        launcher
+            .open_uri(&uri)
+            .on_complete(move |outcome| *into.borrow_mut() = Some(outcome));
+        // A refusal settles at the next owner turn; a held launch answers
+        // nothing until the portal does.
+        for _ in 0..4 {
+            turn(&mut host);
+        }
+        if slot.borrow().is_some() {
+            refused = slot.borrow_mut().take();
+            break;
+        }
+        held.push(slot);
+    }
+    let Some(refused) = refused else {
+        panic!("{ATTEMPTS} launches went to the portal: none was refused");
+    };
+    assert!(
+        !held.is_empty(),
+        "a launch holds a place before any is refused"
+    );
+    match refused {
+        Ok(Err(LaunchError::Unsupported(unsupported))) => assert_eq!(
+            unsupported.reason,
+            flui_platform::UnsupportedReason::Unavailable
+        ),
+        other => panic!("the launch past the bound is refused: {other:?}"),
+    }
+    pump_until(&mut host, "every held launch reached the portal", || {
+        portal.held().len() == held.len()
+    });
+    assert_eq!(
+        portal.calls().len(),
+        held.len(),
+        "the refused launch never reached the portal"
+    );
+
+    for (_, path) in portal.held() {
+        portal.release(&path, 0, Results::new());
+    }
+    for slot in &held {
+        pump_until(&mut host, "a released launch answered", || {
+            slot.borrow().is_some()
+        });
+        assert_eq!(*slot.borrow(), Some(Ok(Ok(()))));
+    }
+    // Every place is free again: the next launch reaches the portal.
+    let _next = launcher.open_uri(&uri);
+    pump_until(&mut host, "the next launch reached the portal", || {
+        portal.calls().len() == held.len() + 1
+    });
 }

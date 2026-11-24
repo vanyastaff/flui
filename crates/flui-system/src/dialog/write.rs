@@ -35,16 +35,20 @@
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, ErrorKind, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use flui_platform::SystemFailure;
 use flui_platform::capability::{CompletionSource, Resolver};
 
-use super::{DialogError, SaveLocation, SaveResult};
+use super::{DialogError, SaveLocation, SaveResult, off_owner_refusal};
+use crate::off_owner::OffOwner;
 
-/// Write `contents` to `path` on a thread of its own, then answer `caller`
-/// with `location`, or with the failure of the write.
+/// Write `contents` to `path` on a thread of its own, holding one of the
+/// runtime's off-owner places, then answer `caller` with `location`, or with
+/// the failure of the write. With every place taken the save is refused at
+/// once (`Unavailable`) and nothing is written.
 pub(super) fn write_file(
+    off_owner: &OffOwner,
     completions: &CompletionSource,
     path: PathBuf,
     contents: Arc<[u8]>,
@@ -69,32 +73,9 @@ pub(super) fn write_file(
             Err(_) => drop(caller),
         }
     });
-    // The thread answers through the slot; a thread that cannot start leaves
-    // the resolver there, and the failure is answered here.
-    let slot = Arc::new(Mutex::new(Some(answer)));
-    let writer = Arc::clone(&slot);
-    let started = std::thread::Builder::new()
-        .name("flui-system-save".to_owned())
-        .spawn(move || {
-            let written = write_replacing(&path, &contents).map_err(|error| write_failure(&error));
-            let answer = writer
-                .lock()
-                .expect("BUG: the save slot's holders run no code under its lock")
-                .take();
-            if let Some(answer) = answer {
-                // A retired owner has nobody left to answer.
-                let _ = answer.resolve(written);
-            }
-        });
-    if let Err(error) = started {
-        let answer = slot
-            .lock()
-            .expect("BUG: the save slot's holders run no code under its lock")
-            .take();
-        if let Some(answer) = answer {
-            let _ = answer.resolve(Err(write_failure(&error)));
-        }
-    }
+    off_owner.run("flui-system-save", answer, off_owner_refusal, move || {
+        write_replacing(&path, &contents).map_err(|error| write_failure(&error))
+    });
 }
 
 /// How many names beside the chosen file a save tries for its new file

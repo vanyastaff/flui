@@ -1,10 +1,9 @@
-//! The threads the shell's work runs on, bounded per UI runtime: each inside
-//! the apartment its calls ask for (`ShellExecuteExW`, `IFileOperation` and
-//! `ICustomDestinationList` a single-threaded one, the WinRT storage calls
-//! a multithreaded one).
+//! The threads the shell's work runs on, each holding one of the runtime's
+//! off-owner places ([`crate::off_owner`]) and inside the apartment its calls
+//! ask for (`ShellExecuteExW`, `IFileOperation` and `ICustomDestinationList`
+//! a single-threaded one, the WinRT storage calls a multithreaded one).
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -13,6 +12,8 @@ use windows::Win32::System::Com::{
     COINIT, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED, CoInitializeEx,
     CoUninitialize,
 };
+
+use crate::off_owner::{self, OffOwner};
 
 /// Which COM apartment a thread enters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -62,25 +63,22 @@ impl Drop for Apartment {
     }
 }
 
-/// The work was refused: the runtime has [`MAX_IN_FLIGHT`] threads running,
-/// or no thread could be started.
+/// The work was refused: the runtime's off-owner places are all taken, or no
+/// thread could be started.
 #[derive(Debug)]
 pub(crate) struct Refused;
 
-/// The most shell threads one UI runtime runs at once.
-pub(crate) const MAX_IN_FLIGHT: usize = 8;
-
-/// The count of one runtime's running shell threads, which the threads
-/// share: what any thread that starts shell work takes a place in, the
-/// owner's requests and the share sheet's handler alike.
+/// The runtime's off-owner places ([`crate::off_owner`]) as its shell
+/// threads take them: what any thread that starts shell work takes a place
+/// in, the owner's requests and the share sheet's handler alike.
 #[derive(Debug, Default)]
 pub(crate) struct ShellPool {
-    running: AtomicUsize,
+    places: OffOwner,
 }
 
 impl ShellPool {
     /// Run `work` on a new thread named `name`, inside an apartment of
-    /// `kind`, holding one of the [`MAX_IN_FLIGHT`] places until it ends,
+    /// `kind`, holding one of the runtime's off-owner places until it ends,
     /// unwinding included, or until the owner reclaims it.
     ///
     /// # Errors
@@ -88,23 +86,13 @@ impl ShellPool {
     /// [`Refused`] when every place is taken, or the thread could not be
     /// started; `work` is dropped unrun, on this thread.
     pub(crate) fn spawn(
-        self: &Arc<Self>,
+        &self,
         name: &str,
         kind: ApartmentKind,
         work: impl FnOnce() + Send + 'static,
     ) -> Result<Arc<Place>, Refused> {
-        let taken = self
-            .running
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |running| {
-                (running < MAX_IN_FLIGHT).then_some(running + 1)
-            });
-        if taken.is_err() {
-            return Err(Refused);
-        }
-        let place = Arc::new(Place {
-            pool: Arc::clone(self),
-            released: AtomicBool::new(false),
-        });
+        let taken = self.places.place().ok_or(Refused)?;
+        let place = Arc::new(Place(Mutex::new(Some(taken))));
         let held = PlaceHold(Arc::clone(&place));
         std::thread::Builder::new()
             .name(name.to_owned())
@@ -117,31 +105,24 @@ impl ShellPool {
             .map_err(|_| Refused)?;
         Ok(place)
     }
-
-    /// How many places are taken now.
-    #[cfg(test)]
-    pub(crate) fn running(&self) -> usize {
-        self.running.load(Ordering::Acquire)
-    }
 }
 
-/// One running thread's place in the count: given back once, by the thread
-/// as it ends or by the owner when it abandons the thread.
+/// One running thread's off-owner place: given back once, by the thread as
+/// it ends or by the owner when it abandons the thread.
 #[derive(Debug)]
-pub(crate) struct Place {
-    pool: Arc<ShellPool>,
-    released: AtomicBool,
-}
+pub(crate) struct Place(Mutex<Option<off_owner::Place>>);
 
 impl Place {
     fn release(&self) {
-        if !self.released.swap(true, Ordering::AcqRel) {
-            self.pool.running.fetch_sub(1, Ordering::AcqRel);
-        }
+        // The slot holds a place or none; nothing runs under its lock.
+        drop(self.0.lock().unwrap_or_else(PoisonError::into_inner).take());
     }
 
     fn is_released(&self) -> bool {
-        self.released.load(Ordering::Acquire)
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_none()
     }
 }
 
@@ -166,7 +147,7 @@ struct Running {
 ///
 /// A request runs on a thread of its own, so one that stalls (a slow disk, a
 /// handler that does not return) delays nobody else; at most
-/// [`MAX_IN_FLIGHT`] run at once, and a request past that is refused for
+/// [`off_owner::MAX_IN_FLIGHT`] run at once, and a request past that is refused for
 /// now. A thread still running [`ABANDON_AFTER`](Self::ABANDON_AFTER) after
 /// it started is abandoned when the owner next needs a place: its place is
 /// given back, its caller answered with the request's refusal, and whatever
@@ -201,6 +182,13 @@ impl ShellThreads {
     /// one off the owner thread.
     pub(crate) fn pool(&self) -> Arc<ShellPool> {
         Arc::clone(&self.pool)
+    }
+
+    /// The runtime's off-owner places, which the shell threads take: every
+    /// other piece of work off the owner thread (a save's write) takes its
+    /// place in the same count.
+    pub(crate) fn off_owner(&self) -> &OffOwner {
+        &self.pool.places
     }
 
     /// Answer `answer` with what `work` returns on a single-threaded
@@ -260,7 +248,7 @@ impl ShellThreads {
     /// How many places are taken now.
     #[cfg(test)]
     pub(crate) fn running(&self) -> usize {
-        self.pool.running()
+        self.pool.places.held()
     }
 }
 
@@ -298,7 +286,8 @@ mod tests {
 
     use flui_platform::capability::Abandoned;
 
-    use super::{ApartmentKind, MAX_IN_FLIGHT, ShellThreads};
+    use super::{ApartmentKind, ShellThreads};
+    use crate::off_owner::MAX_IN_FLIGHT;
     use crate::testing::win32::TestOwner;
 
     /// Where a request's answer lands.

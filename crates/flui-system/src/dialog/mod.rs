@@ -32,6 +32,9 @@ use flui_platform::capability::{
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason, WindowId};
 use rustc_hash::FxHashMap;
 
+#[cfg(any(not(target_arch = "wasm32"), test))]
+use crate::off_owner::NotRun;
+use crate::off_owner::OffOwner;
 pub use message::{
     MessageAnswer, MessageBoxBackend, MessageBoxCapability, MessageBoxRequest, MessageBoxResult,
     MessageBoxes, MessageButtons, MessageLevel,
@@ -142,6 +145,20 @@ impl DialogError {
             | Self::TooManyEntries { .. } => None,
         }
     }
+}
+
+/// What a dialog answers a piece of its work that no thread took: a save's
+/// write, an Android picker's read.
+#[cfg(any(not(target_arch = "wasm32"), test))]
+pub(crate) fn off_owner_refusal<T>(reason: NotRun) -> Result<T, DialogError> {
+    Err(match reason {
+        NotRun::Busy => DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(
+            UnsupportedReason::Unavailable,
+        )),
+        NotRun::NoThread(code) => {
+            DialogError::Failed(code.map_or(SystemFailure::MalformedAnswer, SystemFailure::Os))
+        }
+    })
 }
 
 /// What an open dialog answers: what the user picked, `None` when the user
@@ -485,6 +502,8 @@ impl OpenAnswerRule {
 pub struct FileDialogs {
     backend: Rc<dyn FileDialogBackend>,
     scope: DialogScope,
+    /// The runtime's places for a save's write.
+    off_owner: Rc<OffOwner>,
 }
 
 impl FileDialogs {
@@ -502,6 +521,7 @@ impl FileDialogs {
         Ok(Self {
             backend: Rc::new(backend),
             scope: DialogScope::try_new::<FileDialogCapability>(ctx)?,
+            off_owner: OffOwner::of(ctx),
         })
     }
 
@@ -602,6 +622,7 @@ impl FileDialogs {
             guard,
         } = chosen;
         let completions = self.scope.completions.clone();
+        let off_owner = Rc::clone(&self.off_owner);
         let (completion, caller) = completions.pending();
         let mut waiting = Some((caller, contents));
         chosen.on_complete(move |outcome| {
@@ -611,7 +632,14 @@ impl FileDialogs {
             match outcome {
                 Ok(Ok(Some(location))) => match location.file().path() {
                     Some(path) => {
-                        write_file(&completions, path.to_path_buf(), contents, location, caller);
+                        write_file(
+                            &off_owner,
+                            &completions,
+                            path.to_path_buf(),
+                            contents,
+                            location,
+                            caller,
+                        );
                     }
                     // The backend wrote the contents itself (a browser, iOS).
                     None => {
@@ -619,7 +647,6 @@ impl FileDialogs {
                         let _ = caller.resolve(Ok(Some(location)));
                     }
                 },
-                // A retired owner has nobody left to answer.
                 Ok(unwritten) => {
                     // A retired owner has nobody left to answer.
                     let _ = caller.resolve(unwritten);
@@ -636,6 +663,7 @@ impl FileDialogs {
 /// of this platform hands over no path, so only a stand-in answers one.
 #[cfg(target_arch = "wasm32")]
 fn write_file(
+    _: &OffOwner,
     _: &CompletionSource,
     _: PathBuf,
     _: Arc<[u8]>,

@@ -30,8 +30,8 @@ use windows_collections::IIterable;
 
 use super::threads::{ApartmentKind, ShellPool};
 use super::{Owner, ShellThreads, failure};
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
 use crate::share::{ShareBackend, ShareCapability, ShareError, ShareRequest, ShareResult};
+use flui_foundation::panic::{AfterPanic, os_entry};
 
 /// What a share hands the sheet, owned by its handler.
 #[derive(Debug, PartialEq, Eq)]

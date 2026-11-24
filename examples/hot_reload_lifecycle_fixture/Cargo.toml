@@ -20,3 +20,5 @@ workspace = true
 
 [package.metadata.flui]
 tier-kind = "tool"
+# Hot reload loads the fixture with dlopen, which the web does not have.
+wasm = false

@@ -8779,6 +8779,108 @@
       ],
       "type": "object"
     },
+    "ReloadParams": {
+      "properties": {
+        "at_least": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReloadTier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ReloadReport": {
+      "properties": {
+        "elapsed_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "outcome": {
+          "$ref": "#/$defs/Reloaded"
+        }
+      },
+      "required": [
+        "outcome",
+        "elapsed_ms"
+      ],
+      "type": "object"
+    },
+    "ReloadTier": {
+      "oneOf": [
+        {
+          "const": "reassemble",
+          "type": "string"
+        },
+        {
+          "const": "restart",
+          "type": "string"
+        },
+        {
+          "const": "process_restart",
+          "type": "string"
+        }
+      ]
+    },
+    "Reloaded": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "applied": {
+              "properties": {
+                "tier": {
+                  "$ref": "#/$defs/ReloadTier"
+                }
+              },
+              "required": [
+                "tier"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "applied"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "failed": {
+              "properties": {
+                "diagnostics": {
+                  "items": {
+                    "$ref": "#/$defs/Diagnostic"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
+                },
+                "omitted": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "diagnostics",
+                "omitted"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "failed"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RemainderHandoff": {
       "oneOf": [
         {
@@ -13884,6 +13986,17 @@
       },
       "served_by": "agent",
       "tier": "record"
+    },
+    "run.reload": {
+      "effect": "destructive",
+      "output": {
+        "$ref": "#/$defs/ReloadReport"
+      },
+      "params": {
+        "$ref": "#/$defs/ReloadParams"
+      },
+      "served_by": "supervisor",
+      "tier": "session"
     },
     "semantics.act": {
       "effect": "acts",

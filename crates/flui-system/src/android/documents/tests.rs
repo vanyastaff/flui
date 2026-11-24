@@ -38,9 +38,7 @@ fn known(extension: &str) -> Option<String> {
 }
 
 fn images() -> FileFilter {
-    FileFilter::new("Images")
-        .with_extension("png")
-        .with_extension("jpg")
+    FileFilter::new("Images").extension("png").extension("jpg")
 }
 
 fn refusal(error: DialogError) -> Option<UnsupportedReason> {
@@ -61,17 +59,17 @@ fn a_filter_becomes_the_types_android_maps_it_to_or_every_document() {
     );
     let mixed = [
         FileFilter::new("Pictures")
-            .with_mime_type("image/*")
-            .with_extension("png"),
-        FileFilter::new("Archives").with_extension("tar.gz"),
-        FileFilter::new("Again").with_mime_type("image/png"),
+            .mime_type("image/*")
+            .extension("png"),
+        FileFilter::new("Archives").extension("tar.gz"),
+        FileFilter::new("Again").mime_type("image/png"),
     ];
     assert_eq!(
         open_types(&mixed, known),
         ["image/*", "image/png", "application/gzip"],
         "a stated type as it is, an extension by its last part, each type once"
     );
-    let unknown = [images(), FileFilter::new("Notes").with_extension("note")];
+    let unknown = [images(), FileFilter::new("Notes").extension("note")];
     assert_eq!(
         open_types(&unknown, known),
         every,
@@ -79,7 +77,7 @@ fn a_filter_becomes_the_types_android_maps_it_to_or_every_document() {
     );
     for widening in [
         FileFilter::all_files("Everything"),
-        FileFilter::new("Make").with_file_name("Makefile"),
+        FileFilter::new("Make").file_name("Makefile"),
     ] {
         assert_eq!(
             open_types(&[images(), widening.clone()], known),
@@ -89,7 +87,7 @@ fn a_filter_becomes_the_types_android_maps_it_to_or_every_document() {
     }
     let numbered = |count: usize| {
         (0..count).fold(FileFilter::new("Many"), |filter, index| {
-            filter.with_mime_type(format!("application/x-{index}"))
+            filter.mime_type(format!("application/x-{index}"))
         })
     };
     assert_eq!(
@@ -100,7 +98,7 @@ fn a_filter_becomes_the_types_android_maps_it_to_or_every_document() {
         open_types(
             &[
                 numbered(MAX_INTENT_TYPES),
-                FileFilter::new("One more").with_extension("png")
+                FileFilter::new("One more").extension("png")
             ],
             known
         ),
@@ -131,17 +129,17 @@ fn a_save_proposes_a_name_and_a_type_after_the_first_filter() {
         ),
         (
             Some("notes.note"),
-            vec![FileFilter::new("Text").with_mime_type("text/plain")],
+            vec![FileFilter::new("Text").mime_type("text/plain")],
             create("text/plain", Some("notes.note")),
         ),
         (
             Some("notes"),
-            vec![FileFilter::new("Notes").with_extension("note")],
+            vec![FileFilter::new("Notes").extension("note")],
             create("application/octet-stream", Some("notes.note")),
         ),
         (
             Some("any"),
-            vec![FileFilter::new("Pictures").with_mime_type("image/*")],
+            vec![FileFilter::new("Pictures").mime_type("image/*")],
             create("application/octet-stream", Some("any")),
         ),
         // Unnamed: the type of the first filter's extension, so the
@@ -149,15 +147,15 @@ fn a_save_proposes_a_name_and_a_type_after_the_first_filter() {
         (None, vec![images()], create("image/png", None)),
         (
             None,
-            vec![FileFilter::new("Archives").with_extension("tar.gz")],
+            vec![FileFilter::new("Archives").extension("tar.gz")],
             create("application/gzip", None),
         ),
         (
             None,
             vec![
                 FileFilter::new("Notes")
-                    .with_extension("note")
-                    .with_mime_type("text/plain"),
+                    .extension("note")
+                    .mime_type("text/plain"),
             ],
             create("text/plain", None),
         ),
@@ -300,7 +298,7 @@ fn the_picks_are_held_to_the_filters_and_the_limit_before_any_is_read() {
 
     // A MIME pattern admits a pick by the type its provider states.
     let (mut documents, _) = steps_of(vec![Document::new("IMG_0001", "image/jpeg", b"1")]);
-    let typed = [FileFilter::new("Pictures").with_mime_type("image/*")];
+    let typed = [FileFilter::new("Pictures").mime_type("image/*")];
     assert!(matches!(
         read_picks(&mut documents, &typed, false, 8, &LetGo::default(), false),
         Ok(Some(_))
@@ -701,7 +699,7 @@ fn a_save_completes_once_the_user_chose_whoever_still_waits() {
     let request = || {
         SaveRequest::new()
             .suggested_name("report")
-            .filter(FileFilter::new("PDF").with_extension("pdf"))
+            .filter(FileFilter::new("PDF").extension("pdf"))
             .contents(&b"report"[..])
     };
     let saving = dialogs.save(request());

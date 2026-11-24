@@ -14,13 +14,12 @@ use crate::app::ui_runtime::UiRuntime;
 /// Start this loop's development agents: take `config`'s hooks and attach
 /// them. Agents a loop on this thread failed to end are ended first.
 pub(super) fn start(config: &AppConfig) {
-    let hooks = config
-        .dev_agent
-        .as_ref()
-        .map_or_default(crate::app::dev_agent::DevAgent::take);
     // Attached with no borrow of the loop's state held: `attach` is the
     // hooks' code.
-    let host = (!hooks.is_empty()).then(|| DevAgentHost::attach(hooks));
+    let host = config
+        .dev_agent
+        .as_ref()
+        .and_then(crate::app::dev_agent::DevAgent::attach);
     let agents = match host {
         Some(host) if host.is_serving() => LoopAgents::Serving(host),
         _ => LoopAgents::None,

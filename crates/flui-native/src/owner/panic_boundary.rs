@@ -1,37 +1,34 @@
-//! The boundary a panic meets before it reaches the operating system.
+//! The crate's side of the boundary a panic meets before it reaches the
+//! operating system.
 //!
-//! The OS calls into the crate through function pointers it was handed: a
-//! Win32 window procedure (`extern "system"`), a JNI native, an Objective-C
-//! method or block (`extern "C-unwind"`), a COM vtable entry, a GCD work item.
-//! A panic must not leave any of them. Out of an `extern "C"` or
-//! `extern "system"` frame the language aborts the process (Rust Reference,
-//! *Panic* chapter, "unwinding across FFI boundaries"; before Rust 1.81 it
-//! was undefined behaviour) and says nothing through the framework's
-//! diagnostics; out of an `extern "C-unwind"` frame the panic unwinds through
-//! AppKit's or libdispatch's frames, which were not written to be unwound.
-//!
-//! `os_entry` is the one boundary: every entry's body is a call of it, or
-//! of a function of the same file whose body is that call (an adapter, such
-//! as a COM object's `com_entry`; ADR-0151 §16). An entry says what it
-//! answers after a panic (`AfterPanic`): a failure the OS understands, or,
-//! where the state behind it may be torn mid-dispatch, the end of the process
-//! (`docs/PANIC-POLICY.md`: a panic is a bug report, never control flow).
-//!
-//! One entry has no body in this crate: the `dealloc` objc2 generates for a
-//! class declared with `define_class!`, which destroys the class's ivars. A
-//! class keeps them in `ContainedIvars`, whose destructor is that call, and
-//! the same task checks each class for it.
+//! The boundary itself is `flui_foundation::panic::os_entry`, the one every
+//! OS entry of FLUI goes through, this crate's and each capability crate's
+//! (ADR-0151 §16); it is reached here as `owner::panic_boundary::os_entry`,
+//! with `AfterPanic`, `ContainedIvars` and `contain_os_entry`. Every entry's
+//! body is a call of it, or of a function of the same file whose body is that
+//! call (an adapter, such as a COM object's `com_entry`), and every class the
+//! crate declares with objc2's `define_class!` keeps its ivars in
+//! `ContainedIvars`, whose destructor is that call.
 //!
 //! Recoverable owner callbacks have a boundary of their own inside an entry:
 //! the call point (`super::call_point`) settles a handler's slot apart from
 //! its call, and callback invocation and capture cleanup are contained
 //! separately ([`contain_owner_callback`]).
 //!
-//! The payload-to-message rule is the pure, decidable part; it lives here,
-//! compiled under `test` on every host, so the Linux-executed suite pins it.
+//! `panic_payload_message` names a caught payload in the log of the hosts
+//! that report one with its text (Windows' text services, Linux's clipboard
+//! and display sources).
 
-/// Fallback text for a panic payload that is neither a `&'static str` nor a
-/// `String` (someone used `std::panic::panic_any` with an arbitrary type).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub(crate) use flui_foundation::panic::ContainedIvars;
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "android",
+    all(test, not(target_arch = "wasm32"))
+))]
+pub(crate) use flui_foundation::panic::contain_os_entry;
 #[cfg(any(
     target_os = "windows",
     target_os = "macos",
@@ -40,6 +37,11 @@
     linux_host,
     all(test, not(target_arch = "wasm32"))
 ))]
+pub(crate) use flui_foundation::panic::{AfterPanic, os_entry};
+
+/// Fallback text for a panic payload that is neither a `&'static str` nor a
+/// `String` (someone used `std::panic::panic_any` with an arbitrary type).
+#[cfg(any(target_os = "windows", linux_host,))]
 pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
 
 /// Extracts the human-readable message from a caught panic payload.
@@ -47,198 +49,10 @@ pub(crate) const OPAQUE_PANIC_PAYLOAD: &str = "non-string panic payload";
 /// `panic!("literal")` produces a `&'static str` payload; `panic!("{x}")`
 /// and every formatted variant produce a `String`; anything else (via
 /// `panic_any`) is opaque and reported as [`OPAQUE_PANIC_PAYLOAD`].
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    linux_host,
-    all(test, not(target_arch = "wasm32"))
-))]
+#[cfg(any(target_os = "windows", linux_host,))]
 #[must_use]
 pub(crate) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
     flui_foundation::panic::payload_text(payload).unwrap_or(OPAQUE_PANIC_PAYLOAD)
-}
-
-/// What an OS entry answers once its body panicked.
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    linux_host,
-    all(test, not(target_arch = "wasm32"))
-))]
-pub(crate) enum AfterPanic<A, R> {
-    /// The entry failed and the state behind it holds: the OS gets what this
-    /// makes of the entry's arguments (a session-end query is granted, any
-    /// other message answered 0). A plain `fn`, so the answer captures
-    /// nothing, and nothing of it is made unless the body panicked (a COM
-    /// error reads the thread's error information as it is made).
-    Answer(fn(A) -> R),
-    /// The state behind the entry may be torn mid-dispatch, and answering
-    /// would let the OS run more of it: the process ends once the panic is
-    /// logged. Only the Win32, AppKit and UIKit entries have no answer to
-    /// give.
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
-    Abort,
-}
-
-/// Run the body of an entry the OS calls, so that no panic leaves it: the
-/// body's answer, or, when it panicked, what `after_panic` makes of `args`,
-/// what the OS called the entry with (a window message and its handle).
-///
-/// The panic is logged first, with its text, under `entry` and with `args`
-/// (unless they are `()`), so a failure that follows (an answer that panics
-/// too, the abort) never hides it; the log is contained like any owner
-/// callback, since a subscriber is user code. The payload is then discarded
-/// under containment: its destructor is user code too. An answer that
-/// panics leaves nothing to give the OS, so the process ends. `args` are
-/// `Copy`, so nothing of them is destroyed outside the boundary either.
-///
-/// An entry's body is one call of this function, or of an adapter of its file
-/// whose body is that call.
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    linux_host,
-    all(test, not(target_arch = "wasm32"))
-))]
-pub(crate) fn os_entry<A, R>(
-    entry: &'static str,
-    args: A,
-    after_panic: AfterPanic<A, R>,
-    body: impl FnOnce() -> R,
-) -> R
-where
-    A: Copy + std::fmt::Debug,
-{
-    let shown: Option<&dyn std::fmt::Debug> = (size_of::<A>() != 0).then_some(&args);
-    if let Some(answer) = contained(entry, shown, body) {
-        return answer;
-    }
-    match after_panic {
-        AfterPanic::Answer(answer) => {
-            contained(entry, shown, move || answer(args)).unwrap_or_else(|| {
-                end_process(entry, shown, "its answer after the panic panicked too")
-            })
-        }
-        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "ios"))]
-        AfterPanic::Abort => end_process(entry, shown, "the state behind it may be torn"),
-    }
-}
-
-/// The ivars of a class this crate declares with objc2's `define_class!`,
-/// destroyed inside the boundary.
-///
-/// objc2 generates the class's `dealloc`, an `extern "C-unwind"` method that
-/// drops the ivars in place. Whoever releases the object last runs it: an
-/// autorelease pool UIKit drains, a session letting go of its delegate, a
-/// `Retained` of the crate's own. So the destructors of the ivars are an OS
-/// entry with nothing of the crate above them, and what they own may be the
-/// application's (a window's handler, a callback's captures). Declared as
-/// `#[ivars = ContainedIvars<T>]`, the value is destroyed by one call of
-/// [`os_entry`]: a destructor's panic is logged there, the fields after the
-/// failing one are destroyed as it unwinds, and `dealloc` goes on to the
-/// superclass's. Every class of the crate declares this type.
-///
-/// The value is read through `Deref` (`self.ivars().field`) and never moves:
-/// it is destroyed in place, where objc2 keeps it pinned.
-///
-/// Public where it is defined, because a public class names it as its
-/// `DefinedClass::Ivars`; the module is private, so it is nameable only
-/// inside the crate.
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    all(test, not(target_arch = "wasm32"))
-))]
-#[derive(Debug)]
-pub struct ContainedIvars<T>(std::mem::ManuallyDrop<T>);
-
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    all(test, not(target_arch = "wasm32"))
-))]
-impl<T> ContainedIvars<T> {
-    /// `ivars`, for `set_ivars`.
-    pub(crate) const fn new(ivars: T) -> Self {
-        Self(std::mem::ManuallyDrop::new(ivars))
-    }
-}
-
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    all(test, not(target_arch = "wasm32"))
-))]
-impl<T> std::ops::Deref for ContainedIvars<T> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        &self.0
-    }
-}
-
-#[cfg(any(
-    target_os = "macos",
-    target_os = "ios",
-    all(test, not(target_arch = "wasm32"))
-))]
-#[expect(
-    unsafe_code,
-    reason = "the ivars are destroyed in place, once, inside the boundary"
-)]
-impl<T> Drop for ContainedIvars<T> {
-    fn drop(&mut self) {
-        // Every class's `dealloc` is this one entry, so the answer after a
-        // panic names the ivars whose destructor failed. It runs inside the
-        // boundary, as an argument computed before the call would not, and
-        // under a containment of its own, as the first log is: a subscriber
-        // is user code, and an answer that panics ends the process.
-        os_entry(
-            "dealloc",
-            (),
-            AfterPanic::Answer(|()| {
-                contain_owner_callback(|| {
-                    tracing::error!(
-                        ivars = std::any::type_name::<T>(),
-                        "the destructor that panicked was of these ivars"
-                    );
-                });
-            }),
-            || {
-                // SAFETY: the value is initialized from `new` on, this is the
-                // only place that destroys it, and `drop` runs once: nothing
-                // reads it afterwards.
-                unsafe { std::mem::ManuallyDrop::drop(&mut self.0) }
-            },
-        );
-    }
-}
-
-/// End the process from inside an entry that has nothing to answer.
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    linux_host,
-    all(test, not(target_arch = "wasm32"))
-))]
-fn end_process(entry: &'static str, args: Option<&dyn std::fmt::Debug>, why: &'static str) -> ! {
-    contain_owner_callback(|| {
-        tracing::error!(
-            entry,
-            args = args.map(|args| format!("{args:?}")),
-            why,
-            "an OS entry panicked and cannot answer; aborting"
-        );
-    });
-    std::process::abort()
 }
 
 /// Contain owner callback and capture cleanup panics; the panic is logged with
@@ -266,58 +80,6 @@ pub(crate) fn contain_owner_callback(body: impl FnOnce()) {
     flui_foundation::panic::discard_payload(payload);
 }
 
-/// [`os_entry`]'s containment, for one step inside an entry that answers its
-/// failure itself (a broadcast subscriber, a drag provider the OLE data
-/// object serves): `None` when `body` panicked. The panic is logged with its
-/// text, under `entry`, the log contained like any owner callback, and its
-/// payload is then discarded under containment, since a payload's destructor
-/// is user code that would unwind into the OS (ADR-0281).
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    all(test, not(target_arch = "wasm32"))
-))]
-pub(crate) fn contain_os_entry<R>(entry: &'static str, body: impl FnOnce() -> R) -> Option<R> {
-    contained(entry, None, body)
-}
-
-/// `body`, or `None` once its panic is logged and its payload discarded.
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    linux_host,
-    all(test, not(target_arch = "wasm32"))
-))]
-fn contained<R>(
-    entry: &'static str,
-    args: Option<&dyn std::fmt::Debug>,
-    body: impl FnOnce() -> R,
-) -> Option<R> {
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the one OS entry boundary of flui-native (ADR-0151 §16)"
-    )]
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
-        Ok(value) => Some(value),
-        Err(payload) => {
-            contain_owner_callback(|| {
-                tracing::error!(
-                    entry,
-                    args = args.map(|args| format!("{args:?}")),
-                    panic = panic_payload_message(&*payload),
-                    "an OS entry panicked"
-                );
-            });
-            flui_foundation::panic::discard_payload(payload);
-            None
-        }
-    }
-}
-
 /// Keep an owner-affine resource whose final owner was dropped on another thread.
 /// Retention precedes diagnostics: a subscriber panic must not retire the resource
 /// on the wrong thread, including while the caller is already unwinding.
@@ -339,10 +101,10 @@ pub(crate) fn retain_off_owner_resource<T>(resource: T, report: impl FnOnce()) {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
-    use super::{AfterPanic, ContainedIvars, contain_os_entry, contain_owner_callback, os_entry};
+    use super::contain_owner_callback;
 
     /// A subscriber that records, in order, the `args` and `panic` fields of
     /// each event and the events whose message is `answered`; or panics on
@@ -411,65 +173,6 @@ mod tests {
         fn exit(&self, _: &tracing::span::Id) {}
     }
 
-    /// The body's answer passes through; after a panic the entry answers what
-    /// it said it would, and the panic is logged with its text before the
-    /// answer is made, so nothing that follows hides the first failure.
-    /// Red-check: answer before logging, or skip the log.
-    #[test]
-    fn an_os_entry_logs_the_first_failure_then_answers() {
-        assert_eq!(
-            os_entry("a healthy entry", (), AfterPanic::Answer(|()| 0), || 7),
-            7
-        );
-
-        let (recorder, seen) = Recorder::recording();
-        let answered = tracing::subscriber::with_default(recorder, || {
-            os_entry(
-                "a failing entry",
-                (),
-                AfterPanic::Answer(|()| {
-                    tracing::info!("answered");
-                    -1
-                }),
-                || -> i32 { panic!("the first failure") },
-            )
-        });
-        assert_eq!(answered, -1);
-        assert_eq!(
-            *seen.lock().expect("the recorder is not poisoned"),
-            ["logged: the first failure", "answered"]
-        );
-    }
-
-    /// The answer after a panic is made from what the OS called the entry
-    /// with, and the log names those arguments: a session-end query is
-    /// granted where any other message is answered 0. Red-check: answer
-    /// without the arguments, or log without them.
-    #[test]
-    fn an_os_entry_answers_from_its_arguments_and_logs_them() {
-        const QUERY: u32 = 0x11;
-        let after_panic = || AfterPanic::Answer(|message: u32| isize::from(message == QUERY));
-        let failing = || -> isize { panic!("a subscriber's failure") };
-
-        let (recorder, seen) = Recorder::recording();
-        let answers = tracing::subscriber::with_default(recorder, || {
-            [
-                os_entry("a window message", QUERY, after_panic(), failing),
-                os_entry("a window message", 0x0F_u32, after_panic(), failing),
-            ]
-        });
-        assert_eq!(answers, [1, 0]);
-        assert_eq!(
-            *seen.lock().expect("the recorder is not poisoned"),
-            [
-                "args: 17",
-                "logged: a subscriber's failure",
-                "args: 15",
-                "logged: a subscriber's failure"
-            ]
-        );
-    }
-
     /// A step contained inside an entry is logged with its panic's text, so
     /// the first failure is never a generic line. Red-check: log without the
     /// text.
@@ -482,137 +185,6 @@ mod tests {
         assert_eq!(
             *seen.lock().expect("the recorder is not poisoned"),
             ["logged: a hook's failure"]
-        );
-    }
-
-    /// A subscriber is user code: one that panics while the entry logs its
-    /// panic does not unwind out of the entry. Red-check: log outside the
-    /// containment.
-    #[test]
-    fn a_panicking_log_stays_inside_the_entry() {
-        let recorder = Recorder {
-            panics: true,
-            seen: Arc::default(),
-        };
-        let answered = tracing::subscriber::with_default(recorder, || {
-            os_entry(
-                "a failing entry",
-                (),
-                AfterPanic::Answer(|()| 3_u8),
-                || -> u8 { panic!("the body's failure") },
-            )
-        });
-        assert_eq!(answered, 3);
-    }
-
-    /// A class's ivars whose destructor panics are destroyed inside the
-    /// boundary: the panic is logged and does not reach objc2's `dealloc`,
-    /// and what the ivars hold after the failing field is still destroyed.
-    /// Red-check: destroy the value without the boundary.
-    #[test]
-    fn contained_ivars_keep_a_destructors_panic_inside_the_boundary() {
-        let (ivars, destroyed) = failing_ivars();
-        assert!(
-            !ivars.captures.0.load(Ordering::SeqCst),
-            "the ivars are read through the wrapper, untouched"
-        );
-
-        let (recorder, seen) = Recorder::recording();
-        tracing::subscriber::with_default(recorder, || drop(ivars));
-        assert_eq!(
-            *seen.lock().expect("the recorder is not poisoned"),
-            [
-                "logged: a destructor's failure".to_owned(),
-                format!("ivars: {}", std::any::type_name::<Ivars>()),
-            ],
-            "the failure names the class's ivars"
-        );
-        assert!(
-            destroyed.load(Ordering::SeqCst),
-            "the captures after the failing field are destroyed"
-        );
-    }
-
-    /// A subscriber that panics on the diagnostics after an ivars' destructor
-    /// panicked leaves the teardown complete and the process running: each
-    /// log after the caught panic is contained, as the first one is.
-    /// Red-check: log the ivars' type without its own containment (the
-    /// answer's panic ends the process).
-    #[test]
-    fn contained_ivars_survive_a_subscriber_that_panics() {
-        let (ivars, destroyed) = failing_ivars();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let recorder = Recorder {
-            panics: true,
-            seen: Arc::clone(&seen),
-        };
-        tracing::subscriber::with_default(recorder, || drop(ivars));
-        assert!(
-            destroyed.load(Ordering::SeqCst),
-            "the captures after the failing field are destroyed"
-        );
-        assert!(
-            seen.lock()
-                .expect("the recorder is not poisoned")
-                .is_empty(),
-            "no event was recorded: the subscriber panicked on each"
-        );
-    }
-
-    /// A destructor that panics.
-    struct Fails;
-
-    impl Drop for Fails {
-        fn drop(&mut self) {
-            panic!("a destructor's failure");
-        }
-    }
-
-    /// Ivars whose first field's destructor panics, and whose second records
-    /// that it was destroyed.
-    struct Ivars {
-        _handler: Fails,
-        captures: Payload,
-    }
-
-    fn failing_ivars() -> (ContainedIvars<Ivars>, Arc<AtomicBool>) {
-        let destroyed = Arc::new(AtomicBool::new(false));
-        let ivars = ContainedIvars::new(Ivars {
-            _handler: Fails,
-            captures: Payload(Arc::clone(&destroyed)),
-        });
-        (ivars, destroyed)
-    }
-
-    /// A panic payload whose destructor is user code: it records that it ran.
-    struct Payload(Arc<AtomicBool>);
-
-    impl Drop for Payload {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
-        }
-    }
-
-    /// An entry's answer passes through; a panic is `None` and an opaque
-    /// payload is dropped inside the entry, not handed to the OS. Red-check:
-    /// retain the payload instead of dropping it.
-    #[test]
-    fn an_os_entry_contains_its_panic_and_drops_its_payload() {
-        assert_eq!(contain_os_entry("a healthy entry", || 7), Some(7));
-        assert_eq!(
-            contain_os_entry("a formatted panic", || -> u8 { panic!("entry {}", 7) }),
-            None
-        );
-
-        let destroyed = Arc::new(AtomicBool::new(false));
-        let payload = Payload(Arc::clone(&destroyed));
-        let answered = contain_os_entry("an opaque panic", move || -> u8 {
-            std::panic::panic_any(payload)
-        });
-        assert_eq!(answered, None);
-        assert!(
-            destroyed.load(Ordering::SeqCst),
-            "the payload is dropped inside the entry"
         );
     }
 

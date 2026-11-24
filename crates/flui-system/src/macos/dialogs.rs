@@ -165,14 +165,14 @@ mod appkit {
         ContentFilter, HasContentTypes, Judged, NameRule, content_filter, unsupported, ut_type,
     };
     use crate::apple::modal::Pending;
-    use crate::apple::queue::WorkQueue;
     use crate::apple::version::MacOSVersion;
     use crate::apple::{file_url, url_path};
     use crate::dialog::{
         DialogError, DialogHold, FileDialogBackend, OpenRequest, OpenResult, SaveRequest,
         SaveResult,
     };
-    use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
+    use crate::off_owner::OffOwner;
+    use flui_foundation::panic::{AfterPanic, ContainedIvars, os_entry};
 
     /// Where [`MacDialogs`] gets its panels: AppKit's own, or, in a test, a
     /// source that makes none.
@@ -361,14 +361,14 @@ mod appkit {
         content_types: Option<HasContentTypes>,
         panels: Panels,
         /// Where an open that keeps access makes its picks' bookmarks.
-        queue: Rc<WorkQueue>,
+        queue: Rc<OffOwner>,
     }
 
     impl MacDialogs {
         pub(crate) fn new(
             mtm: MainThreadMarker,
             version: MacOSVersion,
-            queue: Rc<WorkQueue>,
+            queue: Rc<OffOwner>,
         ) -> Self {
             Self::with_panels(mtm, version, APPKIT_PANELS, queue)
         }
@@ -377,7 +377,7 @@ mod appkit {
             mtm: MainThreadMarker,
             version: MacOSVersion,
             panels: Panels,
-            queue: Rc<WorkQueue>,
+            queue: Rc<OffOwner>,
         ) -> Self {
             Self {
                 mtm,
@@ -575,7 +575,7 @@ mod appkit {
                             // the picks without them.
                             Ok(Some(picks)) => {
                                 let unkept = Ok(Some(picks.clone()));
-                                queue.run(answer, unkept, move || {
+                                queue.dispatch(answer, unkept, move || {
                                     Ok(Some(with_grants(picks, |path| {
                                         file_url(path, folders).and_then(|url| bookmark(&url))
                                     })))

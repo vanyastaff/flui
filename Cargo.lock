@@ -2521,6 +2521,7 @@ version = "0.2.0-dev"
 dependencies = [
  "block2 0.6.2",
  "dispatch2",
+ "flui-foundation",
  "flui-platform",
  "flui-sdk",
  "flui-testing",

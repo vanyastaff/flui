@@ -1,14 +1,16 @@
-# Written by `FLUI_PERF_BASELINE=bless CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo nextest run --locked --no-fail-fast --workspace --exclude flui-native --features flui/material,flui/cupertino,flui/native --test perf`;
+# Written by `FLUI_PERF_BASELINE=bless CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo nextest run --locked --no-fail-fast --workspace --exclude flui-native --features flui/material,flui/cupertino,flui/native --test perf`,
+# `instructions` by CI's perf-gates job;
 # counts, not timings.
 
 [filter_3000_keyed_rows]
-allocated_bytes = 4952190
-allocations = 12192
+allocated_bytes = 4952222
+allocations = 12193
 builds_run = 6021
 damage_full = 0
 damage_rects = 1
 elements_rebuilt = 6021
 frames_produced = 1
+instructions = 73708438
 layers_produced = 1501
 layers_reused = 0
 layout_passes = 1

@@ -119,11 +119,20 @@ impl PresentationState {
                 .invoke_with(|| self.widgets.withdraw_owner_authority())
                 .unwrap_or_default()
         };
-        let agent = self.dev_agent.take();
-        if let Some(agent) = &agent {
-            agent.withdraw();
+        let agent_side = self.agent_side.get();
+        if let Some(side) = agent_side {
+            side.withdraw_window(self);
         }
-        self.abandon_agent_jobs();
+        let agent = self.dev_agent.take();
+        if let Some(side) = agent_side {
+            // A delivery's panic is held like any other step's failure: the close goes on,
+            // preserving.
+            let abandoned = side.abandon_jobs(self);
+            failure.invoke(|| abandoned.resume());
+        }
+        // A closed presentation settles no frame it queued: a later settlement finds no record
+        // and is stale.
+        failure.retire(self.take_pending_frames());
         let window_control = self.window_control.take();
         if let Some(window) = &window_control {
             failure.invoke(|| window.close());
@@ -224,19 +233,22 @@ impl PresentationState {
     /// before any closes: dispatch targets, liveness, held input, the graph,
     /// rebuild and key authority, agent ports, focus and text input become
     /// unavailable, so a sibling's callbacks cannot drive this presentation
-    /// (ADR-0123). The withdrawn key owners are returned for the caller to
-    /// retire; the presentation's own close later retires everything else.
+    /// (ADR-0123). Its unsettled frames are dropped, so none settles. The
+    /// withdrawn key owners are returned for the caller to retire, with the
+    /// first panic of the agent's replies (each delivered contained when its
+    /// jobs are answered) or of a dropped frame; the presentation's own close
+    /// later retires everything else.
     pub(crate) fn withdraw_for_ui_runtime_close(
         &self,
         lane: &flui_interaction::pointer::InteractionLane,
-    ) -> Vec<flui_view::__runtime::WithdrawnKey> {
+    ) -> (Vec<flui_view::__runtime::WithdrawnKey>, FirstPanic) {
         self.withdraw_animation();
         use flui_view::__runtime::BindingRuntime as _;
         if matches!(
             self.lifecycle.get(),
             PresentationLifecycle::Closing | PresentationLifecycle::Closed
         ) {
-            return Vec::new();
+            return (Vec::new(), FirstPanic::new());
         }
         self.pipeline.withdraw_layout();
         if let Some(scope) = &self.completion_scope {
@@ -250,13 +262,20 @@ impl PresentationState {
         self.alive.borrow_mut().take();
         self.held_pointer_input.borrow_mut().clear();
         let keys = self.widgets.withdraw_owner_authority();
-        if let Some(agent) = &*self.dev_agent.borrow() {
-            agent.withdraw();
-        }
-        self.abandon_agent_jobs();
+        let mut failure = self.agent_side.get().map_or_default(|side| {
+            side.withdraw_window(self);
+            side.abandon_jobs(self)
+        });
+        failure.retire(self.take_pending_frames());
         flui_interaction::__runtime::withdraw_focus(&self.focus);
         flui_interaction::__runtime::withdraw_text_input(&self.text_input);
-        keys
+        (keys, failure)
+    }
+
+    /// The frames this presentation handed its sink that have not settled, taken so that none
+    /// settles once it closes. An agent's layer reads parked on them were answered first.
+    fn take_pending_frames(&self) -> std::collections::VecDeque<crate::ui_runtime::PendingFrame> {
+        std::mem::take(&mut *self.pending_frames.borrow_mut())
     }
 
     fn withdraw_animation(&self) {
@@ -317,12 +336,13 @@ impl PresentationState {
     }
     /// Answers every job an agent parked on this presentation when it closes before a frame
     /// could finish them: a reading an action owes is failed (the action ran), a wait is `gone`,
-    /// and every event stream ends after a last `window` event.
-    pub(crate) fn abandon_agent_jobs(&self) {
+    /// and every event stream ends after a last `window` event. The first panic of a delivery is
+    /// returned for the close to hold.
+    #[must_use = "a delivery's panic is held by the close"]
+    pub(crate) fn abandon_agent_jobs(&self) -> FirstPanic {
         use crate::ui_runtime::deliver_each;
         // Every stage runs to the end whatever an earlier one did: a reply goes to a receiver
         // whose drop or trace is user code, and a job left unanswered here is never answered.
-        // The first panic resumes after all of them.
         let mut ended = FirstPanic::new();
         ended.contain(|| {
             self.end_agent_events();
@@ -337,9 +357,7 @@ impl PresentationState {
         for stage in [reads, inputs, waited, layers] {
             ended.absorb(stage);
         }
-        if let Some(payload) = ended.into_payload() {
-            std::panic::resume_unwind(payload);
-        }
+        ended
     }
 }
 

@@ -460,6 +460,14 @@ impl Driver {
                 self.agent_value(row.name, row.effect, params, holds)
             }
             ServedBy::Driver => crate::compose::call(self, row.name, params),
+            ServedBy::Supervisor => Err(Error::not_supported(
+                row.name,
+                format!(
+                    "`{}` is served by the `flui run` that started the app, at the run \
+                     endpoint its session file names, not by the app",
+                    row.name
+                ),
+            )),
             _ => Err(Error::not_supported(
                 row.name,
                 format!("`{}` needs an OS lane that serves it", row.name),

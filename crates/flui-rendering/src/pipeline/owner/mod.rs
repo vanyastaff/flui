@@ -35,6 +35,7 @@ mod reassemble;
 mod relocation;
 mod semantics;
 mod semantics_enablement;
+mod teardown;
 mod tree_edit;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
@@ -322,6 +323,10 @@ pub struct PipelineOwner {
     /// The nodes a removal took out of the tree, empty between removals:
     /// kept for its capacity, and drained when their destructors run.
     removed_nodes: Vec<crate::storage::RenderNode>,
+    /// The removal batch open on this owner (`PipelineCell::with_batched_removals`).
+    removal_batch: tree_edit::RemovalBatch,
+    /// The teardown open on this owner (`PipelineCell::with_teardown`).
+    teardown: teardown::Teardown,
 
     /// The device pixel ratio the recorded output above was recorded under.
     /// A paint pass under another ratio drops it first, without waking anyone:
