@@ -5,7 +5,7 @@
 - **Related:** [ADR-0048](ADR-0048-frame-transaction-boundary.md) (a frame that unwinds leaves the
   presentation's owner in its `PipelineCell`, which this decision holds by a borrow instead of a
   catch); [ADR-0017](ADR-0017-build-during-layout-callback-seam.md) (the layout pass the
-  build-during-layout fixpoint drives); [ADR-0287](ADR-0287-an-owner-commits-its-state-before-it-runs-code-it-does-not-own.md)
+  build-during-layout fixpoint drives); [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md)
   (the phases commit before they call out, unchanged);
   [ADR-0281](ADR-0281-a-destructor-that-panics-during-an-unwind-aborts-as-in-std.md) (the by-value
   frame that destroyed its owner under containment, which goes)
