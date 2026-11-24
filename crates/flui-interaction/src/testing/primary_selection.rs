@@ -14,14 +14,15 @@
 
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
-use flui_interaction::text_input::{
-    PrimaryClaimId, PrimaryClaims, PrimarySelectionBackend, PrimarySelectionCapability,
-    PrimarySelectionHandle, SelectionText,
-};
 use flui_platform::{
     ClipboardRead, Unsupported,
     capability::scripted::{Scenario, Script, ServiceState, Track},
     capability::{CapabilityProvider, CapabilityRegistrar, ProviderContext, Resolver},
+};
+
+use crate::text_input::{
+    PrimaryClaimId, PrimaryClaims, PrimarySelectionBackend, PrimarySelectionCapability,
+    PrimarySelectionHandle, SelectionText,
 };
 
 /// A request a primary selection's handle makes of its host and is answered

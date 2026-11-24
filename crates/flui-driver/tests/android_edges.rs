@@ -24,7 +24,7 @@ use flui_driver::testing::ScriptedAdb;
 use flui_driver::{Awaited, Error, Isolation};
 
 use crate::android_lane::{
-    FOCUSED, GETEVENT, PACKAGE, PROBED, USAGE, WINDOW, abilities, answer_syncs, capability,
+    FOCUSED, GETEVENT, PACKAGE, PROBED, USAGE, WINDOWS, abilities, answer_syncs, capability,
     connected, inputs, png_of, raw_capture, scripted, scripted_with, tap,
 };
 
@@ -249,27 +249,29 @@ fn the_dump_is_bounded_in_size_depth_and_rotation_and_reads_no_dtd() {
 }
 
 #[test]
-fn the_surface_is_matched_within_its_tolerance_and_each_package_named_once() {
-    let dump = UiDump::parse(
-        "<hierarchy rotation=\"0\">\
-         <node package=\"a\" bounds=\"[0,0][100,50]\"/>\
-         <node package=\"a\" bounds=\"[0,0][10,10]\"/>\
-         <node package=\"b\" bounds=\"[0,0][1,1]\"/></hierarchy>",
-    )
-    .expect("a dump");
-    assert_eq!(dump.packages(), vec!["a", "b"]);
-    let surface = |size: (f64, f64), tolerance: f64| dump.surface_of("a", size, tolerance);
-    assert!(surface((100.0, 50.0), 0.0).is_some(), "an exact size");
-    assert!(
-        surface((102.0, 50.0), 2.0).is_some(),
-        "the tolerance itself"
-    );
-    assert!(
-        surface((100.0, 52.0), 2.0).is_some(),
-        "the tolerance itself, in height"
-    );
-    assert!(surface((102.5, 50.0), 2.0).is_none());
-    assert!(surface((100.0, 52.5), 2.0).is_none());
+fn the_window_is_matched_within_its_tolerance() {
+    let adb = scripted(true, true);
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    let window: flui_driver::protocol::tree::WindowId = "w1".parse().expect("a window");
+    // The fixture's window is 1080 by 2340 pixels.
+    for (width, height, found) in [
+        (1080.0, 2340.0, true),
+        (1082.0, 2340.0, true),
+        (1080.0, 2338.0, true),
+        (1082.5, 2340.0, false),
+        (1080.0, 2342.5, false),
+    ] {
+        let placement = flui_driver::protocol::session::Placement::new(
+            window,
+            flui_driver::protocol::geometry::LogicalSize::new(width, height),
+            1.0,
+        );
+        assert_eq!(
+            lane.locate_window(&placement).is_ok(),
+            found,
+            "{width} x {height}"
+        );
+    }
 }
 
 #[test]
@@ -398,6 +400,51 @@ fn the_guard_waits_for_getevent_to_name_a_device_and_stops_with_it() {
     }
 }
 
+/// A slow scripted command answers once it has run, within its deadline; past it, it is ended at
+/// the deadline and times out with a `may_have_run` effect, as the host's `adb` does.
+#[test]
+fn a_slow_scripted_command_answers_within_its_deadline_and_times_out_past_it() {
+    let adb = ScriptedAdb::new()
+        .reply_once_after(
+            "shell slow",
+            AdbReply::new(0, "done"),
+            Duration::from_secs(5),
+        )
+        .reply_once_after(
+            "shell quick",
+            AdbReply::new(0, "done"),
+            Duration::from_millis(20),
+        );
+    let mut device = adb.device();
+    let started = Instant::now();
+    let refused = device
+        .run(
+            &AdbCommand::Shell("slow".to_owned()),
+            64,
+            Duration::from_millis(50),
+        )
+        .expect_err("the command outlives its deadline");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the deadline ends the command, not the device"
+    );
+    match &refused {
+        Error::Timeout { effect, .. } => assert_eq!(
+            effect.as_ref().map(|effect| effect.kind),
+            Some(flui_driver::protocol::act::EffectKind::MayHaveRun)
+        ),
+        other => panic!("{other:?}"),
+    }
+    let reply = device
+        .run(
+            &AdbCommand::Shell("quick".to_owned()),
+            64,
+            Duration::from_secs(5),
+        )
+        .expect("the command answers within its deadline");
+    assert_eq!(reply.text(), "done");
+}
+
 #[test]
 fn a_guard_that_hears_no_device_within_its_wait_cannot_arm() {
     let adb = ScriptedAdb::new().stream("shell -tt getevent", Vec::new(), None);
@@ -454,12 +501,22 @@ fn device_output_at_its_edges() {
     );
     assert_eq!(device::parse_focus("  mCurrentFocus=Window{1 u0 }\n"), None);
     assert_eq!(
-        device::parse_focus("  mCurrentFocus=Window{9e u0 Application Error: x}\n").as_deref(),
+        device::parse_focus("  mCurrentFocus=Window{9e u0 Application Error: x}\n")
+            .map(|focus| focus.title)
+            .as_deref(),
         Some("Application Error: x"),
         "a title with spaces is read whole"
     );
     assert_eq!(
-        device::parse_focus(FOCUSED).as_deref(),
+        device::parse_focus("  mCurrentFocus=Window{4f u0 a/.B} 0x1\n")
+            .map(|focus| (focus.hash.to_string(), focus.title)),
+        Some(("4f".to_owned(), "a/.B".to_owned())),
+        "what follows the window's name is not its title"
+    );
+    assert_eq!(
+        device::parse_focus(FOCUSED)
+            .map(|focus| focus.title)
+            .as_deref(),
         Some("dev.flui.scenario/android.app.NativeActivity")
     );
 }
@@ -1260,12 +1317,12 @@ fn a_forward_never_takes_over_another_sessions_port() {
 
 #[test]
 fn a_rotated_display_turns_the_gesture_edges_with_it() {
-    let turned = WINDOW
-        .replace("rotation=\"0\"", "rotation=\"1\"")
-        .replace("[0,0][1080,2400]", "[0,0][2400,1080]")
-        .replace("[0,60][1080,2400]", "[0,0][2340,1080]")
-        .replace("[0,60][1080,2399]", "[0,0][2340,1079]");
-    let adb = scripted(true, true).reply_once("exec-out uiautomator", AdbReply::new(0, turned));
+    let turned = WINDOWS
+        .replace("mRotation=0", "mRotation=1")
+        .replace("frame=[0,60][1080,2400]", "frame=[0,0][2340,1080]");
+    assert_ne!(turned, WINDOWS);
+    let adb =
+        scripted(true, true).reply_once("shell dumpsys window displays", AdbReply::new(0, turned));
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
     let window: flui_driver::protocol::tree::WindowId = "w1".parse().expect("a window");
     let placement = flui_driver::protocol::session::Placement::new(

@@ -10,7 +10,7 @@
 - **`flui-platform`**: `Script::on_answer`, which adds an observer that hears every answer a
   scenario script gives, however it is given, before the caller's completion settles.
 - **`flui-testing`**: `ScriptedClipboard::writes`, the script that answers writes (each a
-  `WriteRequest`), with `fail_writes_with`, `stop_failing_writes` and `hold_writes`, whose
+  `ClipboardWriteRequest`), with `fail_writes_with`, `stop_failing_writes` and `hold_writes`, whose
   `ClipboardWriteHold` holds writes while any hold lives; reads and writes keep one order,
   whatever answers a write `Ok` or `ApplicationOnly` lands its text, and a write's completion
   settles only once its text has landed.

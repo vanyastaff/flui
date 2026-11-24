@@ -20,8 +20,9 @@
 //! - **What fits.** A node of a dump fits an app node when its class is the one
 //!   `accesskit_android` gives the app node's AccessKit role ([`roles::class_for`]), its content
 //!   description is the app node's name (its label, or a static text's value, as the adapter sets
-//!   it), its toggled state is the app node's ([`toggled`]: checkable and checked, a radio
-//!   button's selection included), it is enabled as the app node is, and its bounds are the app
+//!   it), its toggled state is the app node's where the app's read reports it ([`Toggle`]:
+//!   checkable and checked, a radio button's selection included; another selection role's is
+//!   not reported), it is enabled as the app node is, and its bounds are the app
 //!   node's surface rectangle placed at the surface's origin on the display ([`Mapping`], the
 //!   lane's screen mapping) and clipped to it, within [`BOUNDS_TOLERANCE`] on each edge. A node
 //!   with no area on the display fits only an app node with none there either: a list's row
@@ -30,8 +31,8 @@
 //! Bounds come from the device. They count only when they lie on the display with an area, as
 //! UI Automator writes the bounds of a node it shows (clipped to the display); any other bounds
 //! place the node nowhere, so the projection gives it no rectangle and no match reads them. The
-//! projection keeps to the walk budgets of every lane ([`MAX_NODES`], [`MAX_DEPTH`]), and matching
-//! compares each app child with at most [`MAX_NODES`] children of its node.
+//! projection keeps to the walk budgets of every lane ([`MAX_NODES`], [`MAX_DEPTH`]), and a node's
+//! children are cut to the room the node budget has left before they are matched.
 //!
 //! A matched node carries the app node's role and identifier, which the match checked against the
 //! node's class and could not read from it: one class stands for many roles. Its name, value and
@@ -79,6 +80,13 @@ pub enum Unobservable {
     /// out, since they are no element of the interface. The root's last children of that shape
     /// that no app node fits are left out of the projection.
     Announcers,
+    /// A toggled state the app's read does not report: the read follows UI Automation, which
+    /// offers a node of a selection role other than a radio button (a grid cell, a list item
+    /// that publishes a selection) as `SelectionItem`, reading its `selected` and no `checked`,
+    /// while the adapter publishes its toggled state as checkable and checked. The match does not
+    /// read the dump's checked state of such a node, and the projection reports its selection as
+    /// the read does (the `Toggle::Unread` case).
+    UnreportedToggle,
 }
 
 /// Where the app's surface sits on the display, as the lane maps it.
@@ -196,41 +204,65 @@ fn find_root<'d>(
 
 /// Whether the node `os` of a dump fits the app node `app`: see the [module docs](self).
 fn fits(app: &Node, os: &UiNode, mapping: Mapping) -> bool {
-    let toggled = toggled(app);
-    os.class == roles::class_for(&app.native_role, toggled.is_some())
+    let toggle = Toggle::of(app);
+    os.class == roles::class_for(&app.native_role, toggle.is_toggled())
         && os.content_desc == app.name.as_deref().unwrap_or_default()
         && os.enabled != app.disabled
-        && toggled_agrees(toggled, os)
+        && toggle.agrees(os)
         && bounds_agree(app.surface_rect, os.bounds, mapping)
 }
 
-/// Whether the app's read reports `app`'s toggled state as a selection: a radio button or a radio
-/// menu item that is on or off, which the read gives as `selected`, as UI Automation offers it
-/// (`SelectionItem`), and the adapter publishes as checkable and checked.
-fn selects_by_toggle(app: &Node) -> bool {
-    matches!(app.native_role.as_str(), "RadioButton" | "MenuItemRadio")
-        && app.checked.is_none()
-        && app.selected.is_some()
+/// What the app's read says of `app`'s toggled state, which the adapter publishes for any node
+/// with one as checkable and checked.
+///
+/// The read follows UI Automation, which offers a node of a selection role as `SelectionItem`
+/// (`agent::offers_selection_item` in `flui-semantics` decides which): such a node reads
+/// `selected` and no `checked`, and no other node reads `selected`. A radio button's selection is
+/// its toggled state; any other's toggled state the read does not report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Toggle {
+    /// The read reports it as `checked`: none, or the state.
+    Checked(Option<Checked>),
+    /// A radio button's selection, which is its toggled state.
+    RadioSelection(bool),
+    /// A node of a selection role whose toggled state the read does not report: the dump's
+    /// checkable and checked are unobservable from the app's side
+    /// ([`Unobservable::UnreportedToggle`]).
+    Unread,
 }
 
-/// The toggled state the adapter publishes for `app`: its checked state, or a radio button's
-/// selection ([`selects_by_toggle`]).
-fn toggled(app: &Node) -> Option<Checked> {
-    if selects_by_toggle(app) {
-        return app
-            .selected
-            .map(|on| if on { Checked::True } else { Checked::False });
+impl Toggle {
+    fn of(app: &Node) -> Self {
+        // The read reports `selected` on a node it offers as `SelectionItem` and on no other, and
+        // then no `checked`: the selection roles are its decision, which the driver does not copy.
+        let selection = app.checked.is_none() && app.selected.is_some();
+        match app.native_role.as_str() {
+            "RadioButton" | "MenuItemRadio" if selection => {
+                Self::RadioSelection(app.selected == Some(true))
+            }
+            _ if selection => Self::Unread,
+            _ => Self::Checked(app.checked),
+        }
     }
-    app.checked
-}
 
-/// Whether `os`'s checked state is `toggled`, as the adapter sets it: checkable with a toggled
-/// state, a mixed one reading as checked.
-fn toggled_agrees(toggled: Option<Checked>, os: &UiNode) -> bool {
-    match toggled {
-        None => !os.checkable,
-        Some(Checked::False) => os.checkable && !os.checked,
-        Some(Checked::True | Checked::Mixed) => os.checkable && os.checked,
+    /// Whether the node has a toggled state, which turns a button into a toggle button.
+    fn is_toggled(self) -> bool {
+        matches!(self, Self::Checked(Some(_)) | Self::RadioSelection(_))
+    }
+
+    /// Whether `os`'s checked state is this one, as the adapter sets it: checkable with a toggled
+    /// state, a mixed one reading as checked.
+    fn agrees(self, os: &UiNode) -> bool {
+        match self {
+            Self::Checked(None) => !os.checkable,
+            Self::Checked(Some(Checked::False)) | Self::RadioSelection(false) => {
+                os.checkable && !os.checked
+            }
+            Self::Checked(Some(Checked::True | Checked::Mixed)) | Self::RadioSelection(true) => {
+                os.checkable && os.checked
+            }
+            Self::Unread => true,
+        }
     }
 }
 
@@ -429,8 +461,13 @@ impl Walk<'_> {
             self.truncated = true;
             return Ok(node);
         }
-        if children.len() > MAX_NODES {
-            children.truncate(MAX_NODES);
+        // The children the node budget leaves room for, cut before they are aligned: a dump wider
+        // than the budget costs no more than the budget.
+        let room =
+            (MAX_NODES + 1).saturating_sub(usize::try_from(self.next_id).unwrap_or(usize::MAX));
+        let cut = children.len() > room;
+        if cut {
+            children.truncate(room);
             node.children_unread = true;
             self.truncated = true;
         }
@@ -438,7 +475,7 @@ impl Walk<'_> {
             Some(app) => self.match_children(app, &children)?,
             None => vec![None; children.len()],
         };
-        if depth == 0 && app.is_some() {
+        if depth == 0 && app.is_some() && !cut {
             // The announcers the app's read leaves out: the root's last children of their shape
             // that no app node fits.
             let mut left_out = 0;
@@ -584,13 +621,15 @@ impl Walk<'_> {
         node.focused = os.focused;
         node.focusable = os.focusable;
         let checked = os.checkable.then_some(os.checked);
-        if app.is_some_and(selects_by_toggle) {
-            // In the vocabulary of the app's read: a radio button's toggled state is its
-            // selection.
-            node.selected = checked;
-        } else {
-            node.checked = checked.map(|on| if on { Checked::True } else { Checked::False });
-            node.selected = os.selected.then_some(true);
+        // In the vocabulary of the app's read (`Toggle`): a radio button's toggled state is its
+        // selection, and another selection role's toggled state is not reported.
+        match app.map(Toggle::of) {
+            Some(Toggle::RadioSelection(_)) => node.selected = checked,
+            Some(Toggle::Unread) => node.selected = os.selected.then_some(true),
+            Some(Toggle::Checked(_)) | None => {
+                node.checked = checked.map(|on| if on { Checked::True } else { Checked::False });
+                node.selected = os.selected.then_some(true);
+            }
         }
         node
     }

@@ -87,7 +87,6 @@
 pub mod a11y;
 pub mod agent_service;
 pub mod backend_conformance;
-pub mod clipboard;
 pub mod control_cost;
 pub mod drop_ledger;
 pub mod find;
@@ -101,7 +100,6 @@ pub use flui_log::testing as log_capture;
 pub mod ownership;
 pub mod perf;
 pub mod portal_exports;
-pub mod primary_selection;
 pub mod recording;
 pub mod replay;
 pub mod storage;

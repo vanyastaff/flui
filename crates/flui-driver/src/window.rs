@@ -4,7 +4,7 @@
 //! gesture method on a locator or an element is the table's `element.<gesture>`, with the options
 //! the builder set.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flui_protocol::act::{ActOutcome, Actionability, ActionabilityParams};
 use flui_protocol::geometry::LogicalPoint;
@@ -27,9 +27,15 @@ use crate::lane::AccessibilityApi;
 use crate::projection::Projection;
 use crate::scenario::WindowSpec;
 
-/// How many times [`Window::os_tree`] and [`Window::compare_projection`] read the OS tree against
-/// the app's before they report that the app's tree moved between the two reads.
-const MAX_TREE_READS: usize = 3;
+/// How long [`Window::os_tree`] and [`Window::compare_projection`] read the OS tree against the
+/// app's again while the app's tree moves between the two reads, before they report it busy,
+/// counted from the end of the first reading: a bound in time, since an app that republishes
+/// every frame moves on any count of readings, and counted after one, since one reading through
+/// a device's lane (a `uiautomator dump`) can take longer than the bound.
+const TREE_SETTLE: Duration = Duration::from_secs(2);
+
+/// The fewest readings made before a moving tree is reported busy, however long they took.
+const MIN_TREE_READINGS: usize = 3;
 
 /// What reading the OS accessibility tree answers in a session without an OS lane.
 fn no_tree_lane() -> crate::Error {
@@ -101,8 +107,8 @@ impl<'d> Window<'d> {
     ///
     /// As [`Self::read`]; [`Error::NotSupported`](crate::Error::NotSupported) naming
     /// `os_accessibility_tree` without a lane that reads one; the lane's failures;
-    /// [`Error::Busy`](crate::Error::Busy) when the app's tree changed while the OS tree was read
-    /// against it on each of three reads.
+    /// [`Error::Busy`](crate::Error::Busy) when the app's tree kept changing while the OS tree was
+    /// read against it, as [`Self::compare_projection`] states.
     pub fn os_tree(&mut self) -> Result<Tree> {
         if self.lane_matches_app_tree()? {
             return self.read_against().map(|(_, os)| os);
@@ -110,37 +116,62 @@ impl<'d> Window<'d> {
         self.os_tree_against(Tree::new(Vec::new(), false))
     }
 
-    /// The app's tree of the window and its OS tree read against it, both of one revision: the
-    /// app's revision is read again once the OS tree is, and a tree that moved in between is
-    /// read again, at most [`MAX_TREE_READS`] times, so a change of the app is never taken for a
-    /// difference of the OS. A read that reports no revision is taken as it is.
+    /// The app's tree of the window and its OS tree read against it, both of one revision, as
+    /// [`Self::compare_projection`] states: [`MIN_TREE_READINGS`] and [`TREE_SETTLE`] are its
+    /// numbers.
+    ///
+    /// A tree that never holds still for one reading is reported busy rather than compared: the
+    /// OS tree was taken at an unknown moment between two app trees, and matching or comparing it
+    /// against either would credit the OS with the app's own change, or hide a difference behind
+    /// it.
     ///
     /// # Errors
     ///
     /// As [`Self::read`] and [`Self::os_tree_against`]; [`Error::Busy`](crate::Error::Busy)
-    /// naming the revisions when the tree moved on every read.
+    /// naming the revisions when the tree moved on every one of those readings.
     fn read_against(&mut self) -> Result<(Tree, Tree)> {
-        let mut moved = String::new();
-        for _ in 0..MAX_TREE_READS {
+        let mut settle_from: Option<Instant> = None;
+        let mut readings = 0_usize;
+        loop {
             let app = self.read()?;
-            let os = self.os_tree_against(app.clone())?;
+            let os = self.os_tree_against(app.clone());
+            readings += 1;
             let Some(before) = app.revision else {
-                return Ok((app, os));
+                return os.map(|os| (app, os));
             };
+            if let Err(error) = &os
+                && !matches!(
+                    error,
+                    crate::Error::NotFound { .. } | crate::Error::Ambiguous { .. }
+                )
+            {
+                return os.map(|os| (app, os));
+            }
             let after = self.read_with(ReadQuery::new().max_depth(0))?.revision;
             if after == Some(before) {
-                return Ok((app, os));
+                return os.map(|os| (app, os));
             }
-            moved = after.map_or_else(
-                || format!("revision {before} became one that reports none"),
-                |after| format!("revision {before} became {after}"),
-            );
+            // The bound starts once the first reading is over.
+            let settling = *settle_from.get_or_insert_with(Instant::now);
+            if readings >= MIN_TREE_READINGS && settling.elapsed() >= TREE_SETTLE {
+                let moved = after.map_or_else(
+                    || format!("revision {before} became one that reports none"),
+                    |after| format!("revision {before} became {after}"),
+                );
+                // `Retry::Never`: the driver has read again for the whole bound already, and an app
+                // that republishes every frame moves through any later call the same way.
+                return Err(crate::Error::Busy {
+                    message: format!(
+                        "the app's tree changed while the OS tree was read against it, on each \
+                         of {readings} readings over more than {} ms after the first (last, \
+                         {moved}): the OS tree is not compared with a tree the app no longer \
+                         shows; the same call answers the same while the app keeps changing",
+                        TREE_SETTLE.as_millis()
+                    ),
+                    retry: flui_protocol::error::Retry::Never,
+                });
+            }
         }
-        Err(crate::Error::busy(format!(
-            "the app's tree changed while the OS tree was read against it, on each of \
-             {MAX_TREE_READS} reads (last, {moved}): the OS tree is not compared with a tree the \
-             app no longer shows"
-        )))
     }
 
     /// Whether the session's lane finds the app's nodes by matching the app's own tree, which it
@@ -194,9 +225,22 @@ impl<'d> Window<'d> {
     /// The window's semantics tree and its OS accessibility tree, each as its normalized outline
     /// (ADR-0095 §4): whether assistive technology reads what the app published.
     ///
+    /// # One revision
+    ///
+    /// The two trees are of one revision of the app's tree, on every lane. The app's tree is read,
+    /// then the OS tree, then the app's revision again; a tree that moved in between is read
+    /// again, and so is a match the lane could not make (`NotFound`, `Ambiguous`) while it moved.
+    /// The reading is made at least three times and until two seconds have passed since the first
+    /// reading ended, since one reading through a device's lane can take longer than that; a tree
+    /// that moved on every one of them answers [`Error::Busy`](crate::Error::Busy) with
+    /// [`Retry::Never`](flui_protocol::error::Retry::Never): an app that republishes every frame
+    /// (a running clock, a progress bar) moves through any later call the same way. A read that
+    /// reports no revision is taken as it is. [`Self::os_tree`] reads the same way through a lane
+    /// that matches against the app's tree.
+    ///
     /// # Errors
     ///
-    /// As [`Self::read`] and [`Self::os_tree`]: the two trees are of one revision of the app's.
+    /// As [`Self::read`] and [`Self::os_tree`]; [`Error::Busy`](crate::Error::Busy) as above.
     pub fn compare_projection(&mut self) -> Result<Projection> {
         let (app, os) = self.read_against()?;
         Ok(Projection::of(&app, &os))
