@@ -35,9 +35,9 @@ use flui_protocol::method::{
 use flui_protocol::{
     act::Effect, act::EffectKind, envelope::RequestId, error::ErrorCode, error::ErrorObject,
     error::HandleKind, error::Retry, events::Event, events::EventFilter, events::Subscription,
-    method::METHODS, method::MethodEffect, method::MethodRow, method::ServedBy,
-    record::RecordEvent, record::RecordParams, record::RecordSummary, record::Recording,
-    session::ClientRole, session::WindowList, tree::WindowId,
+    method::METHODS, method::MethodRow, method::ServedBy, record::RecordEvent,
+    record::RecordParams, record::RecordSummary, record::Recording, session::ClientRole,
+    session::WindowList, tree::WindowId,
 };
 use flui_protocol::{native_recording, record::RecordNativeEvent, record::RecordRow};
 use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow, InputLease};
@@ -73,11 +73,7 @@ pub(super) fn serves(method: &MethodRow) -> bool {
 /// nothing else (the `Annotate` path of `ui_runtime::agent_serve`), so an observer that calls one
 /// reaches no state of the app.
 pub(super) fn may_call(role: ClientRole, method: &MethodRow) -> bool {
-    role.is_driver()
-        || matches!(
-            method.effect,
-            MethodEffect::ReadOnly | MethodEffect::Annotates
-        )
+    role.is_driver() || !method.effect.changes_app()
 }
 
 /// The methods the agent answers a connection admitted as `role`, by wire name, in table order.
@@ -169,8 +165,8 @@ impl Running {
     }
 }
 
-/// What a timeout answers: retry `soon` for a method that only reads or only annotates, and the
-/// `may_have_run` effect for one that acts, which is still queued.
+/// What a timeout answers: the `may_have_run` effect for a method that changes the app, which is
+/// still queued, and retry `soon` for one that only reads or only annotates.
 ///
 /// An annotating method is answered as a read: it is still queued and runs at the owner's next
 /// drain, and a resend runs it once more, which shows what it showed. The window keeps only the
@@ -178,18 +174,15 @@ impl Running {
 /// its requests in order, so the resend cannot put an older report over a newer one the client
 /// sends after it.
 fn timed_out(method: &MethodRow) -> ErrorObject {
-    if matches!(
-        method.effect,
-        MethodEffect::ReadOnly | MethodEffect::Annotates
-    ) {
-        ErrorObject::new(ErrorCode::Timeout, "the window did not answer in time").retry(Retry::Soon)
-    } else {
+    if method.effect.changes_app() {
         ErrorObject::new(
             ErrorCode::Timeout,
             "the window did not answer in time; the request is still queued",
         )
         .retry(Retry::Never)
         .effect(Effect::new(EffectKind::MayHaveRun))
+    } else {
+        ErrorObject::new(ErrorCode::Timeout, "the window did not answer in time").retry(Retry::Soon)
     }
 }
 

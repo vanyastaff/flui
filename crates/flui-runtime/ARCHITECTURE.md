@@ -1359,27 +1359,36 @@ while it is on, then the build banner's while a development tool's report shows 
 (`presentation_scene`). Each overlay is one chunk under a clip to its bounds, under the
 device-pixel-ratio scale when there is one, its labels shaped through the UI runtime's
 `TextContext`; content equal to what the version shows, at the same fonts and scale, records
-nothing and damages nothing (`OverlayContent`). The readout changes only with frames that paint;
-a banner that changed is published on a frame whose pipeline paints nothing, as a patch of its
-node and the root, so no boundary of the pipeline repaints for it.
+nothing and damages nothing (`OverlayContent`), and content whose labels do not shape is kept
+unpublished, so it is not recorded again until it, the fonts or the scale change. The readout is
+composed only on frames that paint; a banner that changed is published on a frame whose pipeline
+paints nothing, as a patch of its node and the root that keeps the readout as the version shows
+it, so no boundary of the pipeline repaints for it.
 
 The banner (`build_overlay`) is the presentation's `BuildBanner`, which `build.report` alone
-writes: a chip in the top-right corner while a build runs, a panel along the bottom with the
-error count, one line per diagnostic cut to the panel's width, and "Tap to dismiss" when one
-failed, laid out from the surface's logical size and kept clear of the performance overlay's
-bounds; a surface without room for it shows none. A report with more than `MAX_DIAGNOSTICS`
-diagnostics is refused `invalid_argument` and changes nothing, an equal one asks for no frame, and
-`Succeeded` clears it. A pointer down inside the bounds the last frame drew it at dismisses it,
-and `route_pointer_event_entered`, the one point every host's pointer input reaches the window's
-widgets through (held input replayed and agent-injected input included), takes that down and the
-rest of its contact, to its up or cancel, before the gesture binding: the application sees none
-of it, and the input journal still records it as received. A new down of that pointer before
-its end arrived starts a contact judged afresh.
+writes: a chip in the top-right corner while a build runs, and while one failed a panel along the
+bottom with the error count ("see the terminal" when the failure carries no diagnostic) and one
+line per diagnostic cut to the panel's width, laid out from the surface's logical size and kept
+clear of the performance overlay's bounds while that is on; a surface without room for it shows
+none. A report is formatted when it is taken: each diagnostic's message and file are cut to one
+line of at most 400 characters, with control characters made spaces and the bidirectional
+formatting characters dropped, and a frame for the surface the last one laid it out for draws
+that layout again. A report with more than `MAX_DIAGNOSTICS` diagnostics is refused
+`invalid_argument` and changes nothing, an equal one asks for no frame, another replaces it, and
+`Succeeded` clears it; nothing else does.
+
+The banner takes no input. It is in no render, semantics or hit-test tree and no input path reads
+it, so a press on it reaches the widget under it as it would were the banner not drawn, and what
+a driver reads of the app (an element's actionability included) is what it would read without
+the banner.
 
 **Why.** The banner is the development tools', not the application's: an observer may report it
-(ADR-0288 §8), so it lives where nothing of the application reads it, beside the overlay that
-already draws over every frame. Pinned by `build_overlay_matrix`
-(`src/ui_runtime/tests/build_overlay.rs`) and `build_overlay`'s unit tests.
+(ADR-0288 §8, ADR-0395), so it lives where nothing of the application reads it, beside the overlay
+that already draws over every frame, and a test that drives the app passes the same with it
+shown. Pinned by `build_overlay_matrix` (`src/ui_runtime/tests/build_overlay.rs`, its
+`a_tap_on_the_banner_reaches_the_app_under_it` included), `build_overlay`'s unit tests and
+`presentation_scene`'s `an_unshapeable_banner_holds_still` and
+`a_banner_only_frame_keeps_the_readout`.
 
 
 ### Deterministic execution preserves concurrent admission during compaction

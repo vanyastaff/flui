@@ -681,33 +681,32 @@ impl UiRuntime {
         // kept clear of the performance overlay while that is drawn. A banner that changed is
         // published even when the pipeline paints nothing (`PresentationScene::produce`).
         let banner = presentation
-            .pipeline()
-            .with(flui_rendering::pipeline::PipelineOwner::root_id)
-            .and_then(|owner| {
-                let surface = flui_foundation::geometry::Size::new(
-                    constraints.max_width,
-                    constraints.max_height,
-                );
-                let avoid = presentation
-                    .performance_overlay_shown()
-                    .then_some(crate::performance_overlay::BOUNDS);
+            .build_banner
+            .banner(
+                flui_foundation::geometry::Size::new(constraints.max_width, constraints.max_height),
                 presentation
-                    .build_banner
-                    .banner(surface, avoid)
-                    .map(|content| crate::presentation_scene::OverlayFrame {
-                        content,
-                        text,
-                        device_pixel_ratio: dpr.get(),
-                        owner,
-                    })
+                    .performance_overlay_shown()
+                    .then_some(crate::performance_overlay::BOUNDS),
+            )
+            .and_then(|content| {
+                let owner = presentation
+                    .pipeline()
+                    .with(flui_rendering::pipeline::PipelineOwner::root_id)?;
+                Some(crate::presentation_scene::OverlayFrame {
+                    content,
+                    text,
+                    device_pixel_ratio: dpr.get(),
+                    owner,
+                })
             });
         let painted = {
             let pipeline = presentation.pipeline();
             scene.produce(
                 |writer| pipeline.run_frame(writer),
                 banner,
+                || pipeline.scene_frame_node(),
                 || {
-                    let overlay = pipeline
+                    pipeline
                         .with(flui_rendering::pipeline::PipelineOwner::root_id)
                         .and_then(|owner| {
                             let readout = presentation.performance_overlay_readout()?;
@@ -721,8 +720,7 @@ impl UiRuntime {
                                     .get(),
                                 owner,
                             })
-                        });
-                    (pipeline.scene_frame_node(), overlay)
+                        })
                 },
             )?
         };
@@ -764,9 +762,6 @@ impl UiRuntime {
         // Phase 4: apply the patch and publish the version.
         presentation.enter_segment_phase(SegmentPhase::Scene);
         let produced = scene.apply(target);
-        // A press dismisses what this version draws of the banner, and none once a refused patch
-        // renewed the lineage.
-        presentation.build_banner.set_drawn(scene.banner_bounds());
         let outcome = match produced {
             crate::presentation_scene::Produced::Applied { version, released } => {
                 // The pipeline's probes, input regions, leader watches and

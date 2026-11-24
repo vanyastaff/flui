@@ -8,20 +8,19 @@
 //! and the presentation publishes the result as a node of its own after the performance
 //! overlay's, recorded as that readout is: its labels shaped through the UI runtime's
 //! [`TextContext`], a clip to its bounds, under the device-pixel-ratio scale
-//! (`presentation_scene`). The application never sees it: it is not in the render, semantics or
-//! hit-test trees, and a press on it is taken before the gesture binding
-//! ([`BuildBanner::consumes`]).
+//! (`presentation_scene`). The application never sees it, and it never touches the
+//! application's input: it is in no render, semantics or hit-test tree, so a press on it reaches
+//! the widget under it as it would were the banner not drawn, and a driver finds that widget as
+//! reachable as it is. The banner stays until the next report.
 //!
 //! Owner thread only (ADR-0323 §1): the slot is cells.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use flui_foundation::geometry::{Offset, RRect, Radius, Rect, Size};
-use flui_interaction::events::{PointerEvent, PointerEventExt as _};
-use flui_interaction::ids::InputSurface;
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, DisplayList, TextContext, TextLayoutError, paint::Paint};
-use flui_platform::input::pointer::PointerId;
 use flui_protocol::build::{BuildState, Diagnostic, MAX_DIAGNOSTICS};
 
 use crate::performance_overlay::draw_label;
@@ -40,36 +39,32 @@ const CHARACTER_WIDTH: f64 = 7.0;
 /// The chip's extent.
 const CHIP_WIDTH: f64 = 96.0;
 const CHIP_HEIGHT: f64 = 24.0;
-/// How many pointers a dismissal follows to their end at once. Past it the oldest is let go:
-/// the rest of its contact reaches the application, which saw none of its start and so treats it
-/// as a pointer it holds nothing for.
-const MAX_FOLLOWED_POINTERS: usize = 8;
+/// The most characters a report keeps of a diagnostic's message, and of its file's name, the
+/// ellipsis included: each window keeps its own copy of the report, and the widest panel holds
+/// fewer on a line.
+const FIELD_LIMIT: usize = 400;
 
 const CHIP_BACKGROUND: Color = Color::rgba(10, 10, 15, 200);
 const CHIP_TEXT: Color = Color::rgba(255, 220, 120, 255);
 const PANEL_BACKGROUND: Color = Color::rgba(48, 8, 8, 230);
 const HEADER_TEXT: Color = Color::rgba(255, 140, 140, 255);
 const LINE_TEXT: Color = Color::rgba(235, 235, 235, 255);
-const HINT_TEXT: Color = Color::rgba(160, 160, 160, 255);
 
 /// What the chip says while a build runs.
 pub(crate) const BUILDING: &str = "Building\u{2026}";
-/// The panel's last line.
-pub(crate) const DISMISS_HINT: &str = "Tap to dismiss";
+/// The panel's header for a failure that carries no diagnostic, as a manifest or dependency
+/// resolution error does: the terminal that ran the build shows why.
+pub(crate) const SEE_THE_TERMINAL: &str = "Build failed: see the terminal";
 
-/// The report a presentation shows, and the pointers a press on it took from the application.
+/// The report a presentation shows.
 ///
-/// A report replaces the one before it; `Succeeded` clears it, and so does a press inside the
-/// banner a frame drew for it. Only what the last frame drew can be pressed: until a frame draws
-/// a new report, a press goes to the application.
+/// A report replaces the one before it and `Succeeded` clears it; nothing else does.
 #[derive(Debug, Default)]
 pub(crate) struct BuildBanner {
     shown: RefCell<Option<Report>>,
-    /// The bounds the last frame drew the shown report at; `None` while nothing of it is drawn.
-    drawn: Cell<Option<Rect<f64>>>,
-    /// The pointers whose press dismissed the banner: the rest of each contact, to its up or
-    /// cancel, is the banner's too.
-    followed: RefCell<Vec<PointerId>>,
+    /// The banner last laid out for the shown report, with the surface and the bounds it kept
+    /// clear of: a frame for the same surface draws it again as it is. A report clears it.
+    laid: RefCell<Option<Laid>>,
 }
 
 /// What [`BuildBanner::report`] refuses.
@@ -81,25 +76,24 @@ pub(crate) enum ReportRefused {
     UnknownState,
 }
 
-/// What [`BuildBanner::consumes`] made of a pointer event.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Consumption {
-    /// It is the application's.
-    Passes,
-    /// It continues a contact whose press dismissed the banner.
-    Taken,
-    /// It pressed the banner, which is dismissed: the presentation owes a frame without it.
-    Dismissed,
-}
-
-/// The report shown: a build running, or one that failed.
+/// The report shown: a build running, or one that failed, as the panel reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Report {
     Building,
+    /// The panel's header, then one line per diagnostic, its message and its file each
+    /// [`one_line`] of at most [`FIELD_LIMIT`] characters.
     Failed {
-        diagnostics: Vec<Diagnostic>,
-        omitted: u32,
+        header: String,
+        lines: Vec<String>,
     },
+}
+
+/// A banner laid out, and what it was laid out for.
+#[derive(Debug)]
+struct Laid {
+    surface: Extent,
+    avoid: Option<Rect<f64>>,
+    banner: Option<Banner>,
 }
 
 impl BuildBanner {
@@ -121,8 +115,8 @@ impl BuildBanner {
                     return Err(ReportRefused::TooManyDiagnostics);
                 }
                 Some(Report::Failed {
-                    diagnostics,
-                    omitted,
+                    header: header(diagnostics.len(), omitted),
+                    lines: diagnostics.iter().map(diagnostic_line).collect(),
                 })
             }
             _ => return Err(ReportRefused::UnknownState),
@@ -130,91 +124,45 @@ impl BuildBanner {
         if *self.shown.borrow() == report {
             return Ok(false);
         }
-        // What was drawn is of the report replaced: nothing of the new one can be pressed
-        // before a frame draws it.
-        self.drawn.set(None);
-        // The replaced report is strings: its drop runs no code of the application's.
+        // The replaced report and its layout are strings: their drops run no code of the
+        // application's.
+        drop(self.laid.take());
         drop(self.shown.replace(report));
         Ok(true)
     }
 
     /// The banner of the shown report on a surface of `surface` logical pixels, kept clear of
     /// `avoid` (the performance overlay's bounds while it is drawn); `None` when nothing is shown
-    /// or nothing of it fits.
+    /// or nothing of it fits. A frame for the surface the last one laid out for gets that banner
+    /// again, without laying it out.
     pub(crate) fn banner(&self, surface: Size<f64>, avoid: Option<Rect<f64>>) -> Option<Banner> {
         let shown = self.shown.borrow();
+        let report = shown.as_ref()?;
         let surface = Extent::of(surface);
-        match shown.as_ref()? {
+        let mut laid = self.laid.borrow_mut();
+        if let Some(laid) = laid
+            .as_ref()
+            .filter(|laid| laid.surface == surface && laid.avoid == avoid)
+        {
+            return laid.banner.clone();
+        }
+        let banner = match report {
             Report::Building => Banner::chip(surface, avoid),
-            Report::Failed {
-                diagnostics,
-                omitted,
-            } => Banner::panel(surface, avoid, diagnostics, *omitted),
-        }
-    }
-
-    /// The frame drew the banner at `bounds`, or drew none.
-    pub(crate) fn set_drawn(&self, bounds: Option<Rect<f64>>) {
-        self.drawn
-            .set(bounds.filter(|_| self.shown.borrow().is_some()));
-    }
-
-    /// Whether `event`, on `surface` of the presentation's window, is the banner's: a press
-    /// inside what the last frame drew dismisses it, and the rest of that contact is the
-    /// banner's too, to its up or cancel. Everything else passes to the application.
-    ///
-    /// Only the window's own surface is drawn over; an embedded surface's input passes.
-    pub(crate) fn consumes(&self, surface: InputSurface, event: &PointerEvent) -> Consumption {
-        if surface != InputSurface::Window {
-            return Consumption::Passes;
-        }
-        let Some(pointer) = event.pointer_id() else {
-            return Consumption::Passes;
+            Report::Failed { header, lines } => Banner::panel(surface, avoid, header, lines),
         };
-        let pressed = matches!(event, PointerEvent::Down(_));
-        let mut followed = self.followed.borrow_mut();
-        if let Some(at) = followed.iter().position(|held| *held == pointer) {
-            // A contact ends with its up or cancel. A press of a pointer still followed starts a
-            // new contact (the end of the one before was lost, as on a platform that withdrew
-            // it), which is judged afresh below.
-            if pressed || matches!(event, PointerEvent::Up(_) | PointerEvent::Cancel(_)) {
-                followed.remove(at);
-            }
-            if !pressed {
-                return Consumption::Taken;
-            }
-        }
-        if !pressed {
-            return Consumption::Passes;
-        }
-        let inside = event
-            .position()
-            .zip(self.drawn.get())
-            .is_some_and(|(position, drawn)| contains(drawn, position));
-        if !inside {
-            return Consumption::Passes;
-        }
-        self.drawn.set(None);
-        drop(self.shown.replace(None));
-        if followed.len() == MAX_FOLLOWED_POINTERS {
-            followed.remove(0);
-        }
-        followed.push(pointer);
-        Consumption::Dismissed
+        // The layout replaced is strings: its drop runs no code of the application's.
+        drop(laid.replace(Laid {
+            surface,
+            avoid,
+            banner: banner.clone(),
+        }));
+        banner
     }
-}
-
-/// Whether `point` is inside `bounds`, its right and bottom edges excluded.
-fn contains(bounds: Rect<f64>, point: Offset<f64>) -> bool {
-    point.dx >= bounds.left()
-        && point.dx < bounds.right()
-        && point.dy >= bounds.top()
-        && point.dy < bounds.bottom()
 }
 
 /// A surface's logical extent, finite and non-negative: an unbounded or non-finite extent is no
 /// surface.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct Extent {
     width: f64,
     height: f64,
@@ -241,12 +189,21 @@ impl Extent {
 ///
 /// Two frames whose banners compare equal, shaped over the same fonts, record the same commands,
 /// so the presentation keeps the chunk it published and the banner damages nothing while it
-/// holds still.
-#[derive(Debug, Clone, PartialEq)]
+/// holds still. A clone shares its labels, and two banners that share them compare equal without
+/// reading them.
+#[derive(Debug, Clone)]
 pub(crate) struct Banner {
     bounds: Rect<f64>,
     background: Color,
-    labels: Vec<Label>,
+    labels: Rc<[Label]>,
+}
+
+impl PartialEq for Banner {
+    fn eq(&self, other: &Self) -> bool {
+        self.bounds == other.bounds
+            && self.background == other.background
+            && (Rc::ptr_eq(&self.labels, &other.labels) || self.labels == other.labels)
+    }
 }
 
 /// One label of a [`Banner`], at its top-left corner on the surface, in logical pixels.
@@ -276,24 +233,23 @@ impl Banner {
         Some(Self {
             bounds,
             background: CHIP_BACKGROUND,
-            labels: vec![Label {
+            labels: Rc::new([Label {
                 text: BUILDING.to_owned(),
                 at: Offset::new(left + PADDING, top + 4.0),
                 font_size: 12.0,
                 color: CHIP_TEXT,
-            }],
+            }]),
         })
     }
 
     /// The panel that says a build failed: along the bottom of the surface, below `avoid` when
-    /// the two share columns. Its first line counts the errors, its last says how to dismiss it,
-    /// and each diagnostic takes a line between them, as many as the height left holds, each cut
-    /// to the width.
+    /// the two share columns. Its first line is `header`, and each of `lines` takes a line after
+    /// it, as many as the height left holds, each cut to the width.
     fn panel(
         surface: Extent,
         avoid: Option<Rect<f64>>,
-        diagnostics: &[Diagnostic],
-        omitted: u32,
+        header: &str,
+        lines: &[String],
     ) -> Option<Self> {
         let left = MARGIN;
         let right = surface.width - MARGIN;
@@ -311,14 +267,13 @@ impl Banner {
         } else {
             0
         };
-        // The header first, the hint next, then as many diagnostics as fit between them.
-        let (shown, hint) = match rows {
+        // The header first, then as many diagnostics as fit after it.
+        let shown = match rows {
             0 => return None,
-            1 => (0, false),
-            rows => (diagnostics.len().min(rows - 2), true),
+            rows => lines.len().min(rows - 1),
         };
-        let lines = 1 + shown + usize::from(hint);
-        let top = bottom - 2.0 * PADDING - lines as f64 * ROW;
+        let count = 1 + shown;
+        let top = bottom - 2.0 * PADDING - count as f64 * ROW;
         let bounds = Rect::from_ltrb(left, top, right, bottom);
         if bounds.is_empty() {
             return None;
@@ -326,27 +281,24 @@ impl Banner {
         let budget = ((right - left - 2.0 * PADDING) / CHARACTER_WIDTH).max(0.0) as usize;
         let x = left + PADDING;
         let mut y = top + PADDING;
-        let mut labels = Vec::with_capacity(lines);
-        let mut line = |text: String, font_size: f32, color: Color| {
+        let mut labels = Vec::with_capacity(count);
+        let mut line = |text: &str, font_size: f32, color: Color| {
             labels.push(Label {
-                text: cut(&text, budget),
+                text: fit(text, budget),
                 at: Offset::new(x, y),
                 font_size,
                 color,
             });
             y += ROW;
         };
-        line(header(diagnostics.len(), omitted), 13.0, HEADER_TEXT);
-        for diagnostic in &diagnostics[..shown] {
-            line(diagnostic_line(diagnostic), 12.0, LINE_TEXT);
-        }
-        if hint {
-            line(DISMISS_HINT.to_owned(), 11.0, HINT_TEXT);
+        line(header, 13.0, HEADER_TEXT);
+        for text in &lines[..shown] {
+            line(text, 12.0, LINE_TEXT);
         }
         Some(Self {
             bounds,
             background: PANEL_BACKGROUND,
-            labels,
+            labels: Rc::from(labels),
         })
     }
 
@@ -367,7 +319,7 @@ impl Banner {
             RRect::from_rect_and_radius(self.bounds, Radius::circular(4.0)),
             &Paint::fill(self.background),
         );
-        for label in &self.labels {
+        for label in self.labels.iter() {
             draw_label(
                 &mut canvas,
                 text,
@@ -388,38 +340,82 @@ impl Banner {
             .map(|label| label.text.as_str())
             .collect()
     }
-}
 
-/// The panel's first line: how many errors the report carries, and how many it left out.
-fn header(diagnostics: usize, omitted: u32) -> String {
-    let errors = if diagnostics == 1 { "error" } else { "errors" };
-    if omitted == 0 {
-        format!("Build failed: {diagnostics} {errors}")
-    } else {
-        format!("Build failed: {diagnostics} {errors} and {omitted} more")
+    /// A chip whose one label has a font size no shaper takes, so it never records.
+    #[cfg(test)]
+    pub(crate) fn unshapeable() -> Self {
+        Self {
+            bounds: Rect::from_ltrb(8.0, 8.0, 104.0, 32.0),
+            background: CHIP_BACKGROUND,
+            labels: Rc::new([Label {
+                text: BUILDING.to_owned(),
+                at: Offset::new(16.0, 12.0),
+                font_size: f32::NAN,
+                color: CHIP_TEXT,
+            }]),
+        }
     }
 }
 
-/// `file:line:column  message`, or the message alone where it has no location.
+/// The panel's first line: how many errors the report carries, and how many it left out; a
+/// failure that carries none sends the reader to the terminal.
+fn header(diagnostics: usize, omitted: u32) -> String {
+    let errors = |one: bool| if one { "error" } else { "errors" };
+    match (diagnostics, omitted) {
+        (0, 0) => SEE_THE_TERMINAL.to_owned(),
+        (0, omitted) => format!(
+            "Build failed: {omitted} {}, see the terminal",
+            errors(omitted == 1)
+        ),
+        (diagnostics, 0) => format!("Build failed: {diagnostics} {}", errors(diagnostics == 1)),
+        (diagnostics, omitted) => format!(
+            "Build failed: {diagnostics} {} and {omitted} more",
+            errors(diagnostics == 1)
+        ),
+    }
+}
+
+/// `file:line:column  message`, or the message alone where it has no location, its file and its
+/// message each [`one_line`] of at most [`FIELD_LIMIT`] characters.
 fn diagnostic_line(diagnostic: &Diagnostic) -> String {
+    let message = one_line(&diagnostic.message, FIELD_LIMIT);
     match &diagnostic.location {
         Some(location) => format!(
-            "{}:{}:{}  {}",
-            location.file, location.line, location.column, diagnostic.message
+            "{}:{}:{}  {message}",
+            one_line(&location.file, FIELD_LIMIT),
+            location.line,
+            location.column
         ),
-        None => diagnostic.message.clone(),
+        None => message,
     }
 }
 
-/// `text` as one line of at most `budget` characters: cut at its first line break, each other
-/// control character a space, and ended with an ellipsis where it is cut.
-fn cut(text: &str, budget: usize) -> String {
-    let first = text.split(['\n', '\r']).next().unwrap_or_default();
-    let mut cut = first.len() < text.len();
+/// Whether `character` is a bidirectional formatting character: an embedding, an override, an
+/// isolate or an implicit mark. Each reorders the characters around it, so a line that carries
+/// one can show other text than it holds.
+fn is_bidi_format(character: char) -> bool {
+    matches!(
+        character,
+        '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}' | '\u{061C}'
+    )
+}
+
+/// `text` as one line of at most `limit` characters, the ellipsis included: cut at its first
+/// line break when more than whitespace follows it, each other control character a space, every
+/// bidirectional formatting character dropped, and ended with an ellipsis where it is cut. It
+/// copies no more of `text` than the line it keeps.
+fn one_line(text: &str, limit: usize) -> String {
+    let (first, rest) = text
+        .find(['\n', '\r'])
+        .map_or((text, ""), |at| text.split_at(at));
+    let mut cut = !rest.trim().is_empty();
     let mut kept = String::new();
     let mut count = 0;
     for character in first.chars() {
-        if count == budget {
+        if is_bidi_format(character) {
+            continue;
+        }
+        if count == limit {
             cut = true;
             break;
         }
@@ -430,8 +426,8 @@ fn cut(text: &str, budget: usize) -> String {
         });
         count += 1;
     }
-    if cut && budget > 0 {
-        if count == budget {
+    if cut && limit > 0 {
+        if count == limit {
             kept.pop();
         }
         kept.push('\u{2026}');
@@ -439,12 +435,26 @@ fn cut(text: &str, budget: usize) -> String {
     kept
 }
 
+/// `text` in at most `budget` characters: whole when it fits, otherwise its first `budget - 1`
+/// and an ellipsis.
+fn fit(text: &str, budget: usize) -> String {
+    if budget == 0 {
+        return String::new();
+    }
+    match text.char_indices().nth(budget - 1) {
+        Some((last, _)) if text.char_indices().nth(budget).is_some() => {
+            format!("{}\u{2026}", &text[..last])
+        }
+        _ => text.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use flui_foundation::geometry::Size;
     use flui_protocol::build::{BuildState, Diagnostic, MAX_DIAGNOSTICS, SourceLocation};
 
-    use super::{BuildBanner, ReportRefused, cut};
+    use super::{BuildBanner, FIELD_LIMIT, Report, ReportRefused, fit, one_line};
     use crate::performance_overlay::BOUNDS;
 
     fn failed(count: usize, omitted: u32) -> BuildState {
@@ -461,46 +471,117 @@ mod tests {
         }
     }
 
-    /// A line is cut to its budget with an ellipsis, at its first line break, with every other
-    /// control character a space; one that fits is kept whole.
+    /// A report's text is one line at its limit, with an ellipsis where it is cut at a line break
+    /// or at the limit, every other control character a space and every bidirectional formatting
+    /// character dropped; one that fits is kept whole. Fails if a line break, an override or an
+    /// isolate reaches the panel, or a cut is not marked.
     #[test]
-    fn a_line_is_cut_to_one_line_at_its_budget() {
-        for (text, budget, expected) in [
+    fn a_report_line_is_one_line_without_bidi_formatting() {
+        for (text, limit, expected) in [
             ("short", 10, "short"),
             ("exactly10!", 10, "exactly10!"),
             ("eleven char", 10, "eleven ch\u{2026}"),
             ("first\nsecond", 20, "first\u{2026}"),
+            ("first\r\nsecond", 20, "first\u{2026}"),
+            ("trailing\n", 20, "trailing"),
             ("tab\there", 20, "tab here"),
+            ("a\u{202E}cba\u{202C}d", 20, "acbad"),
+            (
+                "\u{2066}x\u{2069}\u{2067}y\u{2068}\u{200E}\u{200F}\u{061C}z\u{202A}\u{202B}\u{202D}",
+                20,
+                "xyz",
+            ),
+            ("\u{202E}0123456789", 10, "0123456789"),
             ("anything", 0, ""),
             ("", 4, ""),
         ] {
-            assert_eq!(cut(text, budget), expected, "{text:?} at {budget}");
+            assert_eq!(one_line(text, limit), expected, "{text:?} at {limit}");
         }
     }
 
-    /// The panel counts the errors and what was left out, draws one line per diagnostic as
-    /// `file:line:column  message`, and ends with the hint.
+    /// A line is cut to the panel's budget with an ellipsis; one that fits is kept whole.
     #[test]
-    fn the_failure_panel_reads_header_diagnostics_and_hint() {
+    fn a_line_is_cut_to_its_budget() {
+        for (text, budget, expected) in [
+            ("short", 10, "short"),
+            ("exactly10!", 10, "exactly10!"),
+            ("eleven char", 10, "eleven ch\u{2026}"),
+            ("\u{e9}\u{e9}\u{e9}\u{e9}", 3, "\u{e9}\u{e9}\u{2026}"),
+            ("anything", 0, ""),
+            ("", 4, ""),
+        ] {
+            assert_eq!(fit(text, budget), expected, "{text:?} at {budget}");
+        }
+    }
+
+    /// A diagnostic's message and file are each bounded when the report is taken, whatever their
+    /// length on the wire. Fails if a window keeps more of either than the limit.
+    #[test]
+    fn a_report_keeps_a_bounded_copy_of_each_diagnostic() {
+        let long = "m".repeat(100_000);
         let banner = BuildBanner::default();
-        assert_eq!(banner.report(failed(2, 5)), Ok(true));
-        let drawn = banner
-            .banner(Size::new(800.0, 600.0), None)
-            .expect("a failure is drawn");
         assert_eq!(
-            drawn.texts(),
+            banner.report(BuildState::Failed {
+                diagnostics: vec![
+                    Diagnostic::new(long.clone(), None),
+                    Diagnostic::new("short".to_owned(), Some(SourceLocation::new(long, 1, 2))),
+                ],
+                omitted: 0,
+            }),
+            Ok(true)
+        );
+        let shown = banner.shown.borrow();
+        let Some(Report::Failed { lines, .. }) = shown.as_ref() else {
+            panic!("a failure is shown: {shown:?}");
+        };
+        assert_eq!(lines[0].chars().count(), FIELD_LIMIT);
+        assert!(lines[0].ends_with('\u{2026}'), "the cut is marked");
+        assert_eq!(
+            lines[1].chars().count(),
+            FIELD_LIMIT + ":1:2  short".chars().count()
+        );
+    }
+
+    /// The panel counts the errors and what was left out and draws one line per diagnostic as
+    /// `file:line:column  message`; a failure with no diagnostic sends the reader to the terminal
+    /// instead of counting none.
+    #[test]
+    fn the_failure_panel_reads_header_and_diagnostics() {
+        let banner = BuildBanner::default();
+        let drawn = |state: BuildState| {
+            assert_eq!(banner.report(state), Ok(true));
+            banner
+                .banner(Size::new(800.0, 600.0), None)
+                .expect("a failure is drawn")
+                .texts()
+                .into_iter()
+                .map(str::to_owned)
+                .collect::<Vec<String>>()
+        };
+        assert_eq!(
+            drawn(failed(2, 5)),
             [
                 "Build failed: 2 errors and 5 more",
                 "src/main.rs:3:7  error 0",
                 "src/main.rs:3:7  error 1",
-                super::DISMISS_HINT,
             ]
         );
-        assert_eq!(banner.report(failed(1, 0)), Ok(true));
-        let drawn = banner
-            .banner(Size::new(800.0, 600.0), None)
-            .expect("a failure is drawn");
-        assert_eq!(drawn.texts()[0], "Build failed: 1 error");
+        assert_eq!(
+            drawn(failed(1, 0)),
+            ["Build failed: 1 error", "src/main.rs:3:7  error 0"]
+        );
+        assert_eq!(drawn(failed(0, 0)), [super::SEE_THE_TERMINAL]);
+        assert_eq!(
+            drawn(failed(0, 3)),
+            ["Build failed: 3 errors, see the terminal"]
+        );
+        assert_eq!(
+            drawn(BuildState::Failed {
+                diagnostics: vec![Diagnostic::new("no location".to_owned(), None)],
+                omitted: 1,
+            }),
+            ["Build failed: 1 error and 1 more", "no location"]
+        );
     }
 
     /// A report past the limit is refused and keeps what was shown; an equal report changes
@@ -508,6 +589,7 @@ mod tests {
     #[test]
     fn a_report_replaces_refuses_or_clears() {
         let banner = BuildBanner::default();
+        assert!(banner.shown.borrow().is_none());
         assert_eq!(banner.report(BuildState::Building), Ok(true));
         assert_eq!(banner.report(BuildState::Building), Ok(false));
         assert_eq!(
@@ -518,13 +600,51 @@ mod tests {
         let building = banner.banner(size, None).expect("the chip stays");
         assert_eq!(building.texts(), [super::BUILDING]);
         assert_eq!(banner.report(failed(MAX_DIAGNOSTICS, 0)), Ok(true));
+        let panel = banner
+            .banner(size, None)
+            .expect("the failure replaces the chip");
+        assert_eq!(panel.texts().len(), MAX_DIAGNOSTICS + 1);
         assert_eq!(banner.report(BuildState::Succeeded), Ok(true));
+        assert!(banner.shown.borrow().is_none());
         assert_eq!(banner.banner(size, None), None);
         assert_eq!(banner.report(BuildState::Succeeded), Ok(false));
     }
 
+    /// A frame for the surface the last one laid out for gets the same banner without a layout,
+    /// and one for another surface or another area to avoid gets it laid out anew. Fails if a
+    /// resize, or the performance overlay turned on, keeps a stale layout.
+    #[test]
+    fn a_layout_is_kept_for_its_surface() {
+        let banner = BuildBanner::default();
+        assert_eq!(banner.report(failed(1, 0)), Ok(true));
+        let wide = Size::new(800.0, 600.0);
+        let first = banner.banner(wide, None).expect("a failure is drawn");
+        let again = banner.banner(wide, None).expect("a failure is drawn");
+        assert!(
+            std::rc::Rc::ptr_eq(&first.labels, &again.labels),
+            "the layout is kept"
+        );
+        let low = banner
+            .banner(Size::new(800.0, 300.0), None)
+            .expect("a failure is drawn");
+        assert_ne!(first.bounds(), low.bounds(), "a resize lays it out anew");
+        assert_eq!(banner.report(BuildState::Building), Ok(true));
+        let building = banner.banner(wide, None).expect("the chip is drawn");
+        let avoiding = banner
+            .banner(Size::new(500.0, 600.0), Some(BOUNDS))
+            .expect("the chip is drawn");
+        let plain = banner
+            .banner(Size::new(500.0, 600.0), None)
+            .expect("the chip is drawn");
+        assert_ne!(building.bounds(), plain.bounds(), "a resize moves the chip");
+        assert_ne!(avoiding.bounds(), plain.bounds(), "the readout moves it");
+        assert!(!avoiding.bounds().overlaps(&BOUNDS));
+    }
+
     /// For any surface, zero, tiny, huge or not finite, every banner is finite, non-negative,
-    /// inside the surface, clear of the performance overlay and every label inside it.
+    /// inside the surface, clear of the performance overlay and every label inside it. Each
+    /// report is drawn on every finite surface of at least 600 by 200 logical pixels, and on none
+    /// narrower than 39 or lower than 32. Fails if a banner that has room draws nothing.
     #[test]
     fn a_banner_is_finite_inside_its_surface_and_clear_of_the_performance_overlay() {
         let extents = [
@@ -544,6 +664,7 @@ mod tests {
             f64::NAN,
             -5.0,
         ];
+        let finite_at_least = |extent: f64, least: f64| extent.is_finite() && extent >= least;
         for state in [
             BuildState::Building,
             failed(MAX_DIAGNOSTICS, 3),
@@ -551,30 +672,36 @@ mod tests {
         ] {
             let banner = BuildBanner::default();
             assert_eq!(banner.report(state.clone()), Ok(true));
+            let mut drawn_count = 0;
             for width in extents {
                 for height in extents {
                     for avoid in [None, Some(BOUNDS)] {
-                        let size = Size::new(width, height);
-                        let Some(drawn) = banner.banner(size, avoid) else {
+                        let case = format!("{state:?} on {width}x{height}, avoiding {avoid:?}");
+                        let drawn = banner.banner(Size::new(width, height), avoid);
+                        if finite_at_least(width, 600.0) && finite_at_least(height, 200.0) {
+                            assert!(drawn.is_some(), "{case}: it has room");
+                        }
+                        if !finite_at_least(width, 39.0) || !finite_at_least(height, 32.0) {
+                            assert!(drawn.is_none(), "{case}: nothing fits");
+                        }
+                        let Some(drawn) = drawn else {
                             continue;
                         };
+                        drawn_count += 1;
                         let bounds = drawn.bounds();
-                        let case = format!("{state:?} on {width}x{height}, avoiding {avoid:?}");
                         assert!(
                             bounds.is_finite() && !bounds.is_empty(),
                             "{case}: {bounds:?}"
                         );
                         assert!(bounds.left() >= 0.0 && bounds.top() >= 0.0, "{case}");
-                        let surface_width = if width.is_finite() { width } else { 0.0 };
-                        let surface_height = if height.is_finite() { height } else { 0.0 };
                         assert!(
-                            bounds.right() <= surface_width && bounds.bottom() <= surface_height,
+                            bounds.right() <= width && bounds.bottom() <= height,
                             "{case}: {bounds:?}"
                         );
                         if let Some(avoid) = avoid {
                             assert!(!bounds.overlaps(&avoid), "{case}: {bounds:?}");
                         }
-                        for label in &drawn.labels {
+                        for label in drawn.labels.iter() {
                             assert!(
                                 label.at.dx.is_finite()
                                     && label.at.dy.is_finite()
@@ -585,129 +712,30 @@ mod tests {
                     }
                 }
             }
+            // At least 1920 and 1e9 on each axis, with and without the readout to avoid.
+            assert!(drawn_count >= 8, "{state:?} drew {drawn_count} times");
         }
     }
 
-    /// A press inside what was drawn dismisses the banner, and the same contact's moves and up
-    /// are the banner's; once it ended, that pointer's input passes again, as does a press
-    /// outside, on an embedded surface, or before a frame drew the report. Fails if the rest of
-    /// a dismissing contact leaks to the application, or its end is never seen.
+    /// A panel on a short surface keeps its header and drops the diagnostics that do not fit; on
+    /// a large one it shows each.
     #[test]
-    fn a_dismissing_press_takes_its_contact_to_its_end() {
-        use flui_interaction::events::{
-            PointerKind, make_cancel_event_for_id, make_down_event, make_down_event_for_id,
-            make_move_event, make_up_event,
-        };
-        use flui_interaction::ids::InputSurface;
-
-        use super::Consumption;
-
-        let at = |x: f64, y: f64| flui_foundation::geometry::Offset::new(x, y);
-        let kind = PointerKind::Touch;
-        let banner = BuildBanner::default();
-        assert_eq!(banner.report(BuildState::Building), Ok(true));
-        let inside = make_down_event(at(20.0, 20.0), kind).expect("finite");
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &inside),
-            Consumption::Passes,
-            "nothing is drawn yet"
-        );
-        banner.set_drawn(Some(flui_foundation::geometry::Rect::from_ltrb(
-            10.0, 10.0, 50.0, 30.0,
-        )));
-        let outside = make_down_event(at(60.0, 20.0), kind).expect("finite");
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &outside),
-            Consumption::Passes
-        );
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &inside),
-            Consumption::Dismissed
-        );
-        assert_eq!(banner.banner(Size::new(800.0, 600.0), None), None);
-        let moved = make_move_event(at(70.0, 70.0), kind).expect("finite");
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &moved),
-            Consumption::Taken
-        );
-        let up = make_up_event(at(70.0, 70.0), kind).expect("finite");
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &up),
-            Consumption::Taken
-        );
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &moved),
-            Consumption::Passes,
-            "the contact ended with its up"
-        );
-
-        // A cancel ends a contact as an up does; an embedded surface is not drawn over.
-        assert_eq!(banner.report(BuildState::Building), Ok(true));
-        banner.set_drawn(Some(flui_foundation::geometry::Rect::from_ltrb(
-            10.0, 10.0, 50.0, 30.0,
-        )));
-        let other = flui_platform::input::pointer::PointerId::new(
-            std::num::NonZeroU64::new(7).expect("non-zero"),
-        );
-        let press = make_down_event_for_id(other, at(20.0, 20.0), kind).expect("finite");
-        let embedded = flui_interaction::binding::GestureBinding::new()
-            .embed_surface()
-            .expect("a surface identity");
-        assert_eq!(banner.consumes(embedded, &press), Consumption::Passes);
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &press),
-            Consumption::Dismissed
-        );
-        let cancel = make_cancel_event_for_id(other, kind);
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &cancel),
-            Consumption::Taken
-        );
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &cancel),
-            Consumption::Passes
-        );
-
-        // A press of a pointer still followed, its end lost, starts a contact the application
-        // sees.
-        assert_eq!(banner.report(BuildState::Building), Ok(true));
-        banner.set_drawn(Some(flui_foundation::geometry::Rect::from_ltrb(
-            10.0, 10.0, 50.0, 30.0,
-        )));
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &press),
-            Consumption::Dismissed
-        );
-        let elsewhere = make_down_event_for_id(other, at(60.0, 20.0), kind).expect("finite");
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &elsewhere),
-            Consumption::Passes,
-            "a new contact is judged afresh"
-        );
-        let after = make_cancel_event_for_id(other, kind);
-        assert_eq!(
-            banner.consumes(InputSurface::Window, &after),
-            Consumption::Passes,
-            "the new contact is the application's to its end"
-        );
-    }
-
-    /// A panel on a short surface keeps its header and hint and drops the diagnostics that do
-    /// not fit; on a large one it shows each.
-    #[test]
-    fn a_short_panel_keeps_its_header_and_hint() {
+    fn a_short_panel_keeps_its_header() {
         let banner = BuildBanner::default();
         assert_eq!(banner.report(failed(MAX_DIAGNOSTICS, 0)), Ok(true));
         let tall = banner
             .banner(Size::new(800.0, 800.0), None)
             .expect("a failure is drawn");
-        assert_eq!(tall.texts().len(), MAX_DIAGNOSTICS + 2);
+        assert_eq!(tall.texts().len(), MAX_DIAGNOSTICS + 1);
         let short = banner
             .banner(Size::new(800.0, 100.0), None)
             .expect("a failure is drawn");
         let texts = short.texts();
-        assert!(texts.len() < MAX_DIAGNOSTICS + 2, "{texts:?}");
+        assert!((2..=MAX_DIAGNOSTICS).contains(&texts.len()), "{texts:?}");
         assert!(texts[0].starts_with("Build failed"), "{texts:?}");
-        assert_eq!(texts.last(), Some(&super::DISMISS_HINT), "{texts:?}");
+        let header_only = banner
+            .banner(Size::new(800.0, 56.0), None)
+            .expect("the header fits");
+        assert_eq!(header_only.texts().len(), 1);
     }
 }

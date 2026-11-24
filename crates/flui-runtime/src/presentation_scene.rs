@@ -5,7 +5,8 @@
 //! root around the pipeline's frame node and the debug overlays' nodes (the
 //! performance overlay's readout, then the build banner), and applies it. A
 //! frame whose pipeline paints nothing applies a patch only when the build
-//! banner changed: its node and the root. The version is reported back to the pipeline, whose probes,
+//! banner changed: its node and the root, the readout kept as the version
+//! shows it. The version is reported back to the pipeline, whose probes,
 //! input regions, leader watches and follower hit-testing read it, and is
 //! published to the sink with the damage since the version the raster side
 //! last acknowledged.
@@ -36,7 +37,7 @@ use flui_foundation::RenderId;
 use flui_foundation::SurfaceGeneration;
 use flui_foundation::geometry::{DevicePixelRatio, Rect};
 use flui_layer::{
-    BoundaryContent, ClipRectLayer, ReleasedContents, ResyncReason, SceneNodeId, SceneOp,
+    BoundaryContent, ClipRectLayer, Lineage, ReleasedContents, ResyncReason, SceneNodeId, SceneOp,
     SceneOwner, ScenePublication, SceneVersion, SceneVersionId, SceneWriter, SurfaceKey,
     TextureRegistry, TransformLayer,
 };
@@ -193,10 +194,13 @@ pub(crate) struct OverlayFrame<'t, C> {
 }
 
 /// An overlay the current version shows: its node and what its chunk was
-/// recorded from.
+/// recorded from, or content that could not be recorded.
 #[derive(Debug)]
 struct ShownOverlay<C> {
-    node: SceneNodeId,
+    /// The node it is published at; `None` when its labels did not shape at
+    /// `fonts`: the version draws nothing of it, and the content is not
+    /// recorded again until it, the scale or the fonts change.
+    node: Option<SceneNodeId>,
     content: C,
     /// The fonts generation the labels were shaped at: a registration may
     /// shape the same text differently.
@@ -211,25 +215,33 @@ impl<C: OverlayContent> ShownOverlay<C> {
         self.content == wanted.content
             && self.device_pixel_ratio.to_bits() == wanted.device_pixel_ratio.to_bits()
     }
+
+    /// Whether this is of the scene's `lineage`: content that was never
+    /// published belongs to every lineage.
+    fn of_lineage(&self, lineage: Lineage) -> bool {
+        self.node.is_none_or(|node| node.lineage() == lineage)
+    }
 }
 
 impl PresentationScene {
     /// Runs `paint` with a patch open, then composes the scene's root around
-    /// the frame node, the performance overlay `compose` names and `banner`,
-    /// in the same patch: when `paint` painted, or when the banner the
-    /// version shows is not `banner`. Returns whether there is a patch to
-    /// [`Self::apply`].
+    /// the frame node `frame` names, the performance overlay `readout` names
+    /// and `banner`, in the same patch: when `paint` painted, or when the
+    /// banner the version shows is not `banner`. Returns whether there is a
+    /// patch to [`Self::apply`].
     ///
     /// The banner is published on a frame the pipeline paints nothing in: it
     /// is the development tools', so a report that changes it repaints no
     /// boundary of the pipeline, and its patch holds the banner's node and
     /// the root alone. The performance overlay changes only with the frames
-    /// it measures, so it waits for one that paints.
+    /// it measures: `readout` runs on a frame that painted, and a frame that
+    /// publishes the banner alone keeps the readout the version shows.
     pub(crate) fn produce<'t, E>(
         &mut self,
         paint: impl FnOnce(&mut SceneWriter<'_>) -> Result<bool, E>,
         banner: Option<OverlayFrame<'t, Banner>>,
-        compose: impl FnOnce() -> (Option<SceneNodeId>, Option<OverlayFrame<'t, Readout>>),
+        frame: impl FnOnce() -> Option<SceneNodeId>,
+        readout: impl FnOnce() -> Option<OverlayFrame<'t, Readout>>,
     ) -> Result<bool, E> {
         let mut writer = self.owner.writer();
         let painted = paint(&mut writer)?;
@@ -237,7 +249,7 @@ impl PresentationScene {
         let banner_shown = match (
             self.banner
                 .as_ref()
-                .filter(|shown| shown.node.lineage() == lineage),
+                .filter(|shown| shown.of_lineage(lineage)),
             banner.as_ref(),
         ) {
             (None, None) => true,
@@ -247,32 +259,40 @@ impl PresentationScene {
         if !painted && banner_shown {
             return Ok(false);
         }
-        let (frame, overlay) = compose();
-        Self::compose(
-            &mut self.overlay,
-            &mut self.banner,
-            &mut writer,
-            frame,
-            overlay,
-            banner,
-        );
+        let overlay = Self::compose_readout(&mut self.overlay, &mut writer, painted, readout);
+        let banner = Self::compose_node(&mut self.banner, &mut writer, banner);
+        Self::compose_root(&mut writer, frame(), overlay, banner);
         Ok(true)
     }
 
+    /// The node the performance overlay is shown at: `readout` composed on a
+    /// frame that `painted`, and on one that did not, the node the version
+    /// shows it at.
+    fn compose_readout<'t>(
+        shown: &mut Option<ShownOverlay<Readout>>,
+        writer: &mut SceneWriter<'_>,
+        painted: bool,
+        readout: impl FnOnce() -> Option<OverlayFrame<'t, Readout>>,
+    ) -> Option<SceneNodeId> {
+        if painted {
+            return Self::compose_node(shown, writer, readout());
+        }
+        let lineage = writer.current().id().lineage();
+        shown
+            .as_ref()
+            .filter(|shown| shown.of_lineage(lineage))
+            .and_then(|shown| shown.node)
+    }
+
     /// Republishes the scene's root around the pipeline's `frame` node and
-    /// the overlays, in the patch `writer` buffers, when it does not slot
-    /// them already; publishes an overlay's node when what it draws changed.
-    fn compose(
-        overlay_shown: &mut Option<ShownOverlay<Readout>>,
-        banner_shown: &mut Option<ShownOverlay<Banner>>,
+    /// the overlays' nodes, in the patch `writer` buffers, when it does not
+    /// slot them already.
+    fn compose_root(
         writer: &mut SceneWriter<'_>,
         frame: Option<SceneNodeId>,
-        overlay: Option<OverlayFrame<'_, Readout>>,
-        banner: Option<OverlayFrame<'_, Banner>>,
+        overlay: Option<SceneNodeId>,
+        banner: Option<SceneNodeId>,
     ) {
-        let overlay = Self::compose_node(overlay_shown, writer, overlay);
-        let banner = Self::compose_node(banner_shown, writer, banner);
-
         let current = writer.current();
         let root = current.root();
         let wanted = frame.into_iter().chain(overlay).chain(banner);
@@ -301,13 +321,13 @@ impl PresentationScene {
         wanted: Option<OverlayFrame<'_, C>>,
     ) -> Option<SceneNodeId> {
         let lineage = writer.current().id().lineage();
-        let previous = shown.take().filter(|shown| shown.node.lineage() == lineage);
-        let retired = previous.as_ref().map(|previous| previous.node);
+        let previous = shown.take().filter(|shown| shown.of_lineage(lineage));
+        let retired = previous.as_ref().and_then(|previous| previous.node);
         *shown = match wanted {
             Some(wanted) => Self::compose_overlay(writer, previous, wanted),
             None => None,
         };
-        let node = shown.as_ref().map(|shown| shown.node);
+        let node = shown.as_ref().and_then(|shown| shown.node);
         if let Some(retired) = retired.filter(|_| node.is_none()) {
             writer.push(SceneOp::Retire { node: retired });
         }
@@ -318,7 +338,8 @@ impl PresentationScene {
     /// the fonts and the scale are those it was recorded from, or while the
     /// text context is lent; otherwise the content recorded as a new content
     /// version and published at `previous`'s node or a new one. Content that
-    /// cannot be recorded shows none.
+    /// cannot be recorded is kept unpublished, so the frames after it neither
+    /// record it again nor publish a patch for it until it changes.
     ///
     /// Only the overlay's own chunk takes a new version, so no recording the
     /// raster side keeps for another chunk changes with it, and content that
@@ -349,19 +370,26 @@ impl PresentationScene {
             }
             Some(None) => return previous,
             Some(Some((fonts, Ok(recording)))) => (fonts, recording),
-            Some(Some((_, Err(error)))) => {
+            Some(Some((fonts, Err(error)))) => {
                 tracing::warn!(
                     overlay = C::NAME,
                     %error,
                     "debug overlay skipped: label layout failed"
                 );
-                return None;
+                return Some(ShownOverlay {
+                    node: None,
+                    content: overlay.content,
+                    fonts,
+                    device_pixel_ratio: overlay.device_pixel_ratio,
+                });
             }
         };
         // A lineage out of versions records no overlay: the pipeline's own
         // patch is refused with it and the scene is rebuilt.
         let version = writer.next_content_version().ok()?;
-        let node = previous.map_or_else(|| writer.mint_node(), |previous| previous.node);
+        let node = previous
+            .and_then(|previous| previous.node)
+            .unwrap_or_else(|| writer.mint_node());
         let mut content = BoundaryContent::builder();
         let mut ordinal = 0;
         if (overlay.device_pixel_ratio - 1.0).abs() >= f64::EPSILON {
@@ -387,17 +415,11 @@ impl PresentationScene {
             content: Arc::new(content.finish()),
         });
         Some(ShownOverlay {
-            node,
+            node: Some(node),
             content: overlay.content,
             fonts,
             device_pixel_ratio: overlay.device_pixel_ratio,
         })
-    }
-
-    /// Where the current version draws the build banner, in logical pixels;
-    /// `None` while it draws none.
-    pub(crate) fn banner_bounds(&self) -> Option<Rect<f64>> {
-        self.banner.as_ref().map(|shown| shown.content.bounds())
     }
 
     /// Applies the buffered patch for `target`.
@@ -758,7 +780,8 @@ mod tests {
                 Ok::<_, ()>(true)
             },
             None,
-            || (None, None),
+            || None,
+            || None,
         );
         assert_eq!(painted, Ok(true));
         scene.apply(SceneTarget {
@@ -776,29 +799,37 @@ mod tests {
         })
     }
 
-    /// A frame that paints nothing of the pipeline's and composes the
-    /// overlay `readout` names, shaped through `text`; the raster side then
-    /// shows the version, so the next publication's damage is that frame's
-    /// own.
-    fn overlay_frame(
+    /// A frame whose pipeline `painted` (publishing nothing of its own) and
+    /// that composes the overlay `readout` names and `banner`, shaped through
+    /// `text`; the raster side then shows the version, so the next
+    /// publication's damage is that frame's own. `None` when the frame has no
+    /// patch.
+    fn composed_frame(
         scene: &mut PresentationScene,
         text: &flui_rendering::TextContextHandle,
+        painted: bool,
         readout: Option<Readout>,
-    ) -> ScenePublication {
-        let painted = scene.produce(
-            |_| Ok::<_, ()>(true),
-            None,
-            || {
-                let overlay = readout.map(|content| OverlayFrame {
-                    content,
-                    text,
-                    device_pixel_ratio: 1.0,
-                    owner: RenderId::new(1),
-                });
-                (None, overlay)
-            },
+        banner: Option<Banner>,
+    ) -> Option<ScenePublication> {
+        fn overlay<'t, C>(
+            text: &'t flui_rendering::TextContextHandle,
+        ) -> impl FnOnce(C) -> OverlayFrame<'t, C> {
+            move |content| OverlayFrame {
+                content,
+                text,
+                device_pixel_ratio: 1.0,
+                owner: RenderId::new(1),
+            }
+        }
+        let patched = scene.produce(
+            |_| Ok::<_, ()>(painted),
+            banner.map(overlay(text)),
+            || None,
+            || readout.map(overlay(text)),
         );
-        assert_eq!(painted, Ok(true));
+        if !patched.expect("the paint succeeds") {
+            return None;
+        }
         assert!(matches!(
             scene.apply(SceneTarget {
                 size: (800, 600),
@@ -808,7 +839,86 @@ mod tests {
         ));
         let publication = scene.publication();
         drop(scene.completed(publication.scene.id()));
-        publication
+        Some(publication)
+    }
+
+    /// [`composed_frame`] of a frame that painted, with no banner.
+    fn overlay_frame(
+        scene: &mut PresentationScene,
+        text: &flui_rendering::TextContextHandle,
+        readout: Option<Readout>,
+    ) -> ScenePublication {
+        composed_frame(scene, text, true, readout, None).expect("a frame that painted patches")
+    }
+
+    /// A banner whose labels do not shape costs one patch, and the frames
+    /// after it publish nothing while it holds still; a frame that painted
+    /// does not record it again either. Fails if each idle frame applies a
+    /// patch for it, or records it again.
+    #[test]
+    fn an_unshapeable_banner_holds_still() {
+        let text = flui_rendering::TextContextHandle::standalone();
+        let mut scene = PresentationScene::default();
+        let _first = overlay_frame(&mut scene, &text, None);
+        let banner = Banner::unshapeable();
+        let failed = composed_frame(&mut scene, &text, false, None, Some(banner.clone()))
+            .expect("a new banner patches once");
+        assert_eq!(
+            failed
+                .scene
+                .node(failed.scene.root())
+                .map(|root| root.content().slots().count()),
+            Some(0),
+            "nothing of it is slotted"
+        );
+        assert!(
+            composed_frame(&mut scene, &text, false, None, Some(banner.clone())).is_none(),
+            "an idle frame publishes nothing for it"
+        );
+        let painted = composed_frame(&mut scene, &text, true, None, Some(banner))
+            .expect("a frame that painted patches");
+        assert_eq!(painted.damage, flui_layer::DamageRegion::Unchanged);
+    }
+
+    /// A frame that publishes the banner alone keeps the readout the version
+    /// shows, however the numbers moved; the next frame that paints records
+    /// them. Fails if a banner-only frame records the readout.
+    #[test]
+    fn a_banner_only_frame_keeps_the_readout() {
+        let text = flui_rendering::TextContextHandle::standalone();
+        let mut scene = PresentationScene::default();
+        let first = overlay_frame(&mut scene, &text, Some(readout(60.0)));
+        let recorded = overlay_chunk(&first).expect("the readout is shown");
+        let chip = || {
+            let banner = crate::build_overlay::BuildBanner::default();
+            assert_eq!(
+                banner.report(flui_protocol::build::BuildState::Building),
+                Ok(true)
+            );
+            banner
+                .banner(flui_foundation::geometry::Size::new(800.0, 600.0), None)
+                .expect("the chip is drawn")
+        };
+        let banner_only =
+            composed_frame(&mut scene, &text, false, Some(readout(30.0)), Some(chip()))
+                .expect("a new banner patches");
+        let version = &banner_only.scene;
+        assert_eq!(
+            version
+                .node(version.root())
+                .map(|root| root.content().slots().count()),
+            Some(2),
+            "the readout, then the banner"
+        );
+        let kept = overlay_chunk(&banner_only).expect("the readout stays shown");
+        assert!(Arc::ptr_eq(&kept, &recorded), "the readout is not recorded");
+        let painted = composed_frame(&mut scene, &text, true, Some(readout(30.0)), Some(chip()))
+            .expect("a frame that painted patches");
+        assert_ne!(
+            overlay_chunk(&painted).map(|chunk| chunk.version()),
+            Some(recorded.version()),
+            "a frame that paints records the new numbers"
+        );
     }
 
     /// The overlay's one chunk in `publication`'s version.

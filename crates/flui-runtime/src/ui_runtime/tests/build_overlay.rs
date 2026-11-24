@@ -1,7 +1,7 @@
 //! The build banner a development tool reports (`build.report`) is a node of its own after the
 //! frame node and the performance overlay: published when it changes, on a frame the pipeline
-//! paints nothing in, kept while it holds still, and dismissed by a press the application never
-//! sees.
+//! paints nothing in, kept while it holds still, and never between the application and its
+//! input.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -218,7 +218,6 @@ fn a_report_shows_a_node_until_it_succeeds() {
             "Build failed: 2 errors and 3 more",
             "src/app.rs:4:9  error 0",
             "src/app.rs:4:9  error 1",
-            crate::build_overlay::DISMISS_HINT,
         ]
     );
     let surface = Rect::from_ltrb(0.0, 0.0, SIZE.width, SIZE.height);
@@ -253,7 +252,7 @@ fn a_report_shows_a_node_until_it_succeeds() {
     assert_eq!(banner_node(&kept, 1), Some(node));
     assert_eq!(
         texts(banner_parts(&kept, node).1).len(),
-        4,
+        3,
         "the failure stays"
     );
 
@@ -398,52 +397,38 @@ fn tap(ui_runtime: &UiRuntime, id: PresentationId, at: Offset<f64>) {
     pointer(ui_runtime, id, make_up_event(at, kind).expect("finite"));
 }
 
-/// A tap inside the failure panel dismisses it, and the application's hit test receives none of
-/// its down, move or up; a tap outside it, and one where it was once dismissed, reach the
-/// application. Fails if the banner lets the press through, keeps the rest of the contact from
-/// it but not the down, takes a press outside it, or stays shown.
-fn a_tap_inside_the_panel_dismisses_it_unseen_and_one_outside_reaches_the_app() {
+/// A tap inside the drawn chip or failure panel reaches the application's widget under it, its
+/// down, move and up each, and the banner stays shown until the next report. Fails if the banner
+/// takes any of a contact's events, or a tap on it dismisses it.
+fn a_tap_on_the_banner_reaches_the_app_under_it() {
     let (ui_runtime, log, window) = ui_runtime_at(1.0);
     let id = presented(&ui_runtime);
-    report(&ui_runtime, &window, failed(1, 0)).expect("a report is served");
-    present(&ui_runtime);
-    let version = current(&ui_runtime);
-    let node = banner_node(&version, 1).expect("the panel is drawn");
-    let (bounds, _) = banner_parts(&version, node);
-
-    let outside = Offset::new(bounds.left() + 4.0, bounds.top() - 4.0);
-    tap(&ui_runtime, id, outside);
-    assert_eq!(
-        (log.downs.get(), log.moves.get(), log.ups.get()),
-        (1, 1, 1),
-        "a tap outside the panel reaches the application"
-    );
-
-    let inside = Offset::new(
-        f64::midpoint(bounds.left(), bounds.right()),
-        f64::midpoint(bounds.top(), bounds.bottom()),
-    );
-    tap(&ui_runtime, id, inside);
-    assert_eq!(
-        (log.downs.get(), log.moves.get(), log.ups.get()),
-        (1, 1, 1),
-        "the application sees nothing of a tap on the panel"
-    );
-    let presentation = ui_runtime.presentations.primary();
-    assert_eq!(presentation.gestures().active_pointer_count(), 0);
-    present(&ui_runtime);
-    assert_eq!(
-        slotted(&current(&ui_runtime)).len(),
-        1,
-        "the tap dismissed the panel"
-    );
-
-    tap(&ui_runtime, id, inside);
-    assert_eq!(
-        (log.downs.get(), log.moves.get(), log.ups.get()),
-        (2, 2, 2),
-        "with the panel gone, the same tap reaches the application"
-    );
+    let mut taps = 0;
+    for state in [failed(1, 0), BuildState::Building] {
+        report(&ui_runtime, &window, state).expect("a report is served");
+        present(&ui_runtime);
+        let version = current(&ui_runtime);
+        let node = banner_node(&version, 1).expect("the banner is drawn");
+        let (bounds, _) = banner_parts(&version, node);
+        let inside = Offset::new(
+            f64::midpoint(bounds.left(), bounds.right()),
+            f64::midpoint(bounds.top(), bounds.bottom()),
+        );
+        tap(&ui_runtime, id, inside);
+        taps += 1;
+        assert_eq!(
+            (log.downs.get(), log.moves.get(), log.ups.get()),
+            (taps, taps, taps),
+            "the application sees the whole tap on the banner at {inside:?}"
+        );
+        present(&ui_runtime);
+        let after = current(&ui_runtime);
+        assert_eq!(
+            banner_node(&after, 1),
+            Some(node),
+            "the banner stays shown after a tap on it"
+        );
+    }
 }
 
 #[test]
@@ -464,8 +449,8 @@ fn build_overlay_matrix() {
                 zero_and_tiny_surfaces_publish_finite_geometry,
             ),
             (
-                "a_tap_inside_the_panel_dismisses_it_unseen_and_one_outside_reaches_the_app",
-                a_tap_inside_the_panel_dismisses_it_unseen_and_one_outside_reaches_the_app,
+                "a_tap_on_the_banner_reaches_the_app_under_it",
+                a_tap_on_the_banner_reaches_the_app_under_it,
             ),
         ],
     );

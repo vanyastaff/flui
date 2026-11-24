@@ -201,7 +201,7 @@ fn refused_hello(service: &Service, now: Instant, waker: &Waker, role: Option<&s
 /// until the first goes. An observer is admitted beside the driver, told only the methods it
 /// may call, and refused `not_driver` when it acts, which reaches the app no more.
 #[test]
-fn one_driver_at_a_time_and_an_observer_only_reads() {
+fn one_driver_at_a_time_and_an_observer_never_changes_the_app() {
     let service = service(Limits::default(), None);
     let (mut host, _agent, presses) = shown(&service);
     let waker = CountingWaker::new().shared().waker();
