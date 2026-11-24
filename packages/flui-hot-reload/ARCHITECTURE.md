@@ -212,6 +212,12 @@ entry it prunes, so the plugin is `Send` without an `unsafe impl` for the
 pointer. `admitted_worker_callbacks_survive_retirement_and_replacement` looks a
 build up from a second thread and finds none.
 
+`WorkerReloadHook` is `Send` (`DevReloadHook` requires it), so an application
+may make it on a thread other than the loop's. It therefore loads its worker in
+`attach`, which the host calls on the loop's thread, not in `new`.
+`a_worker_hook_made_on_another_thread_registers_on_the_loop_thread` makes the
+hook on a second thread and finds the build on the thread that attached it.
+
 ### A worker's rebuild requests reach the host through its init
 
 A worker `cdylib` links its own copy of this crate, statics included, so the
