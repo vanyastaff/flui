@@ -1119,8 +1119,9 @@ nor text, a composition caret outside its text, a trackpad gesture); it queues t
 on the presentation (`agent_input`, at most 64 jobs, then `InputQueueFull`). `drive_frame` advances
 the queue once per frame boundary, after the commit anchor, on the plan's timeline: a tick starts
 at a boundary, each input goes out at the first boundary at or past its offset in the tick,
-stamped with the instant the plan gives it, and the next tick starts at the first boundary past
-the tick's end but never at the boundary its predecessor started at. An input goes in through
+stamped with the instant the plan gives it, and the next tick starts at the first boundary at or past
+the tick's end unless the ending tick started or delivered an input there, so a boundary delivers the
+inputs of one tick and a release follows a move by a frame at least. An input goes in through
 `handle_input_from`, the path the platform's input takes (`handle_input_on`), marked as the
 agent's; each event is contained so one handler's panic does not keep the rest out, and the first
 panic continues once all went in. What a lease holds (contacts down, keys pressed) is kept per lease; a release

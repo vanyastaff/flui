@@ -243,18 +243,8 @@ impl GestureAct {
                 Readiness::Failed(error) => return answer(reply, Err(error)),
             },
         };
-        let lands = match &self.perform {
-            Perform::Semantic(_) => false,
-            Perform::Input(_) => true,
-            Perform::FocusThen(_) => !self.semantic,
-        };
-        let aim = match aim {
-            Some(aim) => aim,
-            // Pointer input needs a point to land on; a semantics action does not.
-            None if lands => return not_yet(ctx, reply, no_point()),
-            None => Aim::new(LogicalPoint::new(0.0, 0.0), None),
-        };
         let snapshot = self.snapshot;
+        let semantic = self.semantic;
         match &mut self.perform {
             Perform::Semantic(action) => {
                 let Some(element) = element else {
@@ -262,25 +252,35 @@ impl GestureAct {
                 };
                 semantic_act(ctx, reply, element, *action, snapshot)
             }
-            Perform::Input(composed) => match composed
-                .sequence(aim, to)
-                .map_err(|error| AgentError::UnplayableInput(error.to_string()))
-                .and_then(|sequence| agent_input::lower(&sequence))
-            {
-                Ok(script) => inject(ctx, reply, element, script, snapshot),
-                Err(error) => answer(reply, Err(error)),
-            },
-            Perform::FocusThen(then) => {
-                let then = then.take().expect("BUG: a gesture performs once");
-                if self.semantic {
-                    let Some(element) = element else {
-                        return answer(reply, Err(names_no_element()));
-                    };
-                    if let Err(error) = focus(ctx, element) {
-                        return answer(reply, Err(error));
-                    }
-                    return inject(ctx, reply, Some(element), then, snapshot);
+            Perform::Input(composed) => {
+                // Pointer input needs a point to land on.
+                let Some(aim) = aim else {
+                    return not_yet(ctx, reply, no_point());
+                };
+                match composed
+                    .sequence(aim, to)
+                    .map_err(|error| AgentError::UnplayableInput(error.to_string()))
+                    .and_then(|sequence| agent_input::lower(&sequence))
+                {
+                    Ok(script) => inject(ctx, reply, element, script, snapshot),
+                    Err(error) => answer(reply, Err(error)),
                 }
+            }
+            Perform::FocusThen(then) if semantic => {
+                let Some(element) = element else {
+                    return answer(reply, Err(names_no_element()));
+                };
+                if let Err(error) = focus(ctx, element) {
+                    return answer(reply, Err(error));
+                }
+                let then = then.take().expect("BUG: a gesture performs once");
+                inject(ctx, reply, Some(element), then, snapshot)
+            }
+            Perform::FocusThen(then) => {
+                let Some(aim) = aim else {
+                    return not_yet(ctx, reply, no_point());
+                };
+                let then = then.take().expect("BUG: a gesture performs once");
                 match agent_input::lower(&gestures::tap(aim.point, PointerButton::Primary)) {
                     Ok(tap) => inject(ctx, reply, element, tap.then(then), snapshot),
                     Err(error) => answer(reply, Err(error)),

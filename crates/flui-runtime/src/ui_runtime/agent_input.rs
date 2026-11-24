@@ -11,10 +11,11 @@
 //! An injection plays the plan's ticks in order, on the plan's timeline: a tick starts at a frame
 //! boundary, each of its inputs goes out at the first boundary at or past its offset in the tick
 //! (stamped with the instant the plan gives it), and the tick lasts until its end. The next tick
-//! starts at the first boundary after that, but never at the boundary its predecessor started at,
-//! so each tick has a boundary of its own. The answer waits for the frame after the last tick, so
-//! `ran` means the window has presented what the input did. A window runs one injection at a time,
-//! in the order they came.
+//! starts at the first boundary at or past that end, unless the ending tick started or delivered an
+//! input at that boundary: each tick has a boundary of its own, a boundary delivers the inputs of
+//! one tick, and so a release follows a move by a frame at least. The answer waits for the frame
+//! after the last tick, so `ran` means the window has presented what the input did. A window runs
+//! one injection at a time, in the order they came.
 //!
 //! What an injection leaves held (a contact down, a button or a key pressed) is its lease's
 //! ([`flui_view::dev_agent::InputLease`]) and stays held across injections, as the platform's
@@ -823,10 +824,14 @@ impl AgentInput {
         };
         let held = leases.entry(injection.lease).or_default();
         let mut batch = Vec::new();
+        // Whether this boundary delivered an input of the running tick: a boundary delivers the
+        // inputs of one tick at most, so the next tick waits for the next boundary.
+        let mut delivered = false;
         loop {
             if let Some(running) = &mut injection.current {
                 let elapsed = now.saturating_duration_since(running.started);
                 while let Some(step) = running.steps.pop_front_if(|step| step.after <= elapsed) {
+                    delivered = true;
                     let time = stamp(
                         running
                             .started
@@ -844,8 +849,9 @@ impl AgentInput {
                 }
                 let started_here = running.boundary == boundary;
                 injection.current = None;
-                if started_here {
-                    // Each tick has a boundary of its own: the next starts at the next one.
+                if started_here || delivered {
+                    // Each tick has a boundary of its own, and a boundary delivers the inputs
+                    // of one tick: the next starts at the next one.
                     break;
                 }
             }
