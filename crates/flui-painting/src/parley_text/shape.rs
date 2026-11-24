@@ -10,6 +10,7 @@ use std::fmt;
 use std::sync::OnceLock;
 
 use super::caret::PlacedLine;
+use super::shape_cache::HeldLayout;
 use crate::display_list::{FontBlob, FontFace, ShapedGlyph, ShapedParagraph};
 use crate::display_list::{GenericFamily as Generic, RunData, ShapedFamily, SpanDescription};
 use crate::glyphs::{FaceKey, Synthesis, fake_bold_width};
@@ -69,10 +70,10 @@ pub struct ParagraphSpec<'a> {
 /// Measurement, paint and the caret queries (`caret`, `position_at`,
 /// `boxes`, `line_metrics`, `word_boundary`) all read this one layout.
 pub struct ParagraphLayout {
-    pub(super) layout: Layout<SpanBrush>,
+    pub(super) layout: HeldLayout,
     /// The text the layout holds, an appended ellipsis included.
     pub(super) text: String,
-    spans: Vec<SpanInfo>,
+    pub(super) spans: Vec<SpanInfo>,
     pub(super) line_height: f32,
     max_lines: Option<usize>,
     alignment_width: f32,
@@ -93,7 +94,7 @@ pub struct ParagraphLayout {
     /// The colour each paint run paints with, by the run's index in its
     /// glyph runs' [`SpanBrush`]: a colour is not shaped, so the layout keeps
     /// it beside the runs and [`recolor`](Self::recolor) replaces it.
-    run_colors: Box<[Option<Color>]>,
+    pub(super) run_colors: Box<[Option<Color>]>,
     /// How many spans the paragraph was shaped from: the length a
     /// recolour's colours must have.
     source_spans: usize,
@@ -108,7 +109,7 @@ const _: () = {
 
 /// What a span was shaped with, for [`ShapedParagraph::describe_spans`].
 #[derive(Clone, Debug)]
-struct SpanInfo {
+pub(super) struct SpanInfo {
     len: usize,
     /// The family it was shaped in, held as [`ShapedFamily`]'s two parts so that the
     /// generic sits in the padding beside `italic`.
@@ -475,6 +476,28 @@ impl ParagraphLayout {
         };
         self.run_colors = runs;
         true
+    }
+
+    /// A copy of this paragraph that shares its layout, which is shared from
+    /// now on (the context's shape cache keeps one). The text, the span
+    /// records and the run colours are copied; the caret and line queries are
+    /// built again on the copy's first use.
+    pub(super) fn share(&mut self) -> Self {
+        Self {
+            layout: HeldLayout::Shared(self.layout.share()),
+            text: self.text.clone(),
+            spans: self.spans.clone(),
+            line_height: self.line_height,
+            max_lines: self.max_lines,
+            alignment_width: self.alignment_width,
+            content_widths: self.content_widths,
+            ellipsized: self.ellipsized,
+            kept_text: self.kept_text,
+            placed: OnceLock::new(),
+            line_layouts: OnceLock::new(),
+            run_colors: self.run_colors.clone(),
+            source_spans: self.source_spans,
+        }
     }
 
     /// The paragraph with its paint runs coloured `runs`; with `casts`, only
@@ -1106,7 +1129,7 @@ impl TextContext {
     /// context keeps one; a second is dropped.
     pub(crate) fn recycle(&mut self, dropped: ParagraphLayout) {
         if self.spare_layout.is_none() {
-            self.spare_layout = Some(dropped.layout);
+            self.spare_layout = dropped.layout.into_unshared();
         }
     }
 
@@ -1125,6 +1148,13 @@ impl TextContext {
         paragraph: &ParagraphSpec<'_>,
     ) -> Result<(ParagraphLayout, TextLayoutResult), TextLayoutError> {
         validate_request(paragraph)?;
+        // A paragraph laid out before from the same spec, on the same fonts,
+        // shares that layout (`shape_cache`).
+        let generation = self.fonts().generation();
+        let miss = match self.shape_cache.find(generation, paragraph) {
+            Ok(hit) => return Ok(hit),
+            Err(miss) => miss,
+        };
         let max_lines = paragraph.max_lines.filter(|&lines| lines > 0);
         let mut shaped = self.shape_spans(paragraph, paragraph.spans, SpanSources::Own)?;
         let mut ellipsized = false;
@@ -1160,8 +1190,8 @@ impl TextContext {
         let widths = shaped.layout.calculate_content_widths();
         let content_widths = (f64::from(widths.min), f64::from(widths.max));
         align_allocated_lines(&mut shaped.layout, paragraph, alignment_width);
-        let layout = ParagraphLayout {
-            layout: shaped.layout,
+        let mut layout = ParagraphLayout {
+            layout: HeldLayout::Own(shaped.layout),
             text: shaped.text,
             spans: shaped.spans,
             line_height: paragraph.line_height.unwrap_or(paragraph.font_size * 1.2),
@@ -1177,6 +1207,13 @@ impl TextContext {
         };
         let metrics = layout.metrics();
         validate_layout(&layout, &metrics)?;
+        self.shape_cache.offer(
+            miss,
+            paragraph,
+            &mut layout,
+            &metrics,
+            &mut self.spare_layout,
+        );
         Ok((layout, metrics))
     }
 
@@ -1285,6 +1322,10 @@ impl TextContext {
         spans: &[(String, Option<TextStyle>)],
         sources: SpanSources,
     ) -> Result<Shaped, TextLayoutError> {
+        #[cfg(any(test, feature = "testing"))]
+        {
+            self.shaped += 1;
+        }
         let text: String = spans.iter().map(|(text, _)| text.as_str()).collect();
         let breaks = one_break_per_crlf(&text);
 

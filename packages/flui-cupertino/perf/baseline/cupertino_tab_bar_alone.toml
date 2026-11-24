@@ -2,8 +2,8 @@
 # counts, not timings.
 
 [cupertino_tab_bar_alone]
-allocations = 345
-bytes = 66477
+allocations = 287
+bytes = 55356
 elements = 35
 reallocations = 3
 render_nodes = 19
