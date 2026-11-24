@@ -229,7 +229,11 @@ pub(crate) fn lerp_to_transparent_keeps_the_hue() {
 
 /// The sRGB decoding of one normalized channel, in `f64` (IEC 61966-2-1).
 fn decode(channel: f32) -> f64 {
-    let c = f64::from(channel);
+    linear(f64::from(channel))
+}
+
+/// The linear light of a normalized sRGB channel value (IEC 61966-2-1).
+fn linear(c: f64) -> f64 {
     if c <= 0.04045 {
         c / 12.92
     } else {
@@ -316,29 +320,49 @@ fn srgb(lab: [f64; 3]) -> [f64; 3] {
 
 /// `Color::lerp` against an `f64` evaluation of premultiplied Oklab with the
 /// transfer function's own `powf` and `cbrt`, for both byte-authored and fractional
-/// channels. The normalized error tolerance is far below one byte step. Colour
-/// channels are compared only where the result is visible (alpha above zero).
+/// channels. Colour channels are compared only where the result is visible (alpha
+/// above zero), and in linear light: the conversion runs in `f32`, whose round-off
+/// stays near `2e-6` of linear light, and the sRGB toe's slope of 12.92 would turn
+/// that into `2.6e-5` of an encoded dark channel. The tolerance is far below the
+/// smallest byte step, `3e-4` of linear light.
 pub(crate) fn lerp_matches_the_exact_oklab_evaluation() {
+    // A dark channel beside two bright ones, near the end of the mix: the input
+    // that put an encoded channel `2.24e-5` off.
+    let dark = Color::from_rgba_f32_array([0.019_607_844, 0.290_196_1, 0.403_921_57, 1.0]);
+    let bright = Color::from_rgba_f32_array([0.023_529_412, 0.964_705_9, 0.764_705_9, 1.0]);
+    if let Err(failure) = lerp_against_exact_oklab(dark, bright, 0.995_247_018_297_732_2) {
+        panic!("{failure}");
+    }
     proptest!(|(a in arb_motion_color(), b in arb_motion_color(), t in 0.0f64..=1.0)| {
-        let got = Color::lerp(a, b, t);
-        let (alpha_a, alpha_b) = (f64::from(a.opacity()), f64::from(b.opacity()));
-        let alpha = alpha_a + (alpha_b - alpha_a) * t;
-        prop_assert!((f64::from(got.opacity()) - alpha).abs() <= 2e-7, "alpha {:?}", got);
-        if got.is_transparent() || alpha <= 0.0 {
-            return Ok(());
-        }
-        let (la, lb) = (oklab(a), oklab(b));
-        let mixed: [f64; 3] = std::array::from_fn(|i| {
-            (la[i] * alpha_a + (lb[i] * alpha_b - la[i] * alpha_a) * t) / alpha
-        });
-        let want = srgb(mixed);
-        for (channel, (got, want)) in got.to_rgba_f32_array().into_iter().zip(want).enumerate() {
-            prop_assert!(
-                (f64::from(got) - want).abs() <= 2e-5,
-                "channel {} is {}, exact {}: {:?} -> {:?} at t = {}", channel, got, want, a, b, t
-            );
-        }
+        lerp_against_exact_oklab(a, b, t).map_err(TestCaseError::fail)?;
     });
+}
+
+/// How far `Color::lerp(a, b, t)` lands from the exact premultiplied Oklab mix:
+/// `Err` names the alpha or the channel past its tolerance.
+fn lerp_against_exact_oklab(a: Color, b: Color, t: f64) -> Result<(), String> {
+    let got = Color::lerp(a, b, t);
+    let (alpha_a, alpha_b) = (f64::from(a.opacity()), f64::from(b.opacity()));
+    let alpha = alpha_a + (alpha_b - alpha_a) * t;
+    if (f64::from(got.opacity()) - alpha).abs() > 2e-7 {
+        return Err(format!("alpha {got:?}, exact {alpha}"));
+    }
+    if got.is_transparent() || alpha <= 0.0 {
+        return Ok(());
+    }
+    let (la, lb) = (oklab(a), oklab(b));
+    let mixed: [f64; 3] = std::array::from_fn(|i| {
+        (la[i] * alpha_a + (lb[i] * alpha_b - la[i] * alpha_a) * t) / alpha
+    });
+    let want = srgb(mixed);
+    for (channel, (got, want)) in got.to_rgba_f32_array().into_iter().zip(want).enumerate() {
+        if (decode(got) - linear(want)).abs() > 4e-6 {
+            return Err(format!(
+                "channel {channel} is {got}, exact {want}: {a:?} -> {b:?} at t = {t}"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// A fade to transparent keeps the opaque end's colour however little alpha is left:
