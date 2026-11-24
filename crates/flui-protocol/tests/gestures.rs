@@ -12,8 +12,11 @@ fn at(x: f64, y: f64) -> LogicalPoint {
     LogicalPoint::new(x, y)
 }
 
+/// A pointer source as [`written`] writes it: its device and its actions.
+type Written = (PointerDevice, Vec<String>);
+
 /// One pointer source's device and actions, each written `move x,y/ms`, `down`, `up`, `pause ms`.
-fn written(sequence: &ActionSequence) -> Vec<(PointerDevice, Vec<String>)> {
+fn written(sequence: &ActionSequence) -> Vec<Written> {
     sequence
         .sources
         .iter()
@@ -50,7 +53,7 @@ fn strings(lines: &[&str]) -> Vec<String> {
 fn each_pointer_gesture_composes_to_its_sequence() {
     let point = at(50.0, 40.0);
     let aim = Aim::new(point, Some(LogicalRect::new(0.0, 20.0, 100.0, 40.0)));
-    let cases: [(&str, ActionSequence, Vec<(PointerDevice, Vec<String>)>); 9] = [
+    let cases: [(&str, ActionSequence, Vec<Written>); 9] = [
         (
             "tap",
             gestures::tap(point, PointerButton::Secondary),
