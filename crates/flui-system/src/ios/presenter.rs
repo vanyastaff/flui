@@ -230,7 +230,7 @@ mod uikit {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     use super::{Chain, Refusal, Top, dismissed_through, middle, topmost, when_settled};
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
+    use flui_foundation::panic::{AfterPanic, os_entry};
 
     /// Run UIKit calls that may raise an Objective-C exception while
     /// `doing` something: [`Refusal::Raised`] when one did, its name and

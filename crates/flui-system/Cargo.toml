@@ -15,6 +15,7 @@ autotests = false
 # A capability crate (ADR-0154 §1): the contract crate and external crates
 # only, and its own OS code. Nothing but the facade names it.
 [dependencies]
+flui-foundation = { workspace = true }
 flui-platform = { workspace = true }
 rustc-hash = { workspace = true }
 thiserror = { workspace = true }
@@ -137,8 +138,6 @@ block2 = { workspace = true }
 dispatch2 = { workspace = true }
 libc = { workspace = true }
 raw-window-handle = { workspace = true }
-# A panic an AppKit callback or a dispatched block contains is logged.
-tracing = { workspace = true }
 
 # The iOS providers: UIKit's document picker, alert and share sheet and
 # `UIApplication`'s `openURL:` on the main thread, a picked document read

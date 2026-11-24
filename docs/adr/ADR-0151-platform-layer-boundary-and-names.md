@@ -709,12 +709,14 @@ secrets in diagnostics) are decided by the records the table cites.
 
 - **Zero CPU when idle.** Every OS signal is a notification; a timer poll is a defect, not a
   fallback.
-- **A panic in user code never unwinds into the OS.** Every OS entry into the core host (an
-  `extern` function, an Objective-C or COM method, an AccessKit handler, a closure handed to the
-  OS) is a constant or one call of `owner::panic_boundary::os_entry`
-  (`crates/flui-native/src/owner/panic_boundary.rs`), or of an adapter of its file that is. The
-  `dealloc` objc2 generates for a class the host declares is an OS entry too, with no body in the
-  crate: a class keeps its Rust state in `owner::panic_boundary::ContainedIvars`, whose destructor
+- **A panic in user code never unwinds into the OS.** Every OS entry into the core host and into a
+  capability crate (an `extern` function, an Objective-C or COM method, an AccessKit handler, a
+  closure handed to the OS) is a constant or one call of `flui_foundation::panic::os_entry`
+  (`crates/flui-foundation/src/panic/os_boundary.rs`, which the core host reaches as
+  `owner::panic_boundary::os_entry`), or of an adapter of its file that is. The boundary sits below
+  both, so the host and the capability crates share one. The `dealloc` objc2 generates for a class
+  FLUI declares is an OS entry too, with no body in the crate: a class keeps its Rust state in
+  `flui_foundation::panic::ContainedIvars`, whose destructor
   is one `os_entry` call, so the ivars are destroyed inside the boundary, and a class's own `Drop`
   follows the entry rule. A panic out of an `extern "C"` frame aborts the process with nothing in
   FLUI's diagnostics, and out of an `extern "C-unwind"` frame it unwinds through foreign frames
