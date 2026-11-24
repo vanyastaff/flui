@@ -362,13 +362,11 @@ fn provider_error(error: ProviderError, what: &str) -> Error {
             ),
             retry: ErrorCode::Timeout.default_retry(),
         },
-        ProviderError::Gone | ProviderError::ParentGone | ProviderError::Failed(_) => {
-            Error::Platform {
-                effect: None,
-                message: format!("the accessibility bus could not list {what}: {error:?}"),
-                retry: Retry::Never,
-            }
-        }
+        ProviderError::Gone | ProviderError::Failed(_) => Error::Platform {
+            effect: None,
+            message: format!("the accessibility bus could not list {what}: {error:?}"),
+            retry: Retry::Never,
+        },
     }
 }
 

@@ -3,8 +3,10 @@
 //! what the Simulator shows the Mac of the app, the elements VoiceOver on iOS reads.
 //!
 //! - **The window.** The device's window is the one window on screen titled for it that names its
-//!   simulator's UDID, or names no UUID while no other listed simulator shares the title; a window
-//!   that names any other UUID is not it, and two windows left are refused ([`find_screen`]).
+//!   simulator's UDID, whatever the others name; else the one that names no UUID, while no other
+//!   listed simulator shares the title. A window that names any other UUID is not it, and two
+//!   windows that name the UDID, or two that name no UUID when none names it, are refused
+//!   ([`choose_window`], which every host's read goes through).
 //! - **The screen.** The device's screen is a group of that window with the shape of the app's
 //!   window, which fills the screen: in Simulator.app a child of the window or of a group the
 //!   bezel adds around it, in DeviceHub (Xcode 27) a group about seven levels down whose subrole
@@ -107,8 +109,8 @@ pub enum TreeError {
         title: String,
         /// The groups it shows, for people, at most ten.
         groups: Vec<String>,
-        /// Whether the search saw only part of the window: its budget ran out, or a group went
-        /// away before its children were all listed.
+        /// Whether the search saw only part of the window: its budget ran out, or a group's list
+        /// of children came back short (it went away, or the listing's bound stopped it).
         cut_short: bool,
     },
     /// The app published no tree of the window to match the elements against.
@@ -184,8 +186,9 @@ pub trait WindowTree {
     /// One element of a window, the window itself included.
     type Element: Clone;
 
-    /// The children of `element`, in the API's order, and whether `element` went away before
-    /// they were all listed.
+    /// The children of `element`, in the API's order, and whether the list is short of
+    /// `element`'s children: it went away before they were all listed, or a bound stopped the
+    /// listing.
     ///
     /// # Errors
     ///
@@ -214,80 +217,99 @@ fn descends(facts: &WindowFacts) -> bool {
     facts.subrole.as_deref() != Some(SCREEN_SUBROLE)
 }
 
-/// The window of `screen` among `windows`, the windows on screen of its title, by the allow-list
-/// of [`window_identity`]: a window that names the simulator's UDID is taken; one that names any
-/// other UUID is not; one that names none is taken only while no other listed simulator shares
-/// the title ([`ScreenRequest::others_titled`]), since it could be that simulator's.
+/// Which of the windows on screen of `screen`'s title shows its device, by what each names
+/// (`identities`, in the windows' order, from [`window_identity`]): the one window that names the
+/// simulator's UDID, whatever the others name; else the one window that names no UUID, while no
+/// other listed simulator shares the title ([`ScreenRequest::others_titled`]), since it could be
+/// that simulator's. A window that names any other UUID is never taken. Every host decides here:
+/// the Mac's window search ([`find_screen`]) and the scripted window alike.
 ///
 /// # Errors
 ///
 /// [`Error::NotFound`] when no window has the title ([`no_window`]) or every one names another
-/// UUID; [`Error::Ambiguous`] when two windows are left, or the one that names no UUID shares
-/// its title with another listed simulator; the API's failure.
-fn the_window<T: WindowTree>(
-    tree: &mut T,
-    screen: &ScreenRequest,
-    windows: Vec<T::Element>,
-) -> Result<T::Element> {
-    if windows.is_empty() {
+/// UUID; [`Error::Ambiguous`] when two windows name the simulator, or none does and two name no
+/// UUID, or the one that names no UUID shares its title with another listed simulator.
+pub fn choose_window(screen: &ScreenRequest, identities: &[WindowIdentity]) -> Result<usize> {
+    if identities.is_empty() {
         return Err(no_window(&screen.title));
     }
-    let mut named = Vec::new();
-    let mut unknown = Vec::new();
-    let mut other = 0_usize;
-    for window in windows {
-        match window_identity(&screen.udid, &tree.identity(&window)?) {
-            WindowIdentity::Named => named.push(window),
-            WindowIdentity::Unknown => unknown.push(window),
-            _ => other += 1,
-        }
-    }
+    let naming = |wanted: WindowIdentity| {
+        (0..identities.len())
+            .filter(|index| identities[*index] == wanted)
+            .collect::<Vec<usize>>()
+    };
+    let named = naming(WindowIdentity::Named);
+    let unknown = naming(WindowIdentity::Unknown);
     let ambiguous = |message: String| Error::Ambiguous {
         message,
         candidates: Vec::new(),
         retry: ErrorCode::Ambiguous.default_retry(),
     };
-    if named.len() > 1 {
-        return Err(ambiguous(format!(
-            "{} windows titled {:?} name simulator {}: close all but one",
-            named.len(),
+    match named.as_slice() {
+        [] => {}
+        [window] => return Ok(*window),
+        _ => {
+            return Err(ambiguous(format!(
+                "{} windows titled {:?} name simulator {}: close all but one",
+                named.len(),
+                screen.title,
+                screen.udid
+            )));
+        }
+    }
+    match unknown.as_slice() {
+        [] => Err(Error::not_found(format!(
+            "the {} windows titled {:?} each name a UUID that is not simulator {}'s: they show \
+             another simulator (or name a document), and the lane takes a window only on its \
+             simulator's UDID or on no UUID at all",
+            identities.len(),
             screen.title,
             screen.udid
-        )));
-    }
-    if let Some(window) = named.pop() {
-        return Ok(window);
-    }
-    match unknown.len() {
-        0 => Err(Error::not_found(format!(
-            "the {other} windows titled {:?} each name a UUID that is not simulator {}'s: they \
-             show another simulator (or name a document), and the lane takes a window only on \
-             its simulator's UDID or on no UUID at all",
-            screen.title, screen.udid
         ))),
-        1 if screen.others_titled == 0 => Ok(unknown.swap_remove(0)),
-        1 => Err(ambiguous(format!(
+        [window] if screen.others_titled == 0 => Ok(*window),
+        [_] => Err(ambiguous(format!(
             "the window titled {:?} names no simulator, and {} other listed simulators share \
              the title, so it could be theirs: rename all but {} (`xcrun simctl rename`)",
             screen.title, screen.others_titled, screen.udid
         ))),
-        count => Err(ambiguous(format!(
-            "{count} windows on screen are titled {:?}, and none names its simulator: close all \
-             but the window of {}",
-            screen.title, screen.udid
+        _ => Err(ambiguous(format!(
+            "{} windows on screen are titled {:?}, and none names its simulator: close all but \
+             the window of {}",
+            unknown.len(),
+            screen.title,
+            screen.udid
         ))),
     }
 }
 
+/// The window of `screen` among `windows`, the windows on screen of its title, as
+/// [`choose_window`] takes it by what each window's attributes name.
+///
+/// # Errors
+///
+/// As [`choose_window`]; the API's failure.
+fn the_window<T: WindowTree>(
+    tree: &mut T,
+    screen: &ScreenRequest,
+    mut windows: Vec<T::Element>,
+) -> Result<T::Element> {
+    let identities = windows
+        .iter()
+        .map(|window| Ok(window_identity(&screen.udid, &tree.identity(window)?)))
+        .collect::<Result<Vec<WindowIdentity>>>()?;
+    let index = choose_window(screen, &identities)?;
+    Ok(windows.swap_remove(index))
+}
+
 /// The device's screen among `windows`, the windows on screen titled as `screen` asks: the
-/// window [`the_window`] takes; and in it the group [`choose_screen`] takes among every group
+/// window [`choose_window`] takes; and in it the group [`choose_screen`] takes among every group
 /// within [`MAX_SCREEN_DEPTH`] levels and [`MAX_NODES`] elements, the search going into each but
 /// a [`SCREEN_SUBROLE`] group. A parent gone mid-search cuts the search short, as the budgets do,
 /// which a failure to find the screen names.
 ///
 /// # Errors
 ///
-/// As [`the_window`]; [`Error::NotFound`] when the window shows no screen; [`Error::Ambiguous`]
+/// As [`choose_window`]; [`Error::NotFound`] when the window shows no screen; [`Error::Ambiguous`]
 /// when two screens fit; the API's failure.
 pub fn find_screen<T: WindowTree>(
     tree: &mut T,
@@ -680,9 +702,11 @@ fn project(
     root.children = walk.children(elements, &mut path, &scope)?;
     root.children_unread = screen.children_unread || unread;
     // The announcers the app's read leaves out: the root's last children of their shape that no
-    // app node fits.
+    // app node fits. A list read short ends where the read stopped, not at the announcers, so
+    // its last children are kept.
     let mut left_out = 0;
-    while left_out < ANNOUNCERS
+    while !root.children_unread
+        && left_out < ANNOUNCERS
         && root
             .children
             .last()

@@ -23,6 +23,7 @@ mod mac;
 
 use std::time::Duration;
 
+use flui_protocol::act::{Effect, EffectKind};
 use flui_protocol::error::{ErrorCode, HandleKind, Retry};
 use flui_protocol::geometry::LogicalSize;
 
@@ -153,7 +154,10 @@ pub struct ScreenRequest {
     /// ([`window_identity`]).
     pub udid: Udid,
     /// How many other listed simulators share [`Self::title`], whatever their state: while one
-    /// does, a window that names no UUID could be its, and is not taken ([`screen_title`]).
+    /// does, a window that names no UUID could be its, and is not taken ([`screen_title`]). Only
+    /// the default device set is listed (`xcrun simctl list devices`): a simulator of another set
+    /// (`simctl --set`, Xcode's previews) is not counted, so its window, when it names no UUID,
+    /// is not told apart from the device's.
     pub others_titled: usize,
     /// The app's window in points: a UIKit window fills its screen.
     pub size: LogicalSize,
@@ -244,15 +248,14 @@ pub enum WindowIdentity {
 /// that names any other UUID is not, whatever the UUID is (another simulator's, from any device
 /// set, a document's), so a window is never taken on a UUID nobody checked; one that names none is
 /// `Unknown`, taken only while no other listed simulator shares its title
-/// ([`ScreenRequest::others_titled`]). No run has shown which attribute, if any, carries a UDID.
+/// ([`ScreenRequest::others_titled`]). A UUID is found wherever its 8-4-4-4-12 form stands with no
+/// hexadecimal digit on either side, whatever joins it to the text around it (`.`, `/`, `-`, `_`
+/// or nothing). No run has shown which attribute, if any, carries a UDID, or in what form.
 #[must_use]
 pub fn window_identity(udid: &Udid, attributes: &[Option<String>]) -> WindowIdentity {
     let mut names_other = false;
     for text in attributes.iter().flatten() {
-        for word in text.split(|c: char| !(c.is_ascii_hexdigit() || c == '-')) {
-            let Ok(found) = Udid::try_new(word) else {
-                continue;
-            };
+        for found in uuids(text) {
             if found == *udid {
                 return WindowIdentity::Named;
             }
@@ -264,6 +267,25 @@ pub fn window_identity(udid: &Udid, attributes: &[Option<String>]) -> WindowIden
     } else {
         WindowIdentity::Unknown
     }
+}
+
+/// The length of a UUID's 8-4-4-4-12 form.
+const UUID_LEN: usize = 36;
+
+/// Every UUID in `text`: each run of [`UUID_LEN`] characters in the 8-4-4-4-12 form with no
+/// hexadecimal digit just before or just after it.
+fn uuids(text: &str) -> impl Iterator<Item = Udid> + '_ {
+    let bytes = text.as_bytes();
+    (0..=bytes.len().saturating_sub(UUID_LEN)).filter_map(move |start| {
+        let bounded = (start == 0 || !bytes[start - 1].is_ascii_hexdigit())
+            && bytes
+                .get(start + UUID_LEN)
+                .is_none_or(|after| !after.is_ascii_hexdigit());
+        if !bounded {
+            return None;
+        }
+        Udid::try_new(text.get(start..start + UUID_LEN)?).ok()
+    })
 }
 
 /// What a read answers when no window has the title: the device is not on screen, since the
@@ -292,13 +314,23 @@ pub fn untrusted() -> Error {
     )
 }
 
+/// The deadline a call ran under, for people: `deadline`, the one the read gave the element the
+/// call was asked of, or, as `None`, the timeout that element kept when it refused the read's.
+fn within(deadline: Option<Duration>) -> String {
+    match deadline {
+        Some(deadline) => format!("within {} ms", deadline.as_millis()),
+        None => {
+            "within the timeout the element kept when it refused the read's deadline".to_owned()
+        }
+    }
+}
+
 /// What a call of a read that failed with `error` answers. A failure while the process is no
 /// trusted accessibility client (`trusted` asked after the failure) is the permission taken back,
 /// [`untrusted`], whatever the call said, since `kAXErrorAPIDisabled` is one failure among the
-/// API's others; a call that did not answer is a timeout naming `deadline`, the deadline the read
-/// set on every element it asked, or, as `None`, saying an element refused it and its calls ran
-/// under the timeout it kept; an element gone is the window gone; any other failure is the
-/// platform's.
+/// API's others; a call that did not answer is a timeout naming `deadline`, the one the read gave
+/// the element the call was asked of, or, as `None`, saying that element refused it and kept its
+/// own; an element gone is the window gone; any other failure is the platform's.
 #[must_use]
 pub fn read_failure(error: ProviderError, trusted: bool, deadline: Option<Duration>) -> Error {
     if !trusted {
@@ -308,18 +340,13 @@ pub fn read_failure(error: ProviderError, trusted: bool, deadline: Option<Durati
         ProviderError::Timeout => Error::Timeout {
             awaited: crate::error::Awaited::Host,
             effect: None,
-            message: match deadline {
-                Some(deadline) => format!(
-                    "the Simulator's window did not answer a call of the read within {} ms",
-                    deadline.as_millis()
-                ),
-                None => "the Simulator's window did not answer a call of the read within the \
-                         timeout an element kept when it refused the read's deadline"
-                    .to_owned(),
-            },
+            message: format!(
+                "the Simulator's window did not answer a call of the read {}",
+                within(deadline)
+            ),
             retry: ErrorCode::Timeout.default_retry(),
         },
-        ProviderError::Gone | ProviderError::ParentGone => Error::gone(
+        ProviderError::Gone => Error::gone(
             HandleKind::Window,
             None,
             None,
@@ -333,6 +360,61 @@ pub fn read_failure(error: ProviderError, trusted: bool, deadline: Option<Durati
     }
 }
 
+/// What pressing the element `label` answered: `offered`, whether it offers `AXPress`, and then
+/// `perform`, the press, made only when it does. A failure while the process is no trusted
+/// accessibility client is [`untrusted`] (`trusted` asked after it); a call that did not answer
+/// names `deadline`, the one the read gave this element, or, as `None`, says it refused that
+/// deadline and kept its own; the rest is [`walk::pattern`] and [`walk::invoked`].
+///
+/// # Errors
+///
+/// [`Error::NotSupported`] as [`untrusted`]; [`Error::ActionUnsupported`] when it offers no
+/// press; [`Error::Timeout`], with `may_have_run` for the press, when a call was not answered;
+/// [`Error::Gone`] and [`Error::Platform`] as [`walk::invoked`].
+///
+/// [`walk::pattern`]: crate::lane::walk::pattern
+/// [`walk::invoked`]: crate::lane::walk::invoked
+pub fn pressed(
+    offered: std::result::Result<bool, ProviderError>,
+    perform: impl FnOnce() -> std::result::Result<(), ProviderError>,
+    label: &str,
+    deadline: Option<Duration>,
+    trusted: impl Fn() -> bool,
+) -> Result<()> {
+    let unanswered = |what: &str, may_have_run: bool| Error::Timeout {
+        awaited: crate::error::Awaited::Host,
+        effect: may_have_run.then(|| Effect::new(EffectKind::MayHaveRun)),
+        message: format!(
+            "the Simulator's window did not answer {what} {label:?} {}{}",
+            within(deadline),
+            if may_have_run {
+                ": read the tree for its effect"
+            } else {
+                ""
+            }
+        ),
+        retry: ErrorCode::Timeout.default_retry(),
+    };
+    if offered.is_err() && !trusted() {
+        return Err(untrusted());
+    }
+    let offered = match offered {
+        Err(ProviderError::Timeout) => {
+            return Err(unanswered("whether it offers a press for", false));
+        }
+        offered => offered.map(|offers| offers.then_some(())),
+    };
+    // A timeout is answered here and below, so the pattern's and the invoke's own timeout
+    // messages, which this deadline would fill, are never reached.
+    let unused = Duration::ZERO;
+    crate::lane::walk::pattern(offered, label, "AXPress", unused)?;
+    match perform() {
+        Err(_) if !trusted() => Err(untrusted()),
+        Err(ProviderError::Timeout) => Err(unanswered("the press of", true)),
+        answer => crate::lane::walk::invoked(answer, label, unused),
+    }
+}
+
 /// The elements of a device's screen as [`walk_screen`] reads them: the Mac's accessibility API,
 /// or a test's tree.
 pub trait ScreenSource {
@@ -343,8 +425,8 @@ pub trait ScreenSource {
     ///
     /// # Errors
     ///
-    /// [`ProviderError::ParentGone`] (or [`ProviderError::Gone`]) when `parent` went away, which
-    /// cuts its children short; any other failure fails the walk.
+    /// [`ProviderError::Gone`] when `parent` went away, which cuts its children short; any other
+    /// failure fails the walk.
     fn child_at(
         &mut self,
         parent: &Self::Element,
@@ -419,8 +501,9 @@ impl<E> ScreenWalk<E> {
 /// The elements under `screen`, read from `source` within [`MAX_NODES`] elements and
 /// [`MAX_DEPTH`] levels. A level stops short the same way whatever stops it, the node budget or
 /// its parent gone mid-read: the parent's children are marked unread and the walk truncated, never
-/// a shorter list read as whole; a level past the depth is marked unread when it has a child. An
-/// element that went away while its own attributes were read is left out.
+/// a shorter list read as whole; an element on the deepest level read has its children marked
+/// unread when it has a child or went away before it said. An element that went away while its
+/// own attributes were read is left out.
 ///
 /// # Errors
 ///
@@ -472,7 +555,7 @@ impl ScreenWalker {
                         unread: false,
                     });
                 }
-                Err(ProviderError::ParentGone | ProviderError::Gone) => {
+                Err(ProviderError::Gone) => {
                     self.truncated = true;
                     return Ok(Level {
                         children,
@@ -497,7 +580,13 @@ impl ScreenWalker {
                 Err(error) => return Err(error),
             };
             let grandchildren = if depth + 1 >= MAX_DEPTH {
-                let more = !matches!(source.child_at(&handle, 0), Ok(None));
+                // Past the depth only whether a child is there is asked: one there, or the
+                // element gone before it said, leaves its children unread.
+                let more = match source.child_at(&handle, 0) {
+                    Ok(first) => first.is_some(),
+                    Err(ProviderError::Gone) => true,
+                    Err(error) => return Err(error),
+                };
                 element.children_unread = more;
                 self.truncated |= more;
                 Vec::new()
@@ -524,8 +613,9 @@ pub trait HostAccessibility: Send {
     ///
     /// [`Error::NotFound`] when no window has the title, every window of it names another UUID,
     /// or it shows no screen of the app's window's shape; [`Error::Ambiguous`] when two windows
-    /// are left or two screens fit, or the one window left names no UUID while another listed
-    /// simulator shares its title ([`super::tree::find_screen`]); [`Error::NotSupported`] naming
+    /// name the simulator, or none does and two name no UUID, or the one that names no UUID
+    /// shares its title with another listed simulator ([`super::tree::choose_window`]), or two
+    /// screens fit ([`super::tree::find_screen`]); [`Error::NotSupported`] naming
     /// `macos_permission_accessibility` when the process is no trusted accessibility client
     /// ([`untrusted`]); [`Error::Timeout`] when the Simulator did not answer.
     fn read(&mut self, screen: &ScreenRequest) -> Result<HostScreen>;

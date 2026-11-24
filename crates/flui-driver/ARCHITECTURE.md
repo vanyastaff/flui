@@ -156,16 +156,19 @@ app's trees, frames and input, and this crate composes that with what only the O
   The read hands back the elements as served (`accessibility::ScreenElement`), and everything
   after it is pure code both the Mac and the scripted window go through (`ios_simulator::tree`).
   The window is one on screen titled `<device> – <runtime>`, found without looking the
-  Simulator's process up by name, and taken by an allow-list: one naming the device's UDID is
-  taken, one naming any other UUID is not, and one naming none only while no other listed
-  simulator, in any state, shares the title; two windows left are refused, and a device renamed
-  or removed since the lane connected is refused (`accessibility::screen_title`). The screen's
-  elements are read by a pure walk over a source (`accessibility::walk_screen`): a level the node
-  budget or a vanished parent cuts is marked unread on its parent, the screen included, and a
-  group gone mid-search cuts the screen search short. That a child read answering
-  `kAXErrorInvalidUIElement` is the parent gone is `ax::child_at`'s rule, which the macOS lane's
-  walk takes too (`walk::ProviderError::ParentGone`). Every element the read asks is given the
-  client's deadline, which a timeout names unless an element refused it. The screen is found by walking every group of the
+  Simulator's process up by name, and taken by an allow-list that every host goes through, the
+  scripted window included (`tree::choose_window`): the one window naming the device's UDID is
+  taken, whatever the others name; else the one naming no UUID, only while no other listed
+  simulator, in any state, shares the title; one naming any other UUID never; two naming the
+  UDID, or two naming none when none names it, are refused. A device renamed or removed since
+  the lane connected is refused (`accessibility::screen_title`). The screen's elements are read
+  by a pure walk over a source (`accessibility::walk_screen`): a level the node budget or a
+  vanished element cuts is marked unread on its parent, the screen included, and a group gone
+  mid-search cuts the screen search short. Every walk over an OS tree takes a step that finds an
+  element gone as its level cut, never ended (`lane::walk`); `ax::child_at` answers
+  `kAXErrorInvalidUIElement`, the parent gone, as that. Every element the read asks is given the
+  client's deadline and carries it, so a timeout, a press's included, names the deadline of the
+  element its call was asked of, or says that element refused it. The screen is found by walking every group of the
   window within ten levels (`tree::find_screen`): an `iOSContentGroup` when there is one, else the
   shallowest group of the app's window's shape. `Lane::read_tree` and `Lane::invoke` are handed
   the app's own tree, and each element is matched among the descendants of the node its nearest

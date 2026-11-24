@@ -3,10 +3,11 @@
 //! [`MAX_NODES`] elements and [`MAX_DEPTH`] levels.
 //!
 //! A provider that does not answer in time fails the walk at once with a typed timeout: a hung app
-//! never reads as a tree of empty defaults. An element that went away while it was read is left
-//! out; a parent that went away before its children were all read leaves them marked unread
-//! ([`ProviderError::ParentGone`]), never a shorter list read as whole; and a property its
-//! provider does not offer reads as the field's default, which is the provider's own answer.
+//! never reads as a tree of empty defaults. An element that went away while its properties were
+//! read is left out; a step to a next child that finds an element gone (the parent a child is
+//! asked of, or the sibling the next one is asked from) leaves the parent's children marked
+//! unread and the read cut short, never a shorter list read as whole; and a property its provider
+//! does not offer reads as the field's default, which is the provider's own answer.
 
 use std::time::Duration;
 
@@ -28,13 +29,9 @@ pub const MAX_DEPTH: usize = 64;
 pub enum ProviderError {
     /// It did not answer within the client's timeout.
     Timeout,
-    /// The element went away.
+    /// The element went away: the one whose properties were read, or the one a step to a child or
+    /// a sibling was asked of, whose list the walk then marks cut short.
     Gone,
-    /// The element a child was asked of went away, so its children past those read cannot be
-    /// read: a provider whose child reads are asked of the parent (the macOS accessibility API's
-    /// `AXChildren` by index) answers this, and the walk marks the parent's children unread and
-    /// the read cut short instead of ending the parent's list as whole.
-    ParentGone,
     /// Anything else, for people.
     Failed(String),
 }
@@ -156,7 +153,7 @@ pub fn pattern<T>(
             retry: ErrorCode::ActionUnsupported.default_retry(),
         }),
         Err(ProviderError::Timeout) => Err(timed_out(timeout)),
-        Err(ProviderError::Gone | ProviderError::ParentGone) => Err(element_gone(
+        Err(ProviderError::Gone) => Err(element_gone(
             automation_id,
             "before it was asked for its pattern",
             None,
@@ -197,7 +194,7 @@ pub fn invoked(
             ),
             retry: ErrorCode::Timeout.default_retry(),
         }),
-        Err(ProviderError::Gone | ProviderError::ParentGone) => Err(element_gone(
+        Err(ProviderError::Gone) => Err(element_gone(
             automation_id,
             "while it was invoked, which may have run first",
             Some(Effect::new(EffectKind::MayHaveRun)),
@@ -224,7 +221,7 @@ fn element_gone(automation_id: &str, when: &str, effect: Option<Effect>) -> Erro
 fn provider_error(error: ProviderError, timeout: Duration) -> Error {
     match error {
         ProviderError::Timeout => timed_out(timeout),
-        ProviderError::Gone | ProviderError::ParentGone => failed("an element went away"),
+        ProviderError::Gone => failed("an element went away"),
         ProviderError::Failed(why) => failed(&why),
     }
 }
@@ -292,9 +289,9 @@ impl Walk {
         Ok(Some(node))
     }
 
-    /// A step to `parent`'s next child: a gone element ends the level; a parent gone ends it
-    /// cut, `parent`'s children marked unread and the read cut short; a timeout or a failure ends
-    /// the walk.
+    /// A step to `parent`'s next child: an element gone (`parent` itself, or the sibling the step
+    /// was asked from) ends the level cut, `parent`'s children marked unread and the read cut
+    /// short, since no provider can say what followed; a timeout or a failure ends the walk.
     fn step<E>(
         &mut self,
         step: Result<Option<E>, ProviderError>,
@@ -302,8 +299,7 @@ impl Walk {
     ) -> Result<Option<E>> {
         match step {
             Ok(next) => Ok(next),
-            Err(ProviderError::Gone) => Ok(None),
-            Err(ProviderError::ParentGone) => {
+            Err(ProviderError::Gone) => {
                 parent.children_unread = true;
                 self.truncated = true;
                 Ok(None)
@@ -317,8 +313,7 @@ impl Walk {
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] when no element within the walk's budgets has it, saying whether the
-/// budget cut the search short; [`Error::Timeout`] and [`Error::Platform`] as [`read`].
+/// As [`find_by`].
 pub fn find<P: Provider>(
     provider: &mut P,
     root: P::Element,
@@ -340,7 +335,8 @@ pub fn find<P: Provider>(
 /// # Errors
 ///
 /// [`Error::NotFound`] when no element within the walk's budgets is accepted, saying whether the
-/// budget cut the search short; [`Error::Timeout`] and [`Error::Platform`] as [`read`].
+/// search was cut short: by its budgets, or by an element that went away before all its
+/// children were searched; [`Error::Timeout`] and [`Error::Platform`] as [`read`].
 pub fn find_by<P: Provider>(
     provider: &mut P,
     root: P::Element,
@@ -407,7 +403,7 @@ pub fn find_by<P: Provider>(
     )))
 }
 
-/// A step of a search: as [`Walk::step`], a parent gone recorded in `parent_gone`, which the
+/// A step of a search: as [`Walk::step`], an element gone recorded in `parent_gone`, which the
 /// search's failure names.
 fn search_step<E>(
     step: Result<Option<E>, ProviderError>,
@@ -416,8 +412,7 @@ fn search_step<E>(
 ) -> Result<Option<E>> {
     match step {
         Ok(next) => Ok(next),
-        Err(ProviderError::Gone) => Ok(None),
-        Err(ProviderError::ParentGone) => {
+        Err(ProviderError::Gone) => {
             *parent_gone = true;
             Ok(None)
         }

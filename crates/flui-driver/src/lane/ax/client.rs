@@ -178,9 +178,8 @@ pub(crate) fn elements(
 /// the API answers as an index outside the array.
 ///
 /// The call is asked of `parent`, so `kAXErrorInvalidUIElement` is `parent` gone, not a child:
-/// every later index would answer the same. It reads as [`ProviderError::ParentGone`], which a
-/// walk takes as the parent's children cut short, never as their end: the one place both lanes
-/// that read through this API learn the rule.
+/// every later index would answer the same. It reads as [`ProviderError::Gone`], which every walk
+/// takes, for any provider, as the parent's children cut short, never as their end.
 pub(crate) fn child_at(
     parent: &AXUIElement,
     index: CFIndex,
@@ -196,7 +195,6 @@ pub(crate) fn child_at(
         AXError::NoValue | AXError::AttributeUnsupported | AXError::IllegalArgument => {
             return Ok(None);
         }
-        AXError::InvalidUIElement => return Err(ProviderError::ParentGone),
         error => return Err(classify(error)),
     }
     let Some(values) = NonNull::new(values.cast_mut()) else {
@@ -289,7 +287,7 @@ pub(crate) fn read_error(error: ProviderError) -> Error {
             ),
             retry: flui_protocol::error::ErrorCode::Timeout.default_retry(),
         },
-        ProviderError::Gone | ProviderError::ParentGone => Error::gone(
+        ProviderError::Gone => Error::gone(
             flui_protocol::error::HandleKind::Window,
             None,
             None,
