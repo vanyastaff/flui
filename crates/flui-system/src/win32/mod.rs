@@ -57,21 +57,22 @@ use std::ffi::OsStr;
 use std::num::NonZeroIsize;
 use std::os::windows::ffi::OsStrExt as _;
 
-use flui_platform::capability::{CapabilityRegistrar, ProviderContext, WindowRef};
-use flui_platform::launch::{Launcher, LauncherCapability};
+use flui_platform::capability::{ProviderContext, WindowRef};
+use flui_platform::launch::Launcher;
 use flui_platform::{SystemFailure, Unsupported};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows::Win32::Foundation::HWND;
 
-use crate::autostart::{Autostart, AutostartCapability};
-use crate::dialog::{FileDialogCapability, FileDialogs, MessageBoxCapability, MessageBoxes};
-use crate::grant::{GrantCapability, Grants};
-use crate::jump_list::{JumpList, JumpListCapability};
-use crate::os::{Os, OsCapability};
-use crate::share::{Share, ShareCapability};
-use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
-use crate::taskbar::{TaskbarCapability, TaskbarEntry};
-use crate::user_dirs::{UserDirCapability, UserDirs};
+use crate::autostart::Autostart;
+use crate::dialog::{FileDialogs, MessageBoxes};
+use crate::grant::Grants;
+use crate::jump_list::JumpList;
+use crate::os::Os;
+use crate::providers::{Providers, Provision};
+use crate::share::Share;
+use crate::shortcuts::GlobalShortcuts;
+use crate::taskbar::TaskbarEntry;
+use crate::user_dirs::UserDirs;
 
 pub(crate) use threads::ShellThreads;
 
@@ -122,72 +123,74 @@ pub(crate) fn failure(error: &windows::core::Error) -> SystemFailure {
     SystemFailure::Os(os_code(error.code()))
 }
 
-/// Register the Windows providers of every service.
-pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
-    registrar.provide::<LauncherCapability>(|ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Launcher::new(
-            launcher::WindowsLauncher::new(ctx.runtime_local::<ShellThreads>(), ctx.window()),
-            ctx,
-        ))
-    });
-    registrar.provide::<FileDialogCapability>(|ctx: &ProviderContext<'_>| {
-        FileDialogs::try_new(
-            dialogs::WindowsDialogs::new(ctx.runtime_local::<modal::ModalWindows>()),
-            ctx,
-        )
-    });
-    registrar.provide::<MessageBoxCapability>(|ctx: &ProviderContext<'_>| {
-        MessageBoxes::try_new(
-            message_box::WindowsMessageBoxes::new(ctx.runtime_local::<modal::ModalWindows>()),
-            ctx,
-        )
-    });
-    registrar.provide::<ShareCapability>(|ctx: &ProviderContext<'_>| {
-        Share::try_new(share::WindowsShare::new(ctx), ctx)
-    });
-    registrar.provide::<AutostartCapability>(|ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Autostart::new(
-            autostart::WindowsAutostart::new(ctx.runtime_local::<ShellThreads>()),
-            ctx,
-        ))
-    });
-    registrar.provide::<GlobalShortcutCapability>(|ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(GlobalShortcuts::new(
-            shortcuts::WindowsShortcuts::new(ctx.runtime_local::<shortcuts::HotkeyWindow>()),
-            ctx,
-        ))
-    });
-    registrar.provide::<TaskbarCapability>(|ctx: &ProviderContext<'_>| {
-        let window = ctx.window();
-        Ok::<_, Unsupported>(TaskbarEntry::new(
-            taskbar::WindowsTaskbar::new(
-                ctx.runtime_local::<taskbar::TaskbarButtons>(),
-                window.as_ref(),
-            ),
-            ctx,
-        ))
-    });
-    registrar.provide::<UserDirCapability>(|ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(UserDirs::new(
-            user_dirs::WindowsUserDirs::new(ctx.runtime_local::<ShellThreads>()),
-            ctx,
-        ))
-    });
-    registrar.provide::<JumpListCapability>(|ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(JumpList::new(
-            jump_list::WindowsJumpList::new(ctx.runtime_local::<ShellThreads>()),
-            ctx,
-        ))
-    });
-    registrar.provide::<OsCapability>(|ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Os::new(os::WindowsOs, ctx))
-    });
-    registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
-        Ok::<_, Unsupported>(Grants::new(
-            grants::WindowsGrants::new(ctx.runtime_local::<ShellThreads>()),
-            ctx,
-        ))
-    });
+/// The Windows providers of every service.
+pub(crate) fn providers() -> Providers {
+    Providers {
+        launcher: Provision::provided(|ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Launcher::new(
+                launcher::WindowsLauncher::new(ctx.runtime_local::<ShellThreads>(), ctx.window()),
+                ctx,
+            ))
+        }),
+        file_dialogs: Provision::provided(|ctx: &ProviderContext<'_>| {
+            FileDialogs::try_new(
+                dialogs::WindowsDialogs::new(ctx.runtime_local::<modal::ModalWindows>()),
+                ctx,
+            )
+        }),
+        message_boxes: Provision::provided(|ctx: &ProviderContext<'_>| {
+            MessageBoxes::try_new(
+                message_box::WindowsMessageBoxes::new(ctx.runtime_local::<modal::ModalWindows>()),
+                ctx,
+            )
+        }),
+        share: Provision::provided(|ctx: &ProviderContext<'_>| {
+            Share::try_new(share::WindowsShare::new(ctx), ctx)
+        }),
+        autostart: Provision::provided(|ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Autostart::new(
+                autostart::WindowsAutostart::new(ctx.runtime_local::<ShellThreads>()),
+                ctx,
+            ))
+        }),
+        global_shortcuts: Provision::provided(|ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(GlobalShortcuts::new(
+                shortcuts::WindowsShortcuts::new(ctx.runtime_local::<shortcuts::HotkeyWindow>()),
+                ctx,
+            ))
+        }),
+        taskbar: Provision::provided(|ctx: &ProviderContext<'_>| {
+            let window = ctx.window();
+            Ok::<_, Unsupported>(TaskbarEntry::new(
+                taskbar::WindowsTaskbar::new(
+                    ctx.runtime_local::<taskbar::TaskbarButtons>(),
+                    window.as_ref(),
+                ),
+                ctx,
+            ))
+        }),
+        user_dirs: Provision::provided(|ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(UserDirs::new(
+                user_dirs::WindowsUserDirs::new(ctx.runtime_local::<ShellThreads>()),
+                ctx,
+            ))
+        }),
+        jump_list: Provision::provided(|ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(JumpList::new(
+                jump_list::WindowsJumpList::new(ctx.runtime_local::<ShellThreads>()),
+                ctx,
+            ))
+        }),
+        os: Provision::provided(|ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Os::new(os::WindowsOs, ctx))
+        }),
+        grants: Provision::provided(|ctx: &ProviderContext<'_>| {
+            Ok::<_, Unsupported>(Grants::new(
+                grants::WindowsGrants::new(ctx.runtime_local::<ShellThreads>()),
+                ctx,
+            ))
+        }),
+    }
 }
 
 #[cfg(test)]

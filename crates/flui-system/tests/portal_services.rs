@@ -49,6 +49,51 @@ fn exported_host(
 
 /// A launch outlives its window's close, and loses the window's export with
 /// it; a launch asked from a closed window names no window.
+/// The portal on a private bus is the platform's plugin pointed at another
+/// bus: every service answers an acquisition as `SystemPlugin` does on
+/// Linux, the refusals included.
+#[test]
+fn the_portal_on_a_bus_answers_every_service_as_the_linux_plugin_does() {
+    /// How `plugin` answers an acquisition of `C`.
+    fn answer<C: flui_platform::capability::Capability>(
+        plugin: &dyn flui_platform::capability::Plugin,
+    ) -> Result<(), UnsupportedReason> {
+        let (_host, handle) = acquire::<C>(plugin);
+        handle.map(drop).map_err(|refusal| refusal.reason)
+    }
+    fn same<C: flui_platform::capability::Capability>(
+        on_bus: &dyn flui_platform::capability::Plugin,
+    ) -> (
+        &'static str,
+        Result<(), UnsupportedReason>,
+        Result<(), UnsupportedReason>,
+    ) {
+        (
+            std::any::type_name::<C>(),
+            answer::<C>(on_bus),
+            answer::<C>(&flui_system::SystemPlugin::new()),
+        )
+    }
+    let bus = PrivateBus::start();
+    let on_bus = flui_system::testing::PortalOnBus::new(bus.address.as_str());
+    let answers = [
+        same::<LauncherCapability>(&on_bus),
+        same::<FileDialogCapability>(&on_bus),
+        same::<flui_system::dialog::MessageBoxCapability>(&on_bus),
+        same::<flui_system::share::ShareCapability>(&on_bus),
+        same::<AutostartCapability>(&on_bus),
+        same::<GlobalShortcutCapability>(&on_bus),
+        same::<TaskbarCapability>(&on_bus),
+        same::<UserDirCapability>(&on_bus),
+        same::<flui_system::jump_list::JumpListCapability>(&on_bus),
+        same::<flui_system::os::OsCapability>(&on_bus),
+        same::<GrantCapability>(&on_bus),
+    ];
+    for (service, on_bus, platform) in answers {
+        assert_eq!(on_bus, platform, "{service}");
+    }
+}
+
 #[test]
 fn a_closed_window_takes_its_exports_with_it_and_names_no_parent() {
     let portal = StandIn::serve();

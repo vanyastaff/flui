@@ -49,6 +49,7 @@ pub mod os;
 mod owner;
 #[cfg(target_os = "linux")]
 mod portal;
+mod providers;
 pub mod sandbox;
 pub mod share;
 pub mod shortcuts;
@@ -82,87 +83,62 @@ impl SystemPlugin {
 
 impl Plugin for SystemPlugin {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
-        #[cfg(windows)]
-        win32::register(registrar);
-        #[cfg(target_os = "macos")]
-        macos::register(registrar);
-        #[cfg(target_os = "ios")]
-        ios::register(registrar);
-        #[cfg(target_os = "linux")]
-        portal::register(registrar, None, None);
-        #[cfg(target_os = "android")]
-        android::register(registrar);
-        #[cfg(target_arch = "wasm32")]
-        web::register(registrar);
-        #[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
-        refusals::register(registrar);
+        platform_providers().register(registrar);
     }
 }
 
-/// The refusals off Windows, Android and the web: the services no portal
-/// has, the jump list, and what a platform's provider does not have yet.
-#[cfg(not(any(windows, target_os = "android", target_arch = "wasm32")))]
-mod refusals {
-    use flui_platform::capability::{Capability, CapabilityRegistrar, ProviderContext};
-    use flui_platform::{Unsupported, UnsupportedReason};
+/// This platform's answer for every service.
+#[cfg(windows)]
+use win32::providers as platform_providers;
 
-    /// Provide `C` as a refusal for `reason`.
-    fn refuse<C: Capability>(registrar: &mut CapabilityRegistrar, reason: UnsupportedReason) {
-        registrar.provide::<C>(move |_: &ProviderContext<'_>| {
-            Err::<C::Handle, _>(Unsupported::of::<C>(reason))
-        });
-    }
+/// This platform's answer for every service.
+#[cfg(target_os = "macos")]
+use macos::providers as platform_providers;
 
-    /// macOS provides every service but the jump list, which is Windows'.
-    #[cfg(target_os = "macos")]
-    pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
-        refuse::<crate::jump_list::JumpListCapability>(
-            registrar,
-            UnsupportedReason::NotOnThisPlatform,
-        );
-    }
+/// This platform's answer for every service.
+#[cfg(target_os = "ios")]
+use ios::providers as platform_providers;
 
-    /// iOS has no form of autostart, of a shortcut heard while another
-    /// application is in front or of a jump list. Its form of the launcher
-    /// entry, the count on the application's icon, needs the user's
-    /// permission for notifications, which no provider asks for yet.
-    #[cfg(target_os = "ios")]
-    pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
-        let never = UnsupportedReason::NotOnThisPlatform;
-        refuse::<crate::autostart::AutostartCapability>(registrar, never);
-        refuse::<crate::shortcuts::GlobalShortcutCapability>(registrar, never);
-        refuse::<crate::jump_list::JumpListCapability>(registrar, never);
-        refuse::<crate::taskbar::TaskbarCapability>(registrar, UnsupportedReason::NotYetOnThisHost);
-    }
+/// This platform's answer for every service.
+#[cfg(target_os = "android")]
+use android::providers as platform_providers;
 
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
-        let not_yet = UnsupportedReason::NotYetOnThisHost;
-        // The portal's registration provides the rest on Linux, and refuses
-        // the message box, the share sheet and the jump list for good.
-        #[cfg(not(target_os = "linux"))]
-        {
-            use crate::autostart::AutostartCapability;
-            use crate::dialog::{FileDialogCapability, MessageBoxCapability};
-            use crate::grant::GrantCapability;
-            use crate::jump_list::JumpListCapability;
-            use crate::share::ShareCapability;
-            use crate::shortcuts::GlobalShortcutCapability;
-            use crate::taskbar::TaskbarCapability;
-            use crate::user_dirs::UserDirCapability;
-            use flui_platform::launch::LauncherCapability;
+/// This platform's answer for every service.
+#[cfg(target_arch = "wasm32")]
+use web::providers as platform_providers;
 
-            refuse::<LauncherCapability>(registrar, not_yet);
-            refuse::<FileDialogCapability>(registrar, not_yet);
-            refuse::<GrantCapability>(registrar, not_yet);
-            refuse::<MessageBoxCapability>(registrar, not_yet);
-            refuse::<ShareCapability>(registrar, not_yet);
-            refuse::<AutostartCapability>(registrar, not_yet);
-            refuse::<GlobalShortcutCapability>(registrar, not_yet);
-            refuse::<TaskbarCapability>(registrar, not_yet);
-            refuse::<UserDirCapability>(registrar, not_yet);
-            refuse::<JumpListCapability>(registrar, UnsupportedReason::NotOnThisPlatform);
-        }
-        refuse::<crate::os::OsCapability>(registrar, not_yet);
+/// This platform's answer for every service: the portal on the session bus,
+/// naming the application as the composition root does.
+#[cfg(target_os = "linux")]
+fn platform_providers() -> providers::Providers {
+    portal::providers(None, None)
+}
+
+/// A platform FLUI has no provider on yet refuses every service with
+/// `NotYetOnThisHost`, and the jump list, which is Windows', for good.
+#[cfg(not(any(
+    windows,
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "linux",
+    target_os = "android",
+    target_arch = "wasm32"
+)))]
+fn platform_providers() -> providers::Providers {
+    use flui_platform::UnsupportedReason::{NotOnThisPlatform, NotYetOnThisHost};
+    use providers::Provision::Refused;
+
+    providers::Providers {
+        launcher: Refused(NotYetOnThisHost),
+        file_dialogs: Refused(NotYetOnThisHost),
+        message_boxes: Refused(NotYetOnThisHost),
+        share: Refused(NotYetOnThisHost),
+        autostart: Refused(NotYetOnThisHost),
+        global_shortcuts: Refused(NotYetOnThisHost),
+        taskbar: Refused(NotYetOnThisHost),
+        user_dirs: Refused(NotYetOnThisHost),
+        jump_list: Refused(NotOnThisPlatform),
+        os: Refused(NotYetOnThisHost),
+        grants: Refused(NotYetOnThisHost),
     }
 }

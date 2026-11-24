@@ -35,29 +35,24 @@ use flui_platform::capability::scripted::{Answer, Scenario, Script};
 use flui_platform::capability::{
     CapabilityRegistrar, Plugin, ProviderContext, Resolver, WindowRef,
 };
-use flui_platform::launch::{Launcher, LauncherCapability};
+use flui_platform::launch::Launcher;
 pub use flui_platform::testing::{LaunchRequest, ScriptedLauncher};
 
-use crate::autostart::{
-    Autostart, AutostartBackend, AutostartCapability, AutostartRequest, AutostartResult,
-};
+use crate::autostart::{Autostart, AutostartBackend, AutostartRequest, AutostartResult};
 use crate::dialog::{
-    DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs, MessageBoxBackend,
-    MessageBoxCapability, MessageBoxRequest, MessageBoxResult, MessageBoxes, OpenRequest,
-    OpenResult, SaveRequest, SaveResult,
+    DialogHold, FileDialogBackend, FileDialogs, MessageBoxBackend, MessageBoxRequest,
+    MessageBoxResult, MessageBoxes, OpenRequest, OpenResult, SaveRequest, SaveResult,
 };
-use crate::grant::{GrantCapability, Grants};
-use crate::jump_list::{
-    JumpList, JumpListBackend, JumpListCapability, JumpListResult, JumpListTask,
-};
-use crate::os::{Architecture, Os, OsBackend, OsCapability, OsInfo, OsVersion};
-use crate::share::{Share, ShareBackend, ShareCapability, ShareRequest, ShareResult};
+use crate::grant::Grants;
+use crate::jump_list::{JumpList, JumpListBackend, JumpListResult, JumpListTask};
+use crate::os::{Architecture, Os, OsBackend, OsInfo, OsVersion};
+use crate::providers::{Providers, Provision};
+use crate::share::{Share, ShareBackend, ShareRequest, ShareResult};
 use crate::shortcuts::{
-    GlobalShortcutCapability, GlobalShortcuts, Shortcut, ShortcutBackend, ShortcutEvent,
-    ShortcutFeed, ShortcutHold,
+    GlobalShortcuts, Shortcut, ShortcutBackend, ShortcutEvent, ShortcutFeed, ShortcutHold,
 };
-use crate::taskbar::{EntryState, Honoured, TaskbarBackend, TaskbarCapability, TaskbarEntry};
-use crate::user_dirs::{UserDir, UserDirBackend, UserDirCapability, UserDirResult, UserDirs};
+use crate::taskbar::{EntryState, Honoured, TaskbarBackend, TaskbarEntry};
+use crate::user_dirs::{UserDir, UserDirBackend, UserDirResult, UserDirs};
 pub use grants::{GrantStore, ScriptedGrants};
 
 /// One dialog a [`ScriptedFileDialogs`] was asked to show.
@@ -659,49 +654,52 @@ impl ScriptedSystem {
 impl Plugin for ScriptedSystem {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
         let launcher = self.launcher.clone();
-        registrar.provide::<LauncherCapability>(move |ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(Launcher::new(launcher.clone(), ctx))
-        });
         let dialogs = self.dialogs.clone();
-        registrar.provide::<FileDialogCapability>(move |ctx: &ProviderContext<'_>| {
-            FileDialogs::try_new(dialogs.clone(), ctx)
-        });
         let message_boxes = self.message_boxes.clone();
-        registrar.provide::<MessageBoxCapability>(move |ctx: &ProviderContext<'_>| {
-            MessageBoxes::try_new(message_boxes.clone(), ctx)
-        });
         let share = self.share.clone();
-        registrar.provide::<ShareCapability>(move |ctx: &ProviderContext<'_>| {
-            Share::try_new(share.clone(), ctx)
-        });
         let autostart = self.autostart.clone();
-        registrar.provide::<AutostartCapability>(move |ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(Autostart::new(autostart.clone(), ctx))
-        });
         let shortcuts = self.shortcuts.clone();
-        registrar.provide::<GlobalShortcutCapability>(move |ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(GlobalShortcuts::new(shortcuts.clone(), ctx))
-        });
         let taskbar = self.taskbar.clone();
-        registrar.provide::<TaskbarCapability>(move |ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(TaskbarEntry::new(taskbar.clone(), ctx))
-        });
         let user_dirs = self.user_dirs.clone();
-        registrar.provide::<UserDirCapability>(move |ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(UserDirs::new(user_dirs.clone(), ctx))
-        });
         let jump_list = self.jump_list.clone();
-        registrar.provide::<JumpListCapability>(move |ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(JumpList::new(jump_list.clone(), ctx))
-        });
         let os = self.os.clone();
-        registrar.provide::<OsCapability>(move |ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(Os::new(os.clone(), ctx))
-        });
         let grants = self.grants.clone();
-        registrar.provide::<GrantCapability>(move |ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(Grants::new(grants.clone(), ctx))
-        });
+        Providers {
+            launcher: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(Launcher::new(launcher.clone(), ctx))
+            }),
+            file_dialogs: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                FileDialogs::try_new(dialogs.clone(), ctx)
+            }),
+            message_boxes: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                MessageBoxes::try_new(message_boxes.clone(), ctx)
+            }),
+            share: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                Share::try_new(share.clone(), ctx)
+            }),
+            autostart: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(Autostart::new(autostart.clone(), ctx))
+            }),
+            global_shortcuts: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(GlobalShortcuts::new(shortcuts.clone(), ctx))
+            }),
+            taskbar: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(TaskbarEntry::new(taskbar.clone(), ctx))
+            }),
+            user_dirs: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(UserDirs::new(user_dirs.clone(), ctx))
+            }),
+            jump_list: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(JumpList::new(jump_list.clone(), ctx))
+            }),
+            os: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(Os::new(os.clone(), ctx))
+            }),
+            grants: Provision::provided(move |ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(Grants::new(grants.clone(), ctx))
+            }),
+        }
+        .register(registrar);
     }
 }
 
@@ -741,10 +739,10 @@ impl PortalOnBus {
 #[cfg(target_os = "linux")]
 impl Plugin for PortalOnBus {
     fn register(&self, registrar: &mut CapabilityRegistrar) {
-        crate::portal::register(
-            registrar,
+        crate::portal::providers(
             Some(std::sync::Arc::clone(&self.address)),
             self.app_id.clone(),
-        );
+        )
+        .register(registrar);
     }
 }

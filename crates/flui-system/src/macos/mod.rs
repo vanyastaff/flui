@@ -32,16 +32,16 @@ mod shortcuts;
 mod taskbar;
 
 #[cfg(target_os = "macos")]
-pub(crate) use appkit::register;
+pub(crate) use appkit::providers;
 
 /// What the providers share on macOS alone: the window a widget is in, and
-/// the registration.
+/// the providers.
 #[cfg(target_os = "macos")]
 #[expect(unsafe_code, reason = "a raw window handle's view")]
 mod appkit {
-    use flui_platform::Unsupported;
-    use flui_platform::capability::{CapabilityRegistrar, ProviderContext, WindowRef};
-    use flui_platform::launch::{Launcher, LauncherCapability};
+    use flui_platform::capability::{ProviderContext, WindowRef};
+    use flui_platform::launch::Launcher;
+    use flui_platform::{Unsupported, UnsupportedReason};
     use objc2::MainThreadMarker;
     use objc2::rc::Retained;
     use objc2_app_kit::{NSView, NSWindow};
@@ -53,14 +53,15 @@ mod appkit {
     use crate::apple::queue::WorkQueue;
     use crate::apple::user_dirs::AppleUserDirs;
     use crate::apple::version::{OnMacOS, RunningVersion};
-    use crate::autostart::{Autostart, AutostartCapability};
+    use crate::autostart::Autostart;
     use crate::dialog::{FileDialogCapability, FileDialogs, MessageBoxCapability, MessageBoxes};
-    use crate::grant::{GrantCapability, Grants};
-    use crate::os::{Os, OsCapability};
+    use crate::grant::Grants;
+    use crate::os::Os;
+    use crate::providers::{Providers, Provision};
     use crate::share::{Share, ShareCapability};
     use crate::shortcuts::{GlobalShortcutCapability, GlobalShortcuts};
     use crate::taskbar::{TaskbarCapability, TaskbarEntry};
-    use crate::user_dirs::{UserDirCapability, UserDirs};
+    use crate::user_dirs::UserDirs;
 
     /// The AppKit window `window` is, when its handle names a view in one:
     /// `None` for a window of another kind (a headless window) or a view
@@ -78,96 +79,99 @@ mod appkit {
         view.window()
     }
 
-    /// Register the macOS providers of every service but the jump list,
-    /// which is Windows'.
-    pub(crate) fn register(registrar: &mut CapabilityRegistrar) {
-        registrar.provide::<LauncherCapability>(|ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(Launcher::new(
-                super::launcher::MacLauncher::new(ctx.runtime_local::<WorkQueue>()),
-                ctx,
-            ))
-        });
-        registrar.provide::<FileDialogCapability>(|ctx: &ProviderContext<'_>| {
-            let mtm = main_thread::<FileDialogCapability>()?;
-            FileDialogs::try_new(
-                super::dialogs::MacDialogs::new(
-                    mtm,
-                    ctx.runtime_local::<RunningVersion<OnMacOS>>().0,
-                    ctx.runtime_local::<WorkQueue>(),
-                ),
-                ctx,
-            )
-        });
-        registrar.provide::<MessageBoxCapability>(|ctx: &ProviderContext<'_>| {
-            let mtm = main_thread::<MessageBoxCapability>()?;
-            MessageBoxes::try_new(super::message_box::MacMessageBoxes::new(mtm), ctx)
-        });
-        registrar.provide::<ShareCapability>(|ctx: &ProviderContext<'_>| {
-            let mtm = main_thread::<ShareCapability>()?;
-            Share::try_new(
-                super::share::MacShare::new(
-                    mtm,
-                    ctx.runtime_local::<WorkQueue>(),
-                    ctx.completions().clone(),
-                ),
-                ctx,
-            )
-        });
-        registrar.provide::<AutostartCapability>(|ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(Autostart::new(
-                super::autostart::MacAutostart::new(
-                    ctx.runtime_local::<RunningVersion<OnMacOS>>().0,
-                    ctx.runtime_local::<WorkQueue>(),
-                ),
-                ctx,
-            ))
-        });
-        registrar.provide::<GlobalShortcutCapability>(|ctx: &ProviderContext<'_>| {
-            let mtm = main_thread::<GlobalShortcutCapability>()?;
-            Ok::<_, Unsupported>(GlobalShortcuts::new(
-                super::shortcuts::MacShortcuts::new(
-                    mtm,
-                    ctx.runtime_local::<super::shortcuts::HotKeys>(),
-                ),
-                ctx,
-            ))
-        });
-        registrar.provide::<TaskbarCapability>(|ctx: &ProviderContext<'_>| {
-            let mtm = main_thread::<TaskbarCapability>()?;
-            Ok::<_, Unsupported>(TaskbarEntry::new(
-                super::taskbar::MacDockTile::new(
-                    mtm,
-                    ctx.runtime_local::<super::taskbar::DockViews>(),
-                ),
-                ctx,
-            ))
-        });
-        registrar.provide::<UserDirCapability>(|ctx: &ProviderContext<'_>| {
-            Ok::<_, Unsupported>(UserDirs::new(
-                AppleUserDirs::new(ctx.runtime_local::<WorkQueue>()),
-                ctx,
-            ))
-        });
-        registrar.provide::<OsCapability>(|ctx: &ProviderContext<'_>| {
-            let version = ctx.runtime_local::<RunningVersion<OnMacOS>>().0;
-            Ok::<_, Unsupported>(Os::new(AppleOs::new("macOS", version.components()), ctx))
-        });
-        registrar.provide::<GrantCapability>(|ctx: &ProviderContext<'_>| {
-            // No Flatpak description on macOS: the App Sandbox is read from
-            // the environment its system sets. The user database is asked
-            // only for an App Sandbox whose `HOME` is not its container.
-            let confinement = flui_platform::sandbox::Confinement::of_process(
-                &flui_platform::sandbox::FlatpakInfo::Absent,
-                &crate::sandbox::user_database_home,
-                &|_| None,
-            );
-            Ok::<_, Unsupported>(Grants::new(
-                AppleGrants::new(
-                    ctx.runtime_local::<WorkQueue>(),
-                    crate::sandbox::of_confinement(&confinement),
-                ),
-                ctx,
-            ))
-        });
+    /// The macOS providers: every service but the jump list, which is refused.
+    pub(crate) fn providers() -> Providers {
+        Providers {
+            launcher: Provision::provided(|ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(Launcher::new(
+                    super::launcher::MacLauncher::new(ctx.runtime_local::<WorkQueue>()),
+                    ctx,
+                ))
+            }),
+            file_dialogs: Provision::provided(|ctx: &ProviderContext<'_>| {
+                let mtm = main_thread::<FileDialogCapability>()?;
+                FileDialogs::try_new(
+                    super::dialogs::MacDialogs::new(
+                        mtm,
+                        ctx.runtime_local::<RunningVersion<OnMacOS>>().0,
+                        ctx.runtime_local::<WorkQueue>(),
+                    ),
+                    ctx,
+                )
+            }),
+            message_boxes: Provision::provided(|ctx: &ProviderContext<'_>| {
+                let mtm = main_thread::<MessageBoxCapability>()?;
+                MessageBoxes::try_new(super::message_box::MacMessageBoxes::new(mtm), ctx)
+            }),
+            share: Provision::provided(|ctx: &ProviderContext<'_>| {
+                let mtm = main_thread::<ShareCapability>()?;
+                Share::try_new(
+                    super::share::MacShare::new(
+                        mtm,
+                        ctx.runtime_local::<WorkQueue>(),
+                        ctx.completions().clone(),
+                    ),
+                    ctx,
+                )
+            }),
+            autostart: Provision::provided(|ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(Autostart::new(
+                    super::autostart::MacAutostart::new(
+                        ctx.runtime_local::<RunningVersion<OnMacOS>>().0,
+                        ctx.runtime_local::<WorkQueue>(),
+                    ),
+                    ctx,
+                ))
+            }),
+            global_shortcuts: Provision::provided(|ctx: &ProviderContext<'_>| {
+                let mtm = main_thread::<GlobalShortcutCapability>()?;
+                Ok::<_, Unsupported>(GlobalShortcuts::new(
+                    super::shortcuts::MacShortcuts::new(
+                        mtm,
+                        ctx.runtime_local::<super::shortcuts::HotKeys>(),
+                    ),
+                    ctx,
+                ))
+            }),
+            taskbar: Provision::provided(|ctx: &ProviderContext<'_>| {
+                let mtm = main_thread::<TaskbarCapability>()?;
+                Ok::<_, Unsupported>(TaskbarEntry::new(
+                    super::taskbar::MacDockTile::new(
+                        mtm,
+                        ctx.runtime_local::<super::taskbar::DockViews>(),
+                    ),
+                    ctx,
+                ))
+            }),
+            user_dirs: Provision::provided(|ctx: &ProviderContext<'_>| {
+                Ok::<_, Unsupported>(UserDirs::new(
+                    AppleUserDirs::new(ctx.runtime_local::<WorkQueue>()),
+                    ctx,
+                ))
+            }),
+            os: Provision::provided(|ctx: &ProviderContext<'_>| {
+                let version = ctx.runtime_local::<RunningVersion<OnMacOS>>().0;
+                Ok::<_, Unsupported>(Os::new(AppleOs::new("macOS", version.components()), ctx))
+            }),
+            grants: Provision::provided(|ctx: &ProviderContext<'_>| {
+                // No Flatpak description on macOS: the App Sandbox is read from
+                // the environment its system sets. The user database is asked
+                // only for an App Sandbox whose `HOME` is not its container.
+                let confinement = flui_platform::sandbox::Confinement::of_process(
+                    &flui_platform::sandbox::FlatpakInfo::Absent,
+                    &crate::sandbox::user_database_home,
+                    &|_| None,
+                );
+                Ok::<_, Unsupported>(Grants::new(
+                    AppleGrants::new(
+                        ctx.runtime_local::<WorkQueue>(),
+                        crate::sandbox::of_confinement(&confinement),
+                    ),
+                    ctx,
+                ))
+            }),
+            // The jump list is Windows'.
+            jump_list: Provision::Refused(UnsupportedReason::NotOnThisPlatform),
+        }
     }
 }
