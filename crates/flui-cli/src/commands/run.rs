@@ -76,9 +76,8 @@ pub(crate) fn execute(
     let target = resolve_target(device.as_deref())?;
     ui::info(format!("Target device: {}", style(target.label()).cyan()))?;
     // A run that rebuilds on saves serves its reloads too (ADR-0401 §2): a desktop application,
-    // an Android device or a browser, with hot reload. A worker project's host is not started
-    // with the session.
-    let serves_reloads = hot_reload && !release && !matches!(project, Project::Worker(_));
+    // an Android device or a browser, with hot reload (`--agent` refuses a worker project).
+    let serves_reloads = hot_reload && !release;
     let (agent, run_endpoint) = if agent {
         let (session, run_endpoint) = start_agent_session(
             &project,
@@ -1060,8 +1059,7 @@ fn drive(
                         restart(strategy, child)?
                     }
                 };
-                let asked = request.asked();
-                request.answer(&report_reload(reloaded, asked));
+                request.answer(&report_reload(reloaded, started));
             }
             LoopEvent::Key(HotKey::Clear) => {
                 let _ = console::Term::stderr().clear_screen();

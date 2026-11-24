@@ -278,9 +278,9 @@ runs. Tools:
 
 `flui_reload` is answered by the `flui run --agent` that started the app, not
 by the app: a run that rebuilds on each save serves it at a run endpoint of its
-own, private as the app's and admitting the same token and one driver at a time, and names it `run` in
+own, private as the app's and admitting the same token, and names it `run` in
 the session file (ADR-0401) before `run.agent.ready`. A run that does not rebuild on saves
-(`--no-hot-reload`, `--release`, a worker project) names none, and
+(`--no-hot-reload`, `--release`) names none, and
 `flui_reload` answers `not_supported` there. No mechanism restarts the app in its
 process yet, so `restart` is applied as `process_restart`.
 

@@ -90,7 +90,7 @@ pub(crate) struct Credentials {
     pub(crate) pid: u32,
     /// Where that `flui run` serves `run.reload`, on this host, admitting the same token
     /// ([`supervisor`], ADR-0401); absent when the run does not rebuild the app on saves
-    /// (`--no-hot-reload`, `--release`, a worker project), and in the credentials the
+    /// (`--no-hot-reload`, `--release`), and in the credentials the
     /// environment names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) run: Option<String>,

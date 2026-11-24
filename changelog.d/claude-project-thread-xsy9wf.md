@@ -24,8 +24,9 @@
 - **`flui-cli`**: `flui mcp` gains `flui_reload`, which rebuilds the app and applies the build
   through the `flui run --agent` that started it, and answers what the reload came to: applied
   at a tier, or failed with the compiler's errors and their `file:line:column`, with the time it
-  took. `flui run --agent` with a rebuild loop serves it at a private run endpoint of its own and
-  names it `run` in `target/flui-agent.json` (ADR-0401).
+  took. A `flui run --agent` that rebuilds on saves (hot reload, not `--release`) serves it at a
+  private run endpoint of its own, names it `run` in `target/flui-agent.json` and reports it in
+  `run.agent.ready` (ADR-0401).
 - **`flui-protocol`**: protocol 0.31 adds `run.reload { at_least? }`, served by the new
   `ServedBy::Supervisor`, with `ReloadTier`, `ReloadParams`, `ReloadReport` and `Reloaded`.
   `ClientRole::may_call`, `launch::same_token` and `ServerLine::malformed` (with

@@ -67,7 +67,8 @@ pub(crate) struct Connection {
     outgoing: mpsc::Sender<String>,
     /// Every line the app sent, and the failure that ended either thread.
     incoming: mpsc::Receiver<Result<String, Failure>>,
-    /// Set once the reading thread ended: the app closed its end, so a request is not sent.
+    /// Set once the reading thread meets the end of the conversation (the app closed its end, a
+    /// read failed, a line could not be read), before it reports it: a request is not sent then.
     ended: Arc<AtomicBool>,
     next_id: u64,
     /// Shuts the socket down when the connection is dropped.
@@ -117,10 +118,7 @@ impl Connection {
             .map_err(|e| format!("could not start the connection's writer: {e}"))?;
         thread::Builder::new()
             .name("flui-agent-client-read".into())
-            .spawn(move || {
-                receive(reader, &lines);
-                read_to_end.store(true, Ordering::SeqCst);
-            })
+            .spawn(move || receive(reader, &lines, &read_to_end))
             .map_err(|e| format!("could not start the connection's reader: {e}"))?;
 
         let connection = Self {
@@ -304,8 +302,13 @@ fn send(
 }
 
 /// Reads every line the app sends until it closes, a read fails or a line runs past
-/// [`MAX_REPLY`]; the end is reported once, on the lines' channel.
-fn receive(mut stream: Box<dyn Read + Send>, lines: &mpsc::Sender<Result<String, Failure>>) {
+/// [`MAX_REPLY`]; the end is reported once, on the lines' channel, after `ended` is set, so a
+/// request made once the end is queued is never written.
+fn receive(
+    mut stream: Box<dyn Read + Send>,
+    lines: &mpsc::Sender<Result<String, Failure>>,
+    ended: &AtomicBool,
+) {
     let mut reader = LineReader::new(MAX_REPLY);
     let mut chunk = vec![0_u8; 64 << 10];
     loop {
@@ -320,6 +323,9 @@ fn receive(mut stream: Box<dyn Read + Send>, lines: &mpsc::Sender<Result<String,
                 )),
             };
             let failed = line.is_err();
+            if failed {
+                ended.store(true, Ordering::SeqCst);
+            }
             if lines.send(line).is_err() || failed {
                 return;
             }
@@ -333,6 +339,7 @@ fn receive(mut stream: Box<dyn Read + Send>, lines: &mpsc::Sender<Result<String,
         match read {
             Ok(read) => reader.push(&chunk[..read]),
             Err(why) => {
+                ended.store(true, Ordering::SeqCst);
                 let _ = lines.send(Err(Failure::Transport(why)));
                 return;
             }

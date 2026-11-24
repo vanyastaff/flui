@@ -428,6 +428,9 @@ fn an_agent_reads_and_taps_the_app_run_with_agent_through_mcp() {
     let ready = ready.expect("run.agent.ready");
     let session = std::path::PathBuf::from(ready["session"].as_str().unwrap());
     let session_text = std::fs::read_to_string(&session).unwrap();
+    // A run that does not rebuild on saves serves no reload, and names no run endpoint.
+    assert!(ready.get("run").is_none(), "{ready}");
+    assert!(!session_text.contains("\"run\""), "{session_text}");
     assert!(
         !ready.to_string().contains(
             session_text
