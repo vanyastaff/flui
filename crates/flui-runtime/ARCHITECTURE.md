@@ -1299,11 +1299,10 @@ module is the defect this rule exists to catch (ADR-0402).
 
 **Why here.** Linking follows reachability: a binary in which no code installs a hook names
 neither `WindowSource::dev_agent` nor `dev_agent_window`, so it links none of the agent's owner
-side (0.58 MB of a release counter), in every build mode and with no feature for two crates to
+side (ADR-0402 gives the bytes), in every build mode and with no feature for two crates to
 disagree on. Flutter's counterpart is `BindingBase.initServiceExtensions`, guarded so its tree
-shaker drops the extensions from a release build. Pinned by `counter_release_bytes` and
-`counter_wasm_bytes` (`perf/size.toml`), and by every agent test, which vends its windows through
-`dev_agent_window`.
+shaker drops the extensions from a release build. Pinned by the `*_bytes` lines of
+`perf/size.toml`, and by every agent test, which vends its windows through `dev_agent_window`.
 
 ### The agent's conversation is one service, and it does no I/O
 
