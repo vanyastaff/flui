@@ -1,11 +1,11 @@
 # testing-platform: требования
 
 - **Статус:** черновик 2026-11-24; ждёт утверждения владельцем
-- **Решения:** ADR-0400 (пишется вместе с `design.md`);
+- **Решения:** [ADR-0400](../../../adr/ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md);
   [ADR-0243](../../../adr/ADR-0243-one-testing-kit-per-layer.md) (один кит на слой),
   [ADR-0396](../../../adr/ADR-0396-a-perf-scenario-is-one-workload-every-instrument-measures-and-its-costs-are-a-file-beside-it.md)
   (замер стоимости), [ADR-0238](../../../adr/ADR-0238-flui-driver-protocol.md) (драйвер)
-- **Дизайн:** `design.md`; задачи: `tasks.md` (появятся в этой же ветке)
+- **Дизайн:** [design.md](design.md); задачи: [tasks.md](tasks.md)
 
 ## Зачем
 
@@ -64,5 +64,5 @@
 
 ## Числовые ворота
 
-Ворота и их целевые числа задаёт `design.md` после выбора архитектуры; исходные числа
+Ворота T1–T8 и их целевые числа заданы в [design.md](design.md); исходные числа
 в таблице выше.
