@@ -3,10 +3,10 @@
 //!
 //! The rules are not written here. `Unnamed` and `TargetSize` are `flui-semantics`'
 //! ([`SemanticsOwner::audit_unnamed`], [`SemanticsOwner::audit_target_size`]) and
-//! `TextContrast` is `flui-rendering`'s ([`PipelineOwner::audit_text_contrast`]); the testing
-//! kit calls the same functions. This module picks the rules asked for, gives each the facts
-//! the window holds (its placement, its platform's minimum target, its scene), and folds what
-//! they answer into one [`AuditReport`].
+//! `TextContrast` is `flui-rendering`'s ([`PipelineOwner::audit_text_contrast`]). This module
+//! picks the rules asked for (each once, in the order first asked), gives each the facts the
+//! window holds (its placement, its platform's minimum target, its scene), and folds what they
+//! answer into one [`AuditReport`].
 //!
 //! # The report
 //!
@@ -20,12 +20,15 @@
 //!
 //! `text_contrast` judges every text the frame paints. When one or more of them cannot be
 //! judged (its background is not one colour, it sits under an effect the rule does not
-//! resolve), the rule is listed in `not_checked` with the texts it could not judge, and the
-//! findings of the texts it judged are still reported: a partial check is never a pass.
+//! resolve, something is painted over it, the text below its contrast has no element to name),
+//! the rule is listed in `not_checked` with how many, the first three quoted with why and the
+//! rest counted, and the findings of the texts it judged are still reported: a partial check is
+//! never a pass.
 //!
 //! The target-size minimum is the platform's for its primary pointer: the touch minimum on
 //! Android, iOS and Fuchsia, the mouse minimum elsewhere, as the window's gesture settings
-//! resolve them (`GestureSettings::min_target`).
+//! resolve them (`GestureSettings::min_target`). The testing kit's gesture-alternatives check
+//! holds a control to a finger's minimum instead, since it presses with one on every platform.
 //!
 //! [`SemanticsOwner::audit_unnamed`]: flui_semantics::SemanticsOwner::audit_unnamed
 //! [`SemanticsOwner::audit_target_size`]: flui_semantics::SemanticsOwner::audit_target_size

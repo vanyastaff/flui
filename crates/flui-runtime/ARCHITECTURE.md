@@ -1300,12 +1300,13 @@ own: `unnamed` and `target_size` are `flui-semantics`' `SemanticsOwner::audit_un
 (`SceneSlot::current_version`; the scene keeps holding it, so the copy releases nothing when it
 drops). The target-size minimum is the presentation's gesture settings' `min_target` for the
 platform's primary pointer: touch on Android, iOS and Fuchsia, mouse elsewhere. An empty `rules`
-asks for every rule the protocol names; a rule that cannot run (one this agent does not run, a
-semantics rule before the first committed tree, `text_contrast` before the first applied frame)
-is listed in `not_checked` and the verdict is never `pass`, and `text_contrast` with any text it
-could not judge is listed there too, beside the findings of the texts it judged. A window with no
-tree yet is answered this way, not with an error. The elements findings name are recorded as
-issued. Pinned by `src/ui_runtime/tests/agent_audit.rs`.
+asks for every rule the protocol names, and a rule asked twice runs once; a rule that cannot run
+(one this agent does not run, a semantics rule before the first committed tree, `text_contrast`
+before the first applied frame) is listed in `not_checked` and the verdict is never `pass`, and
+`text_contrast` with any text it could not judge is listed there too, with how many and the
+first three quoted, beside the findings of the texts it judged. A window with no tree yet is
+answered this way, not with an error. The elements findings name are recorded as issued. Pinned
+by `src/ui_runtime/tests/agent_audit.rs`.
 
 **Performance spans.** `perf.start` and `perf.stop` (`agent_perf.rs`) keep a span on the
 presentation's agent slot. After each frame `AgentSide::after_frame` takes, for a running span,
@@ -1314,10 +1315,15 @@ and answers. Only presented frames count; a frame's time is its work, segment st
 return; past one refresh period it is dropped, past `jank_multiplier` periods janky instead, and
 both counts are `None` once any frame of the span had no known period. The span keeps the times
 of its last 3600 frames and the 64 slowest at most, so its memory is fixed at its start; past the
-cap the percentiles describe the last frames and the counts the whole span. A second `perf.start`
-and a `perf.stop` with no span are `invalid_argument`; a span whose window handles are all
-dropped is let go at the next frame or call, and a closed window drops its span with its slot.
-With no span running a frame pays one borrow per presentation and allocates nothing. Pinned by
+cap the percentiles describe the last frames and the counts the whole span. `perf.start` refuses
+a `jank_multiplier` that is not finite and at least 1, and reports at most 64 of the `worst`
+frames asked for. A span is its starter's: the input lease the call was asked through (one
+conversation's), or the window handles a call through no lease shares. A second `perf.start`, a
+`perf.stop` with no span and one by another caller are `invalid_argument`; a lease's span goes
+when the drain releases the lease (`DevAgentSlot::take_released`), so a conversation that ends
+without `perf.stop` blocks no other; a span asked through no lease is let go at the next frame or
+call once the window handles are all dropped, and a closed window drops its span with its slot.
+With no span running a frame pays one borrow per presentation. Pinned by
 `src/ui_runtime/tests/agent_perf.rs`.
 
 **Enablement.** Every window handle shares one `SemanticsHandle`, so semantics are
