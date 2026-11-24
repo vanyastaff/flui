@@ -142,8 +142,12 @@ fn a_refused_call_carries_the_app_s_code() {
 fn an_answer_that_did_not_arrive_releases_the_window_s_input() {
     let probe = Probe::default();
     // The agent answers `timeout` for whatever its window has not answered within a millisecond
-    // of virtual time: a read answers in the frame it is asked, a tap takes frames to play.
-    let launch = counter(&probe).reply_timeout(Duration::from_millis(1));
+    // of virtual time past what the request plays at 60 Hz: a window presenting at 30 Hz plays a
+    // tap's ticks a frame each, twice as long.
+    let launch = counter(&probe)
+        .reply_timeout(Duration::from_millis(1))
+        .frame_period(Duration::from_millis(33))
+        .expect("a headless launch");
     let mut driver = Driver::launch(launch).expect("the headless app starts");
     let unanswered = Connection::call::<ElementTap>(&mut driver, TapParams::new(increment()));
     assert_eq!(
@@ -187,9 +191,10 @@ fn a_device_s_end_names_what_it_cannot_check() {
 /// What a scripted agent was asked: each request's method and the window its parameters name.
 type Asked = Arc<Mutex<Vec<(String, Option<String>)>>>;
 
-/// A scripted agent that lists `w1`, `w2`, `w3` the first time it is asked and the reverse after,
-/// answers `semantics.locate` with `timeout`, and answers `input.release` with `release`.
-fn reordering_agent(release: Reply) -> (ScriptedAgent, Asked) {
+/// A scripted agent that lists `w1`, `w2`, `w3` the first time it is asked and `w3`, `w2` after,
+/// as though `w1` closed and `w3` came forward, answers `semantics.locate` with `locate` and
+/// `input.release` with `release`.
+fn scripted_windows(locate: Reply, release: Reply) -> (ScriptedAgent, Asked) {
     let asked = Asked::default();
     let log = Arc::clone(&asked);
     let mut listed = 0_u32;
@@ -209,17 +214,14 @@ fn reordering_agent(release: Reply) -> (ScriptedAgent, Asked) {
             match name {
                 "windows.list" => {
                     listed += 1;
-                    let windows = if listed == 1 {
-                        ["w1", "w2", "w3"]
+                    let windows: &[&str] = if listed == 1 {
+                        &["w1", "w2", "w3"]
                     } else {
-                        ["w3", "w2", "w1"]
+                        &["w3", "w2"]
                     };
                     Reply::Result(json!({ "windows": windows }))
                 }
-                "semantics.locate" => Reply::Error(ErrorObject::new(
-                    ErrorCode::Timeout,
-                    "the window did not answer in time",
-                )),
+                "semantics.locate" => locate.clone(),
                 _ => release.clone(),
             }
         }),
@@ -233,14 +235,14 @@ fn attach(agent: &ScriptedAgent) -> Driver {
         .expect("the driver attaches")
 }
 
-/// The windows each `input.release` was asked for.
-fn releases(asked: &Asked) -> Vec<Option<String>> {
+/// The windows each request of `method` was asked for, `-` for one that names none.
+fn asked_of(asked: &Asked, method: &str) -> Vec<String> {
     asked
         .lock()
         .expect("the log")
         .iter()
-        .filter(|(name, _)| name == method::InputRelease::NAME)
-        .map(|(_, window)| window.clone())
+        .filter(|(name, _)| name == method)
+        .map(|(_, window)| window.clone().unwrap_or_else(|| "-".to_owned()))
         .collect()
 }
 
@@ -248,26 +250,42 @@ fn released() -> Reply {
     Reply::Result(json!({ "pointers": 0, "keys": 0 }))
 }
 
+fn unanswered() -> Reply {
+    Reply::Error(ErrorObject::new(
+        ErrorCode::Timeout,
+        "the window did not answer in time",
+    ))
+}
+
+fn closed() -> Reply {
+    Reply::Error(
+        ErrorObject::new(ErrorCode::Gone, "the window has closed")
+            .retry(Retry::Never)
+            .handle(HandleKind::Window, "w1"),
+    )
+}
+
 #[test]
 fn the_connection_keeps_the_window_it_was_first_used_on() {
-    let (agent, asked) = reordering_agent(released());
+    let (agent, asked) = scripted_windows(unanswered(), released());
     let mut driver = attach(&agent);
     for _ in 0..2 {
         let failures = driver.finish(&EndChecks::none());
         assert_eq!(failures, [], "the release passed");
     }
     assert_eq!(
-        releases(&asked),
-        [Some("w1".to_owned()), Some("w1".to_owned())],
+        asked_of(&asked, method::InputRelease::NAME),
+        ["w1", "w1"],
         "the app listing `w3` first later does not move the connection: {asked:?}"
     );
+    assert_eq!(asked_of(&asked, method::WindowsList::NAME).len(), 1);
 }
 
 #[test]
-fn an_unanswered_call_releases_the_window_it_addressed() {
+fn an_unanswered_call_releases_the_connection_s_window() {
     let refused = Reply::Error(ErrorObject::new(ErrorCode::Platform, "the release failed"));
     for (release, answered) in [(released(), true), (refused, false)] {
-        let (agent, asked) = reordering_agent(release);
+        let (agent, asked) = scripted_windows(unanswered(), release);
         let mut driver = attach(&agent);
         // The end resolves the connection on the first listing, `w1` first; the app lists `w3`
         // first afterwards.
@@ -275,11 +293,11 @@ fn an_unanswered_call_releases_the_window_it_addressed() {
             driver.finish(&EndChecks::none()).len(),
             usize::from(!answered)
         );
-        let w2 = driver.windows().expect("the windows")[1];
-
+        // A locator that names no window, which the agent alone would refuse in an app of
+        // several windows.
         let unanswered = Connection::call::<SemanticsLocate>(
             &mut driver,
-            LocateParams::new(Locator::identifier("increment").in_window(w2)),
+            LocateParams::new(Locator::identifier("increment")),
         );
         assert_eq!(
             unanswered,
@@ -290,17 +308,85 @@ fn an_unanswered_call_releases_the_window_it_addressed() {
             "a read the agent left unanswered ran nothing"
         );
         assert_eq!(
-            releases(&asked),
-            [Some("w1".to_owned()), Some("w2".to_owned())],
-            "the end releases the connection's window, the unanswered call the one it named"
+            asked_of(&asked, method::SemanticsLocate::NAME),
+            ["w1"],
+            "a call that names no window is sent to the connection's"
+        );
+        assert_eq!(
+            asked_of(&asked, method::InputRelease::NAME),
+            ["w1", "w1"],
+            "the end and the unanswered call release the connection's window"
         );
     }
 }
 
 #[test]
+fn a_call_that_names_another_window_is_refused_before_it_is_sent() {
+    let (agent, asked) = scripted_windows(unanswered(), released());
+    let mut driver = attach(&agent);
+    assert_eq!(driver.finish(&EndChecks::none()), []);
+    let w2 = driver.windows().expect("the windows")[1];
+    let refused = Connection::call::<SemanticsLocate>(
+        &mut driver,
+        LocateParams::new(Locator::identifier("increment").in_window(w2)),
+    );
+    let Err(CallError::Failed(error)) = &refused else {
+        panic!("a call to another window is refused: {refused:?}");
+    };
+    assert_eq!(error.code, ErrorCode::InvalidArgument, "{error:?}");
+    assert!(
+        error.message.contains("w1") && error.message.contains("w2"),
+        "{error:?}"
+    );
+    assert_eq!(
+        asked_of(&asked, method::SemanticsLocate::NAME),
+        Vec::<String>::new(),
+        "nothing reached the agent"
+    );
+    assert_eq!(
+        asked_of(&asked, method::InputRelease::NAME),
+        ["w1"],
+        "only the end released"
+    );
+}
+
+#[test]
+fn a_closed_connection_window_is_gone_and_never_replaced() {
+    let (agent, asked) = scripted_windows(closed(), closed());
+    let mut driver = attach(&agent);
+    // The end resolves the connection on `w1`; the app then answers that `w1` closed, and lists
+    // `w3` first.
+    assert_eq!(
+        driver.finish(&EndChecks::none()),
+        [],
+        "a closed window holds no input: its release is a release"
+    );
+    let gone = Connection::call::<SemanticsLocate>(
+        &mut driver,
+        LocateParams::new(Locator::identifier("increment")),
+    );
+    let Err(CallError::Failed(error)) = &gone else {
+        panic!("a call to the closed window is `gone`: {gone:?}");
+    };
+    assert_eq!(
+        (error.code, error.kind),
+        (ErrorCode::Gone, Some(HandleKind::Window)),
+        "{error:?}"
+    );
+    assert_eq!(driver.finish(&EndChecks::none()), []);
+    assert_eq!(asked_of(&asked, method::SemanticsLocate::NAME), ["w1"]);
+    assert_eq!(asked_of(&asked, method::InputRelease::NAME), ["w1", "w1"]);
+    assert_eq!(
+        asked_of(&asked, method::WindowsList::NAME).len(),
+        1,
+        "the connection is not moved to another window"
+    );
+}
+
+#[test]
 fn a_failed_release_at_the_end_is_a_failed_check() {
     let refused = Reply::Error(ErrorObject::new(ErrorCode::Platform, "the release failed"));
-    let (agent, _asked) = reordering_agent(refused);
+    let (agent, _asked) = scripted_windows(unanswered(), refused);
     let mut driver = attach(&agent);
     let failures = driver.finish(&EndChecks::none());
     let [failure] = failures.as_slice() else {
@@ -447,4 +533,80 @@ fn an_error_is_stated_on_the_wire_as_it_was_read() {
             code == ErrorCode::NotSupported
         );
     }
+}
+
+/// A run of ticks that name no duration plays one frame each: the reply's bound counts them, so
+/// an agent bounding its reply at 200 ms past what the input takes answers the whole run.
+#[test]
+fn a_long_run_of_ticks_that_name_no_duration_is_answered_when_it_has_played() {
+    let probe = Probe::default();
+    let launch = counter(&probe).reply_timeout(Duration::from_millis(200));
+    let mut driver = Driver::launch(launch).expect("the headless app starts");
+    let actions = (0..300)
+        .map(|step| PointerAction::Move {
+            to: LogicalPoint::new(5.0 + f64::from(step % 10), 5.0),
+            duration_ms: 0,
+            pressure: None,
+        })
+        .collect();
+    let moves = ActionSequence::new(vec![InputSource::Pointer {
+        id: "p".to_owned(),
+        device: PointerDevice::Mouse,
+        actions,
+    }]);
+    assert_eq!(moves.span(), Duration::ZERO, "no tick names a duration");
+    let before = Connection::now(&driver).time;
+    let performed = Connection::perform(&mut driver, &moves).expect("the moves are answered");
+    assert_eq!(performed.via, InputPath::Synthetic);
+    assert!(
+        Connection::now(&driver).time.saturating_sub(before) >= Duration::from_millis(16 * 299),
+        "the agent played a tick a frame"
+    );
+}
+
+/// A call the connection itself had no answer to within its budget, the agent silent past it, is
+/// unanswered as the agent's `timeout` is, and the window's input is released.
+#[test]
+fn a_call_the_agent_answers_past_the_connection_s_budget_is_unanswered() {
+    let asked = Asked::default();
+    let log = Arc::clone(&asked);
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::SemanticsLocate::NAME,
+            method::InputRelease::NAME,
+        ],
+        Box::new(move |name, params| {
+            let window = params
+                .get("window")
+                .or_else(|| params.pointer("/locator/window"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            log.lock().expect("the log").push((name.to_owned(), window));
+            match name {
+                "windows.list" => Reply::Result(json!({ "windows": ["w1"] })),
+                "semantics.locate" => {
+                    // Past the 15 s an attached driver waits for an agent's answer.
+                    std::thread::sleep(Duration::from_millis(15_500));
+                    Reply::Result(json!({ "elements": [] }))
+                }
+                _ => released(),
+            }
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let mut driver = attach(&agent);
+    let unanswered = Connection::call::<SemanticsLocate>(
+        &mut driver,
+        LocateParams::new(Locator::identifier("increment")),
+    );
+    assert_eq!(
+        unanswered,
+        Err(CallError::Unanswered {
+            may_have_run: false,
+            released: true,
+        }),
+        "the connection's own deadline is the agent's silence, not a host tool's"
+    );
+    assert_eq!(asked_of(&asked, method::InputRelease::NAME), ["w1"]);
 }

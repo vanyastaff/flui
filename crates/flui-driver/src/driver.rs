@@ -351,6 +351,7 @@ impl Driver {
     #[must_use]
     pub fn capabilities(&self) -> Capabilities {
         let mut capabilities = self.hello().capabilities.clone().unwrap_or_default();
+        let listed = std::mem::take(&mut capabilities.pointers);
         let serves = |name: &str| capabilities.methods.iter().any(|method| method == name);
         let mut paths = Vec::new();
         if serves(method::SemanticsAct::NAME) {
@@ -359,7 +360,11 @@ impl Driver {
         if serves(method::InputInject::NAME) {
             paths.push(InputPath::Synthetic);
         }
-        let mut pointers = if serves(method::InputInject::NAME) {
+        // The devices the agent's hello says its injection delivers; an agent older than 0.32
+        // lists none and delivers a mouse, a touch contact and a pen.
+        let mut pointers = if !listed.is_empty() {
+            listed
+        } else if serves(method::InputInject::NAME) {
             vec![
                 PointerDevice::Mouse,
                 PointerDevice::Touch,

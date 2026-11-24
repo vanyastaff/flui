@@ -11,7 +11,7 @@ use flui_driver::protocol::act::EffectKind;
 use flui_driver::protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
 use flui_driver::protocol::events::Event;
 use flui_driver::protocol::geometry::LogicalPoint;
-use flui_driver::protocol::input::{ActionSequence, InputSource};
+use flui_driver::protocol::input::{ActionSequence, InputSource, TapParams};
 use flui_driver::protocol::method::{self, Method};
 use flui_driver::protocol::tree::{ElementRef, WindowId};
 use flui_driver::steps::OsEvent;
@@ -423,6 +423,66 @@ fn an_element_that_turns_actionable_on_the_last_frame_is_acted_on() {
         readings.load(Ordering::SeqCst),
         2,
         "the facts were read again after the last frame"
+    );
+}
+
+/// A gesture that names a timeout past a day is composed within a day: its actionability waits
+/// are asked for at most that long, and its failure names the bound.
+#[test]
+fn a_composed_gesture_waits_no_longer_than_a_day_whatever_its_timeout() {
+    let asked = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let log = Arc::clone(&asked);
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::ElementActionability::NAME,
+            method::WaitUntil::NAME,
+        ],
+        Box::new(move |name, params| match name {
+            "element.actionability" => Reply::Result(json!({
+                "attached": true,
+                "rect": { "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0 },
+                "visible": true,
+                "stable": true,
+                "enabled": false,
+                "receives": true,
+                "point": { "x": 5.0, "y": 5.0 },
+                "revision": 1,
+            })),
+            "wait.until" => {
+                log.lock()
+                    .expect("the log")
+                    .push(params["timeout_ms"].as_u64().unwrap_or(u64::MAX));
+                Reply::Result(json!({
+                    "end": "unsatisfied",
+                    "frames": 0,
+                    "observation": { "revision": 1, "count": 0 },
+                }))
+            }
+            _ => Reply::Result(json!({ "windows": ["w1"] })),
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let mut driver = attach(&agent);
+    let element: ElementRef = "w1/e1".parse().expect("an element handle");
+    let mut tap = TapParams::new(element);
+    tap.options.timeout_ms = Some(u64::MAX);
+    let refused = driver
+        .call::<method::ElementTap>(tap)
+        .expect_err("the element never turns enabled");
+    let day = Duration::from_hours(24).as_millis();
+    assert!(
+        matches!(&refused, Error::NotActionable { message, .. }
+            if message.contains(&format!("within {day} ms"))),
+        "{refused:?}"
+    );
+    let asked = asked.lock().expect("the log");
+    assert!(
+        !asked.is_empty()
+            && asked
+                .iter()
+                .all(|&timeout_ms| u128::from(timeout_ms) <= day),
+        "each wait is asked for at most a day: {asked:?}"
     );
 }
 

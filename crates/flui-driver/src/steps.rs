@@ -17,7 +17,8 @@
 use std::time::Duration;
 
 use flui_protocol::input::{
-    ActionSequence, ImeAction, PlannedInput, PointerButton, PointerDevice, ScrollUnit, SourceKind,
+    ActionSequence, ImeAction, Plan, PlannedInput, PointerButton, PointerDevice, ScrollUnit,
+    SourceKind,
 };
 
 use crate::coordinates::{self, DevicePoint, WindowGeometry};
@@ -82,23 +83,53 @@ pub enum OsEvent {
 ///
 /// # Errors
 ///
-/// [`Error::InvalidArgument`] for a sequence the plan refuses (its bounds and ranges); as
-/// [`coordinates::to_device`] for a point outside the window; [`Error::NotSupported`] for input no
-/// OS lane sends (a trackpad gesture, a pointer's cancel, a virtual pointer, a scroll by lines),
-/// naming it. Each is answered before any event is handed over. An input-method composition
-/// becomes its steps ([`OsEvent::Composition`]), one per tick, which only a lane that composes
-/// takes.
+/// As [`admit`] for a sequence the plan refuses or no OS lane sends; as
+/// [`coordinates::to_device`] for a point outside the window. Each is answered before any event is
+/// handed over. An input-method composition becomes its steps ([`OsEvent::Composition`]), one
+/// per tick, which only a lane that composes takes.
 pub fn os_events(sequence: &ActionSequence, geometry: &WindowGeometry) -> Result<Vec<OsEvent>> {
+    events_of(&admit(sequence)?, geometry)
+}
+
+/// A sequence's plan that an OS lane can send: only [`admit`] makes one.
+pub(crate) struct Admitted(Plan);
+
+/// `sequence`'s plan, refused for everything no OS lane sends. It needs no window, so the OS
+/// path asks it before the desktop is locked or the window located.
+///
+/// # Errors
+///
+/// [`Error::InvalidArgument`] for a sequence the plan refuses (its bounds and ranges);
+/// [`Error::NotSupported`] for input no OS lane sends (a trackpad gesture, a pointer's cancel, a
+/// virtual pointer, a scroll by lines), naming it.
+pub(crate) fn admit(sequence: &ActionSequence) -> Result<Admitted> {
     let plan = flui_protocol::input::plan(sequence)
         .map_err(|error| Error::invalid_argument(error.to_string()))?;
-    let sources = plan.sources();
-    for source in sources {
+    for source in plan.sources() {
         match source.kind {
             SourceKind::Trackpad => return Err(unsent("trackpad_gesture")),
             SourceKind::Pointer(PointerDevice::Virtual) => return Err(unsent("virtual_pointer")),
             _ => {}
         }
     }
+    for planned in plan.inputs() {
+        match &planned.input {
+            PlannedInput::PointerCancel { .. } => return Err(unsent("pointer_cancel")),
+            // An OS event scrolls by device pixels, and no lane knows the line height the app
+            // scrolls a line by: a line scroll goes the synthetic path, which the app sizes.
+            PlannedInput::Scroll { unit, .. } if *unit != ScrollUnit::Pixel => {
+                return Err(unsent(&format!("{}_scroll", unit.name())));
+            }
+            _ => {}
+        }
+    }
+    Ok(Admitted(plan))
+}
+
+/// The events of an admitted plan, into the window `geometry` places.
+pub(crate) fn events_of(admitted: &Admitted, geometry: &WindowGeometry) -> Result<Vec<OsEvent>> {
+    let Admitted(plan) = admitted;
+    let sources = plan.sources();
     let mut states: Vec<SourceState> = sources.iter().map(|_| SourceState::default()).collect();
     let mut events = Vec::new();
     let mut now = Duration::ZERO;
@@ -129,18 +160,16 @@ pub fn os_events(sequence: &ActionSequence, geometry: &WindowGeometry) -> Result
                 device,
                 button: *button,
             }),
-            PlannedInput::PointerCancel { .. } => return Err(unsent("pointer_cancel")),
+            PlannedInput::PointerCancel { .. } => {
+                unreachable!("BUG: `admit` refuses a pointer's cancel")
+            }
             PlannedInput::Scroll {
                 at,
                 delta_x,
                 delta_y,
-                unit,
+                unit: _,
             } => {
-                // An OS event scrolls by device pixels, and no lane knows the line height the app
-                // scrolls a line by: a line scroll goes the synthetic path, which the app sizes.
-                if *unit != ScrollUnit::Pixel {
-                    return Err(unsent(&format!("{}_scroll", unit.name())));
-                }
+                // `admit` refused a scroll by lines: this one is in logical pixels.
                 let at = coordinates::to_device(geometry, *at)?;
                 let state = &mut states[planned.source];
                 let (asked_x, asked_y) = &mut state.scrolled;

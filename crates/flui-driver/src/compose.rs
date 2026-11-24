@@ -32,7 +32,7 @@ use flui_protocol::input::{
     SwipeParams, TapParams, TypeTextParams,
 };
 use flui_protocol::locator::{LocateParams, Locator, Matches, Pick, Target};
-use flui_protocol::method::{self, Method};
+use flui_protocol::method::{self, Addressed as _, Method};
 use flui_protocol::session::{Empty, Isolation, Placement, WindowParams};
 use flui_protocol::snapshot::Snapshot;
 use flui_protocol::tree::{ElementRef, WindowId};
@@ -424,7 +424,7 @@ fn inject(
 ) -> Result<ActOutcome> {
     let mut params = InputParams::new(window, sequence);
     params.snapshot = snapshot;
-    let holds = params.actions.span();
+    let holds = params.holds_for();
     driver.agent::<method::InputInject>(params, holds)
 }
 
@@ -447,8 +447,10 @@ fn perform_os(
             )
         })
         .ok_or_else(no_lane)?;
-    // A composition the lane cannot send is refused before the desktop is locked or the run
-    // announced, as `send_guarded` refuses it again before any event.
+    // What no lane sends, and a composition this lane cannot send, are refused before the desktop
+    // is locked, the window located or the run announced, as `send_guarded` refuses a
+    // composition again before any event.
+    let admitted = steps::admit(&sequence)?;
     let composition = sequence
         .sources
         .iter()
@@ -464,7 +466,7 @@ fn perform_os(
     let placement: Placement =
         driver.agent::<method::WindowPlacement>(WindowParams::new(window), Duration::ZERO)?;
     let geometry = lane_run(driver, move |lane| lane.locate_window(&placement))??;
-    let events = steps::os_events(&sequence, &geometry)?;
+    let events = steps::events_of(&admitted, &geometry)?;
     let announcement = match driver.scenario() {
         Some(scenario) if !scenario.devices().is_empty() => {
             Announcement::new(scenario.devices().to_vec(), scenario.duration(), isolation)

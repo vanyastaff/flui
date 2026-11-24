@@ -9,7 +9,7 @@ use flui_driver::os_input::OsDevice;
 use flui_driver::protocol::error::{ErrorCode, ErrorObject};
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
-    ActionSequence, InputSource, PointerAction, PointerDevice, TapParams,
+    ActionSequence, InputSource, PointerAction, PointerDevice, ScrollUnit, TapParams, WheelAction,
 };
 use flui_driver::protocol::locator::Target;
 use flui_driver::protocol::method::{self, Method};
@@ -495,4 +495,122 @@ fn a_served_gesture_is_waited_for_as_long_as_its_act_may_hold() {
         .call::<method::ElementTap>(tap)
         .expect("the tap's act timeout extends the reply's deadline");
     assert_eq!(tapped.via, InputPath::Synthetic);
+}
+
+/// A counter whose session sends every input by the OS path through a guarded scripted lane on
+/// the shared desktop, its lock at `dir`'s `os-input.lock`.
+fn on_the_os_path(probe: &Probe, dir: &tempfile::TempDir) -> (Driver, LaneLog) {
+    let (lane, log) = ScriptedLane::new(Isolation::Shared);
+    let driver = Driver::launch(counter(probe))
+        .expect("the headless app starts")
+        .with_os_input_lock(dir.path().join("os-input.lock"))
+        .with_input_policy(InputPolicy::require(InputPath::Os))
+        .with_lane(lane.guarded())
+        .expect("the lane starts");
+    (driver, log)
+}
+
+/// `count` moves of a mouse that name no duration.
+fn moves(count: u32) -> ActionSequence {
+    ActionSequence::new(vec![InputSource::Pointer {
+        id: "p".to_owned(),
+        device: PointerDevice::Mouse,
+        actions: (0..count)
+            .map(|step| PointerAction::Move {
+                to: LogicalPoint::new(5.0 + f64::from(step % 10), 5.0),
+                duration_ms: 0,
+                pressure: None,
+            })
+            .collect(),
+    }])
+}
+
+/// With no scenario to name its duration, the announcement states how long the events play: a
+/// move that names no duration plays for a step, which the sequence's own span does not count.
+#[test]
+fn an_announcement_with_no_scenario_states_how_long_its_events_play() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let probe = Probe::default();
+    let (mut driver, log) = on_the_os_path(&probe, &dir);
+    let moves = moves(200);
+    assert_eq!(moves.span(), Duration::ZERO);
+    let mut window = driver.main_window().expect("a window");
+    let performed = window.perform(moves).expect("the moves are sent");
+    assert_eq!(performed.via, InputPath::Os);
+    let announced = driver.take_announcements();
+    let [line] = announced.as_slice() else {
+        panic!("announced once: {announced:?}");
+    };
+    assert!(
+        line.contains("mouse") && line.contains("about 3 s"),
+        "200 steps of 16 ms play for 3.2 s: {line}"
+    );
+    assert_ne!(log.sent().len(), 0, "the moves were sent");
+}
+
+/// Input no OS lane sends is refused before the desktop is locked, the window located or the run
+/// announced: the next session takes the lock at once.
+#[test]
+fn input_no_lane_sends_is_refused_before_the_desktop_is_locked() {
+    let dir = tempfile::tempdir().expect("a temporary directory");
+    let probe = Probe::default();
+    let (mut driver, log) = on_the_os_path(&probe, &dir);
+    let line_scroll = ActionSequence::new(vec![InputSource::Wheel {
+        id: "w".to_owned(),
+        actions: vec![WheelAction::Scroll {
+            at: LogicalPoint::new(5.0, 5.0),
+            delta_x: 0.0,
+            delta_y: 3.0,
+            unit: ScrollUnit::Line,
+        }],
+    }]);
+    let mut window = driver.main_window().expect("a window");
+    let refused = window.perform(line_scroll);
+    assert!(
+        matches!(&refused, Err(Error::NotSupported { capability: Some(capability), .. })
+            if capability == "os_line_scroll"),
+        "{refused:?}"
+    );
+    drop(
+        flui_driver::os_input::OsInputLock::acquire(&dir.path().join("os-input.lock"))
+            .expect("the refused call took no lock"),
+    );
+    assert!(
+        driver.take_announcements().is_empty(),
+        "nothing was announced"
+    );
+    assert!(log.sent().is_empty(), "nothing was sent");
+}
+
+/// The pointer devices a session takes are the ones its agent's hello says its injection
+/// delivers, a virtual pointer among them; an agent that lists none (one older than protocol
+/// 0.32) delivers a mouse, a touch contact and a pen.
+#[test]
+fn a_session_takes_the_pointers_its_agent_says_it_delivers() {
+    let probe = Probe::default();
+    let driver = Driver::launch(counter(&probe)).expect("the headless app starts");
+    assert_eq!(
+        driver.capabilities().pointers,
+        [
+            PointerDevice::Mouse,
+            PointerDevice::Touch,
+            PointerDevice::Pen,
+            PointerDevice::Virtual,
+        ]
+    );
+    let agent = ScriptedAgent::start(
+        &[method::WindowsList::NAME, method::InputInject::NAME],
+        Box::new(|_, _| Reply::Result(json!({ "windows": ["w1"] }))),
+    )
+    .expect("the stand-in binds its endpoint");
+    let older = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    assert_eq!(
+        older.capabilities().pointers,
+        [
+            PointerDevice::Mouse,
+            PointerDevice::Touch,
+            PointerDevice::Pen
+        ]
+    );
 }

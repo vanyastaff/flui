@@ -13,7 +13,7 @@ use flui_driver::protocol::tree::ReadQuery;
 use flui_driver::protocol::verdict::Verdict;
 use flui_driver::testing::ScriptedLane;
 use flui_driver::{
-    Driver, Error, InputPath, InputPolicy, Isolation, Launch, Locator, TextMatch, expect,
+    Awaited, Driver, Error, InputPath, InputPolicy, Isolation, Launch, Locator, TextMatch, expect,
 };
 
 use crate::fixtures::{Counter, Gallery, Probe};
@@ -175,15 +175,28 @@ fn driver_goes_with_a_contact_held(app: App) {
 fn an_accepted_action_times_out(app: App) {
     let probe = Probe::default();
     // The agent answers `timeout` for whatever its window has not answered within a millisecond
-    // of virtual time: a read answers in the frame it is asked, a tap takes frames to play.
-    let launch = launch(app, &probe).reply_timeout(Duration::from_millis(1));
+    // of virtual time past what the request plays at 60 Hz: a window presenting at 30 Hz plays a
+    // tap's ticks a frame each, twice as long.
+    let launch = launch(app, &probe)
+        .reply_timeout(Duration::from_millis(1))
+        .frame_period(Duration::from_millis(33))
+        .expect("a headless launch");
     let mut driver = Driver::launch(launch).expect("the headless app starts");
     let mut window = driver.main_window().expect("a window");
     let tapped = window.locate(Locator::identifier("increment")).tap();
     let Err(error) = tapped else {
         panic!("{app:?}: the tap answered in time: {tapped:?}");
     };
-    assert!(matches!(error, Error::Timeout { .. }), "{app:?}: {error:?}");
+    assert!(
+        matches!(
+            error,
+            Error::Timeout {
+                awaited: Awaited::Agent,
+                ..
+            }
+        ),
+        "{app:?}: {error:?}"
+    );
     assert_eq!(
         error.effect().map(|effect| effect.kind),
         Some(EffectKind::MayHaveRun),

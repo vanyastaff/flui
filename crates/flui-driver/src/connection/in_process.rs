@@ -4,7 +4,7 @@
 //! The host lives on a thread of its own, the app's "process": the driver stays `Send` while the
 //! host, which is not, never leaves its thread. Time is virtual. The host runs no frame by
 //! itself: while a call waits for its answer, the driver asks for one frame at a time, each
-//! advancing the host's clock by [`FRAME`], and polls the conversation after it at the matching
+//! advancing the host's clock by one frame ([`FRAME`] unless the launch names its period), and polls the conversation after it at the matching
 //! virtual instant. A call's budget is counted in that time, so a wait that the app answers after
 //! twenty frames answers after twenty frames on every run, and a call nobody answers fails after
 //! the same number of frames on every host.
@@ -35,7 +35,8 @@ use super::{Call, Events, Heard, Transport};
 use crate::error::{Error, Result};
 use crate::launch::HeadlessLaunch;
 
-/// How far the host's clock moves per frame the driver asks for: 60 Hz, as a headless test pumps.
+/// How far the host's clock moves per frame the driver asks for when the launch names no frame
+/// period: 60 Hz, as a headless test pumps.
 pub(crate) const FRAME: Duration = Duration::from_millis(16);
 
 /// Frames run after the root is attached and before the first call: one builds and lays out the
@@ -71,6 +72,8 @@ pub(crate) struct InProcess {
     events: Events,
     /// Why the app ended, once it did.
     ended: Option<String>,
+    /// How far each frame moves the app's clock.
+    frame: Duration,
     /// The virtual time the app's frames have advanced since it started serving.
     elapsed: Duration,
 }
@@ -82,6 +85,7 @@ impl InProcess {
         let (to_app, inbox) = mpsc::channel();
         let (outbox, from_app) = mpsc::channel();
         let app_token = token.clone();
+        let frame = launch.frame;
         let thread = thread::Builder::new()
             .name("flui-driver-headless-app".into())
             .spawn(move || run_app(launch, &app_token, &inbox, &outbox))?;
@@ -93,6 +97,7 @@ impl InProcess {
             next_id: 1,
             events: Events::default(),
             ended: None,
+            frame,
             elapsed: Duration::ZERO,
         };
         connection.send(ToApp::Line(super::hello_line(&token)?))?;
@@ -146,7 +151,9 @@ impl InProcess {
         mut heard: impl FnMut(Heard),
     ) -> Result<()> {
         self.send(ToApp::Run { frames })?;
-        self.elapsed = self.elapsed.saturating_add(FRAME.saturating_mul(frames));
+        self.elapsed = self
+            .elapsed
+            .saturating_add(self.frame.saturating_mul(frames));
         loop {
             match self.from_app.recv() {
                 Ok(FromApp::Line(line)) => match super::hear(&line, waiting)? {
@@ -216,7 +223,7 @@ impl Transport for InProcess {
             if waited >= call.budget {
                 return Err(super::unanswered(&call));
             }
-            waited += FRAME;
+            waited += self.frame;
             frames = 1;
         }
     }
@@ -280,6 +287,7 @@ fn serve(
         height,
         insets,
         reply_timeout,
+        frame: period,
         attach,
     } = launch;
     let service =
@@ -293,7 +301,7 @@ fn serve(
     let mut host = HeadlessHost::new(window).with_dev_agent(&mut agent);
     attach(&host)?;
     for _ in 0..STARTUP_FRAMES {
-        frame(&mut host, FRAME);
+        frame(&mut host, period);
     }
     let start = Instant::now();
     let mut elapsed = Duration::ZERO;
@@ -312,8 +320,8 @@ fn serve(
                     frame(&mut host, Duration::ZERO);
                 }
                 for _ in 0..frames {
-                    elapsed += FRAME;
-                    frame(&mut host, FRAME);
+                    elapsed += period;
+                    frame(&mut host, period);
                     if host.is_closed(host.primary_window()) {
                         break;
                     }
@@ -343,7 +351,7 @@ fn serve(
     conversation.peer_closed();
     conversation.poll(start + elapsed);
     drop(conversation);
-    frame(&mut host, FRAME);
+    frame(&mut host, period);
     Ok(())
 }
 
