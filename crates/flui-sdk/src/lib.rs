@@ -424,18 +424,16 @@ pub mod pipeline {
 
 /// Development hooks the facade does not expose.
 ///
-/// **Evolving** (ADR-0088 §4), like [`pipeline`]:
+/// **Evolving** (ADR-0088 §4), like [`pipeline`]: the plugin ABI of `flui-hot-reload`'s dlopen
+/// path (ADR-0311 §6). The [`PluginPipeline`](hooks::PluginPipeline) a scene plugin mounts its
+/// root on and the [`Scene`](hooks::Scene) of a retained version it hands back, the
+/// [`TextContextHandle`](hooks::TextContextHandle) it measures with, and the
+/// [`LayerTree`](hooks::LayerTree) a scene plugin builds its image from, which `Scene::new` makes
+/// a version, and the [`SceneError`](hooks::SceneError) a refused frame reports as its source.
+/// They leave with that path (ADR-0311 §7).
 ///
-/// - frame telemetry that development tooling reads. No public API produces a
-///   `FrameSnapshot`: a UI runtime builds them crate-privately. The gap is
-///   `docs/gaps.md#development-tooling-reads-frame-snapshots-nothing-public-produces`.
-/// - the plugin ABI of `flui-hot-reload`'s dlopen path (ADR-0311 §6): the
-///   [`PluginPipeline`](hooks::PluginPipeline) a scene plugin mounts its root
-///   on and the [`Scene`](hooks::Scene) of a retained version it hands back,
-///   the [`TextContextHandle`](hooks::TextContextHandle) it measures with, and
-///   the [`LayerTree`](hooks::LayerTree) a scene plugin builds its image from,
-///   which `Scene::new` makes a version, and the [`SceneError`](hooks::SceneError)
-///   a refused frame reports as its source. They leave with that path (ADR-0311 §7).
+/// Frame telemetry is not here: development tooling reads the runtime's `flui.frame`
+/// `frame_telemetry` events through `tracing`, as `flui-devtools`' capture does.
 ///
 /// The tree-observation seam is not here; it is `foundation::observe`, at the
 /// facade's path.
@@ -446,7 +444,6 @@ pub mod hooks {
     pub use flui_layer::Scene;
     pub use flui_layer::SceneError;
     pub use flui_rendering::pipeline::TextContextHandle;
-    pub use flui_scheduler::FrameSnapshot;
     pub use plugin_pipeline::PluginFrameError;
     pub use plugin_pipeline::PluginPipeline;
 }

@@ -377,13 +377,6 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - The Web (a `requestAnimationFrame` timestamp is a frame's start) and X11 (the Present extension reports a completion to the GPU driver's connection) have no presentation time a toolkit can read, and their windows say so. A compositing X11 window manager that synchronises frames sends one in `_NET_WM_FRAME_TIMINGS`, which the X11 window does not read yet ([Live resize](#live-resize-is-unaudited-and-unscheduled)).
 - Animations still tick on the vsync instant, never the presentation time (ADR-0347 decision 2). A presentation report names the frame it describes (ADR-0347 decision 6), but the frame telemetry does not yet match a report to the produced frame it names, so its input-to-present histogram still ends at the submit.
 
-### Development tooling reads frame snapshots nothing public produces
-
-> **Environments:** all · **Who it hurts:** Authors of a development tool or a profiler built on `flui-sdk`, which cannot read a frame's timings from a running application · **Parity:** none (not platform-specific)
-
-- `flui_sdk::hooks::FrameSnapshot` (the scheduler's record of one produced frame) and `flui-devtools`' `Timeline::record_frame_snapshots` have no public producer. A UI runtime builds each snapshot crate-privately, in `record_submit_telemetry` (`crates/flui-runtime/src/ui_runtime/frame.rs`), and emits it as tracing telemetry; neither `flui-runtime`, `flui-app` nor the facade hands it out, so the timeline bridge is reachable from tests only.
-- What closes it: a public snapshot source, a frame-telemetry capability on the UI runtime or on `LifecycleContext` (ADR-0088 §4), from which `flui-devtools` takes its snapshots. Until then `hooks::FrameSnapshot` is an Evolving item with no production caller.
-
 ### No HDR, wide gamut or colour management
 
 > **Environments:** all · **Who it hurts:** Photo, video and design apps; every app on an HDR display · **Parity:** [Displays and metrics](platform-parity.md#displays-and-metrics)

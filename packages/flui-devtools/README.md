@@ -7,8 +7,8 @@ itself, opens an endpoint, or watches files.
 
 | Module | Feature | What it is |
 |--------|---------|------------|
-| `capture` + `profiler` | `profiling` | `Capture`, the one recorder of the framework's frame spans, and `Profiler`: per-frame build/layout/paint/compositing and animation timings, jank detection, frame rate and history. `Capture::layer` subscribes to the framework's own frame spans. |
-| `timeline` | `timeline` | An event recorder with Chrome trace (`chrome://tracing`) and JSON export, plus a bridge that turns the scheduler's `FrameSnapshot`s into trace events. |
+| `capture` + `profiler` | `profiling` | `Capture`, the one recorder of the framework's frame spans and frame telemetry, and `Profiler`: per-frame build/layout/paint/compositing and animation timings, jank detection, frame rate and history. `Capture::layer` subscribes to the framework's own frame spans and to the `frame_telemetry` events behind each `ProducedFrame`. |
+| `timeline` | `timeline` | An event recorder with Chrome trace (`chrome://tracing`) and JSON export; over a capture it shows the framework's frames, phases and the frames each presentation produced. |
 | `inspector` | `inspector` | `InspectorCounters`, a counting `TreeObserver` over the ADR-0040 observation seam: mounts, moves, rebuilds per cause, unmounts. |
 | `gesture_inspector` | `inspector` | `GestureInspector`, a `GestureObserver` on one arena that reports each contest: members with their composition paths, claims, the winner, rejections with reasons, elapsed deadlines and the input sequence. A recording is inspected by replaying it with the inspector attached. |
 | `gesture_overlay` | `inspector` | `GestureInspectorOverlay`, a debug overlay at the app root that draws each live contest beside its contact, fading it once settled; a `GestureOverlayController` toggles it without rebuilding the app, and no observer is registered while it is hidden or unmounted. |
@@ -41,10 +41,19 @@ let profiler = Profiler::over(&capture, ProfilerConfig::default());
 // run the app; `flui-app` inherits an installed subscriber
 ```
 
-The layer carries its own per-layer filter that admits the frame/phase spans
-and animation controller span identities. It admits no events. FLUI's default
+The layer carries its own per-layer filter that admits the frame/phase spans,
+animation controller span identities and, of the events, only the runtime's
+`frame_telemetry` and `frame_gpu_time` (`TRACE`, target `flui.frame`) with the
+`enabled!` gate the runtime asks before tracing them. FLUI's default
 `INFO` log filter therefore does not starve it, and
-attaching it does not turn on `DEBUG` logging for the whole process.
+attaching it does not turn on `DEBUG` or `TRACE` logging for the whole process.
+
+The spans are `DEBUG` and the two telemetry events `TRACE`. Today the framework
+sets no `max_level_*` feature (ADR-0242 §7), so a release build still traces
+them for a capture that asks. A build that caps `tracing` below `TRACE` (a
+`max_level_*` or `release_max_level_*` feature) compiles the two events out, and
+its capture then records no produced frames; one capped below `DEBUG` loses the
+spans too.
 
 Animation timings are inclusive: tick includes sampling and listeners, so
 adding the three is not a frame CPU total. Reentrant work inside the same
@@ -96,10 +105,10 @@ produced for, which the scheduler's `frame` span reports as `period_us`
 (8.3 ms on a 120 Hz display; 16.7 ms when a frame reports none). `JankLine::Fixed(duration)`
 keeps one threshold for every display.
 
-The contract between the two halves is a set of span names, pinned by
-`tests/frame_profile_end_to_end.rs`: it drives a real tree through
-a headless UI runtime's frames, the same `drive_frame` every runner uses, and
-reads the profile back.
+The contract between the two halves is a set of span names and two telemetry
+events, pinned by `tests/frame_profile_end_to_end.rs` and `tests/produced_frames.rs`:
+they drive a real tree through a headless UI runtime's frames, the same
+`drive_frame` every runner uses, and read the profile and the produced frames back.
 
 ## Timeline
 
@@ -114,38 +123,60 @@ let timeline = Timeline::new();
 std::fs::write("trace.json", timeline.export_chrome_trace())?;
 ```
 
-Every `TimelineEvent` says what it is with its `kind`: a `TimelineEventKind::Frame`, a
-presentation `Segment`, a `Phase(phase)` of a captured frame, or a `Custom` event the
-application recorded. `export_chrome_trace` writes one complete (`X`) event per span with its
-kind's label as `cat`, a process per runtime, a thread per thread, and, for a timeline over a
-capture, `frame_ms` and `jank` counters; it opens in `ui.perfetto.dev` and `chrome://tracing`.
+Every `TimelineEvent` says what it is with its `kind`: a scheduler `TimelineEventKind::Frame`, a
+`ProducedFrame` of a presentation, a presentation `Segment`, a `Phase(phase)` of a captured
+frame, or a `Custom` event the application recorded. `export_chrome_trace` writes one complete
+(`X`) event per span with its kind's label as `cat`, a process per runtime, a thread per thread,
+and, for a timeline over a capture, `frame_ms` and `jank` counters per scheduler frame; it opens
+in `ui.perfetto.dev` and `chrome://tracing`.
 
-`Timeline::record_frame_snapshots` converts `flui_sdk::hooks::FrameSnapshot`s
-into `Frame` events in the same trace, so a presentation's frame history and
-hand-recorded events share one file. The presentation's frame clock produces
-the snapshots, and it is internal to the app host: no public API hands them
-out yet (ADR-0088, move 4, names the follow-up).
+Each frame a presentation produced is a `ProducedFrame` of the capture, read
+from the `frame_telemetry` event its runtime traces: the runtime, presentation
+and frame number, the outcome, the segment's build, layout, paint and composite
+times, produce-to-present, the input count and largest input latency, and the
+GPU time once a `frame_gpu_time` event names the same runtime, presentation and
+frame. A timeline over the capture shows each as a `ProducedFrame` event named
+`Frame N [runtime presentation]`, with those values in its `args`, on a
+`Produced frames` track of its runtime's process. The frame is placed by when
+the capture received its telemetry, since the presentation's clock may be
+virtual (a headless host's).
 
 ## Inspector counters
 
 ```rust
 use std::sync::Arc;
 
+use flui::app::AppConfig;
+use flui::foundation::observe::TreeObserver;
 use flui_devtools::InspectorCounters;
-use flui_sdk::foundation::observe::TreeObserver;
 
 let counters = Arc::new(InspectorCounters::new());
-build_owner.set_tree_observer(Arc::clone(&counters) as Arc<dyn TreeObserver>);
-// ...drive frames...
+let config = AppConfig::new().dev_tree_observer({
+    let counters = Arc::clone(&counters);
+    move |_runtime| Arc::clone(&counters) as Arc<dyn TreeObserver>
+});
+// ...run the app with `config`...
 let snapshot = counters.snapshot();
 println!("{} mounts, {} rebuilds, {} unmounts", snapshot.mounts, snapshot.rebuilds, snapshot.unmounts);
 ```
 
+`AppConfig::dev_tree_observer` takes a factory, which every UI runtime the
+runner builds for a window calls once with its id, before its first root is
+mounted. The runner installs the observer it returns with the seeded install,
+which replays what is already mounted, and the runtime's retirement ends the
+observer's stream (`is_final()`). The observer sees the runtime's primary
+presentation; a presentation opened into an existing runtime is not observed.
+A factory that panics is logged and its runtime runs without an observer. One
+`InspectorCounters` shared by several runtimes adds their counts together and
+ends at the first runtime's retirement, so an application that opens several
+windows hands each runtime counters of its own.
+
 This is the event half of ADR-0040's dependency-inverted seam: structural
 observations pushed by the core, with no access to the trees themselves.
-The seam's end-to-end test lives in this package
-(`tests/tree_observer_inspector.rs`): it drives a real tree against the
-counters.
+The seam's end-to-end tests live in this package:
+`tests/tree_observer_inspector.rs` drives a real tree against the counters,
+and `tests/dev_tree_observer.rs` installs them through `AppConfig` and runs
+the application on the headless platform.
 
 Devtools is an official package: its only framework dependency is `flui-sdk`
 ([ADR-0088](../../docs/adr/ADR-0088-official-packages-sdk-and-facade.md)).

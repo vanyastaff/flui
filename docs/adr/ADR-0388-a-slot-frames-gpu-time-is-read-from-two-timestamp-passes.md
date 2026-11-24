@@ -141,12 +141,14 @@ impl FrameClock {
     presentation whose frame was just sent, so a sink serves one presentation. A time usually
     arrives after the frame's `frame_telemetry`
     event, so a filled snapshot emits its own `flui.frame` event,
-    `frame_gpu_time`, with `frame_id`, `epoch` and `gpu_us`, and a reader joins the two by
-    `frame_id`; a snapshot that took a held time emits it right after its `frame_telemetry`.
+    `frame_gpu_time`, with `ui_runtime_id`, `presentation`, `frame_id`, `epoch` and `gpu_us`, and a
+    reader joins the two by runtime, presentation and `frame_id` (a frame number is scoped to its
+    presentation); a snapshot that took a held time emits it right after its `frame_telemetry`.
     The sink's call and every event run contained, so a panic in either is held for the
     frame's tail, which still settles. `GpuFrameTime` lives in `flui-foundation`, below both the
     engine and the runtime, so the runtime names it without an engine edge (ADR-0083). The
-    devtools Timeline puts `gpu_us` in a timed frame's arguments. The agent protocol carries
+    devtools capture joins it to the produced frame, and a timeline over the capture puts
+    `gpu_us` in that frame's arguments. The agent protocol carries
     no `FrameSnapshot`, so its version is unchanged.
 
 ### Confirmation
@@ -177,8 +179,9 @@ impl FrameClock {
   retry its refusal asked for.
 - `a_windows_sink_hands_back_the_gpu_times_of_its_frames` (`flui-app`) checks that a window's
   sink drains its slots' times.
-- `a_timed_frame_carries_its_gpu_time_into_the_trace` (`flui-devtools`) checks `gpu_us` on a
-  timed frame and its absence on an untimed one.
+- `a_timed_frame_carries_its_gpu_time_into_the_trace` (`flui-devtools`) checks that a
+  `frame_gpu_time` joins the produced frame its runtime, presentation and number name, which
+  carries `gpu_us` in the trace, and that no other frame carries one.
 - An idle frame's plan is a skip, which returns before the timer's `begin`;
   `perf_an_idle_frame_leaves_the_retained_scene_alone` keeps asserting zero allocations on the
   retained scene's idle frame.
