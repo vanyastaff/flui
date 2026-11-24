@@ -1079,7 +1079,8 @@ impl Tester {
         ])])
     }
 
-    /// Press at `start` and move by `dx`, `dy` over `duration`, then release.
+    /// Press at `start` and move by `dx`, `dy` over `duration`, then release
+    /// as [`Self::try_drag_from`] does.
     ///
     /// # Panics
     ///

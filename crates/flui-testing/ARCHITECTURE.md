@@ -260,11 +260,17 @@ Its frame driver is `HeadlessHost`, which pumps a
   ends are answered from the list the settle reads, with
   `SettleScope::Complete`. The host builds its runtime with
   `composes_host_half`, so no wait is answered from the runtime's half alone.
+  The pump's own steps and that answer pass unwind into one first-failure
+  fold: a contained dropped-frame report is raised first, then the pump's own
+  panic, and a later panic of the answer pass is discarded under containment
+  (`a_pump_answers_its_settled_waits_behind_the_frame_s_failure`).
   `run_until_answered` runs turns for a parked request on the virtual clock:
   each at the list's wake, a re-armed next-turn cause a frame later, until the
-  answer, `limit` of virtual time, or `TURNS_AT_ONE_INSTANT` turns without the
-  clock moving. Tests: `tests/settledness.rs`
-  (`the_host_settle_and_wait_settled_agree_on_every_cause`, one row per cause).
+  answer, `limit` of virtual time, nothing left to wake for, or
+  `TURNS_AT_ONE_INSTANT` turns without the clock moving
+  (`run_until_answered_stops_at_its_limit_and_when_nothing_wakes`). Tests:
+  `tests/settledness.rs` (`the_host_settle_and_wait_settled_agree_on_every_cause`,
+  one row per cause).
 
 ## Mapping decisions
 
