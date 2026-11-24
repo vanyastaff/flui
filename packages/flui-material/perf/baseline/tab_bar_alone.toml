@@ -2,8 +2,8 @@
 # counts, not timings.
 
 [tab_bar_alone]
-allocations = 366
-bytes = 57674
-elements = 41
+allocations = 362
+bytes = 56972
+elements = 39
 reallocations = 2
 render_nodes = 24

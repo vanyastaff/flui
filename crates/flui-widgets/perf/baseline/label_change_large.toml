@@ -2,6 +2,6 @@
 # counts, not timings.
 
 [label_change_large]
-allocated_bytes = 27470
-allocations = 182
+allocated_bytes = 27086
+allocations = 178
 reallocations = 0
