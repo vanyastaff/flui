@@ -89,6 +89,9 @@ fn a_perf_span_counts_the_frames_presented_between_start_and_stop() {
         for _ in 0..7 {
             presented_frame(&ui_runtime, &mut sink);
         }
+        // A frame whose submit fails is recorded, and is not a presented frame.
+        let mut failing = ScriptedSink::new(|_, _| crate::sink::SubmitVerdict::Retry);
+        presented_frame(&ui_runtime, &mut failing);
         let report = stop(&ui_runtime, &window).expect("the span reports");
         assert_eq!(report.frames, 7, "{name}: {report:#?}");
         assert_eq!(

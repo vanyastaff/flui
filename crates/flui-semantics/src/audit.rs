@@ -21,7 +21,7 @@
 //! in. An element the window does not show at all has no hit region and is not
 //! judged.
 
-use accesskit_consumer::{FilterResult, NodeRef, TreeState, common_filter};
+use accesskit_consumer::{NodeRef, TreeState};
 use flui_protocol::{
     audit::AuditFinding, audit::AuditRule, tree::ElementRef, wire::ActionName, wire::Role,
 };
@@ -121,9 +121,6 @@ impl SemanticsOwner {
                 let Some(id) = element_id(&node) else {
                     continue;
                 };
-                if common_filter(&node) != FilterResult::Include {
-                    continue;
-                }
                 let wire = wire_node(&node, id, false);
                 if !is_interactive(&wire.actions) {
                     continue;

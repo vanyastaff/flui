@@ -74,6 +74,24 @@ fn audit(ui_runtime: &UiRuntime, window: &AgentWindow, rules: &[AuditRule]) -> A
 #[test]
 fn an_audit_finds_each_planted_violation_on_its_element() {
     let (ui_runtime, window, _sink) = planted();
+    // No read has reported an element yet: only the audit's answer can record its findings'.
+    let first = audit(
+        &ui_runtime,
+        &window,
+        &[AuditRule::Unnamed, AuditRule::TextContrast],
+    );
+    let state = ui_runtime
+        .presentations
+        .get(ui_runtime.presentation_id())
+        .expect("the primary presentation is hosted");
+    let issued = crate::ui_runtime::agent::issued_of(state);
+    assert_eq!(first.findings.len(), 2, "{first:#?}");
+    for finding in &first.findings {
+        assert!(
+            issued.borrow().was_issued(finding.node.element),
+            "the element of {finding:?} is recorded as issued"
+        );
+    }
     let tree = read(&ui_runtime, &window);
     let faint = find(&tree, "Faint").id;
     let named = find(&tree, "Named").id;
@@ -100,16 +118,6 @@ fn an_audit_finds_each_planted_violation_on_its_element() {
             .collect();
         assert_eq!(nodes, vec![element], "{rule:?}: {report:#?}");
         assert_ne!(element, named, "the named button breaks no rule");
-        let state = ui_runtime
-            .presentations
-            .get(ui_runtime.presentation_id())
-            .expect("the primary presentation is hosted");
-        assert!(
-            crate::ui_runtime::agent::issued_of(state)
-                .borrow()
-                .was_issued(element),
-            "{rule:?}: the finding's element is recorded as issued"
-        );
     }
     let contrast = audit(&ui_runtime, &window, &[AuditRule::TextContrast]);
     let detail = &contrast.findings[0].detail;
