@@ -22,18 +22,18 @@ use crate::wire::ActionName;
 
 /// How long a long press holds when the call names no duration, in milliseconds: the platforms'
 /// long-press delay (500 ms) and a margin.
-pub const LONG_PRESS_MS: u64 = 800;
+const LONG_PRESS_MS: u64 = 800;
 
 /// The gap between the two taps of a double tap, in milliseconds: well inside every platform's
 /// double-tap timeout.
-pub const DOUBLE_TAP_GAP_MS: u64 = 60;
+const DOUBLE_TAP_GAP_MS: u64 = 60;
 
 /// How long the move of a drag and of a pinch lasts, in milliseconds.
-pub const STROKE_MS: u64 = 300;
+const STROKE_MS: u64 = 300;
 
 /// A fling's speed when the call names none, in logical pixels a second: well above the
 /// platforms' fling velocity.
-pub const FLING_VELOCITY: f64 = 2_500.0;
+const FLING_VELOCITY: f64 = 2_500.0;
 
 /// How long a swipe holds still before it lifts, in milliseconds, so its release velocity is
 /// under the fling velocity whatever speed it moved at.
@@ -41,7 +41,7 @@ pub const SWIPE_SETTLE_MS: u64 = 120;
 
 /// The longest the move of a swipe or a fling lasts, in milliseconds; a slower stroke is this
 /// long.
-pub const MAX_STROKE_MS: u64 = 10_000;
+const MAX_STROKE_MS: u64 = 10_000;
 
 /// How far a swipe goes when the call names no distance and its target shows no bounds, in
 /// logical pixels.
@@ -113,6 +113,12 @@ pub enum GestureError {
         /// The chord as asked.
         chord: String,
     },
+    /// A chord of `element.press_keys` that does not read as `+`-joined keys: a `+` with no key
+    /// after it, or a key name with space around it.
+    UnreadableChord {
+        /// The chord as asked.
+        chord: String,
+    },
 }
 
 impl fmt::Display for GestureError {
@@ -126,6 +132,9 @@ impl fmt::Display for GestureError {
             }
             Self::NoScale { scale } => write!(f, "a pinch to scale {scale} is not one"),
             Self::EmptyChord { chord } => write!(f, "the chord {chord:?} names no key"),
+            Self::UnreadableChord { chord } => {
+                write!(f, "the chord {chord:?} does not read as `+`-joined keys")
+            }
         }
     }
 }
@@ -180,7 +189,7 @@ pub fn tap_action(button: PointerButton) -> Option<ActionName> {
     (button == PointerButton::Primary).then_some(ActionName::Invoke)
 }
 
-/// `element.double_tap`: two taps of `button` at `at`, [`DOUBLE_TAP_GAP_MS`] apart.
+/// `element.double_tap`: two taps of `button` at `at`, 60 ms apart.
 #[must_use]
 pub fn double_tap(at: LogicalPoint, button: PointerButton) -> ActionSequence {
     ActionSequence::new(vec![pointer(
@@ -197,7 +206,7 @@ pub fn double_tap(at: LogicalPoint, button: PointerButton) -> ActionSequence {
     )])
 }
 
-/// `element.long_press`: a touch contact held at `at` for `duration_ms`, or [`LONG_PRESS_MS`].
+/// `element.long_press`: a touch contact held at `at` for `duration_ms`, or 800 ms.
 #[must_use]
 pub fn long_press(at: LogicalPoint, duration_ms: Option<u64>) -> ActionSequence {
     ActionSequence::new(vec![pointer(
@@ -212,7 +221,7 @@ pub fn long_press(at: LogicalPoint, duration_ms: Option<u64>) -> ActionSequence 
     )])
 }
 
-/// `element.drag_to`: the mouse presses at `from`, moves to `to` over [`STROKE_MS`] and releases.
+/// `element.drag_to`: the mouse presses at `from`, moves to `to` over 300 ms and releases.
 #[must_use]
 pub fn drag(from: LogicalPoint, to: LogicalPoint) -> ActionSequence {
     ActionSequence::new(vec![pointer(
@@ -254,7 +263,7 @@ fn stroke_ms(distance: f64, velocity: f64) -> u64 {
 /// [`SWIPE_SETTLE_MS`] first, so it ends below the fling velocity.
 ///
 /// The distance is most of the aimed element's extent along the stroke when absent, and the
-/// velocity [`FLING_VELOCITY`].
+/// velocity 2500 logical pixels a second.
 ///
 /// # Errors
 ///
@@ -298,7 +307,7 @@ pub fn swipe(
     )]))
 }
 
-/// `element.pinch`: two touch contacts on either side of the aim, moved over [`STROKE_MS`] until
+/// `element.pinch`: two touch contacts on either side of the aim, moved over 300 ms until
 /// their distance is `scale` times what it was.
 ///
 /// # Errors
@@ -342,21 +351,50 @@ pub fn text(text: &str) -> ActionSequence {
     }])
 }
 
-/// The chords `element.press_keys` presses in turn, each `+`-joined (`"Control+a"`): each chord's
-/// keys go down in order and come up in reverse.
+/// The keys of one chord, `+`-joined: a `+` where a key stands is the plus key (`"+"`,
+/// `"Control++"`).
+fn keys_of(chord: &str) -> Result<Vec<&str>, GestureError> {
+    let unreadable = || GestureError::UnreadableChord {
+        chord: chord.to_owned(),
+    };
+    if chord.is_empty() {
+        return Err(GestureError::EmptyChord {
+            chord: chord.to_owned(),
+        });
+    }
+    let mut keys = Vec::new();
+    let mut rest = chord;
+    loop {
+        let (key, after) = match rest.strip_prefix('+') {
+            Some(after) => ("+", after),
+            None => rest.split_at(rest.find('+').unwrap_or(rest.len())),
+        };
+        // A key's name has no space around it; a space is a key of its own (`" "`).
+        if key.chars().count() > 1 && key.trim() != key {
+            return Err(unreadable());
+        }
+        keys.push(key);
+        if after.is_empty() {
+            return Ok(keys);
+        }
+        rest = match after.strip_prefix('+') {
+            Some(next) if !next.is_empty() => next,
+            _ => return Err(unreadable()),
+        };
+    }
+}
+
+/// The chords `element.press_keys` presses in turn, each `+`-joined (`"Control+a"`, and
+/// `"Control++"` for the plus key): each chord's keys go down in order and come up in reverse.
 ///
 /// # Errors
 ///
-/// [`GestureError::EmptyChord`] for a chord that names no key.
+/// [`GestureError::EmptyChord`] for a chord that names no key, and
+/// [`GestureError::UnreadableChord`] for one that does not read as `+`-joined keys.
 pub fn chords(chords: &[String]) -> Result<ActionSequence, GestureError> {
     let mut actions = Vec::new();
     for chord in chords {
-        let keys: Vec<&str> = chord.split('+').filter(|key| !key.is_empty()).collect();
-        if keys.is_empty() {
-            return Err(GestureError::EmptyChord {
-                chord: chord.clone(),
-            });
-        }
+        let keys = keys_of(chord)?;
         actions.extend(keys.iter().map(|key| KeyAction::Down {
             key: (*key).to_owned(),
         }));
@@ -418,7 +456,7 @@ impl PlayBound for super::DragParams {
 
 impl PlayBound for super::SwipeParams {
     /// A swipe, which holds still before it lifts, of the longest stroke the distance allows: the
-    /// one named, or [`MAX_STROKE_MS`] when the target's extent sets it.
+    /// one named, or the longest stroke (10 s) when the target's extent sets it.
     fn plays_within(&self) -> Duration {
         let stroke = match self.distance {
             Some(distance) => {

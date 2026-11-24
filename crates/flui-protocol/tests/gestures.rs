@@ -235,7 +235,7 @@ fn keys_text_and_a_scroll_step_compose_to_their_sequences() {
 }
 
 /// What makes no sequence is refused, naming why: a stroke that goes nowhere, a pinch to no
-/// scale, a chord of no key.
+/// scale, a chord of no key, a chord that does not read as `+`-joined keys.
 #[test]
 fn parameters_that_make_no_gesture_are_refused() {
     let aim = Aim::new(at(1.0, 1.0), Some(LogicalRect::new(0.0, 0.0, 0.0, 0.0)));
@@ -259,13 +259,51 @@ fn parameters_that_make_no_gesture_are_refused() {
             "{scale}: {refused:?}"
         );
     }
-    let refused =
-        gestures::chords(&["Shift+".to_owned(), "+".to_owned()]).expect_err("a chord of no key");
+    let refused = gestures::chords(&["Enter".to_owned(), String::new()]).expect_err("no key");
     assert_eq!(
         refused,
         GestureError::EmptyChord {
-            chord: "+".to_owned()
-        },
-        "a trailing `+` names no key of its own; a lone one names none"
+            chord: String::new()
+        }
     );
+    // A `+` with no key after it, a key after a `+` key with no `+` between, and a key name with
+    // space around it do not read as keys; none is dropped or typed as text.
+    for chord in ["Shift+", "+a", "a++b", "Control + a", "Control+ a"] {
+        let refused = gestures::chords(&[chord.to_owned()]).expect_err("an unreadable chord");
+        assert_eq!(
+            refused,
+            GestureError::UnreadableChord {
+                chord: chord.to_owned()
+            },
+            "{chord:?}"
+        );
+    }
+}
+
+/// A `+` where a key stands is the plus key, alone or after a modifier; a space is the space key.
+#[test]
+fn the_plus_key_and_the_space_key_read_as_keys() {
+    let cases: [(&str, &[&str]); 5] = [
+        ("+", &["+"]),
+        ("Control++", &["Control", "+"]),
+        ("Shift+Control++", &["Shift", "Control", "+"]),
+        (" ", &[" "]),
+        ("Shift+ ", &["Shift", " "]),
+    ];
+    for (chord, keys) in cases {
+        let sequence = gestures::chords(&[chord.to_owned()]).expect("a chord that reads");
+        let [InputSource::Keys { actions, .. }] = sequence.sources.as_slice() else {
+            panic!("one keyboard: {sequence:?}");
+        };
+        let mut wanted: Vec<KeyAction> = keys
+            .iter()
+            .map(|key| KeyAction::Down {
+                key: (*key).to_owned(),
+            })
+            .collect::<Vec<KeyAction>>();
+        wanted.extend(keys.iter().rev().map(|key| KeyAction::Up {
+            key: (*key).to_owned(),
+        }));
+        assert_eq!(actions, &wanted, "{chord:?}");
+    }
 }
