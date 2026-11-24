@@ -1,5 +1,6 @@
-//! How a [`HeadlessHost`] decides it has settled: waits, background work and text
-//! sizing.
+//! How a [`HeadlessHost`] decides it has settled: the one list of what keeps the
+//! application from being idle (ADR-0400 §3), the loop that runs turns for a
+//! wait, background work and text sizing.
 
 #[cfg(doc)]
 use super::HeadlessWindow;
@@ -7,23 +8,24 @@ use super::HeadlessWindow;
 use std::time::Duration;
 
 use flui_foundation::PresentationId;
-
+use flui_protocol::error::ErrorObject;
+use flui_protocol::tree::WindowId;
 use flui_runtime::pump::FrameOutcome;
-
+use flui_runtime::settledness::{HostHalf, Unsettled};
 use flui_runtime::ui_runtime::UiRuntime;
+use flui_view::dev_agent::AgentAnswer;
 
 use super::errors::NotSettled;
 use super::text_sizing::{self, ScriptedTextSizing};
 use super::{HeadlessHost, HeadlessWindowId};
 
 impl HeadlessHost {
-    /// How long a host's loop waits before its next frame: none while a frame
-    /// is asked for or work is pending, unless a dropped frame waits for its
-    /// retry; otherwise until the earliest deadline the UI runtime armed, such
-    /// as a gesture's or a dropped frame's retry, the instant a window asked
-    /// for a frame at (the frame a covered window owes its surface), or the
-    /// next change the host's scenario scheduled. `None` when the loop would
-    /// wait for input alone.
+    /// What keeps the application from being idle now: the UI runtime's half
+    /// ([`UiRuntime::unsettled`]) and the host's own, gathered into one list
+    /// (ADR-0400 §3). [`time_to_next_frame`](Self::time_to_next_frame) is its
+    /// [wake](Unsettled::wake), [`pump_until_settled`](Self::pump_until_settled)
+    /// settles when it is empty, and each [`pump`](Self::pump) hands it to the
+    /// runtime's agent waits once the pump's own steps are done.
     ///
     /// Not a pure read: it first asks each covered window for the frame it
     /// owes, as a runner's owner delivery does after the work item that left
@@ -31,60 +33,176 @@ impl HeadlessHost {
     /// request ([`HeadlessWindow::timed_frame_requests`]). Asking again with
     /// nothing changed asks nothing.
     #[must_use]
-    pub fn time_to_next_frame(&self) -> Option<Duration> {
-        let Some(runtime) = &self.ui_runtime else {
-            // A retired host frames nothing: its loop wakes for the
-            // background lanes and the scenario alone.
-            if self.background_runs_next_pump() {
-                return Some(Duration::ZERO);
-            }
-            return self.scenario_wait();
-        };
+    pub fn unsettled(&self) -> Unsettled {
         // What changed since the last turn (a signal written between pumps)
         // may leave a covered window owing a frame: its window is asked first,
         // as a runner's owner delivery asks at the end of the work item that
-        // changed it, and the wait below counts the request.
+        // changed it, and the list counts the request.
         self.ask_owed_frames();
-        let now = flui_foundation::MonotonicClock::now(&self.clock);
-        // A dropped frame waiting for its retry runs nothing sooner, though a
-        // gesture deadline before it still wakes the loop.
-        let retrying = runtime
-            .failure_retry_deadline()
-            .is_some_and(|retry| retry > now);
-        // A runtime whose frames are off (no window seen) has no frame to run
-        // now: its pump is a background turn, which its deadlines, background
-        // work and observations still ask for. The frame a covered window owes
-        // is served only through its window's timed request, as on a native
-        // host, never as work pending here.
-        let frame_owed = runtime.scheduler().frames_enabled()
-            && (runtime.needs_redraw()
-                || runtime.scheduler().is_frame_scheduled()
-                || runtime.has_pending_work());
-        if !retrying
-            && (frame_owed
-                || self.background_runs_next_pump()
-                || self.observations_pending()
-                || self.turn_owed())
-        {
-            return Some(Duration::ZERO);
-        }
-        let runtime_wait = runtime
-            .next_wake()
-            .map(|wake| wake.saturating_duration_since(now));
-        // A change the scenario has scheduled is a deadline like any other, and
-        // so is a window's timed frame request, which the host serves.
-        [runtime_wait, self.scenario_wait(), self.timed_frame_wait()]
-            .into_iter()
-            .flatten()
-            .min()
+        self.gather_unsettled()
     }
 
-    /// How long until the scenario's next scheduled change, if one is.
-    fn scenario_wait(&self) -> Option<Duration> {
+    /// The host's list, its owed frames already asked. Its own half:
+    ///
+    /// - background work (`Background`): held work only the test releases,
+    ///   runnable work the next turn runs, and a parked future something
+    ///   outside the application wakes;
+    /// - a turn owed for a close or a quit (`OwedTurn`), and a window
+    ///   observation not yet delivered (`WindowObservation`), each the next
+    ///   turn's;
+    /// - a window's timed frame request (ADR-0389), served by a turn at its
+    ///   instant (`FrameRequest`) and, once that instant has come, the frame a
+    ///   covered window owes its surface, which the next turn serves
+    ///   (`SurfaceFrame`);
+    /// - the scenario's next change (`ScenarioStep`), at its instant.
+    ///
+    /// While a dropped frame's retry is armed and not yet due the runtime runs
+    /// no frame sooner, and the host's own next-turn causes (background work,
+    /// a turn owed, an observation) wait for it too, listed at the retry; the
+    /// due frame request and the scenario's step are served at their own
+    /// instants.
+    fn gather_unsettled(&self) -> Unsettled {
+        use flui_protocol::wait::UnsettledReason;
+
+        let now = flui_foundation::MonotonicClock::now(&self.clock);
+        let mut unsettled = Unsettled::new(now);
+        let held_until = self.ui_runtime.as_ref().and_then(|runtime| {
+            runtime.unsettled(now, &mut unsettled);
+            runtime
+                .failure_retry_deadline()
+                .filter(|retry| *retry > now)
+        });
+        let next_turn =
+            |unsettled: &mut Unsettled, reason, window: Option<WindowId>| match held_until {
+                Some(retry) => unsettled.deadline(reason, window, retry),
+                None => unsettled.next_frame(reason, window),
+            };
+
+        let background = &self.scripted.background;
+        let pending = background.pending();
+        if background.held.get() {
+            if pending > 0 {
+                unsettled.test(UnsettledReason::Background, None);
+            }
+        } else {
+            let runnable = background.executors.runnable();
+            if runnable > 0 {
+                next_turn(&mut unsettled, UnsettledReason::Background, None);
+            }
+            if pending > runnable {
+                unsettled.outside(UnsettledReason::Background, None);
+            }
+        }
+        if self.turn_owed() {
+            next_turn(&mut unsettled, UnsettledReason::OwedTurn, None);
+        }
+        let epoch = flui_foundation::MonotonicClock::epoch(&self.clock);
+        for open in &self.open {
+            let window = Some(wire_window(open.id));
+            if open.window.chrome.borrow().unobserved {
+                next_turn(&mut unsettled, UnsettledReason::WindowObservation, window);
+            }
+            if let Some(at) = open.window.pending_timed_frame() {
+                let at = epoch
+                    .checked_add(Duration::from_nanos(at.as_nanos()))
+                    .unwrap_or(epoch);
+                if at <= now {
+                    unsettled.next_frame(UnsettledReason::SurfaceFrame, window);
+                } else {
+                    unsettled.deadline(UnsettledReason::FrameRequest, window, at);
+                }
+            }
+        }
         let scenario = self.scripted.clock.scenario();
-        scenario
-            .next_due()
-            .map(|due| due.saturating_sub(scenario.now()))
+        if let Some(due) = scenario.next_due() {
+            let at = now
+                .checked_add(due.saturating_sub(scenario.now()))
+                .unwrap_or(now);
+            unsettled.deadline(UnsettledReason::ScenarioStep, None, at);
+        }
+        unsettled
+    }
+
+    /// After a pump's own steps: hands the list to the UI runtime, which
+    /// answers its agent's settled waits, timeouts and idle ends from it.
+    pub(super) fn answer_settled(&mut self) {
+        let unsettled = self.gather_unsettled();
+        if let Some(runtime) = self.ui_runtime.as_mut() {
+            runtime.answer_settled(unsettled.at(), HostHalf::Complete(&unsettled));
+        }
+    }
+
+    /// How long a host's loop waits before its next frame: the list's
+    /// [wake](Unsettled::wake), from now ([`unsettled`](Self::unsettled), which
+    /// asks each covered window for the frame it owes first). `None` when the
+    /// loop would wait for input alone.
+    #[must_use]
+    pub fn time_to_next_frame(&self) -> Option<Duration> {
+        let unsettled = self.unsettled();
+        unsettled
+            .wake()
+            .map(|wake| wake.saturating_duration_since(unsettled.at()))
+    }
+
+    /// Run turns for a request `answer` waits on, on the host's virtual clock,
+    /// until it is answered: each turn at the list's wake, the application's
+    /// timers included, so a wait's deadline is reached in virtual time. A
+    /// cause the next turn serves is served at once; one that re-armed at that
+    /// instant is served a `frame` later, as a display paces its frames, unless
+    /// a deadline is due, which is served at once again. Stops unanswered,
+    /// returning `None`, once `limit` of virtual time has passed, once nothing
+    /// is left to wake for, or after
+    /// [`TURNS_AT_ONE_INSTANT`](flui_runtime::settledness::TURNS_AT_ONE_INSTANT)
+    /// turns without the clock moving, where the runtime ends a parked wait
+    /// itself, naming the causes due at that instant.
+    ///
+    /// # Panics
+    ///
+    /// As [`pump`](Self::pump) does.
+    pub fn run_until_answered<T>(
+        &mut self,
+        answer: &mut AgentAnswer<T>,
+        frame: Duration,
+        limit: Duration,
+    ) -> Option<Result<T, ErrorObject>> {
+        let start = self.clock().elapsed();
+        // The first turn drains the request at the instant it was made.
+        let mut dt = Duration::ZERO;
+        let mut turned_at = None;
+        let mut turns_here = 0_u32;
+        loop {
+            let _ = self.pump(dt);
+            if let Some(answered) = answer.try_take() {
+                return Some(answered);
+            }
+            let now = flui_foundation::MonotonicClock::now(&self.clock);
+            turns_here = if turned_at == Some(now) {
+                turns_here.saturating_add(1)
+            } else {
+                1
+            };
+            turned_at = Some(now);
+            let waited = self.clock().elapsed().saturating_sub(start);
+            if turns_here > flui_runtime::settledness::TURNS_AT_ONE_INSTANT || waited >= limit {
+                return None;
+            }
+            let unsettled = self.unsettled();
+            let wake = unsettled.wake()?;
+            let deadline_due = unsettled.next_deadline().is_some_and(|due| due <= now);
+            dt = if wake > now {
+                wake.saturating_duration_since(now)
+            } else if deadline_due {
+                Duration::ZERO
+            } else {
+                // Only causes the next turn serves re-armed at this instant:
+                // the next frame is a display period later, or at the next
+                // deadline if that comes sooner.
+                unsettled
+                    .next_deadline()
+                    .map_or(frame, |due| frame.min(due.saturating_duration_since(now)))
+            };
+            dt = dt.min(limit.saturating_sub(waited));
+        }
     }
 
     /// Stop [`pump`](Self::pump) running background work, so a test sees a
@@ -135,23 +253,6 @@ impl HeadlessHost {
                 .any(|waited| !self.is_open(HeadlessWindowId(waited.presentation_id)))
     }
 
-    /// Whether a window changed since the host last told the UI runtime: the next pump
-    /// delivers the change, so the host is not settled.
-    fn observations_pending(&self) -> bool {
-        self.presentation_ids().into_iter().any(|presentation| {
-            self.window_of(HeadlessWindowId(presentation))
-                .chrome
-                .borrow()
-                .unobserved
-        })
-    }
-
-    /// Whether the next pump runs background work: a parked future waits
-    /// for its wake, not for a frame.
-    fn background_runs_next_pump(&self) -> bool {
-        !self.scripted.background.held.get() && self.scripted.background.executors.runnable() > 0
-    }
-
     /// Wait as a host's loop does, [`time_to_next_frame`](Self::time_to_next_frame),
     /// then pump. `None`, pumping nothing, when the loop would wait for input
     /// alone.
@@ -164,13 +265,10 @@ impl HeadlessHost {
         Some(self.pump(wait))
     }
 
-    /// Pump frames of `frame` until nothing is left to do — no redraw or
-    /// frame asked for (a running animation asks for each next one), no
-    /// pending work, no armed deadline, no unserved timed frame request of a
-    /// window, no change the scenario scheduled — at most `max_frames` of
-    /// them. Returns how many frames it took. Before each check it asks each
-    /// covered window for the frame it owes, as
-    /// [`time_to_next_frame`](Self::time_to_next_frame) does.
+    /// Pump frames of `frame` until the host's list
+    /// ([`unsettled`](Self::unsettled)) names no cause, at most `max_frames`
+    /// of them. Returns how many frames it took. A wait an agent parked is no
+    /// cause: its deadline only wakes the loop.
     ///
     /// # Errors
     ///
@@ -182,26 +280,7 @@ impl HeadlessHost {
         max_frames: usize,
     ) -> Result<usize, NotSettled> {
         for frames in 0..=max_frames {
-            // A covered window owing a frame is asked before the host decides
-            // it has nothing to do, as `time_to_next_frame` asks.
-            self.ask_owed_frames();
-            // A retired host owes only its background work and the scenario.
-            // A runtime whose frames are off owes no frame, only its deadlines
-            // and the timed requests of its windows.
-            let runtime_idle = self.ui_runtime.as_ref().is_none_or(|runtime| {
-                (!runtime.scheduler().frames_enabled()
-                    || (!runtime.needs_redraw()
-                        && !runtime.scheduler().is_frame_scheduled()
-                        && !runtime.has_pending_work()))
-                    && runtime.next_wake().is_none()
-            });
-            if runtime_idle
-                && self.timed_frame_wait().is_none()
-                && self.pending_background() == 0
-                && !self.observations_pending()
-                && !self.turn_owed()
-                && self.scenario_wait().is_none()
-            {
+            if self.unsettled().is_empty() {
                 return Ok(frames);
             }
             if frames < max_frames {
@@ -300,17 +379,6 @@ impl HeadlessHost {
         }
     }
 
-    /// How long until the earliest timed frame request of an open window the
-    /// host has not served, if any.
-    fn timed_frame_wait(&self) -> Option<Duration> {
-        let now = self.event_now();
-        self.open
-            .iter()
-            .filter_map(|open| open.window.pending_timed_frame())
-            .min()
-            .map(|at| at.saturating_duration_since(now))
-    }
-
     /// Size the sink to the primary window's device size.
     pub(super) fn size_sink_to_primary(&mut self) {
         let physical = self.primary.window.physical_size_i32();
@@ -319,4 +387,10 @@ impl HeadlessHost {
             u32::try_from(physical.height).expect("BUG: a window's device size is positive"),
         );
     }
+}
+
+/// The protocol's name for the window of `presentation`.
+fn wire_window(presentation: PresentationId) -> WindowId {
+    WindowId::from_u64(presentation.as_u64())
+        .expect("BUG: a presentation id packs a non-zero generation")
 }

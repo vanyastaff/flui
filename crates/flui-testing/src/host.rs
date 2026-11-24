@@ -43,6 +43,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use std::time::Duration;
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::capability::scripted::{AlreadyDriven, Scenario};
 use flui_platform::text::store::TextStoreHost;
@@ -395,7 +396,9 @@ impl HeadlessHost {
             window_system,
             Some(session_end_support_of(window_system)),
         );
-        host = host.with_close_vetoes(&close_vetoes);
+        // The host gathers its half of what keeps the application from being
+        // idle and answers the agent's settled waits after every turn.
+        host = host.with_close_vetoes(&close_vetoes).composes_host_half();
         let ui_runtime = UiRuntime::try_new(
             PresentationWindow::new(
                 Rc::clone(&window) as Rc<dyn PlatformWindow>,
@@ -695,9 +698,24 @@ impl HeadlessHost {
         // each covered window is asked for the frame it owes.
         self.serve_text_sizing();
         self.ask_owed_frames();
+        // Once the turn's own steps are done, the list they leave answers the
+        // agent's settled waits, on every outcome: a reply's delivery is user
+        // code, and its panic stays behind the frame's own failure.
+        let mut answering = FirstPanic::new();
+        answering.contain(|| self.answer_settled());
         // Taken on every outcome: a failed frame's findings are its own, and
         // the failure that is raised already fails the test.
         let semantics_findings = self.take_semantics_findings();
+        let answering = answering.into_payload();
+        if attempt.is_err() || first_failure.is_some() {
+            // The frame's failure is raised; a later one of a reply is
+            // destroyed under containment (ADR-0281).
+            if let Some(payload) = answering {
+                flui_foundation::panic::discard_payload(payload);
+            }
+        } else if let Some(payload) = answering {
+            resume_unwind(payload);
+        }
         match (attempt, first_failure) {
             (Ok(outcome), None) => {
                 assert!(
