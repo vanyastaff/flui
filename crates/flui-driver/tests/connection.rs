@@ -5,9 +5,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flui_driver::protocol::act::ActionabilityParams;
+use flui_driver::protocol::act::{ActionabilityCheck, ActionabilityParams, Effect, EffectKind};
 use flui_driver::protocol::client::{CallError, Connection, EndChecks};
-use flui_driver::protocol::error::{ErrorCode, ErrorObject};
+use flui_driver::protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
     ActionSequence, InputPath, InputSource, PointerAction, PointerButton, PointerDevice,
@@ -18,10 +18,11 @@ use flui_driver::protocol::method::{
 };
 use flui_driver::protocol::report::{CheckFailure, Outcome};
 use flui_driver::protocol::session::WindowParams;
+use flui_driver::protocol::version::ProtocolVersion;
 use flui_driver::protocol::wait::{Condition, Expectation, SettleScope, WaitEnd};
 use flui_driver::protocol::{input::TapParams, locator::LocateParams};
 use flui_driver::testing::{Reply, ScriptedAgent, ScriptedLane};
-use flui_driver::{Driver, InputPolicy, Isolation, Launch};
+use flui_driver::{Driver, Error, InputPolicy, Isolation, Launch};
 use serde_json::json;
 
 use crate::fixtures::{Counter, Probe};
@@ -369,4 +370,81 @@ fn a_wait_that_never_holds_ends_unsatisfied() {
         .expect("the wait is answered");
     assert_eq!(outcome.end, WaitEnd::Unsatisfied, "{outcome:?}");
     assert_eq!(probe.presses(), 0);
+}
+
+/// Each wire answer reads into its variant and is stated again as the app sent it, every field
+/// its code carries kept; a failure only the driver sees takes the code a caller branches on.
+#[test]
+fn an_error_is_stated_on_the_wire_as_it_was_read() {
+    let mut gone = ErrorObject::new(ErrorCode::Gone, "the app exited")
+        .handle(HandleKind::Window, "w2")
+        .effect(Effect::new(EffectKind::MayHaveRun).detail("the tap was sent"));
+    gone.exit = Some(3);
+    // `stale` names the handle that went, and no kind.
+    let mut stale = ErrorObject::new(ErrorCode::Stale, "the element went");
+    stale.handle = Some("w1/e4".to_owned());
+    let answers = [
+        ErrorObject::new(ErrorCode::NotFound, "no button").retry(Retry::Never),
+        ErrorObject::ambiguous("two buttons", vec!["w1/e1".to_owned(), "w1/e2".to_owned()]),
+        stale,
+        gone,
+        ErrorObject::not_actionable(
+            "covered",
+            ActionabilityCheck::Receives,
+            Some("w1/e9".to_owned()),
+        ),
+        ErrorObject::version(ProtocolVersion::new(0, 31), ProtocolVersion::new(0, 32)),
+        ErrorObject::new(ErrorCode::Timeout, "no answer")
+            .effect(Effect::new(EffectKind::MayHaveRun))
+            .retry(Retry::Soon),
+        ErrorObject::new(ErrorCode::Platform, "the OS refused")
+            .effect(Effect::new(EffectKind::Partial)),
+    ];
+    for answer in answers {
+        let read = Error::from_wire(answer.clone());
+        assert_eq!(read.to_wire(), answer, "{read:?}");
+    }
+    let mut unsupported = ErrorObject::new(ErrorCode::NotSupported, "no recorder");
+    unsupported.capability = Some("record".to_owned());
+    assert_eq!(Error::from_wire(unsupported.clone()).to_wire(), unsupported);
+
+    let driver_only: [(Error, ErrorCode, Option<&str>); 3] = [
+        (
+            Error::InterruptedByUser {
+                lane: "windows".to_owned(),
+                event: "a key".to_owned(),
+            },
+            ErrorCode::NotSupported,
+            Some("uninterrupted_os_input"),
+        ),
+        (
+            Error::Lane {
+                lane: "adb".to_owned(),
+                unavailable: true,
+                message: "no device".to_owned(),
+            },
+            ErrorCode::NotSupported,
+            Some("adb_lane"),
+        ),
+        (
+            Error::Protocol {
+                message: "a line that is not one".to_owned(),
+            },
+            ErrorCode::Platform,
+            None,
+        ),
+    ];
+    for (error, code, capability) in driver_only {
+        let wire = error.to_wire();
+        assert_eq!(
+            (wire.code, wire.capability.as_deref(), wire.retry),
+            (code, capability, Retry::Never),
+            "{error:?}"
+        );
+        assert_eq!(wire.message, error.to_string());
+        assert_eq!(
+            CallError::failed(wire).is_cannot_verify(),
+            code == ErrorCode::NotSupported
+        );
+    }
 }
