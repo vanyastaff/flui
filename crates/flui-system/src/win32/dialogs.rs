@@ -633,15 +633,15 @@ mod tests {
             .directory(temp("in"))
             .filter(
                 FileFilter::new("Images")
-                    .with_extension("PNG")
-                    .with_extension("tar.gz"),
+                    .extension("PNG")
+                    .extension("tar.gz"),
             )
-            .filter(FileFilter::new("Text").with_extension("txt"))
+            .filter(FileFilter::new("Text").extension("txt"))
             .filter(
                 FileFilter::new("Build files")
-                    .with_file_name("Makefile")
-                    .with_extension("mk")
-                    .with_file_name(".env"),
+                    .file_name("Makefile")
+                    .extension("mk")
+                    .file_name(".env"),
             )
             .filter(FileFilter::all_files("All files"));
         assert_eq!(
@@ -680,8 +680,8 @@ mod tests {
 
         let save = SaveRequest::new().suggested_name("report").filter(
             FileFilter::new("Archive")
-                .with_extension("tar.gz")
-                .with_extension("zip"),
+                .extension("tar.gz")
+                .extension("zip"),
         );
         let spec = save_spec(&save).expect("a save without MIME types maps");
         assert_eq!(spec.file_name.as_deref(), Some("report"));
@@ -692,7 +692,7 @@ mod tests {
         );
         let any = SaveRequest::new()
             .filter(FileFilter::all_files("All files"))
-            .filter(FileFilter::new("Text").with_extension("txt"));
+            .filter(FileFilter::new("Text").extension("txt"));
         assert_eq!(
             save_spec(&any).expect("maps").default_extension,
             None,
@@ -828,8 +828,8 @@ mod tests {
     fn a_mime_type_the_dialog_cannot_filter_by_is_refused_not_dropped() {
         let request = OpenRequest::files().filter(
             FileFilter::new("Images")
-                .with_extension("png")
-                .with_mime_type("image/*"),
+                .extension("png")
+                .mime_type("image/*"),
         );
         let refusal = open_spec(&request).expect_err("the dialog filters by name only");
         assert_eq!(

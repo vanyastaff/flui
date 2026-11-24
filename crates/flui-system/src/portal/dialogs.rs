@@ -408,13 +408,13 @@ mod tests {
     #[test]
     fn a_filter_becomes_globs_then_mime_types() {
         let filter = FileFilter::new("Images")
-            .with_extension("png")
-            .with_extension("JPG")
-            .with_extension("tar.gz")
-            .with_extension("c++")
-            .with_extension("7z")
-            .with_extension("123")
-            .with_mime_type("image/webp");
+            .extension("png")
+            .extension("JPG")
+            .extension("tar.gz")
+            .extension("c++")
+            .extension("7z")
+            .extension("123")
+            .mime_type("image/webp");
         assert_eq!(
             portal_filter(&filter),
             (
@@ -443,9 +443,9 @@ mod tests {
     #[test]
     fn a_file_name_is_its_own_glob_and_every_file_is_one_star() {
         let build = FileFilter::new("Build files")
-            .with_file_name("Makefile")
-            .with_file_name(".env")
-            .with_extension("mk");
+            .file_name("Makefile")
+            .file_name(".env")
+            .extension("mk");
         assert_eq!(
             portal_filter(&build),
             (

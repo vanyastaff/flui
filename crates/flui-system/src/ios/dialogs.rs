@@ -623,7 +623,7 @@ mod tests {
         let contents: Arc<[u8]> = Arc::from(&b"hello"[..]);
         let request = SaveRequest::new()
             .suggested_name("notes")
-            .filter(FileFilter::new("Text").with_extension("txt"))
+            .filter(FileFilter::new("Text").extension("txt"))
             .contents(Arc::clone(&contents));
         assert_eq!(export_of(&request), Ok(("notes.txt".to_owned(), contents)));
         let unnamed = SaveRequest::new().contents(Arc::<[u8]>::from(&b""[..]));

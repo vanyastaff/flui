@@ -922,7 +922,7 @@ fn the_dialogs_reach_the_file_chooser_and_answer_its_picks() {
         .title("Pictures")
         .directory("/home/me")
         .accept_label("Use")
-        .filter(FileFilter::new("Images").with_extension("png"));
+        .filter(FileFilter::new("Images").extension("png"));
     assert_eq!(
         settle(&mut host, dialogs.open(request)),
         Ok(Ok(Picks::try_new(vec![
@@ -1065,11 +1065,11 @@ fn a_portal_save_without_an_extension_is_named_after_the_selected_filter() {
     let file = |name: &str| PickedFile::try_new(at(name)).expect("an absolute path");
     let request = || {
         SaveRequest::new()
-            .filter(FileFilter::new("PNG").with_extension("png"))
+            .filter(FileFilter::new("PNG").extension("png"))
             .filter(
                 FileFilter::new("Archive")
-                    .with_extension("tar.gz")
-                    .with_file_name("backup"),
+                    .extension("tar.gz")
+                    .file_name("backup"),
             )
             .filter(FileFilter::all_files("All files"))
     };
@@ -1172,8 +1172,8 @@ fn a_save_dialog_reports_the_filter_the_portal_says_was_selected() {
     let dialogs = dialogs.expect("the portal provides dialogs on Linux");
     let request = || {
         SaveRequest::new()
-            .filter(FileFilter::new("PNG").with_extension("png"))
-            .filter(FileFilter::new("JPEG").with_extension("jpg"))
+            .filter(FileFilter::new("PNG").extension("png"))
+            .filter(FileFilter::new("JPEG").extension("jpg"))
     };
     // A name with its extension, which no filter completes.
     let answer = |current: Option<(&str, &str)>| saved_as("file:///home/me/picture.jpeg", current);
