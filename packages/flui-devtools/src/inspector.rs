@@ -15,9 +15,6 @@ use flui_sdk::foundation::observe::{
     ElementMounted, ElementMoved, ElementRebuilt, ElementUnmounted, TreeObserver,
 };
 
-/// Number of [`RebuildReason`] variants tracked in the per-cause tallies.
-const REASON_COUNT: usize = 10;
-
 /// Counting/logging [`TreeObserver`].
 ///
 /// Interior state is private atomics; nothing here exposes a lock.
@@ -31,7 +28,7 @@ pub struct InspectorCounters {
     unmounts: AtomicU64,
     rebuilds: AtomicU64,
     moves: AtomicU64,
-    per_reason: [AtomicU64; REASON_COUNT],
+    per_reason: [AtomicU64; RebuildReason::COUNT],
     detached: AtomicBool,
 }
 
@@ -58,7 +55,7 @@ impl InspectorCounters {
         // stream ended. Counters themselves stay Relaxed — mid-stream
         // snapshots promise per-counter monotonicity only.
         let detached = self.detached.load(Ordering::Acquire);
-        let mut per_reason = [0u64; REASON_COUNT];
+        let mut per_reason = [0u64; RebuildReason::COUNT];
         for (slot, counter) in per_reason.iter_mut().zip(&self.per_reason) {
             *slot = counter.load(Ordering::Relaxed);
         }
@@ -121,7 +118,7 @@ pub struct InspectorSnapshot {
     /// Moves (reparents + keyed reorders) since attach.
     pub moves: u64,
     /// Per-reason rebuild tallies; read via [`Self::rebuilds_for`].
-    per_reason: [u64; REASON_COUNT],
+    per_reason: [u64; RebuildReason::COUNT],
     /// Whether the stream ended (`detached()` fired) before this snapshot.
     detached: bool,
 }
