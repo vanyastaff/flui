@@ -24,31 +24,13 @@
 //! An application registers [`SystemPlugin`]; a scenario registers
 //! `testing::ScriptedSystem` instead (feature `testing`).
 //!
-//! Windows provides every service, macOS every one but the jump list. iOS
-//! opens links, picks and exports documents, shows a message box and the
-//! share sheet, and names the application's folders and the system through
-//! UIKit and Foundation; it refuses what it has no form of (opening a file
-//! in a default application, revealing and trashing one, autostart, global
-//! shortcuts, the jump list) with `UnsupportedReason::NotOnThisPlatform`,
-//! and the launcher entry, whose form there is the icon's badge, with
-//! `NotYetOnThisHost`. Linux reaches the launcher, the file
-//! dialogs, autostart and the global shortcuts through the XDG desktop
-//! portal on the session bus, the launcher entry through its session-bus
-//! signal, and the user folders through the XDG user directories; it
-//! refuses the message box, the share sheet and the jump list with
-//! `UnsupportedReason::NotOnThisPlatform`, since no portal has them. A web
-//! page launches URIs, picks and saves files, shows a message box, shares,
-//! and badges an installed application's icon through the browser, and
-//! refuses autostart, global shortcuts, the user folders, the jump list and
-//! the system information with `NotOnThisPlatform`: a page has none of
-//! them. Android launches through `ACTION_VIEW`, picks and saves documents
-//! through the Storage Access Framework, shows a message box, shares, names
-//! the user's public folders and says what it is, and refuses autostart,
-//! global shortcuts, the launcher entry and the jump list with
-//! `NotOnThisPlatform`. Elsewhere, and for the system information on Linux, the handle is
-//! refused with `UnsupportedReason::NotYetOnThisHost` until a platform's
-//! provider lands, never faked (ADR-0154 §10); the jump list is refused with
-//! `NotOnThisPlatform` everywhere but Windows.
+//! A platform provides the services it has a form of and refuses the others
+//! with an [`Unsupported`](flui_platform::Unsupported) whose reason says
+//! whether it never will (`NotOnThisPlatform`) or does not yet
+//! (`NotYetOnThisHost`), never with a stand-in (ADR-0154 §10). Which
+//! platform provides which service, and where each falls short of the
+//! contract, is stated once: in `docs/gaps.md` ("The OS shell services") and
+//! the System services rows of `crates/flui-native/platform-parity.toml`.
 
 #[cfg(any(target_os = "android", test))]
 mod android;

@@ -619,7 +619,6 @@ impl FileDialogs {
                         let _ = caller.resolve(Ok(Some(location)));
                     }
                 },
-                // A retired owner has nobody left to answer.
                 Ok(unwritten) => {
                     // A retired owner has nobody left to answer.
                     let _ = caller.resolve(unwritten);

@@ -101,7 +101,7 @@ returned request or poll `try_result` to obtain the window result."
 //! | `cupertino` | off | `flui::cupertino` |
 //! | `material-icons` | off | the Material Icons face in the binary, for an application that draws the family `"Material Icons"` with [`widgets::Icon`] without the `material` catalog, which brings the face itself |
 //! | `cupertino-icons` | off | the Cupertino Icons face (family `"CupertinoIcons"`) in the binary, for an application that draws that family with [`widgets::Icon`]; the `cupertino` catalog draws no glyph of it and does not bring it, as Flutter takes the face from the `cupertino_icons` package |
-//! | `system` | off | `flui::services::system`: the launcher, file-dialog, autostart, global-shortcut, progress and user-folder providers |
+//! | `system` | off | `flui::services::system`: `flui-system`'s OS shell services (dialogs, launching, sharing, shortcuts and the rest its crate documentation lists) |
 //! | `http` | off | the built-in `HttpCapability` provider, each host's own HTTP stack (`ureq` over rustls on Linux and the BSDs); off, an `HttpCapability` request is refused as not registered and no HTTP client or TLS stack is linked |
 //! | `images` | off | `flui::assets` and the widgets' `Image::asset` and `Image::network`, with the decoded-image cache each UI runtime keeps; a network image also needs `http`; off, no image decoder is linked |
 //! | `single-instance` | off | one instance per user session on Linux and Windows (`Application::single_instance`): a later launch hands the running instance its links and files; off, each launch is a process of its own, and `flui build` and `flui run` refuse a desktop build of an application that declares URL schemes or file types |
@@ -309,10 +309,10 @@ pub mod scheduler {
 /// OS services from capability crates (ADR-0154 §8), each behind the feature
 /// of its name.
 ///
-/// `system` (`flui-system`): the providers of the launcher, whose handle is
-/// [`platform::launch::Launcher`], the file dialogs, autostart, global
-/// shortcuts, the launcher entry's progress and count, and the user's
-/// folders. An application registers `services::system::SystemPlugin`.
+/// `system` (`flui-system`): the OS shell services its crate documentation
+/// lists, the launcher's provider among them, whose handle is
+/// [`platform::launch::Launcher`]. An application registers
+/// `services::system::SystemPlugin`.
 #[cfg(feature = "system")]
 pub mod services {
     pub use flui_system as system;
