@@ -7,7 +7,7 @@
   `cupertino` catalog draws no glyph of the Cupertino family and does not bring its face. An
   application that draws a family with `Icon` and has no catalog that brings it turns the facade's
   feature on; without it the icon draws the missing-glyph box on every host. A generated counter,
-  which uses no catalog, is 0.59 MB smaller on Linux x86_64 and 0.60 MB on wasm32 (ADR-0397).
+  which uses no catalog, is about 0.6 MB smaller on Linux x86_64 and on wasm32 (ADR-0397).
 - A host font feed never adds a face of the "Material Icons" or "CupertinoIcons" family: an icon
   draws from the face FLUI embeds or from one the application registers, never from a copy the
   host happens to have.

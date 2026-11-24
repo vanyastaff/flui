@@ -1,9 +1,11 @@
 # ADR-0397: An icon face is in a binary only where a package or the application asks for it
 
-- **Status:** Accepted (2026-11-24)
+- **Status:** Implemented (2026-11-24)
 - **Date:** 2026-11-24
 - **Supersedes:** [ADR-0092](ADR-0092-per-realm-text-over-parley.md) migration step 4a only (the
-  clause that `bundled-fonts` installs Material Icons and CupertinoIcons beside Roboto);
+  clause that `bundled-fonts` installs Material Icons and CupertinoIcons beside Roboto, and §7's
+  clause that the feed adds a host face of every family the collection does not hold, for the two
+  icon families);
   [ADR-0065](ADR-0065-painting-owns-shaping-text-crosses-the-display-list-shaped.md) "Decision"
   only (the clause that the embedded faces, each icon family among them, sit behind
   `bundled-fonts`)
@@ -101,8 +103,8 @@ package with its own icon face ships the bytes and documents the `register_font`
 ### Consequences
 
 - Good, because an application carries only the faces it asks for: without a catalog or an icon
-  feature none of the 614,468 bytes of the two icon faces (a generated counter measured 592,128
-  bytes smaller on Linux x86_64 and 600,277 on wasm32), and with Material alone not the Cupertino
+  feature none of the 614,468 bytes of the two icon faces (about 0.6 MB of the generated counter
+  on Linux x86_64 and on wasm32, `perf/size.toml`), and with Material alone not the Cupertino
   face's 257,628.
 - Good, because an author adds `material` and its widgets' icons draw: the feature rides on the
   dependency.
@@ -112,11 +114,13 @@ package with its own icon face ships the bytes and documents the `register_font`
 - Bad, because `Icon` with an icon family in an application whose build does not embed that face,
   and which registers none, draws the missing-glyph box on every host, where it drew the icon
   before. `Icon`'s documentation and the facade's feature table say which feature brings each
-  face; a diagnostic on the shaping path that names the feature is a follow-up.
+  face; a diagnostic that names it is a gap ([`docs/gaps.md`](../gaps.md)).
 - Neutral, because a workspace build that includes the packages unifies `material-icons` on, so a
   test that needs an icon face in a crate below the packages names the feature in its own
-  dev-dependency (`flui-engine` and `flui-widgets` do). Registering the bytes by hand instead adds
-  a second copy of the family wherever the feature is unified on, so the feature is the form.
+  dev-dependency (`flui-engine` and `flui-widgets` do). `flui-painting`'s own tests are the
+  exception: they check the builds without the feature, so a test of theirs that needs a face
+  registers its bytes on its collection, which holds a second copy of the family wherever the
+  feature is unified on.
 
 ### Confirmation
 
@@ -124,14 +128,17 @@ package with its own icon face ships the bytes and documents the `register_font`
   `#[cfg(feature = …)]`, and the registration names them under the same `cfg`.
 - `an_icon_face_reaches_a_consumer_only_with_its_catalog_or_its_feature` (the facade's
   `facade_consumer`, which main's nested suite runs): resolves a project outside the workspace
-  that depends on the facade and reads `flui-painting`'s features from its graph. With no feature
-  neither icon feature is on; `material` and `material-icons` turn on the Material one alone;
-  `cupertino` turns on neither, and `cupertino-icons` the Cupertino one alone. A workspace build
-  cannot show this, since its members' features are unified. It holds §3.
+  that depends on the facade, or on `flui-sdk` as a package does, and reads `flui-painting`'s
+  features from its graph. With no feature neither icon feature is on; `material` and
+  `material-icons` turn on the Material one alone; `cupertino` turns on neither, and
+  `cupertino-icons` the Cupertino one alone. A workspace build cannot show this, since its
+  members' features are unified. It holds §3.
 - `a_host_never_supplies_an_icon_family_flui_embeds` (`flui-painting`, `text_layout::context`): a
-  host feed that offers a face of each icon family and of a text family adds the text face and
-  neither icon face, and a collection holds an icon family exactly when its feature is on. It
-  holds §2.
+  host feed that offers a face of "Material Icons", of "CupertinoIcons" and of a text family adds
+  the text face, and each icon family then holds one face where its feature is on and none where
+  it is off. The families are spelled in the test, so the feed's list cannot drift from them. It
+  holds §2, and `every_family_the_host_scan_finds_resolves_in_the_collection` reads the same rule
+  on the host's own fonts.
 - `an_icon_of_the_family_shapes_to_a_glyph_of_the_embedded_face` (`flui-material`'s
   `tests/icon_face.rs`): in a build that holds the face, a codepoint of the family shapes to a
   glyph on a new collection, with nothing registered by hand.

@@ -892,7 +892,9 @@ a file that panics on every read is skipped; a file replaced between that
 read and the registration is not covered. The scan is fontdb's: the platform's font
 directories, and fontconfig's configuration where there is one. The
 collection holds the bundled faces, then every face the scan found whose
-family it does not already hold, read from the same files. A generic it
+family it does not already hold and that is not "Material Icons" or
+"CupertinoIcons" (ADR-0397 §2: an icon draws the face the build embeds or the
+app registers, never a host copy), read from the same files. A generic it
 leaves unbound takes the scan's pick for it, system-ui taking sans-serif's
 (decision 16). A style's family is resolved by one rule, `resolve_family_name`
 (decision 8), over the families the collection holds, spelled exactly:

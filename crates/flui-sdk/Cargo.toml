@@ -61,8 +61,9 @@ flui-rendering = { workspace = true, features = ["testing"] }
 [features]
 animation-diagnostics = ["flui-animation/diagnostics"]
 # Embed an icon face in the application, so every `FontCollection` holds it
-# (flui-painting, ADR-0397). A package that draws with the family turns its
-# feature on in its own manifest, as `flui-material` and `flui-cupertino` do.
+# (flui-painting, ADR-0397). A package whose widgets draw with the family turns
+# its feature on in its own manifest, as `flui-material` does; `flui-cupertino`
+# draws no glyph of its family and turns nothing on.
 material-icons = ["flui-painting/material-icons"]
 cupertino-icons = ["flui-painting/cupertino-icons"]
 # Additive. Re-exports the handle-less input capabilities

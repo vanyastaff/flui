@@ -83,9 +83,11 @@ impl FontCollection {
 
     /// A collection fed from the host: [`FontCollection::new`]'s faces, then
     /// every face `host` found whose families the collection does not
-    /// already hold, every generic family the collection leaves unbound
-    /// bound to the family `host` picked for it (system-ui to sans-serif's),
-    /// and `host`'s fallback lists past a style's family.
+    /// already hold and that is not of an icon family FLUI embeds ("Material
+    /// Icons", "CupertinoIcons", ADR-0397 §2), every generic family the
+    /// collection leaves unbound bound to the family `host` picked for it
+    /// (system-ui to sans-serif's), and `host`'s fallback lists past a
+    /// style's family.
     ///
     /// With `bundled-fonts` the bundled Roboto keeps every generic and a
     /// host copy of a bundled family is never fed, so text naming no family
@@ -107,11 +109,12 @@ impl FontCollection {
     /// renders before the host is scanned. [`HostFontFeed::run`], on a thread
     /// other than the owner's, scans the host and adds what
     /// [`FontCollection::with_host_fonts`] would: every face whose families
-    /// the collection does not hold when the feed starts, the generics it
-    /// leaves unbound, and the host's fallback order. If that changed the
-    /// collection it then raises [`Self::generation`] by one, so text laid
-    /// out before measures again at each pipeline's next frame, as after a
-    /// registration; a feed that added nothing leaves it alone.
+    /// the collection does not hold when the feed starts, except a face of an
+    /// icon family FLUI embeds, the generics it leaves unbound, and the host's
+    /// fallback order. If that changed the collection it then raises
+    /// [`Self::generation`] by one, so text laid out before measures again at
+    /// each pipeline's next frame, as after a registration; a feed that added
+    /// nothing leaves it alone.
     ///
     /// Without `bundled-fonts` the collection would start with no face, and
     /// a first frame would draw no text at all; this then feeds the host's
@@ -1227,25 +1230,25 @@ mod tests {
     /// A host never supplies an icon family FLUI embeds, whether this build
     /// holds that face or not: its "Material Icons" and "CupertinoIcons" are
     /// left out, and a text family beside them is fed. Without the feature
-    /// the family is then absent; with it, it keeps the embedded face alone.
-    /// Fails if the feed treats the icon families like any other family the
-    /// collection does not hold.
+    /// the family is then absent; with it, it holds the embedded face alone.
+    /// The families are spelled here, not taken from the feed's own list, so
+    /// a name dropped from or misspelt in that list fails its row.
     #[test]
     fn a_host_never_supplies_an_icon_family_flui_embeds() {
-        use super::EMBEDDED_ICON_FAMILIES;
-
         const PROBE: &str = "FLUI Probe Sans";
+        const ICONS: [(&str, bool); 2] = [
+            ("Material Icons", cfg!(feature = "material-icons")),
+            ("CupertinoIcons", cfg!(feature = "cupertino-icons")),
+        ];
+        let source = |family: &str| HostSource {
+            data: HostData::Blob(Arc::new(renamed(PROBE_SANS, family, None))),
+            families: vec![family.to_owned()],
+        };
         let host = HostFaces {
-            sources: EMBEDDED_ICON_FAMILIES
+            sources: ICONS
                 .iter()
-                .map(|&family| HostSource {
-                    data: HostData::Blob(Arc::new(renamed(PROBE_SANS, family, None))),
-                    families: vec![family.to_owned()],
-                })
-                .chain(std::iter::once(HostSource {
-                    data: HostData::Blob(Arc::new(renamed(PROBE_SANS, PROBE, None))),
-                    families: vec![PROBE.to_owned()],
-                }))
+                .map(|&(family, _)| source(family))
+                .chain(std::iter::once(source(PROBE)))
                 .collect(),
             sans_serif: PROBE.to_owned(),
             serif: PROBE.to_owned(),
@@ -1263,21 +1266,12 @@ mod tests {
                 .map_or(0, |family| family.fonts().len())
         };
         let fed = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
-        let embedded = FontCollection::new();
         assert_eq!(faces_of(&fed, PROBE), 1, "the text family is fed");
-        // The names are the embedded faces' own, so a face whose family name
-        // drifted from the list is caught where its feature is on.
-        for (family, embeds) in EMBEDDED_ICON_FAMILIES.into_iter().zip([
-            cfg!(feature = "material-icons"),
-            cfg!(feature = "cupertino-icons"),
-        ]) {
-            assert_eq!(embedded.holds(family), embeds, "`{family}` is embedded");
-        }
-        for family in EMBEDDED_ICON_FAMILIES {
+        for (family, embeds) in ICONS {
             assert_eq!(
                 faces_of(&fed, family),
-                faces_of(&embedded, family),
-                "`{family}` holds the faces this build embeds and no host copy"
+                usize::from(embeds),
+                "`{family}` holds the face this build embeds and no host copy"
             );
         }
     }
