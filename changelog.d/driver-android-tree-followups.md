@@ -4,7 +4,8 @@
   for a while, as a slow device does; a command whose deadline comes first is ended there and
   answers `Error::Timeout`, as the host's `adb` does.
 
-### Changed
+### Removed
 
-- **`flui-driver`**: `lane::android::device::parse_focus` answers the focused window's
-  `WindowName`, its `WindowHash` and its title, where it answered the title alone.
+- **`flui-driver`**: `lane::android::device::FOCUS` and `parse_focus`: the lane reads the focus
+  with the windows, from one `dumpsys window` (`device::WINDOWS`), as `Windows::focus`, the
+  window's `WindowName` (its `WindowHash` and its title).

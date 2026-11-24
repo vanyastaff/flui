@@ -201,9 +201,6 @@ pub fn parse_input_usage(usage: &str) -> InputCommands {
     }
 }
 
-/// The line that prints the window holding the input focus.
-pub const FOCUS: &str = "dumpsys window windows | grep -m1 'mCurrentFocus='";
-
 /// A window's hash, the id `Window{hash uU title}` names it by (`WindowState`'s identity hash):
 /// two windows of one title (an activity's window leaving as it is started again, split screen)
 /// differ in it.
@@ -268,24 +265,15 @@ impl WindowName {
     }
 }
 
-/// The window holding the input focus, from a reply holding its `mCurrentFocus=` line ([`FOCUS`],
-/// [`WINDOWS`]); `None` when no window holds it.
-#[must_use]
-pub fn parse_focus(printed: &str) -> Option<WindowName> {
-    printed
-        .lines()
-        .find_map(|line| line.split_once("mCurrentFocus="))
-        .and_then(|(_, window)| WindowName::parse(window.trim()))
-}
-
-/// The line that prints where the windows are: each display's header (`Display: mDisplayId=N`)
-/// and its rotation (`DisplayRotation`'s `mRotation=`), then each window's header
-/// (`Window #N Window{hash uU title}:`), its display (`mDisplayId=`, the first word of its dump),
-/// its frame (`frame=[l,t][r,b]` on its `Frames:` line from Android 11, `mFrame=[l,t][r,b]`
-/// before) and the window holding the input focus (`mCurrentFocus=`), as `dumpsys window` writes
-/// them. It reads no accessibility, so it pauses no accessibility service.
-pub const WINDOWS: &str = "dumpsys window displays | grep -E 'Display: mDisplayId=|mRotation='; \
-                           dumpsys window windows | grep -E 'Window #|mDisplayId=|mCurrentFocus=|rame=\\['";
+/// The line that prints where the windows are, from one `dumpsys window`, which the window manager
+/// dumps under its one lock, so the reply is of one moment: the parts' headers (`WINDOW MANAGER
+/// DISPLAY CONTENTS`, `WINDOW MANAGER WINDOWS`, …); in the displays' part each display's header
+/// (`Display: mDisplayId=N`), the window holding its input focus (`mCurrentFocus=`) and its
+/// rotation (`DisplayRotation`'s `mRotation=`); in the windows' part each window's header
+/// (`Window #N Window{hash uU title}:`), its display (`mDisplayId=`, the first word of its dump)
+/// and its frame (`frame=[l,t][r,b]` on its `Frames:` line from Android 11, `mFrame=[l,t][r,b]`
+/// before). It reads no accessibility, so it pauses no accessibility service.
+pub const WINDOWS: &str = "dumpsys window | grep -E 'WINDOW MANAGER |mDisplayId=|mCurrentFocus=|mRotation=|Window #|rame=\\['";
 
 /// The display the lane drives, the default one: the one `input`, `screencap` and
 /// `uiautomator dump` address, whose rotation the lane reads, and where the app's window must be.
@@ -344,6 +332,42 @@ impl Windows {
     }
 }
 
+/// Which part of the [`WINDOWS`] reply a line is in, by the part's `WINDOW MANAGER …` header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    /// Before any part's header: a reply that heads no part, read whole.
+    Unheaded,
+    /// `WINDOW MANAGER DISPLAY CONTENTS`: each display's header, focus and rotation.
+    Displays,
+    /// `WINDOW MANAGER WINDOWS`: each window's header, display and frame.
+    Windows,
+    /// Any other part, whose lines the lane does not read but for a focus outside a display.
+    Other,
+}
+
+impl Part {
+    /// The part a `WINDOW MANAGER …` header's `rest` names.
+    fn named(rest: &str) -> Self {
+        if rest.starts_with("DISPLAY CONTENTS") {
+            Self::Displays
+        } else if rest.starts_with("WINDOWS") {
+            Self::Windows
+        } else {
+            Self::Other
+        }
+    }
+
+    /// Whether the part lists the displays.
+    fn lists_displays(self) -> bool {
+        matches!(self, Self::Unheaded | Self::Displays)
+    }
+
+    /// Whether the part lists the windows.
+    fn lists_windows(self) -> bool {
+        matches!(self, Self::Unheaded | Self::Windows)
+    }
+}
+
 /// Which display's section of the [`WINDOWS`] reply a line is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
@@ -364,9 +388,12 @@ impl Section {
 }
 
 /// The windows the [`WINDOWS`] line printed as `printed`: see [`Windows`]. The rotation is the
-/// first `mRotation=` word inside the default display's section ([`DEFAULT_DISPLAY`]), or, in a
-/// reply that heads no display, the first one at all; a window's frame is the first `frame=` or
-/// `mFrame=` after its header; a line the parser does not know is skipped.
+/// first `mRotation=` word inside the default display's section ([`DEFAULT_DISPLAY`]) of the
+/// displays' part, or, in a reply that heads no display, the first one at all; the focus is the
+/// first `mCurrentFocus=` of the default display's section, or, where it has none (before
+/// Android 10, which prints the focus with the windows), the first outside any display's section;
+/// a window's frame is the first `frame=` or `mFrame=` after its header; a line the parser does
+/// not know is skipped.
 ///
 /// # Errors
 ///
@@ -374,18 +401,44 @@ impl Section {
 /// how the display is turned.
 pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
     let mut rotation = None;
+    // The first focus line of the default display's section, and of the lines outside any
+    // display's section: each `Some(None)` when that line names no window.
+    let mut display_focus: Option<Option<WindowName>> = None;
+    let mut other_focus: Option<Option<WindowName>> = None;
+    let mut part = Part::Unheaded;
     let mut section = Section::Unheaded;
     let mut windows: Vec<ListedWindow> = Vec::new();
     let mut in_window = false;
     for line in printed.lines() {
         let line = line.trim();
-        if line.starts_with("Display:")
+        if let Some(rest) = line.strip_prefix("WINDOW MANAGER ") {
+            part = Part::named(rest);
+            section = Section::Unheaded;
+            in_window = false;
+            continue;
+        }
+        if part.lists_displays()
+            && line.starts_with("Display:")
             && let Some(id) = word_value(line, "mDisplayId=")
         {
             section = Section::Display(DisplayId::parse(id));
             continue;
         }
+        if let Some((_, window)) = line.split_once("mCurrentFocus=") {
+            let named = WindowName::parse(window.trim());
+            match section {
+                Section::Display(display) if display == Some(DEFAULT_DISPLAY) => {
+                    display_focus.get_or_insert(named);
+                }
+                Section::Display(_) => {}
+                Section::Unheaded => {
+                    other_focus.get_or_insert(named);
+                }
+            }
+            continue;
+        }
         if rotation.is_none()
+            && part.lists_displays()
             && section.is_default()
             && let Some(value) = word_value(line, "mRotation=")
         {
@@ -398,7 +451,7 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
             };
             continue;
         }
-        if line.starts_with("Window #") {
+        if part.lists_windows() && line.starts_with("Window #") {
             in_window = false;
             if windows.len() < MAX_WINDOWS
                 && let Some(name) = WindowName::parse(line)
@@ -426,7 +479,7 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
     Ok(Windows {
         rotation,
         windows,
-        focus: parse_focus(printed),
+        focus: display_focus.or(other_focus).flatten(),
     })
 }
 

@@ -25,7 +25,7 @@ use flui_driver::{Awaited, Error, Isolation};
 
 use crate::android_lane::{
     FOCUSED, GETEVENT, PACKAGE, PROBED, USAGE, WINDOWS, abilities, answer_syncs, capability,
-    connected, inputs, png_of, raw_capture, scripted, scripted_with, tap,
+    connected, focus_of, inputs, png_of, raw_capture, scripted, scripted_with, tap,
 };
 
 const AT: DevicePoint = DevicePoint::new(300, 600);
@@ -495,28 +495,22 @@ fn device_output_at_its_edges() {
     assert!(device::check_component(&name(255), "id").is_ok());
     assert!(device::check_component(&name(256), "id").is_err());
     assert_eq!(device::INPUT_USAGE, "input help 2>&1");
+    assert_eq!(focus_of("  mCurrentFocus=Window{1 u0 }\n"), None);
     assert_eq!(
-        device::FOCUS,
-        "dumpsys window windows | grep -m1 'mCurrentFocus='"
-    );
-    assert_eq!(device::parse_focus("  mCurrentFocus=Window{1 u0 }\n"), None);
-    assert_eq!(
-        device::parse_focus("  mCurrentFocus=Window{9e u0 Application Error: x}\n")
+        focus_of("  mCurrentFocus=Window{9e u0 Application Error: x}\n")
             .map(|focus| focus.title)
             .as_deref(),
         Some("Application Error: x"),
         "a title with spaces is read whole"
     );
     assert_eq!(
-        device::parse_focus("  mCurrentFocus=Window{4f u0 a/.B} 0x1\n")
+        focus_of("  mCurrentFocus=Window{4f u0 a/.B} 0x1\n")
             .map(|focus| (focus.hash.to_string(), focus.title)),
         Some(("4f".to_owned(), "a/.B".to_owned())),
         "what follows the window's name is not its title"
     );
     assert_eq!(
-        device::parse_focus(FOCUSED)
-            .map(|focus| focus.title)
-            .as_deref(),
+        focus_of(FOCUSED).map(|focus| focus.title).as_deref(),
         Some("dev.flui.scenario/android.app.NativeActivity")
     );
 }
@@ -1321,8 +1315,10 @@ fn a_rotated_display_turns_the_gesture_edges_with_it() {
         .replace("mRotation=0", "mRotation=1")
         .replace("frame=[0,60][1080,2400]", "frame=[0,0][2340,1080]");
     assert_ne!(turned, WINDOWS);
-    let adb =
-        scripted(true, true).reply_once("shell dumpsys window displays", AdbReply::new(0, turned));
+    // Turned when the lane locates the window and still when it checks the press.
+    let adb = scripted(true, true)
+        .reply_once("shell dumpsys window |", AdbReply::new(0, turned.clone()))
+        .reply_once("shell dumpsys window |", AdbReply::new(0, turned));
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
     let window: flui_driver::protocol::tree::WindowId = "w1".parse().expect("a window");
     let placement = flui_driver::protocol::session::Placement::new(
