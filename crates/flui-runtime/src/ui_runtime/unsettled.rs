@@ -88,7 +88,8 @@ impl UiRuntime {
     ///
     /// A runtime whose host does not compose a half
     /// ([`RuntimeHostServices::composes_host_half`](super::RuntimeHostServices::composes_host_half))
-    /// answers with [`HostHalf::Absent`] itself at the end of each turn.
+    /// answers with [`HostHalf::Absent`] itself at the end of each turn and of each frame
+    /// settlement ([`Self::settle_frame`]), which discharges a cause with no turn after it.
     ///
     /// # Panics
     ///
@@ -100,8 +101,32 @@ impl UiRuntime {
         self.answer_settled_waits(now, host);
     }
 
-    /// [`Self::answer_settled`], for the runtime's own turn end.
-    pub(super) fn answer_settled_waits(&self, now: Instant, host: HostHalf<'_>) {
+    /// Whether a wait an agent parked is still unanswered: what [`Self::answer_settled`] would
+    /// answer. A host gathers its list for that call only while this holds, so a turn nobody
+    /// waits on costs it nothing.
+    #[must_use]
+    pub fn awaits_settled_answer(&self) -> bool {
+        self.agent_side.get().is_some()
+            && self
+                .presentations
+                .iter()
+                .any(|presentation| !presentation.agent_waits.borrow().is_empty())
+    }
+
+    /// A runtime whose host composes no half answers its settled waits from its own: at the end
+    /// of an owner turn, and after a frame's settlement, which discharges the frame in flight
+    /// with no turn after it. On a host that composes one this does nothing: that host answers
+    /// after its own steps (ADR-0400 §3).
+    pub(super) fn answer_settled_from_own_half(&self) {
+        if self.composes_host_half || !self.awaits_settled_answer() {
+            return;
+        }
+        let now = flui_foundation::MonotonicClock::now(&self.clock);
+        self.answer_settled_waits(now, HostHalf::Absent);
+    }
+
+    /// [`Self::answer_settled`] behind `&self`, for the runtime's own answers.
+    fn answer_settled_waits(&self, now: Instant, host: HostHalf<'_>) {
         let Some(agent) = self.agent_side.get() else {
             return;
         };
@@ -124,10 +149,5 @@ impl UiRuntime {
         } else {
             SettleScope::RuntimeOnly
         }
-    }
-
-    /// Whether the host answers settledness after each of its turns.
-    pub(super) fn host_composes_half(&self) -> bool {
-        self.composes_host_half
     }
 }

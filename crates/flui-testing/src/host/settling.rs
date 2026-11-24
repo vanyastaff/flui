@@ -124,8 +124,17 @@ impl HeadlessHost {
     }
 
     /// After a pump's own steps: hands the list to the UI runtime, which
-    /// answers its agent's settled waits, timeouts and idle ends from it.
+    /// answers its agent's settled waits, timeouts and idle ends from it. The
+    /// list is gathered only while a wait is parked, so a pump nobody waits
+    /// on allocates nothing for it.
     pub(super) fn answer_settled(&mut self) {
+        if !self
+            .ui_runtime
+            .as_ref()
+            .is_some_and(UiRuntime::awaits_settled_answer)
+        {
+            return;
+        }
         let unsettled = self.gather_unsettled();
         if let Some(runtime) = self.ui_runtime.as_mut() {
             runtime.answer_settled(unsettled.at(), HostHalf::Complete(&unsettled));

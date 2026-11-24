@@ -20,7 +20,7 @@ use flui_protocol::{locator::Locator, tree::WindowId};
 use flui_runtime::dev_agent::{AgentWindowSource, DevAgentHost};
 use flui_runtime::pump::SampledClock;
 use flui_runtime::settledness::{HostHalf, TURNS_AT_ONE_INSTANT, Unsettled};
-use flui_runtime::sink::{FrameSink, SubmitVerdict};
+use flui_runtime::sink::{FrameSettlement, FrameSink, Settled, SubmitVerdict};
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 use flui_testing::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook};
@@ -74,9 +74,9 @@ struct Held(
     #[expect(dead_code, reason = "kept alive, never read")] Rc<dyn PlatformWindow>,
 );
 
-/// An idle runtime on `clock`, built as a host that composes its half (`composes`) or not, run
-/// until its half lists nothing, and the agent window of its presentation.
-fn idle_runtime(clock: &ManualClock, composes: bool) -> (UiRuntime, Held, AgentWindow) {
+/// A runtime on `clock` with a still root mounted and no frame run yet, built as a host that
+/// composes its half (`composes`) or not, and the agent window of its presentation.
+fn mounted_runtime(clock: &ManualClock, composes: bool) -> (UiRuntime, Held, AgentWindow) {
     let fonts = flui_painting::FontCollection::new();
     let mut services = RuntimeHostServices::new(
         Arc::new(|| {}),
@@ -92,7 +92,7 @@ fn idle_runtime(clock: &ManualClock, composes: bool) -> (UiRuntime, Held, AgentW
     let platform_window: Rc<dyn PlatformWindow> = Rc::new(HeadlessWindow::new(40, 40));
     let window = PresentationWindow::new(Rc::clone(&platform_window), None)
         .with_gesture_profiles(flui_interaction::gesture::GestureSettings::default());
-    let mut runtime = UiRuntime::try_new(window, 1.0, services).expect("a manual-clock runtime");
+    let runtime = UiRuntime::try_new(window, 1.0, services).expect("a manual-clock runtime");
     runtime
         .attach_root_widget(&flui_widgets::SizedBox::square(10.0))
         .expect("the root mounts");
@@ -100,6 +100,12 @@ fn idle_runtime(clock: &ManualClock, composes: bool) -> (UiRuntime, Held, AgentW
     let window = agent
         .vend(&runtime, runtime.presentation_id())
         .expect("a serving hook is vended the window");
+    (runtime, Held(agent, platform_window), window)
+}
+
+/// [`mounted_runtime`], run until its half lists nothing.
+fn idle_runtime(clock: &ManualClock, composes: bool) -> (UiRuntime, Held, AgentWindow) {
+    let (mut runtime, held, window) = mounted_runtime(clock, composes);
     // Run turns at each wake until nothing is listed, as a host's loop does.
     let mut half = Unsettled::new(clock.now());
     for _ in 0..16 {
@@ -119,7 +125,7 @@ fn idle_runtime(clock: &ManualClock, composes: bool) -> (UiRuntime, Held, AgentW
         "a still root leaves the runtime idle within a few frames: {:?}",
         half.causes().collect::<Vec<_>>()
     );
-    (runtime, Held(agent, platform_window), window)
+    (runtime, held, window)
 }
 
 fn wait_until(
@@ -368,4 +374,79 @@ fn the_headless_host_answers_wait_settled_and_wait_frames_with_both_halves() {
     assert_eq!(outcome.end, WaitEnd::Satisfied);
     assert_eq!(outcome.frames, 2, "the frames presented after the request");
     assert_eq!(outcome.scope, SettleScope::Complete);
+}
+
+/// A sink that queues every frame and keeps its epoch, as a host with a raster thread does.
+#[derive(Default)]
+struct Queueing(Vec<flui_foundation::FrameEpoch>);
+
+impl FrameSink for Queueing {
+    fn surface_size(&mut self) -> (u32, u32) {
+        (40, 40)
+    }
+
+    fn submit(
+        &mut self,
+        epoch: flui_foundation::FrameEpoch,
+        _: flui_layer::ScenePublication,
+    ) -> SubmitVerdict {
+        self.0.push(epoch);
+        SubmitVerdict::Queued
+    }
+}
+
+/// A queued frame settles by a call outside any turn, as a native runner's raster side makes
+/// it. The settlement discharges the last cause, the frame in flight, and no turn follows it:
+/// on a host that composes no half the settled wait is answered there, not at its own deadline.
+///
+/// Fails while only the end of a turn answers from the runtime's half.
+#[test]
+fn a_queued_frame_s_settlement_answers_a_settled_wait_with_no_turn_after_it() {
+    let clock = ManualClock::new();
+    let (mut runtime, _held, window) = mounted_runtime(&clock, false);
+    let address = flui_foundation::PresentationAddress {
+        ui_runtime_id: runtime.id(),
+        presentation_id: runtime.presentation_id(),
+    };
+    let mut settled = wait_until(&window, Condition::Settled, 30_000);
+    let mut sink = Queueing::default();
+
+    // Turns at each wake, every queued frame settled after its turn, until nothing is listed.
+    let mut emptied_by_a_settlement = false;
+    let mut half = Unsettled::new(clock.now());
+    for _ in 0..16 {
+        let next = half.wake().map_or(Duration::from_millis(16), |wake| {
+            wake.saturating_duration_since(clock.now())
+        });
+        clock.advance(next);
+        let _ = runtime.pump(&mut SampledClock(clock.now()), &mut sink);
+        let mut after_turn = Unsettled::new(clock.now());
+        runtime.unsettled(clock.now(), &mut after_turn);
+        for epoch in sink.0.drain(..) {
+            let applied = runtime.settle_frame(FrameSettlement::new(
+                address,
+                epoch,
+                SubmitVerdict::Presented,
+            ));
+            assert_eq!(applied, Settled::Applied);
+        }
+        half = Unsettled::new(clock.now());
+        runtime.unsettled(clock.now(), &mut half);
+        if half.is_empty() {
+            emptied_by_a_settlement = !after_turn.is_empty();
+            break;
+        }
+    }
+    assert!(
+        emptied_by_a_settlement,
+        "the last cause was the frame in flight, which its settlement discharged: {:?}",
+        half.causes().collect::<Vec<_>>()
+    );
+
+    let outcome = settled
+        .try_take()
+        .expect("the settlement that left nothing in flight answered the wait")
+        .expect("a settled window is an answer");
+    assert_eq!(outcome.end, WaitEnd::Satisfied);
+    assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
 }

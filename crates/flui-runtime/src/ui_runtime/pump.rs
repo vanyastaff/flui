@@ -453,12 +453,7 @@ impl UiRuntime {
             // from the runtime's half alone; a composing host answers them after its own steps
             // (ADR-0400 §3). A reply's delivery is user code, contained behind the turn's own
             // failure.
-            if !self.host_composes_half() {
-                first.contain(|| {
-                    let now = flui_foundation::MonotonicClock::now(&self.clock);
-                    self.answer_settled_waits(now, crate::settledness::HostHalf::Absent);
-                });
-            }
+            first.contain(|| self.answer_settled_from_own_half());
         }
         if let Some(failure) = first.into_payload() {
             resume_unwind(failure);
