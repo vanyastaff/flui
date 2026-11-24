@@ -16,6 +16,7 @@ use interprocess::local_socket::traits::Stream as _;
 use super::launch::{LaunchError, LaunchedBrowser};
 use super::relay::Relay;
 use super::*;
+use crate::agent::nonblocking::NonblockingStream;
 use crate::agent::{Endpoint, Session};
 
 /// How long a test waits for a line or an end.
@@ -173,9 +174,10 @@ fn relayed(link: Box<dyn BrowserLink>) -> (tempfile::TempDir, Session, Relay) {
     (project, session, relay)
 }
 
-/// A client of the session's endpoint, reading line by line.
+/// A client of the session's endpoint, reading line by line. A named pipe takes no read
+/// timeout, so the stream is polled.
 struct Client {
-    stream: Stream,
+    stream: NonblockingStream,
     reader: LineReader,
 }
 
@@ -187,19 +189,26 @@ impl Client {
         let stream =
             Stream::connect(crate::agent::client::name(endpoint).expect("the endpoint is a name"))
                 .expect("the relay accepts");
-        stream
-            .set_recv_timeout(Some(Duration::from_millis(100)))
-            .expect("a receive timeout");
         Self {
-            stream,
+            stream: NonblockingStream::try_new(stream).expect("non-blocking"),
             reader: LineReader::new(1 << 20),
         }
     }
 
     fn send(&mut self, line: &str) {
-        (&self.stream)
-            .write_all(format!("{line}\n").as_bytes())
-            .expect("the relay reads");
+        let line = format!("{line}\n");
+        let deadline = Instant::now() + WAIT;
+        let mut written = 0;
+        while written < line.len() {
+            match (&self.stream).write(&line.as_bytes()[written..]) {
+                Ok(count) => written += count,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(Instant::now() < deadline, "the relay reads within {WAIT:?}");
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("the relay reads: {error}"),
+            }
+        }
     }
 
     /// The next line; `None` once the relay closed the connection.
@@ -217,11 +226,9 @@ impl Client {
             match (&self.stream).read(&mut chunk) {
                 Ok(0) => return None,
                 Ok(read) => self.reader.push(&chunk[..read]),
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
                 Err(_) => return None,
             }
         }
