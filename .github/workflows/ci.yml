@@ -1196,7 +1196,7 @@ jobs:
       matrix:
         run: [1, 2, 3, 4, 5]
     needs: [checks, plan]
-    if: needs.plan.outputs.lane == 'full'
+    if: contains(fromJSON('["wide","full"]'), needs.plan.outputs.lane)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     env:
