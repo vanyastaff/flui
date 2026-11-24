@@ -2,8 +2,8 @@
 # counts, not timings.
 
 [filter_3000_memo_rows]
-allocated_bytes = 3476809
-allocations = 4693
+allocated_bytes = 3476841
+allocations = 4694
 builds_run = 21
 damage_full = 0
 damage_rects = 1

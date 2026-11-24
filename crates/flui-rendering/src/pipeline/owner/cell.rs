@@ -235,6 +235,49 @@ impl PipelineCell {
         result
     }
 
+    /// Runs `f`, the unmount of a subtree of elements whose render objects on
+    /// this owner are `members`. During `f`, a
+    /// [`remove_render_object`](PipelineOwner::remove_render_object) of a
+    /// member whose parent is a member leaves it in place, and the parent's
+    /// removal takes it out with the rest of its subtree: a row of `k` render
+    /// nodes leaves the tree once, not `k` times. When `f` returns, any member
+    /// still in the tree is removed, and `members` is handed back empty with
+    /// its capacity, for the next teardown to fill.
+    ///
+    /// Each member's own element must unmount within `f`, deepest first, so
+    /// a member's parent is removed after the member's element let it go. A
+    /// teardown opened while one is open, or while the owner is checked out,
+    /// runs `f` without one. If `f` unwinds, the teardown closes without
+    /// removing: the members left belong to elements that did not finish.
+    pub fn with_teardown<R>(&self, members: &mut Vec<RenderId>, f: impl FnOnce() -> R) -> R {
+        /// Closes the teardown on an unwind; after `end_teardown` it finds
+        /// none open.
+        struct Abandon<'c>(&'c PipelineCell);
+        impl Drop for Abandon<'_> {
+            fn drop(&mut self) {
+                if let Ok(mut owner) = self.0.0.owner.try_borrow_mut() {
+                    owner.abandon_teardown();
+                }
+            }
+        }
+
+        let lent = std::mem::take(members);
+        let opened = match self.0.owner.try_borrow_mut() {
+            Ok(mut owner) => owner.begin_teardown(lent),
+            Err(_) => Err(lent),
+        };
+        if let Err(unopened) = opened {
+            *members = unopened;
+            members.clear();
+            return f();
+        }
+        let abandon = Abandon(self);
+        let result = f();
+        *members = self.with_mut(PipelineOwner::end_teardown);
+        drop(abandon);
+        result
+    }
+
     /// A watch on the leader that publishes under `link` in this pipeline's
     /// frames, delivered through `lane`, the post-frame lane of the frames
     /// that paint them.

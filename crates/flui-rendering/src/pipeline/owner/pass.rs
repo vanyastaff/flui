@@ -73,9 +73,11 @@ impl PipelineOwner {
     /// that drives them by hand starts here.
     ///
     /// A removal batch left open by a scope that unwound is closed first, so
-    /// the frame never walks a child list that names a removed node.
+    /// the frame never walks a child list that names a removed node, and so
+    /// is a teardown, so no later removal waits for a parent that stays.
     pub fn layout_pass(&mut self) -> FramePass<'_, Layout> {
         self.close_removal_batch();
+        self.abandon_teardown();
         FramePass::new(self)
     }
 }

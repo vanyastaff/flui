@@ -170,8 +170,11 @@ impl PipelineOwner {
     /// former parent of `id`
     /// ([`PipelineCell::with_batched_removals`](crate::pipeline::PipelineCell::with_batched_removals))
     /// that parent's child list keeps the stale id, and the parent is marked,
-    /// until the batch ends and compacts that list once. Must not run
-    /// mid-phase — the layout/paint walks hold raw borrows into the slab.
+    /// until the batch ends and compacts that list once. Inside a teardown
+    /// ([`PipelineCell::with_teardown`](crate::pipeline::PipelineCell::with_teardown))
+    /// a member whose parent is a member stays in place and returns 0: its
+    /// parent's removal takes it. Must not run mid-phase — the layout/paint
+    /// walks hold raw borrows into the slab.
     pub fn remove_render_object(&mut self, id: RenderId) -> usize {
         debug_assert!(
             !self.scheduler.debug_doing_layout() && !self.scheduler.debug_doing_paint(),
@@ -179,6 +182,9 @@ impl PipelineOwner {
              the walks hold borrows into the slab; defer removal to \
              between-frame work",
         );
+        if self.teardown_takes(id) {
+            return 0;
+        }
         let former_parent = self.render_tree.parent(id);
         let batched = former_parent.is_some() && former_parent == self.removal_batch.parent;
         let edge = if batched {
