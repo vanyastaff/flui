@@ -16,7 +16,10 @@ impl UiRuntime {
     ///   running animation (`Ticker`, with its window, whether or not what it animates is painted)
     ///   are the next turn's, but only while the runtime's frames are on: a runtime that sees no
     ///   window runs no frame for them, and lists none. While a dropped frame's retry is armed and
-    ///   not yet due they are served at the retry instead, and listed at it;
+    ///   not yet due they are served at the retry instead, and listed at it. A redraw, a
+    ///   scheduled frame and tree work or motion are listed with the window of each presentation
+    ///   that has work for a frame (or motion), and with none when no presentation has any; due
+    ///   work is listed with none;
     /// - every deadline the runtime wakes for (a gesture's, its geometry's, text preparation's, a
     ///   haptic delivery's, a frame-rate hold's, a dropped frame's retry, the in-flight floor, a
     ///   task's sleep, a drag's spring loading) is a `Timer` served at its exact instant, with the
@@ -31,22 +34,53 @@ impl UiRuntime {
             Some(retry) => into.deadline(reason, window, retry),
             None => into.next_frame(reason, window),
         };
+        // The runtime-wide demand for a frame changes only the presentations with work for it:
+        // it is listed once with the window of each, or with none when no presentation has any,
+        // so a `wait.settled` on a window another window's demand does not touch is not held by
+        // it (ADR-0400 §3).
+        let for_frame_work =
+            |into: &mut Unsettled,
+             reason,
+             also: &dyn Fn(&crate::presentation::PresentationState) -> bool| {
+                let mut named = false;
+                for presentation in self.presentations.iter() {
+                    if presentation.has_frame_work() || also(presentation) {
+                        next_turn(
+                            into,
+                            reason,
+                            Some(super::agent::window_of(presentation.id())),
+                        );
+                        named = true;
+                    }
+                }
+                if !named {
+                    next_turn(into, reason, None);
+                }
+            };
         let frames_enabled = self.scheduler.frames_enabled();
         if frames_enabled {
             if self.needs_redraw() {
-                next_turn(into, UnsettledReason::NeedsRedraw, None);
+                for_frame_work(into, UnsettledReason::NeedsRedraw, &|_| false);
             }
             if self.scheduler.is_frame_scheduled() {
-                next_turn(into, UnsettledReason::FrameScheduled, None);
+                for_frame_work(into, UnsettledReason::FrameScheduled, &|_| false);
             }
             // A gesture deadline armed and not yet come is its own `Timer` below: a frame before
             // it serves nothing.
-            let motion = self
-                .presentations
-                .iter()
-                .any(|presentation| presentation.gestures().has_pending_motion());
-            if self.has_pending_tree_work() || self.has_pending_due_work() || motion {
+            let has_motion = |presentation: &crate::presentation::PresentationState| {
+                presentation.gestures().has_pending_motion()
+            };
+            if self.has_pending_due_work() {
+                // Due work is the runtime's (a task's deadline) or a presentation's (a retry, a
+                // gesture's deadline, a haptic delivery, a hold); it is named for none.
                 next_turn(into, UnsettledReason::PendingWork, None);
+            } else if self.has_pending_tree_work()
+                || self
+                    .presentations
+                    .iter()
+                    .any(|presentation| has_motion(presentation))
+            {
+                for_frame_work(into, UnsettledReason::PendingWork, &has_motion);
             }
             for presentation in self.presentations.iter() {
                 if !presentation.closing_requested.get()

@@ -2,15 +2,16 @@
 //! a parked wait from the list its host hands it after a turn, and from its own half alone, never
 //! idle, where its host composes none.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-
-use flui_platform::PlatformWindow;
-use flui_runtime::presentation::PresentationWindow;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use flui_foundation::panic::payload_text;
+use flui_foundation::testing::panicking_waker;
 use flui_foundation::{ManualClock, MonotonicClock};
+use flui_platform::PlatformWindow;
 use flui_protocol::method::{WaitFrames, WaitSettled, WaitUntil};
 use flui_protocol::wait::{
     ClearedBy, Condition, FramesParams, SettleScope, SettledParams, UnsettledReason, WaitEnd,
@@ -18,6 +19,7 @@ use flui_protocol::wait::{
 };
 use flui_protocol::{locator::Locator, tree::WindowId};
 use flui_runtime::dev_agent::{AgentWindowSource, DevAgentHost};
+use flui_runtime::presentation::PresentationWindow;
 use flui_runtime::pump::SampledClock;
 use flui_runtime::settledness::{HostHalf, TURNS_AT_ONE_INSTANT, Unsettled};
 use flui_runtime::sink::{FrameSettlement, FrameSink, Settled, SubmitVerdict};
@@ -77,9 +79,18 @@ struct Held(
 /// A runtime on `clock` with a still root mounted and no frame run yet, built as a host that
 /// composes its half (`composes`) or not, and the agent window of its presentation.
 fn mounted_runtime(clock: &ManualClock, composes: bool) -> (UiRuntime, Held, AgentWindow) {
+    mounted_runtime_waking(clock, composes, Arc::new(|| {}))
+}
+
+/// [`mounted_runtime`] whose host wake is `wake`.
+fn mounted_runtime_waking(
+    clock: &ManualClock,
+    composes: bool,
+    wake: Arc<dyn Fn() + Send + Sync>,
+) -> (UiRuntime, Held, AgentWindow) {
     let fonts = flui_painting::FontCollection::new();
     let mut services = RuntimeHostServices::new(
-        Arc::new(|| {}),
+        wake,
         Arc::new(AtomicBool::new(false)),
         &fonts,
         flui_scheduler::ClockSource::Manual(clock.clone()),
@@ -105,7 +116,15 @@ fn mounted_runtime(clock: &ManualClock, composes: bool) -> (UiRuntime, Held, Age
 
 /// [`mounted_runtime`], run until its half lists nothing.
 fn idle_runtime(clock: &ManualClock, composes: bool) -> (UiRuntime, Held, AgentWindow) {
-    let (mut runtime, held, window) = mounted_runtime(clock, composes);
+    run_until_idle(clock, mounted_runtime(clock, composes))
+}
+
+/// Runs `mounted`'s turns at each wake until its half lists nothing.
+fn run_until_idle(
+    clock: &ManualClock,
+    mounted: (UiRuntime, Held, AgentWindow),
+) -> (UiRuntime, Held, AgentWindow) {
+    let (mut runtime, held, window) = mounted;
     // Run turns at each wake until nothing is listed, as a host's loop does.
     let mut half = Unsettled::new(clock.now());
     for _ in 0..16 {
@@ -283,48 +302,84 @@ fn a_runtime_whose_host_composes_no_half_answers_runtime_only_and_never_idle() {
 }
 
 /// A timer the host lists as due at the instant it is served, after every turn, keeps the clock
-/// from moving: the wait ends unsatisfied after the turn bound, naming the timer.
+/// from moving: the wait ends unsatisfied after the turn bound, naming the timer. The bound
+/// counts passes at one instant: a pass at a later instant counts from one again, so passes
+/// spread over time never end a wait.
 ///
-/// Fails without the bound: the wait stays parked however many turns run at one instant.
+/// Fails without the bound (the wait stays parked however many turns run at one instant), or
+/// with a count that never restarts (the pass at the later instant ends the wait).
 #[test]
 fn a_timer_that_re_arms_at_the_same_instant_ends_the_wait_after_the_turn_bound() {
-    let clock = ManualClock::new();
-    let (mut runtime, _agent, window) = idle_runtime(&clock, true);
-    let mut reply = wait_until(&window, missing(), 60_000);
-    let _ = runtime.drain_owner_inbox();
-    let now = clock.now();
-    // The timer is due at this instant; the scenario's step is not.
-    let mut listed = Unsettled::new(now);
-    listed.deadline(UnsettledReason::Timer, None, now);
-    listed.deadline(
-        UnsettledReason::ScenarioStep,
-        None,
-        now + Duration::from_secs(1),
-    );
-
-    for _ in 1..TURNS_AT_ONE_INSTANT {
-        runtime.answer_settled(now, HostHalf::Complete(&listed));
+    struct Row {
+        name: &'static str,
+        /// Whether the clock moves before the pass that would reach the bound.
+        moves: bool,
     }
-    assert!(
-        reply.try_take().is_none(),
-        "one turn short of the bound, the wait holds out"
-    );
-    runtime.answer_settled(now, HostHalf::Complete(&listed));
-    let outcome = reply
-        .try_take()
-        .expect("the bound answered")
-        .expect("an answer");
-    assert_eq!(outcome.end, WaitEnd::Unsatisfied);
-    let named: Vec<_> = outcome
-        .unsettled
-        .iter()
-        .map(|cause| (cause.reason, cause.cleared_by))
-        .collect();
-    assert_eq!(
-        named,
-        [(UnsettledReason::Timer, ClearedBy::Deadline)],
-        "the cause due at that instant, not the later step"
-    );
+    // The timer is due at `now`; the scenario's step is not.
+    let listed_at = |now| {
+        let mut listed = Unsettled::new(now);
+        listed.deadline(UnsettledReason::Timer, None, now);
+        listed.deadline(
+            UnsettledReason::ScenarioStep,
+            None,
+            now + Duration::from_secs(1),
+        );
+        listed
+    };
+    let rows = [
+        Row {
+            name: "every pass at one instant",
+            moves: false,
+        },
+        Row {
+            name: "the last pass at a later instant",
+            moves: true,
+        },
+    ];
+    for row in rows {
+        let clock = ManualClock::new();
+        let (mut runtime, _agent, window) = idle_runtime(&clock, true);
+        let mut reply = wait_until(&window, missing(), 60_000);
+        let _ = runtime.drain_owner_inbox();
+        let now = clock.now();
+        let listed = listed_at(now);
+        for _ in 1..TURNS_AT_ONE_INSTANT {
+            runtime.answer_settled(now, HostHalf::Complete(&listed));
+        }
+        assert!(
+            reply.try_take().is_none(),
+            "{}: one turn short of the bound, the wait holds out",
+            row.name
+        );
+        if row.moves {
+            clock.advance(Duration::from_millis(1));
+            let later = clock.now();
+            runtime.answer_settled(later, HostHalf::Complete(&listed_at(later)));
+            assert!(
+                reply.try_take().is_none(),
+                "{}: a pass at a later instant counts from one again",
+                row.name
+            );
+            continue;
+        }
+        runtime.answer_settled(now, HostHalf::Complete(&listed));
+        let outcome = reply
+            .try_take()
+            .expect("the bound answered")
+            .expect("an answer");
+        assert_eq!(outcome.end, WaitEnd::Unsatisfied, "{}", row.name);
+        let named: Vec<_> = outcome
+            .unsettled
+            .iter()
+            .map(|cause| (cause.reason, cause.cleared_by))
+            .collect();
+        assert_eq!(
+            named,
+            [(UnsettledReason::Timer, ClearedBy::Deadline)],
+            "{}: the cause due at that instant, not the later step",
+            row.name
+        );
+    }
 }
 
 /// One served answer per method the runtime answers since it owns settledness: `wait.settled`
@@ -449,4 +504,220 @@ fn a_queued_frame_s_settlement_answers_a_settled_wait_with_no_turn_after_it() {
         .expect("a settled window is an answer");
     assert_eq!(outcome.end, WaitEnd::Satisfied);
     assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
+}
+
+/// The payload an agent's waker panics with.
+const WAKER_PANIC: &str = "an agent's waker panics";
+
+/// A host wake that panics while `armed` holds, each payload naming its ordinal among the armed
+/// calls (`host wake 1`, `host wake 2`, …), which `calls` counts.
+fn wake_that_panics_while(
+    armed: &Arc<AtomicBool>,
+    calls: &Arc<AtomicUsize>,
+) -> Arc<dyn Fn() + Send + Sync> {
+    let (armed, calls) = (Arc::clone(armed), Arc::clone(calls));
+    Arc::new(move || {
+        if armed.load(Ordering::SeqCst) {
+            let ordinal = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            std::panic::panic_any(format!("host wake {ordinal}"));
+        }
+    })
+}
+
+/// A `wait.frames` that holds out: every answer pass that puts it back asks the host for the
+/// frames it counts, which wakes the host.
+fn frames_that_hold_out(window: &AgentWindow) -> AgentAnswer<WaitOutcome> {
+    window
+        .call::<WaitFrames>(frames_params(window.id(), 1_000, 60_000))
+        .expect("the inbox has room")
+}
+
+/// A runtime whose host composes no half answers its settled waits at a turn's end behind the
+/// turn's own failure. A reply whose waker panics is answered and fails nothing: the reply
+/// contains its waker (ADR-0288 §3). Where the turn failed first (its host wake panicked), that
+/// failure continues and the answer pass's own (the wake it asks for the frames a parked
+/// `wait.frames` counts) is discarded under containment (ADR-0281). Either way the wait is
+/// answered once, nothing is left parked, and the next turn works.
+///
+/// Fails against a turn end that answers uncontained (the answer pass's later panic replaces the
+/// turn's) or that skips the answers once the turn failed (the wait is not answered).
+#[test]
+fn a_turn_s_end_answers_settled_waits_behind_the_turn_s_first_failure() {
+    struct Row {
+        name: &'static str,
+        turn_fails: bool,
+    }
+    let rows = [
+        Row {
+            name: "a reply whose waker panics",
+            turn_fails: false,
+        },
+        Row {
+            name: "a turn that failed first",
+            turn_fails: true,
+        },
+    ];
+    for row in rows {
+        let clock = ManualClock::new();
+        let armed = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (runtime, _held, window) = run_until_idle(
+            &clock,
+            mounted_runtime_waking(&clock, false, wake_that_panics_while(&armed, &calls)),
+        );
+        let frames = frames_that_hold_out(&window);
+        let _ = runtime.drain_owner_inbox();
+        // Parked and past its deadline in one turn: its end answers it.
+        let mut until = wait_until(&window, missing(), 0);
+        until.register(&panicking_waker(WAKER_PANIC));
+
+        armed.store(row.turn_fails, Ordering::SeqCst);
+        let turn = catch_unwind(AssertUnwindSafe(|| runtime.drain_owner_inbox()));
+        armed.store(false, Ordering::SeqCst);
+
+        match turn {
+            Ok(_) => assert!(
+                !row.turn_fails,
+                "{}: the turn's failure continues",
+                row.name
+            ),
+            Err(payload) => {
+                assert!(
+                    row.turn_fails,
+                    "{}: a reply's waker fails nothing",
+                    row.name
+                );
+                assert_eq!(
+                    payload_text(&*payload),
+                    Some("host wake 1"),
+                    "{}: the turn's own failure, the first",
+                    row.name
+                );
+                assert!(
+                    calls.load(Ordering::SeqCst) >= 2,
+                    "{}: the answer pass ran after the failure and woke the host too",
+                    row.name
+                );
+            }
+        }
+        let outcome = until
+            .try_take()
+            .expect("the turn's end answered the wait")
+            .expect("an answer");
+        assert_eq!(outcome.end, WaitEnd::Unsatisfied, "{}", row.name);
+        assert_eq!(outcome.scope, SettleScope::RuntimeOnly, "{}", row.name);
+
+        drop(frames);
+        let _ = runtime.drain_owner_inbox();
+        assert!(
+            !runtime.awaits_settled_answer(),
+            "{}: no wait is left parked to be answered again",
+            row.name
+        );
+    }
+}
+
+/// A queued frame's settlement, outside any turn, answers the settled waits of a runtime whose
+/// host composes no half behind the settlement's own failure: a reply whose waker panics fails
+/// nothing, and where the settlement's wake for the frame it retries panicked first, that failure
+/// continues and the answer pass's later one is discarded. Either way the wait is answered once,
+/// nothing is left parked, and the next turn works.
+///
+/// Fails against a settlement that answers uncontained (the answer pass's later panic replaces
+/// the settlement's) or only once its own tail succeeded (the wait is not answered).
+#[test]
+fn a_settlement_answers_settled_waits_behind_its_own_first_failure() {
+    struct Row {
+        name: &'static str,
+        verdict: SubmitVerdict,
+        settlement_fails: bool,
+    }
+    let rows = [
+        Row {
+            name: "a reply whose waker panics",
+            verdict: SubmitVerdict::Presented,
+            settlement_fails: false,
+        },
+        Row {
+            name: "a settlement that failed first",
+            verdict: SubmitVerdict::Retry,
+            settlement_fails: true,
+        },
+    ];
+    for row in rows {
+        let clock = ManualClock::new();
+        let armed = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (mut runtime, _held, window) =
+            mounted_runtime_waking(&clock, false, wake_that_panics_while(&armed, &calls));
+        let address = flui_foundation::PresentationAddress {
+            ui_runtime_id: runtime.id(),
+            presentation_id: runtime.presentation_id(),
+        };
+        let frames = frames_that_hold_out(&window);
+        let mut until = wait_until(&window, missing(), 10);
+        until.register(&panicking_waker(WAKER_PANIC));
+        let mut sink = Queueing::default();
+        clock.advance(Duration::from_millis(16));
+        let _ = runtime.pump(&mut SampledClock(clock.now()), &mut sink);
+        assert!(
+            until.try_take().is_none(),
+            "{}: the turn ended before the wait's deadline",
+            row.name
+        );
+        let epoch = *sink
+            .0
+            .last()
+            .unwrap_or_else(|| panic!("{}: the turn queued a frame", row.name));
+
+        // The settlement comes past the wait's deadline.
+        clock.advance(Duration::from_millis(20));
+        armed.store(row.settlement_fails, Ordering::SeqCst);
+        let settled = catch_unwind(AssertUnwindSafe(|| {
+            runtime.settle_frame(FrameSettlement::new(address, epoch, row.verdict))
+        }));
+        armed.store(false, Ordering::SeqCst);
+
+        match settled {
+            Ok(applied) => {
+                assert!(
+                    !row.settlement_fails,
+                    "{}: the settlement's failure continues",
+                    row.name
+                );
+                assert_eq!(applied, Settled::Applied, "{}", row.name);
+            }
+            Err(payload) => {
+                assert!(
+                    row.settlement_fails,
+                    "{}: a reply's waker fails nothing",
+                    row.name
+                );
+                assert_eq!(
+                    payload_text(&*payload),
+                    Some("host wake 1"),
+                    "{}: the settlement's own failure, the first",
+                    row.name
+                );
+                assert!(
+                    calls.load(Ordering::SeqCst) >= 2,
+                    "{}: the answer pass ran after the failure and woke the host too",
+                    row.name
+                );
+            }
+        }
+        let outcome = until
+            .try_take()
+            .expect("the settlement answered the wait")
+            .expect("an answer");
+        assert_eq!(outcome.end, WaitEnd::Unsatisfied, "{}", row.name);
+
+        drop(frames);
+        let _ = runtime.drain_owner_inbox();
+        assert!(
+            !runtime.awaits_settled_answer(),
+            "{}: no wait is left parked to be answered again",
+            row.name
+        );
+    }
 }
