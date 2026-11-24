@@ -490,7 +490,7 @@ impl<M: PartialEq + Debug + 'static> Run<'_, M> {
     }
 
     fn control_paths(&mut self, label: &str, reference: &(&str, Outcome<M>), initial: &M) {
-        let min_target = GestureSettings::default().min_target();
+        let min_target = minimum_target().get();
         for device in [Device::Mouse, Device::Touch, Device::Virtual] {
             let path = format!("its control, pressed with {device:?}");
             if let Some(outcome) = self.path(label, &path, |_, mounted| {
@@ -863,8 +863,12 @@ fn node_bounds<M>(
 }
 
 /// The minimum target a control and its companions are held to: the default
-/// gesture settings' extent, judged by the rule `audit.a11y` applies
-/// ([`MinimumTarget::admits`]).
+/// gesture settings' extent, the neutral platform's touch preset. Every path
+/// presses with a finger as well as a mouse and a virtual pointer, so the check
+/// holds each target to what a finger needs. `audit.a11y` judges another
+/// minimum, its window's for the platform's primary pointer (a mouse on a
+/// desktop platform, whose presets ask less than a finger's); both compare
+/// through [`MinimumTarget::admits`].
 fn minimum_target() -> MinimumTarget {
     MinimumTarget::try_new(GestureSettings::default().min_target())
         .expect("BUG: the default gesture settings' minimum target is finite and positive")
