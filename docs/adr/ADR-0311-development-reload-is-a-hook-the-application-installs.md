@@ -250,7 +250,7 @@ user code:
 - What the path keeps in the framework is debt whose `exit` is this record: `flui-view`'s
   `REGISTRY_STACK` in `ManuallyDrop` form; the package's `globals` entries
   (`dispatch::REQUEST_REBUILD`, the three statics `app_plugin!` emits,
-  `worker::REGISTRATION_SESSION`, `worker::WORKER_BUILDS`); its `reach-exceptions` for `windows`
+  the thread-local `worker::WORKER_BUILDS`); its `reach-exceptions` for `windows`
   and `android_log-sys`, which the loader needs.
 - The dlopen path is deleted when a code patcher implements `DevReloadHook` on Windows, macOS and
   Linux. Then the worker template, the dlopen driver, the `hot_reload_counter` and

@@ -199,6 +199,19 @@ registration retirement and replacement, then verifies subsequent dispatch and
 callback retirement. This test executes the actual loader and plugin code, rather
 than inspecting an address or reproducing a retention predicate.
 
+### Worker builds belong to the thread that loads the worker
+
+The registry a worker's init fills is owner-thread state (ADR-0323 §1): a
+`thread_local!` `RefCell` holding each fingerprint's newest build and, while an
+init runs, the registrations it makes. The host loads a worker and looks its
+builds up on the thread that drives its frames; another thread sees an empty
+registry. No borrow is held while the worker's init or a `tracing` subscriber
+runs, so no call finds the registry borrowed. A `WorkerPlugin` keeps each of
+its registrations as a fingerprint and an address integer, which identify the
+entry it prunes, so the plugin is `Send` without an `unsafe impl` for the
+pointer. `admitted_worker_callbacks_survive_retirement_and_replacement` looks a
+build up from a second thread and finds none.
+
 ### A worker's rebuild requests reach the host through its init
 
 A worker `cdylib` links its own copy of this crate, statics included, so the
