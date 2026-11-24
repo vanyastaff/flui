@@ -58,6 +58,7 @@ use std::path::{Path, PathBuf};
 
 use super::instructions;
 use super::window::Cost;
+use flui_foundation::testing::heap::HeapCounts;
 
 /// The environment variable that names the mode.
 const MODE_VARIABLE: &str = "FLUI_PERF_BASELINE";
@@ -209,31 +210,10 @@ impl Baselines {
             self.hold_measured(small.0, &[], small.1),
             self.hold_measured(large.0, &[], large.1),
         ];
-        let (small_heap, large_heap) = (small.1.heap(), large.1.heap());
-        assert_eq!(
-            small_heap, large_heap,
-            "{} asked {small_heap:?} of the heap and {} {large_heap:?}",
-            small.0, large.0
+        assert_flat(
+            Scaled::new(small.0, small.1, &held[0]),
+            Scaled::new(large.0, large.1, &held[1]),
         );
-        if let [
-            Held {
-                instructions: Some(small_count),
-                ..
-            },
-            Held {
-                instructions: Some(large_count),
-                ..
-            },
-        ] = &held
-        {
-            assert!(
-                !exceeds(*large_count, *small_count, SCALING_ALLOWANCE_PERCENT),
-                "{} costs {large_count} instructions, more than \
-                 {SCALING_ALLOWANCE_PERCENT}% over {}'s {small_count}",
-                large.0,
-                small.0
-            );
-        }
         held
     }
 
@@ -384,6 +364,44 @@ impl Baselines {
                 Held::inert()
             }
         }
+    }
+}
+
+/// One tree's side of a [`Baselines::hold_scaling`]: what its window cost.
+#[derive(Debug, Clone, Copy)]
+struct Scaled<'a> {
+    scenario: &'a str,
+    heap: HeapCounts,
+    instructions: Option<u64>,
+}
+
+impl<'a> Scaled<'a> {
+    fn new(scenario: &'a str, cost: &Cost, held: &Held) -> Self {
+        Self {
+            scenario,
+            heap: cost.heap(),
+            instructions: held.instructions,
+        }
+    }
+}
+
+/// Asserts that the large tree's window costs what the small one's does: the
+/// same heap counts, and, when both counted instructions, at most
+/// [`SCALING_ALLOWANCE_PERCENT`] more of them.
+fn assert_flat(small: Scaled<'_>, large: Scaled<'_>) {
+    assert_eq!(
+        small.heap, large.heap,
+        "{} asked {:?} of the heap and {} {:?}",
+        small.scenario, small.heap, large.scenario, large.heap
+    );
+    if let (Some(small_count), Some(large_count)) = (small.instructions, large.instructions) {
+        assert!(
+            !exceeds(large_count, small_count, SCALING_ALLOWANCE_PERCENT),
+            "{} costs {large_count} instructions, more than \
+             {SCALING_ALLOWANCE_PERCENT}% over {}'s {small_count}",
+            large.scenario,
+            small.scenario
+        );
     }
 }
 
@@ -813,6 +831,33 @@ mod tests {
     /// [`Held`] it drops during that panic sees `std::thread::panicking()`.
     fn panics(body: impl FnOnce() + Send + 'static) -> bool {
         std::thread::spawn(body).join().is_err()
+    }
+
+    /// A scaling hold passes equal heap counts with instructions within 5%,
+    /// and fails a heap count that differs or instructions past 5%; with no
+    /// instructions counted it compares the heap alone.
+    #[test]
+    fn a_scaling_hold_fails_a_large_tree_that_costs_more() {
+        let heap = |allocations| HeapCounts {
+            allocations,
+            ..HeapCounts::default()
+        };
+        let side = |scenario, allocations, instructions| Scaled {
+            scenario,
+            heap: heap(allocations),
+            instructions,
+        };
+        for (case, large, fails) in [
+            ("the same", side("large", 4, Some(1_000)), false),
+            ("5% more instructions", side("large", 4, Some(1_050)), false),
+            ("past 5%", side("large", 4, Some(1_051)), true),
+            ("more allocations", side("large", 5, Some(1_000)), true),
+            ("no instructions counted", side("large", 4, None), false),
+        ] {
+            let small = side("small", 4, Some(1_000));
+            let panicked = panics(move || assert_flat(small, large));
+            assert_eq!(panicked, fails, "{case}");
+        }
     }
 
     /// The variable's values: unset is no mode, `check` and `bless` are

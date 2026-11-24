@@ -192,6 +192,7 @@ names are stabilised once the framework's own scenarios have run on it.
   `each_kind_of_run_compares_only_its_own_lines`,
   `a_bless_writes_the_file_only_when_the_test_ends_without_a_panic`,
   `a_bless_keeps_the_lines_of_the_other_kind`,
+  `a_scaling_hold_fails_a_large_tree_that_costs_more`,
   `only_a_run_with_a_mode_records_its_counts`) and of `crates/flui-testing/src/perf/instructions.rs`
   (`the_switch_is_callgrind_or_unset`, `the_count_is_callgrinds_collected_line`).
 - Each target's `every_baseline_file_is_a_scenario`.
