@@ -774,10 +774,10 @@ fn a_pump_answers_its_settled_waits_behind_the_frame_s_failure() {
             (&mut panicking, "the wait whose waker panicked"),
             (&mut counted, "the other wait"),
         ] {
-            let outcome = answer
-                .try_take()
-                .unwrap_or_else(|| panic!("{}: {which} is answered by the pump", row.name))
-                .expect("an answer");
+            let Some(answered) = answer.try_take() else {
+                panic!("{}: {which} is answered by the pump", row.name);
+            };
+            let outcome = answered.expect("an answer");
             assert_eq!(outcome.end, row.ends, "{}: {which}", row.name);
         }
         assert_eq!(counting.count(), 1, "{}: woken once", row.name);

@@ -74,12 +74,7 @@ impl UiRuntime {
                 // Due work is the runtime's (a task's deadline) or a presentation's (a retry, a
                 // gesture's deadline, a haptic delivery, a hold); it is named for none.
                 next_turn(into, UnsettledReason::PendingWork, None);
-            } else if self.has_pending_tree_work()
-                || self
-                    .presentations
-                    .iter()
-                    .any(|presentation| has_motion(presentation))
-            {
+            } else if self.has_pending_tree_work() || self.presentations.iter().any(has_motion) {
                 for_frame_work(into, UnsettledReason::PendingWork, &has_motion);
             }
             for presentation in self.presentations.iter() {
