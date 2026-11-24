@@ -15,7 +15,7 @@
 //! Cross-platform: uses [`DynLib`] for loading (dlopen on Unix, LoadLibraryW on
 //! Windows).
 
-use std::path::Path;
+use std::{marker::PhantomData, ops::Deref, path::Path};
 
 use flui_sdk::hooks::Scene;
 
@@ -73,8 +73,8 @@ pub enum PluginKind {
 /// ```text
 /// ScenePlugin::load(path)
 ///     ↓
-/// plugin.build_scene(w, h) → Option<Scene>   (can call many times;
-///                                              None = skip this frame)
+/// plugin.build_scene(w, h) → Option<PluginScene<'_>>  (can call many times;
+///                                                      None = skip this frame)
 ///     ↓
 /// plugin.has_update()  →  true when library file changed on disk
 ///     ↓
@@ -242,6 +242,9 @@ impl ScenePlugin {
     /// `repr(Rust)` compilations is established at `load` by the ABI-token
     /// handshake (same compiler, same crate revision — see [`crate::abi_token`]).
     ///
+    /// The returned [`PluginScene`] borrows the plugin, so the plugin cannot be
+    /// unloaded or dropped while the scene lives.
+    ///
     /// Returns `None` when the build function answered null: the plugin's
     /// code panicked (the image contained, reported and destroyed the panic),
     /// or, for a [`PluginKind::App`] plugin, the call came from a thread other
@@ -251,19 +254,17 @@ impl ScenePlugin {
     ///
     /// # Safety
     ///
-    /// One obligation remains with the caller, and it is why this stays an
-    /// `unsafe fn`: the returned `Scene` can hold `Arc<dyn Any>` /
-    /// `Arc<dyn Fn>` payloads whose vtables live in the plugin image, so the caller
-    /// must drop it BEFORE the library is unloaded. No lifetime ties the
-    /// scene to the [`DynLib`]; dropping it after `dlclose` is a
-    /// use-after-free of code. Development-only tooling either way. This
-    /// obligation applies only to a `Some` return — a `None` (skipped frame)
-    /// owns nothing.
+    /// The caller retains no payload of the scene beyond the plugin: a scene
+    /// can hold `Arc<dyn Any>` and `Arc<dyn Fn>` payloads whose vtables live in
+    /// the plugin image, and a clone of one taken through the borrow outlives
+    /// the lifetime that keeps the image loaded. Dropping such a clone after
+    /// the image is closed runs code that is no longer mapped. The borrow
+    /// holds the scene itself.
     #[expect(
         unsafe_code,
-        reason = "an `unsafe fn`: the scene must be dropped before the library is unloaded, stated in its docs"
+        reason = "an `unsafe fn`: no clone of a scene payload may outlive the plugin, stated under `# Safety`"
     )]
-    pub unsafe fn build_scene(&self, width: f64, height: f64) -> Option<Scene> {
+    pub unsafe fn build_scene(&self, width: f64, height: f64) -> Option<PluginScene<'_>> {
         // SAFETY: `build_fn`/`free_fn` were resolved from the `DynLib` this
         // struct owns, which outlives the call. The plugin macro returns
         // `Box::into_raw(Box::new(scene))`, so a non-null `ptr` addresses one
@@ -282,7 +283,10 @@ impl ScenePlugin {
             }
             let scene = std::ptr::read(ptr.cast::<Scene>());
             (self.free_fn)(ptr);
-            Some(scene)
+            Some(PluginScene {
+                scene,
+                plugin: PhantomData,
+            })
         }
     }
 
@@ -319,5 +323,55 @@ impl ScenePlugin {
     /// Which symbol convention this plugin uses.
     pub fn kind(&self) -> PluginKind {
         self.kind
+    }
+}
+
+/// A scene a [`ScenePlugin`] built, borrowing the plugin whose image holds its
+/// code: the plugin cannot be unloaded or dropped while the scene lives.
+///
+/// It reads as a [`Scene`] through `Deref`. It never gives the scene up by
+/// value, because an owned scene would outlive the borrow.
+///
+/// ```compile_fail,E0505
+/// fn frame(plugin: flui_hot_reload::ScenePlugin) {
+///     // SAFETY: nothing here clones a payload out of the scene.
+///     let scene = unsafe { plugin.build_scene(64.0, 64.0) };
+///     plugin.unload();
+///     drop(scene);
+/// }
+/// ```
+///
+/// A driver's poll, which may unload the image, waits for the scene too:
+///
+/// ```compile_fail,E0502
+/// fn frame(driver: &mut flui_hot_reload::HotReloadDriver) {
+///     // SAFETY: nothing here clones a payload out of the scene.
+///     let scene = unsafe { driver.build_scene(64.0, 64.0) };
+///     driver.poll();
+///     drop(scene);
+/// }
+/// ```
+///
+/// Dropping the scene first compiles:
+///
+/// ```
+/// fn frame(driver: &mut flui_hot_reload::HotReloadDriver) {
+///     // SAFETY: nothing here clones a payload out of the scene.
+///     let scene = unsafe { driver.build_scene(64.0, 64.0) };
+///     drop(scene);
+///     driver.poll();
+/// }
+/// ```
+#[derive(Debug)]
+pub struct PluginScene<'plugin> {
+    scene: Scene,
+    plugin: PhantomData<&'plugin ScenePlugin>,
+}
+
+impl Deref for PluginScene<'_> {
+    type Target = Scene;
+
+    fn deref(&self) -> &Scene {
+        &self.scene
     }
 }

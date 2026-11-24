@@ -275,9 +275,13 @@ let mut driver = plugin_path.map(|p| HotReloadDriver::new(p));
 
 // each frame:
 if let Some(ref mut d) = driver {
-    d.poll(width, height);
-    let scene = d.build_scene_or(width, height, fallback_scene);
-    renderer.render_scene(&scene)?;
+    d.poll();
+    // SAFETY: the renderer keeps no clone of a scene payload past this frame;
+    // the scene itself borrows the driver, so `poll` cannot unload it first.
+    match unsafe { d.build_scene(width, height) } {
+        Some(scene) => renderer.render_scene(&scene)?,
+        None => renderer.render_scene(&fallback_scene(width, height))?,
+    }
 }
 ```
 

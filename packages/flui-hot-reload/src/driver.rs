@@ -21,12 +21,12 @@
 //!
 //! // In your event loop:
 //! loop {
-//!     if driver.poll() {
-//!         // SAFETY: the scene and any clones are dropped before the next poll
-//!         // or before dropping the driver, keeping plugin code loaded.
-//!         if let Some(scene) = unsafe { driver.build_scene(width, height) } {
-//!             renderer.render_scene(&scene);
-//!         }
+//!     driver.poll();
+//!     // SAFETY: the renderer keeps no clone of a scene payload past this
+//!     // frame; the scene itself borrows the driver until it is dropped.
+//!     match unsafe { driver.build_scene(width, height) } {
+//!         Some(scene) => renderer.render_scene(&scene),
+//!         None => renderer.render_scene(&fallback_scene(width, height)),
 //!     }
 //! }
 //! ```
@@ -36,11 +36,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use flui_sdk::hooks::Scene;
-
 use crate::{
     dynlib::LoadRefusal,
-    host::{PluginKind, ScenePlugin},
+    host::{PluginKind, PluginScene, ScenePlugin},
     strategy::timing,
 };
 
@@ -163,16 +161,18 @@ impl HotReloadDriver {
     /// [`ScenePlugin::build_scene`]'s docs). The caller cannot and need not
     /// tell them apart.
     ///
+    /// The scene borrows the driver, so [`Self::poll`], which may unload the
+    /// image, cannot run while it lives.
+    ///
     /// # Safety
     ///
-    /// Forwards [`ScenePlugin::build_scene`]'s contract unchanged — see it for
-    /// the obligations the caller must establish about host/plugin agreement
-    /// and about dropping the `Scene` before the library is unloaded.
+    /// Forwards [`ScenePlugin::build_scene`]'s contract unchanged: no clone of
+    /// a scene payload outlives the driver's image.
     #[expect(
         unsafe_code,
         reason = "an `unsafe fn` that forwards `ScenePlugin::build_scene`'s contract, stated under `# Safety`"
     )]
-    pub unsafe fn build_scene(&self, width: f64, height: f64) -> Option<Scene> {
+    pub unsafe fn build_scene(&self, width: f64, height: f64) -> Option<PluginScene<'_>> {
         // SAFETY: the caller of this fn has assumed the same obligations.
         self.plugin
             .as_ref()
@@ -203,24 +203,5 @@ impl HotReloadDriver {
     /// The library file path being watched.
     pub fn lib_path(&self) -> &Path {
         &self.lib_path
-    }
-
-    /// Build a scene or fall back to a default scene builder.
-    ///
-    /// Convenience method that calls the plugin's `build_scene` if loaded,
-    /// otherwise calls the provided fallback function.
-    /// # Safety
-    ///
-    /// Forwards [`Self::build_scene`]'s contract unchanged.
-    #[expect(
-        unsafe_code,
-        reason = "an `unsafe fn` that forwards `build_scene`'s contract, stated under `# Safety`"
-    )]
-    pub unsafe fn build_scene_or<F>(&self, width: f64, height: f64, fallback: F) -> Scene
-    where
-        F: FnOnce(f64, f64) -> Scene,
-    {
-        // SAFETY: the caller of this fn has assumed the same obligations.
-        unsafe { self.build_scene(width, height) }.unwrap_or_else(|| fallback(width, height))
     }
 }

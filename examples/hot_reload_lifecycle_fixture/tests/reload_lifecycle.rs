@@ -128,7 +128,7 @@ fn tick(lib: &DynLib) -> u32 {
 }
 
 /// Drive one full session: load, confirm it's an `app_plugin!`, build a
-/// scene (drop it before unload, per `build_scene`'s `# Safety`), then
+/// scene, then
 /// unload. Returns nothing — the point is that none of this panics.
 fn load_drive_unload(path: &Path) {
     let plugin = ScenePlugin::load(path).expect("fixture must load as a ScenePlugin");
@@ -137,10 +137,8 @@ fn load_drive_unload(path: &Path) {
         PluginKind::App,
         "the fixture is an app_plugin!, not a scene_plugin!"
     );
-    // SAFETY: host and fixture are built by this same workspace/toolchain
-    // (the ABI-token handshake `ScenePlugin::load` already performed
-    // confirms it), and the returned scene is dropped immediately, before
-    // `plugin` (and thus the library) is unloaded below.
+    // SAFETY: nothing here clones a payload out of the scene, which borrows
+    // `plugin` and is dropped before the unload below.
     #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
     let scene = unsafe { plugin.build_scene(64.0, 64.0) };
     assert!(
@@ -309,8 +307,8 @@ fn a_panicking_app_root_skips_the_frame_and_the_next_build_mounts() {
         std::mem::transmute::<*mut c_void, extern "C" fn()>(ptr)();
     }
 
-    // SAFETY: the load's token handshake confirmed the layouts, and each
-    // scene is dropped before `plugin` unloads the image below.
+    // SAFETY: nothing here clones a payload out of either scene, and both
+    // borrow `plugin`, so they drop before it unloads the image below.
     #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
     let (refused, mounted) = unsafe {
         (

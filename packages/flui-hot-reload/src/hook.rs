@@ -307,14 +307,17 @@ impl ScenePluginHook {
         self.pending_font_reset |= updated;
     }
 
+    /// Runs `render` over `scene` with the pending font reset, which a
+    /// successful render clears. An associated function over the one field it
+    /// changes, so it runs while the scene borrows the driver.
     fn render_loaded_scene(
-        &mut self,
+        pending_font_reset: &mut bool,
         scene: &Scene,
         render: &mut dyn FnMut(&Scene, bool) -> bool,
     ) -> bool {
-        let rendered = render(scene, self.pending_font_reset);
+        let rendered = render(scene, *pending_font_reset);
         if rendered {
-            self.pending_font_reset = false;
+            *pending_font_reset = false;
         }
         rendered
     }
@@ -349,19 +352,16 @@ impl DevReloadHook for ScenePluginHook {
         let updated = self.driver.poll();
         self.observe_image_update(updated);
 
-        // SAFETY: `HotReloadDriver::build_scene` reclaims a scene the plugin
-        // allocated, so host and plugin must agree on `Scene`'s layout and
-        // the scene must be dropped before the library is unloaded. The
-        // layout agreement is the ABI-token handshake the loader checked; the
-        // original scene is dropped before this method returns, while the
-        // driver holds the image. The unsafe scene_frame caller additionally
-        // guarantees render retains no cloned image-dependent payloads.
+        // SAFETY: `build_scene`'s one obligation is that no clone of a scene
+        // payload outlives the image, and this method's caller guarantees
+        // that `render` retains none. The scene itself borrows the driver and
+        // is dropped before this method returns.
         #[expect(unsafe_code, reason = "`build_scene` is an `unsafe fn`")]
         let built = unsafe { self.driver.build_scene(width, height) };
         let Some(scene) = built else {
             return false;
         };
-        let rendered = self.render_loaded_scene(&scene, render);
+        let rendered = Self::render_loaded_scene(&mut self.pending_font_reset, &scene, render);
         drop(scene);
         rendered
     }
