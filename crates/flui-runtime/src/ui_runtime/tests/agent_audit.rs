@@ -132,7 +132,7 @@ fn a_rule_the_agent_cannot_run_makes_the_audit_cannot_verify() {
     );
     let listed: Vec<AuditRule> = report.not_checked.iter().map(|entry| entry.rule).collect();
     assert_eq!(listed, vec![AuditRule::FocusOrder], "{report:#?}");
-    assert!(!report.not_checked[0].reason.is_empty());
+    assert_ne!(report.not_checked[0].reason, "", "the reason is given");
 
     let every = audit(&ui_runtime, &window, &[]);
     assert_eq!(

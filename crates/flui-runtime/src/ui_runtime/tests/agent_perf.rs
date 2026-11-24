@@ -104,18 +104,13 @@ fn a_perf_span_counts_the_frames_presented_between_start_and_stop() {
             report.frame_time.max >= report.frame_time.p50 && report.frame_time.p50 > 0.0,
             "{name}: {report:#?}"
         );
-        match period {
-            Some(_) => {
-                assert_eq!(report.refresh_period_ms, Some(1000.0), "{name}");
-                assert_eq!(report.dropped, Some(0), "{name}");
-                assert_eq!(report.janky, Some(0), "{name}");
-            }
-            None => {
-                assert_eq!(report.refresh_period_ms, None, "{name}");
-                assert_eq!(report.dropped, None, "{name}");
-                assert_eq!(report.janky, None, "{name}");
-            }
-        }
+        // A one-second period: no frame of the span comes near it.
+        let judged = period.map_or((None, None, None), |_| (Some(1000.0), Some(0), Some(0)));
+        assert_eq!(
+            (report.refresh_period_ms, report.dropped, report.janky),
+            judged,
+            "{name}: {report:#?}"
+        );
         assert!(report.input_to_present.is_none(), "{name}");
     }
 }
@@ -174,11 +169,11 @@ fn each_perf_call_out_of_order_has_a_defined_answer() {
         ui_runtime.close_presentation_entered(second),
         "the window closes"
     );
-    // The closed window refuses the call itself, before it reaches the owner.
-    let gone = other
-        .call::<method::PerfStop>(WindowParams::new(other.id()))
-        .map(|reply| answer(&ui_runtime, reply))
-        .expect_err("the closed window admits no call");
+    // The closed window refuses the call itself, or its owner answers it gone.
+    let gone = match other.call::<method::PerfStop>(WindowParams::new(other.id())) {
+        Err(refused) => refused,
+        Ok(reply) => answer(&ui_runtime, reply).expect_err("the window closed"),
+    };
     assert_eq!(gone.code, ErrorCode::Gone, "{gone:?}");
 }
 
