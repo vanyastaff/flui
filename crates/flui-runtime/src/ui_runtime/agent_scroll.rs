@@ -9,11 +9,19 @@
 //! scrollable's descendants and their bounds: a step after which it is unchanged means the scroll
 //! extent ended, or the scrollable does not scroll, and ends the search, so a scrollable that
 //! does not move never spins. A call that names no direction scrolls down; a scrollable whose
-//! content does not move on its first step down is tried rightwards. A step under way when the
-//! timeout passes finishes before the act answers, so no scroll goes out after the answer.
+//! content does not move on its first step down is tried rightwards.
+//!
+//! The act's deadline wakes the owner whether or not the window draws, and the pass at it is the
+//! last: a step not played yet is withdrawn and one under way has sent its one wheel input, the
+//! window as it is then is looked at once more, and the act answers. No scroll goes out after
+//! the answer.
+//!
+//! A step reads at most [`CONTENT_NODES`] of the scrollable's descendants and looks among at
+//! most [`MAX_MATCHES`] of the locator's matches in the window; a read that leaves some out is
+//! refused rather than taken for the whole.
 
 use flui_protocol::input::gestures;
-use flui_protocol::method;
+use flui_protocol::method::{self, Method};
 use flui_protocol::{
     act::ActOutcome, act::ActionabilityParams, act::Effect, act::EffectKind, act::JournalSpan,
     input::Direction, input::InputPath, input::ScrollUntilParams, locator::LocateParams,
@@ -25,11 +33,13 @@ use flui_view::dev_agent::AgentAnswer;
 use rustc_hash::FxHashSet;
 
 use super::agent::{
-    self, AgentError, IssuedHandles, ReadingOwed, ReplySender, record_issued_outcome, send_reply,
+    self, AgentError, IssuedHandles, ReadingOwed, ReplySender, record_issued_outcome,
 };
-use super::agent_gesture::{Aimed, Checks, Readiness, deadline_of, readiness, takes_semantic_path};
+use super::agent_gesture::{
+    Aimed, Checks, Forms, Readiness, answer, deadline_of, readiness, takes_semantic_path, unleased,
+};
 use super::agent_held::{Attempt, AttemptContext, HeldAct, Holding};
-use super::agent_input::{self, Injecting, widen};
+use super::agent_input::{self, Injecting, InjectionId, widen};
 use super::agent_serve::{Answer, Serve, ServeContext};
 
 /// The most of a scrollable's descendants one step reads, to find the element under it and to
@@ -52,7 +62,10 @@ struct Content {
 
 impl Content {
     fn new(shown: Vec<(ElementId, Option<Rect>)>) -> Self {
-        let elements = shown.iter().map(|(element, _)| *element).collect();
+        let elements = shown
+            .iter()
+            .map(|(element, _)| *element)
+            .collect::<FxHashSet<ElementId>>();
         Self { shown, elements }
     }
 
@@ -79,20 +92,22 @@ pub(super) struct ScrollSearch {
     snapshot: Snapshot,
     /// The tree before the first step, for a delta reading.
     before: Option<TreeSnapshot>,
-    /// The step under way: its injection's answer.
-    stepping: Option<AgentAnswer<ActOutcome>>,
+    /// The step under way.
+    stepping: Option<Step>,
     /// The content when the last step was sent.
     sent_over: Option<Content>,
     /// The window's journal entries the steps made.
     observed: Option<JournalSpan>,
 }
 
-impl ScrollSearch {
-    /// Whether a step is under way: the search waits for it to play, whatever its deadline.
-    pub(super) fn is_stepping(&self) -> bool {
-        self.stepping.is_some()
-    }
+/// One step of a search: the injection that turns the wheel, and its answer.
+struct Step {
+    /// `None` when the window's queue refused it, which its answer says.
+    injection: Option<InjectionId>,
+    answer: AgentAnswer<ActOutcome>,
+}
 
+impl ScrollSearch {
     /// One attempt: answer once the element shows under the scrollable or the content stops
     /// moving, and scroll a step otherwise.
     pub(super) fn attempt(
@@ -100,10 +115,20 @@ impl ScrollSearch {
         ctx: &mut AttemptContext<'_>,
         reply: &ReplySender<ActOutcome>,
     ) -> Attempt {
-        if let Some(stepping) = &mut self.stepping {
-            match stepping.try_take() {
-                // The step under way finishes first, the timeout's attempt included.
-                None => return Attempt::Hold,
+        if let Some(step) = &mut self.stepping {
+            let injection = step.injection;
+            match step.answer.try_take() {
+                // The step under way finishes before the next one is sent.
+                None if !ctx.last => return Attempt::Hold,
+                // The deadline passed first. A step not played yet is withdrawn; one under way
+                // has sent its one wheel input at the boundary it started at. Nothing of it goes
+                // out after this, and the window is looked at once more below.
+                None => {
+                    if let Some(injection) = injection {
+                        agent_input::withdraw(ctx.state, injection);
+                    }
+                    self.stepping = None;
+                }
                 Some(Err(failed)) => {
                     self.stepping = None;
                     return answer(reply, Err(AgentError::InputFailed(Box::new(failed))));
@@ -179,9 +204,15 @@ impl ScrollSearch {
             snapshot: Snapshot::None,
             before: None,
         };
-        ctx.runtime
+        // Past here only the platform's wake runs, before anything is queued.
+        ctx.if_panics.set(AgentError::Panicked);
+        let injection = ctx
+            .runtime
             .queue_injection(ctx.state, injecting, step_reply);
-        self.stepping = Some(stepping);
+        self.stepping = Some(Step {
+            injection,
+            answer: stepping,
+        });
         self.sent_over = Some(content);
         Attempt::Hold
     }
@@ -197,6 +228,13 @@ impl ScrollSearch {
         let mut params = LocateParams::new(every);
         params.max_matches = Some(MAX_MATCHES);
         let matches = agent::locate(ctx.state, ctx.window, &params)?;
+        if matches.truncated > 0 {
+            // A match left out may be the one under the scrollable, or a second one there.
+            return Err(AgentError::InvalidArgument {
+                reason: "the locator matches more elements in the window than a scroll looks \
+                         among (4096): narrow it",
+            });
+        }
         let under: Vec<_> = matches
             .matches
             .iter()
@@ -214,7 +252,7 @@ impl ScrollSearch {
                         .map(|found| {
                             flui_protocol::tree::outline(std::slice::from_ref(&found.node))
                         })
-                        .collect(),
+                        .collect::<Vec<String>>(),
                 });
             }
             (Pick::Last, several) => several.last(),
@@ -268,6 +306,13 @@ fn content_of(ctx: &AttemptContext<'_>, scrollable: ElementRef) -> Result<Conten
         .root(scrollable.element)
         .max_nodes(CONTENT_NODES);
     let tree = agent::read_tree(ctx.state, ctx.window, &query, true)?;
+    if tree.truncated {
+        // Neither whether a match is under it nor whether it moved can be told from a part.
+        return Err(AgentError::NotSupported {
+            capability: method::ElementScrollUntil::NAME,
+            reason: "the scrollable holds more descendants than a scroll reads (4096)",
+        });
+    }
     let mut content = Vec::new();
     for root in &tree.roots {
         walk(&root.children, &mut content);
@@ -275,21 +320,9 @@ fn content_of(ctx: &AttemptContext<'_>, scrollable: ElementRef) -> Result<Conten
     Ok(Content::new(content))
 }
 
-/// Answer `reply` with `result`: the search is done.
-fn answer(reply: &ReplySender<ActOutcome>, result: Result<ActOutcome, AgentError>) -> Attempt {
-    send_reply(reply, None, result);
-    Attempt::Done
-}
-
 fn names_no_scrollable() -> AgentError {
     AgentError::InvalidArgument {
         reason: "a point names no scrollable",
-    }
-}
-
-fn unleased() -> AgentError {
-    AgentError::InvalidArgument {
-        reason: "a gesture's synthetic input is asked through an input lease",
     }
 }
 
@@ -305,7 +338,7 @@ impl Serve for method::ElementScrollUntil {
         if matches!(params.target, Target::Point { .. }) {
             return Answer::Now(Err(names_no_scrollable()));
         }
-        if let Err(error) = takes_semantic_path(&params.options, false) {
+        if let Err(error) = takes_semantic_path(&params.options, Forms::Synthetic) {
             return Answer::Now(Err(error));
         }
         let Some(lease) = ctx.lease else {

@@ -16,7 +16,9 @@
 //!   the call's input lease, as `input.inject` is. The semantic path performs the semantics action
 //!   that does the same where the gesture has one (a primary tap invokes, a focus before typing
 //!   focuses), and otherwise falls back to synthetic input unless the call requires the semantic
-//!   path. The `os` path is the driver's: the agent refuses it.
+//!   path; `scroll_into_view`, which has only the semantics action, takes it unless the call
+//!   requires synthetic input. The `os` path is the driver's: the agent refuses it. Every gesture
+//!   asks [`takes_semantic_path`] before it is held.
 //! - **Answer.** What performing it answers: the injection's outcome once a frame has passed since
 //!   its last tick, or the semantics action's, naming the element acted on.
 
@@ -300,7 +302,10 @@ fn not_yet(ctx: &AttemptContext<'_>, reply: &ReplySender<ActOutcome>, why: Agent
 }
 
 /// Answer `reply` with `result`: the act is done.
-fn answer(reply: &ReplySender<ActOutcome>, result: Result<ActOutcome, AgentError>) -> Attempt {
+pub(super) fn answer(
+    reply: &ReplySender<ActOutcome>,
+    result: Result<ActOutcome, AgentError>,
+) -> Attempt {
     send_reply(reply, None, result);
     Attempt::Done
 }
@@ -334,6 +339,8 @@ fn inject(
         snapshot,
         before,
     };
+    // Past here only the platform's wake runs, before anything is queued.
+    ctx.if_panics.set(AgentError::Panicked);
     ctx.runtime
         .queue_injection(ctx.state, injecting, reply.clone());
     Attempt::Done
@@ -387,30 +394,52 @@ fn focus(ctx: &AttemptContext<'_>, element: ElementRef) -> Result<(), AgentError
     .map(|_| ())
 }
 
-fn unleased() -> AgentError {
+/// Why a gesture that injects was asked without an input lease to inject through.
+pub(super) fn unleased() -> AgentError {
     AgentError::InvalidArgument {
         reason: "a gesture's synthetic input is asked through an input lease",
     }
 }
 
-/// Whether a gesture takes the semantic path under `options`, where `semantic_form` says it has
-/// a semantics action that does the same: the path the call names, synthetic when it names none,
-/// and synthetic in place of a semantic path the gesture has no action for unless the call
-/// requires it.
+/// The paths in the application a gesture has a form on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Forms {
+    /// Synthetic input alone.
+    Synthetic,
+    /// Synthetic input, and a semantics action that does the same.
+    Both,
+    /// A semantics action alone.
+    Semantic,
+}
+
+/// Whether a gesture with `forms` takes the semantic path under `options`: the path the call
+/// names, synthetic when it names none, and the other path in place of one the gesture has no
+/// form on unless the call requires it. Every gesture the agent answers is asked this before it
+/// is held.
 ///
 /// # Errors
 ///
-/// `not_supported` for the `os` path, which the driver composes with its lane, and for a semantic
-/// path the call requires and the gesture has no action for.
+/// `not_supported` for the `os` path, which the driver composes with its lane, and for a path the
+/// call requires and the gesture has no form on.
 pub(super) fn takes_semantic_path(
     options: &GestureOptions,
-    semantic_form: bool,
+    forms: Forms,
 ) -> Result<bool, AgentError> {
     let policy = options.via.unwrap_or_default();
+    let (synthetic, semantic) = match forms {
+        Forms::Synthetic => (true, false),
+        Forms::Both => (true, true),
+        Forms::Semantic => (false, true),
+    };
     match policy.prefer {
-        InputPath::Synthetic => Ok(false),
-        InputPath::Semantic if semantic_form => Ok(true),
+        InputPath::Synthetic if synthetic => Ok(false),
+        InputPath::Semantic if semantic => Ok(true),
+        InputPath::Synthetic if !policy.require => Ok(true),
         InputPath::Semantic if !policy.require => Ok(false),
+        InputPath::Synthetic => Err(AgentError::NotSupported {
+            capability: "synthetic_input",
+            reason: "this gesture has no synthetic input that does the same",
+        }),
         InputPath::Semantic => Err(AgentError::NotSupported {
             capability: "semantic_input",
             reason: "this gesture has no semantics action that does the same",
@@ -493,7 +522,7 @@ fn hold_input(
     options: &GestureOptions,
     composed: Composed,
 ) -> Answer<ActOutcome> {
-    if let Err(error) = takes_semantic_path(options, false) {
+    if let Err(error) = takes_semantic_path(options, Forms::Synthetic) {
         return Answer::Now(Err(error));
     }
     hold(
@@ -526,7 +555,7 @@ fn hold_focus_then(
             reason: "text and keys have no semantics action that does the same",
         }));
     }
-    let semantic = match takes_semantic_path(options, true) {
+    let semantic = match takes_semantic_path(options, Forms::Both) {
         Ok(semantic) => semantic && !matches!(target, Target::Point { .. }),
         Err(error) => return Answer::Now(Err(error)),
     };
@@ -561,8 +590,12 @@ impl Serve for method::ElementTap {
             Ok(target) => target,
             Err(error) => return Answer::Now(Err(error)),
         };
-        let semantic_form = invoke.is_some() && !target.is_point();
-        let semantic = match takes_semantic_path(&params.options, semantic_form) {
+        let forms = if invoke.is_some() && !target.is_point() {
+            Forms::Both
+        } else {
+            Forms::Synthetic
+        };
+        let semantic = match takes_semantic_path(&params.options, forms) {
             Ok(semantic) => semantic,
             Err(error) => return Answer::Now(Err(error)),
         };
@@ -673,6 +706,9 @@ impl Serve for method::ElementScrollIntoView {
                 reason: "a point names no element to scroll into view",
             }));
         }
+        if let Err(error) = takes_semantic_path(&params.options, Forms::Semantic) {
+            return Answer::Now(Err(error));
+        }
         hold(
             ctx,
             Asked {
@@ -718,7 +754,7 @@ impl Serve for method::ElementPressKeys {
         if let Some(target) = &params.target {
             return hold_focus_then(ctx, target, &params.options, keys);
         }
-        if let Err(error) = takes_semantic_path(&params.options, false) {
+        if let Err(error) = takes_semantic_path(&params.options, Forms::Synthetic) {
             return Answer::Now(Err(error));
         }
         let Some(lease) = ctx.lease else {

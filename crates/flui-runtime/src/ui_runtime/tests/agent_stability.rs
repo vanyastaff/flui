@@ -75,12 +75,25 @@ fn elements_are_remembered_apart_and_the_table_stays_bounded() {
         rect(5.0)
     );
 
-    for number in 3..(3 + 64) {
+    // The table holds 192 elements: two for each of the 64 acts a presentation holds, and 64
+    // more. Filled with elements 1 and 2 read longest ago, it still holds both.
+    for number in 3..(3 + 190) {
         let _ = stability.observe(element(number), revision, true, rect(0.0));
     }
     assert_eq!(
         stability.observe(element(1), revision, true, rect(1.0)),
+        rect(1.0),
+        "a table of 192 holds every element read between two boundaries"
+    );
+    let _ = stability.observe(element(500), revision, true, rect(0.0));
+    assert_eq!(
+        stability.observe(element(1), revision, true, rect(1.0)),
+        rect(1.0),
+        "past the bound the element read longest ago is forgotten, not one read since"
+    );
+    assert_eq!(
+        stability.observe(element(2), revision, true, rect(5.0)),
         None,
-        "a full table starts again rather than grow"
+        "the element read longest ago is a first sight again"
     );
 }

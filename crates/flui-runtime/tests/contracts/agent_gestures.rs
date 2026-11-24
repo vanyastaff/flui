@@ -14,14 +14,15 @@ use flui_interaction::pointer::HitTestBehavior;
 use flui_protocol::input::gestures;
 use flui_protocol::method::{self, Method};
 use flui_protocol::{
-    act::ActOutcome, act::ActParams, act::ActionabilityCheck, act::ActionabilityParams,
-    act::EffectKind, error::ErrorCode, error::ErrorObject, geometry::LogicalPoint,
-    geometry::LogicalRect, input::DragParams, input::GestureOptions, input::InputKind,
-    input::InputPath, input::InputPolicy, input::Journal, input::JournalParams,
-    input::LongPressParams, input::PinchParams, input::PointerButton, input::PressKeysParams,
-    input::ScrollIntoViewParams, input::ScrollUntilParams, input::SwipeParams, input::TapParams,
-    input::TypeTextParams, locator::LocateParams, locator::Locator, locator::Target,
-    tree::ElementRef, wire::ActionName,
+    act::ActOutcome, act::ActParams, act::Actionability, act::ActionabilityCheck,
+    act::ActionabilityParams, act::EffectKind, error::ErrorCode, error::ErrorObject,
+    geometry::LogicalPoint, geometry::LogicalRect, input::Direction, input::DragParams,
+    input::GestureOptions, input::InputKind, input::InputPath, input::InputPolicy, input::Journal,
+    input::JournalParams, input::LongPressParams, input::PinchParams, input::PointerButton,
+    input::PressKeysParams, input::ScrollIntoViewParams, input::ScrollUntilParams,
+    input::SwipeParams, input::TapParams, input::TypeTextParams, locator::LocateParams,
+    locator::Locator, locator::Pick, locator::Target, locator::TextMatch, snapshot::Snapshot,
+    tree::ElementRef, wait::ClearedBy, wire::ActionName,
 };
 use flui_runtime::agent::Limits;
 use flui_testing::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
@@ -29,8 +30,8 @@ use flui_view::Signal;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::prelude::*;
 use flui_widgets::{
-    AnimatedPadding, Column, ListView, Listener, Positioned, RawButton, ScrollView, SizedBox,
-    Stack, Text,
+    AnimatedPadding, Column, ListView, Listener, Positioned, RawButton, ScrollView, Semantics,
+    SingleChildScrollView, SizedBox, Stack, Text,
 };
 use parking_lot::Mutex;
 use serde_json::json;
@@ -45,9 +46,9 @@ struct Presses {
 }
 
 /// A board of targets: "Go"; "Gated", disabled until "Enable" is pressed; "Target", which slides
-/// "Items" of 100 rows 20 px tall, "Item 0" to "Item 99", in a viewport 100 px tall; and a row
-/// "Columns" of 100 columns 50 px wide, "Col 0" to "Col 99", in a viewport 200 px wide.
-/// "Items" of 100 rows 20 px tall, "Item 0" to "Item 99", in a viewport 100 px tall.
+/// right once "Move" is pressed; "Covered", under a cover that takes its hit; a list "Items" of
+/// 100 rows 20 px tall, "Item 0" to "Item 99", in a viewport 100 px tall; a row "Columns" of 100
+/// columns 50 px wide, "Col 0" to "Col 99", in a viewport 200 px wide; and two texts "Twin".
 #[derive(Clone, StatefulView)]
 struct Board {
     presses: Presses,
@@ -148,6 +149,8 @@ impl ViewState<Board> for BoardState {
                 .child(columns)
                 .into_view()
                 .boxed(),
+            Text::new("Twin").into_view().boxed(),
+            Text::new("Twin").into_view().boxed(),
         ])
     }
 }
@@ -286,7 +289,7 @@ fn ask<M: Method<Output = ActOutcome> + flui_protocol::method::WindowMethod>(
 #[test]
 fn the_agent_answers_every_gesture_with_what_it_ran() {
     use InputKind::{KeyDown, KeyUp, PointerDown, PointerMove, PointerUp, Scroll, Text};
-    let rows: [(&str, Ask, InputPath, &[InputKind]); 11] = [
+    let rows: [(&str, Ask, InputPath, &[InputKind]); 12] = [
         (
             method::ElementTap::NAME,
             |lease| ask::<method::ElementTap>(lease, TapParams::new(named("Go"))),
@@ -355,6 +358,19 @@ fn the_agent_answers_every_gesture_with_what_it_ran() {
                 let params: PressKeysParams = serde_json::from_value(json!({
                     "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
                     "keys": ["Shift+a"],
+                }))
+                .expect("press keys reads");
+                ask::<method::ElementPressKeys>(lease, params)
+            },
+            InputPath::Synthetic,
+            &[PointerDown, PointerUp, KeyDown, KeyDown, KeyUp, KeyUp],
+        ),
+        (
+            "element.press_keys of the plus key",
+            |lease| {
+                let params: PressKeysParams = serde_json::from_value(json!({
+                    "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+                    "keys": ["Control++"],
                 }))
                 .expect("press keys reads");
                 ask::<method::ElementPressKeys>(lease, params)
@@ -560,25 +576,49 @@ fn force_acts_on_a_covered_target() {
     );
 }
 
-/// A presentation holds at most 64 acts: one more is refused `busy` while they hold.
+/// A presentation holds at most 64 acts. While it holds 64, one more is refused `busy` before
+/// anything of it runs (a scroll sends no step) and the 64 still hold; acts whose askers let
+/// their answers go hold no place, and the next act is held again.
 #[test]
 fn a_window_holds_a_bounded_number_of_acts() {
-    let (mut host, _agent, _window, lease, _presses) = shown();
-    let held: Vec<AgentAnswer<ActOutcome>> = (0..64)
-        .map(|_| {
-            let mut tap = TapParams::new(named("Gated"));
-            tap.options = timeout(tap.options, 60_000);
-            ask::<method::ElementTap>(&lease, tap)
-        })
+    let (mut host, _agent, window, lease, _presses) = shown();
+    let gated = || {
+        let mut tap = TapParams::new(named("Gated"));
+        tap.options = timeout(tap.options, 60_000);
+        tap
+    };
+    let mut held: Vec<AgentAnswer<ActOutcome>> = (0..64)
+        .map(|_| ask::<method::ElementTap>(&lease, gated()))
         .collect();
-    let mut tap = TapParams::new(named("Gated"));
-    tap.options = timeout(tap.options, 60_000);
-    let mut one_more = ask::<method::ElementTap>(&lease, tap);
+    let journaled = journal(&mut host, &window).entries.len();
+    let mut scroll = ScrollUntilParams::new(named("Items"), Locator::named("Item 60"));
+    scroll.options = timeout(scroll.options, 60_000);
+    let mut one_more = ask::<method::ElementScrollUntil>(&lease, scroll);
     let refused = answered(&mut host, &mut one_more, 2)
         .0
         .expect_err("past the bound");
     assert_eq!(refused.code, ErrorCode::Busy, "{refused:?}");
+    for _ in 0..5 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert_eq!(
+        journal(&mut host, &window).entries.len(),
+        journaled,
+        "the refused scroll sent no step"
+    );
+    assert!(
+        held.iter_mut().all(|act| act.try_take().is_none()),
+        "the 64 still hold"
+    );
     drop(held);
+    let mut after = ask::<method::ElementTap>(&lease, gated());
+    for _ in 0..3 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert!(
+        after.try_take().is_none(),
+        "held once the askers of the 64 let their answers go"
+    );
 }
 
 /// Every way a held act ends without its target answers it once: the window closing, and the
@@ -677,19 +717,77 @@ fn a_gestures_reply_deadline_is_its_timeout_and_its_play_past_the_reply_timeout(
     );
 }
 
+fn scroll_item_12_into_view(via: InputPolicy) -> ScrollIntoViewParams {
+    let mut params: ScrollIntoViewParams = serde_json::from_value(json!({
+        "target": { "locator": { "name": { "match": "exact", "text": "Item 12" } } },
+    }))
+    .expect("scroll into view reads");
+    params.options.via = Some(via);
+    params
+}
+
 /// A gesture asked on the `os` path is the driver's: the agent refuses it, naming the capability.
+/// `scroll_into_view`, which has only a semantics action, is held to the same path rule: the
+/// `os` path is refused, and a call that requires synthetic input is refused naming it.
 #[test]
 fn the_agent_refuses_a_gesture_on_the_os_path() {
-    let (mut host, _agent, _window, lease, presses) = shown();
-    let mut tap = TapParams::new(named("Go"));
-    tap.options.via = Some(InputPolicy::prefer(InputPath::Os));
-    let mut tap = ask::<method::ElementTap>(&lease, tap);
-    let refused = answered(&mut host, &mut tap, 2)
-        .0
-        .expect_err("the os path is the driver's");
-    assert_eq!(refused.code, ErrorCode::NotSupported, "{refused:?}");
-    assert_eq!(refused.capability.as_deref(), Some("os_input"));
-    assert_eq!(presses.go.load(Ordering::SeqCst), 0);
+    let rows: [(&str, Ask, &str); 4] = [
+        (
+            "a tap",
+            |lease| {
+                let mut tap = TapParams::new(named("Go"));
+                tap.options.via = Some(InputPolicy::prefer(InputPath::Os));
+                ask::<method::ElementTap>(lease, tap)
+            },
+            "os_input",
+        ),
+        (
+            "scroll_into_view preferring the os path",
+            |lease| {
+                ask::<method::ElementScrollIntoView>(
+                    lease,
+                    scroll_item_12_into_view(InputPolicy::prefer(InputPath::Os)),
+                )
+            },
+            "os_input",
+        ),
+        (
+            "scroll_into_view requiring the os path",
+            |lease| {
+                ask::<method::ElementScrollIntoView>(
+                    lease,
+                    scroll_item_12_into_view(InputPolicy::require(InputPath::Os)),
+                )
+            },
+            "os_input",
+        ),
+        (
+            "scroll_into_view requiring synthetic input",
+            |lease| {
+                ask::<method::ElementScrollIntoView>(
+                    lease,
+                    scroll_item_12_into_view(InputPolicy::require(InputPath::Synthetic)),
+                )
+            },
+            "synthetic_input",
+        ),
+    ];
+    for (case, call, capability) in rows {
+        let (mut host, _agent, window, lease, presses) = shown();
+        let item = element(&mut host, &window, "Item 12");
+        let before = bounds(&mut host, &window, "Item 12");
+        let mut asked = call(&lease);
+        let refused = answered(&mut host, &mut asked, 2).0.expect_err("refused");
+        assert_eq!(refused.code, ErrorCode::NotSupported, "{case}: {refused:?}");
+        assert_eq!(refused.capability.as_deref(), Some(capability), "{case}");
+        assert_eq!(presses.go.load(Ordering::SeqCst), 0, "{case}");
+        let _ = host.pump(Duration::from_millis(16));
+        assert_eq!(
+            bounds(&mut host, &window, "Item 12"),
+            before,
+            "{case}: nothing scrolled {item:?}"
+        );
+    }
 }
 
 /// On the semantic path a gesture with a semantics action that does the same performs it and
@@ -745,5 +843,527 @@ fn the_semantic_path_performs_the_semantics_action_that_does_the_same() {
             }
             (answer, expected) => panic!("{case}: {answer:?}, not {expected:?}"),
         }
+    }
+}
+
+/// A window that draws nothing still answers a held act at its deadline, which wakes the host's
+/// loop: a tap whose target never passes, and a scroll whose step was queued as the window
+/// stopped drawing, which is withdrawn so no scroll goes out after the answer, the window seen
+/// again included. Meanwhile the runtime lists no cause a frame would serve, since none runs.
+#[test]
+fn a_window_that_draws_nothing_answers_a_held_act_at_its_deadline() {
+    let rows: [(&str, Ask, ErrorCode); 2] = [
+        (
+            "a tap on a disabled target",
+            |lease| {
+                let mut tap = TapParams::new(named("Gated"));
+                tap.options = timeout(tap.options, 200);
+                ask::<method::ElementTap>(lease, tap)
+            },
+            ErrorCode::NotActionable,
+        ),
+        (
+            "a scroll with its step queued",
+            |lease| {
+                let mut until = ScrollUntilParams::new(named("Items"), Locator::named("Item 99"));
+                until.options = timeout(until.options, 200);
+                ask::<method::ElementScrollUntil>(lease, until)
+            },
+            ErrorCode::NotFound,
+        ),
+    ];
+    for (case, call, code) in rows {
+        let (mut host, _agent, window, lease, _presses) = shown();
+        let journaled = journal(&mut host, &window).entries.len();
+        host.set_window_visible(false);
+        let _ = host.pump(Duration::from_millis(16));
+        let mut asked = call(&lease);
+        let _ = host.pump(Duration::ZERO);
+        host.request_frame();
+        let unsettled = host.unsettled();
+        assert!(
+            unsettled
+                .causes()
+                .all(|cause| cause.cleared_by != ClearedBy::NextFrame),
+            "{case}: no frame runs, so none is owed: {unsettled:?}"
+        );
+        assert!(
+            unsettled.wake().is_some(),
+            "{case}: the act's deadline wakes the loop"
+        );
+        let Some(answer) = host.run_until_answered(
+            &mut asked,
+            Duration::from_millis(16),
+            Duration::from_secs(5),
+        ) else {
+            panic!("{case}: answered at its deadline");
+        };
+        let refused = answer.expect_err("nothing came of it");
+        assert_eq!(refused.code, code, "{case}: {refused:?}");
+        host.set_window_visible(true);
+        for _ in 0..5 {
+            let _ = host.pump(Duration::from_millis(16));
+        }
+        assert_eq!(
+            journal(&mut host, &window).entries.len(),
+            journaled,
+            "{case}: nothing went out after the answer"
+        );
+    }
+}
+
+/// "Row 0" to "Row 149", each a line of text.
+#[derive(Clone, StatelessView)]
+struct Rows;
+
+impl StatelessView for Rows {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Column::new(
+            (0..150)
+                .map(|row| Text::new(format!("Row {row}")).into_view().boxed())
+                .collect::<Vec<BoxedView>>(),
+        )
+    }
+}
+
+/// A window serving its agent, showing `view`, its agent window, after its first frames.
+fn serving(
+    view: &(impl View + Clone + 'static),
+    height: u32,
+) -> (HeadlessHost, HeadlessDevAgent, AgentWindow) {
+    let windows = Arc::new(Mutex::new(Vec::new()));
+    let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
+    let mut host = HeadlessHost::new(HeadlessWindow::new(200, height)).with_dev_agent(&mut agent);
+    host.attach(view).expect("mount");
+    let _ = host.pump(Duration::from_millis(16));
+    let window = windows
+        .lock()
+        .pop()
+        .expect("the host handed the agent its window");
+    let _ = host.pump(Duration::from_millis(16));
+    (host, agent, window)
+}
+
+/// The stability check remembers every element read between two frames, as many as the acts a
+/// window holds read (two each) and elements a driver polls beside them: 150 elements read, and
+/// read again after a frame, are each stable.
+#[test]
+fn the_stability_check_remembers_every_element_read_between_two_frames() {
+    let (mut host, _agent, window) = serving(&Rows, 4000);
+    // A strict locate lists every match.
+    let mut locate = LocateParams::new(Locator::default().name_matching(TextMatch::prefix("Row ")));
+    locate.max_matches = Some(200);
+    let mut found = window
+        .call::<method::SemanticsLocate>(locate)
+        .expect("the inbox has room");
+    let rows: Vec<ElementRef> = answered(&mut host, &mut found, 2)
+        .0
+        .expect("located")
+        .matches
+        .iter()
+        .map(|found| found.element)
+        .collect::<Vec<ElementRef>>();
+    assert_eq!(rows.len(), 150, "every row is published");
+    let read = |host: &mut HeadlessHost| -> Vec<bool> {
+        let mut stable = Vec::with_capacity(rows.len());
+        for batch in rows.chunks(50) {
+            let mut asked: Vec<AgentAnswer<Actionability>> = batch
+                .iter()
+                .map(|row| {
+                    window
+                        .call::<method::ElementActionability>(ActionabilityParams::new(*row))
+                        .expect("the inbox has room")
+                })
+                .collect::<Vec<AgentAnswer<Actionability>>>();
+            let _ = host.pump(Duration::ZERO);
+            for answer in &mut asked {
+                stable.push(
+                    answer
+                        .try_take()
+                        .expect("answered at the drain")
+                        .expect("its facts")
+                        .stable,
+                );
+            }
+        }
+        stable
+    };
+    let _ = read(&mut host);
+    let _ = host.pump(Duration::from_millis(16));
+    let unstable = read(&mut host).iter().filter(|stable| !**stable).count();
+    assert_eq!(
+        unstable, 0,
+        "{unstable} of 150 rows read twice are not stable"
+    );
+}
+
+/// What a gesture answers when it cannot run: a sequence the call's parameters make none of, a
+/// chord that does not read, a name two elements share (with every candidate), a name nothing
+/// has by the timeout, a handle whose element left the tree; and a point the call names, which
+/// is ready at once and names no element.
+#[test]
+fn a_gesture_answers_why_it_did_not_run() {
+    type Setup = fn(&mut HeadlessHost, &AgentWindow, &InputLease) -> AgentAnswer<ActOutcome>;
+    let rows: [(&str, Setup, Result<(), ErrorCode>); 6] = [
+        (
+            "a pinch to no scale",
+            |_, _, lease| {
+                let params: PinchParams = serde_json::from_value(json!({
+                    "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+                    "scale": 0.0,
+                }))
+                .expect("a pinch reads");
+                ask::<method::ElementPinch>(lease, params)
+            },
+            Err(ErrorCode::InvalidArgument),
+        ),
+        (
+            "a chord ending in a separator",
+            |_, _, lease| {
+                let params: PressKeysParams = serde_json::from_value(json!({
+                    "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+                    "keys": ["Control+"],
+                }))
+                .expect("press keys reads");
+                ask::<method::ElementPressKeys>(lease, params)
+            },
+            Err(ErrorCode::InvalidArgument),
+        ),
+        (
+            "a name two elements share",
+            |_, _, lease| ask::<method::ElementTap>(lease, TapParams::new(named("Twin"))),
+            Err(ErrorCode::Ambiguous),
+        ),
+        (
+            "a name nothing has",
+            |_, _, lease| {
+                let mut tap = TapParams::new(named("Nowhere"));
+                tap.options = timeout(tap.options, 80);
+                ask::<method::ElementTap>(lease, tap)
+            },
+            Err(ErrorCode::NotFound),
+        ),
+        (
+            "a handle whose element left",
+            |host, window, lease| {
+                let item = element(host, window, "Item 0");
+                let mut scrolled = ask::<method::ElementScrollUntil>(
+                    lease,
+                    until("Items", Locator::named("Item 60")),
+                );
+                answered(host, &mut scrolled, 200).0.expect("scrolled");
+                for _ in 0..4 {
+                    let _ = host.pump(Duration::from_millis(16));
+                }
+                ask::<method::ElementTap>(lease, TapParams::new(Target::Element(item)))
+            },
+            Err(ErrorCode::Gone),
+        ),
+        (
+            "a point",
+            |host, window, lease| {
+                let at = bounds(host, window, "Go").center();
+                ask::<method::ElementTap>(
+                    lease,
+                    TapParams::new(Target::Point {
+                        window: window.id(),
+                        at,
+                    }),
+                )
+            },
+            Ok(()),
+        ),
+    ];
+    for (case, setup, expected) in rows {
+        let (mut host, _agent, window, lease, presses) = shown();
+        let mut asked = setup(&mut host, &window, &lease);
+        let (answer, frames) = answered(&mut host, &mut asked, 30);
+        if case == "a name nothing has" {
+            // Held for one to appear until its 80 ms timeout, five frames of 16 ms.
+            assert!(frames >= 5, "{case}: answered at frame {frames}");
+        }
+        match (answer, expected) {
+            (Ok(outcome), Ok(())) => {
+                assert_eq!(outcome.element, None, "{case}: a point names no element");
+                assert_eq!(presses.go.load(Ordering::SeqCst), 1, "{case}");
+            }
+            (Err(refused), Err(code)) => {
+                assert_eq!(refused.code, code, "{case}: {refused:?}");
+                if code == ErrorCode::Ambiguous {
+                    assert_eq!(refused.candidates.len(), 2, "{case}: {refused:?}");
+                }
+                assert_eq!(presses.go.load(Ordering::SeqCst), 0, "{case}");
+            }
+            (answer, expected) => panic!("{case}: {answer:?}, not {expected:?}"),
+        }
+    }
+}
+
+fn until(scrollable: &str, sought: Locator) -> ScrollUntilParams {
+    ScrollUntilParams::new(named(scrollable), sought)
+}
+
+/// The elements whose name starts with "Item 1", picked by `pick`.
+fn item_1(pick: Pick) -> Locator {
+    Locator::default()
+        .name_matching(TextMatch::prefix("Item 1"))
+        .pick(pick)
+}
+
+/// `scroll_until`: past its deadline it answers `not_found` while the content still moves; a
+/// direction the call names is never turned from; a pick other than strict finds its match where
+/// it shows (the second, the last), a strict one that matches several under the scrollable is
+/// `ambiguous`; a point names no scrollable; and a found element carries the reading asked for.
+#[test]
+fn scroll_until_answers_by_its_deadline_direction_and_pick() {
+    type Make = fn(&AgentWindow) -> ScrollUntilParams;
+    let rows: [(&str, Make, Result<&str, ErrorCode>); 7] = [
+        (
+            "past its deadline, the content still moving",
+            |_| {
+                let mut params = until("Items", Locator::named("Item 999"));
+                params.options = timeout(params.options, 100);
+                params
+            },
+            Err(ErrorCode::NotFound),
+        ),
+        (
+            "down named on a row that does not scroll down",
+            |_| {
+                let mut params = until("Columns", Locator::named("Col 30"));
+                params.direction = Some(Direction::Down);
+                params
+            },
+            Err(ErrorCode::NotFound),
+        ),
+        (
+            "the second match",
+            |_| until("Items", item_1(Pick::Nth(1))),
+            Ok("Item 10"),
+        ),
+        (
+            "the last match",
+            |_| until("Items", item_1(Pick::Last)),
+            Ok("Item 19"),
+        ),
+        (
+            "several under a strict pick",
+            |_| until("Items", item_1(Pick::Strict)),
+            Err(ErrorCode::Ambiguous),
+        ),
+        (
+            "a point",
+            |window| {
+                ScrollUntilParams::new(
+                    Target::Point {
+                        window: window.id(),
+                        at: LogicalPoint::new(10.0, 10.0),
+                    },
+                    Locator::named("Item 60"),
+                )
+            },
+            Err(ErrorCode::InvalidArgument),
+        ),
+        (
+            "a reading asked for",
+            |_| {
+                let mut params = until("Items", Locator::named("Item 30"));
+                params.options.snapshot = Snapshot::Full;
+                params
+            },
+            Ok("Item 30"),
+        ),
+    ];
+    for (case, make, expected) in rows {
+        let (mut host, _agent, window, lease, _presses) = shown();
+        let params = make(&window);
+        let reads = params.options.snapshot != Snapshot::None;
+        let mut asked = ask::<method::ElementScrollUntil>(&lease, params);
+        let (answer, frames) = answered(&mut host, &mut asked, 400);
+        match (answer, expected) {
+            (Ok(outcome), Ok(sought)) => {
+                let found = outcome.element.expect("the element found");
+                assert_eq!(found, element(&mut host, &window, sought), "{case}");
+                assert_eq!(outcome.snapshot.is_some(), reads, "{case}: {outcome:?}");
+            }
+            (Err(refused), Err(code)) => {
+                assert_eq!(refused.code, code, "{case}: {refused:?}");
+            }
+            (answer, expected) => panic!("{case}: {answer:?}, not {expected:?}"),
+        }
+        if case.starts_with("past its deadline") {
+            // 100 rows in a viewport of five take 20 steps, two frames each at least, to end.
+            assert!(
+                frames < 20,
+                "{case}: answered at the deadline, frame {frames}"
+            );
+        }
+    }
+}
+
+/// `twins` texts "Twin" below a list "Tall" of `rows` rows, "Row 0" onward, each given upfront.
+#[derive(Clone, StatelessView)]
+struct Crowd {
+    twins: usize,
+    rows: usize,
+}
+
+impl StatelessView for Crowd {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let rows = Column::new(
+            (0..self.rows)
+                .map(|row| Text::new(format!("Row {row}")).into_view().boxed())
+                .collect::<Vec<BoxedView>>(),
+        );
+        let tall = Semantics::new()
+            .label("Tall")
+            .container(true)
+            .child(SizedBox::new(200.0, 100.0).child(SingleChildScrollView::new().child(rows)));
+        let mut children = vec![tall.into_view().boxed()];
+        children.extend((0..self.twins).map(|_| Text::new("Twin").into_view().boxed()));
+        Column::new(children)
+    }
+}
+
+/// `scroll_until` reads at most 4096 of the scrollable's descendants and looks among at most 4096
+/// of the window's matches; a read that leaves some out is refused, never taken for the whole: a
+/// scrollable with more descendants is `not_supported`, a locator with more matches
+/// `invalid_argument`.
+#[test]
+fn scroll_until_refuses_a_read_that_leaves_some_out() {
+    let rows: [(&str, Crowd, &str, ErrorCode); 2] = [
+        (
+            "a scrollable of 4200 rows",
+            Crowd {
+                twins: 0,
+                rows: 4200,
+            },
+            "Row 4199",
+            ErrorCode::NotSupported,
+        ),
+        (
+            "4200 matches in the window",
+            Crowd {
+                twins: 4200,
+                rows: 3,
+            },
+            "Twin",
+            ErrorCode::InvalidArgument,
+        ),
+    ];
+    for (case, crowd, sought, code) in rows {
+        let (mut host, _agent, window) = serving(&crowd, 400);
+        let lease = window
+            .input_lease()
+            .expect("an open window leases its input");
+        let mut asked = ask::<method::ElementScrollUntil>(
+            &lease,
+            ScrollUntilParams::new(named("Tall"), Locator::named(sought)),
+        );
+        let refused = answered(&mut host, &mut asked, 400).0.expect_err("refused");
+        assert_eq!(refused.code, code, "{case}: {refused:?}");
+    }
+}
+
+/// Every gesture, and a perf span's start and stop, crosses the wire through the connection's
+/// lease on its window: asked over the protocol, each is answered by the window, none refused as
+/// asked without a lease. A gesture the method table gains has a row here or fails the coverage
+/// check; which methods the dispatcher sends through the lease is held by its own table test.
+#[test]
+fn every_gesture_crosses_the_wire_through_the_connections_lease() {
+    let go = json!({ "locator": { "name": { "match": "exact", "text": "Go" } } });
+    let mut rows: Vec<(&str, serde_json::Value)> = vec![
+        (method::ElementTap::NAME, json!({ "target": go })),
+        (method::ElementDoubleTap::NAME, json!({ "target": go })),
+        (
+            method::ElementLongPress::NAME,
+            json!({ "target": go, "duration_ms": 100 }),
+        ),
+        (
+            method::ElementDragTo::NAME,
+            json!({ "target": go, "to": go }),
+        ),
+        (
+            method::ElementSwipe::NAME,
+            json!({ "target": go, "direction": "up" }),
+        ),
+        (
+            method::ElementFling::NAME,
+            json!({ "target": go, "direction": "up" }),
+        ),
+        (
+            method::ElementPinch::NAME,
+            json!({ "target": go, "scale": 2.0 }),
+        ),
+        (
+            method::ElementPressKeys::NAME,
+            json!({ "target": go, "keys": ["a"] }),
+        ),
+        (
+            method::ElementTypeText::NAME,
+            json!({ "target": go, "text": "hi" }),
+        ),
+        (method::ElementScrollIntoView::NAME, json!({ "target": go })),
+        (
+            method::ElementScrollUntil::NAME,
+            json!({ "target": go, "until": { "name": { "match": "exact", "text": "Go" } } }),
+        ),
+    ];
+    for gesture in method::METHODS
+        .iter()
+        .filter(|row| row.name.starts_with("element.") && row.effect.changes_app())
+    {
+        assert!(
+            rows.iter().any(|(name, _)| *name == gesture.name),
+            "{} has a row",
+            gesture.name
+        );
+    }
+    let service = crate::agent_wire::service(Limits::default(), None);
+    let (mut host, _agent, _presses) = crate::agent_wire::shown(&service);
+    let waker = Waker::from(CountingWaker::new().shared());
+    let now = Instant::now();
+    let mut session = crate::agent_wire::greeted(&service, now, &waker);
+    // A perf span is the connection's too: it starts and stops through the same lease.
+    session.receive(
+        &crate::agent_wire::line(
+            &json!({ "id": "windows", "method": "windows.list", "params": {} }),
+        ),
+        now,
+    );
+    session.poll(now, &waker);
+    let _ = host.pump(Duration::ZERO);
+    session.poll(now, &waker);
+    let listed = crate::agent_wire::transmitted(&mut session);
+    let Some(answer) = listed.iter().find(|line| line["id"] == json!("windows")) else {
+        panic!("windows.list is answered: {listed:?}");
+    };
+    let handle = answer["result"]["windows"][0].clone();
+    rows.push((method::PerfStart::NAME, json!({ "window": handle })));
+    rows.push((method::PerfStop::NAME, json!({ "window": handle })));
+    for (id, (name, params)) in rows.iter().enumerate() {
+        session.receive(
+            &crate::agent_wire::line(&json!({ "id": id, "method": name, "params": params })),
+            now,
+        );
+        session.poll(now, &waker);
+        let mut answer = None;
+        for _ in 0..200 {
+            let _ = host.pump(Duration::from_millis(16));
+            session.poll(now, &waker);
+            if let Some(line) = crate::agent_wire::transmitted(&mut session)
+                .into_iter()
+                .find(|line| line["id"] == json!(id))
+            {
+                answer = Some(line);
+                break;
+            }
+        }
+        let answer = answer.unwrap_or_else(|| panic!("{name} is answered"));
+        assert_ne!(
+            answer["error"]["code"],
+            json!("invalid_argument"),
+            "{name} went through the lease: {answer}"
+        );
     }
 }

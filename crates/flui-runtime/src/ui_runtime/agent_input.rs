@@ -704,6 +704,10 @@ struct Running {
     steps: VecDeque<Step>,
 }
 
+/// Which of a window's injections one is, as [`UiRuntime::queue_injection`] queued it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct InjectionId(u64);
+
 /// What an injection of a script is asked with.
 pub(super) struct Injecting {
     /// The lease it goes through.
@@ -728,7 +732,7 @@ impl AgentInput {
         &mut self,
         injecting: Injecting,
         reply: ReplySender<ActOutcome>,
-    ) -> Result<(), ReplySender<ActOutcome>> {
+    ) -> Result<InjectionId, ReplySender<ActOutcome>> {
         if self.jobs.len() >= MAX_QUEUED {
             return Err(reply);
         }
@@ -756,7 +760,22 @@ impl AgentInput {
             reply,
             observed: None,
         })));
-        Ok(())
+        Ok(InjectionId(self.injections))
+    }
+
+    /// Take injection `id` off the queue if none of its ticks has started, to be dropped unsent
+    /// once the queue is let go: nothing of it goes out. An injection already under way, or
+    /// gone, stays as it is.
+    fn withdraw(&mut self, id: InjectionId) -> Option<Job> {
+        let at = self.jobs.iter().position(|job| match job {
+            Job::Inject(injection) => {
+                injection.id == id.0
+                    && injection.current.is_none()
+                    && injection.script.len() == injection.total
+            }
+            Job::Release { .. } => false,
+        })?;
+        self.jobs.remove(at)
     }
 
     /// Queue `input.release` through `lease`, behind the work already queued.
@@ -960,31 +979,42 @@ enum Turn {
 }
 
 impl UiRuntime {
-    /// Queue `injecting` in `state`'s window, and ask for the frame whose boundary starts it.
+    /// Queue `injecting` in `state`'s window, after asking for the frame whose boundary starts
+    /// it: the injection, or `None` when the queue was full and `reply` was answered `busy`.
+    ///
+    /// The frame is asked for first. Its wake reaches the platform, user code, and one that
+    /// panics has queued nothing, so the containment that answers the panic answers what
+    /// happened; the wake reads none of the agent's state, and the redraw marks it sets are
+    /// durable whichever way it returns.
     pub(super) fn queue_injection(
         &self,
         state: &PresentationState,
         injecting: Injecting,
         reply: ReplySender<ActOutcome>,
-    ) {
+    ) -> Option<InjectionId> {
+        self.request_redraw_for(state);
         let queued = state.agent_input.borrow_mut().inject(injecting, reply);
         match queued {
-            Ok(()) => self.request_redraw_for(state),
-            Err(reply) => send_reply(&reply, None, Err(AgentError::InputQueueFull)),
+            Ok(id) => Some(id),
+            Err(reply) => {
+                send_reply(&reply, None, Err(AgentError::InputQueueFull));
+                None
+            }
         }
     }
 
-    /// Queue `input.release` through `lease` in `state`'s window.
+    /// Queue `input.release` through `lease` in `state`'s window, after asking for the frame
+    /// that plays it, as [`Self::queue_injection`] does.
     pub(super) fn queue_release(
         &self,
         state: &PresentationState,
         lease: LeaseId,
         reply: ReplySender<Released>,
     ) {
+        self.request_redraw_for(state);
         let queued = state.agent_input.borrow_mut().release(lease, reply);
-        match queued {
-            Ok(()) => self.request_redraw_for(state),
-            Err(reply) => send_reply(&reply, None, Err(AgentError::InputQueueFull)),
+        if let Err(reply) = queued {
+            send_reply(&reply, None, Err(AgentError::InputQueueFull));
         }
     }
 
@@ -1009,9 +1039,11 @@ impl UiRuntime {
             match turn {
                 Turn::Idle => return,
                 Turn::Sent(batch, id) => {
-                    self.request_redraw_for(state);
-                    let sent = self.send_agent_input(state, batch);
+                    // The tick's input left the queue with this turn: it goes out before the
+                    // wake that asks for the next boundary, and a wake that panics loses none.
+                    let mut sent = self.send_agent_input(state, batch);
                     state.agent_input.borrow_mut().observe(id, sent.observed);
+                    sent.panic.contain(|| self.request_redraw_for(state));
                     sent.resume();
                     return;
                 }
@@ -1032,15 +1064,18 @@ impl UiRuntime {
                         observed,
                         ..
                     } = *injection;
-                    let sent = self.send_agent_input(state, batch);
+                    let mut sent = self.send_agent_input(state, batch);
                     let mut outcome =
                         ActOutcome::new(InputPath::Synthetic, Effect::new(EffectKind::Ran));
                     outcome.element = element;
                     outcome.observed = widen(observed, sent.observed);
                     // Owed once the input has gone out, a handler's panic included: the answer
                     // waits for the frame after it, which shows what the input did. The window
-                    // is still open, since closing one takes the runtime mutably.
-                    self.park_act_read(state, ReadingOwed::new(outcome, snapshot, before), reply);
+                    // is still open, since closing one takes the runtime mutably. Parking wakes
+                    // the platform, so it runs behind a handler's panic, which stays first.
+                    let owed = ReadingOwed::new(outcome, snapshot, before);
+                    sent.panic
+                        .contain(|| self.park_act_read(state, owed, reply));
                     sent.resume();
                     return;
                 }
@@ -1146,6 +1181,15 @@ impl UiRuntime {
         ));
         sent.resume();
     }
+}
+
+/// Take injection `id` off `state`'s queue if none of its ticks has started: whether it was. Its
+/// answer is dropped unsent, after the queue is let go.
+pub(super) fn withdraw(state: &PresentationState, id: InjectionId) -> bool {
+    let withdrawn = state.agent_input.borrow_mut().withdraw(id);
+    let was = withdrawn.is_some();
+    drop(withdrawn);
+    was
 }
 
 /// What sending one batch of injected input came to.

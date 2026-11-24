@@ -211,12 +211,12 @@ impl AgentSide for AgentOwnerSide {
     }
 
     fn after_turn(&self, ui_runtime: &UiRuntime) {
-        // A held act whose deadline passed is answered on a turn without a frame too; a panic
-        // there continues once the waits are evaluated.
-        let mut held = FirstPanic::new();
-        held.contain(|| ui_runtime.advance_held_acts(super::agent_held::Pass::Expired));
-        ui_runtime.evaluate_agent_waits(false);
-        held.resume();
+        // A held act whose deadline passed is answered on a turn without a frame too. The waits
+        // are evaluated whichever panics, and the first panic of the two continues after both.
+        let mut first = FirstPanic::new();
+        first.contain(|| ui_runtime.advance_held_acts(super::agent_held::Pass::Expired));
+        first.contain(|| ui_runtime.evaluate_agent_waits(false));
+        first.resume();
     }
 
     fn advance_input(&self, ui_runtime: &UiRuntime, now: Instant) {

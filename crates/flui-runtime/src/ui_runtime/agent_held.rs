@@ -147,17 +147,10 @@ impl HeldActs {
         dropped
     }
 
-    /// The earliest deadline that wakes the owner: an act's, unless the act waits for input it
-    /// queued to play, which frames serve and the deadline does not.
+    /// The earliest deadline that wakes the owner: every act's, a scroll's whose step is under
+    /// way included, since the pass at the deadline answers it whether or not a frame comes.
     fn next_deadline(&self) -> Option<Instant> {
-        self.acts
-            .iter()
-            .filter(|act| match &act.holding {
-                Holding::Gesture(_) => true,
-                Holding::Scroll(search) => !search.is_stepping(),
-            })
-            .map(|act| act.deadline)
-            .min()
+        self.acts.iter().map(|act| act.deadline).min()
     }
 }
 
@@ -171,9 +164,15 @@ pub(super) enum Pass {
 }
 
 impl UiRuntime {
-    /// Hold `act` in `state`'s window: attempted at once, in the serving turn, and held when it
-    /// holds on. A panic in the attempt continues into the serving turn's containment, which
-    /// answers `if_panics`; one the hit-test caught is left in `caught`.
+    /// Hold `act` in `state`'s window: refused when the window holds [`MAX_HELD_ACTS`] already,
+    /// before anything of it runs; otherwise attempted at once, in the serving turn, and held
+    /// when it holds on. A panic in the attempt continues into the serving turn's containment,
+    /// which answers `if_panics`; one the hit-test caught is left in `caught`.
+    ///
+    /// The frames a held act asks for are asked for before the attempt: the wake reaches the
+    /// platform, user code, and one that panics has held and queued nothing, so the serving
+    /// turn's answer to it is true. Nothing that runs code this module does not own comes after
+    /// the act is held.
     pub(super) fn hold_act(
         &self,
         state: &PresentationState,
@@ -181,6 +180,18 @@ impl UiRuntime {
         if_panics: &PanicAnswer,
         caught: &mut FirstPanic,
     ) {
+        // Acts nobody takes any more hold no place against the limit.
+        let held = {
+            let mut acts = state.agent_acts.borrow_mut();
+            acts.acts.retain(HeldAct::is_awaited);
+            acts.acts.len()
+        };
+        if held >= MAX_HELD_ACTS {
+            send_reply(&act.reply, None, Err(AgentError::TooManyActs));
+            return;
+        }
+        if_panics.set(AgentError::Panicked);
+        self.request_redraw_for(state);
         let mut ctx = AttemptContext {
             runtime: self,
             state,
@@ -191,26 +202,14 @@ impl UiRuntime {
             if_panics,
             caught,
         };
-        let Some(act) = act.attempt(&mut ctx) else {
-            return;
-        };
-        // Acts nobody takes any more hold no place against the limit.
-        state
-            .agent_acts
-            .borrow_mut()
-            .acts
-            .retain(HeldAct::is_awaited);
-        let held = state.agent_acts.borrow().acts.len();
-        if held >= MAX_HELD_ACTS {
-            send_reply(&act.reply, None, Err(AgentError::TooManyActs));
-            return;
+        if let Some(act) = act.attempt(&mut ctx) {
+            state.agent_acts.borrow_mut().acts.push(act);
         }
-        state.agent_acts.borrow_mut().acts.push(act);
-        self.request_redraw_for(state);
     }
 
     /// Attempt the held acts `pass` reaches in every window. An attempt that panics in app code
-    /// answers its own act, and the first panic continues once every window's acts are put back.
+    /// answers its own act; the answer and each window's wake run contained, and the first panic
+    /// of any of them continues once every window's acts are put back.
     pub(super) fn advance_held_acts(&self, pass: Pass) {
         let mut first = FirstPanic::new();
         for state in self.presentations.iter() {
@@ -246,23 +245,28 @@ impl UiRuntime {
                     };
                     act.attempt(&mut ctx)
                 });
+                first.absorb(caught);
+                first.absorb(attempted);
                 match kept {
                     Some(Some(act)) => keep.push(act),
                     Some(None) => {}
-                    // The attempt consumed the act; the reply kept apart answers it.
-                    None => send_reply(&reply, None, Err(if_panics.into_failure())),
+                    // The attempt consumed the act; the reply kept apart answers it, behind the
+                    // attempt's panic.
+                    None => {
+                        let failure = if_panics.into_failure();
+                        first.contain(|| send_reply(&reply, None, Err(failure)));
+                    }
                 }
-                first.absorb(caught);
-                first.absorb(attempted);
             }
             // Acts held while this ran (none can be, on the owner) stay behind the old ones.
-            let mut held = state.agent_acts.borrow_mut();
-            keep.append(&mut held.acts);
-            held.acts = keep;
-            let holding = !held.acts.is_empty();
-            drop(held);
+            let holding = {
+                let mut held = state.agent_acts.borrow_mut();
+                keep.append(&mut held.acts);
+                held.acts = keep;
+                !held.acts.is_empty()
+            };
             if holding {
-                self.request_redraw_for(state);
+                first.contain(|| self.request_redraw_for(state));
             }
         }
         first.resume();

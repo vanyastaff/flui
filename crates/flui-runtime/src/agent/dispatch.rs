@@ -30,8 +30,8 @@ use std::time::Duration;
 use flui_protocol::input_recording::Row;
 use flui_protocol::method::{
     Addressed, ElementDoubleTap, ElementDragTo, ElementFling, ElementLongPress, ElementPinch,
-    ElementPressKeys, ElementScrollIntoView, ElementScrollUntil, ElementSwipe, ElementTap,
-    ElementTypeText, EventsSubscribe, EventsUnsubscribe, InputInject, InputRelease, Method,
+    ElementPressKeys, ElementScrollUntil, ElementSwipe, ElementTap, ElementTypeText,
+    EventsSubscribe, EventsUnsubscribe, InputInject, InputRelease, Method, PerfStart, PerfStop,
     RecordStart, RecordStop, WindowMethod, WindowsList,
 };
 use flui_protocol::{
@@ -242,23 +242,30 @@ fn done(outcome: Result<Value, ErrorObject>) -> (Work, Duration) {
 }
 
 /// The window methods asked through the connection's input lease on the window: the ones whose
-/// synthetic input the lease holds, so the input a gesture leaves held is the connection's and
-/// goes with it (ADR-0400 §2).
+/// effect stays the connection's (synthetic input it holds, a perf span it started), so it goes
+/// with the connection (ADR-0400 §2). `element.scroll_into_view` is a semantics action and holds
+/// nothing. `contracts/agent_gestures.rs` sends every gesture over the wire through it.
 const LEASED: &[&str] = &[
     InputInject::NAME,
     InputRelease::NAME,
+    PerfStart::NAME,
+    PerfStop::NAME,
     ElementDoubleTap::NAME,
     ElementDragTo::NAME,
     ElementFling::NAME,
     ElementLongPress::NAME,
     ElementPinch::NAME,
     ElementPressKeys::NAME,
-    ElementScrollIntoView::NAME,
     ElementScrollUntil::NAME,
     ElementSwipe::NAME,
     ElementTap::NAME,
     ElementTypeText::NAME,
 ];
+
+/// Whether the window method `name` is asked through the connection's lease ([`LEASED`]).
+fn through_lease(name: &str) -> bool {
+    LEASED.contains(&name)
+}
 
 /// Start a window method: the route generated for each one the table declares. Synthetic input
 /// and the gestures that make it are asked through the connection's lease on the window
@@ -269,7 +276,7 @@ fn window_route(
     method: &MethodRow,
     params: Value,
 ) -> Option<(Work, Duration)> {
-    let leased = LEASED.contains(&method.name);
+    let leased = through_lease(method.name);
     macro_rules! routes {
         ($($ty:ident = $name:literal, $effect:ident, $tier:ident, $params:ty => $output:ty;)+) => {
             match method.name {
@@ -878,10 +885,66 @@ impl Leases {
 
 #[cfg(test)]
 mod tests {
-    use flui_protocol::method::{METHODS, MethodEffect};
+    use flui_protocol::method::{
+        ElementActionability, ElementDoubleTap, ElementDragTo, ElementFling, ElementLongPress,
+        ElementPinch, ElementPressKeys, ElementScrollIntoView, ElementScrollUntil, ElementSwipe,
+        ElementTap, ElementTypeText, InputInject, InputRelease, PerfStart, PerfStop, SemanticsAct,
+    };
+    use flui_protocol::method::{METHODS, Method, MethodEffect, ServedBy};
     use flui_protocol::session::ClientRole;
 
-    use super::may_call;
+    use super::{may_call, through_lease};
+
+    /// The window methods the dispatcher asks through the connection's lease are exactly those
+    /// whose effect stays the connection's: each that may inject synthetic input, and a perf span.
+    /// A semantics action holds nothing, and a read never goes through it. Fails when an entry
+    /// leaves the lease's list, or when the table gains an acting `element.*` method this table
+    /// does not name.
+    #[test]
+    fn the_dispatcher_asks_through_the_lease_what_stays_the_connections() {
+        let leased = [
+            InputInject::NAME,
+            InputRelease::NAME,
+            PerfStart::NAME,
+            PerfStop::NAME,
+            ElementDoubleTap::NAME,
+            ElementDragTo::NAME,
+            ElementFling::NAME,
+            ElementLongPress::NAME,
+            ElementPinch::NAME,
+            ElementPressKeys::NAME,
+            ElementScrollUntil::NAME,
+            ElementSwipe::NAME,
+            ElementTap::NAME,
+            ElementTypeText::NAME,
+        ];
+        let not_leased = [
+            ElementScrollIntoView::NAME,
+            SemanticsAct::NAME,
+            ElementActionability::NAME,
+        ];
+        for name in leased {
+            assert!(through_lease(name), "{name} goes through the lease");
+        }
+        for name in not_leased {
+            assert!(!through_lease(name), "{name} does not");
+        }
+        for method in METHODS
+            .iter()
+            .filter(|method| method.served_by == ServedBy::Agent)
+        {
+            if method.name.starts_with("element.") && method.effect.changes_app() {
+                assert!(
+                    leased.contains(&method.name) || not_leased.contains(&method.name),
+                    "{} is named by this table",
+                    method.name
+                );
+            }
+            if !leased.contains(&method.name) {
+                assert!(!through_lease(method.name), "{} does not", method.name);
+            }
+        }
+    }
 
     /// Over every method of the table, an observer may call exactly those that read or only
     /// annotate, and the driver every one. Fails if an observer is let act, or refused an
