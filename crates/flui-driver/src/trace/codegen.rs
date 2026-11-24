@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use flui_protocol::locator::{Locator, TextMatch};
-use flui_protocol::method::{self, Method as _, MethodEffect};
+use flui_protocol::method::{self, Method as _};
 use flui_protocol::wait::{Condition, Expectation};
 use serde_json::Value;
 
@@ -139,7 +139,7 @@ pub fn codegen(trace: &Trace, options: &CodegenOptions) -> Result<String> {
 
 /// What a command becomes in the test.
 enum Statement {
-    /// Nothing: a read changes nothing.
+    /// Nothing: a read or an annotation changes nothing of the app.
     Read,
     /// A statement, and whether it uses `expect`.
     Code { line: String, expects: bool },
@@ -163,7 +163,7 @@ fn statement(command: &CommandRow, main: Option<&str>) -> Statement {
                 expects: true,
             };
         }
-    } else if row.effect == MethodEffect::ReadOnly {
+    } else if !row.effect.changes_app() {
         return Statement::Read;
     } else if row.name.starts_with("session.") {
         return Statement::NotGenerated("it begins or ends a session, which the test holds");

@@ -179,9 +179,8 @@ fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
 
 /// A single timeline event
 ///
-/// `#[non_exhaustive]`: a future field is additive — this slice already
-/// added one (`args`), a semver break for any external constructor; marking
-/// it now stops the next addition from repeating that break.
+/// `#[non_exhaustive]`: a field added later is not a semver break for a constructor outside the
+/// crate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct TimelineEvent {

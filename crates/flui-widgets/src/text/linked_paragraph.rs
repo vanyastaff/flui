@@ -53,7 +53,7 @@ use flui_view::{
     WriterSource,
 };
 
-use super::rich_text::ResolvedParagraph;
+use super::rich_text::RichText;
 use crate::anchored_box::AnchoredBox;
 use crate::support::RefCallback;
 use crate::{
@@ -120,21 +120,21 @@ fn identities_of(text: &InlineSpan) -> Vec<LinkIdentity> {
         .collect()
 }
 
-/// [`ResolvedParagraph`] mounted under a state that owns its links' tap
+/// [`RichText`] mounted under a state that owns its links' tap
 /// recognizers and focus nodes.
 #[derive(Clone)]
 pub(super) struct LinkedParagraph {
-    paragraph: ResolvedParagraph,
+    paragraph: RichText,
     on_link: RefCallback<TextLink>,
 }
 
 impl LinkedParagraph {
-    pub(super) fn new(paragraph: ResolvedParagraph, on_link: RefCallback<TextLink>) -> Self {
+    pub(super) fn new(paragraph: RichText, on_link: RefCallback<TextLink>) -> Self {
         Self { paragraph, on_link }
     }
 
     fn identities(&self) -> Vec<LinkIdentity> {
-        identities_of(&self.paragraph.authored.text)
+        identities_of(&self.paragraph.text)
     }
 }
 
@@ -423,7 +423,7 @@ impl ViewState<LinkedParagraph> for LinkedParagraphState {
         });
         let paragraph = AnchoredBox::new(
             self.anchor.clone(),
-            ResolvedParagraph {
+            RichText {
                 links,
                 link_focus: self.link_focus(ctx),
                 ..view.paragraph.clone()

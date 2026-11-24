@@ -229,3 +229,23 @@ fn a_window_methods_parameters_name_the_window_they_address() {
         "a locate answers at the drain"
     );
 }
+
+/// What an observer may call and what a timeout lets a client resend is one rule over the
+/// effects (ADR-0395): a read and an annotation leave the app as it was, an act and a destructive
+/// call change it.
+#[test]
+fn only_an_act_or_a_destructive_call_changes_the_app() {
+    let changes: Vec<(MethodEffect, bool)> = MethodEffect::ALL
+        .iter()
+        .map(|effect| (*effect, effect.changes_app()))
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            (MethodEffect::ReadOnly, false),
+            (MethodEffect::Annotates, false),
+            (MethodEffect::Acts, true),
+            (MethodEffect::Destructive, true),
+        ]
+    );
+}

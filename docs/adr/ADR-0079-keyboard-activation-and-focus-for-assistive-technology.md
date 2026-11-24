@@ -129,7 +129,7 @@ with nothing focusable (`back_keys_leave_a_page_with_nothing_focusable`).
 
 ## Amendment: links
 
-Amends §1 for the links of a `RichText` that `on_link` handles; the rest stands.
+Amends §1 for the links of a `Text` that `on_link` handles; the rest stands.
 
 A link opens on Enter and Select, as on every platform's links, and not on Space: a link is not
 a button, and Space is left to what encloses it. §1's bindings cannot say that, because Space's

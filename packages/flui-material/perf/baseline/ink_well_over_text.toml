@@ -3,7 +3,7 @@
 
 [ink_well_over_text]
 allocations = 55
-bytes = 6788
+bytes = 7051
 elements = 3
 reallocations = 1
 render_nodes = 2

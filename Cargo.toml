@@ -869,6 +869,15 @@ default = []
 material = ["dep:flui-material"]
 cupertino = ["dep:flui-cupertino"]
 
+# === Icon faces (ADR-0397) ===
+# Each embeds one icon face for an application that draws with the family
+# through `flui::widgets::Icon`: `material` brings the Material face, whose
+# glyphs its widgets draw; the Cupertino catalog draws none, so an application
+# that draws "CupertinoIcons" names `cupertino-icons`, as a Flutter one depends
+# on the `cupertino_icons` package.
+material-icons = ["flui-painting/material-icons"]
+cupertino-icons = ["flui-painting/cupertino-icons"]
+
 # === Capability crates (ADR-0154 §8) ===
 # Off by default like every capability (ADR-0088 §6): `system` gives
 # `flui::services::system`, the providers of the launcher and the file dialogs.

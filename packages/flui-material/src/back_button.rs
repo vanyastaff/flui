@@ -9,19 +9,17 @@
 //! that replaces it (for example to pop the platform's navigation stack
 //! instead of the route).
 //!
-//! # Glyph: the `arrow_back` codepoint, not a bundled asset
+//! # Glyph: the `arrow_back` codepoint
 //!
 //! The Material spec uses a platform-specific glyph (an iOS-style chevron on
 //! iOS/macOS, the `arrow_back` arrow everywhere else). FLUI has no
-//! platform/action-icon-theme support to switch on, and — as
-//! [`Icon`]'s own module docs state plainly — **no
-//! bundled icon font**: every codepoint shapes to tofu (the "missing glyph"
-//! box) until font-registration infrastructure lands, regardless of which
-//! icon is requested. Given that pre-existing, already-named rendering gap,
-//! [`back_arrow_icon_data`] carries the `arrow_back` icon's exact identity —
-//! codepoint `0xE092`, font family `"Material Icons"`, `match_text_direction:
-//! true` — rather than inventing a substitute glyph or a hand-drawn path (no
-//! such drawn-path convention exists in this crate). **Named limitation:** no
+//! platform/action-icon-theme support to switch on, so
+//! [`back_arrow_icon_data`] carries the `arrow_back` icon's identity:
+//! codepoint `0xE5C4` in the upstream `material-design-icons` numbering of the
+//! face (not that of Flutter's `Icons`), font family `"Material Icons"`, `match_text_direction:
+//! true`. The face of that family is in every application that depends on
+//! this package, which turns on `flui-sdk`'s `material-icons` feature
+//! (ADR-0397). **Named limitation:** no
 //! iOS/macOS-specific glyph switch: it waits on platform detection, not on
 //! anything specific to this type. `match_text_direction` is applied: under a
 //! right-to-left `Directionality`, `Icon` mirrors the arrow so it points to the
@@ -33,14 +31,12 @@ use flui_sdk::widgets::{Icon, IconData, PageHandle};
 use crate::button_style_button::PressCallback;
 use crate::icon_button::IconButton;
 
-/// The Material `arrow_back` icon. See the module docs' "Glyph" section for
-/// why this codepoint is used even with no bundled icon font to shape it
-/// against.
+/// The Material `arrow_back` icon (the module docs' "Glyph" section).
 #[must_use]
 pub(crate) fn back_arrow_icon_data() -> IconData {
     IconData {
         match_text_direction: true,
-        ..IconData::new(0xE092).with_font_family("Material Icons")
+        ..IconData::new(0xE5C4).with_font_family("Material Icons")
     }
 }
 

@@ -32,9 +32,10 @@
 //! the act's effect. A conversation holds at most [`Limits::queue`] requests, those answered and
 //! not yet transmitted included, and one beyond that is answered `busy` at once. An answer the
 //! window has not given within the reply timeout, and as long again as the window may hold the
-//! request (a wait's timeout), answers `timeout`: with retry `soon` for a read-only method, and
-//! with the `may_have_run` effect for one that acts, which is still queued and runs at the
-//! owner's next drain.
+//! request (a wait's timeout), answers `timeout`: with retry `soon` for a method that reads or
+//! only annotates, and with the `may_have_run` effect for one that acts, which is still queued
+//! and runs at the owner's next drain. An annotation is still queued too, and a resend shows
+//! what it showed: the window keeps only the last one.
 //!
 //! Events of the conversation's subscriptions are written between answers, a bounded number at a
 //! time; a stream that is not read keeps its own events, and counts the ones it has no room for.
@@ -47,8 +48,11 @@
 //! A hello names its role (ADR-0288 §8). One conversation drives the app at a time: a hello that
 //! asks to drive, as one naming no role does, takes the driver's seat, and while another holds
 //! it the hello is answered `not_driver`, retry `soon`, and closed. An observer
-//! (`"role":"observer"`) reads and subscribes beside the driver; a call of its that acts is
-//! answered `not_driver`, and its hello lists only the methods it may call.
+//! (`"role":"observer"`) reads, subscribes and annotates beside the driver: it may call a method
+//! whose effect is `read_only` or `annotates`, and a call of any other effect is answered
+//! `not_driver`; its hello lists only the methods it may call. An annotating method
+//! (`build.report`) changes only what the development tools draw over a window, and the window
+//! serves it from that drawing alone, so an observer that calls one reaches nothing of the app.
 //!
 //! When the driver's conversation ends (its client closed it, broke it, or it was closed for a
 //! fault of the client's), the seat is free for the next driver. A service given an

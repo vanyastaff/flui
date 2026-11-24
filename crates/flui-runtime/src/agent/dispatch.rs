@@ -35,9 +35,9 @@ use flui_protocol::method::{
 use flui_protocol::{
     act::Effect, act::EffectKind, envelope::RequestId, error::ErrorCode, error::ErrorObject,
     error::HandleKind, error::Retry, events::Event, events::EventFilter, events::Subscription,
-    method::METHODS, method::MethodEffect, method::MethodRow, method::ServedBy,
-    record::RecordEvent, record::RecordParams, record::RecordSummary, record::Recording,
-    session::ClientRole, session::WindowList, tree::WindowId,
+    method::METHODS, method::MethodRow, method::ServedBy, record::RecordEvent,
+    record::RecordParams, record::RecordSummary, record::Recording, session::ClientRole,
+    session::WindowList, tree::WindowId,
 };
 use flui_protocol::{native_recording, record::RecordNativeEvent, record::RecordRow};
 use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow, InputLease};
@@ -66,9 +66,14 @@ pub(super) fn serves(method: &MethodRow) -> bool {
 }
 
 /// Whether a connection admitted as `role` may call `method`: the driver anything, an observer
-/// only what reads (ADR-0288 §8).
+/// what reads and what only annotates the windows, never what changes the app (ADR-0288 §8,
+/// ADR-0395).
+///
+/// An annotating method is served from what the development tools draw over a window and
+/// nothing else (the `Annotate` path of `ui_runtime::agent_serve`), so an observer that calls one
+/// reaches no state of the app.
 pub(super) fn may_call(role: ClientRole, method: &MethodRow) -> bool {
-    role.is_driver() || method.effect == MethodEffect::ReadOnly
+    role.is_driver() || !method.effect.changes_app()
 }
 
 /// The methods the agent answers a connection admitted as `role`, by wire name, in table order.
@@ -80,12 +85,12 @@ pub(super) fn served(role: ClientRole) -> Vec<String> {
         .collect()
 }
 
-/// `method` acts, and the connection only observes.
+/// `method` changes the app, and the connection only observes.
 pub(super) fn not_driver(method: &MethodRow) -> ErrorObject {
     ErrorObject::new(
         ErrorCode::NotDriver,
         format!(
-            "{} acts, and this connection observes: only the app's driver acts",
+            "{} changes the app, and this connection observes: only the app's driver acts",
             method.name
         ),
     )
@@ -160,18 +165,24 @@ impl Running {
     }
 }
 
-/// What a timeout answers: retry `soon` for a method that only reads, and the `may_have_run`
-/// effect for one that acts, which is still queued.
+/// What a timeout answers: the `may_have_run` effect for a method that changes the app, which is
+/// still queued, and retry `soon` for one that only reads or only annotates.
+///
+/// An annotating method is answered as a read: it is still queued and runs at the owner's next
+/// drain, and a resend runs it once more, which shows what it showed. The window keeps only the
+/// last annotation it took (`build.report` replaces the report shown), and the conversation runs
+/// its requests in order, so the resend cannot put an older report over a newer one the client
+/// sends after it.
 fn timed_out(method: &MethodRow) -> ErrorObject {
-    if method.effect == MethodEffect::ReadOnly {
-        ErrorObject::new(ErrorCode::Timeout, "the window did not answer in time").retry(Retry::Soon)
-    } else {
+    if method.effect.changes_app() {
         ErrorObject::new(
             ErrorCode::Timeout,
             "the window did not answer in time; the request is still queued",
         )
         .retry(Retry::Never)
         .effect(Effect::new(EffectKind::MayHaveRun))
+    } else {
+        ErrorObject::new(ErrorCode::Timeout, "the window did not answer in time").retry(Retry::Soon)
     }
 }
 
@@ -848,5 +859,40 @@ impl Leases {
             }
         };
         lease.call::<M>(params)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use flui_protocol::method::{METHODS, MethodEffect};
+    use flui_protocol::session::ClientRole;
+
+    use super::may_call;
+
+    /// Over every method of the table, an observer may call exactly those that read or only
+    /// annotate, and the driver every one. Fails if an observer is let act, or refused an
+    /// annotation.
+    #[test]
+    fn an_observer_may_call_what_reads_or_annotates_and_nothing_else() {
+        for method in METHODS {
+            let observes = matches!(
+                method.effect,
+                MethodEffect::ReadOnly | MethodEffect::Annotates
+            );
+            assert_eq!(
+                may_call(ClientRole::Observer, method),
+                observes,
+                "{} ({:?})",
+                method.name,
+                method.effect
+            );
+            assert!(may_call(ClientRole::Driver, method), "{}", method.name);
+        }
+        assert!(
+            METHODS
+                .iter()
+                .any(|method| method.effect == MethodEffect::Annotates),
+            "the table holds an annotating method for the rule to cover"
+        );
     }
 }

@@ -345,15 +345,63 @@ fn a_restart_replaces_the_running_build_only_with_one_that_succeeded() {
         }
     }
 
-    /// An app that prints `marker` and runs until the `stop` file exists.
+    /// The agent the app serves at the endpoint `flui run` hands it, as far as `flui run`'s
+    /// build reports need: the hello, one window, and each `build.report` printed as
+    /// `REPORT <state>`.
+    const AGENT: &str = r#"
+fn serve_agent() {
+    use std::io::{BufRead as _, Write as _};
+    let Ok(path) = std::env::var("FLUI_AGENT_ENDPOINT") else { return };
+    // The build it replaced left its socket behind.
+    let _ = std::fs::remove_file(&path);
+    let listener = std::os::unix::net::UnixListener::bind(&path).expect("bind the endpoint");
+    std::thread::spawn(move || {
+        for stream in listener.incoming().map_while(Result::ok) {
+            let mut out = stream.try_clone().expect("clone");
+            let mut lines = std::io::BufReader::new(stream).lines().map_while(Result::ok);
+            if lines.next().is_none() {
+                continue;
+            }
+            let _ = writeln!(out, "{{\"hello\":{{\"protocol\":\"PROTOCOL\"}}}}");
+            for line in lines {
+                let id = line
+                    .split("\"id\":")
+                    .nth(1)
+                    .and_then(|rest| rest.split([',', '}']).next())
+                    .unwrap_or("0")
+                    .trim()
+                    .to_owned();
+                let result = if line.contains("\"windows.list\"") {
+                    "{\"windows\":[\"w1\"]}"
+                } else {
+                    if let Some(state) = ["failed", "succeeded", "building"]
+                        .into_iter()
+                        .find(|state| line.contains(&format!("\"{state}\"")))
+                    {
+                        println!("REPORT {state}");
+                    }
+                    "{}"
+                };
+                let _ = writeln!(out, "{{\"id\":{id},\"result\":{result}}}");
+            }
+        }
+    });
+}
+"#;
+
+    /// An app that serves [`AGENT`], prints `marker` and runs until the `stop` file exists.
     fn app_main(marker: &str) -> String {
+        let agent = AGENT.replace(
+            "PROTOCOL",
+            &flui_protocol::version::PROTOCOL_VERSION.to_string(),
+        );
         format!(
-            "use flui as _;\n\nfn main() {{\n    println!(\"{marker}\");\n    \
+            "use flui as _;\n{agent}\nfn main() {{\n    serve_agent();\n    \
+             println!(\"{marker}\");\n    \
              while !std::path::Path::new(\"stop\").exists() {{\n        \
              std::thread::sleep(std::time::Duration::from_millis(20));\n    }}\n}}\n"
         )
     }
-
     let tmp = TempDir::new().expect("fixture");
     let dependency = tmp.path().join("facade");
     package(&dependency, "flui", "");
@@ -444,6 +492,12 @@ fn a_restart_replaces_the_running_build_only_with_one_that_succeeded() {
             Duration::from_secs(60),
         );
     }
+    // The run opened its session only to report its builds: `flui mcp` finds no app through
+    // it, and a session file a `flui run --agent` wrote would be left alone.
+    assert!(
+        !app.join("target").join("flui-agent.json").exists(),
+        "a run without --agent wrote the session file"
+    );
 
     std::fs::write(app.join("src/main.rs"), "fn main() { this is not rust }\n")
         .expect("a compile error");
@@ -459,6 +513,19 @@ fn a_restart_replaces_the_running_build_only_with_one_that_succeeded() {
         names(&seen[mark..]),
         Vec::<String>::new(),
         "the previous build was stopped for a build that failed: {seen:?}"
+    );
+    // The running build shows the rebuild, then its failure (ADR-0395).
+    if !seen[mark..].iter().any(says("REPORT failed")) {
+        wait_for(
+            &events,
+            &mut seen,
+            says("REPORT failed"),
+            Duration::from_secs(30),
+        );
+    }
+    assert!(
+        seen[mark..].iter().any(says("REPORT building")),
+        "the build was shown starting: {seen:?}"
     );
 
     std::fs::write(app.join("src/main.rs"), app_main("FLUI_APP_SECOND")).expect("the fix");
@@ -481,6 +548,16 @@ fn a_restart_replaces_the_running_build_only_with_one_that_succeeded() {
         ["run.app.stop", "run.app.start"],
         "the fixed build replaced the previous one: {seen:?}"
     );
+    // The success clears the failure: shown to the build it replaced or, once that one is
+    // stopped, to its successor.
+    if !seen[mark..].iter().any(says("REPORT succeeded")) {
+        wait_for(
+            &events,
+            &mut seen,
+            says("REPORT succeeded"),
+            Duration::from_secs(30),
+        );
+    }
 
     // The app exits on its own while the next rebuild runs beside it.
     std::fs::write(app.join("src/main.rs"), app_main("FLUI_APP_THIRD")).expect("another edit");

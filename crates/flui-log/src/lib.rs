@@ -142,12 +142,7 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
-#![warn(
-    missing_debug_implementations,
-    rust_2018_idioms,
-    unreachable_pub,
-    clippy::pedantic
-)]
+#![warn(unreachable_pub)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod backend;

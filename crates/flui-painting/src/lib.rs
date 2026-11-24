@@ -82,7 +82,11 @@ mod box_fit;
 mod canvas;
 mod display_list;
 mod error;
-#[cfg(feature = "bundled-fonts")]
+#[cfg(any(
+    feature = "bundled-fonts",
+    feature = "material-icons",
+    feature = "cupertino-icons"
+))]
 pub mod fonts;
 pub mod glyphs;
 mod image_placement;

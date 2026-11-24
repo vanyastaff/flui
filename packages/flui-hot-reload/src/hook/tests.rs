@@ -333,3 +333,22 @@ fn scene_frame_reset_recovery_matrix() {
     }
     assert!(failures.is_empty(), "failed cases: {failures:?}");
 }
+
+/// A watcher thread that died on a panic hands its payload to the join.
+/// Fails when the join drops the payload outside containment: the payload's
+/// destructor panics again, out of `Drop`.
+#[test]
+fn a_watcher_that_panicked_is_joined_with_its_payload_contained() {
+    struct PanicsOnDrop;
+    impl Drop for PanicsOnDrop {
+        fn drop(&mut self) {
+            panic!("the payload's destructor panicked");
+        }
+    }
+    let watcher = ArtifactWatcher {
+        stop: Arc::new(AtomicBool::new(false)),
+        handle: Some(std::thread::spawn(|| std::panic::panic_any(PanicsOnDrop))),
+    };
+    let dropped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(watcher)));
+    assert!(dropped.is_ok(), "dropping the watcher does not panic");
+}

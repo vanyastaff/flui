@@ -6,7 +6,7 @@
 //! render children through the production `build_scope` path each
 //! iteration): observer absent (the `Option` null-check off path), a no-op
 //! observer (emission + `catch_unwind` frame, empty body), and the
-//! devtools counting inspector (the first real consumer).
+//! devtools counting inspector.
 
 // Bench binary: criterion's generated main has no docs (house precedent:
 // the flui-view benches carry the same allow).

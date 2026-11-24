@@ -178,10 +178,11 @@ framework, of each official package and of each dependency serves the launcher a
 - rustc links each crate once per artifact, so the dylib holds exactly one copy of every
   process-global static. Dynamic linking does not split UI runtime or registry identity and needs
   no entry in ADR-0097's allowlist.
-- The reading of the dlopen worker in the study found two unreported hazards (the old image
-  unmapped before the reassemble drops its views; the worker's own `REQUEST_REBUILD`,
-  `packages/flui-hot-reload/src/dispatch.rs:24`). Both are unrun hypotheses and belong to the
-  hot-reload work, not to this decision.
+- The reading of the dlopen worker in the study found that a worker `cdylib` holds its own copy
+  of the package's rebuild slot (`REQUEST_REBUILD`, `packages/flui-hot-reload/src/dispatch.rs`).
+  The package answers it by handing the worker the host's entry in `flui_worker_init`
+  (`a_worker_images_rebuild_request_runs_the_hosts_hook`), and ADR-0111 keeps an admitted worker
+  image mapped until process exit. Neither belongs to this decision.
 
 ## Alternatives considered
 

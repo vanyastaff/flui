@@ -2,12 +2,12 @@
 # counts, not timings.
 
 [full_reassemble]
-allocated_bytes = 211920
+allocated_bytes = 211896
 allocations = 836
-builds_run = 278
+builds_run = 277
 damage_full = 0
 damage_rects = 1
-elements_rebuilt = 152
+elements_rebuilt = 151
 frames_produced = 1
 layers_produced = 44
 layers_reused = 0
