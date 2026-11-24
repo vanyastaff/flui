@@ -140,7 +140,7 @@ writes them back as the file has them. Instructions are blessed on the runner al
 callgrind's counts follow the host's valgrind and processor: on a miss `perf-gates` blesses them,
 prints the diff and uploads the files, and a pull request that raises a window's cost runs that
 job on its branch and commits them. The 3% is measured: five CI runners on one commit counted
-each window within 0.17% of the others (the idle frame; most windows within 0.01%), and a
+each window within 0.17% of the others (the idle frame; 8 of the 13 windows within 0.02%), and a
 spread over 1% reopens this section.
 
 ### §4. Frame time is a trend, never a gate
