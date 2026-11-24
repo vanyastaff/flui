@@ -816,7 +816,9 @@ impl UiRuntime {
         // failure too; the first failure stays the one resumed (ADR-0281 §3).
         first_panic.contain(|| drop(removed));
         // The agents' recordings started on it end with their `end` rows.
-        first_panic.absorb(self.end_agent_recordings_of(id));
+        if let Some(agent) = self.agent_side.get() {
+            first_panic.absorb(agent.end_recordings_of(self, id));
+        }
         first_panic.contain(|| self.synchronize_window_lifecycle());
         first_panic.resume();
         true

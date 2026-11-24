@@ -602,7 +602,10 @@ impl UiRuntime {
         let mut report = DrainReport::default();
         // Counted before the commands are: a lease let go is released after the calls asked
         // through it, which were enqueued before it was let go.
-        let released = self.count_released_leases();
+        let released = self
+            .agent_side
+            .get()
+            .map_or_default(|agent| agent.count_released_leases(self));
         // Bound the pass by the pre-read length: `try_iter` is NOT a
         // snapshot — it keeps yielding messages that arrive during
         // iteration, so an unbounded loop could be extended indefinitely by
@@ -685,38 +688,39 @@ impl UiRuntime {
                         Err(payload) => self.rearm_after_command_panic(payload),
                     }
                 }
+                // Only a window `dev_agent_window` vended sends these, and vending one installs
+                // the agent's side: a command without it was not sent through this runtime's
+                // ports, and dropping it drops its reply, which its caller reads as gone.
                 UiCommand::Agent {
                     presentation_id,
                     call,
-                } => self.serve_window_call(presentation_id, call, &mut report),
+                } => match self.agent_side.get() {
+                    Some(agent) => {
+                        agent.serve_window_call(self, presentation_id, call, &mut report);
+                    }
+                    None => report.dropped_stale += 1,
+                },
                 UiCommand::AgentSubscribe {
                     presentation_id,
                     filters,
                     reply,
-                } => {
-                    let window = super::agent::window_of(presentation_id);
-                    let Some(state) = self.presentations.get(presentation_id) else {
-                        reply.send(Err(super::AgentError::PresentationGone.into_error(window)));
-                        report.dropped_stale += 1;
-                        continue;
-                    };
-                    let reply = super::agent::ReplySender::new(
-                        reply,
-                        window,
-                        super::agent::issued_of(state),
-                        |_, _| {},
-                    );
-                    self.subscribe_agent_events(state, filters, &reply);
-                    report.invoked += 1;
-                }
+                } => match self.agent_side.get() {
+                    Some(agent) => {
+                        agent.subscribe(self, presentation_id, filters, reply, &mut report);
+                    }
+                    None => report.dropped_stale += 1,
+                },
                 UiCommand::AgentRecord {
                     presentation_id,
                     params,
                     reply,
-                } => {
-                    self.start_agent_recording(presentation_id, &params, &reply);
-                    report.invoked += 1;
-                }
+                } => match self.agent_side.get() {
+                    Some(agent) => {
+                        agent.record(self, presentation_id, &params, &reply);
+                        report.invoked += 1;
+                    }
+                    None => report.dropped_stale += 1,
+                },
                 UiCommand::SignalWrite { target, mut apply } => {
                     let Some((presentation, source)) = self.signal_writer_for(target) else {
                         #[expect(
@@ -819,9 +823,9 @@ impl UiRuntime {
         // The input of the leases let go is released, every window's, and then the recordings
         // their readers stopped or let go end, before a panic continues: a recording stopped
         // here holds the release.
-        let mut first = self.release_counted_leases(released);
-        first.absorb(self.sweep_agent_recordings());
-        if let Some(payload) = first.into_payload() {
+        if let Some(agent) = self.agent_side.get()
+            && let Some(payload) = agent.after_drain(self, released).into_payload()
+        {
             self.rearm_after_command_panic(payload);
         }
         // Then what providers posted back: settled completions run their

@@ -3,7 +3,7 @@
 #[cfg(doc)]
 use super::HeadlessHost;
 
-use flui_runtime::dev_agent::DevAgentHost;
+use flui_runtime::dev_agent::{DevAgentHost, WindowSource};
 
 use flui_view::dev_agent::DevAgentHook;
 
@@ -26,7 +26,7 @@ impl HeadlessDevAgent {
     pub fn attach(hook: impl DevAgentHook) -> Self {
         let hook: Box<dyn DevAgentHook> = Box::new(hook);
         Self {
-            host: DevAgentHost::attach([hook]),
+            host: DevAgentHost::attach(WindowSource::dev_agent(), [hook]),
         }
     }
 

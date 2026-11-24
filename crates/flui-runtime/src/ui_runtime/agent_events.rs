@@ -16,16 +16,17 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use flui_foundation::PresentationId;
 use flui_protocol::{
     events::Event, events::EventFilter, events::EventKind, events::FrameEvent, events::GapEvent,
     events::SemanticsEvent, events::WindowEvent, tree::WindowId,
 };
-use flui_view::__runtime::{EventSource, WakeSlot};
+use flui_view::__runtime::{EventSource, Reply, WakeSlot};
 use flui_view::dev_agent::AgentEvents;
 use parking_lot::{Condvar, Mutex};
 
-use super::UiRuntime;
 use super::agent::{AgentError, ReplySender, send_reply};
+use super::{DrainReport, UiRuntime};
 use crate::presentation::PresentationState;
 use crate::semantics_host::SemanticsHandle;
 
@@ -337,6 +338,26 @@ impl PresentationState {
 }
 
 impl UiRuntime {
+    /// A subscription the drain took for `presentation`: answered `gone` when the presentation
+    /// closed after it was sent, registered otherwise.
+    pub(super) fn serve_subscription(
+        &self,
+        presentation: PresentationId,
+        filters: Vec<EventFilter>,
+        reply: Reply<AgentEvents>,
+        report: &mut DrainReport,
+    ) {
+        let window = super::agent::window_of(presentation);
+        let Some(state) = self.presentations.get(presentation) else {
+            reply.send(Err(AgentError::PresentationGone.into_error(window)));
+            report.dropped_stale += 1;
+            return;
+        };
+        let reply = ReplySender::new(reply, window, super::agent::issued_of(state), |_, _| {});
+        self.subscribe_agent_events(state, filters, &reply);
+        report.invoked += 1;
+    }
+
     /// The owner half of `AgentWindow::subscribe`: registers the subscription and answers with
     /// its stream.
     pub(super) fn subscribe_agent_events(

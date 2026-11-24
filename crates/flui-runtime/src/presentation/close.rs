@@ -123,7 +123,9 @@ impl PresentationState {
         if let Some(agent) = &agent {
             agent.withdraw();
         }
-        self.abandon_agent_jobs();
+        if let Some(agent) = self.agent_side.get() {
+            agent.abandon_jobs(self);
+        }
         let window_control = self.window_control.take();
         if let Some(window) = &window_control {
             failure.invoke(|| window.close());
@@ -253,7 +255,9 @@ impl PresentationState {
         if let Some(agent) = &*self.dev_agent.borrow() {
             agent.withdraw();
         }
-        self.abandon_agent_jobs();
+        if let Some(agent) = self.agent_side.get() {
+            agent.abandon_jobs(self);
+        }
         flui_interaction::__runtime::withdraw_focus(&self.focus);
         flui_interaction::__runtime::withdraw_text_input(&self.text_input);
         keys

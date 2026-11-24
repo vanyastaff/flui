@@ -1030,6 +1030,10 @@ impl UiRuntime {
     #[must_use]
     pub fn dev_agent_window(&self, presentation: PresentationId) -> Option<AgentWindow> {
         let state = self.presentations.get(presentation)?;
+        // The one place that names the agent's owner side: from here on the runtime's drain,
+        // frames and closes serve it (ADR-0402).
+        self.agent_side.set(Some(&super::agent_side::SERVED));
+        state.agent_side.set(Some(&super::agent_side::SERVED));
         let window = window_of(presentation);
         let (port, collecting, fresh) = {
             let mut slot = state.dev_agent.borrow_mut();

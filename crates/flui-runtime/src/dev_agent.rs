@@ -40,6 +40,29 @@ use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 
 use crate::ui_runtime::UiRuntime;
 
+/// Where a loop's hooks get their windows: [`UiRuntime::dev_agent_window`], named only by
+/// [`Self::dev_agent`] (ADR-0402).
+///
+/// A host takes it from the code that installs a hook, never from its own paths, so a binary in
+/// which nothing installs a hook does not name `dev_agent_window` and links none of the agent's
+/// owner side.
+#[derive(Clone, Copy)]
+pub struct WindowSource(fn(&UiRuntime, PresentationId) -> Option<AgentWindow>);
+
+impl WindowSource {
+    /// The development agent's windows, vended by [`UiRuntime::dev_agent_window`].
+    #[must_use]
+    pub fn dev_agent() -> Self {
+        Self(UiRuntime::dev_agent_window)
+    }
+}
+
+impl fmt::Debug for WindowSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("WindowSource")
+    }
+}
+
 /// The development-agent hooks one event loop serves, owned by that loop.
 ///
 /// `!Send + !Sync`: it stays on the thread whose loop attached the hooks,
@@ -50,17 +73,22 @@ pub struct DevAgentHost {
     /// The hooks that answered they serve and have not panicked since, in
     /// the order they were attached.
     hooks: Vec<Box<dyn DevAgentHook>>,
+    /// Where the hooks get their windows.
+    windows: WindowSource,
     /// `*const ()` is neither `Send` nor `Sync`.
     _owner_affine: PhantomData<*const ()>,
 }
 
 impl DevAgentHost {
-    /// Attach `hooks` for this loop, in order.
+    /// Attach `hooks` for this loop, in order, handed their windows from `windows`.
     ///
     /// A hook that answers it does not serve is dropped without a detach, and
     /// one whose `attach` panics is dropped too; neither is handed a window.
     /// Every hook kept is detached once, when the host drops.
-    pub fn attach(hooks: impl IntoIterator<Item = Box<dyn DevAgentHook>>) -> Self {
+    pub fn attach(
+        windows: WindowSource,
+        hooks: impl IntoIterator<Item = Box<dyn DevAgentHook>>,
+    ) -> Self {
         let mut serving = Vec::new();
         for mut hook in hooks {
             match contained(|| hook.attach()) {
@@ -71,6 +99,7 @@ impl DevAgentHost {
         }
         Self {
             hooks: serving,
+            windows,
             _owner_affine: PhantomData,
         }
     }
@@ -93,7 +122,7 @@ impl DevAgentHost {
         if !self.is_serving() {
             return None;
         }
-        ui_runtime.dev_agent_window(presentation)
+        (self.windows.0)(ui_runtime, presentation)
     }
 
     /// Hand `window` to every hook, in the order they were attached. Does

@@ -1287,6 +1287,24 @@ path the same code. The devtools server cannot name the runtime (an official pac
 through the SDK; the runtime holds no transport. Flutter has no counterpart: its service
 extensions are the VM's. Pinned by `dev_agent_host_contains_its_hook` (`src/dev_agent/tests.rs`).
 
+### The runtime reaches the agent only through the side a vended window installs
+
+**Rule.** The UI runtime's own paths (the command drain, a frame's end, an owner turn, the next
+wake, platform input, a presentation leaving, a scene's settlement, a presentation's close) call
+the development agent only through `ui_runtime::agent_side::AgentSide`, the reference
+`UiRuntime::dev_agent_window` installs on the runtime and on the presentation it vends for, never
+cleared. `DevAgentHost::attach` takes a `dev_agent::WindowSource` beside the hooks, and only
+`WindowSource::dev_agent` names `dev_agent_window`. A direct call from those paths into an agent
+module is the defect this rule exists to catch (ADR-0402).
+
+**Why here.** Linking follows reachability: a binary in which no code installs a hook names
+neither `WindowSource::dev_agent` nor `dev_agent_window`, so it links none of the agent's owner
+side (0.58 MB of a release counter), in every build mode and with no feature for two crates to
+disagree on. Flutter's counterpart is `BindingBase.initServiceExtensions`, guarded so its tree
+shaker drops the extensions from a release build. Pinned by `counter_release_bytes` and
+`counter_wasm_bytes` (`perf/size.toml`), and by every agent test, which vends its windows through
+`dev_agent_window`.
+
 ### The agent's conversation is one service, and it does no I/O
 
 **Rule.** `agent::Service` serves the windows a development-agent hook is handed (the hook calls

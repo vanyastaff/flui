@@ -458,16 +458,12 @@ impl UiRuntime {
         // A frame has passed: the readings the actions an agent ran owe are taken from the tree it
         // left, the events it produced are emitted, and the waits an agent parked see the window as
         // the frame left it, events included.
-        if result.is_some() || frames_seen() != seen_before {
+        if (result.is_some() || frames_seen() != seen_before)
+            && let Some(agent) = self.agent_side.get()
+        {
             // Contained: the platform's wake is user code, and the drive's own failure, when
             // there is one, is the one that continues.
-            first_panic.contain(|| {
-                for presentation in self.presentations.iter() {
-                    Self::complete_agent_reads(presentation);
-                }
-                self.publish_agent_events();
-                self.evaluate_agent_waits(true);
-            });
+            first_panic.contain(|| agent.after_frame(self));
         }
         if let Some(payload) = first_panic.into_payload() {
             resume_unwind(payload);
@@ -479,7 +475,9 @@ impl UiRuntime {
         // boundary, even after an anchor that failed, whose failure continues first.
         let mut boundary = flui_foundation::panic::FirstPanic::new();
         boundary.contain(|| self.run_commit_anchor());
-        boundary.contain(|| self.advance_agent_input(now));
+        if let Some(agent) = self.agent_side.get() {
+            boundary.contain(|| agent.advance_input(self, now));
+        }
         boundary.resume();
         result
     }
