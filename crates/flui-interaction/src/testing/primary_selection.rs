@@ -14,14 +14,15 @@
 
 use std::{cell::RefCell, fmt, rc::Rc, sync::Arc};
 
-use flui_interaction::text_input::{
-    PrimaryClaimId, PrimaryClaims, PrimarySelectionBackend, PrimarySelectionCapability,
-    PrimarySelectionHandle, SelectionText,
-};
 use flui_platform::{
     ClipboardRead, Unsupported,
-    capability::scripted::{Scenario, Script, ServiceState, Track},
+    capability::scripted::{Scenario, Script, ScriptHold, ServiceState, Track},
     capability::{CapabilityProvider, CapabilityRegistrar, ProviderContext, Resolver},
+};
+
+use crate::text_input::{
+    PrimaryClaimId, PrimaryClaims, PrimarySelectionBackend, PrimarySelectionCapability,
+    PrimarySelectionHandle, SelectionText,
 };
 
 /// A request a primary selection's handle makes of its host and is answered
@@ -48,6 +49,10 @@ struct Selection {
     /// Another application's selection, which holds while no claim does.
     foreign: Option<String>,
     fail_releases: bool,
+    /// The read script's hold
+    /// [`hold_reads`](ScriptedPrimarySelection::hold_reads) took, one of the
+    /// script's counted holds.
+    read_hold: Option<ScriptHold>,
     /// One clone per live handle.
     handles: Rc<()>,
 }
@@ -123,17 +128,27 @@ impl ScriptedPrimarySelection {
     }
 
     /// Keep every later read unanswered until
-    /// [`answer_held_reads`](Self::answer_held_reads).
+    /// [`answer_held_reads`](Self::answer_held_reads). It is one hold of the
+    /// [`reads`](Self::reads) script: a hold a test took there itself keeps
+    /// reads held after `answer_held_reads`, until it is dropped too.
     pub fn hold_reads(&self) {
-        self.reads.hold();
+        let fresh = self.selection.borrow().read_hold.is_none();
+        if fresh {
+            let hold = self.reads.hold();
+            self.selection.borrow_mut().read_hold = Some(hold);
+        }
     }
 
-    /// Answer the reads held so far with the selection's text now, and
-    /// answer later reads at once again. Returns how many reads it answered.
+    /// Let go of the hold [`hold_reads`](Self::hold_reads) took: when no
+    /// other hold of the read script lives, the reads it kept are answered,
+    /// oldest first, by the script's steps and its standing answer (the
+    /// selection's text, asked as each is answered), and later reads answer
+    /// at once again. Returns how many held reads went on to be answered.
     pub fn answer_held_reads(&self) -> usize {
-        self.reads.resume();
-        let text: ClipboardRead = Ok(self.text().map(Arc::<str>::from));
-        self.reads.release_held(|_| text.clone())
+        // Taken out first: releasing asks a claim for its text and answers
+        // reads, the test's code, with nothing borrowed.
+        let hold = self.selection.borrow_mut().read_hold.take();
+        hold.map_or(0, ScriptHold::release)
     }
 
     /// Turn the primary selection off: the provider refuses every later

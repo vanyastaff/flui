@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use flui_interaction::testing::ScriptedClipboard;
 use flui_interaction::text_input::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim,
     PrimarySelectionCapability, PrimarySelectionHandle,
@@ -23,7 +24,6 @@ use flui_platform::{
     Unsupported, UnsupportedReason,
 };
 use flui_runtime::capability::{CapabilityConflict, CapabilityRegistry, ProviderTier};
-use flui_testing::clipboard::ScriptedClipboard;
 use flui_testing::host::{HeadlessHost, HeadlessWindow};
 use flui_view::{
     BuildContext, IntoView, LifecycleContext, LifecycleContextExt, StatefulView, View, ViewState,
@@ -344,6 +344,63 @@ pub(crate) fn a_tests_observer_and_two_holds_leave_the_clipboard_serving() {
     let _ = host.pump(Duration::ZERO);
     assert_eq!(heard.get(), 1, "the test's observer heard the write");
     assert_eq!(*read.borrow(), Some(Ok(Ok(Some(answered("held"))))));
+}
+
+/// A hold a test takes on a script and the clipboard's own hold of that
+/// script are holds of one count: whichever goes first, the other keeps the
+/// write held and holds a later one, and the writes land, in order, only
+/// once both are gone. A test's hold of the read script keeps reads held
+/// past `answer_held_reads` the same way.
+pub(crate) fn a_tests_script_hold_and_the_clipboards_hold_share_one_count() {
+    for clipboard_hold_goes_first in [true, false] {
+        let case = if clipboard_hold_goes_first {
+            "the clipboard's hold dropped first"
+        } else {
+            "the test's hold dropped first"
+        };
+        let mut host = HeadlessHost::new(window());
+        let scripted = host.clipboard();
+        let clipboard = acquire(&mut host).expect("provided");
+        let mut script_hold = Some(scripted.writes().hold());
+        let mut clipboard_hold = Some(scripted.hold_writes());
+        let first = settle_into(clipboard.write_text("first"));
+        if clipboard_hold_goes_first {
+            drop(clipboard_hold.take());
+        } else {
+            drop(script_hold.take());
+        }
+        let second = settle_into(clipboard.write_text("second"));
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(scripted.text(), None, "{case}: the first write stays held");
+        assert_eq!(*first.borrow(), None, "{case}: its completion waits");
+        assert_eq!(*second.borrow(), None, "{case}: a later write is held");
+        assert_eq!(scripted.writes().held(), 2, "{case}");
+
+        drop(script_hold.take());
+        drop(clipboard_hold.take());
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(scripted.text().as_deref(), Some("second"), "{case}");
+        assert_eq!(*first.borrow(), Some(Ok(Ok(()))), "{case}");
+        assert_eq!(*second.borrow(), Some(Ok(Ok(()))), "{case}");
+    }
+
+    let mut host = HeadlessHost::new(window());
+    let scripted = host.clipboard();
+    scripted.set_text("pasted");
+    let clipboard = acquire(&mut host).expect("provided");
+    let script_hold = scripted.reads().hold();
+    scripted.hold_reads();
+    let read = settle_into(clipboard.read_text());
+    assert_eq!(
+        scripted.answer_held_reads(),
+        0,
+        "the test's hold still holds the read"
+    );
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*read.borrow(), None);
+    assert_eq!(script_hold.release(), 1);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*read.borrow(), Some(Ok(Ok(Some(answered("pasted"))))));
 }
 
 /// A concealed write reaches the host marked, pastes like any other, and an

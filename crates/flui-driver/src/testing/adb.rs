@@ -4,11 +4,10 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use flui_protocol::act::{Effect, EffectKind};
-use flui_protocol::error::ErrorCode;
-
 use crate::error::{Error, Result};
-use crate::lane::android::adb::{Adb, AdbCommand, AdbReply, AdbStream, Framing};
+use crate::lane::android::adb::{
+    Adb, AdbCommand, AdbReply, AdbStream, Framing, over_limit, timed_out,
+};
 
 /// How a rule answers.
 #[derive(Debug, Clone)]
@@ -21,6 +20,9 @@ enum Answer {
 struct Rule {
     prefix: String,
     answer: Answer,
+    /// How long the command runs before it answers: a slow device. One that runs to its
+    /// deadline or past it is ended there, as the host ends it.
+    taking: Duration,
     once: bool,
 }
 
@@ -101,25 +103,39 @@ impl ScriptedAdb {
     /// `prefix` with `reply`, once the rules added before it pass.
     #[must_use]
     pub fn reply(self, prefix: impl Into<String>, reply: AdbReply) -> Self {
-        self.rule(prefix.into(), Answer::Reply(reply), false)
+        self.rule(prefix.into(), Answer::Reply(reply), Duration::ZERO, false)
     }
 
     /// Answer the next command starting with `prefix` with `reply`, before any lasting rule.
     #[must_use]
     pub fn reply_once(self, prefix: impl Into<String>, reply: AdbReply) -> Self {
-        self.rule(prefix.into(), Answer::Reply(reply), true)
+        self.rule(prefix.into(), Answer::Reply(reply), Duration::ZERO, true)
+    }
+
+    /// Answer the next command starting with `prefix` with `reply` once it has run for `taking`,
+    /// as a device whose command is slow does, before any lasting rule. A command whose deadline
+    /// comes first is ended at it, and times out as the host's does.
+    #[must_use]
+    pub fn reply_once_after(
+        self,
+        prefix: impl Into<String>,
+        reply: AdbReply,
+        taking: Duration,
+    ) -> Self {
+        self.rule(prefix.into(), Answer::Reply(reply), taking, true)
     }
 
     /// Let the next command starting with `prefix` outlive its deadline.
     #[must_use]
     pub fn timeout_once(self, prefix: impl Into<String>) -> Self {
-        self.rule(prefix.into(), Answer::Timeout, true)
+        self.rule(prefix.into(), Answer::Timeout, Duration::ZERO, true)
     }
 
-    fn rule(self, prefix: String, answer: Answer, once: bool) -> Self {
+    fn rule(self, prefix: String, answer: Answer, taking: Duration, once: bool) -> Self {
         lock(&self.script).rules.push(Rule {
             prefix,
             answer,
+            taking,
             once,
         });
         self
@@ -316,18 +332,18 @@ impl Adb for ScriptedAdb {
         } else {
             script.rules[index].clone()
         };
+        // A slow command runs with the script let go of, as the device's command runs apart from
+        // the host's other commands, and no longer than its deadline, where the host ends it.
+        drop(script);
+        if !rule.taking.is_zero() {
+            std::thread::sleep(rule.taking.min(timeout));
+        }
+        if !rule.taking.is_zero() && rule.taking >= timeout {
+            return Err(timed_out(command, timeout));
+        }
         match rule.answer {
-            Answer::Timeout => Err(Error::Timeout {
-                awaited: crate::error::Awaited::Host,
-                effect: Some(Effect::new(EffectKind::MayHaveRun)),
-                message: format!("`adb {text}` did not end within {} ms", timeout.as_millis()),
-                retry: ErrorCode::Timeout.default_retry(),
-            }),
-            Answer::Reply(reply) if reply.stdout.len() > limit => Err(Error::Lane {
-                lane: "android".to_owned(),
-                unavailable: false,
-                message: format!("`adb {text}` printed more than {limit} bytes"),
-            }),
+            Answer::Timeout => Err(timed_out(command, timeout)),
+            Answer::Reply(reply) if reply.stdout.len() > limit => Err(over_limit(command, limit)),
             Answer::Reply(reply) => Ok(reply),
         }
     }

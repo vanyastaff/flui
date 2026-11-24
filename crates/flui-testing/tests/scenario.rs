@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use flui_platform::capability::scripted::{
     AlreadyDriven, Answer, EventSubscription, Events, Expect, MAX_REPORTS, RequestTicket, Scenario,
-    ScenarioFailure, Script, ServiceState, StreamEnd, StreamItem, Track,
+    ScenarioFailure, Script, ScriptHold, ServiceState, StreamEnd, StreamItem, Track,
 };
 use flui_platform::capability::{
     Abandoned, Capability, CapabilityRegistrar, Completion, CompletionSource, Plugin,
@@ -275,7 +275,7 @@ fn a_dropped_ticket_withdraws_a_waiting_request_and_the_run_owes_nothing_for_it(
     let (mut host, camera, handle) = camera_on(&scenario);
 
     // Held, then called off.
-    camera.captures.hold();
+    let hold = camera.captures.hold();
     let (held, ticket) = handle.capture_until_dropped(64);
     let held = land(held);
     assert_eq!(camera.captures.held(), 1);
@@ -285,7 +285,7 @@ fn a_dropped_ticket_withdraws_a_waiting_request_and_the_run_owes_nothing_for_it(
         !camera.captures.release_oldest(Ok(vec![1])),
         "nothing to release"
     );
-    camera.captures.resume();
+    drop(hold);
 
     // Scheduled, then called off before its instant.
     camera
@@ -531,7 +531,7 @@ fn a_scenario_dropped_unverified_with_debts_fails_the_test() {
 fn a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest() {
     let scenario = Scenario::new();
     let (mut host, camera, handle) = camera_on(&scenario);
-    camera.captures.hold();
+    let _held = camera.captures.hold();
     let first = land(handle.capture(1));
     let poisoned = land(handle.capture(2));
     let third = land(handle.capture(3));
@@ -557,6 +557,62 @@ fn a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest() {
     let _ = host.pump(Duration::ZERO);
     assert_eq!(taken(&poisoned), Some(Ok(Err(CaptureError::Busy))));
     scenario.verify().expect("every request was answered");
+}
+
+/// A script counts its holds: whichever of two goes first, requests stay
+/// held until the last is gone, and only the requests the holds kept then go
+/// on, oldest first, to the steps and the standing answer, as if they
+/// arrived then. A request a step held waits for the test.
+#[test]
+fn a_scripts_last_hold_sends_on_only_what_the_holds_kept() {
+    for first_hold_goes_first in [true, false] {
+        let case = if first_hold_goes_first {
+            "the first hold dropped first"
+        } else {
+            "the second hold dropped first"
+        };
+        let scenario = Scenario::new();
+        let (mut host, camera, handle) = camera_on(&scenario);
+        camera.captures.otherwise(|_| Ok(vec![0]));
+        camera
+            .captures
+            .expect_held(Expect::exactly(CameraRequest::Capture { width: 1 }));
+        let stepped = land(handle.capture(1));
+        let mut holds = [Some(camera.captures.hold()), Some(camera.captures.hold())];
+        let early = land(handle.capture(2));
+        camera
+            .captures
+            .answer_next(Answer::value(Err(CaptureError::Busy)));
+        let (gone, kept) = if first_hold_goes_first {
+            (0, 1)
+        } else {
+            (1, 0)
+        };
+        let released = holds[gone].take().map(ScriptHold::release);
+        assert_eq!(released, Some(0), "{case}: the other hold keeps them");
+        let late = land(handle.capture(3));
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(taken(&early), None, "{case}");
+        assert_eq!(taken(&late), None, "{case}");
+        assert_eq!(camera.captures.held(), 3, "{case}");
+
+        let released = holds[kept].take().map(ScriptHold::release);
+        assert_eq!(released, Some(2), "{case}: the two the holds kept");
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(
+            taken(&early),
+            Some(Ok(Err(CaptureError::Busy))),
+            "{case}: the step added during the hold takes the oldest"
+        );
+        assert_eq!(taken(&late), Some(Ok(Ok(vec![0]))), "{case}");
+        assert_eq!(taken(&stepped), None, "{case}: the step's request waits");
+        assert_eq!(camera.captures.held(), 1, "{case}");
+
+        assert!(camera.captures.release_oldest(Ok(vec![1])));
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(taken(&stepped), Some(Ok(Ok(vec![1]))), "{case}");
+        scenario.verify().expect("every request was answered");
+    }
 }
 
 /// A script's observer hears every answer before the caller's completion
@@ -590,12 +646,16 @@ fn a_scripts_observer_hears_every_answer_however_it_is_given() {
     let stepped = land(handle.capture(1));
     let delayed = land(handle.capture(2));
     let standing = land(handle.capture(3));
-    camera.captures.hold();
+    let hold = camera.captures.hold();
     let released = land(handle.capture(4));
     let abandoned = land(handle.capture(5));
-    camera.captures.resume();
     assert!(camera.captures.release_oldest(Ok(vec![])));
     assert_eq!(camera.captures.abandon_held(), 1);
+    assert_eq!(
+        hold.release(),
+        0,
+        "the release and the abandon left none held"
+    );
     let _ = host.pump(Duration::from_millis(10));
     assert_eq!(
         *heard.borrow(),
@@ -836,7 +896,7 @@ fn a_caller_that_asks_again_from_its_answer_is_answered_at_the_next_turn() {
 fn a_held_request_and_an_unused_step_fail_the_run() {
     let scenario = Scenario::new();
     let (mut host, camera, handle) = camera_on(&scenario);
-    camera.captures.hold();
+    let _held = camera.captures.hold();
     camera.prompts.expect(
         Expect::exactly(CameraRequest::Prompt),
         Answer::value(Access::Granted),

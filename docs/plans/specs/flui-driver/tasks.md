@@ -1089,7 +1089,7 @@ graph LR
     `a_stream_is_cut_into_lines_and_json_objects_and_a_record_is_bounded`,
     `a_command_fails_on_its_exit_code_or_on_what_the_device_printed`,
     `the_devices_listing_is_read_and_only_a_named_ready_device_is_taken`,
-    `what_the_device_prints_reads_into_its_facts`, `the_dump_gives_the_rotation_and_the_apps_surface`,
+    `what_the_device_prints_reads_into_its_facts`, `the_windows_give_the_rotation_and_the_focused_apps_frame`,
     `a_raw_capture_is_read_in_both_header_forms_and_refused_when_it_lies`,
     `a_png_capture_decodes_and_a_window_is_cut_from_it`,
     `getevent_lines_tell_the_lanes_devices_from_everyone_elses`,
@@ -1144,7 +1144,9 @@ graph LR
     `uinput` probe and the pen's hover, press and leave on a device that allows it, and the probe's
     refusal on one that does not; the pen's axes at each rotation and under a `wm size` override;
     `getevent -l` over `adb shell -tt` seeing the person's touch and not the lane's `input`
-    commands; `uiautomator dump` answering while the app animates; `screencap`'s raw header and
+    commands; the window's frame and rotation as the device's `dumpsys window` prints them (the
+    window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`);
+    `uiautomator dump` answering while the app animates; `screencap`'s raw header and
     format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
     endpoint forward and the app's exit when the session ends; which window is under the point
     before a press (a heads-up notification, the input method, an overlay), which the lane does
@@ -1175,8 +1177,10 @@ graph LR
     report confirmed by the command's sync answer; `input stylus` is not used, so a device without
     `uinput` refuses the pen. The design's touchpad `uinput` script is not built: no OS lane sends a
     touchpad gesture, and adding one is a change to `steps::os_events` and every lane's check.
-  - Where the app's window is and how the display is turned come from `uiautomator dump`; before
-    every press, key, text and scroll the app's window must hold the input focus (`dumpsys window`).
+  - Where the app's window is and how the display is turned come from `dumpsys window` (the
+    focused window's frame, which the app's view covers, and `DisplayRotation`'s rotation), which
+    pauses no accessibility service; before every press, key, text and scroll the app's window
+    must hold the input focus (`dumpsys window`).
   - A device is someone's: `os_input::admit` admits it only with a guard, as the shared desktop.
   - The capture reads `screencap` raw first and falls back to `-p` for a pixel format it does not
     read raw; the driver's own PNG reader (`pixels::codec`) decodes the PNG within its bounds, and the capture is a `pixels::Image`; `roxmltree` reads the dump.
@@ -1185,20 +1189,27 @@ graph LR
     without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
     and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
     port tried when one is taken, is removed by that port once `adb` made it or may have.
-  - `uiautomator dump` suspends every accessibility service running while it dumps, so the lane
-    refuses every dump while any service is on (`enabled_accessibility_services`, a list never set
-    or emptied being none) or touch exploration is, naming `android_window_dump` and the services,
-    and a TalkBack run locates the window before TalkBack is on (`docs/gaps.md`).
+  - `uiautomator dump` suspends every accessibility service running while it dumps, so only the
+    read of the tree takes one, and on a device or an emulator it is refused while any service is
+    on (`enabled_accessibility_services`, a list never set or emptied being none) or touch
+    exploration is, naming `android_tree_dump` and the services (`docs/gaps.md`). Input and
+    capture take no dump. The window is the focused one by its hash, on the default display, read
+    with the rotation from one `dumpsys window`; the focus check before each press, key, text and
+    scroll reads it again and compares hash, frame and rotation (another window `NotForeground`,
+    the same one moved or turned `Busy`); a read of the tree locates the window again after the
+    dump, and a window replaced, moved or turned in between answers `Busy`.
   - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
     sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,
     which `Lane::read_tree` is handed, of one revision with the OS tree: the root is the decor
     view's child where `FluiView.install` puts it, and the children are matched in the order the
     adapter adds them, those `accesskit_consumer`'s filter keeps under a clipping parent first, by
     role (the class `accesskit_android` gives the node's AccessKit role, `lane::android::roles`),
-    content description, toggled state (a radio button's selection included), enabled state and
+    content description, toggled state where the app's read reports it (a radio button's
+    selection included; a grid cell's and another selection role's it does not), enabled state and
     bounds placed at the surface's origin; two candidates the order does not tell apart are
-    `Ambiguous`, bounds off the display place a node nowhere, and what a dump cannot show (a
-    range's value, the announcers) is no difference (`tree::Unobservable`). `invoke` is refused
+    `Ambiguous`, bounds off the display place a node nowhere, and what a dump cannot show or the
+    read does not report (a range's value, the announcers, a selection role's toggled state) is no
+    difference (`tree::Unobservable`). `invoke` is refused
     naming `os_invoke`: UI Automator performs no action. Held by `android_tree::*` and, through
     the lane on a scripted emulator answering with literal dumps of the headless app's pages, by
     `scenarios::the_android_roles_scenario_passes_through_the_lane_on_the_headless_app` and
