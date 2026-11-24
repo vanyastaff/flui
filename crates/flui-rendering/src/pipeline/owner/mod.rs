@@ -23,6 +23,7 @@ mod layout;
 mod layout_inputs;
 mod leader_watch;
 mod paint;
+mod pass;
 mod placement;
 mod poison;
 #[cfg(any(test, feature = "testing"))]
@@ -40,6 +41,7 @@ pub use cell::{PipelineCell, WeakPipelineCell};
 pub use counters::PipelineCounters;
 pub(crate) use leader_watch::LeaderWatches;
 pub use leader_watch::{LeaderGeometry, LeaderWatch};
+pub use pass::FramePass;
 pub use placement::PresentedPlacement;
 #[cfg(any(test, feature = "testing"))]
 pub use presented::{PresentedKind, PresentedNode};
@@ -50,7 +52,7 @@ pub use relocation::{
 };
 pub use tree_edit::{ParentDataSlot, RenderChildrenEdit};
 
-use std::{marker::PhantomData, rc::Rc};
+use std::rc::Rc;
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Matrix4;
@@ -66,7 +68,6 @@ use crate::{constraints::BoxConstraints, storage::RenderTree};
 use super::{
     handle::{DirtyRequest, DirtySender},
     notifier::SharedNotifier,
-    phase::{Idle, PipelinePhase},
     scheduler::{DirtyTracker, LayoutStamp},
 };
 
@@ -104,7 +105,7 @@ const DEFAULT_DIRTY_CHANNEL_CAPACITY: usize = 256;
 ///
 /// Phase ordering is enforced by the type system rather than runtime
 /// asserts: each phase's `run_*` method lives only on the matching
-/// `PipelineOwner<PhaseMarker>` impl block.
+/// `PipelineOwner` impl block.
 ///
 /// # Pipeline Phases
 ///
@@ -131,7 +132,7 @@ const DEFAULT_DIRTY_CHANNEL_CAPACITY: usize = 256;
 /// hierarchical-pipelines API (`adopt_child` / `drop_child`) was removed
 /// -- it used `Arc<RwLock<PipelineOwner>>` for tree nodes, an
 /// anti-pattern this crate refuses.
-pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
+pub struct PipelineOwner {
     /// First to retire: every attachment loses admission before user-owned
     /// resources in the remaining fields run their destructors.
     local_dirty: std::rc::Rc<super::local_invalidation::LocalDirtyInbox>,
@@ -397,16 +398,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// [`Self::counters`]. `layout_roots` is not stored here: the scheduler
     /// already counts it and the accessor fills it in.
     counters: PipelineCounters,
-
-    /// Phantom marker for the typestate phase. Always zero-sized.
-    /// See `crates/flui-rendering/src/pipeline/phase.rs`.
-    _phase: PhantomData<Phase>,
 }
 
-impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
+impl std::fmt::Debug for PipelineOwner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PipelineOwner")
-            .field("phase", &Phase::NAME)
             .field("root_id", &self.root_id)
             .field("render_tree_len", &self.render_tree.len())
             .field("nodes_needing_layout", &self.scheduler.layout_queue_len())
@@ -432,74 +428,11 @@ impl<Phase: PipelinePhase> std::fmt::Debug for PipelineOwner<Phase> {
     }
 }
 
-/// Internal helper: shifts the `Phase` phantom parameter without touching any
-/// runtime field. Behaviour-preserving by construction.
-#[inline]
-fn rebind_phase<From, To>(from: PipelineOwner<From>) -> PipelineOwner<To>
-where
-    From: PipelinePhase,
-    To: PipelinePhase,
-{
-    PipelineOwner {
-        text: from.text,
-        text_measurers: from.text_measurers,
-        text_sizing: from.text_sizing,
-        fonts_seen: from.fonts_seen,
-        relocation_owner_seal: from.relocation_owner_seal,
-        render_tree: from.render_tree,
-        transform_paths: from.transform_paths,
-        root_id: from.root_id,
-        notifier: from.notifier,
-        scheduler: from.scheduler,
-        layout_poison: from.layout_poison,
-        layout_buffers: from.layout_buffers,
-        root_constraints: from.root_constraints,
-        semantics_enabled: from.semantics_enabled,
-        semantics_owner: from.semantics_owner,
-        semantics_regions: from.semantics_regions,
-        frame_arena: from.frame_arena,
-        built_arena: from.built_arena,
-        semantics_diagnostics: from.semantics_diagnostics,
-        assistive_focus: from.assistive_focus,
-        #[cfg(any(test, feature = "testing"))]
-        unchecked_semantics_diagnostics: from.unchecked_semantics_diagnostics,
-        semantics_update_callback: from.semantics_update_callback,
-        semantics_route_change_sink: from.semantics_route_change_sink,
-        last_follower_transforms: from.last_follower_transforms,
-        last_child_paint_orders: from.last_child_paint_orders,
-        leader_watches: from.leader_watches,
-        boundary_records: from.boundary_records,
-        follower_boundaries: from.follower_boundaries,
-        scene_frame: from.scene_frame,
-        staged_scene: from.staged_scene,
-        paint_scratch: from.paint_scratch,
-        orphaned_nodes: from.orphaned_nodes,
-        subtree_buffers: from.subtree_buffers,
-        removed_nodes: from.removed_nodes,
-        abandoned_nodes: from.abandoned_nodes,
-        retained_pixel_ratio: from.retained_pixel_ratio,
-        unrecorded_paint: from.unrecorded_paint,
-        last_hidden_follower_ids: from.last_hidden_follower_ids,
-        device_pixel_ratio: from.device_pixel_ratio,
-        dirty_sender: from.dirty_sender,
-        dirty_rx: from.dirty_rx,
-        local_dirty: from.local_dirty,
-        #[cfg(any(test, feature = "testing"))]
-        parent_data_seeds: from.parent_data_seeds,
-        #[cfg(any(test, feature = "testing"))]
-        semantics_error_once_for_test: from.semantics_error_once_for_test,
-        pending_child_requests: from.pending_child_requests,
-        pending_retain_bands: from.pending_retain_bands,
-        counters: from.counters,
-        _phase: PhantomData,
-    }
-}
-
 // ============================================================================
 // Cross-phase accessors
 // ============================================================================
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Takes all child-build requests accumulated during the most recent
     /// layout pass, leaving the buffer empty.
     ///
@@ -735,12 +668,14 @@ mod tests {
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(10.0, 10.0))));
         owner.set_semantics_enabled(true);
 
-        let mut owner = owner.into_layout();
-        owner.run_layout().expect("initial layout");
-        let owner = owner.into_compositing().into_paint();
-        let mut owner = owner.into_semantics();
-        owner.run_semantics().expect("first semantics pass");
-        let mut owner = owner.finish();
+        owner.layout_pass().run_layout().expect("initial layout");
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .into_semantics()
+            .run_semantics()
+            .expect("first semantics pass");
         assert_eq!(
             captured
                 .lock()
@@ -753,9 +688,13 @@ mod tests {
         // Mark the root again without changing anything observable — the
         // shape of "a repaint touched this subtree, semantics did not move".
         owner.mark_needs_semantics(root_id);
-        let owner = owner.into_layout().into_compositing().into_paint();
-        let mut owner = owner.into_semantics();
-        owner.run_semantics().expect("second semantics pass");
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .into_semantics()
+            .run_semantics()
+            .expect("second semantics pass");
 
         assert_eq!(
             captured
@@ -802,12 +741,14 @@ mod tests {
         owner.set_semantics_enabled(true);
 
         super::semantics::reset_assembly_visits();
-        let mut owner = owner.into_layout();
-        owner.run_layout().expect("initial layout");
-        let owner = owner.into_compositing().into_paint();
-        let mut owner = owner.into_semantics();
-        owner.run_semantics().expect("first semantics pass");
-        let mut owner = owner.finish();
+        owner.layout_pass().run_layout().expect("initial layout");
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .into_semantics()
+            .run_semantics()
+            .expect("first semantics pass");
         let full_visits = super::semantics::assembly_visits();
         assert_eq!(full_visits, 12, "the initializing pass walks all 12 nodes");
 
@@ -818,9 +759,13 @@ mod tests {
         owner.mark_needs_semantics(a_leaf);
 
         super::semantics::reset_assembly_visits();
-        let owner = owner.into_layout().into_compositing().into_paint();
-        let mut owner = owner.into_semantics();
-        owner.run_semantics().expect("mark-scoped semantics pass");
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .into_semantics()
+            .run_semantics()
+            .expect("mark-scoped semantics pass");
 
         assert_eq!(
             super::semantics::assembly_visits(),
@@ -887,12 +832,14 @@ mod tests {
             .expect("tile leaf inserted");
         owner.set_semantics_enabled(true);
 
-        let mut owner = owner.into_layout();
-        owner.run_layout().expect("initial layout");
-        let owner = owner.into_compositing().into_paint();
-        let mut owner = owner.into_semantics();
-        owner.run_semantics().expect("first semantics pass");
-        let mut owner = owner.finish();
+        owner.layout_pass().run_layout().expect("initial layout");
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .into_semantics()
+            .run_semantics()
+            .expect("first semantics pass");
 
         *label
             .lock()
@@ -901,9 +848,13 @@ mod tests {
         owner.mark_needs_semantics(tile_leaf);
 
         super::semantics::reset_assembly_visits();
-        let owner = owner.into_layout().into_compositing().into_paint();
-        let mut owner = owner.into_semantics();
-        owner.run_semantics().expect("mark-scoped semantics pass");
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .into_semantics()
+            .run_semantics()
+            .expect("mark-scoped semantics pass");
 
         assert_eq!(
             super::semantics::assembly_visits(),
@@ -1228,10 +1179,9 @@ mod tests {
         use crate::error::{PoisonPhase, RenderError};
 
         let captured = Rc::new(std::cell::Cell::new(SliverGeometry::ZERO));
-        let mut owner =
-            PipelineOwner::new(crate::pipeline::TextContextHandle::standalone()).into_layout();
+        let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
         let constraints = BoxConstraints::tight(Size::new(10.0, 20.0));
-        let install = |owner: &mut PipelineOwner<crate::pipeline::phase::Layout>, payload| {
+        let install = |owner: &mut PipelineOwner, payload| {
             let root = if sliver {
                 owner
                     .render_tree_mut()
@@ -1321,7 +1271,7 @@ mod tests {
         owner.set_root_constraints(Some(BoxConstraints::new(0.0, 200.0, 0.0, 200.0)));
 
         let mut scene = crate::testing::SceneHost::new();
-        let (owner, result) = scene.run_frame(owner);
+        let result = scene.run_frame(&mut owner);
 
         std::panic::set_hook(prev);
 
@@ -1342,12 +1292,11 @@ mod tests {
         // since the first frame already cleared its paint dirty flag.
         // The second frame must hit the panic site once more and
         // surface the same Err(Poisoned).
-        let mut owner = owner;
         owner.mark_needs_paint(root_id);
 
         let prev = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let (owner, second_result) = scene.run_frame(owner);
+        let second_result = scene.run_frame(&mut owner);
         std::panic::set_hook(prev);
 
         let _second_err =

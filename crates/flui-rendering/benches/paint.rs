@@ -1,6 +1,6 @@
 //! U1b — paint and compositing pipeline benchmarks.
 //!
-//! Measures `PipelineOwner::run_paint` and `run_compositing` over flat and
+//! Measures `|owner, writer| owner.layout_pass().into_compositing().into_paint().run_paint(writer)` and `run_compositing` over flat and
 //! deep tree shapes. Setup runs layout (and layout+compositing for paint
 //! benches) so each timed iteration measures only the phase under test.
 //!
@@ -26,7 +26,7 @@ use flui_objects::{
 };
 use flui_painting::paint::Path;
 use flui_painting::styling::{BorderRadius, BorderRadiusExt};
-use flui_rendering::pipeline::{PaintPhase, PipelineOwner};
+use flui_rendering::pipeline::PipelineOwner;
 use flui_rendering::testing::{SceneHost, update_render_object};
 
 // ============================================================================
@@ -41,6 +41,8 @@ fn bench_flat_run_compositing(c: &mut Criterion) {
                 || helpers::build_flat_compositing_ready(n),
                 |mut owner| {
                     owner
+                        .layout_pass()
+                        .into_compositing()
                         .run_compositing()
                         .expect("run_compositing must succeed on a freshly laid-out flat tree");
                     black_box(owner)
@@ -63,8 +65,13 @@ fn bench_flat_run_paint(c: &mut Criterion) {
             b.iter_batched(
                 || helpers::build_flat_paint_ready(n),
                 |(mut owner, mut scene)| {
-                    let (painted, _) =
-                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                    let (painted, _) = scene.apply(&mut owner, |owner, writer| {
+                        owner
+                            .layout_pass()
+                            .into_compositing()
+                            .into_paint()
+                            .run_paint(writer)
+                    });
                     painted.expect("run_paint must succeed on a freshly composited flat tree");
                     black_box((owner, scene))
                 },
@@ -86,8 +93,13 @@ fn bench_deep_run_paint(c: &mut Criterion) {
             b.iter_batched(
                 || helpers::build_deep_paint_ready(depth),
                 |(mut owner, mut scene)| {
-                    let (painted, _) =
-                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                    let (painted, _) = scene.apply(&mut owner, |owner, writer| {
+                        owner
+                            .layout_pass()
+                            .into_compositing()
+                            .into_paint()
+                            .run_paint(writer)
+                    });
                     painted.expect("run_paint must succeed on a freshly composited deep chain");
                     black_box((owner, scene))
                 },
@@ -131,8 +143,13 @@ fn bench_single_dirty_boundary(c: &mut Criterion) {
                     (owner, scene)
                 },
                 |(mut owner, mut scene)| {
-                    let (painted, _) =
-                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                    let (painted, _) = scene.apply(&mut owner, |owner, writer| {
+                        owner
+                            .layout_pass()
+                            .into_compositing()
+                            .into_paint()
+                            .run_paint(writer)
+                    });
                     painted.expect("run_paint must succeed with one dirty boundary");
                     black_box((owner, scene))
                 },
@@ -161,8 +178,13 @@ fn bench_nested_caret(c: &mut Criterion) {
                     (owner, scene)
                 },
                 |(mut owner, mut scene)| {
-                    let (painted, _) =
-                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                    let (painted, _) = scene.apply(&mut owner, |owner, writer| {
+                        owner
+                            .layout_pass()
+                            .into_compositing()
+                            .into_paint()
+                            .run_paint(writer)
+                    });
                     painted.expect("run_paint must succeed with one dirty nested boundary");
                     black_box((owner, scene))
                 },
@@ -193,8 +215,13 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
                     (owner, scene)
                 },
                 |(mut owner, mut scene)| {
-                    let (painted, _) =
-                        scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                    let (painted, _) = scene.apply(&mut owner, |owner, writer| {
+                        owner
+                            .layout_pass()
+                            .into_compositing()
+                            .into_paint()
+                            .run_paint(writer)
+                    });
                     painted.expect("run_paint must succeed with eight dirty boundaries");
                     black_box((owner, scene))
                 },
@@ -232,8 +259,8 @@ fn bench_eight_dirty_boundaries(c: &mut Criterion) {
 fn bench_effect_change(
     c: &mut Criterion,
     group: &str,
-    build: impl Fn(bool, usize) -> (PipelineOwner<PaintPhase>, SceneHost, RenderId),
-    mutate: impl Fn(&mut PipelineOwner<PaintPhase>, RenderId),
+    build: impl Fn(bool, usize) -> (PipelineOwner, SceneHost, RenderId),
+    mutate: impl Fn(&mut PipelineOwner, RenderId),
 ) {
     for (layered, name) in [(false, "inline"), (true, "layered")] {
         let mut bench_group = c.benchmark_group(format!("{group}/{name}"));
@@ -249,8 +276,13 @@ fn bench_effect_change(
                             (owner, scene)
                         },
                         |(mut owner, mut scene)| {
-                            let (painted, _) =
-                                scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                            let (painted, _) = scene.apply(&mut owner, |owner, writer| {
+                                owner
+                                    .layout_pass()
+                                    .into_compositing()
+                                    .into_paint()
+                                    .run_paint(writer)
+                            });
                             painted.expect("run_paint must succeed after the effect change");
                             black_box((owner, scene))
                         },
@@ -272,8 +304,13 @@ fn bench_effect_change(
                             (owner, scene)
                         },
                         |(mut owner, mut scene)| {
-                            let (painted, _) =
-                                scene.apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                            let (painted, _) = scene.apply(&mut owner, |owner, writer| {
+                                owner
+                                    .layout_pass()
+                                    .into_compositing()
+                                    .into_paint()
+                                    .run_paint(writer)
+                            });
                             painted.expect("run_paint must succeed after the effect change");
                             black_box((owner, scene))
                         },
@@ -298,7 +335,7 @@ fn bench_opacity_alpha_change(c: &mut Criterion) {
         c,
         "paint/opacity_alpha_change",
         |layered, subtree| helpers::build_effect_tree(layered, subtree, RenderOpacity::new(0.5)),
-        |owner, id| update_render_object::<RenderOpacity, _>(owner, id, |o| o.set_opacity(0.25)),
+        |owner, id| update_render_object::<RenderOpacity>(owner, id, |o| o.set_opacity(0.25)),
     );
 }
 
@@ -324,7 +361,7 @@ fn bench_transform_matrix_change(c: &mut Criterion) {
             )
         },
         |owner, id| {
-            update_render_object::<RenderTransform, _>(owner, id, |t| {
+            update_render_object::<RenderTransform>(owner, id, |t| {
                 t.set_transform(Matrix4::scaling(3.0, 3.0, 1.0))
             });
         },
@@ -345,7 +382,7 @@ fn bench_rotated_box_turn_change(c: &mut Criterion) {
         "paint/rotated_box_turn_change",
         |layered, subtree| helpers::build_effect_tree(layered, subtree, RenderRotatedBox::new(1)),
         |owner, id| {
-            update_render_object::<RenderRotatedBox, _>(owner, id, |r| r.set_quarter_turns(3));
+            update_render_object::<RenderRotatedBox>(owner, id, |r| r.set_quarter_turns(3));
         },
     );
 }
@@ -373,7 +410,7 @@ fn bench_clip_rrect_radius_change(c: &mut Criterion) {
             )
         },
         |owner, id| {
-            update_render_object::<RenderClipRRect, _>(owner, id, |r| {
+            update_render_object::<RenderClipRRect>(owner, id, |r| {
                 r.set_border_radius(Some(BorderRadius::circular(2.0)))
             });
         },
@@ -462,8 +499,8 @@ fn new_path_clip_pair() -> (
 fn bench_effect_change_in_lane(
     c: &mut Criterion,
     group: &str,
-    build: impl Fn(bool, usize, PathClipTarget) -> (PipelineOwner<PaintPhase>, SceneHost, RenderId),
-    mutate: impl Fn(&mut PipelineOwner<PaintPhase>, RenderId, PathClipTarget),
+    build: impl Fn(bool, usize, PathClipTarget) -> (PipelineOwner, SceneHost, RenderId),
+    mutate: impl Fn(&mut PipelineOwner, RenderId, PathClipTarget),
 ) {
     for (layered, name) in [(false, "inline"), (true, "layered")] {
         let full_group = format!("{group}/{name}");
@@ -484,8 +521,13 @@ fn bench_effect_change_in_lane(
                         },
                         |(mut owner, mut scene)| {
                             lane.enter(|| {
-                                let (painted, _) = scene
-                                    .apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                                let (painted, _) = scene.apply(&mut owner, |owner, writer| {
+                                    owner
+                                        .layout_pass()
+                                        .into_compositing()
+                                        .into_paint()
+                                        .run_paint(writer)
+                                });
                                 painted.expect("run_paint must succeed after the effect change");
                             });
                             black_box((owner, scene))
@@ -520,8 +562,13 @@ fn bench_effect_change_in_lane(
                         },
                         |(mut owner, mut scene)| {
                             lane.enter(|| {
-                                let (painted, _) = scene
-                                    .apply(&mut owner, flui_rendering::PipelineOwner::run_paint);
+                                let (painted, _) = scene.apply(&mut owner, |owner, writer| {
+                                    owner
+                                        .layout_pass()
+                                        .into_compositing()
+                                        .into_paint()
+                                        .run_paint(writer)
+                                });
                                 painted.expect("run_paint must succeed after the effect change");
                             });
                             black_box((owner, scene))
@@ -558,7 +605,7 @@ fn bench_clip_path_token_change(c: &mut Criterion) {
             helpers::build_effect_tree(layered, subtree, clip)
         },
         |owner, id, target_b| {
-            update_render_object::<RenderClipPath, _>(owner, id, |r| {
+            update_render_object::<RenderClipPath>(owner, id, |r| {
                 r.set_path_clip_target(Some(target_b))
             });
         },

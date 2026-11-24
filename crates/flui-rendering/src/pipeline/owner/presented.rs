@@ -12,7 +12,6 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect};
 
 use crate::input_regions::map_rect;
-use crate::pipeline::phase::PipelinePhase;
 use crate::storage::RenderNode;
 
 use super::PipelineOwner;
@@ -67,7 +66,7 @@ struct Inherited {
     opacity: f64,
 }
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Every node the last paint drew, in paint order (a node before its descendants), with
     /// the geometry and opacity the window shows it at (ADR-0321 §1). Empty before the root's
     /// first layout.

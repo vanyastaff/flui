@@ -6,7 +6,6 @@ use flui_foundation::geometry::{Matrix4, Offset};
 
 use crate::{
     constraints::{SliverConstraints, SliverGeometry},
-    pipeline::phase::PipelinePhase,
     protocol::MainAxisPosition,
     storage::RenderNode,
 };
@@ -17,7 +16,7 @@ use super::{
     subtree_arena::ensure_stack,
 };
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Hit-tests the render tree at `position` (root-local
     /// coordinates), appending leaf-first entries to `result`.
     ///
@@ -53,14 +52,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         position: Offset,
         kind: flui_interaction::events::PointerKind,
         result: &mut flui_interaction::pointer::HitTestResult,
-    ) -> bool
-    where
-        // The child-recursion callback must be Send + Sync (inherited
-        // ctx trait bounds); it captures &self, so the phase
-        // marker must be Sync. Every phase is a ZST — always satisfied
-        // at call sites, spelled out for the generic impl.
-        Phase: Sync,
-    {
+    ) -> bool {
         let Some(root_id) = self.root_id else {
             return false;
         };
@@ -82,10 +74,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         position: Offset,
         result: &mut flui_interaction::pointer::HitTestResult,
         walk: &mut HitWalk,
-    ) -> bool
-    where
-        Phase: Sync,
-    {
+    ) -> bool {
         ensure_stack(|| {
             contain_node(result, walk, |result, walk| {
                 self.hit_test_subtree_impl(id, position, result, walk)
@@ -101,10 +90,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         position: Offset,
         result: &mut flui_interaction::pointer::HitTestResult,
         walk: &mut HitWalk,
-    ) -> bool
-    where
-        Phase: Sync,
-    {
+    ) -> bool {
         let Some(node) = self.render_tree.get(id) else {
             return false;
         };
@@ -534,10 +520,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         position: MainAxisPosition,
         result: &mut flui_interaction::pointer::HitTestResult,
         walk: &mut HitWalk,
-    ) -> bool
-    where
-        Phase: Sync,
-    {
+    ) -> bool {
         ensure_stack(|| {
             contain_node(result, walk, |result, walk| {
                 self.hit_test_sliver_subtree_impl(id, position, result, walk)
@@ -551,10 +534,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         position: MainAxisPosition,
         result: &mut flui_interaction::pointer::HitTestResult,
         walk: &mut HitWalk,
-    ) -> bool
-    where
-        Phase: Sync,
-    {
+    ) -> bool {
         let Some(node) = self.render_tree.get(id) else {
             return false;
         };

@@ -15,7 +15,6 @@ use rustc_hash::FxHashSet;
 use crate::input_regions::{
     InputRegion, InputRegionKind, InputRegionSink, Presses, UnmappableRegion, map_rect,
 };
-use crate::pipeline::phase::PipelinePhase;
 use crate::storage::RenderNode;
 
 use super::PipelineOwner;
@@ -23,7 +22,7 @@ use super::subtree_arena::ensure_stack;
 
 const TARGET: &str = "flui_rendering::input_regions";
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// This window's input regions in window-logical coordinates, as the laid-out tree
     /// reports them now: what a presentation hands
     /// `PlatformWindow::set_input_regions` on every composited frame. They come in paint

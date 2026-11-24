@@ -14,8 +14,6 @@
 
 use std::ops::{Add, AddAssign};
 
-use crate::pipeline::phase::PipelinePhase;
-
 use super::PipelineOwner;
 
 /// Work the pipeline did, counted per phase. See the module docs.
@@ -129,7 +127,7 @@ pub(super) struct PaintCounts {
     pub(super) layers_reused: u64,
 }
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Dirty layout entries drained by every `run_layout` so far (monotonic).
     /// A frame's relayout-root count is the difference across the frame
     /// (ADR-0074 §8 telemetry). Entries that turned out already clean or

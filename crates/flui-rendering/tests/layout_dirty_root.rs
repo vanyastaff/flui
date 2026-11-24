@@ -106,7 +106,9 @@ pub(crate) fn descendant_err_preserves_parent_needs_layout() {
     flui_rendering::testing::raw_tree::append_unlinked_child(&mut pipeline, padding_id, child_id);
 
     let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
-    let result = pipeline.layout_dirty_root(padding_id, constraints);
+    let result = pipeline
+        .layout_pass()
+        .layout_dirty_root(padding_id, constraints);
 
     // Outer call SUCCEEDS (Padding's perform_layout completes with
     // child_size = Size::ZERO from the swallowed callback Err).
@@ -234,14 +236,13 @@ pub(crate) fn adopted_nodes_lay_out_parents_before_children() {
 
     owner.set_root_id(Some(root));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("first layout");
+    owner.layout_pass().run_layout().expect("first layout");
     assert_eq!(leaf_layouts.load(Ordering::Relaxed), 1);
 
     owner.mark_needs_layout(c);
     inset.store(10.0_f64.to_bits(), Ordering::Relaxed);
     owner.mark_needs_layout(a);
-    owner.run_layout().expect("relayout");
+    owner.layout_pass().run_layout().expect("relayout");
 
     assert_eq!(
         leaf_layouts.load(Ordering::Relaxed),
@@ -335,8 +336,7 @@ pub(crate) fn sibling_layout_marks_share_one_ancestor_walk() {
         .collect();
     owner.set_root_id(Some(root));
     owner.set_root_constraints(Some(BoxConstraints::loose(Size::new(100.0, 100.0))));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("first layout");
+    owner.layout_pass().run_layout().expect("first layout");
     assert_eq!(leaf_layouts.load(Ordering::Relaxed), SIBLINGS);
 
     // The first walk marks the leaf, the chain and the root; each later
@@ -353,7 +353,7 @@ pub(crate) fn sibling_layout_marks_share_one_ancestor_walk() {
             "round {round}: sibling marks walk the shared ancestors once"
         );
         assert_eq!(owner.queued_for_layout(), [root]);
-        owner.run_layout().expect("relayout");
+        owner.layout_pass().run_layout().expect("relayout");
         assert_eq!(
             leaf_layouts.load(Ordering::Relaxed),
             SIBLINGS * (round + 1),
@@ -384,8 +384,7 @@ pub(crate) fn a_moved_node_marks_its_new_ancestors() {
     owner.adopt_render_child(moved, leaf);
     owner.set_root_id(Some(root));
     owner.set_root_constraints(Some(BoxConstraints::loose(Size::new(100.0, 100.0))));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("first layout");
+    owner.layout_pass().run_layout().expect("first layout");
     assert_eq!(leaf_layouts.load(Ordering::Relaxed), 1);
 
     // Settles the path leaf → moved → donor → root.
@@ -409,7 +408,7 @@ pub(crate) fn a_moved_node_marks_its_new_ancestors() {
             .is_some_and(flui_rendering::storage::RenderNode::needs_layout),
         "the moved node's mark reaches its new parent"
     );
-    owner.run_layout().expect("relayout");
+    owner.layout_pass().run_layout().expect("relayout");
     assert_eq!(
         leaf_layouts.load(Ordering::Relaxed),
         2,
@@ -435,14 +434,13 @@ pub(crate) fn a_relayout_acquires_only_the_nodes_it_reaches() {
     }
     owner.set_root_id(Some(root));
     owner.set_root_constraints(Some(BoxConstraints::loose(Size::new(100.0, 100.0))));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("first layout");
+    owner.layout_pass().run_layout().expect("first layout");
     let total = 1 + BRANCHES * (1 + DEPTH);
     assert_eq!(owner.counters().nodes_laid_out, total as u64);
 
     let before = owner.counters();
     owner.mark_needs_layout(root);
-    owner.run_layout().expect("relayout");
+    owner.layout_pass().run_layout().expect("relayout");
     let work = owner.counters().since(before);
     assert_eq!(work.nodes_laid_out, 1, "only the root's own layout ran");
     assert_eq!(

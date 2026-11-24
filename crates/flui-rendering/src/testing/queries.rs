@@ -12,7 +12,7 @@
 //! [`FrameRun`]: super::harness::FrameRun
 
 use crate::constraints::BoxConstraints;
-use crate::pipeline::{PipelineOwner, PipelinePhase};
+use crate::pipeline::PipelineOwner;
 use crate::storage::IntrinsicDimension;
 use crate::traits::TextBaseline;
 use flui_foundation::RenderId;
@@ -27,10 +27,9 @@ use super::harness::{FrameRun, LayoutRun};
 /// harness inspection helpers.
 pub trait BoxQueryRun {
     /// Pipeline phase held by the run.
-    type Phase: PipelinePhase + Sync;
 
     /// Mutable access to the backing owner (used by default method bodies).
-    fn pipeline_mut(&mut self) -> &mut PipelineOwner<Self::Phase>;
+    fn pipeline_mut(&mut self) -> &mut PipelineOwner;
 
     /// Dispatches to the min/max intrinsic width/height computation for
     /// `dimension`.
@@ -89,17 +88,13 @@ pub trait BoxQueryRun {
 }
 
 impl BoxQueryRun for LayoutRun {
-    type Phase = crate::pipeline::Layout;
-
-    fn pipeline_mut(&mut self) -> &mut PipelineOwner<Self::Phase> {
+    fn pipeline_mut(&mut self) -> &mut PipelineOwner {
         self.owner_mut()
     }
 }
 
 impl BoxQueryRun for FrameRun {
-    type Phase = crate::pipeline::Idle;
-
-    fn pipeline_mut(&mut self) -> &mut PipelineOwner<Self::Phase> {
+    fn pipeline_mut(&mut self) -> &mut PipelineOwner {
         self.owner_mut()
     }
 }

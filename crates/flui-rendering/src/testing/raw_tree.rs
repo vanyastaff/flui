@@ -17,7 +17,7 @@ use crate::{
     constraints::{SliverConstraints, SliverGeometry},
     error::RenderResult,
     parent_data::ParentData,
-    pipeline::{PipelineOwner, PipelinePhase, TextSource},
+    pipeline::{PipelineOwner, TextSource},
     protocol::{BoxProtocol, SliverProtocol},
     storage::{ChildrenUpdate, RenderNode, RenderTree},
     traits::RenderObject,
@@ -45,13 +45,13 @@ impl sealed::Sealed for RenderTree {
 
 impl RawTree for RenderTree {}
 
-impl<Phase: PipelinePhase> sealed::Sealed for PipelineOwner<Phase> {
+impl sealed::Sealed for PipelineOwner {
     fn raw_tree(&mut self) -> &mut RenderTree {
         self.render_tree_mut()
     }
 }
 
-impl<Phase: PipelinePhase> RawTree for PipelineOwner<Phase> {}
+impl RawTree for PipelineOwner {}
 
 /// Inserts a Box render object with no parent: no attach, no dirty mark.
 pub fn insert_box(
@@ -149,10 +149,7 @@ pub fn age_next_free_slot(tree: &mut impl RawTree) -> bool {
 
 /// Replaces the owner's tree with `tree` and returns the one it held, with
 /// none of the owner's records updated.
-pub fn replace_tree<Phase: PipelinePhase>(
-    owner: &mut PipelineOwner<Phase>,
-    tree: RenderTree,
-) -> RenderTree {
+pub fn replace_tree(owner: &mut PipelineOwner, tree: RenderTree) -> RenderTree {
     std::mem::replace(owner.render_tree_mut(), tree)
 }
 

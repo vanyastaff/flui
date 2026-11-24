@@ -17,10 +17,7 @@ use flui_rendering::{
 
 use crate::common::{BoxedSliverObject, laid_out_tight_100x100 as laid_out};
 
-fn render_offset(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    id: flui_foundation::RenderId,
-) -> Offset {
+fn render_offset(owner: &PipelineOwner, id: flui_foundation::RenderId) -> Offset {
     inspect::render_offset(owner, id).expect("node exists")
 }
 

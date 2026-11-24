@@ -3,14 +3,11 @@
 
 use flui_foundation::RenderId;
 
-use crate::{
-    constraints::BoxConstraints,
-    pipeline::phase::{Idle, PipelinePhase},
-};
+use crate::constraints::BoxConstraints;
 
 use super::{LayoutPremise, PipelineOwner};
 
-impl PipelineOwner<Idle> {
+impl PipelineOwner {
     /// Withhold retained layout when its external input cannot progress.
     /// A live layout invalidation makes the retained work runnable again.
     #[doc(hidden)]
@@ -25,7 +22,7 @@ impl PipelineOwner<Idle> {
         self.scheduler.resume_retained_layout();
     }
 }
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Capture the accepted layout-input premise for a suspended segment.
     /// Drain pending invalidations first: queued external requests become live
     /// changes only after generation-validated replay.

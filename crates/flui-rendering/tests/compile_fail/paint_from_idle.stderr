@@ -3,5 +3,3 @@ error[E0599]: no method named `run_paint` found for struct `PipelineOwner` in th
   |
 5 |     owner.run_paint();
   |           ^^^^^^^^^ method not found in `PipelineOwner`
-  |
-  = note: the method was found for `PipelineOwner<PaintPhase>`

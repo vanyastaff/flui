@@ -4,11 +4,11 @@
 use flui_foundation::RenderId;
 use flui_foundation::panic::{FailureClass, PanicRecovery, RecoveryScope};
 
-use crate::pipeline::{handle::DirtyKind, phase::PipelinePhase};
+use crate::pipeline::handle::DirtyKind;
 
 use super::PipelineOwner;
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Sets the callback for when a visual update is needed.
     pub fn set_on_need_visual_update<F>(&mut self, callback: F)
     where

@@ -41,7 +41,6 @@ use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::panic::FirstPanic;
 use flui_interaction::events::PointerKind;
 
-use crate::pipeline::phase::PipelinePhase;
 use flui_interaction::pointer::{HitTestEntry, HitTestResult};
 
 use super::PipelineOwner;
@@ -214,7 +213,7 @@ fn distance_to_bounds(position: Offset, size: Size) -> f64 {
     dx.hypot(dy)
 }
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Re-walks for the best slop candidate the visual walk recorded and, when
     /// one may take the position, replaces the visual path from `base` on with
     /// its path. Returns the re-walk's hit flag, or `None` to keep the visual
@@ -227,10 +226,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         result: &mut HitTestResult,
         base: usize,
         walk: &mut HitWalk,
-    ) -> Option<bool>
-    where
-        Phase: Sync,
-    {
+    ) -> Option<bool> {
         let kind = walk.kind;
         let mut candidates = std::mem::take(&mut walk.candidates);
         // Stable: equal distances keep visit order, topmost first.

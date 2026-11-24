@@ -161,7 +161,9 @@ pub(crate) fn cross_protocol_layout_sliver_child_on_box_child_returns_zero_and_p
     // The parent's perform_layout returns Ok, so layout_dirty_root itself
     // returns Ok.  Only the descendant-error flag prevents NEEDS_LAYOUT
     // from being cleared.
-    let result = pipeline.layout_dirty_root(parent_id, box_constraints);
+    let result = pipeline
+        .layout_pass()
+        .layout_dirty_root(parent_id, box_constraints);
     assert!(
         result.is_ok(),
         "layout_dirty_root must return Ok even when a descendant ProtocolMismatch occurs: {result:?}"

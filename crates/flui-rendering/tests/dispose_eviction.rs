@@ -169,8 +169,8 @@ fn retirement_child(mode: &str) {
     next.set_root_constraints(Some(flui_rendering::constraints::BoxConstraints::tight(
         flui_foundation::geometry::Size::new(10.0, 10.0),
     )));
-    let mut next = next.into_layout();
-    next.run_layout().expect("next owner layouts");
+
+    next.layout_pass().run_layout().expect("next owner layouts");
     assert_eq!(
         next.render_tree()
             .get(root)
@@ -367,7 +367,7 @@ pub(crate) fn a_destructor_that_panics_during_removal_still_commits_the_owner() 
         .expect("the child attaches");
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(40.0, 40.0))));
     let mut scene = SceneHost::new();
-    let (mut owner, frame) = scene.run_frame(owner);
+    let frame = scene.run_frame(&mut owner);
     frame.expect("the first frame runs");
     assert!(
         !owner.has_dirty_nodes(),

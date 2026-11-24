@@ -82,7 +82,7 @@ impl Scene {
 
     fn resize(&self, height: f64) {
         self.cell.with_mut(|owner| {
-            update_render_object::<RenderSizedBox, _>(owner, self.sized, |sized| {
+            update_render_object::<RenderSizedBox>(owner, self.sized, |sized| {
                 sized.set_size(Some(10.0), Some(height))
             });
         });
@@ -91,7 +91,7 @@ impl Scene {
     /// Moves the leader `width` along the row, leaving its size.
     fn shift(&self, width: f64) {
         self.cell.with_mut(|owner| {
-            update_render_object::<RenderSizedBox, _>(owner, self.lead, |lead| {
+            update_render_object::<RenderSizedBox>(owner, self.lead, |lead| {
                 lead.set_size(Some(width), Some(10.0))
             });
         });
@@ -331,7 +331,7 @@ fn a_replaced_version_drops_outside_the_pipeline_borrow() {
                 .renew(flui_layer::ResyncReason::RasterReset),
         );
         cell.with_mut(|owner| {
-            update_render_object::<RenderAnnotatedRegion, _>(owner, region, |region| {
+            update_render_object::<RenderAnnotatedRegion>(owner, region, |region| {
                 region.set_value(Arc::new(DropProbe))
             });
         });
@@ -377,7 +377,7 @@ fn an_unapplied_patch_drops_outside_the_pipeline_borrow() {
     WATCHED.with(|watched| *watched.borrow_mut() = (Some(cell.downgrade()), Vec::new()));
     let replace = || {
         cell.with_mut(|owner| {
-            update_render_object::<RenderAnnotatedRegion, _>(owner, region, |region| {
+            update_render_object::<RenderAnnotatedRegion>(owner, region, |region| {
                 region.set_value(Arc::new(DropProbe))
             });
         });

@@ -26,7 +26,7 @@ use flui_layer::LayerTree;
 use crate::{
     constraints::BoxConstraints,
     error::RenderError,
-    pipeline::{Compositing, Idle, Layout, PaintPhase, PipelineOwner, Semantics},
+    pipeline::PipelineOwner,
     testing::{
         inspect::{self, Probe},
         report::FrameReport,
@@ -43,9 +43,43 @@ fn default_constraints() -> BoxConstraints {
 
 /// Marks `id` for repaint: compositing bits (layer structure may change when
 /// paint effects like opacity cross the fully-opaque threshold) then paint.
-fn mark_needs_paint<P: crate::pipeline::PipelinePhase>(owner: &mut PipelineOwner<P>, id: RenderId) {
+fn mark_needs_paint(owner: &mut PipelineOwner, id: RenderId) {
     owner.mark_needs_compositing_bits_update(id);
     owner.mark_needs_paint(id);
+}
+
+/// Lays out `owner` and recomputes its compositing bits, the phases a run
+/// takes before it paints.
+fn lay_out_and_composite(owner: &mut PipelineOwner) {
+    let mut layout = owner.layout_pass();
+    layout
+        .run_layout()
+        .expect("run_layout must succeed for a well-formed test tree");
+    layout
+        .into_compositing()
+        .run_compositing()
+        .expect("run_compositing must succeed for a well-formed test tree");
+}
+
+/// Paints `owner`, already laid out and composited, into `writer`.
+fn paint(owner: &mut PipelineOwner, writer: &mut flui_layer::SceneWriter<'_>) {
+    owner
+        .layout_pass()
+        .into_compositing()
+        .into_paint()
+        .run_paint(writer)
+        .expect("run_paint must succeed for a well-formed test tree");
+}
+
+/// Assembles the semantics of `owner`, already painted.
+fn assemble_semantics(owner: &mut PipelineOwner) {
+    owner
+        .layout_pass()
+        .into_compositing()
+        .into_paint()
+        .into_semantics()
+        .run_semantics()
+        .expect("run_semantics must succeed for a well-formed test tree");
 }
 
 /// Downcasts the render object at `id` to `T` and runs `edit`, returning
@@ -55,8 +89,8 @@ fn mark_needs_paint<P: crate::pipeline::PipelinePhase>(owner: &mut PipelineOwner
 /// type stored at `id`.
 ///
 /// Panics if the id is stale or is not a `T`.
-pub fn edit_render_object<T: 'static, P: crate::pipeline::PipelinePhase, R>(
-    owner: &mut PipelineOwner<P>,
+pub fn edit_render_object<T: 'static, R>(
+    owner: &mut PipelineOwner,
     id: RenderId,
     edit: impl FnOnce(&mut T) -> R,
 ) -> R {
@@ -81,8 +115,8 @@ pub fn edit_render_object<T: 'static, P: crate::pipeline::PipelinePhase, R>(
 /// type stored at `id`.
 ///
 /// Panics if the id is stale or is not a `T`.
-pub fn update_render_object<T: 'static, P: crate::pipeline::PipelinePhase>(
-    owner: &mut PipelineOwner<P>,
+pub fn update_render_object<T: 'static>(
+    owner: &mut PipelineOwner,
     id: RenderId,
     update: impl FnOnce(&mut T) -> crate::RenderUpdateImpact,
 ) {
@@ -152,7 +186,7 @@ impl RenderTester {
     }
 
     /// Builds the owner, mounts the spec, and seeds the root + constraints.
-    fn build(self) -> (PipelineOwner<Idle>, RenderId, RenderLabelRegistry) {
+    fn build(self) -> (PipelineOwner, RenderId, RenderLabelRegistry) {
         let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
         let (root_id, registry) = tree::mount(&mut owner, self.spec);
         owner.set_root_id(Some(root_id));
@@ -166,9 +200,9 @@ impl RenderTester {
     /// Drives the tree through layout only, returning a [`LayoutRun`].
     #[must_use]
     pub fn run_layout(self) -> LayoutRun {
-        let (owner, root_id, registry) = self.build();
-        let mut owner = owner.into_layout();
+        let (mut owner, root_id, registry) = self.build();
         owner
+            .layout_pass()
             .run_layout()
             .expect("run_layout must succeed for a well-formed test tree");
         LayoutRun {
@@ -181,9 +215,9 @@ impl RenderTester {
     /// Drives the tree through a full frame, returning a [`FrameRun`].
     #[must_use]
     pub fn run_frame(self) -> FrameRun {
-        let (owner, root_id, registry) = self.build();
+        let (mut owner, root_id, registry) = self.build();
         let mut scene = super::SceneHost::new();
-        let (owner, result) = scene.run_frame(owner);
+        let result = scene.run_frame(&mut owner);
         let layer_tree = result.expect("run_frame must succeed for a well-formed test tree");
         FrameRun {
             owner,
@@ -200,9 +234,8 @@ impl RenderTester {
     ///
     /// [`perform_layout_raw`]: crate::protocol::RenderObject::perform_layout_raw
     pub fn try_run_layout(self) -> Result<LayoutRun, RenderError> {
-        let (owner, root_id, registry) = self.build();
-        let mut owner = owner.into_layout();
-        owner.run_layout()?;
+        let (mut owner, root_id, registry) = self.build();
+        owner.layout_pass().run_layout()?;
         Ok(LayoutRun {
             owner,
             root_id,
@@ -216,9 +249,9 @@ impl RenderTester {
     ///
     /// [`paint_raw`]: crate::protocol::RenderObject::paint_raw
     pub fn try_run_frame(self) -> Result<FrameRun, RenderError> {
-        let (owner, root_id, registry) = self.build();
+        let (mut owner, root_id, registry) = self.build();
         let mut scene = super::SceneHost::new();
-        let (owner, result) = scene.run_frame(owner);
+        let result = scene.run_frame(&mut owner);
         let layer_tree = result.map_err(flui_foundation::TreeError::into_error)?;
         Ok(FrameRun {
             owner,
@@ -234,7 +267,7 @@ impl RenderTester {
 /// `Layout` phase with committed geometry/offsets ready to inspect.
 #[derive(Debug)]
 pub struct LayoutRun {
-    owner: PipelineOwner<Layout>,
+    owner: PipelineOwner,
     root_id: RenderId,
     registry: RenderLabelRegistry,
 }
@@ -248,12 +281,12 @@ impl LayoutRun {
 
     /// The underlying pipeline owner (escape hatch for advanced inspection).
     #[must_use]
-    pub fn owner(&self) -> &PipelineOwner<Layout> {
+    pub fn owner(&self) -> &PipelineOwner {
         &self.owner
     }
 
     /// Mutable access to the underlying pipeline owner.
-    pub fn owner_mut(&mut self) -> &mut PipelineOwner<Layout> {
+    pub fn owner_mut(&mut self) -> &mut PipelineOwner {
         &mut self.owner
     }
 
@@ -291,15 +324,14 @@ impl LayoutRun {
     /// nodes marked dirty since the previous pass.
     pub fn relayout(&mut self) {
         self.owner
+            .layout_pass()
             .run_layout()
             .expect("relayout must succeed for a well-formed test tree");
     }
 }
 
 impl Probe for LayoutRun {
-    type Phase = Layout;
-
-    fn pipeline(&self) -> &PipelineOwner<Layout> {
+    fn pipeline(&self) -> &PipelineOwner {
         &self.owner
     }
 
@@ -312,7 +344,7 @@ impl Probe for LayoutRun {
 /// `Idle` plus the layer tree the frame produced.
 #[derive(Debug)]
 pub struct FrameRun {
-    owner: PipelineOwner<Idle>,
+    owner: PipelineOwner,
     root_id: RenderId,
     registry: RenderLabelRegistry,
     layer_tree: Option<LayerTree>,
@@ -391,7 +423,7 @@ impl FrameRun {
     pub fn try_pump(&mut self) -> Result<FrameReport, RenderError> {
         self.layer_tree = self
             .scene
-            .run_frame_in_place(&mut self.owner)
+            .run_frame(&mut self.owner)
             .map_err(flui_foundation::TreeError::into_error)?;
         Ok(self.report())
     }
@@ -509,13 +541,13 @@ impl FrameRun {
 
     /// The underlying pipeline owner (escape hatch for advanced inspection).
     #[must_use]
-    pub fn owner(&self) -> &PipelineOwner<Idle> {
+    pub fn owner(&self) -> &PipelineOwner {
         &self.owner
     }
 
     /// Mutable access to the underlying pipeline owner — mutate the tree
     /// here between [`pump`](FrameRun::pump) calls.
-    pub fn owner_mut(&mut self) -> &mut PipelineOwner<Idle> {
+    pub fn owner_mut(&mut self) -> &mut PipelineOwner {
         &mut self.owner
     }
 
@@ -585,13 +617,13 @@ impl FrameRun {
     /// there is no previous pass for the second to contradict.
     pub fn run_frame_again(self) -> Self {
         let Self {
-            owner,
+            mut owner,
             root_id,
             registry,
             mut scene,
             ..
         } = self;
-        let (owner, result) = scene.run_frame(owner);
+        let result = scene.run_frame(&mut owner);
         let layer_tree = result.expect("run_frame must succeed for a well-formed test tree");
         Self {
             owner,
@@ -644,9 +676,7 @@ impl FrameRun {
 }
 
 impl Probe for FrameRun {
-    type Phase = Idle;
-
-    fn pipeline(&self) -> &PipelineOwner<Idle> {
+    fn pipeline(&self) -> &PipelineOwner {
         &self.owner
     }
 
@@ -716,21 +746,11 @@ impl RenderTester {
     /// ```
     #[must_use]
     pub fn run_to_paint(self) -> PaintRun {
-        let (owner, root_id, registry) = self.build();
-        let mut owner = owner.into_layout();
-        owner
-            .run_layout()
-            .expect("run_layout must succeed for a well-formed test tree");
-        let mut owner = owner.into_compositing();
-        owner
-            .run_compositing()
-            .expect("run_compositing must succeed for a well-formed test tree");
-        let mut owner = owner.into_paint();
+        let (mut owner, root_id, registry) = self.build();
+        lay_out_and_composite(&mut owner);
         let mut scene = super::SceneHost::new();
         let ((), layer_tree) = scene.drive(&mut owner, |owner, writer| {
-            owner
-                .run_paint(writer)
-                .expect("run_paint must succeed for a well-formed test tree");
+            paint(owner, writer);
         });
         PaintRun {
             owner,
@@ -748,15 +768,8 @@ impl RenderTester {
     /// [`run_frame`](Self::run_frame) when you need the painted output.
     #[must_use]
     pub fn run_to_compositing(self) -> CompositingRun {
-        let (owner, root_id, registry) = self.build();
-        let mut owner = owner.into_layout();
-        owner
-            .run_layout()
-            .expect("run_layout must succeed for a well-formed test tree");
-        let mut owner = owner.into_compositing();
-        owner
-            .run_compositing()
-            .expect("run_compositing must succeed for a well-formed test tree");
+        let (mut owner, root_id, registry) = self.build();
+        lay_out_and_composite(&mut owner);
         CompositingRun {
             owner,
             root_id,
@@ -773,25 +786,12 @@ impl RenderTester {
     /// via [`Probe::pipeline`] is the inspection surface.
     #[must_use]
     pub fn run_to_semantics(self) -> SemanticsRun {
-        let (owner, root_id, registry) = self.build();
-        let mut owner = owner.into_layout();
-        owner
-            .run_layout()
-            .expect("run_layout must succeed for a well-formed test tree");
-        let mut owner = owner.into_compositing();
-        owner
-            .run_compositing()
-            .expect("run_compositing must succeed for a well-formed test tree");
-        let mut owner = owner.into_paint();
+        let (mut owner, root_id, registry) = self.build();
+        lay_out_and_composite(&mut owner);
         let _ = super::SceneHost::new().drive(&mut owner, |owner, writer| {
-            owner
-                .run_paint(writer)
-                .expect("run_paint must succeed for a well-formed test tree");
+            paint(owner, writer);
         });
-        let mut owner = owner.into_semantics();
-        owner
-            .run_semantics()
-            .expect("run_semantics must succeed for a well-formed test tree");
+        assemble_semantics(&mut owner);
         SemanticsRun {
             owner,
             root_id,
@@ -814,7 +814,7 @@ impl RenderTester {
 /// [`RenderTester::run_to_paint`].
 #[derive(Debug)]
 pub struct PaintRun {
-    owner: PipelineOwner<PaintPhase>,
+    owner: PipelineOwner,
     root_id: RenderId,
     registry: RenderLabelRegistry,
     /// The frame node's tree, flattened from the scene the paint pass was
@@ -875,9 +875,7 @@ impl PaintRun {
 }
 
 impl Probe for PaintRun {
-    type Phase = PaintPhase;
-
-    fn pipeline(&self) -> &PipelineOwner<PaintPhase> {
+    fn pipeline(&self) -> &PipelineOwner {
         &self.owner
     }
 
@@ -899,7 +897,7 @@ impl Probe for PaintRun {
 /// [`run_frame`](RenderTester::run_frame) when you need painted output.
 #[derive(Debug)]
 pub struct CompositingRun {
-    owner: PipelineOwner<Compositing>,
+    owner: PipelineOwner,
     root_id: RenderId,
     registry: RenderLabelRegistry,
 }
@@ -913,9 +911,7 @@ impl CompositingRun {
 }
 
 impl Probe for CompositingRun {
-    type Phase = Compositing;
-
-    fn pipeline(&self) -> &PipelineOwner<Compositing> {
+    fn pipeline(&self) -> &PipelineOwner {
         &self.owner
     }
 
@@ -934,7 +930,7 @@ impl Probe for CompositingRun {
 /// Semantics inspection goes through raw owner access via [`Probe::pipeline`].
 #[derive(Debug)]
 pub struct SemanticsRun {
-    owner: PipelineOwner<Semantics>,
+    owner: PipelineOwner,
     root_id: RenderId,
     registry: RenderLabelRegistry,
 }
@@ -952,31 +948,17 @@ impl SemanticsRun {
     #[must_use]
     pub fn edit_and_run_again<T: 'static>(self, id: RenderId, edit: impl FnOnce(&mut T)) -> Self {
         let Self {
-            owner,
+            mut owner,
             root_id,
             registry,
         } = self;
-        let mut owner = owner.finish();
         edit_render_object(&mut owner, id, edit);
         owner.mark_needs_layout(id);
-        let mut owner = owner.into_layout();
-        owner
-            .run_layout()
-            .expect("run_layout must succeed for a well-formed test tree");
-        let mut owner = owner.into_compositing();
-        owner
-            .run_compositing()
-            .expect("run_compositing must succeed for a well-formed test tree");
-        let mut owner = owner.into_paint();
+        lay_out_and_composite(&mut owner);
         let _ = super::SceneHost::new().drive(&mut owner, |owner, writer| {
-            owner
-                .run_paint(writer)
-                .expect("run_paint must succeed for a well-formed test tree");
+            paint(owner, writer);
         });
-        let mut owner = owner.into_semantics();
-        owner
-            .run_semantics()
-            .expect("run_semantics must succeed for a well-formed test tree");
+        assemble_semantics(&mut owner);
         Self {
             owner,
             root_id,
@@ -1002,9 +984,7 @@ impl SemanticsRun {
 }
 
 impl Probe for SemanticsRun {
-    type Phase = Semantics;
-
-    fn pipeline(&self) -> &PipelineOwner<Semantics> {
+    fn pipeline(&self) -> &PipelineOwner {
         &self.owner
     }
 

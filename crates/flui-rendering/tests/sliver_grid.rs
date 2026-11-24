@@ -129,7 +129,7 @@ fn build_grid_tree(
     delegate: SliverGridDelegateWithFixedCrossAxisCount,
     child_count: usize,
 ) -> (
-    PipelineOwner<flui_rendering::pipeline::phase::Layout>,
+    PipelineOwner,
     flui_foundation::RenderId,
     flui_foundation::RenderId,
     Vec<flui_foundation::RenderId>,
@@ -167,8 +167,7 @@ fn build_grid_tree(
 
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(200.0, 200.0))));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout succeeds");
+    owner.layout_pass().run_layout().expect("layout succeeds");
 
     (owner, root_id, grid_id, child_ids)
 }

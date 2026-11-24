@@ -35,19 +35,21 @@ use crate::common::BoxedRenderObject;
 
 /// Runs layout → compositing → paint and returns the produced layer
 /// tree.
-fn paint_frame(
-    owner: PipelineOwner,
-) -> (
-    LayerTree,
-    flui_rendering::pipeline::PipelineOwner<flui_rendering::pipeline::phase::PaintPhase>,
-) {
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout succeeds");
-    let mut owner = owner.into_compositing();
-    owner.run_compositing().expect("compositing succeeds");
-    let mut owner = owner.into_paint();
+fn paint_frame(mut owner: PipelineOwner) -> (LayerTree, flui_rendering::pipeline::PipelineOwner) {
+    owner.layout_pass().run_layout().expect("layout succeeds");
+    owner
+        .layout_pass()
+        .into_compositing()
+        .run_compositing()
+        .expect("compositing succeeds");
     let mut scene = SceneHost::new();
-    let (painted, tree) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    let (painted, tree) = scene.drive(&mut owner, |owner, writer| {
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .run_paint(writer)
+    });
     painted.expect("paint succeeds");
     let tree = tree.expect("run_paint must produce a layer tree");
     (tree, owner)

@@ -3,14 +3,11 @@
 
 use flui_foundation::RenderId;
 
-use crate::{
-    pipeline::phase::PipelinePhase,
-    protocol::{BoxProtocol, SliverProtocol},
-};
+use crate::protocol::{BoxProtocol, SliverProtocol};
 
 use super::PipelineOwner;
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Inserts a render object into the tree and marks it as needing layout.
     ///
     /// This method:

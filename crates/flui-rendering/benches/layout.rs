@@ -30,6 +30,7 @@ fn bench_flat_run_layout(c: &mut Criterion) {
                 || helpers::build_flat(n),
                 |mut owner| {
                     owner
+                        .layout_pass()
                         .run_layout()
                         .expect("run_layout must succeed on a valid flat tree");
                     // Prevent the optimizer from discarding the owner.
@@ -54,6 +55,7 @@ fn bench_deep_run_layout(c: &mut Criterion) {
                 || helpers::build_deep(depth),
                 |mut owner| {
                     owner
+                        .layout_pass()
                         .run_layout()
                         .expect("run_layout must succeed on a valid deep chain");
                     black_box(owner)
@@ -77,6 +79,7 @@ fn bench_wide_run_layout(c: &mut Criterion) {
                 || helpers::build_wide(n),
                 |mut owner| {
                     owner
+                        .layout_pass()
                         .run_layout()
                         .expect("run_layout must succeed on a valid wide tree");
                     black_box(owner)
@@ -104,6 +107,7 @@ fn bench_layout_dirty_root(c: &mut Criterion) {
                         "root must be set: build_flat always sets root_id before returning",
                     );
                     let size = owner
+                        .layout_pass()
                         .layout_dirty_root(root_id, black_box(constraints))
                         .expect("layout_dirty_root must succeed on a freshly built valid tree");
                     black_box(size)

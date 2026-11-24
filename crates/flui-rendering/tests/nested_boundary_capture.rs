@@ -20,12 +20,12 @@ use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext, PaintAnchor, PaintContext},
     parent_data::BoxParentData,
-    pipeline::{Idle, PipelineOwner},
+    pipeline::PipelineOwner,
     testing::{SceneHost, TreeNode, box_node, tree, update_render_object},
     traits::RenderBox,
 };
 
-fn mount(root: TreeNode) -> (PipelineOwner<Idle>, tree::RenderLabelRegistry) {
+fn mount(root: TreeNode) -> (PipelineOwner, tree::RenderLabelRegistry) {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let (root_id, registry) = tree::mount(&mut owner, root);
     owner.set_root_id(Some(root_id));
@@ -33,12 +33,12 @@ fn mount(root: TreeNode) -> (PipelineOwner<Idle>, tree::RenderLabelRegistry) {
     (owner, registry)
 }
 
-fn frame(scene: &mut SceneHost, owner: PipelineOwner<Idle>) -> (PipelineOwner<Idle>, LayerTree) {
-    let (owner, result) = scene.run_frame(owner);
+fn frame(scene: &mut SceneHost, owner: &mut PipelineOwner) -> LayerTree {
+    let result = scene.run_frame(owner);
     let tree = result
         .expect("frame")
         .expect("the frame produces a layer tree");
-    (owner, tree)
+    tree
 }
 
 fn leaf() -> TreeNode {
@@ -131,7 +131,7 @@ impl RenderBox for PaintTally {
 /// Root row → boundary "outer" → row → [tally, boundary "inner" → tally, tally]; a sibling
 /// boundary "other" next to "outer" gives a frame something unrelated to repaint.
 struct Nested {
-    owner: PipelineOwner<Idle>,
+    owner: PipelineOwner,
     outer: RenderId,
     inner: RenderId,
     other: RenderId,
@@ -178,19 +178,19 @@ fn nested() -> Nested {
 #[test]
 fn a_nested_boundary_mark_paints_only_that_boundary() {
     let Nested {
-        owner,
+        mut owner,
         inner,
         outer_tally,
         inner_tally,
         ..
     } = nested();
     let mut scene = SceneHost::new();
-    let (mut owner, _) = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
     let (outer_before, inner_before) = (outer_tally.paints(), inner_tally.paints());
     let before = owner.counters();
 
     owner.mark_needs_paint(inner);
-    let (owner, _) = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
 
     // The inner boundary and the tally under it: the frame node and the outer boundary keep
     // their contents, which still slot the inner node.
@@ -208,16 +208,16 @@ fn a_nested_boundary_mark_paints_only_that_boundary() {
 #[test]
 fn a_replayed_slot_keeps_its_place_between_inline_runs() {
     let Nested {
-        owner,
+        mut owner,
         outer,
         inner,
         ..
     } = nested();
     let mut scene = SceneHost::new();
-    let (mut owner, first) = frame(&mut scene, owner);
+    let first = frame(&mut scene, &mut owner);
     let inner_node = owner.boundary_scene_node(inner).expect("published");
     owner.mark_needs_paint(inner);
-    let (owner, second) = frame(&mut scene, owner);
+    let second = frame(&mut scene, &mut owner);
 
     let content = scene.content_of(&owner, outer).expect("published");
     let order: Vec<&str> = content
@@ -239,15 +239,15 @@ fn a_replayed_slot_keeps_its_place_between_inline_runs() {
 #[test]
 fn a_repainted_nested_boundary_republishes_and_its_neighbours_keep_their_contents() {
     let Nested {
-        owner,
+        mut owner,
         outer,
         inner,
         other,
         ..
     } = nested();
     let mut scene = SceneHost::new();
-    let (mut owner, _) = frame(&mut scene, owner);
-    let before = |scene: &SceneHost, owner: &PipelineOwner<Idle>, id| {
+    let _ = frame(&mut scene, &mut owner);
+    let before = |scene: &SceneHost, owner: &PipelineOwner, id| {
         scene.content_of(owner, id).expect("published")
     };
     let (a_inner, a_outer, a_other) = (
@@ -256,7 +256,7 @@ fn a_repainted_nested_boundary_republishes_and_its_neighbours_keep_their_content
         before(&scene, &owner, other),
     );
     owner.mark_needs_paint(inner);
-    let (owner, _) = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
     assert!(!Arc::ptr_eq(&a_inner, &before(&scene, &owner, inner)));
     assert!(Arc::ptr_eq(&a_outer, &before(&scene, &owner, outer)));
     assert!(Arc::ptr_eq(&a_other, &before(&scene, &owner, other)));
@@ -268,7 +268,7 @@ fn a_repainted_nested_boundary_republishes_and_its_neighbours_keep_their_content
 fn a_nested_boundary_holding_a_follower_is_retained() {
     let (outer_tally, inner_tally) = (PaintTally::new(), PaintTally::new());
     let link = flui_layer::LayerLink::new();
-    let (owner, registry) = mount(
+    let (mut owner, registry) = mount(
         box_node(RenderFlex::row())
             .child(
                 box_node(RenderRepaintBoundary::new()).child(
@@ -290,11 +290,11 @@ fn a_nested_boundary_holding_a_follower_is_retained() {
     );
     let other = registry.get("other").expect("labelled");
     let mut scene = SceneHost::new();
-    let (mut owner, first) = frame(&mut scene, owner);
+    let first = frame(&mut scene, &mut owner);
     let (outer_before, inner_before) = (outer_tally.paints(), inner_tally.paints());
 
     owner.mark_needs_paint(other);
-    let (_, second) = frame(&mut scene, owner);
+    let second = frame(&mut scene, &mut owner);
 
     assert_eq!(
         outer_tally.paints(),
@@ -337,11 +337,11 @@ fn a_boundary_holding_a_leader_is_retained() {
     };
 
     let tally = PaintTally::new();
-    let (owner, registry) = mount(scene(20.0, &tally));
+    let (mut owner, registry) = mount(scene(20.0, &tally));
     let lead = registry.get("lead").expect("labelled");
     let leading = registry.get("leading").expect("labelled");
     let mut host = SceneHost::new();
-    let (mut owner, _) = frame(&mut host, owner);
+    let _ = frame(&mut host, &mut owner);
     assert_eq!(
         owner.boundary_record_count(),
         2,
@@ -350,10 +350,10 @@ fn a_boundary_holding_a_leader_is_retained() {
     let paints = tally.paints();
     let content = host.content_of(&owner, leading).expect("published");
 
-    update_render_object::<RenderSizedBox, _>(&mut owner, lead, |sized| {
+    update_render_object::<RenderSizedBox>(&mut owner, lead, |sized| {
         sized.set_size(Some(30.0), Some(10.0))
     });
-    let (owner, second) = frame(&mut host, owner);
+    let second = frame(&mut host, &mut owner);
     assert_eq!(
         tally.paints(),
         paints,
@@ -372,8 +372,8 @@ fn a_boundary_holding_a_leader_is_retained() {
         "the version resolves the leader where the boundary now stands"
     );
 
-    let (fresh, _) = mount(scene(30.0, &PaintTally::new()));
-    let (_, fresh) = frame(&mut SceneHost::new(), fresh);
+    let (mut fresh, _) = mount(scene(30.0, &PaintTally::new()));
+    let fresh = frame(&mut SceneHost::new(), &mut fresh);
     assert_eq!(fingerprint(&second), fingerprint(&fresh));
     let origin = leader_origin(&second, link);
     assert_eq!(origin, leader_origin(&fresh, link));
@@ -386,7 +386,7 @@ fn a_boundary_holding_a_leader_is_retained() {
 #[test]
 fn a_boundary_painted_alone_reads_the_anchor_its_parent_gave_it() {
     let tally = PaintTally::new();
-    let (owner, registry) = mount(
+    let (mut owner, registry) = mount(
         box_node(RenderFlex::row())
             .child(
                 box_node(RenderPaintAnchor::new()).child(
@@ -401,7 +401,7 @@ fn a_boundary_painted_alone_reads_the_anchor_its_parent_gave_it() {
     );
     let inner = registry.get("inner").expect("labelled");
     let mut scene = SceneHost::new();
-    let (mut owner, _) = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
     let first_anchor = tally.anchor().expect("the tally sits under an anchor");
     assert!(
         first_anchor.offset.dx > 0.0,
@@ -410,7 +410,7 @@ fn a_boundary_painted_alone_reads_the_anchor_its_parent_gave_it() {
     let paints = tally.paints();
 
     owner.mark_needs_paint(inner);
-    let _ = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
 
     assert_eq!(tally.paints(), paints + 1);
     assert_eq!(tally.anchor(), Some(first_anchor));
@@ -420,7 +420,7 @@ fn a_boundary_painted_alone_reads_the_anchor_its_parent_gave_it() {
 #[test]
 fn an_anchor_outside_the_region_is_rebased_at_each_slot() {
     let tally = PaintTally::new();
-    let (owner, registry) = mount(
+    let (mut owner, registry) = mount(
         box_node(RenderFlex::row())
             .child(
                 box_node(RenderPaintAnchor::new()).child(
@@ -439,7 +439,7 @@ fn an_anchor_outside_the_region_is_rebased_at_each_slot() {
     );
     let inner = registry.get("inner").expect("labelled");
     let mut scene = SceneHost::new();
-    let (mut owner, _) = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
     let first_anchor = tally.anchor().expect("the tally sits under an anchor");
     assert!(
         first_anchor.offset.dx >= 20.0,
@@ -447,7 +447,7 @@ fn an_anchor_outside_the_region_is_rebased_at_each_slot() {
     );
 
     owner.mark_needs_paint(inner);
-    let _ = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
 
     assert_eq!(tally.anchor(), Some(first_anchor));
 }
@@ -460,7 +460,7 @@ fn an_anchor_outside_the_region_is_rebased_at_each_slot() {
 #[test]
 fn a_boundary_under_a_moved_clean_boundary_reads_the_moved_anchor() {
     let tally = PaintTally::new();
-    let (owner, registry) = mount(
+    let (mut owner, registry) = mount(
         box_node(RenderPaintAnchor::new()).child(
             box_node(RenderFlex::row())
                 .child(box_node(RenderSizedBox::fixed(10.0, 10.0)).label("lead"))
@@ -478,14 +478,14 @@ fn a_boundary_under_a_moved_clean_boundary_reads_the_moved_anchor() {
     let lead = registry.get("lead").expect("labelled");
     let inner = registry.get("inner").expect("labelled");
     let mut scene = SceneHost::new();
-    let (mut owner, _) = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
     let first = tally.anchor().expect("the tally sits under an anchor");
 
-    update_render_object::<RenderSizedBox, _>(&mut owner, lead, |lead| {
+    update_render_object::<RenderSizedBox>(&mut owner, lead, |lead| {
         lead.set_size(Some(40.0), Some(10.0))
     });
     owner.mark_needs_paint(inner);
-    let _ = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
 
     let moved = tally.anchor().expect("the tally sits under an anchor");
     assert_eq!(
@@ -598,12 +598,12 @@ fn retained_frames_match_a_full_repaint_over_random_trees_and_marks() {
         }
         let (boundaries, opacities, root_is_boundary) =
             (spec.boundaries, spec.opacities, spec.root_is_boundary);
-        let (owner, registry) = mount(spec.root);
+        let (mut owner, registry) = mount(spec.root);
         let id = |name: String| registry.get(&name).expect("labelled");
         let mut alphas = vec![0.5; opacities];
         let mut rng = Lcg(seed ^ 0x9e37_79b9);
         let mut scene = SceneHost::new();
-        let (mut owner, _) = frame(&mut scene, owner);
+        let _ = frame(&mut scene, &mut owner);
 
         for step in 0..6 {
             if root_is_boundary && rng.next(4) == 0 {
@@ -615,15 +615,14 @@ fn retained_frames_match_a_full_repaint_over_random_trees_and_marks() {
             if opacities > 0 && step % 2 == 1 {
                 let k = rng.next(opacities);
                 alphas[k] = if alphas[k] > 0.4 { 0.3 } else { 0.7 };
-                update_render_object::<RenderOpacity, _>(&mut owner, id(format!("o{k}")), |o| {
+                update_render_object::<RenderOpacity>(&mut owner, id(format!("o{k}")), |o| {
                     o.set_opacity(alphas[k])
                 });
             }
-            let (next, retained) = frame(&mut scene, owner);
-            owner = next;
+            let retained = frame(&mut scene, &mut owner);
 
-            let (reference, _) = mount(generate(seed, &alphas).root);
-            let (_, full) = frame(&mut SceneHost::new(), reference);
+            let (mut reference, _) = mount(generate(seed, &alphas).root);
+            let full = frame(&mut SceneHost::new(), &mut reference);
             assert_eq!(
                 fingerprint(&retained),
                 fingerprint(&full),
@@ -644,9 +643,9 @@ fn retained_frames_match_a_full_repaint_over_random_trees_and_marks() {
 fn the_generator_nests_boundaries() {
     let nested_somewhere = (0..48u64).any(|seed| {
         let spec = generate(seed, &[]);
-        let (owner, _registry) = mount(spec.root);
+        let (mut owner, _registry) = mount(spec.root);
         let mut scene = SceneHost::new();
-        let _ = frame(&mut scene, owner);
+        let _ = frame(&mut scene, &mut owner);
         // The scene's root slots the frame node, which slots the top-level boundaries: a node
         // deeper than those is a boundary nested in another.
         scene.version().nodes().any(|node| node.depth() >= 3)
@@ -660,7 +659,7 @@ fn leak(label: String) -> &'static str {
 }
 
 /// Root boundary → row → [tally, boundary "inner" → tally]: the root is retained like any boundary.
-fn rooted() -> (PipelineOwner<Idle>, RenderId, PaintTally, PaintTally) {
+fn rooted() -> (PipelineOwner, RenderId, PaintTally, PaintTally) {
     let (root_tally, inner_tally) = (PaintTally::new(), PaintTally::new());
     let (owner, registry) = mount(
         box_node(RenderRepaintBoundary::new()).child(
@@ -680,14 +679,14 @@ fn rooted() -> (PipelineOwner<Idle>, RenderId, PaintTally, PaintTally) {
 /// A root that is a repaint boundary is replayed while only a boundary nested in it repaints.
 #[test]
 fn a_root_boundary_is_replayed_when_only_a_nested_boundary_repaints() {
-    let (owner, inner, root_tally, inner_tally) = rooted();
+    let (mut owner, inner, root_tally, inner_tally) = rooted();
     let mut scene = SceneHost::new();
-    let (mut owner, first) = frame(&mut scene, owner);
+    let first = frame(&mut scene, &mut owner);
     let (root_before, inner_before) = (root_tally.paints(), inner_tally.paints());
     let before = owner.counters();
 
     owner.mark_needs_paint(inner);
-    let (owner, second) = frame(&mut scene, owner);
+    let second = frame(&mut scene, &mut owner);
 
     // The inner boundary and the tally under it; the root and its row are replayed.
     assert_eq!(owner.counters().since(before).nodes_painted, 2);
@@ -707,22 +706,22 @@ fn a_layer_update_under_the_root_boundary_patches_the_retained_root() {
                 .child(box_node(tally.clone())),
         )
     };
-    let (owner, registry) = mount(build(0.5));
+    let (mut owner, registry) = mount(build(0.5));
     let opacity = registry.get("opacity").expect("labelled");
     let mut scene = SceneHost::new();
-    let (mut owner, _) = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
     let painted = tally.paints();
 
-    update_render_object::<RenderOpacity, _>(&mut owner, opacity, |o| o.set_opacity(0.25));
-    let (_, patched) = frame(&mut scene, owner);
+    update_render_object::<RenderOpacity>(&mut owner, opacity, |o| o.set_opacity(0.25));
+    let patched = frame(&mut scene, &mut owner);
 
     assert_eq!(
         tally.paints(),
         painted,
         "the root was patched, not repainted"
     );
-    let (reference, _) = mount(build(0.25));
-    let (_, full) = frame(&mut SceneHost::new(), reference);
+    let (mut reference, _) = mount(build(0.25));
+    let full = frame(&mut SceneHost::new(), &mut reference);
     assert_eq!(fingerprint(&patched), fingerprint(&full));
 }
 
@@ -730,18 +729,18 @@ fn a_layer_update_under_the_root_boundary_patches_the_retained_root() {
 /// repaints everything, even when only a nested boundary asked for it.
 #[test]
 fn a_pixel_ratio_change_drops_the_retained_output() {
-    let (owner, inner, root_tally, inner_tally) = rooted();
+    let (mut owner, inner, root_tally, inner_tally) = rooted();
     let mut scene = SceneHost::new();
-    let (mut owner, _) = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
     owner.mark_needs_paint(inner);
-    let (mut owner, _) = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
     let (root_before, inner_before) = (root_tally.paints(), inner_tally.paints());
 
     owner.set_device_pixel_ratio(
         flui_foundation::geometry::DevicePixelRatio::try_new(2.0).expect("a ratio in range"),
     );
     owner.mark_needs_paint(inner);
-    let (_, _) = frame(&mut scene, owner);
+    let _ = frame(&mut scene, &mut owner);
 
     assert_eq!(root_tally.paints(), root_before + 1);
     assert_eq!(inner_tally.paints(), inner_before + 1);

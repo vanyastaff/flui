@@ -9,8 +9,6 @@ use flui_layer::{BoundaryContent, EntryIndex, SceneNodeId, SceneWriter};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::pipeline::phase::PipelinePhase;
-
 use super::super::PipelineOwner;
 use super::{
     AnchorFrame,
@@ -156,7 +154,7 @@ pub(in crate::pipeline::owner) struct StagedScene {
     pub(super) ops: u64,
 }
 
-impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Takes in what the patch this owner's last paint buffered became: the
     /// version it was applied as (ADR-0304 §8).
     ///
@@ -334,7 +332,7 @@ impl<Phase: crate::pipeline::PipelinePhase> PipelineOwner<Phase> {
     }
 }
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Number of repaint boundaries whose published content is currently
     /// recorded.
     ///

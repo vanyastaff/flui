@@ -24,10 +24,7 @@ use flui_rendering::{
     traits::RenderObject,
 };
 
-fn mount_two_node_tree() -> (
-    PipelineOwner<flui_rendering::pipeline::Idle>,
-    flui_foundation::RenderId,
-) {
+fn mount_two_node_tree() -> (PipelineOwner, flui_foundation::RenderId) {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
     let root_id = owner.insert(Box::new(RenderPadding::all(5.0))
         as Box<dyn RenderObject<flui_rendering::protocol::BoxProtocol>>);
@@ -46,10 +43,10 @@ fn mount_two_node_tree() -> (
 /// the caller drives the phases directly, skipping `run_layout`. The paint
 /// phase begins with layout work pending and must refuse.
 pub(crate) fn run_paint_refuses_to_start_with_layout_work_pending() {
-    let (owner, child_id) = mount_two_node_tree();
+    let (mut owner, child_id) = mount_two_node_tree();
 
     let mut scene = SceneHost::new();
-    let (mut owner, frame) = scene.run_frame(owner);
+    let frame = scene.run_frame(&mut owner);
     frame
         .expect("frame 1 succeeds")
         .expect("frame 1 produces a layer tree");
@@ -61,8 +58,13 @@ pub(crate) fn run_paint_refuses_to_start_with_layout_work_pending() {
          non-empty — the gate fires on queue work, not node flags",
     );
 
-    let mut owner = owner.into_layout().into_compositing().into_paint();
-    let (result, _) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    let (result, _) = scene.drive(&mut owner, |owner, writer| {
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .run_paint(writer)
+    });
 
     match result {
         Err(RenderError::PaintBeforeLayout) => {}

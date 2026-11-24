@@ -17,7 +17,6 @@ use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 
 use crate::input_regions::map_rect;
-use crate::pipeline::phase::PipelinePhase;
 use crate::storage::RenderNode;
 
 use super::PipelineOwner;
@@ -37,7 +36,7 @@ pub struct PresentedPlacement {
     pub clip: Rect,
 }
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Where `id`'s local space is drawn in the window after the last frame: `None` when the
     /// paint walk draws nothing of it (it or an ancestor is skipped, offstage or awaiting
     /// layout, or its parent's last paint left it out), when it is not in the tree under the

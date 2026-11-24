@@ -217,7 +217,7 @@ impl PipelineCell {
 
     /// Runs one frame of the owner: layout of whatever is dirty,
     /// compositing, paint and semantics
-    /// ([`PipelineOwner::run_frame_in_place`]). The owner stays in this cell
+    /// ([`PipelineOwner::run_frame`]). The owner stays in this cell
     /// on every exit: success, error, and a panic that unwinds out of a phase
     /// (a `tracing` subscriber, a visual-update callback), which resumes only
     /// once the owner and its queued work are back, so the frame that retries
@@ -237,7 +237,7 @@ impl PipelineCell {
         &self,
         writer: &mut flui_layer::SceneWriter<'_>,
     ) -> Result<bool, flui_foundation::TreeError<crate::error::RenderError>> {
-        self.with_mut(|owner| owner.run_frame_in_place(writer))
+        self.with_mut(|owner| owner.run_frame(writer))
     }
 
     /// Reports the version the patch of the last frame was applied as
@@ -279,7 +279,7 @@ impl PipelineCell {
     /// As [`Self::with_mut`]: when a `with`/`with_mut` borrow from this cell
     /// is live.
     pub fn run_layout(&self) -> Result<(), flui_foundation::TreeError<crate::error::RenderError>> {
-        self.with_mut(PipelineOwner::run_layout_in_place)
+        self.with_mut(PipelineOwner::run_layout_alone)
     }
 
     /// Reports the semantics diagnostics the last frames queued, as

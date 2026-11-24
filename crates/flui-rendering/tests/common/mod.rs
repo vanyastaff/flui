@@ -13,7 +13,7 @@ use flui_rendering::{
     RenderUpdateImpact,
     constraints::{BoxConstraints, SliverConstraints, SliverGeometry},
     parent_data::ParentData,
-    pipeline::{PipelineOwner, PipelinePhase, phase::Layout},
+    pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
     testing::{inspect, sliver as sliver_presets},
     traits::RenderObject,
@@ -25,21 +25,17 @@ pub type BoxedRenderObject = Box<dyn RenderObject<BoxProtocol>>;
 /// A boxed Sliver-protocol render object, as stored in the pipeline tree.
 pub type BoxedSliverObject = Box<dyn RenderObject<SliverProtocol>>;
 
-/// A fresh pipeline owner already advanced into the Layout phase. Tests
+/// A fresh pipeline owner. Tests
 /// build the tree through the owner (or `flui_rendering::testing::raw_tree`
 /// for a state the owner never builds) before
 /// driving layout.
-pub fn fresh_layout_pipeline() -> PipelineOwner<Layout> {
-    PipelineOwner::new(flui_rendering::TextContextHandle::standalone()).into_layout()
+pub fn fresh_layout_pipeline() -> PipelineOwner {
+    PipelineOwner::new(flui_rendering::TextContextHandle::standalone())
 }
 
 /// Installs `data` as the parent data of `child`, as the element tree stamps
 /// a child at adoption, through the owner's marked edit.
-pub fn seed_parent_data<Phase: PipelinePhase>(
-    owner: &mut PipelineOwner<Phase>,
-    child: RenderId,
-    data: Box<dyn ParentData>,
-) {
+pub fn seed_parent_data(owner: &mut PipelineOwner, child: RenderId, data: Box<dyn ParentData>) {
     let seeded = owner.update_parent_data(child, |parent_data| {
         parent_data.set(data);
         RenderUpdateImpact::NONE
@@ -53,33 +49,32 @@ pub fn laid_out_with(
     mut owner: PipelineOwner,
     root: RenderId,
     constraints: BoxConstraints,
-) -> PipelineOwner<Layout> {
+) -> PipelineOwner {
     owner.set_root_id(Some(root));
     owner.set_root_constraints(Some(constraints));
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout succeeds");
+    owner.layout_pass().run_layout().expect("layout succeeds");
     owner
 }
 
 /// [`laid_out_with`] under a tight 300×100 root — the shared viewport of
 /// the sliver-family harness tests.
-pub fn laid_out_tight_300x100(owner: PipelineOwner, root: RenderId) -> PipelineOwner<Layout> {
+pub fn laid_out_tight_300x100(owner: PipelineOwner, root: RenderId) -> PipelineOwner {
     laid_out_with(owner, root, BoxConstraints::tight(Size::new(300.0, 100.0)))
 }
 
 /// [`laid_out_with`] under a tight 100×100 root.
-pub fn laid_out_tight_100x100(owner: PipelineOwner, root: RenderId) -> PipelineOwner<Layout> {
+pub fn laid_out_tight_100x100(owner: PipelineOwner, root: RenderId) -> PipelineOwner {
     laid_out_with(owner, root, BoxConstraints::tight(Size::new(100.0, 100.0)))
 }
 
 /// [`laid_out_with`] under a loose 0–200 × 0–200 root.
-pub fn laid_out_loose_200x200(owner: PipelineOwner, root: RenderId) -> PipelineOwner<Layout> {
+pub fn laid_out_loose_200x200(owner: PipelineOwner, root: RenderId) -> PipelineOwner {
     laid_out_with(owner, root, BoxConstraints::new(0.0, 200.0, 0.0, 200.0))
 }
 
 /// Reads the committed [`SliverGeometry`] for `id`, panicking when layout
 /// has not produced one.
-pub fn sliver_geometry(owner: &PipelineOwner<Layout>, id: RenderId) -> SliverGeometry {
+pub fn sliver_geometry(owner: &PipelineOwner, id: RenderId) -> SliverGeometry {
     inspect::sliver_geometry(owner, id).expect("sliver geometry is committed")
 }
 

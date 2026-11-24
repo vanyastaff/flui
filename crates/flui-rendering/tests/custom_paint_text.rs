@@ -111,8 +111,8 @@ fn needs_paint(owner: &PipelineOwner, id: flui_foundation::RenderId) -> bool {
 #[test]
 fn a_custom_painter_draws_text_through_its_context() {
     let text = TextContextHandle::standalone();
-    let (owner, _) = mount(&text, label_and_fill());
-    let (_owner, result) = SceneHost::new().run_frame(owner);
+    let (mut owner, _) = mount(&text, label_and_fill());
+    let result = SceneHost::new().run_frame(&mut owner);
     let tree = result
         .expect("the frame paints")
         .expect("the first frame produces a layer tree");
@@ -138,10 +138,10 @@ fn a_custom_painter_draws_text_through_its_context() {
 #[test]
 fn a_font_change_repaints_only_the_painter_that_shaped_text() {
     let text = TextContextHandle::standalone();
-    let (owner, labels) = mount(&text, label_and_fill());
+    let (mut owner, labels) = mount(&text, label_and_fill());
     let label = labels.get("label").expect("labelled");
     let fill = labels.get("fill").expect("labelled");
-    let (mut owner, result) = SceneHost::new().run_frame(owner);
+    let result = SceneHost::new().run_frame(&mut owner);
     result.expect("the first frame paints");
     assert_eq!(
         owner.text_measurer_count(),
@@ -173,9 +173,9 @@ fn a_font_change_repaints_only_the_painter_that_shaped_text() {
 fn a_painter_that_finds_the_context_lent_is_refused_as_busy() {
     let text = TextContextHandle::standalone();
     let outcome = Rc::new(Cell::new(None));
-    let (owner, _) = mount(&text, box_node(custom_paint(LoanOutcome(outcome.clone()))));
+    let (mut owner, _) = mount(&text, box_node(custom_paint(LoanOutcome(outcome.clone()))));
     let mut scene = SceneHost::new();
-    let (_owner, result) = text.with(|_| scene.run_frame(owner));
+    let result = text.with(|_| scene.run_frame(&mut owner));
     result.expect("a refused loan does not fail the frame");
     assert_eq!(outcome.get(), Some(true), "the loan was refused as busy");
 }

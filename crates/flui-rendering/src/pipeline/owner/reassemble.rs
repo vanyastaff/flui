@@ -3,9 +3,8 @@
 use flui_foundation::RenderId;
 
 use super::PipelineOwner;
-use crate::pipeline::phase::PipelinePhase;
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Reassemble every render object in the tree and mark layout, compositing
     /// bits, paint, and semantics dirty.
     ///

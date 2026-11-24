@@ -27,7 +27,7 @@ use crate::{
     parent_data::{
         FlexParentData, MultiChildLayoutParentData, StackParentData, TableCellParentData,
     },
-    pipeline::{Idle, PipelineOwner},
+    pipeline::PipelineOwner,
     protocol::{BoxProtocol, SliverProtocol},
     testing::parent_data::ParentDataSeed,
     traits::RenderObject,
@@ -206,7 +206,7 @@ impl RenderLabelRegistry {
 /// label registry.
 ///
 /// The root must be a Box node; a Sliver root panics with a clear message.
-pub fn mount(owner: &mut PipelineOwner<Idle>, spec: TreeNode) -> (RenderId, RenderLabelRegistry) {
+pub fn mount(owner: &mut PipelineOwner, spec: TreeNode) -> (RenderId, RenderLabelRegistry) {
     let mut registry = RenderLabelRegistry::default();
     let root_id = match spec.payload {
         NodePayload::Box(render_object) => owner.insert(render_object),
@@ -229,7 +229,7 @@ pub fn mount(owner: &mut PipelineOwner<Idle>, spec: TreeNode) -> (RenderId, Rend
 
 /// Recursively inserts `spec` as a child of `parent_id`.
 fn mount_child(
-    owner: &mut PipelineOwner<Idle>,
+    owner: &mut PipelineOwner,
     parent_id: RenderId,
     spec: TreeNode,
     registry: &mut RenderLabelRegistry,
