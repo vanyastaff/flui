@@ -69,7 +69,7 @@
   `BREAKING`.
 - **Доказательства:** `cargo test` (heli и nextest на машине нет): `flui-protocol --all-features`
   18 + 57 + 2, без фич 9 + 26 + 2; `flui-driver` 380 + 1 + 1; `flui-semantics --all-features`
-  68 + 81 + 7; `flui-runtime` 255; `flui-cli` 183 + 66; `flui-testing` 15 + 188 + 11 (3 ignored, как на `main`). clippy
+  68 + 81 + 7; `flui-runtime` 255; `flui-cli` 183 + 66; `flui-testing` 15 + 188 + 11 (3 ignored, ни одного нового). clippy
   `--all-targets -D warnings` чист у `flui-protocol` (с фичами и без), `flui-driver`,
   `flui-semantics`, `flui-runtime`, `flui-cli`, `flui-testing`. `rg 'flui_driver::report' --glob
   '*.rs'` = 0. Ни один случай trybuild не называет изменённые типы.
