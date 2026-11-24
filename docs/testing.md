@@ -49,9 +49,9 @@ Two structural rules hold across the stack:
   up that kit is `flui-testing`: it sits above the frame runtime and the widget catalog, so
   the widget harness lives there too and drives the product frame
   transaction: `Tester::mount` mounts its tree in the headless host, whose frames are
-  `UiRuntime::pump` (ADR-0083 §4). `lay_out`, `LaidOut`, `Harness` and a public `HeadlessHost`,
-  which the rest of this page still describes, are replaced by `Tester` and deprecated until
-  their last user moves (ADR-0400 §1; [gaps](gaps.md#accepted-adr-sections-not-built-yet)).
+  `UiRuntime::pump` (ADR-0083 §4). ADR-0400 §1 replaces `lay_out`, `LaidOut`, `Harness` and a
+  public `HeadlessHost`, which the rest of this page describes as the code has them today, with
+  `Tester`; they are not deprecated yet ([gaps](gaps.md#accepted-adr-sections-not-built-yet)).
   A crate below it exposes its own kit behind a
   feature named `testing`, never `test-support` or `test-utils`.
 - **A test's frames are the UI runtime's.** A tree mounts through `Tester::mount` (today

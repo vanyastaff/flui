@@ -21,7 +21,7 @@
 | Семейства поиска | 3: `find` (локаторы протокола), `a11y::A11yQuery`, `LaidOut::find_by_render_type` и `find_text` | `src/find.rs`, `src/a11y.rs`, `src/widgets.rs` |
 | Словари ввода | 4: `dispatch_pointer_*`, `replay::PointerScript`, глаголы `Tester`, воспроизведение `recording` | там же |
 | Файлы, которые зовут `lay_out*` | около 197 | `crates/*/tests`, `packages/*/tests` |
-| Файлы на `Tester` | 26 | там же |
+| Файлы на `Tester` (`rg -lw` `Tester::mount`, без `RenderTester`) | 16 | там же |
 | `struct Probe` и `ProbeState` в тестах при готовом `widgets::ProbeRoot` | 20 и 6 | `crates/*/tests` |
 | Двойники `Mock*`, `Fake*`, `Scripted*`, `Recording*`, `Counting*` | около 150 в 20 крейтах | `crates/*`, `packages/*` |
 | Рукописные `fn pump`, `advance`, `tick`, `settle` в `tests/` и `benches/` | 80 (28 в `flui-widgets`) | там же |

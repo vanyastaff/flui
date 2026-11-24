@@ -104,8 +104,8 @@ graph LR
 | FD17 | Front ends: `flui drive` CLI with session file, announcement and `call`; `flui mcp` adapter (MCP 2026-07-28) with the core tool set and `--caps` groups | R28–R30, R28a | FD9, FD10 | — | L | 5 | — |
 | FD18 | Inspector app (`tools/flui-inspector`) and `flui inspect`; its own scenario suite; baseline Review view; documented CLI fallback | R25, R31 | FD17, FD26 | — | L, W | 7 | — |
 | FD19 | `interaction_gallery` scenario suite on every target; delete desktop-mcp, xtask drivers, probes, device-check scripts; documentation | R35, R36, R36a, R45 | FD11–FD17, FD20–FD30 | — | all | 4 | IC |
-| FD20 | (Moved to testing-platform TP2, ADR-0400.) Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9, FD29 | [P] | L, W, A | 5 | — |
-| FD21 | (Moved to testing-platform TP2, ADR-0400.) Accessibility audit: `flui-semantics::audit` rules, `audit.a11y`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
+| FD20 | (Runtime part in testing-platform TP2, ADR-0400.) Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9, FD29 | [P] | L, W, A | 5 | — |
+| FD21 | (Runtime part in testing-platform TP2, ADR-0400.) Accessibility audit: `flui-semantics::audit` rules, `audit.a11y`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
 | FD22 | Exploration: seeded `explore.run` with invariants, delta-debugging `explore.shrink`, replay | R39, F12 | FD10 | — | L | 5 | — |
 | FD23 | Layout facts (boxes, clips, text ink bounds, baselines, styles, painted and background colours), `layout.expect` assertions, `audit.layout` lint with finding outcomes, `audit.text_scale`, `audit.screen` with checked and not-checked lists, the layout-defect benchmark | R40, R41, R41a, R41b, R44 | FD4, FD9, FD28 | [P] | L, W | 8 | — |
 | FD24 | Layout snapshot golden and `capture.annotated` | R42, R43 | FD10, FD23 | — | L, W | 4 | — |
@@ -1577,7 +1577,7 @@ graph LR
 
 ### FD20. Performance
 
-- **Status:** Moved to docs/plans/specs/testing-platform/tasks.md TP2 by ADR-0400.
+- **Status:** The runtime's part (its answers to the methods, and the rule this task names for the runtime) moved to docs/plans/specs/testing-platform/tasks.md TP2 by ADR-0400; the rest of this task stays open here.
 - **Changes:**
   - the agent keeps per-frame `FrameSnapshot` samples and phase durations between `perf.start` and
     `perf.stop`, joined with the journal through `input_epochs`;
@@ -1595,7 +1595,7 @@ graph LR
 
 ### FD21. Accessibility audit (IC)
 
-- **Status:** Moved to docs/plans/specs/testing-platform/tasks.md TP2 by ADR-0400.
+- **Status:** The runtime's part (its answers to the methods, and the rule this task names for the runtime) moved to docs/plans/specs/testing-platform/tasks.md TP2 by ADR-0400; the rest of this task stays open here.
 - **Changes:**
   - `flui-semantics::audit` rules (unnamed, focus order with text direction, target size by
     `GestureSettings::min_target`, no alternative from the arena's recognizer registry);

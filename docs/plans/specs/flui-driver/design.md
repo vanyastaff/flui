@@ -248,9 +248,9 @@ parses, enqueues, waits a bounded time and answers. Consequences:
   motion override (`motion.set`) also slows timeouts consistently. Headless waits run on the
   manual clock. The `flui_testing::Headless` connection moves it to each next wake, up to the
   wait's limit of virtual time (ADR-0400 §3), so the outcome is deterministic.
-- **Unsettled causes** come from the runtime's own predicates (`needs_redraw`,
-  `is_frame_scheduled`, `has_pending_work`, `next_wake`), the same signals `pump_until_settled`
-  reads (kittest reports repaint causes; Flutter `waitUntilNoTransientCallbacks`).
+- **Unsettled causes** are one list the host gathers after each turn, the runtime's half and its
+  own, each with what clears it; the same list answers `wait.settled` and the host's settle
+  (ADR-0400 §3; kittest reports repaint causes; Flutter `waitUntilNoTransientCallbacks`).
 - **Reentrancy (F5).** Jobs run outside any borrow of the agent table. The owner commits the job's
   answer slot before running user-visible effects (semantics action handlers, injected input
   dispatch), and a callback that closes the window makes the answer `gone` rather than tearing the

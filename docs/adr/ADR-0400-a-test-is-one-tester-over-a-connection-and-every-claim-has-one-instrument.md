@@ -11,8 +11,10 @@
   [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) §6, the script builders (§2);
   [ADR-0216](ADR-0216-gesture-alternatives.md): the gesture path of `assert_gesture_alternatives`
   driven through `PointerScript` (§2)
-- **Related:** [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (a test's frame is
-  `UiRuntime::pump`); [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) and
+- **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the tiers the golden
+  seam of §6 keeps); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (a test's frame is
+  `UiRuntime::pump`); [ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md) §4 (an
+  act's reply deadline counts what the window holds it for, §2); [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) and
   [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) §1 (what the contract crate may hold);
   [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) (the agent that answers the
   vocabulary); [ADR-0303](ADR-0303-a-rule-takes-the-first-rung-that-states-it-and-an-xtask-gate-is-the-last.md)
@@ -20,7 +22,7 @@
   (no source gate); [ADR-0375](ADR-0375-before-the-first-release-a-pull-request-runs-a-fixed-gate-and-no-api-contract-gate.md)
   (the fixed gate a golden step joins, inside `test`);
   [ADR-0396](ADR-0396-a-perf-scenario-is-one-workload-every-instrument-measures-and-its-costs-are-a-file-beside-it.md)
-  (the cost instrument, which this record calls and does not change)
+  (the cost instrument: `Tester::measure` calls its `perf::measure`, which is built with it)
 - **Sources:** `flutter/flutter@3.50.1` (commit `ae9b586f`) `packages/flutter_test`,
   `packages/integration_test`; `linebender/xilem@9a78df87` `masonry_testing`;
   `emilk/egui@ea6b0943` `crates/egui_kittest`; `rerun-io/kittest@11c1a3f1`;
@@ -40,7 +42,7 @@
 | Input vocabularies | 4: `dispatch_pointer_*`, `replay::PointerScript` and its four siblings, `Tester`'s verbs, a recording's replay | the same files, `replay.rs`, `recording/` |
 | Settle predicates | 2 whose rules differ: the host's reads six conditions the runtime's cannot see | `crates/flui-testing/src/host/settling.rs:186`, `crates/flui-runtime/src/ui_runtime/agent_wait.rs:214` |
 | Protocol methods the runtime does not answer | 7: `AuditA11y`, `CapturePresented`, `CaptureRendered`, `PerfStart`, `PerfStop`, `WaitFrames`, `WaitSettled` | `crates/flui-runtime/src/ui_runtime/agent_serve.rs:385` |
-| Test files on `lay_out*`, and on `Tester` | about 197, and 26 | `crates/*/tests`, `packages/*/tests` |
+| Test files on `lay_out*`, and on `Tester` | about 197, and 16 | `crates/*/tests`, `packages/*/tests` |
 | Copies of a build-counting `Probe` view; hand-written `pump`, `advance`, `tick` or `settle` in test code | 20; 80 | the same trees |
 
 The form `AGENTS.md` gives an application author (`Tester`) is not the form the framework's own
@@ -109,14 +111,17 @@ pub trait Connection {
     fn wait(&mut self, condition: &Condition, limit: Duration) -> Result<WaitOutcome, CallError>;
     fn perform(&mut self, actions: &ActionSequence) -> Result<Performed, CallError>;
     fn now(&self) -> At; // frame number, time, and whether the clock is virtual
-}
-/// A connection whose clock the test moves.
-pub trait VirtualClock: Connection {
-    fn advance(&mut self, by: Duration) -> Result<Advanced, CallError>;
+    /// The end of a test: what this connection can check and release (§7).
+    fn finish(&mut self, checks: &EndChecks) -> Vec<Failure>;
 }
 
 // flui_testing
+/// A target whose clock the test moves; not a `Connection` bound.
+pub trait VirtualClock {
+    fn advance(&mut self, by: Duration) -> Result<Advanced, CallError>;
+}
 pub struct Tester<C = Headless> { /* connection, window, report */ }
+impl<C> Tester<C> { pub fn connection_mut(&mut self) -> &mut C; }
 pub struct Headless<S = Observed> { /* the headless host, private */ }
 pub struct Observed { /* the window's agent */ }
 pub struct Unobserved; // no agent was handed the window: the state a cost baseline holds
@@ -132,10 +137,12 @@ pub struct Unobserved; // no agent was handed the window: the state a cost basel
 `Connection` lives in `flui-protocol` because it is the one crate both the kit and the driver
 reach. It names protocol types and `std` alone, so it is schema in ADR-0095 §1's sense, a
 contract with no behaviour of a runtime behind it, and no upstream type enters the Stable crate's
-surface (ADR-0089 §2). `CallError::Unanswered { may_have_run }` is a call whose answer did not
-arrive; a connection that returns it has released every pointer and key its lease held.
+surface (ADR-0089 §2). `CallError::Unanswered { may_have_run, released }` is a call whose answer
+did not arrive; the connection asks the agent to release the lease's input and to cancel what it
+holds, and `released` says whether the agent answered that it did, never assumes it.
 
-`Headless<Unobserved>` is not a `Connection`: with no agent nothing resolves a locator (§4).
+`Headless<Unobserved>` is not a `Connection`: with no agent nothing resolves a locator (§4). It is
+a `VirtualClock`, as are `Headless<Observed>` and `AppRun`; `Device` is not.
 `HeadlessHost` becomes private to the kit. `LaidOut`, `Harness`, the driver's `Driver`, `Window`,
 `ElementLocator`, `Element`, `Expect`, `SoftExpect`, `compose.rs` and in-process lane, and
 `flui-cli`'s own agent client are deleted. `Device` is what `Driver` was: one launched target, its
@@ -149,21 +156,25 @@ t.tap(&find::button("Increment"));
 t.expect(&find::id("count"), value("1"));
 ```
 
-A scenario for every target is a function over the connection, and `scenarios!` lists it once:
-the macro makes a headless `#[test]` of each and a `pub const SCENARIOS`. A crate's `device`
-target takes `flui-driver` as a dev-dependency, which ADR-0238 §8 allows, and runs each through
+A scenario for every target is a function over the connection, and `scenarios!` lists it once
+with the root it mounts and its window. The macro makes a headless `#[test]` of each and a
+generic `pub fn each<C: Connection>(visit: impl FnMut(&'static str, fn(&mut Tester<C>)))`, which
+a crate's `device` target monomorphizes for `Device`. That target takes `flui-driver` as a
+dev-dependency, which ADR-0238 §8 allows, and attaches through
 `Tester::attach(Device::launch(..)?, spec)`; the facade has no `device` feature.
 
 ```rust
 fn increments<C: Connection>(t: &mut Tester<C>) { /* … */ }
-flui::testing::scenarios! { increments }
+flui::testing::scenarios! { root: counter, window: WindowSpec::phone(), [increments] }
 ```
 
 `attach` takes a `WindowSpec` (size, platform convention, scale, safe area). A headless
-connection builds the window to it; a `Device` checks the window against it and refuses another
-with `TestError::WindowMismatch` (ADR-0238 §11: a scenario fixes its window). The verbs a real
-target alone has (`perform_via(InputPath::Os)`, `os_tree`, `release_input`) are inherent methods
-of `Tester<Device>`, and a capability a lane lacks is `TestError::NotSupported`.
+connection builds the window to it; a `Device` reads the window's `Placement`, which gains the
+platform convention and the safe area, and refuses another with `TestError::WindowMismatch`
+(ADR-0238 §11: a scenario fixes its window). What only a real target has (`perform_via` on the
+`os` path, `os_tree`, `release_input`, pixel predicates with their stated tolerance) is a method
+of `Device` itself, reached through `Tester::connection_mut`, so no crate needs an edge it lacks;
+a capability a lane lacks is `TestError::NotSupported`.
 
 ### §2. The vocabulary is the agent protocol, evaluated in the application
 
@@ -194,8 +205,11 @@ A matcher is data that lowers to exactly one `flui_protocol::wait::Condition`:
 `Expectation` gains `Visible` and `Description` for them and no other type is added. The
 application's runtime evaluates the condition at frame boundaries and after input (ADR-0238 §7);
 the test process has no second evaluator, so `t.expect(&find, matcher)` is the same wait on every
-connection, and §3 states how long it holds out. A claim the wire cannot carry (a rectangle, a
-negation, a typed field) is read (`rect`, `read`, §4) and asserted in Rust, which does not wait.
+connection, and §3 states how long it holds out. It holds once the condition is first true
+(ADR-0238 §7), where Flutter's `expect` checks the frame the test pumped to; a claim about the
+final state is written `settle` first, then the expectation or a read. A claim the wire cannot
+carry (a rectangle, a negation, a typed field) is read (`rect`, `read`, §4) and asserted in Rust,
+which does not wait.
 
 Input is `flui_protocol::input::ActionSequence`. `Tester`'s verbs (`tap`, `long_press`, `drag`,
 `fling`, `scroll_into_view`, `scroll_until`, `enter_text`, `press_keys`) and `Gesture`, the
@@ -210,16 +224,23 @@ A gesture on the synthetic or semantic path is answered by the agent in the appl
 locates, checks actionability at each frame boundary until the target is attached, visible,
 stable over two frames, enabled and receives the hit, or the action's timeout passes
 (ADR-0238 §6), and injects in the turn the check passed, aimed at that frame's bounds. A failure
-is `TestError::NotActionable` with the failed check and nothing sent. On the `os` path the driver
-composes the gesture from those methods as ADR-0238 §5 says, and its effect is `may_have_run`
-unless the application's input journal saw the event reach the element. `scroll_until(&scrollable,
+is `TestError::NotActionable` with the failed check and nothing sent. The action's timeout is in
+its request: the conversation counts it as what the window may hold the act for (ADR-0288 §4),
+the held act's deadline is a wake of §3, and when it passes the agent drops the act, so nothing
+injects after its answer. `Tester::with(GestureOptions)` sets the protocol's options for the next
+verb (`force`, which skips every check but attached, the timeout, the path). On the `os` path the
+driver composes the gesture from those methods as ADR-0238 §5 says (the `os` half of today's
+`compose.rs` stays), and its effect is `may_have_run` unless the application's input journal saw
+the event reach the element. `scroll_until(&scrollable,
 &find)` is answered the same way: the agent scrolls the scrollable a viewport at a time at frame
 boundaries until the locator resolves or the scroll extent ends (`scrollUntilVisible`,
 `controller.dart:2416`).
 
-The input held between steps (keys down, pointers down) has one owner, the window's input lease
-in the agent. The `Tester` keeps no copy: a chord's keys that the lease already holds are not
-pressed again, whichever step pressed them, and the lease answers what it holds.
+The input held between steps (keys down, pointers down) has one owner on each path: the window's
+input lease in the agent for synthetic and semantic input, and the lane's own record for `os`
+input. The `Tester` keeps no copy: a chord's keys that the path's owner already holds are not
+pressed again, whichever step pressed them, and `Device::release_input` and the teardown release
+both owners.
 
 A recording stays ADR-0215's `HostInput` stream, replayed by `Tester<Headless<_>>::replay`. The
 `Tester`'s journal (each step, its caller, its outcome) is the diagnosis written to the report,
@@ -238,9 +259,9 @@ pending work, its deadlines, a running ticker) and partly its host's (a held bac
 owed for a close or a quit, a window observation not yet delivered, a timed frame request, a
 scenario step, a frame a covered window owes its surface). The host that runs the runtime's turns
 owns the list. After each turn, once its own steps after the pump are done (the owed frames
-asked, the observations delivered), it gathers the runtime's half and its own, and that one list
-is what its loop wakes for, what a settle reads, what the teardown checks and what the agent's
-settled waits are answered from:
+asked, the observations delivered), it gathers the runtime's half and its own into one
+`Unsettled`, and that value is what its loop wakes for, what a settle reads, what the teardown
+checks and what the agent's settled waits are answered from:
 
 ```rust
 // flui_protocol::wait
@@ -250,38 +271,50 @@ pub struct UnsettledCause {
     pub owner: Option<ElementRef>,    // the element that owns it, where the runtime records one
     pub site: Option<SourceSite>,     // where it was created
     pub cleared_by: ClearedBy,
-    pub due_in_ms: Option<u64>,
+    pub due_in_ms: Option<u64>,       // for the report; the wake reads `Unsettled::wake`
 }
 pub enum ClearedBy {
     NextFrame,  // the next turn serves it
-    Deadline,   // a turn at `due_in_ms` serves it: a timer, a frame's retry, a scenario step
+    Deadline,   // a turn at its deadline serves it: a timer, a frame's retry, a scenario step
     Test,       // only the test discharges it: held background work
     Outside,    // something outside the application answers it: a platform reply in flight
 }
+pub enum SettleScope { Complete, RuntimeOnly } // a field of `WaitOutcome` and of the report
 
 // flui_runtime
+pub struct Unsettled { /* causes, and the exact `Instant` of the earliest wake */ }
+impl Unsettled {
+    /// The one wake rule every host calls: now for a `NextFrame` cause, the earliest deadline of
+    /// a `Deadline` cause, a parked wait or a held act; never for `Test` or `Outside`.
+    pub fn wake(&self) -> Option<Instant>;
+}
 impl UiRuntime {
     /// The runtime's half. A frame a surface owes is the host's half, never listed here.
-    pub fn unsettled(&self, now: Instant, causes: &mut Vec<UnsettledCause>);
+    pub fn unsettled(&self, now: Instant, into: &mut Unsettled);
     /// The host, after its turn: answers the parked `Settled` and idle waits from both halves.
     pub fn answer_settled(&mut self, now: Instant, host: HostHalf<'_>);
 }
-pub enum HostHalf<'a> { Complete(&'a [UnsettledCause]), Absent }
+pub enum HostHalf<'a> { Complete(&'a Unsettled), Absent }
 ```
 
-The wake rule is the host's and reads `cleared_by`: a `NextFrame` cause wakes the loop now, a
-`Deadline` cause and a parked wait's deadline wake it at that instant, and `Test` and `Outside`
-causes never wake it. `HeadlessHost::pump_until_settled` and `time_to_next_frame` are this rule
-over this list; the runtime's `unsettled_causes` is deleted.
+The runtime's half derives each cause's `cleared_by` from its own state, so the combinations
+the host reads today are the runtime's: a redraw while a frame's retry is armed is a `Deadline`
+cause at the retry, and a redraw while the runtime's frames are off (no window seen) is not
+listed. Every host (the headless host, `AppRun`'s runner, each native runner) wakes at
+`Unsettled::wake` and keeps no rule of its own; `HeadlessHost::pump_until_settled` and
+`time_to_next_frame` read it, and the runtime's `unsettled_causes` is deleted. A wake is an exact
+`Instant` owned by whoever armed it; `due_in_ms` is its rounded copy for the report.
 
 A wait holds out on the connection's clock. On a virtual clock the connection runs the host's loop,
-moving the clock to each next wake, an application's timers included, until the runtime answers or
-`limit` of virtual time has passed: the time a device would spend. A wait whose condition is false
-answers `WaitOutcome::Idle` with the remaining causes when the host's half is `Complete` and no
-cause is served by a frame or a deadline; a cause only the test discharges is named so the test
-can release it. A host whose half is `Absent` (a runner until it composes one) is never idle: its
-waits hold out to their limit, and a report from it says `settle_scope: runtime`. `wait.settled`
-on a window counts that window's causes and the causes of the whole application.
+moving the clock to `Unsettled::wake`, an application's timers included, until the runtime answers,
+`limit` of virtual time has passed (the time a device would spend), or 10 000 turns have passed
+without the clock moving, which answers unsettled with the causes that re-armed at the same
+instant (egui's `max_steps`). A wait whose condition is false answers `WaitOutcome::Idle` with the
+remaining causes when the host's half is `Complete` and every remaining cause is `Test`: only the
+test can release it. An `Outside` cause keeps the wait parked to its limit, as an `Absent` half
+does. A host whose half is `Absent` (a runner until it composes one) is never idle, and its
+answers carry `SettleScope::RuntimeOnly`. `wait.settled` on a window counts that window's causes
+and the causes of the whole application.
 
 A settle that does not end fails with every cause named. The runtime answers `wait.settled`,
 `wait.frames`, `audit.a11y`, `perf.start` and `perf.stop`, which are `not_answered!` today; the two
@@ -296,11 +329,12 @@ touches it does not compile:
 impl<C: VirtualClock> Tester<C> {
     pub fn pump(&mut self);
     pub fn pump_for(&mut self, by: Duration);
+    pub fn settle(&mut self) -> Settled<'_, C>;                       // §6
     pub fn freeze_at(&mut self, after: Duration) -> Settled<'_, C>;   // §6
 }
 impl<S> Tester<Headless<S>> {
     pub fn frame(&mut self) -> Frame<'_, S>;   // exclusive: nothing acts or pumps while it lives
-    pub fn measure(&mut self, steps: impl FnOnce(&mut Self)) -> Cost;   // calls perf::measure
+    pub fn measure(&mut self, steps: impl FnOnce(&mut Self)) -> Cost;   // ADR-0396 §1's perf::measure
     pub fn perform(&mut self, actions: &ActionSequence) -> Result<(), TestError>;
     pub fn clock(&self) -> &HostClock;
     pub fn work(&mut self) -> Work<'_>;        // hold and run background work
@@ -344,13 +378,13 @@ settles with the one vocabulary and no agent in the measured state.
 
 | Claim | Instrument | Flutter 3.50.1 counterpart, or the reason to depart |
 |-------|------------|------------------------------------------------------|
-| Behaviour | `Tester::expect(&find, matcher)` | `expect(finder, matcher)`, `matchers.dart:46`; the matcher is wire data with one evaluator |
-| Geometry | `Tester::rect` on every connection, `Frame::geometry::<R>` in process | `getRect`, `rectMoreOrLessEquals`; tolerance is `LogicalRect::approx_eq` |
+| Behaviour | `Tester::expect(&find, matcher)` | `expect(finder, matcher)`, `matchers.dart:46`; the matcher is wire data with one evaluator, and it holds once the condition is first true (§2) |
+| Geometry | `Tester::rect` on every connection, `Frame::geometry::<R>` in process | `getRect`, `rectMoreOrLessEquals`; the protocol's `LogicalRect` gains `approx_eq` for the tolerance |
 | Paint | `Frame::draw_commands -> DrawList`; `FrameRun::paint()` at the render-object depth | `paints`, `mock_canvas.dart:54`; no pattern language: Rust over an owned list |
 | A render object's field | `Frame::read::<R, T>` | `renderObject<T>`, `controller.dart:987`; by `TypeId`, never a name, never on the wire |
 | Pixels | `Settled::golden` (§6) | `matchesGoldenFile`, `matchers.dart:589` |
 | Semantics | `Tester::read`, `Tester::semantics` | `matchesSemantics`, `matchers.dart:666` |
-| Accessibility rules | `Settled::audit(&[AuditRule])` | `meetsGuideline`, `matchers.dart:1301`; contrast from the draw commands' colours and target size from the hit region inside its clip, not from pixels (flutter/flutter#103235, #144121); the rules live in `flui-semantics`, which the runtime's `audit.a11y` and the kit both call (ADR-0238 §10); a rule that cannot run is `cannot_verify`, never a pass |
+| Accessibility rules | `Settled::audit(&[AuditRule])`; `Tester::audit` on any connection, naming the frame it read | `meetsGuideline`, `matchers.dart:1301`; contrast from the draw commands' colours and target size from the hit region inside its clip, not from pixels (flutter/flutter#103235, #144121); each rule lives with its facts, names and target size in `flui-semantics`, contrast in `flui-rendering::audit` (the flui-driver spec's layout audit), and the runtime's `audit.a11y` and the kit both call them (ADR-0238 §10); a rule that cannot run is `cannot_verify`, never a pass |
 | Time and animation | the virtual clock; `pump`, `pump_for`, `settle`, `freeze_at` | `pump`, `pumpAndSettle`, `widget_tester.dart:651`; a cause is named (#114063) and there are no zones |
 | Background work | `UnsettledReason::Background`; `work().hold()` and `run()`; a seed orders ready completions | `runAsync`; gpui's seeded scheduler |
 | Platform capabilities | `double::<D>()`: the double of the crate that owns the seam | `TestDefaultBinaryMessenger`; typed |
@@ -370,21 +404,28 @@ reference model; a failure prints the seed that reproduces it.
 ### §6. A golden is the product renderer's frame on one named adapter
 
 `Settled<'_, C>` is the only receiver of `golden` and `audit`, so a frame-exact check of a frame
-that is still moving cannot be written. Two calls give one: `Tester::settle`, when the list of §3
-empties, and `Tester::freeze_at(after)` on a virtual clock, which pumps for `after` and holds the
-frame at that instant with its running causes named, so a screen with a repeating animation (an
-activity or progress indicator) has a golden and an audit at a stated instant and no test-only
-switch in the widget.
+that is still moving cannot be written. Only a virtual clock holds a frame still, so both calls
+that give one need `C: VirtualClock`: `Tester::settle`, when the list of §3 empties, and
+`Tester::freeze_at(after)`, which pumps for `after` and holds the frame at that instant with its
+running causes named, so a screen with a repeating animation (an activity or progress indicator)
+has a golden and an audit at a stated instant and no test-only switch in the widget. On any
+connection `Tester::wait_settled()` is the `wait.settled` of §3 and returns the frame number it
+was answered on and its `SettleScope`, not a `Settled`.
 
-`golden` exists where the connection renders (`C: Renders`): `Headless` renders the frame's layer
-tree with the engine's own `HeadlessRenderer`, and a `Device` captures the presented frame with the
-tolerance its call states, keyed by backend and OS. `AppRun` runs on a stand-in renderer and has
-no `golden`.
+`golden` exists on `Settled<'_, Headless<S>>`, which renders the frame's layer tree with the
+engine's own `HeadlessRenderer`. `flui-testing` is in tier K, below `flui-engine`, so the kit
+defines the seam (`golden::Rasterize`, a layer tree in, pixels out) and `flui-engine`'s `testing`
+feature implements it; the facade's `golden` feature joins the two, and a crate below the facade
+names `flui-engine` as a dev-dependency (ADR-0081's tiers stand). `AppRun` runs on a stand-in
+renderer and a `Device` presents on a real one, so neither has `golden`: a device's pixels are
+the driver's pixel predicates with the tolerance each call states (ADR-0238 §10), reached through
+`Tester::connection_mut`.
 
 A headless golden compares exactly, with no default tolerance, on the canonical adapter: the
 software rasteriser the pull-request job installs for the readback suites (lavapipe), named in the
-crate's `goldens.toml` by adapter name, driver version and its compiler's version, and run with
-one rasteriser thread. On an adapter that differs in any of the three the outcome is
+crate's `goldens.toml` by adapter name, driver version, its compiler's version and the vector
+width it generates code for (`LP_NATIVE_VECTOR_WIDTH`, fixed for the run), and run with one
+rasteriser thread. On an adapter that differs in any of the four the outcome is
 `CannotVerify`, which fails a run that requires goldens and is never a pass. When the CI image
 moves the rasteriser, the goldens job fails as `CannotVerify` on every pull request until one
 pull request that changes only `goldens.toml` and the images re-blesses them, so drift never
@@ -411,24 +452,30 @@ untrusted image is checked in one place.
 
 ### §7. A test's end is checked, and its failures have one owner
 
-The `Tester`'s report owns the first failure, the soft failures and whether a call may have run.
-Every exit reads it:
+The `Tester`'s report owns the first failure, the soft failures, whether a call may have run and
+the `TestError`s still alive. Every exit reads it:
 
-- A verb that unwound, and a call answered `Unanswered`, poison the `Tester`. A `try_` verb that
-  returned an error leaves that error as the journal's last step until a later step replaces it.
+- A verb that unwound, and a call answered `Unanswered`, poison the `Tester`.
+- A `TestError` a `try_` verb returned is registered with the report and unregisters when it is
+  dropped. A test that expects an error and goes on drops it at the end of its statement; an error
+  travelling to the caller through `?` is still alive when the `Tester` drops.
 - `Tester::checks(|c| ..)` adds its soft failures to the report's list and raises the list once
   when the closure returns, then clears it.
-- `Tester::finish` and `Drop` on a report with no failure, a journal whose last step did not fail
-  and a thread that is not panicking run, in this order: settle on a virtual clock (bounded by the
-  default limit; a repeating cause freezes the frame at the limit and names it); audit that frame
-  (`AuditRule::Unnamed` by default; on a real clock no frame is exact, so the teardown audit is
-  `cannot_verify` and a test audits with `settle().audit`); unmount the root view, keeping the
-  window and the runtime; run drops and one turn; release the agent's lease and the doubles; check
+- `Tester::finish` and `Drop` on a report that is not poisoned, with no `TestError` alive and a
+  thread that is not panicking, run the end checks. On a `VirtualClock` connection, in this order:
+  settle (bounded as §3; a repeating cause freezes the frame at the limit and names it); audit
+  that frame (`AuditRule::Unnamed` by default); unmount the root view, keeping the window and the
+  runtime; run drops; release the agent's lease, which queues the release of what it holds, and
+  the doubles; run turns until §3's list holds nothing the release or the unmount queued; check
   the `DropLedger`; check that §3's list is empty (a timer, a ticker or background work left
-  behind); close the window and retire the runtime; raise one `TestReport`.
+  behind); close the window and retire the runtime; raise one `TestReport`. `Connection::finish`
+  carries the part a connection can perform: a `Device` releases both owners of held input (§2)
+  and checks nothing it cannot read (no ledger, no exact frame), so its report names those checks
+  `cannot_verify` and a device scenario audits with `Tester::audit`.
 - Otherwise `Drop` releases (unmount, drops, the lease, the window) and checks nothing: the first
   failure is already on its way to the caller as a panic or as the error `?` returned, and the
-  soft failures not yet raised are written to the test's output.
+  soft failures not yet raised are written to the test's output. A test that returns an error of
+  its own type through `?` calls `finish` first, since no `TestError` marks that exit.
 
 Drops run before the checks (the order flutter/flutter#144472 asks for and `binding.dart:2638`
 does not have), and the harness's own objects are released before the ledger is read (#169119).
@@ -455,8 +502,11 @@ reader does, and no allowlist is kept.
 During the migration each old form is `#[deprecated(note = "use Tester …")]`, `docs/gaps.md` has
 the bullet for this record's unbuilt sections, and an item still on an old form carries
 `#[expect(deprecated, reason = "ADR-0400: moves to Tester")]` on its `mod` line, or on the item
-itself where there is no module (a bench, a unit test in `src/`). A new item on an old form fails
-`clippy`, and a migrated one whose attribute stays fails as an unfulfilled expectation.
+itself where there is no module (a bench, a unit test in `src/`). A new module on an old form
+fails `clippy`, and a migrated one whose attribute stays fails as an unfulfilled expectation; a new
+use inside a module that already carries the attribute is not seen by the lint, so the migration's
+progress counts uses of the old names, not attributes, and the count only falls. The old forms
+are listed by the task that deprecates them.
 
 ### §9. What is not built
 
@@ -485,6 +535,8 @@ link-time test registry; a testing crate beside `flui-testing`.
   keeps its runtime in thread-local state and renders on a stand-in, so a cost scenario mounts the
   root view on `Headless`.
 - Bad, because the wire has no negation and no rectangle condition, so those claims do not wait.
+- Bad, because a device has no golden: its pixels are the driver's predicates with a stated
+  tolerance, and a frame-exact check is written for a virtual clock.
 - Bad, because a device's runner owes its half of §3 before its waits can answer `Idle`; until
   then they hold out to their limit, which is slower but never a false failure.
 - Neutral, because cost scenarios run `Unobserved`, where input aims at points from typed reads:
@@ -493,28 +545,33 @@ link-time test registry; a testing crate beside `flui-testing`.
 
 ### Confirmation
 
-- The compiler: `Tester::tap(&Find<Many>)`, `Frame` on a generic `C: Connection`, `pump_for` on a
-  `Device`, and `golden` on anything but `Settled` or on `AppRun` are compile-fail fixtures of
-  `flui-testing`.
+- The compiler: `Tester::tap(&Find<Many>)`, `Frame` on a generic `C: Connection`, `pump_for` and
+  `settle` on a `Device`, and `golden` on anything but `Settled<'_, Headless<_>>` are compile-fail
+  fixtures of `flui-testing`.
 - clippy: `deprecated` on the old forms with the `#[expect]` marker of §8, until the last one is
   deleted.
 - Tests of `flui-runtime`: a table with one row per `UnsettledReason` on which the host's settle
   and `wait(Settled)` agree, a row where both stay unsettled and name the cause and its
   `cleared_by`, and a row where both settle on the same state; a held background job never wakes
   the loop and makes a false wait `Idle` naming it; a parked wait's deadline is reached in virtual
-  time; a host half that is `Absent` never answers `Idle`; one served-answer test per method
-  removed from `not_answered!`; an act parked for stability injects at the bounds of the frame it
-  passed on.
+  time; a host half that is `Absent`, and an `Outside` cause, never answer `Idle`; a deadline a
+  fraction of a millisecond away is reached; a timer that re-arms at the same instant ends the
+  wait unsettled after the turn bound, naming it; a redraw while a retry is armed wakes at the
+  retry; one served-answer test per method removed from `not_answered!`; an act parked for
+  stability injects at the bounds of the frame it passed on, and one past its timeout never
+  injects.
 - Tests of `flui-testing`: a read leaves the frame number unchanged; a caught panic followed by
-  `Drop`, and an error returned through `?` followed by `Drop`, run no teardown check and lose no
-  failure; a leaked ticker fails the teardown check while the runtime is still alive; `freeze_at`
-  on an activity indicator gives a golden that reruns byte for byte; a chord after a `Gesture`
-  that left a key down sends no second down; a golden off the canonical adapter is `CannotVerify`;
-  a mismatch writes a diff and a failed run blesses nothing.
+  `Drop`, an error returned through `?` followed by `Drop`, and an expected error dropped before
+  a leaked ticker, each run or skip the end checks as §7 says and lose no failure; a leaked ticker
+  fails the end check while the runtime is still alive; a test that ends holding a key passes
+  its end checks; `freeze_at` on an activity indicator gives a golden that reruns byte for byte; a
+  chord after a `Gesture` that left a key down sends no second down; a golden off the canonical
+  adapter is `CannotVerify`; a mismatch writes a diff and a failed run blesses nothing.
 - A test of `flui-protocol`: one `ActionSequence` per gesture kind, planned once, gives the same
   routed events through the agent's injection, a platform lowering and a conformance row.
-- `cargo tree -p flui-cli -e normal` names no `flui-testing`, and `flui-driver` has no
-  `headless` feature.
+- One scenario of an example package runs headless in its `#[test]` and on a device in the
+  nightly platform lanes through `each::<Device>`.
+- `flui-driver` has no `headless` feature and no edge to `flui-testing`.
 
 ## Pros and cons of the options
 
