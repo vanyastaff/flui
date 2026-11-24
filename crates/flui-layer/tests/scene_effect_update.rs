@@ -53,7 +53,7 @@ impl Run {
     fn owner(&self) -> SceneOwner {
         let mut owner = SceneOwner::new();
         if self.unshared {
-            owner.force_unshared_effect_updates();
+            owner.force_unshared_damage();
         }
         owner
     }

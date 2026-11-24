@@ -437,9 +437,11 @@ pub struct SceneOwner {
     /// for the property test.
     #[cfg(feature = "testing")]
     planted: Option<usize>,
-    /// Whether effect updates are damaged by each version's own scope and
-    /// chain, never by the inside and chain the versions share: the path the
-    /// shared one must equal, for the equivalence test.
+    /// Whether damage reads each version's own chains: an effect update by
+    /// each version's own scope and chain, never by the inside and chain the
+    /// versions share, and a republished content entry by entry, never
+    /// through the node's chain folded once. The path the shared reads must
+    /// equal, for the equivalence tests.
     #[cfg(feature = "testing")]
     unshared: bool,
     /// Why a publication without a base is full.
@@ -794,12 +796,14 @@ impl SceneOwner {
         self.planted = Some(op);
     }
 
-    /// Makes every later apply damage an effect update by each version's own
-    /// scope and chain, as if the versions shared neither the effect's inside
-    /// nor the chain above it: the path the shared fold must equal, which a
-    /// test runs beside it.
+    /// Makes every later apply read each version's own chains: an effect
+    /// update damaged by each version's own scope and chain, as if the
+    /// versions shared neither the effect's inside nor the chain above it,
+    /// and each entry of a republished content landed through its own chain
+    /// rather than the node's chain folded once. The path the shared reads
+    /// must equal, which the tests run beside them.
     #[cfg(feature = "testing")]
-    pub fn force_unshared_effect_updates(&mut self) {
+    pub fn force_unshared_damage(&mut self) {
         self.unshared = true;
     }
 

@@ -958,6 +958,19 @@ impl<'v> Geometry<'v> {
         self.scope(key, None, None, 1.0)
     }
 
+    /// A landing of `key`'s entries under this version; `fold` lands its
+    /// chunks through the node's chain folded once.
+    pub(crate) fn landing(self, key: NodeKey, fold: bool) -> ContentLanding<'v> {
+        ContentLanding {
+            geometry: self,
+            key,
+            fold,
+            chain: NodeChain::Unread,
+            under: None,
+            scratch: Links::new(),
+        }
+    }
+
     /// Where `entry` of `key` and its scope land on the surface; nothing when
     /// the node is not attached.
     pub(crate) fn entry_reach(self, key: NodeKey, entry: EntryIndex) -> Reach {
@@ -1368,6 +1381,21 @@ impl<'v> Folded<'v> {
         folded
     }
 
+    /// `key`'s, from the root: its node chain ([`Geometry::node_links`])
+    /// folded; `None` when the node is not attached.
+    pub(crate) fn of(geometry: Geometry<'v>, key: NodeKey) -> Option<Self> {
+        let mut links = Links::new();
+        geometry.node_links(key, &mut links, 0).ok()?;
+        let mut folded = Self {
+            key,
+            ctm: Matrix4::IDENTITY,
+            outer: SmallVec::new(),
+            shift: None,
+        };
+        folded.extend(&links);
+        Some(folded)
+    }
+
     /// `child`'s, from its parent's (`self`): the effects above its slot,
     /// then its placement. `None` when `child` does not stand in a slot of
     /// this node. `scratch` is a buffer the caller keeps between calls.
@@ -1449,7 +1477,7 @@ impl<'v> Folded<'v> {
     ) -> Reach {
         match self.entry_chain(geometry, entry, scratch) {
             Some(inner) => inner.outward(inner.mapped(bounds)),
-            None => self.outward(self.mapped(bounds)),
+            None => self.content_reach(bounds),
         }
     }
 
@@ -1516,4 +1544,73 @@ impl<'v> Folded<'v> {
         }
         out
     }
+}
+
+/// Lands the entries of one node's content under one version, for a pass
+/// that lands many of them. A chunk lands through the node's chain, folded
+/// the first time one asks, and the effects above it, folded inside that
+/// chain once for each run of chunks under one effect, so `k` chunks of one
+/// content walk up to the root once, not `k` times. Any other entry, and
+/// every entry of a landing made with `fold` off, lands through its own
+/// chain ([`Geometry::entry_reach`]), which the folded one must equal.
+pub(crate) struct ContentLanding<'v> {
+    geometry: Geometry<'v>,
+    key: NodeKey,
+    fold: bool,
+    /// The node's chain, read the first time a chunk asks.
+    chain: NodeChain<'v>,
+    /// The effect the last chunk sat under and the chain into its inside;
+    /// `None` inside when the effects above add no link to the node's chain.
+    /// The effects above a chunk are its parent's, whatever the chunk.
+    under: Option<(EntryIndex, Option<Folded<'v>>)>,
+    scratch: Links<'v>,
+}
+
+impl ContentLanding<'_> {
+    /// Where `entry` of the node's content and its scope land on the
+    /// surface: what [`Geometry::entry_reach`] answers for it.
+    pub(crate) fn entry_reach(&mut self, entry: EntryIndex) -> Reach {
+        let geometry = self.geometry;
+        let key = self.key;
+        let (chunk, parent) = match geometry.record(key).content().entries().get(entry.get()) {
+            Some(Entry::Chunk { chunk, parent }) if self.fold => (chunk, *parent),
+            _ => return geometry.entry_reach(key, entry),
+        };
+        if matches!(self.chain, NodeChain::Unread) {
+            self.chain = Folded::of(geometry, key).map_or(NodeChain::Unattached, NodeChain::Read);
+        }
+        let NodeChain::Read(chain) = &self.chain else {
+            return Reach::Nothing;
+        };
+        let Some(parent) = parent else {
+            return chain.content_reach(chunk.bounds());
+        };
+        if self
+            .under
+            .as_ref()
+            .is_none_or(|(under, _)| *under != parent)
+        {
+            self.under = Some((
+                parent,
+                chain.entry_chain(geometry, entry, &mut self.scratch),
+            ));
+        }
+        match &self.under {
+            Some((_, Some(inner))) => inner.content_reach(chunk.bounds()),
+            _ => chain.content_reach(chunk.bounds()),
+        }
+    }
+}
+
+/// A landing's chain into its node.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a landing lives on the stack for one content; boxing its chain would allocate once per damaged content"
+)]
+enum NodeChain<'v> {
+    /// No chunk asked yet.
+    Unread,
+    /// The node is not attached: nothing it holds is drawn.
+    Unattached,
+    Read(Folded<'v>),
 }
