@@ -74,10 +74,10 @@ without the feature:
   registration. A degraded or failed reload is logged and keeps the last good
   tree, as before.
 - `ScenePluginHook` owns the `HotReloadDriver`. `scene_frame` builds the frame's
-  scene and lends it to the host's renderer. The original scene is dropped
-  before the call returns while the driver holds the image. The unsafe
-  `scene_frame` caller must additionally guarantee the renderer retains no
-  cloned image-dependent payload; a borrowed scene alone cannot ensure this.
+  scene and lends it to the host's renderer; the scene borrows the driver and
+  is dropped before the call returns. The unsafe `scene_frame` caller must
+  additionally guarantee the renderer retains no cloned image-dependent
+  payload; a borrowed scene alone cannot ensure this.
 
 The host applies a `Patched` poll once to every UI runtime, not to whichever UI runtime
 polled first; before the hook, a worker's rebuild request reached only the most
@@ -124,12 +124,14 @@ reported. Pinned by
 
 `HotReloadDriver::poll` returns whether an image was loaded or replaced. It
 never calls a scene build entry point. Constructing a scene remains the
-separate unsafe `build_scene` operation: its caller must drop every scene and
-retained clone before the image can be unloaded. A safe polling method that
-returned an unrestricted `Scene` would let that lifetime obligation escape
-without an unsafe call. The hook polls, builds once, lends the scene to the
-renderer and retires it before returning; a reload builds no scene of its own.
-The driver and host hook boundaries follow ADR-0108. The consumer test
+separate `build_scene` operation, which returns a `PluginScene<'_>` that
+borrows the driver: `poll`, which may unload the image, does not compile while
+a scene lives. What a borrow cannot hold is a clone of a scene payload
+(`Arc<dyn Any>`, `Arc<dyn Fn>`) taken through it, so `build_scene` stays
+`unsafe` with that one obligation, the same one `DevReloadHook::scene_frame`
+states. The hook polls, builds once, lends the scene to the renderer and
+retires it before returning; a reload builds no scene of its own. The driver
+and host hook boundaries follow ADR-0108. The consumer test
 `polling_an_unavailable_plugin_reports_no_change` pins the polling result type
 and retries an unavailable image without constructing a scene.
 
@@ -187,7 +189,8 @@ escape into host-owned trees and consumer clones. Worker registration retirement
 still prunes matching dispatch entries, but does not invalidate already escaped
 values. Rejected images close normally. Each admitted revision consumes image
 memory and can keep its Windows staged file locked; restart the host to reclaim
-these resources. Scene plugins retain their separate unsafe unload obligations.
+these resources. A scene plugin's image is unloaded on reload, so its scenes
+borrow it (`PluginScene`).
 
 `admitted_worker_callbacks_survive_retirement_and_replacement` compiles two
 same-toolchain dynamic fixtures and loads them through the public worker API in

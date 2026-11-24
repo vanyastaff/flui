@@ -238,24 +238,40 @@ fn first_render_and_replacement_reset_fonts() {
     let path = scratch_worker("font-reset-generations");
     let mut hook = ScenePluginHook::new(&path);
     let scene = Scene::default();
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(reset, "first image requires its own font namespace");
-        true
-    }));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(reset, "first image requires its own font namespace");
+            true
+        }
+    ));
     hook.observe_image_update(false);
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(!reset, "successful rendering acknowledged the reset");
-        true
-    }));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(!reset, "successful rendering acknowledged the reset");
+            true
+        }
+    ));
     hook.observe_image_update(true);
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(reset, "replacement image may reuse font identifiers");
-        true
-    }));
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(!reset, "replacement reset acknowledged exactly once");
-        true
-    }));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(reset, "replacement image may reuse font identifiers");
+            true
+        }
+    ));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(!reset, "replacement reset acknowledged exactly once");
+            true
+        }
+    ));
     let _ = std::fs::remove_dir_all(path.parent().expect("scratch directory"));
 }
 
@@ -263,19 +279,31 @@ fn failed_render_preserves_font_reset_for_retry() {
     let path = scratch_worker("font-reset-refusal");
     let mut hook = ScenePluginHook::new(&path);
     let scene = Scene::default();
-    assert!(!hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(reset);
-        false
-    }));
+    assert!(!ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(reset);
+            false
+        }
+    ));
     hook.observe_image_update(false);
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(reset, "unchanged image must still retry the failed reset");
-        true
-    }));
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(!reset);
-        true
-    }));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(reset, "unchanged image must still retry the failed reset");
+            true
+        }
+    ));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(!reset);
+            true
+        }
+    ));
     let _ = std::fs::remove_dir_all(path.parent().expect("scratch directory"));
 }
 
@@ -284,24 +312,36 @@ fn panicking_render_preserves_font_reset_for_retry() {
     let mut hook = ScenePluginHook::new(&path);
     let scene = Scene::default();
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        hook.render_loaded_scene(&scene, &mut |_, reset| {
-            assert!(reset);
-            panic!("render failure");
-        });
+        ScenePluginHook::render_loaded_scene(
+            &mut hook.pending_font_reset,
+            &scene,
+            &mut |_, reset| {
+                assert!(reset);
+                panic!("render failure");
+            },
+        );
     }));
     assert!(outcome.is_err());
     hook.observe_image_update(false);
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(
-            reset,
-            "unwinding render cannot acknowledge the namespace reset"
-        );
-        true
-    }));
-    assert!(hook.render_loaded_scene(&scene, &mut |_, reset| {
-        assert!(!reset);
-        true
-    }));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(
+                reset,
+                "unwinding render cannot acknowledge the namespace reset"
+            );
+            true
+        }
+    ));
+    assert!(ScenePluginHook::render_loaded_scene(
+        &mut hook.pending_font_reset,
+        &scene,
+        &mut |_, reset| {
+            assert!(!reset);
+            true
+        }
+    ));
     let _ = std::fs::remove_dir_all(path.parent().expect("scratch directory"));
 }
 
