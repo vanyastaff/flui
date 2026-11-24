@@ -144,6 +144,9 @@ pub struct ScreenRequest {
     pub title: String,
     /// The simulator shown, which a window naming another is not ([`window_identity`]).
     pub udid: Udid,
+    /// The UDIDs `simctl list devices` gives: a window naming one of them other than
+    /// [`Self::udid`] shows another simulator ([`window_identity`]).
+    pub listed: Vec<Udid>,
     /// The app's window in points: a UIKit window fills its screen.
     pub size: LogicalSize,
     /// The window's scale.
@@ -158,9 +161,17 @@ impl ScreenRequest {
         Self {
             title: title.into(),
             udid,
+            listed: Vec::new(),
             size,
             scale,
         }
+    }
+
+    /// The UDIDs `simctl list devices` gives, which a window may name ([`window_identity`]).
+    #[must_use]
+    pub fn listed(mut self, listed: Vec<Udid>) -> Self {
+        self.listed = listed;
+        self
     }
 }
 
@@ -172,19 +183,24 @@ pub fn window_title(simulator: &Simulator) -> String {
     format!("{} \u{2013} {}", simulator.name, simulator.runtime_name())
 }
 
-/// Refuse a title that names more than one listed simulator: the window is found by its title, and
-/// no attribute a run has confirmed carries its simulator's UDID, so a title that `simulators`
+/// Refuse a title that names more than one available simulator: the window is found by its title,
+/// and no attribute a run has confirmed carries its simulator's UDID, so a title that `simulators`
 /// gives two of (any state: DeviceHub keeps a window titled for a simulator that shut down) could
-/// show another simulator's app.
+/// show another simulator's app. One that is not available (its runtime or device type gone)
+/// cannot boot, so no window shows it, and it does not count.
 ///
 /// # Errors
 ///
 /// [`Error::Ambiguous`] naming the simulators that share `target`'s title.
 pub fn check_title_names_one(simulators: &[Simulator], target: &Simulator) -> Result<()> {
     let title = window_title(target);
+    // A simulator that is not available cannot boot, so no window shows it.
     let sharing: Vec<String> = simulators
         .iter()
-        .filter(|simulator| window_title(simulator) == title)
+        .filter(|simulator| {
+            (simulator.available || simulator.udid == target.udid)
+                && window_title(simulator) == title
+        })
         .map(|simulator| format!("{} ({})", simulator.udid, simulator.state))
         .collect();
     if sharing.len() <= 1 {
@@ -208,18 +224,24 @@ pub fn check_title_names_one(simulators: &[Simulator], target: &Simulator) -> Re
 pub enum WindowIdentity {
     /// An attribute names the simulator asked for.
     Named,
-    /// An attribute names another simulator's UDID.
+    /// An attribute names another listed simulator's UDID.
     Other,
-    /// No attribute names a UDID.
+    /// No attribute names a listed simulator's UDID.
     Unknown,
 }
 
 /// What `attributes`, the texts a window answers with (its `AXIdentifier` and `AXDocument`), say
-/// of whether it shows simulator `udid`: a UDID among them is the window's simulator's. No run has
-/// shown which attribute, if any, carries one, so a window naming none is `Unknown`, and the
-/// title's uniqueness ([`check_title_names_one`]) stands for it.
+/// of whether it shows simulator `udid`: a UDID among them is the window's simulator's when
+/// `listed`, the UDIDs `simctl list devices` gives, holds it. Any other UUID (a document's, a
+/// session's) names no simulator. No run has shown which attribute, if any, carries a UDID, so a
+/// window naming none is `Unknown`, and the title's uniqueness ([`check_title_names_one`]) stands
+/// for it.
 #[must_use]
-pub fn window_identity(udid: &Udid, attributes: &[Option<String>]) -> WindowIdentity {
+pub fn window_identity(
+    udid: &Udid,
+    listed: &[Udid],
+    attributes: &[Option<String>],
+) -> WindowIdentity {
     let mut named_other = false;
     for text in attributes.iter().flatten() {
         for word in text.split(|c: char| !(c.is_ascii_hexdigit() || c == '-')) {
@@ -229,7 +251,7 @@ pub fn window_identity(udid: &Udid, attributes: &[Option<String>]) -> WindowIden
             if found == *udid {
                 return WindowIdentity::Named;
             }
-            named_other = true;
+            named_other |= listed.contains(&found);
         }
     }
     if named_other {
@@ -296,6 +318,39 @@ pub fn read_failure(error: ProviderError, trusted: bool, deadline: Duration) -> 
             message: format!("the Simulator's window could not be read: {why}"),
             retry: Retry::Never,
         },
+    }
+}
+
+/// What a read of a parent's child at one index answered, as a walk takes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChildRead<T> {
+    /// The child at the index.
+    Child(T),
+    /// No child at the index: the parent's children are all read.
+    End,
+    /// The parent went away: no later index can be read, so its children are cut short.
+    Cut,
+}
+
+/// What `answer`, a read of a parent's child at one index (`AXUIElementCopyAttributeValues` for
+/// one value of `AXChildren`), means for the walk. The call is asked of the parent, so a `Gone`
+/// answer (`kAXErrorInvalidUIElement`) is the parent gone, not the child: every later index would
+/// answer the same, so reading on would only cost calls, and stopping without a word would present
+/// a shorter list as whole. The level is [`ChildRead::Cut`], which a read reports as children left
+/// unread.
+///
+/// # Errors
+///
+/// Any other failure, as the call answered it.
+pub fn child_read<T>(
+    answer: std::result::Result<Option<T>, ProviderError>,
+) -> std::result::Result<ChildRead<T>, ProviderError> {
+    match answer {
+        Ok(Some(child)) => Ok(ChildRead::Child(child)),
+        Ok(None) => Ok(ChildRead::End),
+        Err(ProviderError::Gone) => Ok(ChildRead::Cut),
+        Err(error) => Err(error),
     }
 }
 

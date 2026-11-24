@@ -15,6 +15,7 @@ mod client;
 pub(crate) use self::client::{
     MESSAGING_TIMEOUT_SECONDS, Visit, Walker, actions, application, attribute, boolean, child_at,
     elements, frame, name, number_text, perform, read_error, settable, string, timeout, trusted,
+    wait_for,
 };
 
 use flui_protocol::wire::Role;

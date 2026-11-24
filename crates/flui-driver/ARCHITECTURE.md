@@ -155,9 +155,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   both the read stands for VoiceOver on iOS only as far as they confirm it (`docs/gaps.md`).
   The read hands back the elements as served (`accessibility::ScreenElement`), and everything
   after it is pure code both the Mac and the scripted window go through (`ios_simulator::tree`).
-  The window is the one on screen titled `<device> – <runtime>`, of those naming no other
-  simulator, found without looking the Simulator's process up by name; two windows, or a title
-  another listed simulator shares, are refused. The screen is found by walking every group of the
+  The window is the one on screen titled `<device> – <runtime>`, of those naming no other listed
+  simulator's UDID, found without looking the Simulator's process up by name; two windows, or a
+  title another available simulator shares, are refused. A parent that goes away mid-read leaves
+  its children unread (`accessibility::child_read`), and every element the read asks waits the
+  deadline a timeout names. The screen is found by walking every group of the
   window within ten levels (`tree::find_screen`): an `iOSContentGroup` when there is one, else the
   shallowest group of the app's window's shape. `Lane::read_tree` and `Lane::invoke` are handed
   the app's own tree, and each element is matched among the descendants of the node its nearest

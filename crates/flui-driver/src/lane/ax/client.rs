@@ -227,6 +227,13 @@ pub(crate) fn application(pid: i32, seconds: f32) -> CFRetained<AXUIElement> {
     app
 }
 
+/// Let calls asked of `element` wait `seconds` for its app: an element's own messaging timeout,
+/// set where a read must know the deadline its calls run under.
+pub(crate) fn wait_for(element: &AXUIElement, seconds: f32) {
+    // SAFETY: a live element and a positive timeout. A refused timeout leaves the one it had.
+    let _ = unsafe { element.set_messaging_timeout(seconds) };
+}
+
 /// The actions `element` offers, by name.
 pub(crate) fn actions(element: &AXUIElement) -> Result<Vec<String>, ProviderError> {
     let mut names: *const CFArray = std::ptr::null();

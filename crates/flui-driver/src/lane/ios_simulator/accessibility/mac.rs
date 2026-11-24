@@ -5,9 +5,11 @@
 //! The Simulator's process is not looked up by name: Simulator.app hosts the device's window
 //! before Xcode 27 and DeviceHub from it, and AppKit reports DeviceHub's process id as -1. The
 //! window server lists the owner of every window on screen with its real process id, so each owner
-//! is asked, within [`PROBE_TIMEOUT_SECONDS`], for its windows of the device's title. A failure
-//! while the process is no longer trusted is the permission taken back, wherever it comes
-//! (`accessibility::read_failure`).
+//! is asked, within [`PROBE_TIMEOUT_SECONDS`], for its windows of the device's title. Every
+//! element the read then asks is given [`READ_TIMEOUT_SECONDS`] of its own, so the deadline a
+//! timeout names is the one its call ran under. A failure while the process is no longer trusted
+//! is the permission taken back, wherever it comes (`accessibility::read_failure`), and a parent
+//! that went away mid-read leaves its children unread (`accessibility::child_read`).
 #![expect(
     unsafe_code,
     reason = "the window list's C call and its constant keys, read as CGWindow.h types them"
@@ -23,8 +25,8 @@ use objc2_core_graphics::{
 };
 
 use super::{
-    HostAccessibility, HostScreen, PointFrame, ScreenElement, ScreenRequest, read_failure,
-    untrusted,
+    ChildRead, HostAccessibility, HostScreen, PointFrame, ScreenElement, ScreenRequest, child_read,
+    read_failure, untrusted,
 };
 use crate::error::{Error, Result};
 use crate::lane::ax;
@@ -55,13 +57,24 @@ impl MacAccessibility {
     }
 }
 
+/// How long each call of a read may take, in seconds: set on every element the read asks
+/// ([`asked`]), since whether an element takes its application's timeout is not documented, so
+/// the deadline a timeout names is the one each call ran under.
+pub const READ_TIMEOUT_SECONDS: f32 = ax::MESSAGING_TIMEOUT_SECONDS;
+
+/// `element`, its replies awaited [`READ_TIMEOUT_SECONDS`].
+fn asked(element: CFRetained<AXUIElement>) -> CFRetained<AXUIElement> {
+    ax::wait_for(&element, READ_TIMEOUT_SECONDS);
+    element
+}
+
 /// What a failed call answers: [`read_failure`] with the process's trust asked now and the
-/// client's per-call deadline.
+/// deadline each call of a read runs under.
 fn failure(error: ProviderError) -> Error {
     read_failure(
         error,
         ax::trusted(),
-        Duration::from_secs_f32(ax::MESSAGING_TIMEOUT_SECONDS),
+        Duration::from_secs_f32(READ_TIMEOUT_SECONDS),
     )
 }
 
@@ -98,7 +111,7 @@ impl HostAccessibility for MacAccessibility {
             .clone()
             .or_else(|| wanted.title.clone())
             .unwrap_or_else(|| wanted.role.clone());
-        let deadline = Duration::from_secs_f32(ax::MESSAGING_TIMEOUT_SECONDS);
+        let deadline = Duration::from_secs_f32(READ_TIMEOUT_SECONDS);
         let offered = ax::actions(&found.handle)
             .map(|names| names.iter().any(|action| action == "AXPress").then_some(()));
         if offered.is_err() && !ax::trusted() {
@@ -124,12 +137,12 @@ fn read_screen(screen: &ScreenRequest) -> Result<(HostScreen, Vec<Read>)> {
         visited: 0,
         truncated: false,
     };
-    let handles = budget.children_of(&group, 0)?;
+    let (handles, cut) = budget.children_of(&group, 0)?;
     let mut read = HostScreen::new(
         frame,
         handles.iter().map(Read::detached).collect::<Vec<_>>(),
     );
-    read.truncated = budget.truncated;
+    read.truncated = budget.truncated || cut;
     Ok((read, handles))
 }
 
@@ -150,15 +163,19 @@ struct Budget {
 
 impl Budget {
     /// The children of `parent`, `depth` levels under the screen, each read with its own, within
-    /// [`MAX_NODES`] elements and [`MAX_DEPTH`] levels.
-    fn children_of(&mut self, parent: &AXUIElement, depth: usize) -> Result<Vec<Read>> {
+    /// [`MAX_NODES`] elements and [`MAX_DEPTH`] levels, and whether `parent` went away before its
+    /// children were all read ([`child_read`]).
+    fn children_of(&mut self, parent: &AXUIElement, depth: usize) -> Result<(Vec<Read>, bool)> {
         let mut children = Vec::new();
         let mut index = 0;
         loop {
-            let child = match ax::child_at(parent, index) {
-                Ok(Some(child)) => child,
-                Ok(None) | Err(ProviderError::Gone) => break,
-                Err(error) => return Err(failure(error)),
+            let child = match child_read(ax::child_at(parent, index)).map_err(failure)? {
+                ChildRead::Child(child) => asked(child),
+                ChildRead::End => break,
+                ChildRead::Cut => {
+                    self.truncated = true;
+                    return Ok((children, true));
+                }
             };
             index += 1;
             if self.visited >= MAX_NODES {
@@ -173,12 +190,17 @@ impl Budget {
                 Err(error) => return Err(failure(error)),
             };
             let grandchildren = if depth + 1 >= MAX_DEPTH {
-                let more = ax::child_at(&child, 0).map_err(failure)?.is_some();
+                let more = !matches!(
+                    child_read(ax::child_at(&child, 0)).map_err(failure)?,
+                    ChildRead::End
+                );
                 element.children_unread = more;
                 self.truncated |= more;
                 Vec::new()
             } else {
-                self.children_of(&child, depth + 1)?
+                let (grandchildren, cut) = self.children_of(&child, depth + 1)?;
+                element.children_unread = cut;
+                grandchildren
             };
             children.push(Read {
                 element,
@@ -186,7 +208,7 @@ impl Budget {
                 children: grandchildren,
             });
         }
-        Ok(children)
+        Ok((children, false))
     }
 }
 
@@ -229,10 +251,11 @@ impl WindowTree for Windows {
         let mut children = Vec::new();
         let mut index = 0;
         while children.len() < MAX_NODES {
-            match ax::child_at(element, index) {
-                Ok(Some(child)) => children.push(child),
-                Ok(None) | Err(ProviderError::Gone) => break,
-                Err(error) => return Err(failure(error)),
+            match child_read(ax::child_at(element, index)).map_err(failure)? {
+                ChildRead::Child(child) => children.push(asked(child)),
+                // A parent gone takes its later children with it: the search chooses among
+                // the groups it saw, and none of those could be a screen still drawn.
+                ChildRead::End | ChildRead::Cut => break,
             }
             index += 1;
         }
@@ -328,7 +351,8 @@ fn titled_windows(title: &str) -> Result<Vec<CFRetained<AXUIElement>>> {
                 Err(_) => continue,
             };
             if named.as_deref() == Some(title) {
-                found.push(window);
+                // Asked within the probe's second until now; read within the read's deadline.
+                found.push(asked(window));
             }
         }
     }

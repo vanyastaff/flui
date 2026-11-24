@@ -227,7 +227,8 @@ pub fn find_screen<T: WindowTree>(
 ) -> Result<(T::Element, PointFrame)> {
     let mut left = Vec::new();
     for window in windows {
-        if window_identity(&screen.udid, &tree.identity(&window)?) != WindowIdentity::Other {
+        let named = tree.identity(&window)?;
+        if window_identity(&screen.udid, &screen.listed, &named) != WindowIdentity::Other {
             left.push(window);
         }
     }
