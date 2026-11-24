@@ -1053,7 +1053,8 @@ the protocol's one method table (`flui_protocol::method::WindowMethod`, the rows
 enqueues it as one `UiCommand::Agent` on the UI runtime's bounded inbox and returns an
 `AgentAnswer` the owner fills at its next drain, a frame boundary. The owner opens the call by its
 method's type (`serve_window_call`, generated from the same table) and serves it through that
-method's `Serve` impl in `agent_serve.rs`, which answers now or parks the reply and answers later.
+method's `Serve` impl, in `agent_serve.rs` or a module beside it (`agent_audit.rs`, `agent_perf.rs`),
+which answers now or parks the reply and answers later.
 `run_window_method` does what every method shares: the presentation lookup, panic containment,
 the record of issued handles and the conversion of an `AgentError` to the protocol's
 `ErrorObject` with its handle. A row whose effect is `Annotates` (`build.report`) takes another
@@ -1248,6 +1249,33 @@ reference's text, `a_node_reference_prints_and_parses_as_one_text` in `flui-foun
 object or view that panics while the tree is read (`kind`, `inspect`) answers
 `InspectPanicked` (`platform`) first and then continues on the owner thread, as an action does;
 pinned by `a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes`.
+
+**Audit.** `audit.a11y` answers at the owner's turn (`agent_audit.rs`) and writes no rule of its
+own: `unnamed` and `target_size` are `flui-semantics`' `SemanticsOwner::audit_unnamed` and
+`audit_target_size` over the committed tree, `text_contrast` is `flui-rendering`'s
+`PipelineOwner::audit_text_contrast` over the version the presentation's scene last applied
+(`SceneSlot::current_version`; the scene keeps holding it, so the copy releases nothing when it
+drops). The target-size minimum is the presentation's gesture settings' `min_target` for the
+platform's primary pointer: touch on Android, iOS and Fuchsia, mouse elsewhere. An empty `rules`
+asks for every rule the protocol names; a rule that cannot run (one this agent does not run, a
+semantics rule before the first committed tree, `text_contrast` before the first applied frame)
+is listed in `not_checked` and the verdict is never `pass`, and `text_contrast` with any text it
+could not judge is listed there too, beside the findings of the texts it judged. A window with no
+tree yet is answered this way, not with an error. The elements findings name are recorded as
+issued. Pinned by `src/ui_runtime/tests/agent_audit.rs`.
+
+**Performance spans.** `perf.start` and `perf.stop` (`agent_perf.rs`) keep a span on the
+presentation's agent slot. After each frame `AgentSide::after_frame` takes, for a running span,
+the snapshots the frame clock recorded since the span's cursor; `perf.stop` takes the last ones
+and answers. Only presented frames count; a frame's time is its work, segment start to submit
+return; past one refresh period it is dropped, past `jank_multiplier` periods janky instead, and
+both counts are `None` once any frame of the span had no known period. The span keeps the times
+of its last 3600 frames and the 64 slowest at most, so its memory is fixed at its start; past the
+cap the percentiles describe the last frames and the counts the whole span. A second `perf.start`
+and a `perf.stop` with no span are `invalid_argument`; a span whose window handles are all
+dropped is let go at the next frame or call, and a closed window drops its span with its slot.
+With no span running a frame pays one borrow per presentation and allocates nothing. Pinned by
+`src/ui_runtime/tests/agent_perf.rs`.
 
 **Enablement.** Every window handle shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is

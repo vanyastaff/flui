@@ -1302,6 +1302,29 @@ No other phase-misuse variant exists. The passes leave no site that could constr
 
 **Accepted trade-off:** the variant name reads per-node ("paint performed before layout") but its semantics is frame-level, as the variant's Display string ("paint phase began with layout work still pending") and doc state.
 
+### Text contrast is read from a finished frame's scene, and an unknown background is not a pass
+
+**Rule.** `audit` reads a frame the pipeline already produced and changes nothing.
+`PipelineOwner::audit_text_contrast` walks the owner's frame node of a `SceneVersion` in paint
+order, as the raster side draws it, to the window's logical pixels. Each paint is kept as the box
+it may touch and, for a solid source-over fill under no unresolved layer, the rectangles it
+surely covers (a rounded rectangle its two bands clear of the corners; a clip by a path or a
+superellipse surely leaves nothing). A text's background is the last such fill that covers its
+whole line boxes inside every clip, with the translucent fills above it composited on; anything
+else touching the box after it, no opaque fill at all, or the text under opacity, a filter, a
+mask or a rotation makes the text `NotChecked` with why. Colours are the run's span colour or the
+paragraph command's, sizes the run's times the axis scale it is painted under; the requirement
+is WCAG 1.4.3's 4.5:1, or 3:1 from 24 px or 18.66 px bold, with a 0.01 tolerance. A text's
+element is the nearest render object, the painter or above, with a committed semantics node.
+
+**Why.** Pixels mix the text's antialiasing into the background and differ by adapter
+(flutter/flutter#103235, #144121); the scene holds the colours exactly. The background is
+under-approximated where it must cover and over-approximated where it may touch, so an unknown
+shape costs a check, never a wrong colour. Ink bounds are a damage extent and run far past the
+glyphs, so the laid-out line boxes stand for the glyphs. The walk keeps its own stack.
+
+**Test.** `text_contrast.rs` in `tests/`.
+
 ### Multi-source design references in this crate
 
 The structural shape of individual components in this crate is designed for Rust and informed by several Rust-side references:

@@ -80,6 +80,8 @@ pub(crate) trait AgentSide {
     /// A frame has passed: the readings agents' actions owe, the events the frame produced and
     /// the waits agents parked, counted for that frame, those that hold without reading
     /// settledness evaluated.
+    ///
+    /// A running perf span takes the frames presented since its last pull.
     fn after_frame(&self, ui_runtime: &UiRuntime);
 
     /// An owner turn ended without a frame: the waits agents parked that hold without reading

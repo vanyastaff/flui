@@ -916,6 +916,24 @@ a second place to be wrong.
 
 **Test.** `locate.rs` and `actionability.rs` in `tests/`.
 
+### Accessibility rules read the published tree and name its elements
+
+**Rule.** `SemanticsOwner::audit_unnamed` and `audit_target_size` walk the nodes an agent reads
+(the agent filter, past a scroll view's edge included) and answer the protocol's `AuditFinding`s
+with each element's `ElementRef`. An element is interactive when it advertises `invoke`,
+`toggle`, `set_value`, `select`, `expand` or `collapse`; `unnamed` reports one whose wire name is
+empty. `target_size` judges the part of an element's bounds the window and every clipping
+ancestor leave, the region `visible` reads (`shown_bounds`), against a `MinimumTarget` the caller
+passes; an element the window does not show has no region and is not judged.
+
+**Why.** The development agent's `audit.a11y` and the testing kit call the same functions
+(ADR-0400 §5). A target drawn large but clipped to a sliver is a sliver to a finger, which a
+check of the drawn rectangle misses (flutter/flutter#103235, #144121). The minimum belongs to the
+presentation's gesture settings in `flui-interaction`, a crate above this one, so it is a
+parameter, finite and positive by construction.
+
+**Test.** `audit.rs` in `tests/`.
+
 ## Numeric and directional input
 
 ADR-0124 distinguishes expand/collapse from activation and numeric setters from
