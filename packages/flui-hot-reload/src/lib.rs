@@ -186,26 +186,15 @@ fn report_frame(error: &PluginFrameError) {
         message.push_str(&cause.to_string());
         source = cause.source();
     }
-    #[cfg(target_os = "android")]
-    {
-        let tag = c"PluginPipeline";
-        let message = std::ffi::CString::new(message).unwrap_or_default();
-        // SAFETY: `tag` and `message` are NUL-terminated C strings that outlive
-        // the call; liblog copies both before returning and retains neither.
-        #[expect(unsafe_code, reason = "liblog's C entry point")]
-        unsafe {
-            android_log_sys::__android_log_write(
-                android_log_sys::LogPriority::INFO as i32,
-                tag.as_ptr(),
-                message.as_ptr(),
-            );
-        }
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        eprintln!("[PluginPipeline] {message}");
-    }
+    entry::report(&format!("PluginPipeline: {message}"));
 }
+
+mod entry;
+
+// Called by every plugin macro's generated entry through `$crate`.
+// `#[doc(hidden)]`, never named outside this crate's own macros.
+#[doc(hidden)]
+pub use entry::contain as __private_contain_entry;
 
 // Dynamic library loading is not available on wasm32
 #[cfg(not(target_arch = "wasm32"))]

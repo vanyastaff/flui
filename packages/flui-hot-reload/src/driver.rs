@@ -158,9 +158,10 @@ impl HotReloadDriver {
     ///
     /// Returns `None` if no plugin is loaded (caller should use a fallback
     /// scene) — the same outcome, for the same "skip this frame" reason, as
-    /// a loaded `app_plugin!` refusing a wrong-thread call (see
+    /// a loaded plugin answering null because its code panicked or the call
+    /// came from a thread `app_plugin!` did not pin (see
     /// [`ScenePlugin::build_scene`]'s docs). The caller cannot and need not
-    /// tell the two apart.
+    /// tell them apart.
     ///
     /// # Safety
     ///

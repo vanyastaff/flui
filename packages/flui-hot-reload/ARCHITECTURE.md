@@ -214,3 +214,25 @@ token, so an image built before the change is refused at load.
 `a_worker_images_rebuild_request_runs_the_hosts_hook`
 (`examples/hot_reload_lifecycle_fixture`) loads the cargo-built fixture as a
 worker, calls the image's own `request_rebuild` and checks the host's hook ran.
+
+### A panic in the developer's code stays in the plugin image
+
+Every entry a plugin macro generates is `extern "C"`, and a panic cannot
+unwind out of one: it aborts the process, the host's included. Each entry that
+runs the developer's code (`flui_scene_build`, `flui_app_build` with the root
+view's construction, its mount and its frame, and `flui_worker_init`) runs it
+through one guard, `entry::contain`. The guard keeps the panic in the image,
+writes its text to stderr or logcat (the host's subscriber is not reachable
+from the image), and destroys the payload there, where its vtable lives. The
+entry answers with its refusal value: a build answers null, which the host
+treats as a skipped frame for both families, and an init answers `false`,
+which the loader treats as a refused load. A refused worker's registrations
+are pruned before its image closes. An `app_plugin!` pipeline that a panic
+left unmounted mounts again on the next build.
+
+`a_panicking_scene_function_answers_null_and_the_next_build_works` and
+`a_panicking_worker_init_answers_false` (in-process expansions),
+`a_panicking_app_root_skips_the_frame_and_the_next_build_mounts` (the
+cargo-built fixture), `a_scene_plugin_answering_null_skips_the_frame` and
+`a_worker_whose_init_fails_is_refused_with_its_registrations` (`rustc`-built
+fixtures) pin it.
