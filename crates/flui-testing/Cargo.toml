@@ -50,10 +50,10 @@ dhat = ["dep:dhat", "dep:backtrace", "flui-foundation/dhat"]
 # support and never enters a production graph (dev edges only, plus the
 # facade's optional `testing` feature), so the feature travels nowhere new.
 flui-interaction = { workspace = true, features = ["testing"] }
-# Geometry and panic containment, named in the host's and the
-# harness's public signatures, which promotes this from a transitive
-# (dev-only) dependency to a normal one.
-flui-foundation = { workspace = true }
+# Geometry and panic containment, named in the host's and the harness's
+# public signatures, and `testing` for the counting allocator `heap`
+# re-exports (the same reasoning as `flui-interaction` above).
+flui-foundation = { workspace = true, features = ["testing"] }
 # The log capture's home: `log_capture` is a re-export of `flui_log::testing`.
 flui-log = { workspace = true, features = ["testing"] }
 # The text-store contract `text_store_kit` certifies stores against, and
