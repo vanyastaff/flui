@@ -38,7 +38,7 @@ use windows::core::w;
 
 use super::threads::{Apartment, OnceAnswer};
 use crate::dialog::{DialogError, DialogHold};
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use flui_foundation::panic::{AfterPanic, os_entry};
 
 /// The message the dismissal window takes as "dismiss the dialog".
 const DISMISS: u32 = WM_APP + 0x51;

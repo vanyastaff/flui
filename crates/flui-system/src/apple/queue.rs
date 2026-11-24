@@ -24,7 +24,7 @@ impl OffOwner {
     ) {
         use dispatch2::{DispatchQoS, DispatchQueue, GlobalQueueIdentifier};
 
-        use crate::owner::panic_boundary::{AfterPanic, os_entry};
+        use flui_foundation::panic::{AfterPanic, os_entry};
 
         let Some(place) = self.place() else {
             // The owner retiring first leaves nothing waiting for the answer.

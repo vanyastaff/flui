@@ -16,7 +16,7 @@
 //!   share picker's file check, the login item, the user's folders).
 //!
 //! Every block, work item, method and Carbon handler AppKit or the system
-//! calls goes through `owner::panic_boundary::os_entry`. A feature newer
+//! calls goes through `flui_foundation::panic::os_entry`. A feature newer
 //! than the floor is behind a gate of `apple::version`. The rules of each
 //! provider (what a request becomes, what an answer means) are tested
 //! beside it on every host; the AppKit calls compile on macOS only.

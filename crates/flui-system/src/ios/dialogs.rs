@@ -132,7 +132,7 @@ mod uikit {
         SaveRequest, SaveResult,
     };
     use crate::off_owner::OffOwner;
-    use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
+    use flui_foundation::panic::{AfterPanic, ContainedIvars, os_entry};
 
     /// The uniform type identifier every document conforms to.
     const EVERY_DOCUMENT: &str = "public.item";

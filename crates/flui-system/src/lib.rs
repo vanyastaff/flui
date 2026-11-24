@@ -46,13 +46,7 @@ pub mod jump_list;
 mod macos;
 mod off_owner;
 pub mod os;
-#[cfg(any(
-    windows,
-    target_os = "macos",
-    target_os = "ios",
-    target_os = "android",
-    test
-))]
+#[cfg(any(target_os = "android", test))]
 mod owner;
 #[cfg(target_os = "linux")]
 mod portal;

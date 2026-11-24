@@ -81,7 +81,7 @@ mod dispatched {
 
     use super::write_export;
     use crate::dialog::DialogError;
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
+    use flui_foundation::panic::{AfterPanic, os_entry};
 
     /// A save's file in its folder of the temporary directory; the folder
     /// is removed, on a global queue, when this drops.

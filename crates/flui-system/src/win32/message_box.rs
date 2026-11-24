@@ -38,7 +38,7 @@ use crate::dialog::{
     DialogError, DialogHold, MessageAnswer, MessageBoxBackend, MessageBoxCapability,
     MessageBoxRequest, MessageBoxResult, MessageButtons, MessageLevel,
 };
-use crate::owner::panic_boundary::{AfterPanic, os_entry};
+use flui_foundation::panic::{AfterPanic, os_entry};
 
 /// The message box as the provider reaches it, on the box's thread: show
 /// `text` under `caption` with `style`, owned by `owner`, installing its

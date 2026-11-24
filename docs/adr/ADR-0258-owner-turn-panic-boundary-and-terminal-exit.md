@@ -54,7 +54,7 @@ the code ran, not on what failed:
 | a frame segment (layout, paint) | contained per presentation (ADR-0048), reported as `SegmentPanic`, retried at the pace of `FallbackGate` with no backoff |
 | an owner operation (input handler, post-frame callback, lifecycle observer, command) | `flui-runtime`'s owner delivery catches it, reports `FrameFailureKind::CallbackPanic` through `UiRuntime::report_contained_panic`, returns the runtime to its slot, and then resumes the first panic (`crates/flui-runtime/src/owner/delivery.rs`) |
 | a window or application handler | the call point (`crates/flui-native/src/owner/call_point.rs`) resurfaces the panic into the OS entry that called it (`or_resume`) |
-| an OS entry | `os_entry` logs the panic, and either answers the OS or ends the process (`AfterPanic`, `crates/flui-native/src/owner/panic_boundary.rs`); FLUI's Win32 window procedure, AppKit and UIKit entries end it (`crates/flui-native/src/owner/windows.rs`) |
+| an OS entry | `os_entry` logs the panic, and either answers the OS or ends the process (`AfterPanic`, `crates/flui-foundation/src/panic/os_boundary.rs`); FLUI's Win32 window procedure, AppKit and UIKit entries end it (`crates/flui-native/src/owner/windows.rs`) |
 
 So a tap handler that panics on Windows aborts the process with `0xC0000409`: the owner delivery
 resumes, the window handler resumes, and the window procedure aborts. The closing path is the same:

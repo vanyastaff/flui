@@ -36,8 +36,8 @@ mod uikit {
     use super::super::presenter::{Refusal, dismiss, guarded, present, when_presentable};
     use crate::apple::share::{objects, share_checked};
     use crate::off_owner::OffOwner;
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
     use crate::share::{ShareBackend, ShareError, ShareRequest, ShareResult};
+    use flui_foundation::panic::{AfterPanic, os_entry};
 
     /// [`ShareBackend`] over the share sheet.
     pub(crate) struct IOSShare {

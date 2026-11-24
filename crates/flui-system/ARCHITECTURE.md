@@ -86,9 +86,10 @@ no test shows a dialog, launches a handler, registers a hot key, writes a start-
 the taskbar. The owed desktop runs are in the parity rows.
 
 Every OS entry of the crate (each window procedure, subclass, enumeration callback and WinRT
-delegate) is one call of `owner::panic_boundary::os_entry`, the crate's boundary of the same
-contract as `flui-native`'s (ADR-0151 §16): a panic is logged and contained, its payload destroyed
-under containment, and the OS gets the entry's answer after a panic.
+delegate) is one call of `flui_foundation::panic::os_entry`, the boundary `flui-native`'s entries
+go through too (ADR-0151 §16): a panic is logged and contained, its payload destroyed under
+containment, and the OS gets the entry's answer after a panic, or the process ends when that
+answer panics as well.
 
 Threads and apartments:
 
@@ -219,7 +220,7 @@ Threads:
   call runs on the main thread (ADR-0360 §2).
 
 Every block, work item, Objective-C method and Carbon handler the system calls is one call of
-`owner::panic_boundary::os_entry`, and the one class the crate declares (the open panel's name
+`flui_foundation::panic::os_entry`, and the one class the crate declares (the open panel's name
 check) keeps its ivars in `ContainedIvars`, as in
 `flui-native`.
 

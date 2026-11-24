@@ -172,7 +172,7 @@ mod appkit {
         SaveResult,
     };
     use crate::off_owner::OffOwner;
-    use crate::owner::panic_boundary::{AfterPanic, ContainedIvars, os_entry};
+    use flui_foundation::panic::{AfterPanic, ContainedIvars, os_entry};
 
     /// Where [`MacDialogs`] gets its panels: AppKit's own, or, in a test, a
     /// source that makes none.
