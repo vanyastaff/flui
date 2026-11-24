@@ -96,7 +96,3 @@ names it without the feature fails; `stale_haptic_source_plays_on_the_window_act
 
 - Good, because no feature is needed.
 - Bad, because test code ships in the Stable contract, which ADR-0151 removed for good reason.
-
-## More information
-
-- The platform-layer spec's D9 and its LY48 and LY50 tasks follow this ADR.

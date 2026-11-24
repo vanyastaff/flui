@@ -845,8 +845,8 @@ graph LR
     `each_role_publishes_the_wire_role_ui_automation_folds_it_to` (the role table against
     `flui-semantics`' own fold, through the agent), `the_input_scenario_passes_on_the_headless_target`,
     `the_notes_scenario_passes_on_the_headless_target`,
-    `the_conformance_scenario_passes_on_the_headless_target` (the conformance row the platform-layer
-    spec names).
+    `the_conformance_scenario_passes_on_the_headless_target` (the conformance scenario the quality
+    rows of `crates/flui-native/platform-parity.toml` name).
   - On W, a nextest desktop of its own (Windows 11 build 26300): `windows_desktop::ui_automation_reads_and_invokes_the_app_as_a_screen_reader_does`
     (the scenario app's UI Automation tree projects equal to its semantics, `AutomationId` is the
     identifier, an `InvokePattern` invoke acts, an unknown id is `not_found`),

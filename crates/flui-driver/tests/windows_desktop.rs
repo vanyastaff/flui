@@ -432,9 +432,10 @@ fn a_launched_app_ends_with_its_session() {
     );
 }
 
-/// The LY99 conformance row: the scenario the headless target runs in CI
+/// The conformance scenario, which the headless target runs in CI
 /// (`scenarios::the_conformance_scenario_passes_on_the_headless_target`), here through the OS
-/// lane, as its certification run.
+/// lane, as its certification run. The run on the desktop that takes the user's input is owed
+/// by a quality row of `crates/flui-native/platform-parity.toml`.
 #[test]
 fn the_conformance_scenario_runs_through_the_os_lane() {
     let live = private_desktop::require();
