@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-use flui_protocol::build::BuildState;
+use flui_protocol::build::{BuildState, Diagnostics};
 
 use super::{
     AppChild, ReloadStrategy, announce_started, reap_exited, spawn_app, stop_and_report,
@@ -13,7 +13,7 @@ use super::{
 };
 use crate::agent::Session;
 use crate::agent::build_report::BuildReporter;
-use crate::build::util::compile_errors::{self, CompileErrors};
+use crate::build::util::compile_errors;
 use crate::error::{CliError, CliResult};
 use crate::ui;
 /// Rebuild the binary and restart the process on every change.
@@ -73,10 +73,7 @@ impl ReloadStrategy for ProcessRestart {
                 stop_and_report(child);
                 self.spawn(child)?;
             }
-            Err(errors) => self.show(BuildState::Failed {
-                diagnostics: errors.diagnostics.clone(),
-                omitted: errors.omitted,
-            }),
+            Err(errors) => self.show(BuildState::Failed(errors.clone())),
         }
         ui::emit(
             "run.reload",
@@ -107,7 +104,7 @@ impl ReloadStrategy for ProcessRestart {
 impl ProcessRestart {
     /// `cargo build` of the application, reported as `run.build.*`; a build
     /// that failed answers its compiler errors.
-    fn build(&self) -> Result<(), CompileErrors> {
+    fn build(&self) -> Result<(), Diagnostics> {
         let mut failed = None;
         let built = timed_build(|| {
             run_cargo_build(
@@ -161,7 +158,7 @@ fn run_cargo_build(
     profile: Option<&str>,
     verbose: bool,
     agent: Option<&Session>,
-) -> Result<(), CompileErrors> {
+) -> Result<(), Diagnostics> {
     let mut cmd = Command::new("cargo");
     cmd.arg("build");
 
@@ -201,7 +198,7 @@ fn run_cargo_build(
 
     let failed = |why: String| {
         let _ = crate::ui::error(why);
-        Err(CompileErrors::default())
+        Err(Diagnostics::new())
     };
     let mut cargo = match cmd.spawn() {
         Ok(cargo) => cargo,

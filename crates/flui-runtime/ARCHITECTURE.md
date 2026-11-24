@@ -1373,8 +1373,9 @@ clear of the performance overlay's bounds while that is on; a surface without ro
 none. A report is formatted when it is taken: each diagnostic's message and file are cut to one
 line of at most `FIELD_LIMIT` characters, with control characters made spaces and the bidirectional
 formatting characters dropped, and a frame for the surface the last one laid it out for draws
-that layout again. A report with more than `MAX_DIAGNOSTICS` diagnostics is refused
-`invalid_argument` and changes nothing, an equal one asks for no frame, another replaces it, and
+that layout again. A report with more than `MAX_DIAGNOSTICS` diagnostics does not decode (the
+protocol's `Diagnostics` holds that bound), so it is refused `invalid_argument` before the banner
+sees it and changes nothing; an equal report asks for no frame, another replaces it, and
 `Succeeded` clears it; nothing else does.
 
 The banner takes no input. It is in no render, semantics or hit-test tree and no input path reads

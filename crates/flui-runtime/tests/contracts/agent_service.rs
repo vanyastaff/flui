@@ -15,9 +15,10 @@ use flui_platform::PlatformInput;
 use flui_protocol::native_recording::Line as NativeLine;
 use flui_protocol::{
     act::ActParams, build::BuildReportParams, build::BuildState, build::Diagnostic,
-    build::SourceLocation, geometry::LogicalPoint, input::ActionSequence, input::InputParams,
-    input::InputSource, input::PointerAction, input::PointerButton, input::PointerDevice,
-    locator::Locator, locator::Target, session::AppDescription, tree::WindowId, wire::ActionName,
+    build::Diagnostics, build::MAX_DIAGNOSTICS, build::SourceLocation, geometry::LogicalPoint,
+    input::ActionSequence, input::InputParams, input::InputSource, input::PointerAction,
+    input::PointerButton, input::PointerDevice, locator::Locator, locator::Target,
+    session::AppDescription, tree::WindowId, wire::ActionName,
 };
 use flui_runtime::agent::{Limits, Refused, Service, ServiceConfig, Session, Status};
 use flui_runtime::ui_runtime::{NativeForms, NativeLines};
@@ -292,13 +293,14 @@ fn an_observer_reports_a_build_and_is_still_refused_an_act() {
         .expect("the window's id");
     let report = BuildReportParams::new(
         window,
-        BuildState::Failed {
-            diagnostics: vec![Diagnostic::new(
+        BuildState::Failed(
+            [Diagnostic::new(
                 "expected `;`".to_owned(),
                 Some(SourceLocation::new("src/main.rs".to_owned(), 3, 7)),
-            )],
-            omitted: 0,
-        },
+            )]
+            .into_iter()
+            .collect::<Diagnostics>(),
+        ),
     );
     observer.receive(
         &line(&json!({ "id": 2, "method": "build.report", "params": report })),
@@ -313,6 +315,25 @@ fn an_observer_reports_a_build_and_is_still_refused_an_act() {
     assert!(
         answer[0].get("result").is_some(),
         "the window serves an observer's report: {answer:?}"
+    );
+
+    // A report with more diagnostics than a window shows is refused as it is read.
+    let over = vec![json!({ "message": "expected `;`", "location": null }); MAX_DIAGNOSTICS + 1];
+    observer.receive(
+        &line(&json!({ "id": 10, "method": "build.report", "params": {
+            "window": window, "state": { "failed": { "diagnostics": over, "omitted": 0 } }
+        } })),
+        now,
+    );
+    observer.poll(now, &waker);
+    let _ = host.pump(Duration::ZERO);
+    observer.poll(now, &waker);
+    let answer = transmitted(&mut observer);
+    assert_eq!(answer.len(), 1, "{answer:?}");
+    assert_eq!(answer[0]["id"], 10, "{answer:?}");
+    assert_eq!(
+        answer[0]["error"]["code"], "invalid_argument",
+        "a report past the bound is refused: {answer:?}"
     );
 
     observer.receive(&press_go(3), now);

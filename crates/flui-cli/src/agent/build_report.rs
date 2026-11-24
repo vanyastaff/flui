@@ -116,6 +116,8 @@ fn describe(failure: &Failure) -> String {
 
 #[cfg(test)]
 mod tests {
+    use flui_protocol::build::Diagnostics;
+
     use super::*;
 
     /// The reports that waited while one was sent fold into the newest: the window shows only
@@ -123,10 +125,7 @@ mod tests {
     #[test]
     fn the_reports_that_waited_fold_into_the_newest() {
         let (reports, pending) = mpsc::channel();
-        let failed = BuildState::Failed {
-            diagnostics: Vec::new(),
-            omitted: 0,
-        };
+        let failed = BuildState::Failed(Diagnostics::new());
         reports.send(failed).expect("send");
         reports.send(BuildState::Succeeded).expect("send");
         assert_eq!(
@@ -147,7 +146,7 @@ mod conversation_tests {
     use std::io::{BufRead as _, BufReader, Write as _};
     use std::os::unix::net::{UnixListener, UnixStream};
 
-    use flui_protocol::build::{Diagnostic, SourceLocation};
+    use flui_protocol::build::{Diagnostic, Diagnostics, SourceLocation};
     use flui_protocol::version::PROTOCOL_VERSION;
     use serde_json::{Value, json};
 
@@ -217,13 +216,14 @@ mod conversation_tests {
     }
 
     fn failed() -> BuildState {
-        BuildState::Failed {
-            diagnostics: vec![Diagnostic::new(
+        BuildState::Failed(
+            [Diagnostic::new(
                 "mismatched types".into(),
                 Some(SourceLocation::new("src/lib.rs".into(), 12, 5)),
-            )],
-            omitted: 0,
-        }
+            )]
+            .into_iter()
+            .collect::<Diagnostics>(),
+        )
     }
 
     fn reports_to(windows: &[&str], state: &BuildState) -> Vec<Value> {

@@ -66,7 +66,9 @@ and hands it nothing else.
 §2. **`build.report`.** Protocol 0.29 adds the window method `build.report { window, state }`.
 `state` is `building`, `succeeded` or `failed { diagnostics, omitted }`; a diagnostic is the
 compiler's first line and the primary span's `file:line:column`. A report carries at most
-`MAX_DIAGNOSTICS` (8) diagnostics and counts the rest; a window refuses one with more. The window
+`MAX_DIAGNOSTICS` (8) diagnostics and counts the rest: the type `Diagnostics` holds the bound,
+built or decoded, and decoding refuses the element past it before reading it, so a window refuses
+a report with more before it holds it. Protocol 0.30 states the bound in the schema. The window
 draws the latest report beside the performance overlay: a chip while a build runs, a panel of the
 errors while the last build failed, nothing after a success. The banner takes no input: every
 pointer event reaches the app as it would without it.
@@ -111,8 +113,11 @@ generator read the same `changes_app`.
   `an_observer_reports_a_build_and_is_still_refused_an_act` (through the service);
   `a_report_past_its_deadline_may_be_sent_again` (§4 on the server); the `Annotate` bound on the
   annotating rows' dispatch.
-- `a_report_replaces_refuses_or_clears` (a report with more than `MAX_DIAGNOSTICS` is refused, a
-  success clears the banner) and `a_report_shows_a_node_until_it_succeeds` (the window draws it
+- `flui-protocol`'s `a_failed_build_keeps_the_errors_a_window_shows_and_counts_the_rest` and
+  `a_report_past_the_bound_is_refused_before_its_next_diagnostic_is_read`;
+  `an_observer_reports_a_build_and_is_still_refused_an_act` refuses one past the bound through the
+  service.
+- `a_report_replaces_or_clears` (a success clears the banner) and `a_report_shows_a_node_until_it_succeeds` (the window draws it
   and asks for a frame); `the_banner_and_the_performance_overlay_show_apart`,
   `a_banner_is_finite_inside_its_surface_and_clear_of_the_performance_overlay` and
   `zero_and_tiny_surfaces_publish_finite_geometry`;

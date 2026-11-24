@@ -91,18 +91,20 @@ fn report(
         .map_err(|error| error.code)
 }
 
+/// A failed build as a window may read it off the wire: `count` diagnostics and `omitted` more.
 fn failed(count: usize, omitted: u32) -> BuildState {
-    BuildState::Failed {
-        diagnostics: (0..count)
-            .map(|index| {
-                Diagnostic::new(
-                    format!("error {index}"),
-                    Some(SourceLocation::new("src/app.rs".to_owned(), 4, 9)),
-                )
-            })
-            .collect(),
-        omitted,
-    }
+    let diagnostics: Vec<Diagnostic> = (0..count)
+        .map(|index| {
+            Diagnostic::new(
+                format!("error {index}"),
+                Some(SourceLocation::new("src/app.rs".to_owned(), 4, 9)),
+            )
+        })
+        .collect();
+    serde_json::from_value(serde_json::json!({
+        "failed": { "diagnostics": diagnostics, "omitted": omitted }
+    }))
+    .expect("a report within the bound")
 }
 
 /// [`report`], and whether serving it asked the primary presentation for a frame.
@@ -192,10 +194,9 @@ fn texts(chunk: &Chunk) -> Vec<String> {
 }
 
 /// A report shows a node after the frame node, published on a frame the pipeline paints nothing
-/// in and leaving the frame node's content as it was; an equal report records nothing; a report
-/// past the limit is refused `invalid_argument` and keeps what was shown; another replaces it at
-/// the same node; `Succeeded` retires it. Fails if a report never reaches the scene, repaints
-/// the pipeline, records again while it holds still, or a refused report changes it.
+/// in and leaving the frame node's content as it was; an equal report records nothing; another
+/// replaces it at the same node; `Succeeded` retires it. Fails if a report never reaches the
+/// scene, repaints the pipeline or records again while it holds still.
 fn a_report_shows_a_node_until_it_succeeds() {
     let (ui_runtime, _log, window) = ui_runtime_at(1.0);
     let first = draw(&ui_runtime).expect("the first frame paints");
@@ -238,22 +239,6 @@ fn a_report_shows_a_node_until_it_succeeds() {
     assert!(
         draw(&ui_runtime).is_none(),
         "an equal report records nothing"
-    );
-
-    let (served, asked) = report_asking(&ui_runtime, &window, failed(MAX_DIAGNOSTICS + 1, 0));
-    let refused = served.expect_err("a report past the limit is refused");
-    assert_eq!(refused, ErrorCode::InvalidArgument);
-    assert!(!asked, "a refused report asks for no frame");
-    assert!(
-        draw(&ui_runtime).is_none(),
-        "a refused report changes nothing"
-    );
-    let kept = current(&ui_runtime);
-    assert_eq!(banner_node(&kept, 1), Some(node));
-    assert_eq!(
-        texts(banner_parts(&kept, node).1).len(),
-        3,
-        "the failure stays"
     );
 
     report(&ui_runtime, &window, BuildState::Building).expect("a report is served");

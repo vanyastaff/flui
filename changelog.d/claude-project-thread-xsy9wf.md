@@ -14,7 +14,9 @@
 - **`flui-protocol`**: protocol 0.29 adds `build.report` and the method effect `annotates`, which
   an observer may call: it changes only what the development tools draw over a window, never the
   app. `MethodEffect::changes_app` is the one rule for what an observer may call and what a
-  timed-out call may resend.
+  timed-out call may resend. A failed build's `Diagnostics` keeps at most `MAX_DIAGNOSTICS` and
+  counts the rest, and a report with more is refused while it is decoded; protocol 0.30 states
+  that bound in the schema.
 
 - **`flui-cli`**: `flui run --json` reports `run.watch {paths}` once the sources are watched; a
   save made after it is a change the run sees.
