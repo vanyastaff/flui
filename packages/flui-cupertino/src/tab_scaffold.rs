@@ -45,8 +45,10 @@ use crate::ObstructingPreferredSizeView;
 pub struct CupertinoTabController {
     index: Rc<Cell<usize>>,
     notifier: ChangeNotifier,
-    /// The build phase of the scaffold that uses this controller, bound in
-    /// its `init_state` (ADR-0074 §5.2).
+    /// The build phase of the element tree of the scaffold that uses this
+    /// controller, bound as that scaffold's state is created and rebound when
+    /// a scaffold takes the controller over (ADR-0074 §5.2). A controller no
+    /// scaffold has used yet has none and accepts every write.
     build_phase: Rc<RefCell<Option<BuildPhase>>>,
 }
 
@@ -237,11 +239,14 @@ impl AnimatedView for CupertinoTabScaffold {
 impl StatefulView for CupertinoTabScaffold {
     type State = CupertinoTabScaffoldState;
 
-    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+    /// The controller is bound to the build phase as the state is born, so
+    /// the scaffold's first build already refuses its writes.
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        let build_phase = ctx.build_phase();
+        self.controller.bind_build_phase(build_phase.clone());
         CupertinoTabScaffoldState {
             should_build_tab: RefCell::new(Vec::new()),
-            controller: self.controller.clone(),
-            build_phase: None,
+            build_phase,
         }
     }
 }
@@ -252,9 +257,9 @@ impl StatefulView for CupertinoTabScaffold {
 /// built once.
 pub struct CupertinoTabScaffoldState {
     should_build_tab: RefCell<Vec<bool>>,
-    /// The controller bound to `build_phase`, rebound when the view swaps it.
-    controller: CupertinoTabController,
-    build_phase: Option<BuildPhase>,
+    /// The build phase of this scaffold's element tree, which the view's
+    /// controller is bound to.
+    build_phase: BuildPhase,
 }
 
 impl std::fmt::Debug for CupertinoTabScaffoldState {
@@ -265,21 +270,15 @@ impl std::fmt::Debug for CupertinoTabScaffoldState {
 }
 
 impl ViewState<CupertinoTabScaffold> for CupertinoTabScaffoldState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let phase = ctx.build_phase();
-        self.controller.bind_build_phase(phase.clone());
-        self.build_phase = Some(phase);
-    }
-
     fn did_update_view(
         &mut self,
         _old_view: &CupertinoTabScaffold,
         new_view: &CupertinoTabScaffold,
     ) {
-        self.controller = new_view.controller.clone();
-        if let Some(phase) = &self.build_phase {
-            self.controller.bind_build_phase(phase.clone());
-        }
+        // A swapped-in controller is bound before the build that reads it.
+        new_view
+            .controller
+            .bind_build_phase(self.build_phase.clone());
     }
 
     fn build(&self, view: &CupertinoTabScaffold, ctx: &dyn BuildContext) -> impl IntoView {

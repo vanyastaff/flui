@@ -230,3 +230,44 @@ both sides.
 `a_bar_whose_background_crosses_full_opacity_keeps_its_slots_state` and
 `content_runs_under_a_translucent_bar_and_below_an_opaque_one` pin the
 hairline, the layout, the blur and the obstruction.
+
+### States are born bound
+
+A state reads what it is driven by in `create_state`, which receives the same
+`LifecycleContext` as `init_state`: the button's ambient clock, the activity
+indicator's controller on the ambient `VsyncScope`, and the tab scaffold's
+build phase, to which it binds the view's controller there. None of them
+implements `init_state`. The button keeps its clock as an `Option` because
+"no `VsyncScope` above" is a state it can be in, not a slot waiting for
+`init_state`. `did_change_dependencies` rebinds the clocks and
+`did_update_view` binds a controller a rebuild swaps in.
+
+The tab scaffold's phase is its element tree's, so a controller shared by two
+scaffolds of one tree, or left behind by a disposed one, still refuses writes
+during any build of that tree. A controller holds one phase: shared by
+scaffolds of two trees, it checks the tree that bound it last.
+
+`controller_mutation_during_build_is_refused` and
+`a_swapped_in_controller_refuses_writes_during_build` pin the binding at birth
+and on a swap.
+
+### The activity indicator's run follows its view
+
+`CupertinoActivityIndicator` takes a radius (a square of twice it), a colour and
+`animating`, and `partially_revealed(progress)` shows the first
+`ceil(8 · progress)` ticks clockwise at alpha 147 and never animates, as
+Flutter's `i < 8 · progress`. Flutter asserts a positive radius and a progress
+in `0..=1`; here an invalid radius keeps the default 10, a progress above 1 is
+read as 1, and one below 0 or NaN as 0, so neither reaches paint. A partially
+revealed indicator publishes its progress as a percentage with a 0–100 range,
+as a determinate progress bar does.
+
+`ViewState::apply_view` starts and stops the run: it runs before the first
+build and after each view or dependency change, so one place holds the rule
+that the controller runs exactly while the view animates and a clock is
+present. Flutter's `stop` freezes the ticks mid-cycle; here a stopped indicator
+paints the rest pose that reduced motion and a disabled `TickerMode` paint.
+
+`radius_and_color_size_and_tint_the_ticks`,
+`animating_starts_and_stops_a_mounted_indicator` and
+`partially_revealed_shows_still_ticks_for_its_progress` pin the options.

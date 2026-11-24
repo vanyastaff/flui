@@ -423,8 +423,10 @@ struct ButtonCore {
     /// Flutter's `_buttonHeldDown`.
     held: Cell<bool>,
     controller: RefCell<Option<DrivenController>>,
-    /// The ambient clock, read at each dependency change, that a controller
-    /// made later is driven by.
+    /// The ambient clock that a controller made later is driven by: read as
+    /// the state is created and again at each dependency change. `None`
+    /// while no [`VsyncScope`] is above the button: a controller made then
+    /// holds no registry seat until a scope arrives.
     vsync: RefCell<Option<Vsync>>,
     /// Rebuilds the button once its controller exists, so the fade
     /// transition reads it (ADR-0018: scheduled from a press, never from
@@ -566,13 +568,14 @@ impl StatefulView for CupertinoButton {
 
     fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
         let rebuild = ctx.rebuild_handle();
+        let vsync = VsyncScope::maybe_of(ctx);
         CupertinoButtonState {
             core: Rc::new_cyclic(|this| ButtonCore {
                 on_pressed: RefCell::new(None),
                 fades: Cell::new(false),
                 held: Cell::new(false),
                 controller: RefCell::new(None),
-                vsync: RefCell::new(None),
+                vsync: RefCell::new(vsync),
                 rebuild,
                 this: Weak::clone(this),
             }),
@@ -581,10 +584,6 @@ impl StatefulView for CupertinoButton {
 }
 
 impl ViewState<CupertinoButton> for CupertinoButtonState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        *self.core.vsync.borrow_mut() = VsyncScope::maybe_of(ctx);
-    }
-
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         let vsync = VsyncScope::maybe_of(ctx);
         if let Some(controller) = self.core.controller.borrow_mut().as_mut()
