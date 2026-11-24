@@ -7,7 +7,7 @@ itself, opens an endpoint, or watches files.
 
 | Module | Feature | What it is |
 |--------|---------|------------|
-| `profiler` + `frame_timing_layer` | `profiling` | Per-frame build/layout/paint/compositing and animation timings, jank detection, FPS and history. Fed by a `tracing` layer that subscribes to the framework's own frame spans. |
+| `capture` + `profiler` | `profiling` | `Capture`, the one recorder of the framework's frame spans, and `Profiler`: per-frame build/layout/paint/compositing and animation timings, jank detection, frame rate and history. `Capture::layer` subscribes to the framework's own frame spans. |
 | `timeline` | `timeline` | An event recorder with Chrome trace (`chrome://tracing`) and JSON export, plus a bridge that turns the scheduler's `FrameSnapshot`s into trace events. |
 | `inspector` | `inspector` | `InspectorCounters`, a counting `TreeObserver` over the ADR-0040 observation seam: mounts, moves, rebuilds per cause, unmounts. |
 | `gesture_inspector` | `inspector` | `GestureInspector`, a `GestureObserver` on one arena that reports each contest: members with their composition paths, claims, the winner, rejections with reasons, elapsed deadlines and the input sequence. A recording is inspected by replaying it with the inspector attached. |
@@ -22,23 +22,21 @@ The framework emits a `frame` span from `UpdateScheduler::drive_frame` and
 `build`, `layout`, `paint`, `compositing`, `semantics`, `commit` and `submit` spans from the
 pipeline and the runtime. The
 `profiling` feature also enables animation instrumentation through the SDK:
-registry walks, source sampling and listener/future delivery become
-`Animation tick`, `Animation sampling` and `Animation listeners` phases.
-`FrameTimingLayer` subscribes to them; it never needs to be called.
+registry walks, source sampling and listener/future delivery become the
+`Phase::AnimationTick`, `Phase::AnimationSampling` and `Phase::AnimationListeners`.
+`Capture::layer()` subscribes to them; it never needs to be called. A `Profiler` reads the
+capture.
 
 ```rust
-use std::sync::Arc;
-
-use flui_devtools::{FrameTimingLayer, Profiler};
+use flui_devtools::{Capture, Profiler, ProfilerConfig};
 use flui_log::config::LogConfig;
 use flui_log::ownership::{InstallPolicy, LogBridgePolicy, install_subscriber};
 use tracing_subscriber::layer::SubscriberExt;
 
-let profiler = Arc::new(Profiler::new());
-let subscriber = LogConfig::default()
-    .subscriber()?
-    .with(FrameTimingLayer::new(Arc::clone(&profiler)));
+let capture = Capture::new();
+let subscriber = LogConfig::default().subscriber()?.with(capture.layer());
 install_subscriber(subscriber, InstallPolicy::Auto, LogBridgePolicy::Auto)?;
+let profiler = Profiler::over(&capture, ProfilerConfig::default());
 
 // run the app; `flui-app` inherits an installed subscriber
 ```
@@ -57,14 +55,15 @@ Scheduler frames are recognized by their producer target as well as their name.
 Animation phases and frames end at their outermost span exit; retaining a span
 clone in application code cannot extend their timing into another frame.
 
-All of this reads one `Capture`. `FrameTimingLayer::new` makes a private one;
-`FrameTimingLayer::over(&capture, profiler)` shares it, and `Timeline::over(&capture)` is a view
-over the same spans. A frame belongs to the runtime that drove it (the `runtime` field of its
-`frame` span) and a span inside it to the presentation whose segment it ran in, so two runtimes
-rendering under one subscriber are two `Partition`s of the capture. A `Profiler` has one stream
-of frames: it follows the first runtime that names itself (or the one `over_runtime` names), and the capture keeps the others.
-Which spans are phases is `Phase::of`, the one `(target, name)` table, so an application span
-named `paint` is not one.
+All of this reads one `Capture`: `Profiler::over(&capture, config)` and `Timeline::over(&capture)`
+are views over the same spans. A frame belongs to the runtime that drove it (the `runtime` field
+of its `frame` span) and a span inside it to the presentation whose segment it ran in, so two
+runtimes rendering under one subscriber are two `Partition`s of the capture. A `Profiler` has one
+stream of frames: it follows the first runtime that names itself (or the one
+`ProfilerConfig::runtime` names), and the capture keeps the others. Which spans are phases is
+`Phase::of`, the one `(target, name)` table, so an application span named `paint` is not one. The
+profiler records framework phases only; time your own work on a timeline with
+`Timeline::record_event`.
 
 Transition events can be logged separately with `animation-diagnostics` on
 `flui` or `flui-sdk`, or `diagnostics` on `flui-animation`, and a DEBUG filter
@@ -72,20 +71,29 @@ for `flui.animation.diagnostics`. Instrumentation is off without these features
 or devtools `profiling`; an interested subscriber is still required.
 
 ```rust
+use flui_devtools::Phase;
+
 if let Some(frame) = profiler.frame_stats() {
-    println!("{:.2} ms, jank: {}", frame.total_time_ms(), frame.is_jank());
-    for phase in &frame.phases {
-        println!("  {}: {:.2} ms", phase.phase.name(), phase.duration_ms());
+    println!("{frame}"); // frame #N: 12.34 ms (jank), then one line per phase
+    if let Some(layout) = frame.phase(Phase::Layout) {
+        println!("layout took {:.2} ms", layout.duration_ms());
     }
 }
-println!("avg {:.1} FPS, {:.1}% jank", profiler.average_fps(), profiler.jank_percentage());
+if let Some(rate) = profiler.frame_rate() {
+    println!("{rate:.1} frames per second, {:.1}% jank", profiler.jank_percentage());
+}
 ```
 
-`Profiler::with_config(ProfilerConfig { jank_line, max_frame_history })`
-sets the jank line and the history depth. The line is `JankLine::FramePeriod` by
+`frame_rate` counts the frames the scheduler produced per second, from the starts of the
+retained frames; it is not a second divided by how long one frame's work took. An idle app
+produces no frames, so its rate stays at the cadence of its last frames rather than falling
+to zero.
+
+`ProfilerConfig { jank_line, max_frame_history, runtime }` sets the jank line, the history
+depth and the runtime followed. The line is `JankLine::FramePeriod` by
 default: a frame is jank when it outlasts the period of the display it was
 produced for, which the scheduler's `frame` span reports as `period_us`
-(8.3 ms on a 120 Hz display; 16.7 ms when a frame reports none). `JankLine::Fixed(ms)`
+(8.3 ms on a 120 Hz display; 16.7 ms when a frame reports none). `JankLine::Fixed(duration)`
 keeps one threshold for every display.
 
 The contract between the two halves is a set of span names, pinned by
@@ -96,19 +104,21 @@ reads the profile back.
 ## Timeline
 
 ```rust
-use flui_devtools::{EventCategory, Timeline};
+use flui_devtools::Timeline;
 
 let timeline = Timeline::new();
 {
-    let _guard = timeline.record_event("load assets", EventCategory::Custom);
+    let _guard = timeline.record_event("load assets");
     // ...
 }
 std::fs::write("trace.json", timeline.export_chrome_trace())?;
 ```
 
-`export_chrome_trace` writes one complete (`X`) event per span, a process per runtime, a thread
-per thread, and, for a timeline over a capture, `frame_ms` and `jank` counters; it opens in
-`ui.perfetto.dev` and `chrome://tracing`.
+Every `TimelineEvent` says what it is with its `kind`: a `TimelineEventKind::Frame`, a
+presentation `Segment`, a `Phase(phase)` of a captured frame, or a `Custom` event the
+application recorded. `export_chrome_trace` writes one complete (`X`) event per span with its
+kind's label as `cat`, a process per runtime, a thread per thread, and, for a timeline over a
+capture, `frame_ms` and `jank` counters; it opens in `ui.perfetto.dev` and `chrome://tracing`.
 
 `Timeline::record_frame_snapshots` converts `flui_sdk::hooks::FrameSnapshot`s
 into `Frame` events in the same trace, so a presentation's frame history and

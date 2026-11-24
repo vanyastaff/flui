@@ -51,7 +51,7 @@ tracing-subscriber = { workspace = true, optional = true }
 default = ["profiling", "timeline", "inspector"]
 
 # Frame profiler. `tracing-subscriber` is what lets it be *fed*: an official
-# package cannot be called by the framework, so `FrameTimingLayer` subscribes
+# package cannot be called by the framework, so `Capture::layer` subscribes
 # to the frame spans the framework already emits.
 profiling = [
     "dep:flui-sdk",
@@ -112,7 +112,7 @@ flui-log = { workspace = true }
 # The observer-overhead bench.
 criterion = { workspace = true }
 
-# The inspector integration tests, as modules of one binary (tests/main.rs).
+# The integration tests, as modules of one binary (tests/main.rs).
 [[test]]
 name = "devtools_it"
 path = "tests/main.rs"

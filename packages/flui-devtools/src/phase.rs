@@ -1,10 +1,12 @@
 //! [`Phase`]: the spans the framework opens that measure a part of a frame.
 //!
 //! One table, here, says which `(target, name)` pairs are phases. The frame profiler, the
-//! timeline and the trace export all ask [`Phase::of`], so a span an application opens with
+//! timeline and the trace export all ask `Phase::of`, so a span an application opens with
 //! the name `paint` is not the framework's paint phase, and a phase added here reaches every
-//! consumer at once.
+//! consumer at once. A timeline built without `profiling` reads no spans, but its events still
+//! name their phase with this type.
 
+#[cfg(feature = "profiling")]
 use tracing::Metadata;
 
 /// A part of a frame the framework measures.
@@ -13,6 +15,7 @@ use tracing::Metadata;
 /// [`Phase::name`]). Animation phases are inclusive: a tick contains its sampling and listener
 /// work, so their durations are not summed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "timeline", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Phase {
     /// The widget tree rebuilds its dirty elements.
@@ -104,6 +107,7 @@ impl Phase {
     }
 
     /// The phase a span measures, or `None` if it is not one of the framework's.
+    #[cfg(feature = "profiling")]
     #[must_use]
     pub fn of(metadata: &Metadata<'_>) -> Option<Self> {
         if !metadata.is_span() {
