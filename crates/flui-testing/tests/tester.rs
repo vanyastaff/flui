@@ -300,8 +300,15 @@ fn an_expectation_does_not_fire_a_timer_due_within_a_frame() {
     assert!(done.get(), "the test reaches it with pump_for");
 }
 
+/// A drag ends below the fling velocity: a list dragged 100 px over 200 ms
+/// (500 px/s while it moves) scrolls by the drag's distance, less at most the
+/// touch slop the recognizer takes before it accepts, and stays there.
+///
+/// Fails against a drag released while the contact still moves: the list
+/// flings on past the distance, and "Item 1" leaves the window.
 #[test]
-fn a_drag_scrolls_a_default_scroll_view() {
+fn a_drag_scrolls_a_default_scroll_view_by_its_distance_and_no_further() {
+    use flui_interaction::gesture::DEFAULT_TOUCH_SLOP;
     use flui_widgets::ListView;
 
     let items: Vec<_> = (0..40)
@@ -317,7 +324,18 @@ fn a_drag_scrolls_a_default_scroll_view() {
     );
     t.pump_and_settle();
     let after = t.rect(&find::text("Item 1"));
-    assert!(after.y < before.y - 50.0, "{before:?} -> {after:?}");
+    let scrolled = before.y - after.y;
+    assert!(
+        (100.0 - DEFAULT_TOUCH_SLOP..=100.0).contains(&scrolled),
+        "the list scrolled by the drag's distance: {before:?} -> {after:?}"
+    );
+
+    t.pump_for(Duration::from_secs(1));
+    assert_eq!(
+        t.rect(&find::text("Item 1")),
+        after,
+        "nothing moved the list after the contact lifted"
+    );
 }
 
 #[test]
