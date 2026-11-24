@@ -476,6 +476,8 @@ fn a_desktop_release_build_compiles_the_facade_with_its_ceiling() {
         .current_dir(&app)
         .env("CARGO_NET_OFFLINE", "true")
         .env("CARGO_TARGET_DIR", root.join("target"))
+        // The profile line is matched as text, which cargo's colours would split.
+        .env("CARGO_TERM_COLOR", "never")
         .args(["build", "desktop", "--release", "--json"])
         .output()
         .expect("run flui build desktop --release");
