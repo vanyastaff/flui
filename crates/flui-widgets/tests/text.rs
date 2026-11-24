@@ -521,12 +521,23 @@ pub(crate) fn a_rich_text_reads_the_style_and_weight_around_it() {
         "a RichText takes the adjustment it is given"
     );
 
-    let described = format!("{:?}", Text::rich(tree()).on_link(|_ctx, _link| {}));
+    let described = format!(
+        "{:?}",
+        Text::rich(tree())
+            .style(sized(31.5))
+            .align(flui_painting::typography::TextAlign::Center)
+            .direction(flui_foundation::TextDirection::Rtl)
+            .max_lines(7)
+            .on_link(|_ctx, _link| {})
+    );
+    // The tree's own spans name no such values, so each comes from its field.
     assert!(
         described.starts_with("Text {")
             && described.contains("content: Rich(")
-            && described.contains("on_link: true"),
-        "a Text describes its content and whether it handles links: {described}"
+            && ["31.5", "Center", "Rtl", "Some(7)", "on_link: true"]
+                .iter()
+                .all(|field| described.contains(field)),
+        "a Text describes its content, style, layout and whether it handles links: {described}"
     );
 }
 
