@@ -31,20 +31,22 @@ fn committed_transform_queries_reuse_ancestry_storage() {
             "a query cannot invent a committed size"
         );
         owner.set_root_constraints(Some(BoxConstraints::loose(Size::new(1024.0, 1024.0))));
-        let mut owner = owner.into_layout();
-        owner.run_layout().expect("deep tree lays out");
+        owner
+            .layout_pass()
+            .run_layout()
+            .expect("deep tree lays out");
         let transform = owner.transform_to(leaf, root).expect("committed ancestry");
         assert_eq!(
             transform.transform_point(3.0, 5.0),
             (3.0 + f64::from(depth), 5.0 + f64::from(depth))
         );
-        // Storage follows this presentation through phase changes, just as
-        // input queries do between frames; no fresh owner or test-only seam.
+        // Storage serves a query made through any phase's pass, as input
+        // queries do between frames; no fresh owner or test-only seam.
         let owner = owner
+            .layout_pass()
             .into_compositing()
             .into_paint()
-            .into_semantics()
-            .finish();
+            .into_semantics();
         let before = HeapCounts::now().allocations;
         for _ in 0..32 {
             black_box(owner.transform_to(black_box(leaf), black_box(root)));
@@ -130,7 +132,7 @@ fn warm_hit_tests_reuse_their_result_storage() {
     }
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(400.0, 400.0))));
     let mut scene = SceneHost::new();
-    let (owner, frame) = scene.run_frame(owner);
+    let frame = scene.run_frame(&mut owner);
     frame.expect("the tree paints");
 
     // The last row box, scaled 2x from the padding's corner at (51, 1).

@@ -3,11 +3,9 @@
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Matrix4;
 
-use crate::pipeline::phase::PipelinePhase;
-
 use super::PipelineOwner;
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// The committed laid-out size of a **box** node, or `None` if `id` is
     /// missing, is a sliver, or has not been laid out yet.
     ///

@@ -248,7 +248,7 @@ fn a_layout_that_panics_while_holding_the_text_context_releases_it() {
     std::panic::set_hook(Box::new(|_| {}));
 
     let text = ui_runtime_text();
-    let (owner, labels) = mount(
+    let (mut owner, labels) = mount(
         &text,
         box_node(RenderFlex::column())
             .child(box_node(PanicsWithTheTextContextLent).label("panics"))
@@ -264,7 +264,7 @@ fn a_layout_that_panics_while_holding_the_text_context_releases_it() {
     let paragraph = labels.get("paragraph").expect("labelled");
 
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("a child's panic is contained in its parent's walk");
     assert!(
         owner.is_layout_poisoned(panics),
@@ -283,7 +283,7 @@ fn a_layout_that_panics_while_holding_the_text_context_releases_it() {
     );
 
     owner.mark_needs_layout(paragraph);
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the next frame lays out");
     assert!(!owner.is_layout_poisoned(paragraph));
     assert!(
@@ -291,9 +291,9 @@ fn a_layout_that_panics_while_holding_the_text_context_releases_it() {
         "the next frame measures through the same context"
     );
 
-    let (owner, _) = mount(&text, box_node(PanicsWithTheTextContextLent));
-    let mut owner = owner.into_layout();
+    let (mut owner, _) = mount(&text, box_node(PanicsWithTheTextContextLent));
     let error = owner
+        .layout_pass()
         .run_layout()
         .expect_err("a panicking root fails layout");
     assert!(
@@ -422,18 +422,18 @@ fn needs_paint(owner: &PipelineOwner, id: flui_foundation::RenderId) -> bool {
 
 fn rejected_text_scale_recovers(scale: f64) {
     let text = ui_runtime_text();
-    let (owner, labels) = mount(
+    let (mut owner, labels) = mount(
         &text,
         box_node(flui_objects::RenderPadding::all(5.0)).child(paragraph("measured")),
     );
     let paragraph = labels.get("paragraph").expect("labelled");
     let root = owner.root_id().expect("mounted root");
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the initial text frame succeeds");
     let committed = inspect::box_geometry(&owner, root).expect("committed root size");
 
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(scale),
@@ -456,8 +456,7 @@ fn rejected_text_scale_recovers(scale: f64) {
     }
 
     for attempt in 0..4 {
-        let (next, result) = scene.run_frame(owner);
-        owner = next;
+        let result = scene.run_frame(&mut owner);
         assert!(
             matches!(
                 result.as_ref().map_err(flui_foundation::TreeError::error),
@@ -476,12 +475,12 @@ fn rejected_text_scale_recovers(scale: f64) {
         assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
     }
 
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("corrected text succeeds in the existing tree");
     assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
     assert!(!owner.has_dirty_nodes(), "recovery consumes retained work");
@@ -512,11 +511,11 @@ fn rejected_viewport_text_preserves_committed_metrics(shrink_wrap: bool) {
     } else {
         box_node(RenderViewport::new(AxisDirection::TopToBottom)).child(child)
     };
-    let (owner, labels) = mount(&ui_runtime_text(), viewport);
+    let (mut owner, labels) = mount(&ui_runtime_text(), viewport);
     let paragraph = labels.get("paragraph").expect("labelled paragraph");
     let root = owner.root_id().expect("mounted viewport");
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("valid viewport text lays out");
     let metrics = |owner: &PipelineOwner| {
         let node = owner.render_tree().get(root).expect("live viewport");
@@ -534,12 +533,12 @@ fn rejected_viewport_text_preserves_committed_metrics(shrink_wrap: bool) {
     };
     let committed = metrics(&owner);
     assert!(committed.0 > 0.0, "real text contributes a scroll extent");
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(f64::MAX),
     );
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     assert!(matches!(
         result.as_ref().map_err(flui_foundation::TreeError::error),
         Err(RenderError::TextLayout(_))
@@ -549,12 +548,12 @@ fn rejected_viewport_text_preserves_committed_metrics(shrink_wrap: bool) {
         committed,
         "a rejected pass publishes no metrics"
     );
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("corrected text recovers in the mounted viewport");
     assert_eq!(metrics(&owner), committed);
 }
@@ -570,35 +569,35 @@ fn rejected_shrink_wrapping_viewport_text_preserves_metrics() {
 fn rejected_root_text_preserves_the_published_view_size() {
     use flui_rendering::view::RenderView;
 
-    let (owner, labels) = mount(
+    let (mut owner, labels) = mount(
         &ui_runtime_text(),
         box_node(RenderView::new()).child(paragraph("measured")),
     );
     let root = owner.root_id().expect("mounted view");
     let paragraph = labels.get("paragraph").expect("labelled paragraph");
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("initial view lays out");
     let committed = inspect::box_geometry(&owner, root).expect("committed view size");
     let resized = Size::new(600.0, 500.0);
     owner.set_root_constraints(Some(BoxConstraints::tight(resized)));
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(f64::MAX),
     );
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     assert!(matches!(
         result.as_ref().map_err(flui_foundation::TreeError::error),
         Err(RenderError::TextLayout(_))
     ));
     assert_eq!(inspect::box_geometry(&owner, root), Some(committed));
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("corrected text completes the pending resize");
     assert_eq!(inspect::box_geometry(&owner, root), Some(resized));
 }
@@ -616,7 +615,7 @@ fn page_resize_survives_text_failure(resize_cross_axis: bool) {
         viewport_fraction: 1.0,
         initial_page: None,
     });
-    let (owner, labels) = mount(
+    let (mut owner, labels) = mount(
         &ui_runtime_text(),
         box_node(RenderViewport::with_offset(
             AxisDirection::TopToBottom,
@@ -637,19 +636,19 @@ fn page_resize_survives_text_failure(resize_cross_axis: bool) {
     );
     let paragraph = labels.get("paragraph").expect("labelled paragraph");
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("initial page lays out");
     let committed = position.extents_snapshot();
     assert_eq!(committed.pixels, 100.0);
     assert_eq!(committed.viewport_dimension, 400.0);
     let width = if resize_cross_axis { 500.0 } else { 400.0 };
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(width, 600.0))));
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(f64::MAX),
     );
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     assert!(matches!(
         result.as_ref().map_err(flui_foundation::TreeError::error),
         Err(RenderError::TextLayout(_))
@@ -669,12 +668,12 @@ fn page_resize_survives_text_failure(resize_cross_axis: bool) {
         },
         "only a successful viewport layout publishes content dimensions"
     );
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    let (_, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("valid text completes the pending page resize");
     assert_eq!(position.viewport_dimension(), 600.0);
     assert_eq!(
@@ -708,7 +707,7 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
         },
         Some(driver.vsync()),
     );
-    let (owner, labels) = mount(
+    let (mut owner, labels) = mount(
         &ui_runtime_text(),
         box_node(RenderAnimatedSize::new(
             size.handle(),
@@ -720,26 +719,26 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
     let paragraph = labels.get("paragraph").expect("labelled paragraph");
     let root = owner.root_id().expect("mounted size animation");
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("initial text lays out");
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(2.0),
     );
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("larger text lays out and starts a resize");
     let committed = inspect::box_geometry(&owner, root);
     driver.tick_all(&clock.frame(Duration::ZERO));
     driver.tick_all(&clock.frame(Duration::from_millis(20)));
     assert!(driver.vsync().has_running(), "the resize run is in flight");
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(400.0, 400.0))));
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(f64::MAX),
     );
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     assert!(matches!(
         result.as_ref().map_err(flui_foundation::TreeError::error),
         Err(RenderError::TextLayout(_))
@@ -750,12 +749,12 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
         driver.vsync().has_running(),
         "rejected child layout cannot stop accepted animation"
     );
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("valid text accepts the tight size");
     assert_eq!(
         inspect::box_geometry(&owner, root),
@@ -906,9 +905,9 @@ fn numeric_sizing_commits_every_measurement_before_reentrant_wake() {
                     .label("second"),
                 ),
             );
-        let (owner, labels) = mount(&text, spec);
+        let (mut owner, labels) = mount(&text, spec);
         let mut scene = SceneHost::new();
-        let (owner, frame) = scene.run_frame(owner);
+        let frame = scene.run_frame(&mut owner);
         frame.expect("initial paragraphs frame");
         let ids = [
             labels.get("first").expect("first"),
@@ -1164,7 +1163,7 @@ fn numeric_sizing_is_presentation_local() {
         .expect("dry baseline")
         .expect("baseline");
     let mut scene = SceneHost::new();
-    let (first, result) = scene.run_frame(first);
+    let result = scene.run_frame(&mut first);
     result.expect("exact answers shape the frame");
     let geometry = inspect::box_geometry(&first, a).expect("actual paragraph geometry");
     assert_eq!(geometry, dry);
@@ -1263,18 +1262,18 @@ fn rejected_correction_preserves_scroll_metrics(shrink_wrap: bool, shrunk_extent
     owner.set_root_constraints(Some(BoxConstraints::new(100.0, 100.0, 0.0, 100.0)));
     let content = labels.get("content").expect("labelled content");
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("initial text and scroll metrics are accepted");
     let committed = position.extents_snapshot();
     assert_eq!(committed.max_scroll_extent, 900.0);
     assert_eq!(committed.pixels, 100.0);
-    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _, _>(
+    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _>(
         &mut owner,
         content,
         |sliver| sliver.shrink = true,
     );
     owner.mark_needs_layout(content);
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     assert!(
         matches!(
             result.as_ref().map_err(flui_foundation::TreeError::error),
@@ -1287,13 +1286,13 @@ fn rejected_correction_preserves_scroll_metrics(shrink_wrap: bool, shrunk_extent
         committed,
         "rejected content dimensions must not reach scroll consumers"
     );
-    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _, _>(
+    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _>(
         &mut owner,
         content,
         |sliver| sliver.reject = false,
     );
     owner.mark_needs_layout(content);
-    let (_, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("corrected text completes the pending content change");
     let max = (shrunk_extent - 100.0).max(0.0);
     assert_eq!(position.max_scroll_extent(), max);
@@ -1358,15 +1357,15 @@ fn scroll_input_during_layout_is_retried(shrink_wrap: bool) {
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
     let content = labels.get("content").expect("labelled content");
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("initial content is accepted");
-    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _, _>(
+    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _>(
         &mut owner,
         content,
         |sliver| sliver.input_during_measurement = Some(std::rc::Rc::clone(&writer)),
     );
     owner.mark_needs_layout(content);
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     assert!(
         matches!(
             result.as_ref().map_err(flui_foundation::TreeError::error),
@@ -1383,7 +1382,7 @@ fn scroll_input_during_layout_is_retried(shrink_wrap: bool) {
         !owner.layout_waits_for_input(),
         "new input already exists and must remain runnable"
     );
-    let (_, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the next frame measures against the latest input without another invalidation");
     assert_eq!(position.pixels(), 200.0);
     assert_eq!(position.max_scroll_extent(), 900.0);
@@ -1410,7 +1409,7 @@ fn text_failure_retains_independent_pending_layout() {
             offset,
         )
     };
-    let (owner, labels) = mount(
+    let (mut owner, labels) = mount(
         &text,
         box_node(RenderFlex::column())
             .child(
@@ -1444,15 +1443,15 @@ fn text_failure_retains_independent_pending_layout() {
         .get("pending content")
         .expect("labelled pending content");
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("both independent boundaries lay out");
     assert_eq!(position.max_scroll_extent(), 900.0);
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(f64::MAX),
     );
-    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _, _>(
+    flui_rendering::testing::edit_render_object::<CorrectionTextSliver, _>(
         &mut owner,
         content,
         |sliver| sliver.shrink = true,
@@ -1462,7 +1461,7 @@ fn text_failure_retains_independent_pending_layout() {
         owner.queued_for_layout().len() >= 2,
         "the failure and pending content must occupy independent queued boundaries"
     );
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     assert!(matches!(
         result.as_ref().map_err(flui_foundation::TreeError::error),
         Err(RenderError::TextLayout(_))
@@ -1472,12 +1471,12 @@ fn text_failure_retains_independent_pending_layout() {
         900.0,
         "later boundary has not run yet"
     );
-    flui_rendering::testing::update_render_object::<RenderParagraph, _>(
+    flui_rendering::testing::update_render_object::<RenderParagraph>(
         &mut owner,
         paragraph,
         |paragraph| paragraph.set_text_scale_factor(1.0),
     );
-    let (_, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("correcting only the first boundary resumes the accepted tail");
     assert_eq!(
         position.max_scroll_extent(),
@@ -1567,7 +1566,7 @@ fn shrink_wrapped_page_resize_measures_the_mapped_position() {
     let content = labels.get("page content").expect("labelled page content");
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 200.0))));
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("initial fractional page is measured");
     assert_eq!(position.pixels(), 100.0);
     assert_eq!(
@@ -1577,7 +1576,7 @@ fn shrink_wrapped_page_resize_measures_the_mapped_position() {
         -100.0
     );
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 400.0))));
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("resized fractional page is measured");
     assert_eq!(position.pixels(), 200.0);
     assert_eq!(
@@ -1597,7 +1596,7 @@ fn laid_out_paragraph_and_box(
     flui_foundation::RenderId,
     flui_foundation::RenderId,
 ) {
-    let (owner, labels) = mount(
+    let (mut owner, labels) = mount(
         text,
         box_node(RenderFlex::column())
             .child(paragraph("measured"))
@@ -1606,7 +1605,7 @@ fn laid_out_paragraph_and_box(
     let paragraph = labels.get("paragraph").expect("labelled");
     let colored = labels.get("box").expect("labelled");
     let mut scene = SceneHost::new();
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the first frame lays out");
     assert!(
         !owner.has_dirty_nodes(),
@@ -1635,7 +1634,7 @@ fn a_font_change_marks_only_the_nodes_that_measured_text() {
         "a node that measured no text is not laid out again"
     );
     let mut scene = SceneHost::new();
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the frame after the change lays out");
     assert!(!owner.has_dirty_nodes(), "the change is applied once");
 }
@@ -1645,10 +1644,10 @@ fn a_font_change_marks_only_the_nodes_that_measured_text() {
 /// render object to opt in.
 fn a_render_object_with_no_font_hook_is_marked() {
     let text = ui_runtime_text();
-    let (owner, labels) = mount(&text, box_node(MeasuresThroughTheContext).label("leaf"));
+    let (mut owner, labels) = mount(&text, box_node(MeasuresThroughTheContext).label("leaf"));
     let leaf = labels.get("leaf").expect("labelled");
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the leaf lays out");
 
     register_probe(&text);
@@ -1721,7 +1720,7 @@ fn a_drain_while_the_context_is_lent_defers_the_change() {
 /// reaches no one.
 fn a_node_removed_after_measuring_is_skipped() {
     let text = ui_runtime_text();
-    let (owner, labels) = mount(
+    let (mut owner, labels) = mount(
         &text,
         box_node(RenderFlex::column())
             .child(paragraph("removed"))
@@ -1736,10 +1735,10 @@ fn a_node_removed_after_measuring_is_skipped() {
     let removed = labels.get("paragraph").expect("labelled");
     let kept = labels.get("kept").expect("labelled");
     let mut scene = SceneHost::new();
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the first frame lays out");
     assert_eq!(owner.remove_render_object(removed), 1);
-    let (mut owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the frame after the removal lays out");
 
     register_probe(&text);
@@ -1770,9 +1769,8 @@ fn the_record_stays_bounded_without_a_font_change() {
         if let Some(previous) = previous {
             assert_eq!(owner.remove_render_object(previous), 1);
         }
-        let (next, result) = scene.run_frame(owner);
+        let result = scene.run_frame(&mut owner);
         result.expect("each rebuild lays out");
-        owner = next;
     }
     assert_eq!(owner.render_tree().len(), 1, "one paragraph is live");
     assert!(
@@ -1884,9 +1882,9 @@ fn font_change_failure_case(
 
     let control_text = ui_runtime_text();
     register_probe(&control_text);
-    let (control, control_labels) = mount(&control_text, spec());
+    let (mut control, control_labels) = mount(&control_text, spec());
     let mut scene = SceneHost::new();
-    let (control, result) = scene.run_frame(control);
+    let result = scene.run_frame(&mut control);
     result.expect("independently registered font control lays out and paints");
     let expected = geometry(&control, &control_labels);
     for (actual, width) in expected.iter().zip([80.0, 40.0]) {
@@ -1897,8 +1895,8 @@ fn font_change_failure_case(
     }
 
     let text = ui_runtime_text();
-    let (owner, labels) = mount(&text, spec());
-    let (mut owner, result) = scene.run_frame(owner);
+    let (mut owner, labels) = mount(&text, spec());
+    let result = scene.run_frame(&mut owner);
     result.expect("unregistered family lays out and paints through its fallback");
     assert!(
         !owner.has_dirty_nodes(),
@@ -1969,7 +1967,7 @@ fn font_change_failure_case(
 
     // Recovery receives no new registration, manual dirty mark or widget edit.
     // The accepted font change must still reach both real paragraphs.
-    let (owner, result) = scene.run_frame(owner);
+    let result = scene.run_frame(&mut owner);
     result.expect("the next ordinary frame completes accepted font work");
     for (index, (actual, expected)) in geometry(&owner, &labels).iter().zip(expected).enumerate() {
         assert!(

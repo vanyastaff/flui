@@ -95,6 +95,9 @@ fn a_child_has_a_size_once_this_pass_lays_it_out() {
     assert_eq!(*seen.borrow(), expected, "the first pass");
 
     owner.mark_needs_layout(host);
-    owner.run_layout().expect("the relayout succeeds");
+    owner
+        .layout_pass()
+        .run_layout()
+        .expect("the relayout succeeds");
     assert_eq!(*seen.borrow(), expected, "a relayout");
 }

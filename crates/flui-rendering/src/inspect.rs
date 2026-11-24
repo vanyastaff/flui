@@ -16,7 +16,7 @@ use flui_foundation::inspect::{
 use flui_foundation::{RenderId, SemanticsId};
 use rustc_hash::FxHashMap;
 
-use crate::pipeline::{PipelineOwner, PipelinePhase};
+use crate::pipeline::PipelineOwner;
 use crate::storage::{RenderNode, RenderTree};
 
 impl Inspect for RenderNode {
@@ -51,7 +51,7 @@ pub struct RenderInspect<'a> {
     semantics: FxHashMap<RenderId, SemanticsId>,
 }
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// The render tree from [`root_id`](Self::root_id), for a typed snapshot
     /// ([`flui_foundation::inspect::snapshot`]).
     ///

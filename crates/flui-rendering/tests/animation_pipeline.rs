@@ -36,9 +36,9 @@ fn controller() -> AnimationController {
     AnimationController::builder(Duration::from_secs(1)).build()
 }
 
-fn frame(scene: &mut SceneHost, owner: PipelineOwner) -> (PipelineOwner, Option<LayerTree>) {
-    let (owner, result) = scene.run_frame(owner);
-    (owner, result.expect("frame must not error"))
+fn frame(scene: &mut SceneHost, owner: &mut PipelineOwner) -> Option<LayerTree> {
+    let result = scene.run_frame(owner);
+    result.expect("frame must not error")
 }
 
 // ============================================================================
@@ -88,9 +88,8 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
     // layer) — the child paints directly, with no OpacityLayer to pay for.
     ctrl.tick_at(std::time::Duration::from_secs_f64(0.0));
     let opacity = 1.0 - ctrl.value();
-    update_render_object::<RenderOpacity, _>(&mut owner, fade, |fade| fade.set_opacity(opacity));
-    let (next, tree) = frame(&mut scene, owner);
-    owner = next;
+    update_render_object::<RenderOpacity>(&mut owner, fade, |fade| fade.set_opacity(opacity));
+    let tree = frame(&mut scene, &mut owner);
     let tree = tree.expect("fully-opaque frame paints");
     assert!(
         opacity_alpha(&tree).is_none(),
@@ -102,11 +101,8 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
     for (i, t) in [0.25f64, 0.5].iter().enumerate() {
         ctrl.tick_at(std::time::Duration::from_secs_f64(*t));
         let opacity = 1.0 - ctrl.value();
-        update_render_object::<RenderOpacity, _>(&mut owner, fade, |fade| {
-            fade.set_opacity(opacity)
-        });
-        let (next, tree) = frame(&mut scene, owner);
-        owner = next;
+        update_render_object::<RenderOpacity>(&mut owner, fade, |fade| fade.set_opacity(opacity));
+        let tree = frame(&mut scene, &mut owner);
         let tree = tree.unwrap_or_else(|| panic!("fade frame {i} must paint"));
 
         let alpha = opacity_alpha(&tree).expect("opacity layer present while 0 < alpha < 1");
@@ -120,8 +116,8 @@ pub(crate) fn animated_opacity_layer_follows_and_zero_alpha_skips() {
     // Final frame: opacity 0 — the subtree is skipped entirely.
     ctrl.tick_at(std::time::Duration::from_secs_f64(1.0));
     let opacity = 1.0 - ctrl.value();
-    update_render_object::<RenderOpacity, _>(&mut owner, fade, |fade| fade.set_opacity(opacity));
-    let (_owner, tree) = frame(&mut scene, owner);
+    update_render_object::<RenderOpacity>(&mut owner, fade, |fade| fade.set_opacity(opacity));
+    let tree = frame(&mut scene, &mut owner);
     let tree = tree.expect("the zero-alpha frame still produces a (empty) tree");
     assert!(
         !has_picture(&tree),

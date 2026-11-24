@@ -34,17 +34,11 @@ fn vertical_constraints(
         .build()
 }
 
-fn box_size(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    id: flui_foundation::RenderId,
-) -> Size {
+fn box_size(owner: &PipelineOwner, id: flui_foundation::RenderId) -> Size {
     inspect::box_geometry(owner, id).expect("box geometry is committed")
 }
 
-fn render_offset(
-    owner: &PipelineOwner<flui_rendering::pipeline::phase::Layout>,
-    id: flui_foundation::RenderId,
-) -> Offset {
+fn render_offset(owner: &PipelineOwner, id: flui_foundation::RenderId) -> Offset {
     inspect::render_offset(owner, id).expect("node exists")
 }
 

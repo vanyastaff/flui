@@ -10,9 +10,8 @@ use flui_semantics::{
 };
 
 use super::PipelineOwner;
-use crate::pipeline::phase::Idle;
 
-impl PipelineOwner<Idle> {
+impl PipelineOwner {
     /// Decode a platform request against this presentation's semantics tree:
     /// a request on a field's text run goes to the field, and a text
     /// selection's run positions become bytes of its value

@@ -13,7 +13,6 @@ use crate::testing::parent_data::ParentDataSeed;
 
 use crate::parent_data::ParentData;
 use crate::pipeline::TextLender;
-use crate::pipeline::phase::PipelinePhase;
 use crate::storage::{EnterRefusal, RenderTree};
 
 use super::{
@@ -26,7 +25,7 @@ use super::{
 // Phase-generic query methods on PipelineOwner
 // ============================================================================
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// One intrinsic dimension of a box subtree, memoized per node.
     ///
     /// Every node's answer for `(dimension, extent)` is cached in its

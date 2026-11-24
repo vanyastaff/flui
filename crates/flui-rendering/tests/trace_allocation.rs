@@ -68,17 +68,16 @@ fn relayout_allocations(dispatch: &Dispatch) -> u64 {
         .insert_child_render_object(middle, Box::new(RenderColoredBox::red(40.0, 40.0)))
         .expect("leaf attaches");
     owner.set_root_constraints(Some(BoxConstraints::loose(Size::new(1024.0, 1024.0))));
-    let mut owner = owner.into_layout();
     tracing::dispatcher::with_default(dispatch, || {
         for _ in 0..2 {
             owner.mark_needs_layout(root);
-            owner.run_layout().expect("the tree lays out");
+            owner.layout_pass().run_layout().expect("the tree lays out");
         }
         let mut total = 0;
         for _ in 0..8 {
             owner.mark_needs_layout(root);
             let before = HeapCounts::now().allocations;
-            owner.run_layout().expect("the tree lays out");
+            owner.layout_pass().run_layout().expect("the tree lays out");
             total += HeapCounts::now().allocations - before;
         }
         total

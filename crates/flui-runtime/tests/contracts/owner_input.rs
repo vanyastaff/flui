@@ -924,7 +924,7 @@ fn a_view_hit_test_reports_a_busy_tree_and_contains_a_render_object_panic() {
             flui_foundation::geometry::Size::new(100.0, 100.0),
         )));
         flui_rendering::testing::SceneHost::new()
-            .run_frame_in_place(owner)
+            .run_frame(owner)
             .expect("the tree paints");
         healthy
     });

@@ -1,11 +1,9 @@
 //! Enabling and disabling semantics, the semantics owner and its update, route-change and
 //! announcement outputs.
 
-use crate::pipeline::phase::PipelinePhase;
-
 use super::PipelineOwner;
 
-impl<Phase: PipelinePhase> PipelineOwner<Phase> {
+impl PipelineOwner {
     /// Turns off, or back on, the debug check that a pass which re-placed
     /// moved semantics publishes what a whole-tree rebuild would. A test that
     /// counts what a pass costs turns it off; every other test keeps it.

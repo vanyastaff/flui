@@ -1,6 +1,6 @@
 //! Integration coverage for the semantics assembly walk.
 //!
-//! Exercises `PipelineOwner<Semantics>::run_semantics` through the real
+//! Exercises `PipelineOwner::run_semantics` through the real
 //! pipeline (`RenderTester::run_to_semantics`) against small test-only
 //! render objects that override `describe_semantics_configuration` /
 //! `excludes_semantics_subtree` directly. The boundary-vs-merge distinction —
@@ -84,17 +84,26 @@ pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
     owner.set_root_render_object(Box::new(Panicking));
     owner.set_root_constraints(Some(constraints()));
     owner.set_semantics_enabled(true);
-    let mut owner = owner.into_layout();
-    owner.run_layout().expect("layout");
-    let mut owner = owner.into_compositing();
-    owner.run_compositing().expect("compositing");
-    let mut owner = owner.into_paint();
+    owner.layout_pass().run_layout().expect("layout");
+    owner.layout_pass().into_compositing().run_compositing();
     let mut scene = SceneHost::new();
-    let (painted, _) = scene.drive(&mut owner, flui_rendering::PipelineOwner::run_paint);
+    let (painted, _) = scene.drive(&mut owner, |owner, writer| {
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .run_paint(writer)
+    });
     painted.expect("paint");
-    let mut owner = owner.into_semantics();
-    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.run_semantics()))
-        .expect_err("the callback's panic propagates");
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owner
+            .layout_pass()
+            .into_compositing()
+            .into_paint()
+            .into_semantics()
+            .run_semantics()
+    }))
+    .expect_err("the callback's panic propagates");
     assert_eq!(
         payload.downcast_ref::<&str>(),
         Some(&"semantics callback failed")
@@ -172,7 +181,7 @@ pub(crate) fn a_failing_semantics_transition_keeps_it() {
         }));
         owner.set_root_render_object(Box::new(ActionLeaf(Arc::clone(teardown))));
         owner.set_root_constraints(Some(constraints()));
-        let (owner, frame) = scene.run_frame(owner);
+        let frame = scene.run_frame(&mut owner);
         frame.expect("the first frame paints");
         assert!(
             !owner.has_dirty_nodes(),
@@ -224,7 +233,7 @@ pub(crate) fn a_failing_semantics_transition_keeps_it() {
         );
 
         let _ = counter(&mut owner, None);
-        let (_, frame) = scene.run_frame(owner);
+        let frame = scene.run_frame(&mut owner);
         frame.expect("the next frame runs");
         assert!(
             published
@@ -240,7 +249,7 @@ pub(crate) fn a_failing_semantics_transition_keeps_it() {
     let mut scene = SceneHost::new();
     let (mut owner, _) = painted(&teardown, &mut scene);
     owner.set_semantics_enabled(true);
-    let (mut owner, frame) = scene.run_frame(owner);
+    let frame = scene.run_frame(&mut owner);
     frame.expect("the frame assembles semantics");
     teardown.store(true, Ordering::SeqCst);
     let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1153,7 +1162,7 @@ pub(crate) fn re_assembling_marked_subtrees_refuses_like_the_whole_tree() {
     };
     assert_eq!(leaves.len(), GROUPS);
     for &leaf in &leaves {
-        edit_render_object::<SemanticsLeaf, _, _>(run.owner_mut(), leaf, |leaf| {
+        edit_render_object::<SemanticsLeaf, _>(run.owner_mut(), leaf, |leaf| {
             leaf.configuration = Some(invalid());
         });
         run.owner_mut().mark_needs_semantics(leaf);
@@ -1202,7 +1211,7 @@ pub(crate) fn a_handler_that_panics_in_a_graft_leaves_containment_to_a_rebuild()
     }
 
     fn edit_leaf(run: &mut FrameRun, id: RenderId, edit: impl FnOnce(&mut SemanticsLeaf)) {
-        edit_render_object::<SemanticsLeaf, _, _>(run.owner_mut(), id, edit);
+        edit_render_object::<SemanticsLeaf, _>(run.owner_mut(), id, edit);
     }
 
     fn clips_children(run: &FrameRun, id: RenderId) -> bool {

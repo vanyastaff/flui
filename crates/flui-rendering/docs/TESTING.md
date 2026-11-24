@@ -63,14 +63,14 @@ Field names use **snake_case**; read them by type (`node.get::<f64>("width")`).
 | `with_constraints(c)` | `Self` | Root box constraints |
 | `with_size(size)` | `Self` | Tight root size |
 | `run_layout()` | `LayoutRun` | Layout phase only (geometry / offsets) |
-| `run_frame()` | `FrameRun` | Full frame (layout → compositing → paint) |
+| `run_frame()` | `FrameRun` | Full frame (layout → compositing → paint → semantics) |
 
 ### `LayoutRun`
 
 | Method | Purpose |
 |--------|---------|
 | `root()` | Root `RenderId` |
-| `owner()` / `owner_mut()` | Escape hatch to `PipelineOwner<Layout>` |
+| `owner()` / `owner_mut()` | Escape hatch to the `PipelineOwner` |
 | `update::<T>(id, edit)` | Mutate + `mark_needs_layout` (Box or Sliver) |
 | `update_paint::<T>(id, edit)` | Mutate + paint-dirty (no layout pass here) |
 | `mark_needs_paint(id)` | Paint-dirty only |
@@ -291,10 +291,10 @@ Sub-project A of render-harness 2.0 adds three integrated capabilities:
 | `run_layout()` | `LayoutRun` | Layout — geometry / offsets available |
 | `run_to_compositing()` | `CompositingRun` | Compositing-bits update (no layer tree) |
 | `run_to_paint()` | `PaintRun` | Paint — cheapest handle with a `LayerTree` |
-| `run_frame()` | `FrameRun` | Full frame (layout → compositing → paint) back to `Idle` |
+| `run_frame()` | `FrameRun` | Full frame (layout → compositing → paint → semantics) |
 | `run_to_semantics()` | `SemanticsRun` | All four phases (semantics stub; B's finders come later) |
 
-Each handle drives only `PipelineOwner<Phase>` transitions up to its phase and stops.
+Each handle drives the owner's passes (`FramePass`) up to its phase and stops.
 The guarantee is **compile-time**: `LayoutRun` has no `snapshot` method — calling it is a
 compile error, not a runtime panic:
 

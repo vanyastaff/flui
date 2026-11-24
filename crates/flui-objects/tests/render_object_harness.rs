@@ -605,7 +605,7 @@ fn harness_custom_paint_failed_replacement_commits_new_painter_and_revokes_old_r
                 .run_frame();
             let root = run.root();
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
+                flui_rendering::testing::update_render_object::<RenderCustomPaint>(
                     run.owner_mut(),
                     root,
                     |object| {
@@ -688,7 +688,7 @@ fn harness_flow_subscription_migration_and_owner_release_finish_after_failure() 
     .run_frame();
     let root = run.root();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        flui_rendering::testing::update_render_object::<RenderFlow, _>(
+        flui_rendering::testing::update_render_object::<RenderFlow>(
             run.owner_mut(),
             root,
             |flow| flow.set_delegate(Rc::new(ListeningFlowDelegate(new.clone()))),
@@ -795,7 +795,7 @@ fn harness_custom_paint_comparison_failure_keeps_the_old_presentation() {
         rejected_faults.comparison.set(Some(comparison));
         let root = run.root();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
+            flui_rendering::testing::update_render_object::<RenderCustomPaint>(
                 run.owner_mut(),
                 root,
                 |object| {
@@ -859,7 +859,7 @@ fn harness_custom_paint_failed_subscription_is_inert_and_can_be_replaced() {
             });
             let root = run.root();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
+                flui_rendering::testing::update_render_object::<RenderCustomPaint>(
                     run.owner_mut(),
                     root,
                     |object| object.set_painter(Some(replacement.clone())),
@@ -879,7 +879,7 @@ fn harness_custom_paint_failed_subscription_is_inert_and_can_be_replaced() {
                 !run.pump().painted,
                 "an unacknowledged registration is revoked before failure escapes"
             );
-            flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
+            flui_rendering::testing::update_render_object::<RenderCustomPaint>(
                 run.owner_mut(),
                 root,
                 |object| object.set_painter(Some(replacement.clone())),
@@ -959,7 +959,7 @@ fn harness_custom_paint_old_painter_retirement_cannot_erase_the_replacement() {
     faults.retirement.set(true);
     let root = run.root();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
+        flui_rendering::testing::update_render_object::<RenderCustomPaint>(
             run.owner_mut(),
             root,
             |object| object.set_painter(Some(Rc::new(ListeningPainter(new.clone(), Color::BLUE)))),
@@ -1255,7 +1255,7 @@ fn harness_render_error_box_fills_bounded_constraints_and_paints() {
     // A new message is shaped at the next layout: the impact `set_error`
     // reports must schedule one, or the old paragraph is painted again.
     let root = run.root();
-    flui_rendering::testing::update_render_object::<RenderErrorBox, _>(
+    flui_rendering::testing::update_render_object::<RenderErrorBox>(
         run.owner_mut(),
         root,
         |error_box| error_box.set_error("bang", None),
@@ -2373,7 +2373,7 @@ fn harness_icon_equal_inputs_install_the_new_measurement_attempt() {
     drop(first_attempt);
 
     let second_attempt = sizing.begin_cohort();
-    flui_rendering::testing::update_render_object::<RenderIcon, _>(run.owner_mut(), root, |icon| {
+    flui_rendering::testing::update_render_object::<RenderIcon>(run.owner_mut(), root, |icon| {
         icon.update(
             20.0,
             None,
@@ -2384,7 +2384,7 @@ fn harness_icon_equal_inputs_install_the_new_measurement_attempt() {
     });
     assert_eq!(run.min_intrinsic_width(root, 80.0), 30.5);
 
-    flui_rendering::testing::update_render_object::<RenderIcon, _>(run.owner_mut(), root, |icon| {
+    flui_rendering::testing::update_render_object::<RenderIcon>(run.owner_mut(), root, |icon| {
         icon.update(
             0.0,
             None,
@@ -2523,7 +2523,7 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
     .with_constraints(loose(80.0))
     .run_frame();
     let root = run.root();
-    let has_baseline = flui_rendering::testing::edit_render_object::<RenderIcon, _, _>(
+    let has_baseline = flui_rendering::testing::edit_render_object::<RenderIcon, _>(
         run.owner_mut(),
         root,
         |icon| {
@@ -2534,7 +2534,7 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
     );
     assert!(has_baseline, "the initial glyph commits a baseline");
 
-    flui_rendering::testing::update_render_object::<RenderIcon, _>(run.owner_mut(), root, |icon| {
+    flui_rendering::testing::update_render_object::<RenderIcon>(run.owner_mut(), root, |icon| {
         icon.update(
             20.0,
             Some('A'),
@@ -2548,34 +2548,30 @@ fn harness_icon_pending_layout_withdraws_old_glyph_geometry() {
         result,
         Err(flui_rendering::RenderError::TextPreparationPending(_))
     ));
-    flui_rendering::testing::edit_render_object::<RenderIcon, _, _>(
-        run.owner_mut(),
-        root,
-        |icon| {
-            assert!(
-                icon.compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
-                    .unwrap()
-                    .is_none()
-            );
-            let text = flui_rendering::TextContextHandle::standalone();
-            let mut recorder = flui_rendering::context::FragmentRecorder::new(
-                Offset::ZERO,
-                flui_foundation::geometry::DevicePixelRatio::ONE,
-            );
-            icon.paint(&mut flui_rendering::context::PaintContext::new(
-                &mut recorder,
-                text.source(),
-                0,
-                Size::new(20.0, 20.0),
-            ));
-            assert!(
-                recorder.finish().is_empty(),
-                "pending geometry must not paint the old glyph"
-            );
-        },
-    );
+    flui_rendering::testing::edit_render_object::<RenderIcon, _>(run.owner_mut(), root, |icon| {
+        assert!(
+            icon.compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
+                .unwrap()
+                .is_none()
+        );
+        let text = flui_rendering::TextContextHandle::standalone();
+        let mut recorder = flui_rendering::context::FragmentRecorder::new(
+            Offset::ZERO,
+            flui_foundation::geometry::DevicePixelRatio::ONE,
+        );
+        icon.paint(&mut flui_rendering::context::PaintContext::new(
+            &mut recorder,
+            text.source(),
+            0,
+            Size::new(20.0, 20.0),
+        ));
+        assert!(
+            recorder.finish().is_empty(),
+            "pending geometry must not paint the old glyph"
+        );
+    });
 
-    flui_rendering::testing::update_render_object::<RenderIcon, _>(run.owner_mut(), root, |icon| {
+    flui_rendering::testing::update_render_object::<RenderIcon>(run.owner_mut(), root, |icon| {
         icon.update(
             20.0,
             Some('A'),
@@ -3039,7 +3035,7 @@ fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
     let root = run.root();
     let constraints = loose(1000.0);
 
-    let live = flui_rendering::testing::edit_render_object::<RenderBaseline, _, _>(
+    let live = flui_rendering::testing::edit_render_object::<RenderBaseline, _>(
         run.owner_mut(),
         root,
         |object| {
@@ -3071,7 +3067,7 @@ fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
     });
     run.relayout();
 
-    let live = flui_rendering::testing::edit_render_object::<RenderBaseline, _, _>(
+    let live = flui_rendering::testing::edit_render_object::<RenderBaseline, _>(
         run.owner_mut(),
         root,
         |object| {
@@ -3363,6 +3359,7 @@ fn harness_aspect_ratio_infinite_minima_reject_without_panicking() {
         run.owner_mut().mark_needs_layout(ratio);
         let error = run
             .owner_mut()
+            .layout_pass()
             .layout_dirty_root(ratio, additional)
             .expect_err("infinite minima cannot admit finite geometry");
         assert!(
@@ -4076,13 +4073,13 @@ fn exercise_static_opacity_updates(sliver: bool) {
         let id = run.id("opacity");
         for value in [1e-17, 0.0025, 0.005, 1.0, 0.0, 0.005, 0.0025] {
             if sliver {
-                flui_rendering::testing::update_render_object::<RenderSliverOpacity, _>(
+                flui_rendering::testing::update_render_object::<RenderSliverOpacity>(
                     run.owner_mut(),
                     id,
                     |render| render.set_opacity(value),
                 );
             } else {
-                flui_rendering::testing::update_render_object::<RenderOpacity, _>(
+                flui_rendering::testing::update_render_object::<RenderOpacity>(
                     run.owner_mut(),
                     id,
                     |render| render.set_opacity(value),
@@ -4319,13 +4316,13 @@ fn harness_static_opacity_visibility_controls_semantics_and_actions() {
             for alpha in [0.0, 0.0025, 1.0, 0.0, 0.5, 0.0] {
                 let id = run.id("opacity");
                 if sliver {
-                    flui_rendering::testing::update_render_object::<RenderSliverOpacity, _>(
+                    flui_rendering::testing::update_render_object::<RenderSliverOpacity>(
                         run.owner_mut(),
                         id,
                         |object| object.set_opacity(alpha),
                     );
                 } else {
-                    flui_rendering::testing::update_render_object::<RenderOpacity, _>(
+                    flui_rendering::testing::update_render_object::<RenderOpacity>(
                         run.owner_mut(),
                         id,
                         |object| object.set_opacity(alpha),
@@ -4387,7 +4384,7 @@ fn harness_sliver_offstage_removes_hidden_semantics_and_stale_actions() {
     let mut failures = Vec::new();
     for offstage in [true, false, true, false, true] {
         let id = run.id("offstage");
-        flui_rendering::testing::update_render_object::<RenderSliverOffstage, _>(
+        flui_rendering::testing::update_render_object::<RenderSliverOffstage>(
             run.owner_mut(),
             id,
             |object| object.set_offstage(offstage),
@@ -5214,7 +5211,7 @@ fn harness_animated_inset_clips_a_child_outside_its_box() {
     );
 
     let root = run.root();
-    flui_rendering::testing::update_render_object::<RenderAnimatedInset, _>(
+    flui_rendering::testing::update_render_object::<RenderAnimatedInset>(
         run.owner_mut(),
         root,
         |node| node.set_clip_behavior(Clip::None),
@@ -5808,7 +5805,7 @@ fn harness_animated_inset_clips_its_child_semantics() {
     );
 
     let root = run.root();
-    flui_rendering::testing::update_render_object::<RenderAnimatedInset, _>(
+    flui_rendering::testing::update_render_object::<RenderAnimatedInset>(
         run.owner_mut(),
         root,
         |node| node.set_clip_behavior(Clip::None),
@@ -6248,7 +6245,7 @@ fn harness_sliver_constrained_cross_axis_limits_actual_layout_and_refuses_invali
         .run_frame();
         let id = run.id("limit");
         for extent in [40.0, 15.5, 0.0, 200.0] {
-            flui_rendering::testing::update_render_object::<RenderSliverConstrainedCrossAxis, _>(
+            flui_rendering::testing::update_render_object::<RenderSliverConstrainedCrossAxis>(
                 run.owner_mut(),
                 id,
                 |object| object.set_max_extent(extent).unwrap(),
@@ -6784,7 +6781,7 @@ fn harness_a_moved_region_painter_retires_its_draft_handlers_after_the_phase() {
     // captures panic when they are destroyed.
     invalid.set(true);
     let transform = run.id("transform");
-    flui_rendering::testing::update_render_object::<RenderTransform, _>(
+    flui_rendering::testing::update_render_object::<RenderTransform>(
         run.owner_mut(),
         transform,
         |node| node.set_transform(Matrix4::translation(10.0, 0.0, 0.0)),
@@ -8086,7 +8083,7 @@ fn harness_physical_model_unusable_elevation_casts_no_shadow() {
         .with_constraints(loose(200.0))
         .run_frame();
         let root = run.root();
-        flui_rendering::testing::update_render_object::<RenderPhysicalModel, _>(
+        flui_rendering::testing::update_render_object::<RenderPhysicalModel>(
             run.owner_mut(),
             root,
             |node| {
@@ -8194,7 +8191,7 @@ fn harness_physical_shape_clips_accessible_bounds_and_updates_without_layout() {
                 Clip::None,
             ] {
                 let root = run.root();
-                flui_rendering::testing::update_render_object::<RenderPhysicalShape, _>(
+                flui_rendering::testing::update_render_object::<RenderPhysicalShape>(
                     run.owner_mut(),
                     root,
                     |node| node.set_clip_behavior(clip),
@@ -8827,7 +8824,7 @@ fn harness_toolbar_items_hide_what_does_not_fit_behind_the_button() {
         "the row paints its items, not the left-over one; commands:\n{commands}"
     );
 
-    flui_rendering::testing::update_render_object::<RenderToolbarItems, _>(
+    flui_rendering::testing::update_render_object::<RenderToolbarItems>(
         run.owner_mut(),
         root,
         |object| object.set_expanded(true),
@@ -8915,7 +8912,7 @@ fn harness_toolbar_items_keep_every_command_reachable() {
     assert_eq!(run.offset(run.id("d")), Offset::new(0.0, 40.0));
     assert_eq!(run.offset(run.id("f")), Offset::new(40.0, 20.0));
     assert_eq!(run.hit_first(60.0, 30.0), Some(run.id("f")));
-    flui_rendering::testing::update_render_object::<RenderToolbarItems, _>(
+    flui_rendering::testing::update_render_object::<RenderToolbarItems>(
         run.owner_mut(),
         root,
         |object| object.set_text_direction(TextDirection::Rtl),
@@ -8960,12 +8957,12 @@ fn harness_toolbar_items_keep_every_command_reachable() {
     let root = run.root();
     assert_eq!(run.offset(run.id("button")), Offset::new(40.0, 0.0));
     let button = run.id("button");
-    flui_rendering::testing::update_render_object::<RenderSizedBox, _>(
+    flui_rendering::testing::update_render_object::<RenderSizedBox>(
         run.owner_mut(),
         button,
         |object| object.set_size(Some(20.0), Some(20.0)),
     );
-    flui_rendering::testing::update_render_object::<RenderToolbarItems, _>(
+    flui_rendering::testing::update_render_object::<RenderToolbarItems>(
         run.owner_mut(),
         root,
         |object| object.set_expanded(true),
@@ -9748,7 +9745,7 @@ fn harness_render_sliver_grid_hit_test_keeps_pre_panic_band_after_a_poisoned_rel
         let impact = grid.set_grid_delegate(Rc::new(ZeroCrossAxisCountDelegate));
         assert_eq!(impact, flui_rendering::RenderUpdateImpact::LAYOUT);
     });
-    let result = run.owner_mut().run_layout();
+    let result = run.owner_mut().layout_pass().run_layout();
     assert!(
         result.is_ok(),
         "the pipeline's per-node catch_unwind must keep the overall pass Ok even \
@@ -10791,7 +10788,7 @@ fn harness_viewport_degraded_pass_does_not_move_the_scroll_position() {
     let viewport = run.id("viewport");
     run.owner_mut().mark_needs_layout(fragile);
     run.owner_mut().mark_needs_layout(viewport);
-    let _ = run.owner_mut().run_layout();
+    let _ = run.owner_mut().layout_pass().run_layout();
     assert!(
         layouts.load(std::sync::atomic::Ordering::SeqCst) >= 2,
         "the fragile sliver was laid out again and panicked"
@@ -10811,7 +10808,7 @@ fn harness_viewport_degraded_pass_does_not_move_the_scroll_position() {
     // Pass 3: the child is poisoned now, so the walk serves its stand-in
     // without recording a failure — the pass is still degraded.
     run.owner_mut().mark_needs_layout(viewport);
-    let _ = run.owner_mut().run_layout();
+    let _ = run.owner_mut().layout_pass().run_layout();
     assert_eq!(
         position.pixels(),
         500.0,
@@ -10895,7 +10892,7 @@ fn harness_sliver_list_failed_child_keeps_its_extent_through_recovery() {
     });
     run.owner_mut().mark_needs_layout(item1);
     run.owner_mut().mark_needs_layout(viewport);
-    let _ = run.owner_mut().run_layout();
+    let _ = run.owner_mut().layout_pass().run_layout();
     assert!(
         layouts.load(SeqCst) >= 2,
         "item1 was laid out again and failed"
@@ -10916,7 +10913,7 @@ fn harness_sliver_list_failed_child_keeps_its_extent_through_recovery() {
     layouts.store(0, SeqCst);
     run.owner_mut().mark_needs_layout(item1);
     run.owner_mut().mark_needs_layout(viewport);
-    let _ = run.owner_mut().run_layout();
+    let _ = run.owner_mut().layout_pass().run_layout();
     assert_eq!(
         position.pixels(),
         250.0,
@@ -10958,7 +10955,7 @@ fn harness_sliver_list_poisoned_child_that_never_laid_out_keeps_its_estimate() {
     );
 
     run.owner_mut().mark_needs_layout(viewport);
-    let _ = run.owner_mut().run_layout();
+    let _ = run.owner_mut().layout_pass().run_layout();
     assert_eq!(
         run.offset(item2).dy,
         -50.0,
@@ -11016,7 +11013,7 @@ fn harness_sliver_list_measures_a_resident_laid_out_over_a_failed_descendant() {
     // The poisoned descendant's skip, then a cache a degraded pass built.
     for pass in 2..=3 {
         run.owner_mut().mark_needs_layout(viewport);
-        let _ = run.owner_mut().run_layout();
+        let _ = run.owner_mut().layout_pass().run_layout();
         assert_eq!(run.offset(item1).dy, 40.0, "pass {pass}");
     }
 }
@@ -11090,7 +11087,7 @@ fn harness_viewport_does_not_serve_a_cache_built_by_a_degraded_pass() {
     let viewport = run.id("viewport");
     run.owner_mut().mark_needs_layout(far_box);
     run.owner_mut().mark_needs_layout(viewport);
-    let _ = run.owner_mut().run_layout();
+    let _ = run.owner_mut().layout_pass().run_layout();
     assert!(layouts.load(std::sync::atomic::Ordering::SeqCst) >= 2);
     assert_eq!(
         position.max_scroll_extent(),
@@ -11103,7 +11100,7 @@ fn harness_viewport_does_not_serve_a_cache_built_by_a_degraded_pass() {
     // viewport's own child-geometry cache would answer for it — collapsed —
     // without ever walking to the poisoned box.
     run.owner_mut().mark_needs_layout(viewport);
-    let _ = run.owner_mut().run_layout();
+    let _ = run.owner_mut().layout_pass().run_layout();
     assert_eq!(
         position.max_scroll_extent(),
         1200.0,
@@ -11425,7 +11422,7 @@ fn harness_theater_baselines_follow_only_onstage_children() {
     .run_frame();
     for (skip, expected) in [(0, Some(5.0)), (1, Some(25.0)), (2, None), (0, Some(5.0))] {
         let theater = run.id("theater");
-        flui_rendering::testing::update_render_object::<RenderTheater, _>(
+        flui_rendering::testing::update_render_object::<RenderTheater>(
             run.owner_mut(),
             theater,
             |object| object.set_skip_count(skip),
@@ -12064,7 +12061,7 @@ fn harness_flow_accessible_bounds_follow_clip_without_layout() {
     let mut run = semantic_flow(delegate);
     for clip in [Clip::HardEdge, Clip::None, Clip::AntiAlias, Clip::None] {
         let root = run.root();
-        flui_rendering::testing::update_render_object::<RenderFlow, _>(
+        flui_rendering::testing::update_render_object::<RenderFlow>(
             run.owner_mut(),
             root,
             |flow| flow.set_clip_behavior(clip),
@@ -12214,7 +12211,7 @@ fn harness_flow_only_announces_presented_children_after_repaint_and_replacement(
     );
 
     let root = run.root();
-    flui_rendering::testing::update_render_object::<RenderFlow, _>(run.owner_mut(), root, |flow| {
+    flui_rendering::testing::update_render_object::<RenderFlow>(run.owner_mut(), root, |flow| {
         flow.set_delegate(Rc::new(SemanticFlowDelegate {
             selected: Rc::new(Cell::new(0)),
             x: Rc::new(Cell::new(5.0)),
@@ -12232,7 +12229,7 @@ fn harness_flow_only_announces_presented_children_after_repaint_and_replacement(
     );
     assert_eq!(replaced[0].2, Rect::from_xywh(5.0, 0.0, 35.0, 40.0));
 
-    flui_rendering::testing::update_render_object::<RenderFlow, _>(run.owner_mut(), root, |flow| {
+    flui_rendering::testing::update_render_object::<RenderFlow>(run.owner_mut(), root, |flow| {
         flow.set_delegate(Rc::new(SemanticFlowDelegate {
             selected: Rc::new(Cell::new(usize::MAX)),
             x: Rc::new(Cell::new(0.0)),
@@ -13072,17 +13069,15 @@ fn harness_viewport_replacement_finishes_subscription_migration_after_failure() 
         if shrink {
             flui_rendering::testing::update_render_object::<
                 RenderShrinkWrappingViewport<ObservedViewportOffset>,
-                _,
             >(run.owner_mut(), root, |viewport| {
                 viewport.set_offset(offset)
             });
         } else {
-            flui_rendering::testing::update_render_object::<
-                RenderViewport<ObservedViewportOffset>,
-                _,
-            >(run.owner_mut(), root, |viewport| {
-                viewport.set_offset(offset)
-            });
+            flui_rendering::testing::update_render_object::<RenderViewport<ObservedViewportOffset>>(
+                run.owner_mut(),
+                root,
+                |viewport| viewport.set_offset(offset),
+            );
         }
     }
     for shrink in [false, true] {

@@ -2090,21 +2090,19 @@ fn a_repainted_boundary_replays_the_chunks_that_did_not_change() {
     let boundary = registry.get("root").expect("labelled");
     let changing = registry.get("changing").expect("labelled");
     let mut scene = SceneHost::new();
-    let frame = |scene: &mut SceneHost, pipeline| {
-        let (pipeline, result) = scene.run_frame(pipeline);
-        result.expect("the frame paints");
-        pipeline
+    let frame = |scene: &mut SceneHost, pipeline: &mut flui_rendering::PipelineOwner| {
+        scene.run_frame(pipeline).expect("the frame paints");
     };
-    let mut pipeline = frame(&mut scene, pipeline);
+    frame(&mut scene, &mut pipeline);
     let mut capture = renderer.retained_capture((SIDE, SIDE)).expect("capture");
     capture.keep_recorded_ir();
     draw_until_admitted(&mut capture, scene.version());
     full_frame(&mut capture, scene.version(), FullReason::FirstFrame);
 
-    update_render_object::<RenderColoredBox, _>(&mut pipeline, changing, |square| {
+    update_render_object::<RenderColoredBox>(&mut pipeline, changing, |square| {
         square.set_color([0.0, 0.0, 1.0, 1.0])
     });
-    let pipeline = frame(&mut scene, pipeline);
+    frame(&mut scene, &mut pipeline);
     let chunks = scene
         .content_of(&pipeline, boundary)
         .expect("the boundary is published")

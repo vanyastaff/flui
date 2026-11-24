@@ -152,10 +152,7 @@ fn nonleaf_failure_then_replacement(sliver: bool, failure: u8) {
     let captured = std::rc::Rc::new(std::cell::Cell::new(SliverGeometry::ZERO));
     let mut pipeline = crate::common::fresh_layout_pipeline();
     let constraints = BoxConstraints::tight(Size::new(10.0, 20.0));
-    let install = |pipeline: &mut flui_rendering::pipeline::PipelineOwner<
-        flui_rendering::pipeline::phase::Layout,
-    >,
-                   failure| {
+    let install = |pipeline: &mut flui_rendering::pipeline::PipelineOwner, failure| {
         let source = Source { failure };
         let root = if sliver {
             flui_rendering::testing::raw_tree::insert_box(
@@ -184,7 +181,7 @@ fn nonleaf_failure_then_replacement(sliver: bool, failure: u8) {
         root
     };
     let root = install(&mut pipeline, failure);
-    let result = pipeline.layout_dirty_root(root, constraints);
+    let result = pipeline.layout_pass().layout_dirty_root(root, constraints);
     if sliver {
         result.expect("host completes with failed child's stand-in");
         assert_eq!(
@@ -216,6 +213,7 @@ fn nonleaf_failure_then_replacement(sliver: bool, failure: u8) {
     let replacement = install(&mut pipeline, 0);
     assert_eq!(
         pipeline
+            .layout_pass()
             .layout_dirty_root(replacement, constraints)
             .expect("replacement layout"),
         Size::new(10.0, 20.0)

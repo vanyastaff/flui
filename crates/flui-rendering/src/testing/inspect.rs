@@ -18,9 +18,7 @@ use flui_foundation::inspect::{Level, Plain, SnapshotNode, SnapshotQuery, render
 use flui_interaction::events::PointerKind;
 
 use crate::{
-    constraints::SliverGeometry,
-    pipeline::{PipelineOwner, PipelinePhase},
-    storage::RenderNode,
+    constraints::SliverGeometry, pipeline::PipelineOwner, storage::RenderNode,
     testing::tree::RenderLabelRegistry,
 };
 use flui_interaction::pointer::HitTestResult;
@@ -41,32 +39,25 @@ pub use flui_layer::testing::inspect::{
 
 /// Returns the committed paint offset of `id`, or `None` if no such node
 /// exists.
-pub fn render_offset<P: PipelinePhase>(owner: &PipelineOwner<P>, id: RenderId) -> Option<Offset> {
+pub fn render_offset(owner: &PipelineOwner, id: RenderId) -> Option<Offset> {
     owner.render_tree().get(id).map(RenderNode::offset)
 }
 
 /// Returns the committed Box geometry (size) of `id`, or `None` if the node
 /// is missing, is not a Box node, or has not been laid out yet.
-pub fn box_geometry<P: PipelinePhase>(owner: &PipelineOwner<P>, id: RenderId) -> Option<Size> {
+pub fn box_geometry(owner: &PipelineOwner, id: RenderId) -> Option<Size> {
     owner.render_tree().get(id)?.as_box()?.state().geometry()
 }
 
 /// Returns the committed Sliver geometry of `id`, or `None` if the node is
 /// missing, is not a Sliver node, or has not been laid out yet.
-pub fn sliver_geometry<P: PipelinePhase>(
-    owner: &PipelineOwner<P>,
-    id: RenderId,
-) -> Option<SliverGeometry> {
+pub fn sliver_geometry(owner: &PipelineOwner, id: RenderId) -> Option<SliverGeometry> {
     owner.render_tree().get(id)?.as_sliver()?.state().geometry()
 }
 
 /// Hit-tests at root-local `(x, y)` (logical pixels) for a touch contact and
 /// returns the leaf-first path of hit `RenderId`s.
-pub fn hit_path<P: PipelinePhase + Sync>(
-    owner: &PipelineOwner<P>,
-    x: f64,
-    y: f64,
-) -> Vec<RenderId> {
+pub fn hit_path(owner: &PipelineOwner, x: f64, y: f64) -> Vec<RenderId> {
     let mut result = HitTestResult::new();
     owner.hit_test(Offset::new(x, y), PointerKind::Touch, &mut result);
     result.path().iter().map(|entry| entry.target).collect()
@@ -87,8 +78,8 @@ pub fn hit_path<P: PipelinePhase + Sync>(
 /// correctly maps a global hit point to the child's local coordinate space.
 ///
 /// [`hit_test_child_at_layout_offset`]: crate::context::BoxHitTestContext::hit_test_child_at_layout_offset
-pub fn hit_path_with_transforms<P: PipelinePhase + Sync>(
-    owner: &PipelineOwner<P>,
+pub fn hit_path_with_transforms(
+    owner: &PipelineOwner,
     x: f64,
     y: f64,
 ) -> Vec<(RenderId, Option<Matrix4>)> {
@@ -146,7 +137,7 @@ pub fn localize_hit_point(transform: Matrix4, global_x: f64, global_y: f64) -> O
 /// geometry, offset, dirty flags), and the parent/child structure.
 ///
 /// Read it by type: `node.get::<f64>("width")`, `node.fact_as::<Size>("size")`.
-pub fn render_snapshot<P: PipelinePhase>(owner: &PipelineOwner<P>) -> SnapshotNode {
+pub fn render_snapshot(owner: &PipelineOwner) -> SnapshotNode {
     snapshot(&owner.inspect(), SnapshotQuery::default())
         .expect("BUG: a mounted harness tree always has a root")
 }
@@ -156,15 +147,13 @@ pub fn render_snapshot<P: PipelinePhase>(owner: &PipelineOwner<P>) -> SnapshotNo
 /// # Panics
 ///
 /// When `id` is not a live node of the tree.
-pub fn node_snapshot<P: PipelinePhase>(owner: &PipelineOwner<P>, id: RenderId) -> SnapshotNode {
+pub fn node_snapshot(owner: &PipelineOwner, id: RenderId) -> SnapshotNode {
     node_snapshotter(owner)(id)
 }
 
 /// [`node_snapshot`] for many nodes of one tree: building the tree's view walks the semantics
 /// tree, so a scan over every node takes the view once and reads each node through it.
-pub fn node_snapshotter<P: PipelinePhase>(
-    owner: &PipelineOwner<P>,
-) -> impl Fn(RenderId) -> SnapshotNode + '_ {
+pub fn node_snapshotter(owner: &PipelineOwner) -> impl Fn(RenderId) -> SnapshotNode + '_ {
     let tree = owner.inspect();
     move |id| {
         snapshot(
@@ -197,11 +186,8 @@ fn outline(tree: &SnapshotNode) -> String {
 /// [`box_geometry`](Probe::box_geometry); Sliver trees read
 /// [`sliver_geometry`](Probe::sliver_geometry); everything else is common.
 pub trait Probe {
-    /// The pipeline phase the implementor holds its owner in.
-    type Phase: PipelinePhase + Sync;
-
     /// The live pipeline owner backing the inspection.
-    fn pipeline(&self) -> &PipelineOwner<Self::Phase>;
+    fn pipeline(&self) -> &PipelineOwner;
 
     /// The label -> id registry built while mounting the tree.
     fn registry(&self) -> &RenderLabelRegistry;

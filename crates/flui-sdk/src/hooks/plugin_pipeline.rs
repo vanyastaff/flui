@@ -181,7 +181,7 @@ impl PluginPipeline {
                 guard.set_root_constraints(Some(BoxConstraints::tight(size)));
                 let mut writer = scene.writer();
                 let painted = guard
-                    .run_frame_in_place(&mut writer)
+                    .run_frame(&mut writer)
                     .map_err(PluginFrameError::Pipeline)?;
                 if !painted {
                     return Err(PluginFrameError::NothingPainted);

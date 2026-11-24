@@ -54,7 +54,7 @@ use flui_rendering::{
     constraints::BoxConstraints,
     context::{BoxHitTestContext, BoxLayoutContext},
     parent_data::{BoxParentData, FlexParentData},
-    pipeline::{Layout, PipelineOwner},
+    pipeline::PipelineOwner,
     testing::{box_node, tree},
     traits::RenderBox,
 };
@@ -127,7 +127,7 @@ fn bench_constraints() -> BoxConstraints {
 /// The seeds are what `build_intrinsic_child_parent_data` clones
 /// (`ParentDataSeed::to_box`) on every intrinsic call, faithfully reproducing
 /// the N-alloc cost without requiring a full element tree.
-fn build_intrinsic_bench_tree(child_count: usize) -> PipelineOwner<Layout> {
+fn build_intrinsic_bench_tree(child_count: usize) -> PipelineOwner {
     let flex_children = (0..child_count).map(|_| {
         box_node(RenderColoredBox::red(10.0, 10.0))
             .with_flex_parent_data(FlexParentData::inflexible())
@@ -140,7 +140,7 @@ fn build_intrinsic_bench_tree(child_count: usize) -> PipelineOwner<Layout> {
     let (root_id, _) = tree::mount(&mut owner, spec);
     owner.set_root_id(Some(root_id));
     owner.set_root_constraints(Some(bench_constraints()));
-    owner.into_layout()
+    owner
 }
 
 // ============================================================================
@@ -162,6 +162,7 @@ fn bench_borrowed_intrinsic_parent_data(c: &mut Criterion) {
                 || build_intrinsic_bench_tree(n),
                 |mut owner| {
                     owner
+                        .layout_pass()
                         .run_layout()
                         .expect("run_layout must succeed on a valid intrinsic-query tree");
                     // Prevent the optimizer from discarding the owner.
