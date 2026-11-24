@@ -20,7 +20,7 @@
 //!   is assumed.
 //! * Admitted worker images remain mapped until process exit (ADR-0111):
 //!   escaped host-tree views, callbacks and state can retain plugin-owned code,
-//!   vtables or storage. Dropping a [`worker::WorkerPlugin`] prunes its matching
+//!   vtables or storage. Dropping a [`WorkerPlugin`] prunes its matching
 //!   registrations without unmapping its image. Each distinct worker revision
 //!   retains memory and can keep Windows staged files locked until host exit.
 //! * What remains, and why this stays a dev-loop tool: a returned scene
@@ -42,7 +42,7 @@
 //!        ↑ used by scene_render, Android host, custom runners
 //! ```
 //!
-//! See [`strategy`] for [`ReloadStrategy`] and shared env/timing constants.
+//! [`env`](mod@env) names the environment variables `flui run` sets for the application.
 //!
 //! ## Plugin vs Host
 //!
@@ -61,7 +61,7 @@
 //!
 //! ## Cross-Platform
 //!
-//! The [`dynlib`] module provides a cross-platform abstraction over:
+//! [`DynLib`] is a cross-platform abstraction over:
 //! - Unix: `dlopen` / `dlsym` / `dlclose`
 //! - Windows: `LoadLibraryW` / `GetProcAddress` / `FreeLibrary`
 //!
@@ -127,10 +127,6 @@
         reason = "test code catches a panic to assert on it (ADR-0303 §5)"
     )
 )]
-#![expect(
-    clippy::module_name_repetitions,
-    reason = "`worker::WorkerPlugin`, `driver::HotReloadDriver` and `dynlib::DynLib` repeat their module name, and those are the names callers import"
-)]
 // The crate-level `warn(clippy::pedantic)` above re-enables the pedantic
 // lints the workspace allows; these five are re-suppressed. `allow`, not
 // `expect`: which of them fire depends on the enabled features and target
@@ -146,9 +142,12 @@
     reason = "feature- and target-dependent after the crate-level pedantic re-enable"
 )]
 
-pub mod strategy;
+pub mod env;
 
-pub mod engine;
+#[cfg(not(target_arch = "wasm32"))]
+mod timing;
+
+mod engine;
 
 mod abi;
 
@@ -224,7 +223,7 @@ pub use entry::contain as __private_contain_entry;
 
 // Dynamic library loading is not available on wasm32
 #[cfg(not(target_arch = "wasm32"))]
-pub mod dynlib;
+mod dynlib;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod driver;
@@ -236,21 +235,24 @@ mod host;
 mod dispatch;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub mod worker;
+mod worker;
 
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "host-hook")))]
 mod hook;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use driver::HotReloadDriver;
+#[cfg(not(target_arch = "wasm32"))]
+pub use dynlib::DynLib;
 #[cfg(all(not(target_arch = "wasm32"), any(test, feature = "host-hook")))]
 pub use hook::{ScenePluginHook, WorkerReloadHook};
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{PluginKind, PluginScene, ScenePlugin};
 #[cfg(not(target_arch = "wasm32"))]
 pub use worker::{
-    HostRequestRebuildFn, RegisterWorkerBuildFn, WorkerPlugin, WorkerPollOutcome,
-    WorkerReloadDriver, get_worker_build_ptr, host_register_fn, worker_artifact_stamp,
+    DEFAULT_FINGERPRINT, HostRequestRebuildFn, RegisterWorkerBuildFn, WorkerPlugin,
+    WorkerPollOutcome, WorkerReloadDriver, get_worker_build_ptr, host_register_fn,
+    worker_artifact_stamp,
 };
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "app-plugin"))]
@@ -264,4 +266,3 @@ pub use dispatch::{
 #[doc(hidden)]
 pub use dispatch::forward_rebuild_requests_to as __private_forward_rebuild_requests_to;
 pub use engine::{HotReloadOutcome, HotReloadTier};
-pub use strategy::ReloadStrategy;

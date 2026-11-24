@@ -131,7 +131,7 @@ frame; that frame's poll then performs the actual owner-thread
 `dlopen`, exactly as before. The woken poll reads the artifact even when a frame
 polled moments before, inside the driver's poll interval: an idle host draws no
 later frame to pick the rebuild up. Both the watcher and the frame-boundary poll
-read every 50 ms (`flui_hot_reload::strategy::timing`), since a reload waits for
+read every 50 ms, since a reload waits for
 the next read. The first poll after `attach` reads the artifact too, so a rebuild
 that landed between making the hook and attaching it is not missed, and an
 artifact that failed to load is opened again once its stamp changes, or after a
@@ -170,7 +170,7 @@ producing.
 
 ## Reload Strategies
 
-[`ReloadStrategy`](https://github.com/flui-rs/flui/blob/main/packages/flui-hot-reload/src/strategy.rs) in `flui-hot-reload` describes how changes reach the running app:
+Changes reach the running app in one of these ways:
 
 | Strategy | Command / setup | Layer 1 | Layer 2 | Host process |
 |----------|-----------------|---------|---------|--------------|
@@ -179,7 +179,7 @@ producing.
 | `BuildAndDeploy` | `flui run --scene` (Android) | watch scene `src/` → ndk build → `adb push` | host polls mtime on device | kept alive |
 | `None` | `flui run --release`, WASM | — | — | — |
 
-The host's constants live in `flui_hot_reload::strategy::{env, timing}`; the
+The environment variables `flui run` sets live in `flui_hot_reload::env`; the
 source debounce is `flui run`'s (`crates/flui-cli/src/watch.rs`).
 
 ## Host / Plugin Split
@@ -218,10 +218,10 @@ Runs Build → Layout → Paint inside the `.so` via `PluginPipeline`. A reload 
 
 | Crate | Responsibility |
 |-------|----------------|
-| **`flui-hot-reload`** | Runtime half, linked by the app: `DynLib`, `ScenePlugin`, `HotReloadDriver`, `ReloadStrategy`, the worker/host ABI, and `WorkerReloadHook`/`ScenePluginHook`, the `DevReloadHook`s a host installs with `AppConfig::dev_reload` |
+| **`flui-hot-reload`** | Runtime half, linked by the app: `DynLib`, `ScenePlugin`, `HotReloadDriver`, the worker/host ABI, and `WorkerReloadHook`/`ScenePluginHook`, the `DevReloadHook`s a host installs with `AppConfig::dev_reload` |
 | **`flui-cli`** | Dev-machine half: the `SourceWatcher` (`src/watch.rs`), the build pipeline (`src/build/`, once `flui-build`), `flui run`, `flui run --scene` |
 
-Do **not** add a second file-watcher implementation. Extend `flui-cli`'s `watch::SourceWatcher`. The env-var names the CLI sets (`FLUI_HOT_RELOAD`, `FLUI_WORKER_PLUGIN`) are duplicated from `flui_hot_reload::{strategy, engine}::env` and pinned by a test in `commands/run.rs`.
+Do **not** add a second file-watcher implementation. Extend `flui-cli`'s `watch::SourceWatcher`. The env-var names the CLI sets (`FLUI_HOT_RELOAD`, `FLUI_WORKER_PLUGIN`) are duplicated from `flui_hot_reload::env` and pinned by a test in `commands/run.rs`.
 
 ## Desktop Plugin Workflow
 
@@ -255,7 +255,7 @@ flui run --scene --scene-crate <scene-crate> --package com.example.app --target 
 
 ## WASM / Web
 
-WASM has no `dlopen`. `flui run --device browser:<browser>` serves the wasm32 build and reloads the open page on every rebuild (`r` rebuilds by hand). Strategy: `ReloadStrategy::None` at runtime.
+WASM has no `dlopen`. `flui run --device browser:<browser>` serves the wasm32 build and reloads the open page on every rebuild (`r` rebuilds by hand); nothing reloads at runtime.
 
 ## iOS
 
@@ -268,7 +268,7 @@ One iOS-specific requirement is structural rather than a platform limit. A worke
 Minimal frame-loop integration:
 
 ```rust
-use flui_hot_reload::{HotReloadDriver, strategy::env};
+use flui_hot_reload::{HotReloadDriver, env};
 
 let plugin_path = std::env::var(env::SCENE_PLUGIN).ok();
 let mut driver = plugin_path.map(|p| HotReloadDriver::new(p));
@@ -290,7 +290,7 @@ A `flui-app` application writes no such loop: it installs `ScenePluginHook` with
 ## Design Constraints
 
 - **Immediate-mode friendly:** scene plugins rebuild each frame path — code changes show up on next reload without stale retained state.
-- **Sanctioned `dyn` boundary:** `flui_hot_reload::dynlib` is the only approved dynamic loading surface.
+- **Sanctioned `dyn` boundary:** `flui_hot_reload::DynLib` is the only approved dynamic loading surface.
 - **No WASM layer 2:** `HotReloadDriver` is `#[cfg(not(target_arch = "wasm32"))]`.
 - **Dev-only:** hot-reload is not shipped in release builds: the generated host links the logic crate unless it is built with its `reload` feature (see "A release build links the logic crate").
 

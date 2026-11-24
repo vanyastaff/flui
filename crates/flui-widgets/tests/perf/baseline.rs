@@ -13,6 +13,8 @@ use flui_testing::perf::{Baselines, Held};
 /// Every scenario that may hold a file, kept sorted.
 const SCENARIOS: &[&str] = &[
     "caret_blink_in_10k_list",
+    "filter_3000_keyed_rows",
+    "filter_3000_memo_rows",
     "full_reassemble",
     "idle_frame_retained_scene",
     "label_change_kept",

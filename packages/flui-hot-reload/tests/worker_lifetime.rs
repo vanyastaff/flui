@@ -47,8 +47,6 @@ pub extern "C" fn flui_worker_init(register: extern "C" fn(u64, *const ()), _req
 #[unsafe(no_mangle)]
 pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
 #[unsafe(no_mangle)]
-pub extern "C" fn flui_worker_version() -> u32 { VALUE }
-#[unsafe(no_mangle)]
 pub extern "C" fn flui_worker_fingerprint() -> u64 { 0xC007_EA01 }
 "#;
     compile_fixture(

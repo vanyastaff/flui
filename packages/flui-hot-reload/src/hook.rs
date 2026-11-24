@@ -29,8 +29,7 @@ use std::{
 use flui_sdk::view::dev_reload::{DevReloadHook, ReloadEvent, ReloadWake};
 
 use crate::{
-    HotReloadDriver, Scene, WorkerPollOutcome, WorkerReloadDriver, strategy::timing,
-    worker_artifact_stamp,
+    HotReloadDriver, Scene, WorkerPollOutcome, WorkerReloadDriver, timing, worker_artifact_stamp,
 };
 
 /// Reloads a host/worker application's worker `cdylib`.

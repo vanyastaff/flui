@@ -811,8 +811,8 @@ fn run_once(
 }
 
 /// Environment variables the dev loop sets for the app it launches. They are
-/// the contract with the runtime half of hot reload (`flui_hot_reload::engine::env`
-/// and `strategy::env`, read inside the app); the names are duplicated here
+/// the contract with the runtime half of hot reload (`flui_hot_reload::env`,
+/// read inside the app); the names are duplicated here
 /// so the CLI does not link the framework, and `env_names_match_the_runtime`
 /// below keeps the two in step.
 mod env {
@@ -3104,11 +3104,8 @@ mod tests {
     /// does not link the framework; this is the only place that proves they
     /// still agree.
     fn env_names_match_the_runtime() {
-        assert_eq!(env::HOT_RELOAD, flui_hot_reload::strategy::env::HOT_RELOAD);
-        assert_eq!(
-            env::WORKER_PLUGIN,
-            flui_hot_reload::engine::env::WORKER_PLUGIN
-        );
+        assert_eq!(env::HOT_RELOAD, flui_hot_reload::env::HOT_RELOAD);
+        assert_eq!(env::WORKER_PLUGIN, flui_hot_reload::env::WORKER_PLUGIN);
     }
 
     /// `--register-associations` hands the application the variable it

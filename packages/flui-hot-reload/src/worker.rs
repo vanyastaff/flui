@@ -181,7 +181,6 @@ pub fn get_worker_build_ptr(fingerprint: u64) -> Option<*const ()> {
 }
 
 type WorkerInitFn = extern "C" fn(RegisterWorkerBuildFn, HostRequestRebuildFn) -> bool;
-type WorkerVersionFn = extern "C" fn() -> u32;
 type WorkerFingerprintFn = extern "C" fn() -> u64;
 type WorkerAbiTokenFn = extern "C" fn() -> u64;
 
@@ -195,7 +194,6 @@ pub struct WorkerPlugin {
     // tree and carry image-owned code, vtables or storage (ADR-0111).
     lib: ManuallyDrop<DynLib>,
     fingerprint_fn: Option<WorkerFingerprintFn>,
-    version: u32,
     mtime: Option<std::time::SystemTime>,
     /// The `(fingerprint, ptr)` pairs this plugin's init hook registered in
     /// `WORKER_BUILDS` — pruned by `Drop`; the admitted image stays mapped.
@@ -248,11 +246,6 @@ impl WorkerPlugin {
                 });
             }
 
-            let version = lib.symbol("flui_worker_version").map_or(0, |ptr| {
-                let version_fn: WorkerVersionFn = std::mem::transmute(ptr);
-                version_fn()
-            });
-
             let fingerprint_fn = lib
                 .symbol("flui_worker_fingerprint")
                 .map(|ptr| std::mem::transmute::<_, WorkerFingerprintFn>(ptr));
@@ -266,12 +259,10 @@ impl WorkerPlugin {
             let plugin = WorkerPlugin {
                 lib: ManuallyDrop::new(lib),
                 fingerprint_fn,
-                version,
                 mtime,
                 registered: Mutex::new(registered),
             };
             tracing::info!(
-                version = plugin.version,
                 path = %lib_path.display(),
                 "Worker plugin loaded"
             );
@@ -295,20 +286,12 @@ impl WorkerPlugin {
     /// Rust values and callbacks can still be used and destroyed safely.
     /// Restart the development host to reclaim older images and staged files.
     pub fn unload(self) {
-        tracing::info!(
-            version = self.version,
-            "Worker registrations retired; image retained"
-        );
+        tracing::info!(path = %self.lib.path().display(), "Worker registrations retired; image retained");
     }
 
     /// Path this worker was loaded from.
     pub fn path(&self) -> &Path {
         self.lib.path()
-    }
-
-    /// Version reported by `flui_worker_version`.
-    pub fn version(&self) -> u32 {
-        self.version
     }
 }
 
@@ -441,7 +424,7 @@ impl WorkerReloadDriver {
             loaded_path: load_path,
             plugin,
             lib_path,
-            poll_interval: crate::strategy::timing::ARTIFACT_POLL,
+            poll_interval: crate::timing::ARTIFACT_POLL,
             last_poll: std::time::Instant::now(),
             reload_count,
             last_fingerprint,
@@ -449,31 +432,11 @@ impl WorkerReloadDriver {
         }
     }
 
-    /// Polling interval for mtime checks (default:
-    /// [`timing::ARTIFACT_POLL`](crate::strategy::timing::ARTIFACT_POLL)).
+    /// Polling interval for mtime checks (default: the artifact poll interval
+    /// every driver starts with).
     pub fn with_poll_interval(mut self, interval: std::time::Duration) -> Self {
         self.poll_interval = interval;
         self
-    }
-
-    /// Whether a worker is currently loaded.
-    pub fn is_loaded(&self) -> bool {
-        self.plugin.is_some()
-    }
-
-    /// Reload count (1 after the initial successful load).
-    pub fn reload_count(&self) -> u32 {
-        self.reload_count
-    }
-
-    /// Last observed type fingerprint from the worker.
-    pub fn fingerprint(&self) -> u64 {
-        self.last_fingerprint
-    }
-
-    /// Library path being watched.
-    pub fn lib_path(&self) -> &Path {
-        &self.lib_path
     }
 
     /// Poll for worker updates. Call from the platform frame loop: the

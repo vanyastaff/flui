@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 /// Why [`ScenePlugin::load`](crate::ScenePlugin::load),
 /// [`WorkerPlugin::load`](crate::WorkerPlugin::load) or
-/// [`DynLib::open`](crate::dynlib::DynLib::open) refused a library. Each
+/// [`DynLib::open`](crate::DynLib::open) refused a library. Each
 /// variant names the file and says what the developer does about it.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]

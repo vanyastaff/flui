@@ -605,6 +605,131 @@ fn perf_a_label_toggling_between_kept_strings_shares_their_layouts() {
     let _baseline = baseline::hold("label_change_kept", &heap_counts(heap));
 }
 
+/// The rows a filter scenario mounts, all eager, so every one is an element,
+/// a render object and a paragraph before the filter runs.
+const FILTER_ROWS: u32 = 3_000;
+
+/// A row keyed by its id: a parent that drops the rows around it keeps its
+/// element, its render object and its paragraph. Its fields are all data, so
+/// it may sit in a [`Memo`].
+#[derive(Clone, PartialEq, StatelessView)]
+struct FilterRow {
+    #[view(key)]
+    key: flui_foundation::ValueKey<u32>,
+}
+
+impl StatelessView for FilterRow {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        SizedBox::new(WIDTH, ROW_HEIGHT).child(Text::new(format!("Row {}", self.key.value())))
+    }
+}
+
+/// [`FILTER_ROWS`] keyed rows in a scrolled column, each in a [`Memo`] when
+/// `memo` is set; with the filter on, only the even ones.
+#[derive(Clone, StatefulView)]
+struct FilteredRows {
+    even_only: SharedSignal<bool>,
+    memo: bool,
+}
+
+struct FilteredRowsState {
+    even_only: SharedSignal<bool>,
+}
+
+impl StatefulView for FilteredRows {
+    type State = FilteredRowsState;
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        FilteredRowsState {
+            even_only: self.even_only.clone(),
+        }
+    }
+}
+
+impl ViewState<FilteredRows> for FilteredRowsState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.even_only.bind(ctx);
+    }
+    fn build(&self, view: &FilteredRows, ctx: &dyn BuildContext) -> impl IntoView {
+        let even_only = self.even_only.get(ctx);
+        let rows: Vec<_> = (0..FILTER_ROWS)
+            .filter(|id| !even_only || id % 2 == 0)
+            .map(|id| {
+                let row = FilterRow {
+                    key: flui_foundation::ValueKey::new(id),
+                };
+                if view.memo {
+                    Memo::new(row).boxed()
+                } else {
+                    row.boxed()
+                }
+            })
+            .collect();
+        SingleChildScrollView::new().child(Column::new(rows))
+    }
+}
+
+/// Mounts [`FilteredRows`], settles it, and returns the report and heap
+/// counts of the one frame that turns the filter on.
+fn filter_frame(memo: bool) -> (FrameReport, HeapCounts) {
+    let even_only = SharedSignal::new(false);
+    let mut laid = lay_out(
+        FilteredRows {
+            even_only: even_only.clone(),
+            memo,
+        },
+        tight(WIDTH, HEIGHT),
+    );
+    laid.pump_for(FRAME);
+    perf_measured(|| {
+        even_only.set(true);
+        laid.pump_report(FRAME)
+    })
+}
+
+/// Filtering 3 000 keyed rows down to their even half, the kind of edit a
+/// search field makes. The column drops the odd rows and keeps the even ones
+/// by key, and a kept row's size does not change, so layout stops at the
+/// column. Each kept row is still handed a new view by the rebuilt parent and
+/// rebuilds with everything below it, as a Flutter widget that is not `const`
+/// does; the file holds that work.
+#[test]
+fn perf_filtering_3000_keyed_rows_keeps_the_rows_that_stay() {
+    let (report, heap) = filter_frame(false);
+    let _baseline = hold_report("filter_3000_keyed_rows", &report, heap);
+
+    let kept = u64::from(FILTER_ROWS / 2);
+    assert_eq!(report.pipeline.frames_produced, 1, "{report:#?}");
+    assert!(
+        report.pipeline.nodes_laid_out < kept,
+        "a kept row keeps its size, so its layout is not redone: {report:#?}"
+    );
+    assert_eq!(
+        report.build.builds_run, report.build.elements_built,
+        "no element builds twice in one frame: {report:#?}"
+    );
+}
+
+/// The same filter over rows in a [`Memo`]: a kept row compares equal to the
+/// view it was built from and skips its rebuild, so the frame builds the
+/// filter's own element and nothing per row. The memo carries its row's key,
+/// so the column still matches each kept row by key and not by position.
+#[test]
+fn perf_filtering_3000_memo_rows_rebuilds_none_of_the_rows_that_stay() {
+    let (report, heap) = filter_frame(true);
+    let _baseline = hold_report("filter_3000_memo_rows", &report, heap);
+
+    let kept = u64::from(FILTER_ROWS / 2);
+    assert_eq!(report.pipeline.frames_produced, 1, "{report:#?}");
+    assert!(
+        report.pipeline.nodes_laid_out < kept,
+        "a kept row keeps its size, so its layout is not redone: {report:#?}"
+    );
+    assert!(
+        (report.build.elements_built as u64) < kept,
+        "a kept row in a memo is not built again: {report:#?}"
+    );
+}
+
 /// What a `RawButton` adds to the `Text` it holds, per button: the four
 /// numbers ADR-0322's drivers count a control's cost by. The `Text` alone is
 /// recorded beside them.
