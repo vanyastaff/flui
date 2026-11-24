@@ -50,7 +50,7 @@ use super::agent_input;
 use super::agent_inspect::InspectTarget;
 use super::agent_journal;
 use super::commands::DrainReport;
-use crate::build_overlay::{BuildBanner, ReportRefused};
+use crate::build_overlay::{BuildBanner, UnknownBuildState};
 use crate::presentation::PresentationState;
 
 /// How many matches a strict locator is resolved over: two say it is ambiguous, ten name the
@@ -177,11 +177,7 @@ impl Annotate for method::BuildReport {
     ) -> Result<(Empty, bool), AgentError> {
         match banner.report(params.state) {
             Ok(changed) => Ok((Empty::default(), changed)),
-            Err(ReportRefused::TooManyDiagnostics) => Err(AgentError::InvalidArgument {
-                reason: "a build report carries more diagnostics than a window shows \
-                         (flui_protocol::build::MAX_DIAGNOSTICS)",
-            }),
-            Err(ReportRefused::UnknownState) => Err(AgentError::InvalidArgument {
+            Err(UnknownBuildState) => Err(AgentError::InvalidArgument {
                 reason: "this app's windows do not know that build state",
             }),
         }

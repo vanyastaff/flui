@@ -944,6 +944,13 @@ impl SceneWriter<'_> {
         Ok(ContentVersion::new(self.owner.lineage, seq))
     }
 
+    /// Whether the patch buffers no op: applying it would publish a version
+    /// that changes nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.owner.ops.is_empty()
+    }
+
     /// Buffers `op`. Its ids are checked against the owner's lineage when the
     /// patch is applied.
     pub fn push(&mut self, op: SceneOp) {

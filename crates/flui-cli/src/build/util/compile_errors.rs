@@ -3,32 +3,14 @@
 //!
 //! `flui run` reads them so the running app can show where its next build failed
 //! (`build.report`, ADR-0395). Only the compiler's errors are kept, at most
-//! [`MAX_DIAGNOSTICS`] of them; the rest is counted.
+//! [`MAX_DIAGNOSTICS`](flui_protocol::build::MAX_DIAGNOSTICS) of them, and the rest counted
+//! ([`Diagnostics`]).
 
 use std::io::{self, BufRead, Write};
 
 use cargo_metadata::Message;
 use cargo_metadata::diagnostic::DiagnosticLevel;
-use flui_protocol::build::{Diagnostic, MAX_DIAGNOSTICS, SourceLocation};
-
-/// The compiler errors of one build.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct CompileErrors {
-    /// The first [`MAX_DIAGNOSTICS`], in the order the compiler reported them.
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    /// How many more it reported.
-    pub(crate) omitted: u32,
-}
-
-impl CompileErrors {
-    fn push(&mut self, diagnostic: Diagnostic) {
-        if self.diagnostics.len() < MAX_DIAGNOSTICS {
-            self.diagnostics.push(diagnostic);
-        } else {
-            self.omitted = self.omitted.saturating_add(1);
-        }
-    }
-}
+use flui_protocol::build::{Diagnostic, Diagnostics, SourceLocation};
 
 /// Reads cargo's messages from `messages` to their end, writing each compiler message's rendered
 /// text, and each line that is not a message, to `terminal`, and answers the errors among them.
@@ -36,8 +18,8 @@ impl CompileErrors {
 /// # Errors
 ///
 /// Reading `messages` or writing `terminal` failed.
-pub(crate) fn read(messages: impl BufRead, terminal: &mut impl Write) -> io::Result<CompileErrors> {
-    let mut errors = CompileErrors::default();
+pub(crate) fn read(messages: impl BufRead, terminal: &mut impl Write) -> io::Result<Diagnostics> {
+    let mut errors = Diagnostics::new();
     for message in Message::parse_stream(messages) {
         match message? {
             Message::CompilerMessage(message) => {
@@ -87,6 +69,8 @@ fn compile_error(diagnostic: &cargo_metadata::diagnostic::Diagnostic) -> Option<
 
 #[cfg(test)]
 mod tests {
+    use flui_protocol::build::MAX_DIAGNOSTICS;
+
     use super::*;
 
     /// A compiler message line as cargo writes it with `--message-format=json`.
@@ -149,7 +133,7 @@ mod tests {
         let errors = read(lines.join("\n").as_bytes(), &mut terminal).expect("read");
 
         assert_eq!(
-            errors.diagnostics[..2],
+            errors.kept()[..2],
             [
                 Diagnostic::new(
                     "mismatched types".into(),
@@ -158,9 +142,10 @@ mod tests {
                 Diagnostic::new("cannot find value `y`".into(), None),
             ]
         );
-        assert_eq!(errors.diagnostics.len(), MAX_DIAGNOSTICS);
+        assert_eq!(errors.kept().len(), MAX_DIAGNOSTICS);
         assert_eq!(
-            errors.omitted, 2,
+            errors.omitted(),
+            2,
             "the errors past the first {MAX_DIAGNOSTICS}"
         );
         let terminal = String::from_utf8(terminal).expect("UTF-8");

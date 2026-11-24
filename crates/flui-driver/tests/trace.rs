@@ -643,6 +643,12 @@ fn codegen_marks_what_it_cannot_write_and_writes_the_main_window_as_the_tests_ow
                 2,
                 serde_json::json!({ "via": "synthetic", "effect": { "kind": "ran" } }),
             ),
+            command(
+                3,
+                "build.report",
+                serde_json::json!({ "window": "w5", "state": "building" }),
+            ),
+            ok(3, serde_json::json!({})),
         ],
     );
     assert!(
@@ -652,6 +658,10 @@ fn codegen_marks_what_it_cannot_write_and_writes_the_main_window_as_the_tests_ow
     assert!(
         !plain.contains("windows.list"),
         "a read is left out: {plain}"
+    );
+    assert!(
+        !plain.contains("build.report"),
+        "an annotation, which leaves the app as it was, is left out: {plain}"
     );
     assert!(
         !plain.contains("serde_json"),
@@ -816,8 +826,6 @@ fn every_text_field_of_the_wire_is_redacted_or_named_as_kept() {
         "persistent_key",
         "root",
         "token_file",
-        // The source file a compiler diagnostic names (`build.report`).
-        "file",
         "tree",
         // Names from a vocabulary: methods, capabilities, actions, kinds, roles, media types,
         // the driver's own reasons and details.

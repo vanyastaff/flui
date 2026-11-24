@@ -21,7 +21,7 @@ use std::rc::Rc;
 use flui_foundation::geometry::{Offset, RRect, Radius, Rect, Size};
 use flui_painting::styling::Color;
 use flui_painting::{Canvas, DisplayList, TextContext, TextLayoutError, paint::Paint};
-use flui_protocol::build::{BuildState, Diagnostic, MAX_DIAGNOSTICS};
+use flui_protocol::build::{BuildState, Diagnostic};
 
 use crate::performance_overlay::draw_label;
 
@@ -67,14 +67,11 @@ pub(crate) struct BuildBanner {
     laid: RefCell<Option<Laid>>,
 }
 
-/// What [`BuildBanner::report`] refuses.
+/// A build state this build of the runtime does not know, which [`BuildBanner::report`]
+/// refuses. No report holds more diagnostics than a window shows:
+/// [`Diagnostics`](flui_protocol::build::Diagnostics) holds that bound, decoded or built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ReportRefused {
-    /// More diagnostics than [`MAX_DIAGNOSTICS`].
-    TooManyDiagnostics,
-    /// A build state this build of the runtime does not know.
-    UnknownState,
-}
+pub(crate) struct UnknownBuildState;
 
 /// The report shown: a build running, or one that failed, as the panel reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,25 +98,16 @@ impl BuildBanner {
     ///
     /// # Errors
     ///
-    /// A report with more than [`MAX_DIAGNOSTICS`] diagnostics, or of a state this runtime does
-    /// not know, is refused and changes nothing.
-    pub(crate) fn report(&self, state: BuildState) -> Result<bool, ReportRefused> {
+    /// A report of a state this runtime does not know is refused and changes nothing.
+    pub(crate) fn report(&self, state: BuildState) -> Result<bool, UnknownBuildState> {
         let report = match state {
             BuildState::Building => Some(Report::Building),
             BuildState::Succeeded => None,
-            BuildState::Failed {
-                diagnostics,
-                omitted,
-            } => {
-                if diagnostics.len() > MAX_DIAGNOSTICS {
-                    return Err(ReportRefused::TooManyDiagnostics);
-                }
-                Some(Report::Failed {
-                    header: header(diagnostics.len(), omitted),
-                    lines: diagnostics.iter().map(diagnostic_line).collect(),
-                })
-            }
-            _ => return Err(ReportRefused::UnknownState),
+            BuildState::Failed(errors) => Some(Report::Failed {
+                header: header(errors.kept().len(), errors.omitted()),
+                lines: errors.kept().iter().map(diagnostic_line).collect(),
+            }),
+            _ => return Err(UnknownBuildState),
         };
         if *self.shown.borrow() == report {
             return Ok(false);
@@ -132,9 +120,9 @@ impl BuildBanner {
     }
 
     /// The banner of the shown report on a surface of `surface` logical pixels, kept clear of
-    /// `avoid` (the performance overlay's bounds while it is drawn); `None` when nothing is shown
-    /// or nothing of it fits. A frame for the surface the last one laid out for gets that banner
-    /// again, without laying it out.
+    /// `avoid` (the bounds of the performance overlay's readout while the scene shows it); `None`
+    /// when nothing is shown or nothing of it fits. A frame for the surface the last one laid out
+    /// for gets that banner again, without laying it out.
     pub(crate) fn banner(&self, surface: Size<f64>, avoid: Option<Rect<f64>>) -> Option<Banner> {
         let shown = self.shown.borrow();
         let report = shown.as_ref()?;
@@ -341,18 +329,21 @@ impl Banner {
             .collect()
     }
 
-    /// A chip whose one label has a font size no shaper takes, so it never records.
+    /// A chip that never records: its first label shapes, so each attempt to record it shapes
+    /// that label unless the context holds its layout, and its second has a font size no shaper
+    /// takes.
     #[cfg(test)]
     pub(crate) fn unshapeable() -> Self {
+        let label = |at: f64, font_size: f32| Label {
+            text: BUILDING.to_owned(),
+            at: Offset::new(16.0, at),
+            font_size,
+            color: CHIP_TEXT,
+        };
         Self {
-            bounds: Rect::from_ltrb(8.0, 8.0, 104.0, 32.0),
+            bounds: Rect::from_ltrb(8.0, 8.0, 104.0, 56.0),
             background: CHIP_BACKGROUND,
-            labels: Rc::new([Label {
-                text: BUILDING.to_owned(),
-                at: Offset::new(16.0, 12.0),
-                font_size: f32::NAN,
-                color: CHIP_TEXT,
-            }]),
+            labels: Rc::new([label(12.0, 12.0), label(32.0, f32::NAN)]),
         }
     }
 }
@@ -400,13 +391,19 @@ fn is_bidi_format(character: char) -> bool {
     )
 }
 
+/// The characters Unicode makes a mandatory line break (UAX #14's `BK`, `CR`, `LF` and `NL`):
+/// the shaper breaks a line at each, so a banner line holds none.
+const LINE_BREAKS: [char; 7] = [
+    '\n', '\r', '\u{000B}', '\u{000C}', '\u{0085}', '\u{2028}', '\u{2029}',
+];
+
 /// `text` as one line of at most `limit` characters, the ellipsis included: cut at its first
-/// line break when more than whitespace follows it, each other control character a space, every
-/// bidirectional formatting character dropped, and ended with an ellipsis where it is cut. It
-/// copies no more of `text` than the line it keeps.
+/// [line break](LINE_BREAKS) when more than whitespace follows it, each other control character a
+/// space, every bidirectional formatting character dropped, and ended with an ellipsis where it is
+/// cut. It copies no more of `text` than the line it keeps.
 fn one_line(text: &str, limit: usize) -> String {
     let (first, rest) = text
-        .find(['\n', '\r'])
+        .find(LINE_BREAKS)
         .map_or((text, ""), |at| text.split_at(at));
     let mut cut = !rest.trim().is_empty();
     let mut kept = String::new();
@@ -454,21 +451,27 @@ mod tests {
     use flui_foundation::geometry::Size;
     use flui_protocol::build::{BuildState, Diagnostic, MAX_DIAGNOSTICS, SourceLocation};
 
-    use super::{BuildBanner, FIELD_LIMIT, Report, ReportRefused, fit, one_line};
+    use super::{BuildBanner, FIELD_LIMIT, Report, fit, one_line};
     use crate::performance_overlay::BOUNDS;
 
+    /// A failed build as a window may read it off the wire: `diagnostics`, and `omitted` more.
+    fn failed_with(diagnostics: &[Diagnostic], omitted: u32) -> BuildState {
+        serde_json::from_value::<BuildState>(serde_json::json!({
+            "failed": { "diagnostics": diagnostics, "omitted": omitted }
+        }))
+        .expect("a report within the bound")
+    }
+
     fn failed(count: usize, omitted: u32) -> BuildState {
-        BuildState::Failed {
-            diagnostics: (0..count)
-                .map(|index| {
-                    Diagnostic::new(
-                        format!("error {index}"),
-                        Some(SourceLocation::new("src/main.rs".to_owned(), 3, 7)),
-                    )
-                })
-                .collect(),
-            omitted,
-        }
+        let diagnostics: Vec<Diagnostic> = (0..count)
+            .map(|index| {
+                Diagnostic::new(
+                    format!("error {index}"),
+                    Some(SourceLocation::new("src/main.rs".to_owned(), 3, 7)),
+                )
+            })
+            .collect();
+        failed_with(&diagnostics, omitted)
     }
 
     /// A report's text is one line at its limit, with an ellipsis where it is cut at a line break
@@ -484,6 +487,12 @@ mod tests {
             ("first\nsecond", 20, "first\u{2026}"),
             ("first\r\nsecond", 20, "first\u{2026}"),
             ("trailing\n", 20, "trailing"),
+            ("first\u{2028}second", 20, "first\u{2026}"),
+            ("first\u{2029}second", 20, "first\u{2026}"),
+            ("first\u{0085}second", 20, "first\u{2026}"),
+            ("first\u{000B}second", 20, "first\u{2026}"),
+            ("first\u{000C}second", 20, "first\u{2026}"),
+            ("trailing\u{2029}", 20, "trailing"),
             ("tab\there", 20, "tab here"),
             ("a\u{202E}cba\u{202C}d", 20, "acbad"),
             (
@@ -521,13 +530,13 @@ mod tests {
         let long = "m".repeat(100_000);
         let banner = BuildBanner::default();
         assert_eq!(
-            banner.report(BuildState::Failed {
-                diagnostics: vec![
+            banner.report(failed_with(
+                &[
                     Diagnostic::new(long.clone(), None),
                     Diagnostic::new("short".to_owned(), Some(SourceLocation::new(long, 1, 2))),
                 ],
-                omitted: 0,
-            }),
+                0
+            )),
             Ok(true)
         );
         let shown = banner.shown.borrow();
@@ -576,28 +585,23 @@ mod tests {
             ["Build failed: 3 errors, see the terminal"]
         );
         assert_eq!(
-            drawn(BuildState::Failed {
-                diagnostics: vec![Diagnostic::new("no location".to_owned(), None)],
-                omitted: 1,
-            }),
+            drawn(failed_with(
+                &[Diagnostic::new("no location".to_owned(), None)],
+                1
+            )),
             ["Build failed: 1 error and 1 more", "no location"]
         );
     }
 
-    /// A report past the limit is refused and keeps what was shown; an equal report changes
-    /// nothing; `Succeeded` clears it.
+    /// A report replaces the one shown, an equal report changes nothing, `Succeeded` clears it.
     #[test]
-    fn a_report_replaces_refuses_or_clears() {
+    fn a_report_replaces_or_clears() {
         let banner = BuildBanner::default();
         assert!(banner.shown.borrow().is_none());
         assert_eq!(banner.report(BuildState::Building), Ok(true));
         assert_eq!(banner.report(BuildState::Building), Ok(false));
-        assert_eq!(
-            banner.report(failed(MAX_DIAGNOSTICS + 1, 0)),
-            Err(ReportRefused::TooManyDiagnostics)
-        );
         let size = Size::new(800.0, 600.0);
-        let building = banner.banner(size, None).expect("the chip stays");
+        let building = banner.banner(size, None).expect("the chip shows");
         assert_eq!(building.texts(), [super::BUILDING]);
         assert_eq!(banner.report(failed(MAX_DIAGNOSTICS, 0)), Ok(true));
         let panel = banner
