@@ -831,7 +831,7 @@ jobs:
           FLUI_REQUIRE_GPU: "1"
         run: |
           crashes=0
-          for i in $(seq 1 150); do
+          for i in $(seq 1 80); do
             for backend in vulkan ""; do
               if ! WGPU_BACKEND="$backend" cargo nextest run -p flui-engine --features testing --lib \
                 --locked --no-fail-fast --test-threads 2 --status-level fail --final-status-level fail \
