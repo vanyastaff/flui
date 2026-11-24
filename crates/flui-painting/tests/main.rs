@@ -1108,6 +1108,14 @@ fn shape_cache_contract() {
                 "a_relayout_builds_into_the_layout_it_replaces",
                 sc::a_relayout_builds_into_the_layout_it_replaces,
             ),
+            (
+                "a_paragraph_back_after_forty_others_is_kept",
+                sc::a_paragraph_back_after_forty_others_is_kept,
+            ),
+            (
+                "an_evicted_layout_is_built_into",
+                sc::an_evicted_layout_is_built_into,
+            ),
         ],
     );
 }

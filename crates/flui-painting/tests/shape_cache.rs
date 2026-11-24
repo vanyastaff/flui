@@ -389,6 +389,13 @@ pub(crate) fn the_bytes_bound_evicts_before_the_count() {
     for paragraph in &paragraphs[1..] {
         keep(&mut context, &spec(paragraph));
     }
+    for recent in [63, 62] {
+        assert_eq!(
+            lay_out(&mut context, &spec(&paragraphs[recent])).1,
+            0,
+            "paragraph {recent} stayed: an eviction gives back the bytes of what it drops"
+        );
+    }
     assert_eq!(
         lay_out(&mut context, &first).1,
         1,
@@ -426,5 +433,51 @@ pub(crate) fn a_relayout_builds_into_the_layout_it_replaces() {
     assert!(
         reused + 8 <= fresh,
         "a relayout into the replaced layout asked the heap for {reused} blocks, a fresh one {fresh}"
+    );
+}
+
+/// A paragraph that comes back after 40 others is still remembered from its
+/// first layout, and kept on its second.
+pub(crate) fn a_paragraph_back_after_forty_others_is_kept() {
+    let mut context = TextContext::new(&fonts());
+    let spans = plain(TEXT);
+    let paragraph = spec(&spans);
+    let rows: Vec<_> = (0..40).map(|row| plain(&format!("Row {row}"))).collect();
+    lay_out(&mut context, &paragraph);
+    for row in &rows {
+        lay_out(&mut context, &spec(row));
+    }
+    lay_out(&mut context, &paragraph);
+    assert_eq!(
+        lay_out(&mut context, &paragraph).1,
+        0,
+        "the second layout, 40 paragraphs after the first, kept it"
+    );
+}
+
+/// A layout the cache drops, held by nothing else, is what the next
+/// paragraph shaped is built into: that shaping allocates less than the one
+/// after it, which finds no layout to build into.
+pub(crate) fn an_evicted_layout_is_built_into() {
+    let mut context = TextContext::new(&fonts());
+    let rows: Vec<_> = (0..129).map(|row| plain(&format!("Row {row}"))).collect();
+    for row in &rows {
+        keep(&mut context, &spec(row));
+    }
+    let after_eviction = plain("A paragraph laid out once, after an eviction.");
+    let without_spare = plain("A paragraph laid out once, with no spare left.");
+    let (into_evicted, _) = crate::foreign_image::allocations_during(|| {
+        context
+            .shape(&spec(&after_eviction))
+            .expect("the fixture shapes")
+    });
+    let (fresh, _) = crate::foreign_image::allocations_during(|| {
+        context
+            .shape(&spec(&without_spare))
+            .expect("the fixture shapes")
+    });
+    assert!(
+        into_evicted + 5 <= fresh,
+        "a shaping into the evicted layout asked the heap for {into_evicted} blocks, a fresh one {fresh}"
     );
 }
