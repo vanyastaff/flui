@@ -541,21 +541,18 @@ impl RenderTree {
 
     /// Drops from `parent_id`'s child list every id that no longer names a
     /// node of this tree, in one pass that keeps the order of the rest: the
-    /// compaction [`ParentEdge::Compact`] leaves to its caller. Returns whether
-    /// any id was dropped; a stale `parent_id` is a no-op.
-    pub(crate) fn drop_removed_children(&mut self, parent_id: RenderId) -> bool {
+    /// compaction [`ParentEdge::Compact`] leaves to its caller. A stale
+    /// `parent_id` is a no-op.
+    pub(crate) fn drop_removed_children(&mut self, parent_id: RenderId) {
         let Some(parent) = self.get_mut(parent_id) else {
-            return false;
+            return;
         };
         let mut children = parent.links_mut().take_children();
-        let before = children.len();
         children.retain(|&child| self.nodes.contains(child));
-        let dropped = children.len() != before;
         self.get_mut(parent_id)
             .expect("BUG: the parent read above is still in the tree")
             .links_mut()
             .restore_children(children);
-        dropped
     }
 
     /// Takes the nodes of `subtree` out of the tree, children before their parent, and appends
@@ -874,8 +871,9 @@ pub(crate) enum ParentEdge {
     Detach,
     /// The parent's list keeps the stale id until
     /// [`RenderTree::drop_removed_children`] compacts it, once for any number
-    /// of removals; until then the list names a removed node, so the
-    /// compaction comes before anything walks that parent's children.
+    /// of removals. Until then the list names a removed node, so a walk of
+    /// it in between must skip every id the tree no longer holds, as
+    /// `collect_subtree` does.
     Compact,
 }
 

@@ -206,16 +206,18 @@ impl PipelineCell {
 
     /// Runs `f`, during which every
     /// [`remove_render_object`](PipelineOwner::remove_render_object) on this
-    /// owner queues its subtree, and then removes them all, compacting each
-    /// parent's child list once. A reconcile that drops `k` of a parent's `n`
-    /// children pays `O(n + k)` for the lists instead of `O(k·n)`.
+    /// owner removes its subtree but leaves the stale id in the former
+    /// parent's child list; when `f` returns, each such list is compacted
+    /// once and its parent marked. A reconcile that drops `k` of a parent's
+    /// `n` children pays `O(n + k)` for the lists instead of `O(k·n)`.
     ///
-    /// Until `f` returns the queued subtrees stay whole and attached: a hook
-    /// that `f` runs finds them where they were. Batches nest; the outermost
-    /// removes. Run while the owner is checked out (a build during layout),
-    /// `f` runs unbatched. If `f` unwinds, the batch stays open and its
-    /// subtrees wait for the next [`layout_pass`](PipelineOwner::layout_pass),
-    /// which closes every open batch first: correctness needs no destructor.
+    /// Until `f` returns a parent's list may name a removed node, which a
+    /// walk of the list must skip (`RenderTree::get` misses it). Batches nest; the
+    /// outermost compacts. Run while the owner is checked out (a build during
+    /// layout), `f` runs unbatched. If `f` unwinds, the batch stays open and
+    /// the next [`layout_pass`](PipelineOwner::layout_pass) closes it first,
+    /// so no frame lays out a list that names a removed node: correctness
+    /// needs no destructor.
     pub fn with_batched_removals<R>(&self, f: impl FnOnce() -> R) -> R {
         let opened = self
             .0

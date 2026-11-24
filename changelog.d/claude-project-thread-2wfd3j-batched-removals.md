@@ -1,6 +1,6 @@
 ### Added
 
-- `PipelineCell::with_batched_removals` runs a closure during which `PipelineOwner::remove_render_object` queues each subtree, then removes them all and compacts each parent's child list once.
+- `PipelineCell::with_batched_removals` runs a closure during which `PipelineOwner::remove_render_object` leaves each former parent's child list to the batch's end, which compacts every such list once.
 
 ### Fixed
 

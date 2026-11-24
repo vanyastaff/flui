@@ -354,10 +354,10 @@ mapped every consumer family of such a seam, including the hard cases
   children that are merely leaving view rather than dying. A reconcile
   runs the removals of its dense children in one removal batch of the
   parent's pipeline (`PipelineCell::with_batched_removals`): each
-  removed subtree stays attached until the batch ends, and the end
-  compacts each render parent's child list once, so dropping `k` of `n`
-  children costs `O(n + k)`, not `O(k·n)`.
-- *Move/reorder* — no per-child mutation at all: a post-build batch pass,
+  removed subtree leaves the render tree at once, its id left in the
+  render parent's child list until the batch ends and compacts each
+  such list once, so dropping `k` of `n` children costs `O(n + k)`, not
+  `O(k·n)`.
   `ElementTree::reorder_render_children_after_build`, settles render
   children into slot order after a build.
 - *Attach/detach* — pipeline-owner wiring at mount/unmount (`on_mount` /
