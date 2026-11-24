@@ -30,9 +30,32 @@ pub(crate) struct BuilderContext {
     /// The floors the build packages and links with (ADR-0244 §10): FLUI's,
     /// raised where `flui.toml` asks.
     pub(crate) floors: crate::build::app_floor::AppFloors,
-    /// Cargo features the build turns on beyond the package's defaults, each
-    /// as `--features` takes it (`flui/driver`).
-    pub(crate) features: Vec<String>,
+    /// The agent's `driver` feature (`flui/driver`, as `--features` takes
+    /// it), for an optimized build the agent connects to.
+    pub(crate) agent_driver: Option<String>,
+}
+
+impl BuilderContext {
+    /// The cargo arguments of this build's mode for a package that reaches
+    /// FLUI through `framework`: the profile's flag and the features the
+    /// mode turns on
+    /// ([`FrameworkDependency::mode_features`](crate::build::framework::FrameworkDependency::mode_features)).
+    #[must_use]
+    pub(crate) fn mode_args(
+        &self,
+        framework: &crate::build::framework::FrameworkDependency,
+    ) -> Vec<String> {
+        let mut args: Vec<String> = self
+            .profile
+            .cargo_flag()
+            .map(str::to_owned)
+            .into_iter()
+            .collect();
+        for feature in framework.mode_features(self.profile, self.agent_driver.as_deref()) {
+            args.extend(["--features".to_owned(), feature]);
+        }
+        args
+    }
 }
 
 /// Identity an application bundle is staged under.
@@ -291,4 +314,45 @@ pub(crate) struct FinalArtifacts {
     pub(crate) app_binary: PathBuf,
     /// File size, or the sum of contained file sizes for a bundle, in bytes.
     pub(crate) size_bytes: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BuildUnit, Platform, Profile};
+    use crate::build::BuilderContextBuilder;
+    use crate::build::framework::FrameworkDependency;
+
+    /// Every platform's build takes its mode from `mode_args`: the profile's
+    /// flag, then the release ceiling through the key the package names the
+    /// facade under, or the agent's driver in its place (ADR-0398 §2).
+    #[test]
+    fn a_build_mode_is_its_profile_flag_and_its_features() {
+        let framework = FrameworkDependency::Named("ui".to_owned());
+        for (profile, driver, expected) in [
+            (
+                Profile::Release,
+                None,
+                &["--release", "--features", "ui/release-max-level-info"][..],
+            ),
+            (Profile::Debug, None, &[][..]),
+            (
+                Profile::Release,
+                Some("ui/driver"),
+                &["--release", "--features", "ui/driver"][..],
+            ),
+        ] {
+            let ctx = BuilderContextBuilder::new(std::path::PathBuf::from("app"))
+                .platform(Platform::Desktop { target: None })
+                .target(BuildUnit::DefaultBinary)
+                .profile(profile)
+                .output_dir(std::path::PathBuf::from("out"))
+                .agent_driver(driver.map(str::to_owned))
+                .build();
+            assert_eq!(
+                ctx.mode_args(&framework),
+                expected,
+                "{profile:?} {driver:?}"
+            );
+        }
+    }
 }

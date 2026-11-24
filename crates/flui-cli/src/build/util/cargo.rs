@@ -8,6 +8,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 
 use crate::build::error::{BuildError, BuildResult};
+use crate::build::framework::FrameworkDependency;
 use crate::build::platform::{BuildUnit, BuiltPackage};
 
 pub(crate) struct CargoTarget {
@@ -17,9 +18,16 @@ pub(crate) struct CargoTarget {
     kind: TargetKind,
     crate_type: CrateType,
     version: String,
+    framework: FrameworkDependency,
 }
 
 impl CargoTarget {
+    /// The dependency through which the package reaches FLUI's build
+    /// switches.
+    pub(crate) fn framework(&self) -> &FrameworkDependency {
+        &self.framework
+    }
+
     /// The workspace member the build compiles, and whether its target
     /// links the member's dev-dependencies (an example's does).
     pub(crate) fn built_package(&self) -> BuiltPackage {
@@ -83,6 +91,9 @@ pub(crate) struct CargoProject {
     /// types the manifest declares do not matter: that build asks for the
     /// `cdylib` itself.
     pub(crate) library: Option<String>,
+    /// The dependency through which that package reaches FLUI's build
+    /// switches; [`FrameworkDependency::Neither`] for a virtual workspace.
+    pub(crate) framework: FrameworkDependency,
 }
 
 /// Ask `cargo metadata` (without dependencies) about the project at `dir`.
@@ -130,6 +141,9 @@ pub(crate) fn cargo_project(dir: &Path) -> BuildResult<CargoProject> {
         target_dir: metadata.target_directory.into_std_path_buf(),
         package: package.map(|package| package.name.to_string()),
         library,
+        framework: package.map_or(FrameworkDependency::Neither, |package| {
+            FrameworkDependency::of(&package.dependencies)
+        }),
     })
 }
 
@@ -298,6 +312,7 @@ async fn select_target_for(
                 package: package.id.clone(),
                 package_name: package.name.to_string(),
                 version: package.version.to_string(),
+                framework: FrameworkDependency::of(&package.dependencies),
                 name: target.name.clone(),
                 kind: kind.clone(),
                 crate_type: if staticlib {

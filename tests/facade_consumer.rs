@@ -229,6 +229,60 @@ fn ordinary_facade_graph_excludes_test_support() {
     }
 }
 
+/// `tracing`'s static maximum level reaches a consumer through the facade's
+/// `release-max-level-info` alone (ADR-0398 §1): without it no crate of the
+/// normal graph turns a `max_level_*` feature on, and with it the release
+/// ceiling is on.
+#[test]
+fn the_release_ceiling_reaches_tracing_only_through_its_feature() {
+    let Some(root) = checkout_root() else { return };
+    for (features, ceiling) in [(&[][..], false), (&["release-max-level-info"][..], true)] {
+        let mut dependencies = toml::Table::new();
+        dependencies.insert("flui".into(), facade_with_features(root, features));
+        let project = consumer_project(dependencies, None, "");
+        let output = Command::new(env!("CARGO"))
+            .args([
+                "tree",
+                "--offline",
+                "--edges",
+                "normal",
+                "--prefix",
+                "none",
+                "--format",
+                "{p}|{f}",
+            ])
+            .current_dir(project.path())
+            .output()
+            .expect("inspect normal consumer dependency graph");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let graph = String::from_utf8_lossy(&output.stdout);
+        let tracing_features: Vec<&str> = graph
+            .lines()
+            .find_map(|line| {
+                line.starts_with("tracing v")
+                    .then(|| line.split_once('|'))
+                    .flatten()
+            })
+            .map(|(_, features)| features.split(',').collect())
+            .unwrap_or_else(|| panic!("`tracing` in the normal graph:\n{graph}"));
+        assert_eq!(
+            tracing_features.contains(&"release_max_level_info"),
+            ceiling,
+            "{features:?}: {tracing_features:?}"
+        );
+        assert!(
+            !tracing_features.iter().any(
+                |feature| feature.contains("max_level") && *feature != "release_max_level_info"
+            ),
+            "{features:?}: a level feature beyond the facade's: {tracing_features:?}"
+        );
+    }
+}
+
 #[test]
 fn external_consumers_extend_and_test_through_the_facade() {
     let Some(root) = checkout_root() else { return };

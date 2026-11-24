@@ -66,6 +66,12 @@ apple-unified-logging = ["dep:tracing-oslog"]
 # Test support (ADR-0243): `testing::capture`, the race-free event capture
 # `flui-testing` re-exports as `log_capture`.
 testing = []
+# `tracing`'s static maximum level for a build without debug assertions
+# (ADR-0398 §1): every `trace!` and `debug!` call site in the application's
+# graph is compiled out. `flui build --release` and `flui run --release` turn
+# it on through the facade; no framework crate does, since the level is one
+# for the whole application.
+release-max-level-info = ["tracing/release_max_level_info"]
 
 [package.metadata.docs.rs]
 all-features = true

@@ -25,6 +25,9 @@ pub(crate) mod context_builder;
 pub(crate) mod desktop;
 /// Custom error types for build operations
 pub(crate) mod error;
+/// The dependency that carries FLUI's build switches, and the features each
+/// build mode turns on through it.
+pub(crate) mod framework;
 /// iOS platform build support
 pub(crate) mod ios;
 mod ios_package;

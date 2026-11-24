@@ -233,7 +233,12 @@ fn main() {
 fn json_mode_streams_the_app_lifecycle_as_ndjson() {
     let tmp = TempDir::new().expect("fixture");
     let dependency = tmp.path().join("facade");
-    package(&dependency, "flui", "");
+    // A release run turns the facade's release ceiling on (ADR-0398 §2).
+    package(
+        &dependency,
+        "flui",
+        "[features]\nrelease-max-level-info = []\n",
+    );
     std::fs::write(dependency.join("src/lib.rs"), "").expect("facade identity");
     let app = tmp.path().join("app");
     package(
@@ -595,7 +600,7 @@ fn a_desktop_run_that_opens_links_needs_one_instance() {
     package(
         &root.join("facade"),
         "flui",
-        "[features]\nsingle-instance = [\"flui-native/single-instance\"]\n\
+        "[features]\nsingle-instance = [\"flui-native/single-instance\"]\nrelease-max-level-info = []\n\
          [dependencies]\nflui-native = { path = \"../flui-native\" }\n",
     );
     std::fs::write(root.join("facade/src/lib.rs"), "").expect("facade identity");

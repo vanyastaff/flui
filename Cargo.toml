@@ -929,6 +929,15 @@ devtools = ["dep:flui-devtools"]
 # device runs turn this on; without it a release build carries none of it.
 driver = ["flui-app/driver"]
 
+# === The release ceiling ===
+# No `trace!` or `debug!` call site, FLUI's or the application's, in a build
+# without debug assertions (ADR-0398): `tracing`'s `release_max_level_info`.
+# `flui build --release` and `flui run --release` turn it on; a plain
+# `cargo build --release` does not, and a `profiling` or agent build keeps
+# every span for its timeline. A filter that asks for more is told so on
+# standard error at start.
+release-max-level-info = ["flui-app/release-max-level-info"]
+
 # === Core Features ===
 # Serialization of the value types, in every crate that owns some: geometry
 # (foundation, through painting), paint and style (painting), locale and

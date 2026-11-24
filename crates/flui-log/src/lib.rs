@@ -167,7 +167,10 @@ mod test_support;
 
 use config::LogConfig;
 use filter::FilterError;
-use ownership::{SetupError, SubscriberInstallation, SubscriberPolicy, install_subscriber};
+use ownership::{
+    SetupError, SubscriberInstallation, SubscriberOwnership, SubscriberPolicy, install_subscriber,
+};
+use tracing::level_filters::STATIC_MAX_LEVEL;
 
 /// Build FLUI's default subscriber and apply an ownership policy to it.
 ///
@@ -217,6 +220,30 @@ pub struct ResilientSetup {
     /// to report it — and *must* decide, because by construction this cannot be
     /// reported before a subscriber exists.
     pub rejected_env_override: Option<FilterError>,
+
+    /// The most verbose level the installed filter selects, when the build
+    /// holds no event of that level (see [the build's ceiling](filter#the-builds-ceiling)).
+    ///
+    /// `Some` means the filter asks for events `tracing`'s static maximum level
+    /// compiled out, so they are not delivered. `None` also when this call
+    /// installed no subscriber, whose filter is then not this configuration's.
+    pub compiled_out: Option<tracing::level_filters::LevelFilter>,
+}
+
+/// The most verbose level `config`'s filter selects above `ceiling`, for a
+/// subscriber this call installed; `None` when the call installed none, whose
+/// filter is then not this configuration's.
+fn selected_beyond(
+    config: &LogConfig,
+    ownership: SubscriberOwnership,
+    ceiling: tracing::level_filters::LevelFilter,
+) -> Option<tracing::level_filters::LevelFilter> {
+    if !ownership.is_installed() {
+        return None;
+    }
+    // The subscriber was built from this filter a moment ago, so it resolves.
+    let targets = config.filter().targets().ok()?;
+    filter::beyond(&targets, ceiling)
 }
 
 /// Set up logging, falling back to the configured directives when the
@@ -261,6 +288,7 @@ pub fn setup_with_env_fallback(
         Ok(installation) => Ok(ResilientSetup {
             installation,
             rejected_env_override: None,
+            compiled_out: selected_beyond(config, installation.ownership, STATIC_MAX_LEVEL),
         }),
 
         // Only an environment override can be retried around. A bad *configured*
@@ -271,9 +299,15 @@ pub fn setup_with_env_fallback(
         )) => {
             let without_override = config.without_env_override();
 
+            let installation = setup(&without_override, policy)?;
             Ok(ResilientSetup {
-                installation: setup(&without_override, policy)?,
+                installation,
                 rejected_env_override: Some(rejected),
+                compiled_out: selected_beyond(
+                    &without_override,
+                    installation.ownership,
+                    STATIC_MAX_LEVEL,
+                ),
             })
         }
 
@@ -302,5 +336,51 @@ mod resilient_setup_tests {
             .expect_err("invalid configured directives must not be swallowed");
 
         assert!(matches!(error, super::SetupError::Filter(_)));
+    }
+
+    #[test]
+    fn a_setup_reports_the_level_above_the_ceiling_only_for_the_subscriber_it_installed() {
+        use tracing::level_filters::LevelFilter;
+
+        use crate::ownership::SubscriberOwnership;
+
+        let config = |directives: &str| {
+            LogConfig::builder()
+                .filter(FilterConfig::new(directives).without_env_var())
+                .build()
+        };
+        for (directives, ownership, ceiling, expected) in [
+            (
+                "warn,flui_view=debug",
+                SubscriberOwnership::Installed,
+                LevelFilter::INFO,
+                Some(LevelFilter::DEBUG),
+            ),
+            (
+                "warn,flui_view=debug",
+                SubscriberOwnership::Installed,
+                LevelFilter::TRACE,
+                None,
+            ),
+            // A subscriber the host installed filters by its own directives.
+            (
+                "warn,flui_view=debug",
+                SubscriberOwnership::Unchanged,
+                LevelFilter::INFO,
+                None,
+            ),
+            (
+                "info",
+                SubscriberOwnership::Installed,
+                LevelFilter::INFO,
+                None,
+            ),
+        ] {
+            assert_eq!(
+                super::selected_beyond(&config(directives), ownership, ceiling),
+                expected,
+                "`{directives}`, {ownership:?}, under a ceiling of {ceiling}"
+            );
+        }
     }
 }
