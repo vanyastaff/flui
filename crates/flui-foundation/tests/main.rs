@@ -76,3 +76,6 @@ mod testing_kit;
 
 // The owner thread's seams carry no thread bound (ADR-0323 §4).
 mod owner_local;
+
+#[path = "os_boundary.rs"]
+mod os_boundary;

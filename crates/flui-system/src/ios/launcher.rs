@@ -50,7 +50,7 @@ mod uikit {
     use objc2_ui_kit::UIApplication;
 
     use super::{no_path_verbs, opened};
-    use crate::owner::panic_boundary::{AfterPanic, os_entry};
+    use flui_foundation::panic::{AfterPanic, os_entry};
 
     /// [`LauncherBackend`] over `UIApplication`.
     pub(crate) struct IOSLauncher {

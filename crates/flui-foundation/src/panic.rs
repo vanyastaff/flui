@@ -12,12 +12,17 @@
 //!
 //! See `docs/PANIC-POLICY.md`'s "The `BUG:` message convention" for the
 //! policy [`is_internal_invariant`] mechanizes.
+//!
+//! [`os_entry`] is the boundary every OS entry goes through, here below
+//! the core host and the capability crates, which both have entries.
 
 use std::any::Any;
 use std::cell::Cell;
 
 mod commit;
+mod os_boundary;
 pub use commit::{Obligation, Outbox, commit, commit_into};
+pub use os_boundary::{AfterPanic, ContainedIvars, contain_os_entry, os_entry};
 
 /// The text of a panic payload, when it has any.
 ///

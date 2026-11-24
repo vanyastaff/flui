@@ -18,7 +18,7 @@
 //! window's top controller ([`presenter`]), and each ends with its window:
 //! the dialogs through their hold (ADR-0344), the share sheet through a
 //! watch on the window's close. Every block, delegate method and work item
-//! UIKit or the system calls goes through `owner::panic_boundary::os_entry`,
+//! UIKit or the system calls goes through `flui_foundation::panic::os_entry`,
 //! and the one class the module declares keeps its ivars in
 //! `ContainedIvars`. A feature newer than the floor is behind a gate of
 //! `apple::version`.
