@@ -22,7 +22,7 @@
 
 - **`flui-devtools` has one capture of the frame spans**: `Capture` and `CaptureLayer` record the
   frame, each presentation's segment and every `Phase`, partitioned by the runtime that drove the
-  frame and the presentation a span ran for. `FrameTimingLayer::over(&capture, profiler)` and
+  frame and the presentation a span ran for. `Profiler::over(&capture, config)` and
   `Timeline::over(&capture)` read it instead of recording on their own. `Phase::of` is the one
   `(target, name)` table. `PresentationId::from_u64` and `GenId::from_u64` read an id back from a
   trace field.
@@ -38,7 +38,5 @@
   that reported no display period (judged against 60 Hz).
 - `OwnerFrame::set_trace_runtime` names the runtime a `frame` span reports from the moment it
   opens, so a frame whose callback panics still says whose frame it was.
-  `FrameTimingLayer::over_runtime` profiles a named runtime, one pair per runtime, and a phase
-  measured by hand with `Profiler::profile_phase` keeps its offset inside a captured frame.
-  `Capture::on_frame_open` (with `FrameOpening`) runs a sink when the outermost frame opens; the
-  profiler begins its frame there, so a measurement taken between frames is never charged to one.
+  `ProfilerConfig::runtime` profiles a named runtime, one profiler per runtime over one capture.
+  `Capture::on_frame_open` (with `FrameOpening`) runs a sink when the outermost frame opens.
