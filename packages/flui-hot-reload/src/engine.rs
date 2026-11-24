@@ -53,12 +53,3 @@ pub enum HotReloadOutcome {
         reason: String,
     },
 }
-
-/// Environment variables for the host/worker split.
-pub mod env {
-    /// Path to the reloadable worker dylib (`my_app_logic.dll`).
-    pub const WORKER_PLUGIN: &str = "FLUI_WORKER_PLUGIN";
-
-    /// Legacy scene plugin path (scene-only hot reload, not widget parity).
-    pub const SCENE_PLUGIN: &str = "FLUI_SCENE_PLUGIN";
-}

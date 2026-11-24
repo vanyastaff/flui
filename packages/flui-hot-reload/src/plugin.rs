@@ -22,8 +22,6 @@
 ///
 /// - `flui_scene_build(width, height) -> *mut c_void` — builds a Scene, returns
 ///   owned pointer
-/// - `flui_scene_version() -> u32` — returns plugin version (for reload
-///   detection)
 /// - `flui_scene_drop(ptr)` — drops a Scene previously returned by
 ///   `flui_scene_build`
 /// - `flui_scene_free(ptr)` — deallocates the box WITHOUT dropping the Scene
@@ -68,15 +66,6 @@ macro_rules! scene_plugin {
                 return ::std::ptr::null_mut();
             };
             ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene)).cast::<::std::ffi::c_void>()
-        }
-
-        /// Returns the plugin version number.
-        ///
-        /// The host uses this to confirm the plugin loaded successfully.
-        // SAFETY: the plugin contract permits one definition of this symbol family per image.
-        #[unsafe(no_mangle)]
-        pub extern "C" fn flui_scene_version() -> u32 {
-            1
         }
 
         /// Drop a `Scene` previously returned by `flui_scene_build`.
@@ -154,7 +143,6 @@ macro_rules! scene_plugin {
 ///   (called on load + every reload); `request_rebuild` is the host's entry
 ///   the worker's [`request_rebuild`](crate::request_rebuild) forwards to;
 ///   `false` when the init panicked
-/// - `flui_worker_version() -> u32`
 /// - `flui_worker_fingerprint() -> u64` — optional layout-change detection
 ///
 /// Requires the `app-plugin` feature on `flui-hot-reload`.
@@ -162,7 +150,7 @@ macro_rules! scene_plugin {
 #[macro_export]
 macro_rules! hot_reload_worker {
     ($init_fn:ident) => {
-        $crate::hot_reload_worker!($init_fn, fingerprint: $crate::worker::DEFAULT_FINGERPRINT);
+        $crate::hot_reload_worker!($init_fn, fingerprint: $crate::DEFAULT_FINGERPRINT);
     };
     ($init_fn:ident, fingerprint: $fp:expr) => {
         /// Worker registration hook — runs on load and after every dylib reload.
@@ -180,13 +168,6 @@ macro_rules! hot_reload_worker {
         ) -> bool {
             $crate::__private_forward_rebuild_requests_to(request_rebuild);
             $crate::__private_contain_entry("flui_worker_init", || $init_fn(register)).is_some()
-        }
-
-        /// Worker version (for diagnostics).
-        // SAFETY: the plugin contract permits one definition of this symbol family per image.
-        #[unsafe(no_mangle)]
-        pub extern "C" fn flui_worker_version() -> u32 {
-            1
         }
 
         /// Stable-layout fingerprint for the shared `types` crate.
@@ -263,8 +244,6 @@ macro_rules! hot_reload_worker {
 /// - `flui_app_build(width, height) -> *mut c_void` — runs pipeline, returns
 ///   owned Scene pointer, or null on a wrong-thread call (see
 ///   [Thread affinity](#thread-affinity))
-/// - `flui_app_version() -> u32` — returns plugin version (for reload
-///   detection)
 /// - `flui_app_drop(ptr)` — drops a Scene previously returned by
 ///   `flui_app_build`
 /// - `flui_app_free(ptr)` — deallocates the box WITHOUT dropping the Scene
@@ -452,13 +431,6 @@ macro_rules! app_plugin {
                 ::std::boxed::Box::into_raw(::std::boxed::Box::new(scene))
                     .cast::<::std::ffi::c_void>()
             })
-        }
-
-        /// Returns the plugin version number.
-        // SAFETY: the plugin contract permits one definition of this symbol family per image.
-        #[unsafe(no_mangle)]
-        pub extern "C" fn flui_app_version() -> u32 {
-            1
         }
 
         /// Drop a `Scene` previously returned by `flui_app_build`.

@@ -47,9 +47,9 @@
 
 use std::path::{Path, PathBuf};
 
+use flui_hot_reload::DynLib;
 use flui_hot_reload::PluginKind;
 use flui_hot_reload::ScenePlugin;
-use flui_hot_reload::dynlib::DynLib;
 use std::ffi::c_void;
 
 /// A self-cleaning temp file path unique to this test process.

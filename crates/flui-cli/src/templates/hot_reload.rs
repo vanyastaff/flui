@@ -581,7 +581,7 @@ fn main() -> Result<(), LaunchError> {
 /// which the installed hook loads and reloads.
 #[cfg(feature = "reload")]
 fn counter_build(config: AppConfig) -> (CounterBuild, AppConfig) {
-    use flui_hot_reload::{WorkerReloadHook, engine::env};
+    use flui_hot_reload::{WorkerReloadHook, env};
 
     let worker_path = std::env::var(env::WORKER_PLUGIN)
         .map_or_else(|_| default_worker_path(), std::path::PathBuf::from);

@@ -133,7 +133,7 @@ fn a_native_byte_library_path_can_be_loaded() {
     let path = directory.join(std::ffi::OsString::from_vec(b"library-\xff.so".to_vec()));
     symlink(image, &path).expect("link the already-loaded native image");
     let library =
-        flui_hot_reload::dynlib::DynLib::open(&path).expect("a native filename need not be UTF-8");
+        flui_hot_reload::DynLib::open(&path).expect("a native filename need not be UTF-8");
     // SAFETY: only check resolution; no function pointer is invoked.
     assert!(unsafe { library.symbol("malloc") }.is_some());
     drop(library);

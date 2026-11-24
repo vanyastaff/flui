@@ -17,7 +17,7 @@ use std::sync::{
 };
 
 use flui_app::{AppConfig, Application, LaunchError};
-use flui_hot_reload::{WorkerReloadHook, engine::env};
+use flui_hot_reload::{WorkerReloadHook, env};
 use hot_reload_counter_types::{CounterApp, CounterShell};
 
 fn default_worker_path() -> std::path::PathBuf {
