@@ -1,38 +1,30 @@
-//! Timeline event tracking for FLUI applications
+//! [`Timeline`]: events over time, exported as a Chrome / Perfetto trace.
 //!
-//! Records and visualizes events over time for performance analysis and
-//! debugging. Supports exporting to Chrome DevTools trace format for advanced
-//! visualization.
+//! An application records its own work with [`Timeline::record_event`] (a guard that measures
+//! until it drops), [`Timeline::record_instant`] and [`Timeline::record_completed_event`]; each
+//! is a [`TimelineEventKind::Custom`] event. A timeline [over](Timeline::over) a
+//! [`Capture`](crate::Capture) shows the framework's frames, presentation segments and phases
+//! beside them on one time base, and [`Timeline::record_frame_snapshots`] adds a presentation's
+//! frame snapshots. Every event says what it is through its [`TimelineEventKind`].
 //!
 //! # Example
 //!
 //! ```rust
-//! use flui_devtools::{EventCategory, Timeline};
+//! use flui_devtools::{Timeline, TimelineEventKind};
 //!
-//! let mut timeline = Timeline::new();
-//!
-//! // Record events
+//! let timeline = Timeline::new();
 //! {
-//!     let _guard = timeline.record_event("Build Widget Tree", EventCategory::Build);
-//!     // Your build code here
-//! } // Event duration automatically recorded
+//!     let _guard = timeline.record_event("load assets");
+//!     // the work being measured
+//! } // the event's duration is recorded here
 //!
-//! {
-//!     let _guard = timeline.record_event("Layout", EventCategory::Layout);
-//!     // Your layout code here
+//! for event in timeline.get_events_by_kind(TimelineEventKind::Custom) {
+//!     println!("{}: {:.2} ms", event.name, event.duration_ms());
 //! }
 //!
-//! // Get all events
-//! let events = timeline.get_events();
-//! for event in events {
-//!     println!("{}: {:.2}ms", event.name, event.duration_ms());
-//! }
-//!
-//! // Export to Chrome DevTools format
+//! // Open in chrome://tracing or ui.perfetto.dev.
 //! let json = timeline.export_chrome_trace();
-//! // std::fs::write("trace.json", &json)?;
 //! # drop(json);
-//! // Load trace.json in chrome://tracing
 //! ```
 
 use std::sync::Arc;
@@ -43,44 +35,33 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use web_time::{Duration, Instant};
 
-/// Category for timeline events
+use crate::phase::Phase;
+
+/// What a [`TimelineEvent`] is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
-pub enum EventCategory {
-    /// Frame event (entire frame)
+pub enum TimelineEventKind {
+    /// A whole frame: a scheduler frame from a [`Capture`](crate::Capture), or a frame snapshot
+    /// from [`Timeline::record_frame_snapshots`].
     Frame,
-    /// Build phase (widget tree construction)
-    Build,
-    /// Layout phase (size calculation)
-    Layout,
-    /// Paint phase (rendering)
-    Paint,
-    /// Custom user-defined event
+    /// One presentation's segment of a captured frame.
+    Segment,
+    /// A phase of a captured frame.
+    Phase(Phase),
+    /// An event the application recorded.
     Custom,
 }
 
-impl EventCategory {
-    /// Get the category name as a string
-    pub fn name(&self) -> &str {
+impl TimelineEventKind {
+    /// The kind as a trace viewer shows it: the event's `cat` in the Chrome trace. A phase is
+    /// its [label](Phase::label).
+    #[must_use]
+    pub const fn label(self) -> &'static str {
         match self {
-            EventCategory::Frame => "Frame",
-            EventCategory::Build => "Build",
-            EventCategory::Layout => "Layout",
-            EventCategory::Paint => "Paint",
-            EventCategory::Custom => "Custom",
-        }
-    }
-
-    /// Get the category color (for visualization)
-    ///
-    /// Returns a color in hex format suitable for Chrome DevTools.
-    pub fn color(&self) -> &str {
-        match self {
-            EventCategory::Frame => "#FF6B6B",  // Red
-            EventCategory::Build => "#4ECDC4",  // Teal
-            EventCategory::Layout => "#FFE66D", // Yellow
-            EventCategory::Paint => "#95E1D3",  // Mint
-            EventCategory::Custom => "#A8E6CF", // Light green
+            Self::Frame => "Frame",
+            Self::Segment => "Segment",
+            Self::Phase(phase) => phase.label(),
+            Self::Custom => "Custom",
         }
     }
 }
@@ -103,23 +84,14 @@ fn saturating_micros(duration: Duration) -> u64 {
     u64::try_from(duration.as_micros()).unwrap_or(u64::MAX)
 }
 
-/// The Chrome-trace "args" object for `event`'s Begin event:
-/// `{"category": ...}` plus every key of `event.args`, IF it is itself a
-/// JSON object (a frame-telemetry event's shape — see
-/// [`Timeline::record_frame_snapshots`]). An event recorded through
-/// [`Timeline::record_event`]/[`Timeline::record_instant`] carries
-/// `args: Value::Null`, which contributes nothing beyond `category` — the
-/// pre-existing behavior every caller of `export_chrome_trace` before this
-/// function existed already relied on.
+/// The Chrome-trace `args` object of `event`: every key of `event.args` when it is a JSON
+/// object (a frame snapshot's shape, see [`Timeline::record_frame_snapshots`]), then
+/// `category`, the [label](TimelineEventKind::label) of the event's kind, and `presentation`
+/// when the event ran for one. An event the application recorded carries `args: Value::Null`,
+/// which adds nothing.
 ///
-/// `extra`'s keys are copied in FIRST, `category` LAST: `category` is this
-/// module's own reserved key (`export_chrome_trace`'s Begin event always
-/// carries it, and nothing downstream expects it to mean anything other
-/// than `event.category.name()`), so it must win if a caller-supplied
-/// `args` object also happens to use that key — inserting it last makes
-/// that an overwrite rather than a coin flip on `serde_json::Map`'s
-/// (insertion-order-preserving, but "last write wins" on a duplicate key)
-/// semantics.
+/// `category` and `presentation` are inserted after the event's own keys, so they win over a
+/// caller-supplied key of the same name: they always mean the event's kind and presentation.
 fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
     let mut args = serde_json::Map::new();
     if let serde_json::Value::Object(extra) = &event.args {
@@ -127,7 +99,7 @@ fn begin_event_args(event: &TimelineEvent) -> serde_json::Value {
             args.insert(key.clone(), value.clone());
         }
     }
-    args.insert("category".to_string(), json!(event.category.name()));
+    args.insert("category".to_string(), json!(event.kind.label()));
     if let Some(presentation) = event.presentation {
         args.insert("presentation".to_string(), json!(presentation));
     }
@@ -148,8 +120,8 @@ pub struct TimelineEvent {
     pub start_micros: u128,
     /// Duration (microseconds)
     pub duration_micros: u128,
-    /// Event category
-    pub category: EventCategory,
+    /// What the event is.
+    pub kind: TimelineEventKind,
     /// Extra structured data carried alongside this event — e.g. a
     /// frame-telemetry event's coalesced input ids and latencies (see
     /// [`Timeline::record_frame_snapshots`]). `Value::Null` for an event
@@ -266,7 +238,7 @@ impl TimelineInner {
         }
     }
 
-    fn start_event(&mut self, name: String, category: EventCategory) -> EventHandle {
+    fn start_event(&mut self, name: String) -> EventHandle {
         let now = Instant::now();
         let start_micros = (now - self.start_time).as_micros();
 
@@ -274,7 +246,7 @@ impl TimelineInner {
             name,
             start_micros,
             duration_micros: 0, // Will be filled in when event ends
-            category,
+            kind: TimelineEventKind::Custom,
             args: serde_json::Value::Null,
             thread_id: std::thread::current().id(),
             runtime: None,
@@ -349,6 +321,10 @@ impl TimelineInner {
 ///
 /// Thread-safe timeline that records events with precise timing.
 /// Events can be exported to Chrome DevTools trace format for visualization.
+///
+/// Every event says what it is with its [`TimelineEventKind`]: what the application records
+/// here is [`Custom`](TimelineEventKind::Custom), and a timeline [over](Self::over) a capture
+/// adds the framework's frames, presentation segments and phases.
 #[derive(Clone)]
 pub struct Timeline {
     inner: Arc<Mutex<TimelineInner>>,
@@ -394,25 +370,23 @@ impl Timeline {
             capture: Some(capture.clone()),
         }
     }
-    /// Record an event with RAII guard
-    ///
-    /// Returns a guard that automatically records the event duration when
-    /// dropped.
+    /// Record an application event that lasts until the returned guard drops. The event is
+    /// [`TimelineEventKind::Custom`].
     ///
     /// # Example
     ///
     /// ```rust
-    /// # use flui_devtools::{Timeline, EventCategory};
+    /// # use flui_devtools::Timeline;
     /// # let timeline = Timeline::new();
     /// {
-    ///     let _guard = timeline.record_event("My Operation", EventCategory::Custom);
+    ///     let _guard = timeline.record_event("My Operation");
     ///     // Your code here
     /// } // Event duration recorded here
     /// ```
-    pub fn record_event(&self, name: impl Into<String>, category: EventCategory) -> EventGuard {
+    pub fn record_event(&self, name: impl Into<String>) -> EventGuard {
         let name = name.into();
         let mut inner = self.inner.lock();
-        let event_handle = inner.start_event(name, category);
+        let event_handle = inner.start_event(name);
         let start = Instant::now();
 
         EventGuard {
@@ -422,32 +396,46 @@ impl Timeline {
         }
     }
 
-    /// Record an instant event (duration = 0)
-    ///
-    /// Use this for events that happen at a point in time rather than over a
-    /// duration.
-    pub fn record_instant(&self, name: impl Into<String>, category: EventCategory) {
+    /// Record an application event that happens at a point in time: a
+    /// [`TimelineEventKind::Custom`] event whose duration is zero.
+    pub fn record_instant(&self, name: impl Into<String>) {
         let name = name.into();
         let mut inner = self.inner.lock();
-        let event_handle = inner.start_event(name, category);
+        let event_handle = inner.start_event(name);
         inner.end_event(event_handle, Duration::ZERO);
     }
 
-    /// Record an event whose timing is already fully known — unlike
-    /// [`Self::record_event`]'s RAII start-then-measure-on-drop shape,
-    /// `start`/`duration` are supplied up front (e.g. a frame's
-    /// already-computed segment span) and this call never reads the wall
-    /// clock itself. `start` is converted to this timeline's own
+    /// Record an application event whose timing is already known: a
+    /// [`TimelineEventKind::Custom`] event. Unlike [`Self::record_event`],
+    /// `start`/`duration` are supplied up front and this call never reads the
+    /// wall clock itself. `start` is converted to this timeline's own
     /// relative-microseconds basis the same way `record_event` does.
     pub fn record_completed_event(
         &self,
         name: impl Into<String>,
-        category: EventCategory,
         start: Instant,
         duration: Duration,
         args: serde_json::Value,
     ) {
-        let name = name.into();
+        self.record_completed(
+            name.into(),
+            TimelineEventKind::Custom,
+            start,
+            duration,
+            args,
+        );
+    }
+
+    /// Record an event of `kind` whose timing is already known. `name` is converted by the
+    /// caller, before the lock: a conversion may read or clear this timeline.
+    fn record_completed(
+        &self,
+        name: String,
+        kind: TimelineEventKind,
+        start: Instant,
+        duration: Duration,
+        args: serde_json::Value,
+    ) {
         let mut inner = self.inner.lock();
         let start_micros = start
             .saturating_duration_since(inner.start_time)
@@ -456,7 +444,7 @@ impl Timeline {
             name,
             start_micros,
             duration_micros: duration.as_micros(),
-            category,
+            kind,
             args,
             thread_id: std::thread::current().id(),
             runtime: None,
@@ -508,14 +496,14 @@ impl Timeline {
             if let Some(gpu) = snapshot.gpu_time {
                 args["gpu_us"] = json!(saturating_micros(gpu));
             }
-            self.record_completed_event(
+            self.record_completed(
                 format!(
                     "Frame {} [{} {}]",
                     snapshot.frame_id,
                     snapshot.address.ui_runtime_id,
                     snapshot.address.presentation_id
                 ),
-                EventCategory::Frame,
+                TimelineEventKind::Frame,
                 snapshot.segment_start,
                 snapshot.segment_span(),
                 args,
@@ -546,11 +534,11 @@ impl Timeline {
         events
     }
 
-    /// Get events filtered by category
-    pub fn get_events_by_category(&self, category: EventCategory) -> Vec<TimelineEvent> {
+    /// Get the events of one kind, oldest first.
+    pub fn get_events_by_kind(&self, kind: TimelineEventKind) -> Vec<TimelineEvent> {
         self.get_events()
             .into_iter()
-            .filter(|e| e.category == category)
+            .filter(|event| event.kind == kind)
             .collect()
     }
 
@@ -643,7 +631,7 @@ impl Timeline {
             let tid = thread as i64 + 1;
             trace_events.push(json!({
                 "name": event.name,
-                "cat": event.category.name(),
+                "cat": event.kind.label(),
                 "ph": "X",
                 "ts": saturating_micros_u128(event.start_micros),
                 "dur": saturating_micros_u128(event.duration_micros),
@@ -651,7 +639,7 @@ impl Timeline {
                 "tid": tid,
                 "args": begin_event_args(event),
             }));
-            if event.category == EventCategory::Frame {
+            if event.kind == TimelineEventKind::Frame {
                 // A frame that reported no display period is judged against 60 Hz, as the
                 // profiler judges it.
                 let period_us = event
@@ -722,24 +710,24 @@ impl Timeline {
             return;
         }
 
-        // Group by category
-        let mut by_category: std::collections::HashMap<EventCategory, Vec<&TimelineEvent>> =
+        // Group by kind
+        let mut by_kind: std::collections::HashMap<TimelineEventKind, Vec<&TimelineEvent>> =
             std::collections::HashMap::new();
 
         for event in &events {
-            by_category.entry(event.category).or_default().push(event);
+            by_kind.entry(event.kind).or_default().push(event);
         }
 
-        for (category, category_events) in by_category {
-            let total_ms: f64 = category_events.iter().map(|e| e.duration_ms()).sum();
-            let avg_ms = total_ms / category_events.len() as f64;
+        for (kind, kind_events) in by_kind {
+            let total_ms: f64 = kind_events.iter().map(|e| e.duration_ms()).sum();
+            let avg_ms = total_ms / kind_events.len() as f64;
 
-            println!("\n{} ({} events):", category.name(), category_events.len());
+            println!("\n{} ({} events):", kind.label(), kind_events.len());
             println!("  Total: {total_ms:.2}ms");
             println!("  Average: {avg_ms:.2}ms");
 
             // Show longest events
-            let mut sorted = category_events.clone();
+            let mut sorted = kind_events.clone();
             sorted.sort_by_key(|e| std::cmp::Reverse(e.duration_micros));
 
             println!("  Longest events:");
@@ -772,21 +760,16 @@ fn saturating_micros_u128(micros: u128) -> u64 {
 /// A captured span as a timeline event.
 #[cfg(feature = "profiling")]
 fn captured_event(span: &crate::capture::CapturedSpan) -> TimelineEvent {
-    use crate::phase::Phase;
-
-    let (name, category) = match span.phase() {
-        Some(Phase::Build) => ("Build", EventCategory::Build),
-        Some(Phase::Layout) => ("Layout", EventCategory::Layout),
-        Some(Phase::Paint) => ("Paint", EventCategory::Paint),
-        Some(other) => (other.label(), EventCategory::Custom),
-        None if span.is_frame() => ("Frame", EventCategory::Frame),
-        None => ("Presentation", EventCategory::Custom),
+    let (name, kind) = match span.phase() {
+        Some(phase) => (phase.label(), TimelineEventKind::Phase(phase)),
+        None if span.is_frame() => ("Frame", TimelineEventKind::Frame),
+        None => ("Presentation", TimelineEventKind::Segment),
     };
     TimelineEvent {
         name: name.to_string(),
         start_micros: span.start().as_micros(),
         duration_micros: span.duration().as_micros(),
-        category,
+        kind,
         args: json!({ "target": span.target(), "span": span.name() }),
         thread_id: span.thread(),
         runtime: span
@@ -830,5 +813,32 @@ mod tests {
                 "no {counter} counter in {events:?}"
             );
         }
+    }
+
+    /// The JSON export reads back as the events it wrote, each with its kind.
+    #[test]
+    fn the_json_export_reads_back_with_each_events_kind() {
+        let capture = Capture::new();
+        let timeline = Timeline::over(&capture);
+        let subscriber = tracing_subscriber::registry().with(capture.layer());
+        flui_testing::log_capture::disarm_interest_cache();
+        tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+            let _frame = tracing::debug_span!(target: "flui.frame", "frame").entered();
+            let _layout = tracing::debug_span!(target: "flui.frame", "layout").entered();
+        });
+        timeline.record_instant("app work");
+
+        let read: Vec<TimelineEvent> =
+            serde_json::from_str(&timeline.export_json()).expect("the export is the events");
+        let mut kinds: Vec<TimelineEventKind> = read.iter().map(|event| event.kind).collect();
+        kinds.sort_by_key(|kind| kind.label());
+        assert_eq!(
+            kinds,
+            [
+                TimelineEventKind::Custom,
+                TimelineEventKind::Frame,
+                TimelineEventKind::Phase(Phase::Layout),
+            ]
+        );
     }
 }

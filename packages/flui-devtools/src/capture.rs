@@ -5,10 +5,9 @@
 //! `flui-devtools` is a package: nothing in the framework may depend on it, so the framework
 //! emits `tracing` spans and the tools read them. [`CaptureLayer`] is the one reader. It
 //! recognizes a frame, the spans of its presentations and its [`Phase`]s, measures each from its
-//! outermost entered visit, and keeps them in a [`Capture`]. The [`Profiler`]
-//! ([`FrameTimingLayer`]), the [`Timeline`](crate::Timeline)
-//! and the Chrome/Perfetto export read that capture; none of them has a recorder of its own for
-//! framework spans.
+//! outermost entered visit, and keeps them in a [`Capture`]. The
+//! [`Profiler`](crate::Profiler), the [`Timeline`](crate::Timeline) and the Chrome/Perfetto
+//! export read that capture; none of them has a recorder of its own for framework spans.
 //!
 //! # Partitions
 //!
@@ -191,15 +190,9 @@ pub struct CapturedFrame {
     period: Option<Duration>,
     spans: Vec<CapturedSpan>,
     outermost: bool,
-    id: u64,
 }
 
 impl CapturedFrame {
-    /// The span id the frame ran under: it tells an opening and a closing apart from another
-    /// frame's while both are live.
-    pub(crate) const fn id(&self) -> u64 {
-        self.id
-    }
     /// The frame span itself.
     #[must_use]
     pub const fn span(&self) -> &CapturedSpan {
@@ -234,15 +227,9 @@ type FrameSink = Arc<dyn Fn(&Capture, &CapturedFrame) + Send + Sync>;
 pub struct FrameOpening {
     runtime: Option<UiRuntimeId>,
     outermost: bool,
-    id: u64,
 }
 
 impl FrameOpening {
-    /// The span id the frame ran under: it tells an opening and a closing apart from another
-    /// frame's while both are live.
-    pub(crate) const fn id(&self) -> u64 {
-        self.id
-    }
     /// The runtime driving the frame, if its span named one by now.
     #[must_use]
     pub const fn runtime(&self) -> Option<UiRuntimeId> {
@@ -383,9 +370,29 @@ impl Capture {
         Arc::as_ptr(&self.shared) as usize
     }
 
-    /// The layer that fills this capture, behind its own filter: it admits the frame, segment
-    /// and phase spans and no events. A log layer with an `INFO` filter beside it does not
-    /// starve it, and installing it does not switch `DEBUG` on for the rest of the process.
+    /// The layer that fills this capture: the one `tracing` layer every devtools reader of
+    /// framework spans is fed through.
+    ///
+    /// It reads these spans:
+    ///
+    /// | span | opened by | read as |
+    /// |------|-----------|---------|
+    /// | `frame` (target `flui.frame`) | `UpdateScheduler::drive_frame` (`flui-scheduler`) | the frame; its `runtime` field names the runtime that drove it, its `period_us` field the display period the jank line follows |
+    /// | `presentation` (target `flui.frame`) | the UI runtime, around one presentation's segment | the [`Partition`] of the spans inside it, from its `presentation` field |
+    /// | `build`, `layout`, `compositing`, `paint`, `semantics`, `commit`, `submit` (target `flui.frame`) | the build owner, the pipeline owner and the runtime | [`Phase::Build`] … [`Phase::Submit`] |
+    /// | `animation_tick`, `animation_sampling`, `animation_listeners` (target `flui.animation`) | `flui-animation`, when the `profiling` feature turns its instrumentation on (ADR-0202) | [`Phase::AnimationTick`], [`Phase::AnimationSampling`], [`Phase::AnimationListeners`] |
+    ///
+    /// The layer carries its own per-layer filter, which admits those spans and the animation
+    /// controller spans that keep an animation span's ancestry visible, and no events. A log
+    /// layer with an `INFO` filter beside it (FLUI's default) therefore does not starve it: the
+    /// registry records a `DEBUG` frame span for this layer while the log layer never sees it.
+    /// And installing it does not switch `DEBUG` on for the rest of the process: an unfiltered
+    /// layer would declare interest in every callsite, and every event in the application would
+    /// pay the dispatch cost once profiling started.
+    ///
+    /// The `tests/frame_profile_end_to_end.rs` suite drives real frames through a headless UI
+    /// runtime and reads them back: it is the evidence that the framework still opens the spans
+    /// this table names.
     #[must_use]
     pub fn layer<S>(&self) -> Filtered<CaptureLayer, FrameSpanFilter, S>
     where
@@ -534,7 +541,6 @@ struct FrameState {
     period: Option<Duration>,
     outermost: bool,
     ended: Vec<Ended>,
-    id: u64,
 }
 
 /// A phase or segment that ended inside a frame, until the frame closes and names its runtime.
@@ -567,6 +573,16 @@ struct Fields {
     runtime: Option<u64>,
     presentation: Option<u64>,
     period_us: Option<u64>,
+}
+
+impl Fields {
+    /// The display period `period_us` reported. A zero period is no period: no display
+    /// refreshes in no time, and a zero jank line would make every frame jank.
+    fn period(&self) -> Option<Duration> {
+        self.period_us
+            .map(Duration::from_micros)
+            .filter(|period| !period.is_zero())
+    }
 }
 
 impl Visit for Fields {
@@ -724,10 +740,9 @@ where
                     thread: std::thread::current().id(),
                     entries: 0,
                     runtime: fields.runtime,
-                    period: fields.period_us.map(Duration::from_micros),
+                    period: fields.period(),
                     outermost,
                     ended: Vec::new(),
-                    id: id.into_u64(),
                 },
             );
         } else if is_segment(metadata) {
@@ -745,8 +760,8 @@ where
             if fields.runtime.is_some() {
                 state.runtime = fields.runtime;
             }
-            if let Some(micros) = fields.period_us {
-                state.period = Some(Duration::from_micros(micros)).filter(|d| !d.is_zero());
+            if fields.period_us.is_some() {
+                state.period = fields.period();
             }
         });
     }
@@ -764,7 +779,6 @@ where
                     Some(FrameOpening {
                         runtime: state.runtime.and_then(UiRuntimeId::from_u64),
                         outermost: state.outermost,
-                        id: state.id,
                     })
                 } else {
                     None
@@ -907,20 +921,13 @@ impl CaptureLayer {
             period: state.period,
             spans: state.ended.iter().map(span_of).collect(),
             outermost: state.outermost,
-            id: state.id,
         };
         self.capture.publish(frame);
     }
 }
 
-impl CaptureLayer {
-    pub(crate) fn new(capture: Capture) -> Self {
-        Self { capture }
-    }
-}
-
 /// The filter a capture layer carries.
-pub(crate) fn filter() -> FrameSpanFilter {
+fn filter() -> FrameSpanFilter {
     filter_fn(is_captured as fn(&Metadata<'_>) -> bool)
 }
 
