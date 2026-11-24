@@ -61,13 +61,13 @@ impl Default for ProfilerConfig {
 /// The time one [`Phase`] took in one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub struct PhaseInfo {
+pub struct PhaseTiming {
     phase: Phase,
     duration: Duration,
     start_offset: Duration,
 }
 
-impl PhaseInfo {
+impl PhaseTiming {
     /// The phase measured.
     #[must_use]
     pub const fn phase(&self) -> Phase {
@@ -109,7 +109,7 @@ pub struct FrameStats {
     number: u64,
     start: Duration,
     duration: Duration,
-    phases: Vec<PhaseInfo>,
+    phases: Vec<PhaseTiming>,
     is_jank: bool,
 }
 
@@ -145,20 +145,20 @@ impl FrameStats {
     /// recorded as one entry holding the summed duration and the first
     /// segment's start offset.
     #[must_use]
-    pub fn phases(&self) -> &[PhaseInfo] {
+    pub fn phases(&self) -> &[PhaseTiming] {
         &self.phases
     }
 
     /// The time `phase` took in this frame, if it ran.
     #[must_use]
-    pub fn phase(&self, phase: Phase) -> Option<&PhaseInfo> {
+    pub fn phase(&self, phase: Phase) -> Option<&PhaseTiming> {
         self.phases.iter().find(|info| info.phase == phase)
     }
 
     /// The time `phase` took in this frame in milliseconds, if it ran.
     #[must_use]
     pub fn phase_duration_ms(&self, phase: Phase) -> Option<f64> {
-        self.phase(phase).map(PhaseInfo::duration_ms)
+        self.phase(phase).map(PhaseTiming::duration_ms)
     }
 
     /// Whether the frame outlasted the profiler's [`JankLine`].
@@ -202,7 +202,7 @@ impl ProfilerInner {
     fn new(config: ProfilerConfig) -> Self {
         Self {
             followed: config.runtime,
-            history: VecDeque::with_capacity(config.max_frame_history),
+            history: VecDeque::new(),
             config,
             total_frames: 0,
             jank_frames: 0,
@@ -232,14 +232,14 @@ impl ProfilerInner {
             .filter_map(|span| span.phase().map(|phase| (phase, span)))
             .collect();
         spans.sort_by_key(|(_, span)| span.start());
-        let mut phases: Vec<PhaseInfo> = Vec::new();
+        let mut phases: Vec<PhaseTiming> = Vec::new();
         for (phase, span) in spans {
             // A phase can run more than once per frame (a layout-builder rebuild is still
             // Build work); its segments merge so `FrameStats::phase` sees all of them.
             if let Some(recorded) = phases.iter_mut().find(|info| info.phase == phase) {
                 recorded.duration = recorded.duration.saturating_add(span.duration());
             } else {
-                phases.push(PhaseInfo {
+                phases.push(PhaseTiming {
                     phase,
                     duration: span.duration(),
                     start_offset: span.start().saturating_sub(frame_start),
@@ -531,7 +531,7 @@ mod tests {
         let stats = profiler
             .frame_stats()
             .expect("the frame span closed, so a frame was recorded");
-        let phases: Vec<Phase> = stats.phases().iter().map(PhaseInfo::phase).collect();
+        let phases: Vec<Phase> = stats.phases().iter().map(PhaseTiming::phase).collect();
         assert_eq!(
             phases,
             [
@@ -660,7 +660,7 @@ mod tests {
 
         let history = profiler.frame_history();
         assert_eq!(history.len(), 1, "only the followed frame: {history:?}");
-        let phases: Vec<Phase> = history[0].phases().iter().map(PhaseInfo::phase).collect();
+        let phases: Vec<Phase> = history[0].phases().iter().map(PhaseTiming::phase).collect();
         assert_eq!(phases, [Phase::Paint, Phase::Layout]);
     }
 
@@ -688,7 +688,7 @@ mod tests {
         assert_eq!(history.len(), 2, "{history:?}");
         let phases: Vec<Vec<Phase>> = history
             .iter()
-            .map(|frame| frame.phases().iter().map(PhaseInfo::phase).collect())
+            .map(|frame| frame.phases().iter().map(PhaseTiming::phase).collect())
             .collect();
         assert_eq!(
             phases,
@@ -735,7 +735,7 @@ mod tests {
         let stats = profiler
             .frame_stats()
             .expect("the frame span closed, so a frame was recorded");
-        let phases: Vec<Phase> = stats.phases().iter().map(PhaseInfo::phase).collect();
+        let phases: Vec<Phase> = stats.phases().iter().map(PhaseTiming::phase).collect();
         assert_eq!(phases, [Phase::Build], "only the framework's span counts");
     }
 
@@ -787,7 +787,7 @@ mod tests {
             number: 7,
             start: Duration::ZERO,
             duration: Duration::from_micros(12_340),
-            phases: vec![PhaseInfo {
+            phases: vec![PhaseTiming {
                 phase: Phase::AnimationTick,
                 duration: Duration::from_micros(1_500),
                 start_offset: Duration::ZERO,
