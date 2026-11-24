@@ -317,8 +317,11 @@ re-armed at the same instant (egui's `max_steps`). A wait whose condition is fal
 `WaitEnd::Idle` with the remaining causes when the host's half is `Complete` and every remaining
 cause is `Test`: only the test can release it. An `Outside` cause keeps the wait parked to its
 limit, as an `Absent` half does. A host whose half is `Absent` (a runner until it composes one) is
-never idle, and its answers carry `SettleScope::RuntimeOnly`. `wait.settled` on a window counts
-that window's causes and the causes of the whole application.
+never idle, and its answers carry `SettleScope::RuntimeOnly`: the runtime answers from its own
+half wherever that host's outermost turn ends (an owner dispatch, a turn the host ran by itself, a
+frame's settlement outside any turn). `wait.settled` on a window counts that window's causes and
+the causes of the whole application: a redraw, a scheduled frame, tree work and pointer motion are
+causes of each window that has work for a frame, and of the whole application when none has.
 
 A settle that does not end fails with every cause named. The runtime answers `wait.settled`,
 `wait.frames`, `audit.a11y`, `perf.start` and `perf.stop`; the two captures stay with a host that

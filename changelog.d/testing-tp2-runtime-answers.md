@@ -46,13 +46,19 @@
   the retry, and a gesture deadline not yet due is a timer, not pending work.
 - The driver sends a gesture to the app's agent from its `Window`, `Element` and `ElementLocator`
   handles too, whenever the agent serves it and the path is not `os`.
-- A gesture's reply deadline (`Addressed::holds_for`) counts the time its input takes to play after
-  the act's timeout, so a long press, a slow swipe or a double tap is no longer cut short.
 - `input.inject` plays `flui_protocol::input::plan`'s timeline: its bounds and refusals are the
   plan's, each step of a move is one event stamped at its planned instant, and a move that names no
   duration lasts a step (16 ms).
+- `Tester::drag` and `drag_from` hold the contact still for the protocol's swipe settle before
+  the release, so a drag ends below the fling velocity on the plan's timeline.
+- A settled wait on a window counts that window's causes and the application's: a redraw, a
+  scheduled frame, tree work and pointer motion are listed for each window that has work for a
+  frame, so another window's animation no longer keeps a still window unsettled.
+
+### Fixed
+
+- A gesture's reply deadline (`Addressed::holds_for`) counts the time its input takes to play after
+  the act's timeout, so a long press, a slow swipe or a double tap is no longer cut short.
 - A composed gesture's pointer and keyboard sources are named `gesture.mouse`, `gesture.touch`,
   `gesture.pinch.a`/`gesture.pinch.b` and `gesture.keys`, so a mouse gesture after a touch gesture on
   one input lease no longer collides on one source name.
-- `Tester::drag` and `drag_from` hold the contact still for the protocol's swipe settle before
-  the release, so a drag ends below the fling velocity on the plan's timeline.
