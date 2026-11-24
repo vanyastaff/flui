@@ -1293,12 +1293,12 @@ extensions are the VM's. Pinned by `dev_agent_host_contains_its_hook` (`src/dev_
 wake, platform input, a presentation leaving, a scene's settlement, a presentation's close) call
 the development agent only through `ui_runtime::agent_side::AgentSide`, the reference
 `UiRuntime::dev_agent_window` installs on the runtime and on the presentation it vends for, never
-cleared. `DevAgentHost::attach` takes a `dev_agent::WindowSource` beside the hooks, and only
-`WindowSource::dev_agent` names `dev_agent_window`. A direct call from those paths into an agent
-module is the defect this rule exists to catch (ADR-0402).
+cleared. `DevAgentHost::attach` takes a `dev_agent::AgentWindowSource` beside the hooks, and only
+`AgentWindowSource::dev_agent` names `dev_agent_window`. A direct call from those paths into an
+agent module is the defect this rule exists to catch (ADR-0402).
 
 **Why here.** Linking follows reachability: a binary in which no code installs a hook names
-neither `WindowSource::dev_agent` nor `dev_agent_window`, so it links none of the agent's owner
+neither `AgentWindowSource::dev_agent` nor `dev_agent_window`, so it links none of the agent's owner
 side (ADR-0402 gives the bytes), in every build mode and with no feature for two crates to
 disagree on. Flutter's counterpart is `BindingBase.initServiceExtensions`, guarded so its tree
 shaker drops the extensions from a release build. Pinned by the `*_bytes` lines of

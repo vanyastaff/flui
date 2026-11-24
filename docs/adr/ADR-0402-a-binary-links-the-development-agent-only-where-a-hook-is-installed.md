@@ -69,12 +69,12 @@ its ports: it is dropped as stale, and its reply with it, which the caller reads
 
 ### §2. Only the code that installs a hook names the vending
 
-`flui_runtime::dev_agent::WindowSource` holds `UiRuntime::dev_agent_window`, and
-`WindowSource::dev_agent` is the one place that names it. `DevAgentHost::attach` takes the source
-beside the hooks and vends through it. `flui-app` creates the source in `DevAgent::with`, behind
-`AppConfig::dev_agent` (and the driver agent's own installation, under `cfg(driver_agent)`), and
-`flui-testing`'s headless host where its test attaches a hook. A binary in which nothing installs
-a hook names neither, and the linker drops the agent's owner side.
+`flui_runtime::dev_agent::AgentWindowSource` holds `UiRuntime::dev_agent_window`, and
+`AgentWindowSource::dev_agent` is the one place that names it. `DevAgentHost::attach` takes the
+source beside the hooks and vends through it. `flui-app` creates the source in `DevAgent::with`,
+behind `AppConfig::dev_agent` (and the driver agent's own installation, under `cfg(driver_agent)`),
+and `flui-testing`'s headless host where its test attaches a hook. A binary in which nothing
+installs a hook names neither, and the linker drops the agent's owner side.
 
 ### Consequences
 

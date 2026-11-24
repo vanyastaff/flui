@@ -47,9 +47,9 @@ use crate::ui_runtime::UiRuntime;
 /// which nothing installs a hook does not name `dev_agent_window` and links none of the agent's
 /// owner side.
 #[derive(Clone, Copy)]
-pub struct WindowSource(fn(&UiRuntime, PresentationId) -> Option<AgentWindow>);
+pub struct AgentWindowSource(fn(&UiRuntime, PresentationId) -> Option<AgentWindow>);
 
-impl WindowSource {
+impl AgentWindowSource {
     /// The development agent's windows, vended by [`UiRuntime::dev_agent_window`].
     #[must_use]
     pub fn dev_agent() -> Self {
@@ -57,9 +57,9 @@ impl WindowSource {
     }
 }
 
-impl fmt::Debug for WindowSource {
+impl fmt::Debug for AgentWindowSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("WindowSource")
+        f.write_str("AgentWindowSource")
     }
 }
 
@@ -74,7 +74,7 @@ pub struct DevAgentHost {
     /// the order they were attached.
     hooks: Vec<Box<dyn DevAgentHook>>,
     /// Where the hooks get their windows.
-    windows: WindowSource,
+    windows: AgentWindowSource,
     /// `*const ()` is neither `Send` nor `Sync`.
     _owner_affine: PhantomData<*const ()>,
 }
@@ -86,7 +86,7 @@ impl DevAgentHost {
     /// one whose `attach` panics is dropped too; neither is handed a window.
     /// Every hook kept is detached once, when the host drops.
     pub fn attach(
-        windows: WindowSource,
+        windows: AgentWindowSource,
         hooks: impl IntoIterator<Item = Box<dyn DevAgentHook>>,
     ) -> Self {
         let mut serving = Vec::new();

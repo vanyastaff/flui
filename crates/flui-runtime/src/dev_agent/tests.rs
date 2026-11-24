@@ -114,7 +114,7 @@ fn hook(panic_in: PanicIn, panic_on_drop: bool) -> (Box<dyn DevAgentHook>, Arc<R
 fn host(panic_in: PanicIn, panic_on_drop: bool) -> (DevAgentHost, Arc<Record>) {
     let (hook, record) = hook(panic_in, panic_on_drop);
     (
-        DevAgentHost::attach(WindowSource::dev_agent(), [hook]),
+        DevAgentHost::attach(AgentWindowSource::dev_agent(), [hook]),
         record,
     )
 }
@@ -264,7 +264,7 @@ fn one_hooks_panic_leaves_the_others_served_in_order() {
     let (ui_runtime, mut sink) = ui_runtime();
     let (failing, failed) = hook(PanicIn::WindowOpened, false);
     let (serving, served) = hook(PanicIn::Nowhere, false);
-    let mut host = DevAgentHost::attach(WindowSource::dev_agent(), [failing, serving]);
+    let mut host = DevAgentHost::attach(AgentWindowSource::dev_agent(), [failing, serving]);
     host.publish(&ui_runtime, ui_runtime.presentation_id());
     assert_eq!(
         failed.counts(),
@@ -322,7 +322,7 @@ fn a_published_window_is_read_until_the_host_detaches() {
 
 fn nothing_is_vended_while_no_hook_serves() {
     let (ui_runtime, mut sink) = ui_runtime();
-    let mut host = DevAgentHost::attach(WindowSource::dev_agent(), std::iter::empty());
+    let mut host = DevAgentHost::attach(AgentWindowSource::dev_agent(), std::iter::empty());
     assert!(!host.is_serving());
     assert!(
         host.vend(&ui_runtime, ui_runtime.presentation_id())

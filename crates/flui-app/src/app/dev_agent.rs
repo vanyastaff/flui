@@ -33,7 +33,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use flui_runtime::dev_agent::{DevAgentHost, WindowSource};
+use flui_runtime::dev_agent::{AgentWindowSource, DevAgentHost};
 use flui_view::dev_agent::DevAgentHook;
 use parking_lot::Mutex;
 
@@ -45,14 +45,14 @@ struct Pending(Mutex<Option<Box<dyn DevAgentHook>>>);
 /// in the order they were installed, until a loop takes them.
 ///
 /// Built by [`AppConfig::dev_agent`](crate::AppConfig::dev_agent), which is
-/// the one place that names the agent's windows ([`WindowSource::dev_agent`]):
+/// the one place that names the agent's windows ([`AgentWindowSource::dev_agent`]):
 /// an application that installs no hook links none of the agent's owner side
 /// (ADR-0402). `Clone` shares the hooks, so whichever clone a loop starts
 /// with, the loop takes them all.
 #[derive(Clone)]
 pub(crate) struct DevAgent {
     hooks: Vec<Arc<Pending>>,
-    windows: WindowSource,
+    windows: AgentWindowSource,
 }
 
 impl DevAgent {
@@ -61,7 +61,7 @@ impl DevAgent {
         let hook: Box<dyn DevAgentHook> = Box::new(hook);
         let mut agents = agents.unwrap_or_else(|| Self {
             hooks: Vec::new(),
-            windows: WindowSource::dev_agent(),
+            windows: AgentWindowSource::dev_agent(),
         });
         agents.hooks.push(Arc::new(Pending(Mutex::new(Some(hook)))));
         agents
@@ -156,7 +156,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_runtime::dev_agent::{DevAgentHost, WindowSource};
+    use flui_runtime::dev_agent::{AgentWindowSource, DevAgentHost};
     use flui_view::dev_agent::{AgentWindow, DevAgentHook};
 
     use super::LoopAgents;
@@ -239,8 +239,10 @@ mod tests {
     fn a_host_lent_when_its_loop_ends_is_handed_back_to_be_dropped() {
         let (serving, attaches, detaches) = hook(false);
         let serving: Box<dyn DevAgentHook> = Box::new(serving);
-        let mut agents =
-            LoopAgents::Serving(DevAgentHost::attach(WindowSource::dev_agent(), [serving]));
+        let mut agents = LoopAgents::Serving(DevAgentHost::attach(
+            AgentWindowSource::dev_agent(),
+            [serving],
+        ));
         let host = agents.lend().expect("the loop's host is lent");
         assert!(agents.lend().is_none(), "a nested call finds it lent");
         assert!(agents.end().is_none(), "the lender keeps the host");
