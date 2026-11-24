@@ -9,7 +9,7 @@
 //! with the `Document` role that publishes the selection as positions in
 //! those runs and takes `SetTextSelection` for the whole document. The
 //! selection is held as two ([anchor], byte) ends, so it names a text by
-//! identity, never by its place or its words. A [`RichText`](crate::RichText)
+//! identity, never by its place or its words. A [`RichText`]
 //! built directly reads no area, as Flutter's reads none
 //! (`flutter/flutter@3.50.1`, `packages/flutter/lib/src/widgets/text.dart`).
 //!
@@ -114,7 +114,7 @@ type SelectionCallback = Rc<dyn Fn(&mut EventContext<'_>, &SelectionChange)>;
 
 /// Makes the static text beneath it selectable as one document.
 ///
-/// Every [`Text`](crate::Text) and [`RichText`](crate::RichText) beneath the
+/// Every [`Text`](crate::Text) and [`RichText`] beneath the
 /// area joins it, except beneath a [`SelectionContainer::disabled`]. A
 /// selection runs from one text to another in the order the published
 /// document reads them, and every text between its two ends is selected
