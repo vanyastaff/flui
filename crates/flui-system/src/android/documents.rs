@@ -49,14 +49,15 @@ use flui_platform::capability::{
 };
 use flui_platform::{SystemFailure, Unsupported, UnsupportedReason};
 
-use super::workers::{NotRun, Workers};
 use crate::dialog::handed_over::{
     admit_declared, admit_picks, admit_read, named_after_first_filter,
 };
 use crate::dialog::{
     DialogError, DialogHold, FileDialogBackend, FileDialogCapability, FileDialogs, FileFilter,
     OpenRequest, OpenResult, PickedFile, Picks, SaveLocation, SaveRequest, SaveResult,
+    off_owner_refusal,
 };
+use crate::off_owner::OffOwner;
 
 /// The key an open dialog's request waits under across Activities.
 pub(crate) const OPEN_KEY: ResultKey = key("flui-system.open-document");
@@ -498,18 +499,6 @@ pub(crate) fn request_refusal(refused: ResultRefused) -> DialogError {
     }
 }
 
-/// What a worker's refusal answers a dialog.
-fn not_run<T>(reason: NotRun) -> Result<T, DialogError> {
-    Err(match reason {
-        NotRun::Busy => DialogError::Unsupported(Unsupported::of::<FileDialogCapability>(
-            UnsupportedReason::Unavailable,
-        )),
-        NotRun::NoThread(code) => {
-            DialogError::Failed(code.map_or(SystemFailure::MalformedAnswer, SystemFailure::Os))
-        }
-    })
-}
-
 /// What a dialog's hold and its request's answer share.
 #[derive(Default)]
 struct Asked {
@@ -552,7 +541,7 @@ pub(crate) struct AndroidDialogs<P: DocumentPicker> {
     activity: Activity,
     completions: CompletionSource,
     picker: Rc<P>,
-    workers: Rc<Workers>,
+    workers: Rc<OffOwner>,
 }
 
 impl<P: DocumentPicker> AndroidDialogs<P> {
@@ -560,7 +549,7 @@ impl<P: DocumentPicker> AndroidDialogs<P> {
         activity: Activity,
         completions: CompletionSource,
         picker: Rc<P>,
-        workers: Rc<Workers>,
+        workers: Rc<OffOwner>,
     ) -> Self {
         Self {
             activity,
@@ -632,9 +621,12 @@ impl<P: DocumentPicker> AndroidDialogs<P> {
                         }
                         AfterAnswer::Completes => LetGo::default(),
                     };
-                    workers.run("flui-system-documents", answer, not_run, move || {
-                        work(&mut documents, &let_go)
-                    });
+                    workers.run(
+                        "flui-system-documents",
+                        answer,
+                        off_owner_refusal,
+                        move || work(&mut documents, &let_go),
+                    );
                 }
                 Ok(None) => drop(answer.resolve(Ok(None))),
                 Err(error) => drop(answer.resolve(Err(error))),
@@ -738,7 +730,7 @@ impl EarlierAnswers {
         activity: &Activity,
         completions: &CompletionSource,
         picker: &Rc<P>,
-        workers: &Rc<Workers>,
+        workers: &Rc<OffOwner>,
     ) {
         if self.claimed.replace(true) {
             return;
@@ -798,7 +790,7 @@ pub(crate) fn provide<P: DocumentPicker>(
     activity: Activity,
     picker: Rc<P>,
 ) -> Result<FileDialogs, Unsupported> {
-    let workers = ctx.runtime_local::<Workers>();
+    let workers = OffOwner::of(ctx);
     ctx.runtime_local::<EarlierAnswers>()
         .claim(&activity, ctx.completions(), &picker, &workers);
     FileDialogs::try_new(

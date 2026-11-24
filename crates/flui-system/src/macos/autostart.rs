@@ -8,7 +8,7 @@
 //! again. Registering asks nobody (the system posts its own notice), so a
 //! request's reason is not shown. Below macOS 13 the service is not there
 //! and every request answers `NotOnThisDevice`. Each request runs off the
-//! main thread (`apple::queue::WorkQueue`), since the service waits on its daemon.
+//! main thread (`apple::queue`, bounded by `off_owner`), since the service waits on its daemon.
 
 use flui_platform::{Unsupported, UnsupportedReason};
 
@@ -125,9 +125,9 @@ mod appkit {
 
     use super::{ItemStatus, LoginItem, LoginItems, answer, unsupported};
     use crate::apple::error_code;
-    use crate::apple::queue::WorkQueue;
     use crate::apple::version::{MacOSVersion, Since};
     use crate::autostart::{AutostartBackend, AutostartRequest, AutostartResult};
+    use crate::off_owner::OffOwner;
 
     /// The application's own login item; made only with the proof that the
     /// class is there.
@@ -163,11 +163,11 @@ mod appkit {
     /// [`AutostartBackend`] over the application's login item.
     pub(crate) struct MacAutostart {
         version: MacOSVersion,
-        queue: Rc<WorkQueue>,
+        queue: Rc<OffOwner>,
     }
 
     impl MacAutostart {
-        pub(crate) fn new(version: MacOSVersion, queue: Rc<WorkQueue>) -> Self {
+        pub(crate) fn new(version: MacOSVersion, queue: Rc<OffOwner>) -> Self {
             Self { version, queue }
         }
     }
@@ -180,7 +180,7 @@ mod appkit {
                 return;
             };
             let busy = Err(unsupported(UnsupportedReason::Unavailable));
-            self.queue.run(answer_to, busy, move || {
+            self.queue.dispatch(answer_to, busy, move || {
                 answer(&MainAppService(since), &request)
             });
         }

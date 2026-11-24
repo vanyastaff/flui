@@ -50,12 +50,12 @@ mod appkit {
     use crate::apple::bookmark::AppleGrants;
     use crate::apple::main_thread;
     use crate::apple::os::AppleOs;
-    use crate::apple::queue::WorkQueue;
     use crate::apple::user_dirs::AppleUserDirs;
     use crate::apple::version::{OnMacOS, RunningVersion};
     use crate::autostart::Autostart;
     use crate::dialog::{FileDialogCapability, FileDialogs, MessageBoxCapability, MessageBoxes};
     use crate::grant::Grants;
+    use crate::off_owner::OffOwner;
     use crate::os::Os;
     use crate::providers::{Providers, Provision};
     use crate::share::{Share, ShareCapability};
@@ -84,7 +84,7 @@ mod appkit {
         Providers {
             launcher: Provision::provided(|ctx: &ProviderContext<'_>| {
                 Ok::<_, Unsupported>(Launcher::new(
-                    super::launcher::MacLauncher::new(ctx.runtime_local::<WorkQueue>()),
+                    super::launcher::MacLauncher::new(OffOwner::of(ctx)),
                     ctx,
                 ))
             }),
@@ -94,7 +94,7 @@ mod appkit {
                     super::dialogs::MacDialogs::new(
                         mtm,
                         ctx.runtime_local::<RunningVersion<OnMacOS>>().0,
-                        ctx.runtime_local::<WorkQueue>(),
+                        OffOwner::of(ctx),
                     ),
                     ctx,
                 )
@@ -106,11 +106,7 @@ mod appkit {
             share: Provision::provided(|ctx: &ProviderContext<'_>| {
                 let mtm = main_thread::<ShareCapability>()?;
                 Share::try_new(
-                    super::share::MacShare::new(
-                        mtm,
-                        ctx.runtime_local::<WorkQueue>(),
-                        ctx.completions().clone(),
-                    ),
+                    super::share::MacShare::new(mtm, OffOwner::of(ctx), ctx.completions().clone()),
                     ctx,
                 )
             }),
@@ -118,7 +114,7 @@ mod appkit {
                 Ok::<_, Unsupported>(Autostart::new(
                     super::autostart::MacAutostart::new(
                         ctx.runtime_local::<RunningVersion<OnMacOS>>().0,
-                        ctx.runtime_local::<WorkQueue>(),
+                        OffOwner::of(ctx),
                     ),
                     ctx,
                 ))
@@ -144,10 +140,7 @@ mod appkit {
                 ))
             }),
             user_dirs: Provision::provided(|ctx: &ProviderContext<'_>| {
-                Ok::<_, Unsupported>(UserDirs::new(
-                    AppleUserDirs::new(ctx.runtime_local::<WorkQueue>()),
-                    ctx,
-                ))
+                Ok::<_, Unsupported>(UserDirs::new(AppleUserDirs::new(OffOwner::of(ctx)), ctx))
             }),
             os: Provision::provided(|ctx: &ProviderContext<'_>| {
                 let version = ctx.runtime_local::<RunningVersion<OnMacOS>>().0;
@@ -164,7 +157,7 @@ mod appkit {
                 );
                 Ok::<_, Unsupported>(Grants::new(
                     AppleGrants::new(
-                        ctx.runtime_local::<WorkQueue>(),
+                        OffOwner::of(ctx),
                         crate::sandbox::of_confinement(&confinement),
                     ),
                     ctx,
