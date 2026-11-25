@@ -18,12 +18,15 @@
 //! The lanes: [`windows`], [`macos`], [`x11`], [`wayland`] (its OS half with the `wayland`
 //! feature) and `chrome` (feature `chrome`); both Linux lanes read the app through [`atspi`].
 //! [`android`] drives a device or an emulator from any host, through `adb`, and [`ios_simulator`]
-//! an iOS Simulator through `xcrun simctl`, which sends no input. An input-method composition goes
-//! only to a lane that says it composes ([`LaneCapabilities::compositions`]), a rule
+//! an iOS Simulator through `xcrun simctl`, which sends no input and reads the app through the
+//! Mac's accessibility API on the Simulator's window. The macOS lane and the iOS Simulator lane
+//! share that API's rules and, on macOS, its client (`ax`); no lane imports another. An input-method composition
+//! goes only to a lane that says it composes ([`LaneCapabilities::compositions`]), a rule
 //! [`send_guarded`] holds.
 
 pub mod android;
 pub mod atspi;
+pub(crate) mod ax;
 #[cfg(feature = "chrome")]
 pub mod chrome;
 pub mod ios_simulator;
@@ -76,14 +79,29 @@ pub enum AccessibilityApi {
     /// Android's accessibility nodes (`AccessibilityNodeInfo`, the tree TalkBack reads) as
     /// UI Automator dumps them: native roles are class names.
     UiAutomator,
+    /// The macOS Accessibility API (AX) on the iOS Simulator's window, under which the Simulator
+    /// bridges the iOS app's UIKit elements: native roles are the `AX` role strings the bridge
+    /// gives each element. Apple documents no part of the bridge, so it stands for VoiceOver on
+    /// iOS only as far as runs confirm it: the roles it gives each trait are inferred, not
+    /// measured, and whether it carries the app's identifier is unconfirmed (`docs/gaps.md`).
+    SimulatorAx,
 }
 
 impl AccessibilityApi {
-    /// Whether the API's tree names no identifier the app sets, so a lane reading it finds the
-    /// app's nodes by matching it to the app's own tree ([`Lane::read_tree`]'s `app`).
+    /// Whether the lane reading the API finds the app's nodes by matching the OS tree to the
+    /// app's own tree ([`Lane::read_tree`]'s `app`): Android's tree names no identifier the app
+    /// sets, and the Simulator's bridge carries one no run has confirmed, so both are matched by
+    /// role, name, state and bounds.
     #[must_use]
     pub fn matches_app_tree(self) -> bool {
-        matches!(self, Self::UiAutomator)
+        matches!(self, Self::UiAutomator | Self::SimulatorAx)
+    }
+
+    /// Whether the API performs an element's action, as a screen reader's activate command does
+    /// ([`Lane::invoke`]): every one but UI Automator, which reads the tree and acts on nothing.
+    #[must_use]
+    pub fn activates(self) -> bool {
+        !matches!(self, Self::UiAutomator)
     }
 }
 
@@ -233,8 +251,8 @@ pub trait Lane: Send {
     /// The OS accessibility tree of the window `placement` describes, projected onto the wire's
     /// nodes (ADR-0095 §4): what a screen reader reads of the app. `app` is the window's tree as
     /// the app published it when the lane's API [matches the app's tree](AccessibilityApi::matches_app_tree)
-    /// (Android's, whose OS tree names no identifier), and an empty tree for the others, which read
-    /// without it.
+    /// (Android's and the iOS Simulator's), and an empty tree for the others, which read without
+    /// it.
     ///
     /// # Errors
     ///
@@ -248,17 +266,20 @@ pub trait Lane: Send {
         ))
     }
 
-    /// Activate the element of the window `placement` describes whose OS automation id is
-    /// `identifier` (an ADR-0240 identifier, as the adapter publishes it) through the OS
-    /// accessibility API, as a screen reader's activate command does.
+    /// Activate the element of the window `placement` describes whose identifier is `identifier`
+    /// (an ADR-0240 identifier, as the adapter publishes it) through the OS accessibility API, as
+    /// a screen reader's activate command does. `app` is handed as [`Self::read_tree`] is handed
+    /// it: a lane whose API [matches the app's tree](AccessibilityApi::matches_app_tree) finds the
+    /// element as the app node of that identifier matched; the others find it by the OS automation
+    /// id.
     ///
     /// # Errors
     ///
     /// [`Error::NotSupported`] naming `os_invoke` for a lane that acts through no accessibility
     /// API, which is the default, and for one that reads a tree but performs no action through it
     /// (Android's); [`Error::NotFound`] when no element has the identifier.
-    fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
-        let _ = (placement, identifier);
+    fn invoke(&mut self, placement: &Placement, identifier: &str, app: &Tree) -> Result<()> {
+        let _ = (placement, identifier, app);
         Err(Error::not_supported(
             "os_invoke",
             format!("the {} lane acts through no accessibility API", self.name()),

@@ -11,7 +11,7 @@
 
 ## Правила исполнения
 
-Пункты 1–7 и 9 [«Правил исполнения» platform-layer](../platform-layer/tasks.md#правила-исполнения):
+Пункты 1–7 и 9 [«Правил исполнения» platform-layer](https://github.com/vanyastaff/flui/blob/693f2c2db3ebf268bd0ecee1bc8500e89bdb8910/docs/plans/specs/platform-layer/tasks.md#правила-исполнения):
 задача = worktree под `.claude/worktrees/<имя>` = ветка = PR; проверки по AGENTS.md «Checking a
 change» через `cargo heli`; fix-тест падает при откате исправления в изолированном checkout; ID
 задач и требований — только в этом каталоге; `changelog.d/<branch-slug>.md` у каждого PR,

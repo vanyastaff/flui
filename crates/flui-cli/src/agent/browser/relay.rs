@@ -15,10 +15,11 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use flui_protocol::framing::{LineReader, MAX_LINE};
+use interprocess::local_socket::Listener;
 use interprocess::local_socket::traits::Listener as _;
-use interprocess::local_socket::{Listener, Stream};
 
 use super::super::listener::bind;
+use super::super::nonblocking::NonblockingStream;
 use super::{
     BrowserLink, CLOSE_FUNCTION, LinkError, LinkEvent, Remote, SEND_FUNCTION, connect_function,
     read_report,
@@ -110,7 +111,7 @@ struct Turns {
 
 /// One client's connection and the page connection it is carried to.
 struct Client {
-    stream: Stream,
+    stream: NonblockingStream,
     reader: LineReader,
     /// What is still to be written to the client.
     unwritten: Vec<u8>,
@@ -170,6 +171,14 @@ impl Turns {
                 Err(error) => {
                     crate::ui::debug(format!("the agent relay accepted no client: {error}"));
                     return;
+                }
+            };
+            let stream = match NonblockingStream::try_new(stream) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    // Dropped: the client reads the end of its connection.
+                    crate::ui::debug(format!("the agent relay could not poll a client: {error}"));
+                    continue;
                 }
             };
             let Some(next) = self.next_id.checked_add(1) else {

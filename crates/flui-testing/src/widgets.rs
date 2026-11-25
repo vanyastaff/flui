@@ -563,7 +563,7 @@ impl LaidOut {
 
     /// The clipboard this tree's widgets acquire through
     /// `ctx.capability::<ClipboardCapability>()`.
-    pub fn clipboard(&self) -> crate::clipboard::ScriptedClipboard {
+    pub fn clipboard(&self) -> flui_interaction::testing::ScriptedClipboard {
         self.host.ui_runtime().clipboard()
     }
 
@@ -571,7 +571,7 @@ impl LaidOut {
     /// `ctx.capability::<PrimarySelectionCapability>()`, on a window whose
     /// platform has one (Linux, through [`lay_out_on`]); elsewhere they are
     /// refused it.
-    pub fn primary_selection(&self) -> crate::primary_selection::ScriptedPrimarySelection {
+    pub fn primary_selection(&self) -> flui_interaction::testing::ScriptedPrimarySelection {
         self.host.ui_runtime().primary_selection()
     }
 

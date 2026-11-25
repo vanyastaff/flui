@@ -469,8 +469,9 @@ pub struct Tree {
     pub roots: Vec<Node>,
     /// Elements reported.
     pub count: usize,
-    /// Whether the read left anything out (its depth, its node budget): then
-    /// read a subtree with `root`, or more nodes.
+    /// Whether the read left anything out: its depth or its node budget ran out, for which read
+    /// a subtree with `root`, or more nodes; or an element went away while the read walked it,
+    /// leaving its parent's children unread (`Node::children_unread`), for which read again.
     pub truncated: bool,
     /// What the read found wrong with the published tree, in the order it
     /// walked it. Reported, never repaired: the nodes read as published.

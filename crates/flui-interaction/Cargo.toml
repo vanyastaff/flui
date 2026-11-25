@@ -117,12 +117,15 @@ harness = false
 [features]
 default = []
 
-# Gates the `testing/` submodule (gesture recording, replay, builders)
-# plus `PointerEventData` / `PointerEventKind` / `make_*_event` compat
-# helpers from `events.rs`. Off by default — opt in via dev-dependencies
-# or downstream `flui-interaction = { features = ["testing"] }`.
+# Gates the `testing/` submodule (the scripted clipboard and primary
+# selection, the in-memory text store, synthetic event builders) plus
+# `PointerEventData` / `PointerEventKind` / `make_*_event` compat helpers
+# from `events.rs`. Off by default — opt in via dev-dependencies or
+# downstream `flui-interaction = { features = ["testing"] }`. The scripted
+# doubles are built on the contract's scenario primitive, hence
+# `flui-platform/scripted` (ADR-0264).
 # Auto-enabled in test builds via `cfg(any(test, feature = "testing"))`.
-testing = []
+testing = ["flui-platform/scripted"]
 
 # Serialize the gesture values (details, velocity, pointer device kind).
 serde = ["dep:serde", "flui-painting/serde", "flui-platform/serde"]

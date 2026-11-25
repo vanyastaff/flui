@@ -426,8 +426,9 @@ unwired. Storage follows as the second built-in capability, and `flui-system` (A
 first capability crate. The clipboard landing contains the contract types, the registry in
 `flui-runtime`, the built-in clipboard provider in `flui-app` (the composition root; the marker
 sits above the core host) over the core host's owner-local clipboard, the headless host's
-clipboard (`pub(crate)` in the core host), a scripted double in `flui-testing` built on the
-contract's `scripted` feature, `EditableText` acquiring the clipboard through the seam, and the
+clipboard (`pub(crate)` in the core host), a scripted double in `flui-interaction`'s `testing`
+kit, beside the contract it doubles (ADR-0264) and built on `flui-platform`'s `scripted`
+feature, `EditableText` acquiring the clipboard through the seam, and the
 removal of `clipboard_handle`, the synchronous `Clipboard` trait and the contract's
 `InMemoryClipboard`. The permission types are not part of it. Tests:
 
@@ -613,11 +614,13 @@ The clipboard landing spells the shape of §3 as follows; the properties of §2 
   a `Resolver`. AppKit and UIKit answer at once, Win32 from a clipboard thread of its own
   (ADR-0337 §3), the web when `navigator.clipboard.readText()` settles (falling back to what the
   page wrote when the browser refuses). Android reads and writes `ClipboardManager` through JNI.
-- **The scripted double.** `flui_testing::clipboard::ScriptedClipboard` holds, answers, fails, drops or
+- **The scripted double.** `flui_interaction::testing::ScriptedClipboard`, beside the contract it
+  doubles (ADR-0264), holds, answers, fails, drops or
   refuses reads, and counts the reads it was asked and the live handles;
   `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin` mount a tree over another
-  registry. `CompletionSource` is public, so the contract needs no
-  `scripted` feature; ADR-0243 names test support `testing` in any case.
+  registry. It is built on `flui_platform::capability::scripted`, which `flui-interaction`'s
+  `testing` feature turns on with `flui-platform/scripted` (ADR-0154 §10); the feature that names
+  the double is `testing`, the name ADR-0243 keeps for test support.
 - **Checked failures.** `capability` on a `BuildContext` is the E0599 doctest of
   `LifecycleContextExt`; `ClipboardHandle: Send` and `Completion<T>: Send` are the E0277 cases
   `a_clipboard_handle_stays_on_its_thread` (`flui-interaction`) and

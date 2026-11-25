@@ -1,19 +1,8 @@
 ### Changed
 
-- **`flui-driver`**: the Android lane refuses a `uiautomator dump` while any accessibility
-  service is on, not only a screen reader, and names the services in the refusal
-  (`not_supported`, `android_window_dump`): the dump suspends Voice Access, Switch Access and
-  Samsung's Universal Switch as it does TalkBack. `Window::os_tree` and
-  `Window::compare_projection` read the app's tree again when it moved while the OS tree was
-  read, and answer `Error::Busy` when it moved on each of three readings.
-
-### Fixed
-
-- **`flui-driver`**: the Android lane's OS tree on a correct app. A device whose last
-  accessibility service was turned off (an empty service list) no longer refuses every dump, and
-  with it the lane's window, capture and input. The app's root is the decor view's child where
-  `FluiView.install` puts it, so an edge-to-edge window is no ambiguity with NativeActivity's own
-  content view. A radio button matches the checked state the adapter publishes for its selection.
-  The rows a list keeps past its viewport match in the order the adapter adds them, so two
-  unnamed rows past the display are no ambiguity. A range's value and the announcer nodes, which
-  a dump cannot show, are no difference.
+- **`flui-driver`**: `Window::compare_projection`, and `Window::os_tree` through a lane that
+  matches against the app's tree, compare the OS tree with the app's tree of its own revision, on
+  every lane: the app's tree is read again while it moves between the two reads, and when the
+  lane could not match a tree that moved, by the rule the rustdoc of `Window::compare_projection`
+  states. A tree that never held still answers `Error::Busy` with `Retry::Never`, which an app
+  republishing every frame (a running clock, a progress bar) always does on Android.

@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 has merged (#2948), FD11 is built and under review (its runs on the input desktop owed), FD12 is built and under review (its runs in a real headless Chrome owed), FD14 has merged (#2927; its runs on a Mac owed), FD15 is built and under review (its HID spike answered no-go, so the lane sends no input under D23's rule and an input channel is the owner's decision; neither Done-when item is met: the HID probe was not built and its runs on a Simulator are owed), FD16 is built and under review (its runs in a real Linux session owed), FD13 is built and under review (its runs on an emulator and a device owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 has merged (#2948), FD11 is built and under review (its runs on the input desktop owed), FD12 is built and under review (its runs in a real headless Chrome owed), FD14 has merged (#2927; its runs on a Mac owed), FD15 is built and under review (its HID spike answered no-go, so the lane sends no input under D23's rule and an input channel is the owner's decision; it reads the app's accessibility tree through the Mac's accessibility API on the Simulator's window; neither Done-when item is met: the HID probe was not built and its runs on a Simulator are owed), FD16 is built and under review (its runs in a real Linux session owed), FD13 is built and under review (its runs on an emulator and a device owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -845,8 +845,8 @@ graph LR
     `each_role_publishes_the_wire_role_ui_automation_folds_it_to` (the role table against
     `flui-semantics`' own fold, through the agent), `the_input_scenario_passes_on_the_headless_target`,
     `the_notes_scenario_passes_on_the_headless_target`,
-    `the_conformance_scenario_passes_on_the_headless_target` (the conformance row the platform-layer
-    spec names).
+    `the_conformance_scenario_passes_on_the_headless_target` (the conformance scenario the quality
+    rows of `crates/flui-native/platform-parity.toml` name).
   - On W, a nextest desktop of its own (Windows 11 build 26300): `windows_desktop::ui_automation_reads_and_invokes_the_app_as_a_screen_reader_does`
     (the scenario app's UI Automation tree projects equal to its semantics, `AutomationId` is the
     identifier, an `InvokePattern` invoke acts, an unknown id is `not_found`),
@@ -1089,7 +1089,7 @@ graph LR
     `a_stream_is_cut_into_lines_and_json_objects_and_a_record_is_bounded`,
     `a_command_fails_on_its_exit_code_or_on_what_the_device_printed`,
     `the_devices_listing_is_read_and_only_a_named_ready_device_is_taken`,
-    `what_the_device_prints_reads_into_its_facts`, `the_dump_gives_the_rotation_and_the_apps_surface`,
+    `what_the_device_prints_reads_into_its_facts`, `the_windows_give_the_rotation_and_the_focused_apps_frame`,
     `a_raw_capture_is_read_in_both_header_forms_and_refused_when_it_lies`,
     `a_png_capture_decodes_and_a_window_is_cut_from_it`,
     `getevent_lines_tell_the_lanes_devices_from_everyone_elses`,
@@ -1144,7 +1144,9 @@ graph LR
     `uinput` probe and the pen's hover, press and leave on a device that allows it, and the probe's
     refusal on one that does not; the pen's axes at each rotation and under a `wm size` override;
     `getevent -l` over `adb shell -tt` seeing the person's touch and not the lane's `input`
-    commands; `uiautomator dump` answering while the app animates; `screencap`'s raw header and
+    commands; the window's frame and rotation as the device's `dumpsys window` prints them (the
+    window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`);
+    `uiautomator dump` answering while the app animates; `screencap`'s raw header and
     format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
     endpoint forward and the app's exit when the session ends; which window is under the point
     before a press (a heads-up notification, the input method, an overlay), which the lane does
@@ -1175,8 +1177,10 @@ graph LR
     report confirmed by the command's sync answer; `input stylus` is not used, so a device without
     `uinput` refuses the pen. The design's touchpad `uinput` script is not built: no OS lane sends a
     touchpad gesture, and adding one is a change to `steps::os_events` and every lane's check.
-  - Where the app's window is and how the display is turned come from `uiautomator dump`; before
-    every press, key, text and scroll the app's window must hold the input focus (`dumpsys window`).
+  - Where the app's window is and how the display is turned come from `dumpsys window` (the
+    focused window's frame, which the app's view covers, and `DisplayRotation`'s rotation), which
+    pauses no accessibility service; before every press, key, text and scroll the app's window
+    must hold the input focus (`dumpsys window`).
   - A device is someone's: `os_input::admit` admits it only with a guard, as the shared desktop.
   - The capture reads `screencap` raw first and falls back to `-p` for a pixel format it does not
     read raw; the driver's own PNG reader (`pixels::codec`) decodes the PNG within its bounds, and the capture is a `pixels::Image`; `roxmltree` reads the dump.
@@ -1185,20 +1189,27 @@ graph LR
     without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
     and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
     port tried when one is taken, is removed by that port once `adb` made it or may have.
-  - `uiautomator dump` suspends every accessibility service running while it dumps, so the lane
-    refuses every dump while any service is on (`enabled_accessibility_services`, a list never set
-    or emptied being none) or touch exploration is, naming `android_window_dump` and the services,
-    and a TalkBack run locates the window before TalkBack is on (`docs/gaps.md`).
+  - `uiautomator dump` suspends every accessibility service running while it dumps, so only the
+    read of the tree takes one, and on a device or an emulator it is refused while any service is
+    on (`enabled_accessibility_services`, a list never set or emptied being none) or touch
+    exploration is, naming `android_tree_dump` and the services (`docs/gaps.md`). Input and
+    capture take no dump. The window is the focused one by its hash, on the default display, read
+    with the rotation from one `dumpsys window`; the focus check before each press, key, text and
+    scroll reads it again and compares hash, frame and rotation (another window `NotForeground`,
+    the same one moved or turned `Busy`); a read of the tree locates the window again after the
+    dump, and a window replaced, moved or turned in between answers `Busy`.
   - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
     sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,
     which `Lane::read_tree` is handed, of one revision with the OS tree: the root is the decor
     view's child where `FluiView.install` puts it, and the children are matched in the order the
     adapter adds them, those `accesskit_consumer`'s filter keeps under a clipping parent first, by
     role (the class `accesskit_android` gives the node's AccessKit role, `lane::android::roles`),
-    content description, toggled state (a radio button's selection included), enabled state and
+    content description, toggled state where the app's read reports it (a radio button's
+    selection included; a grid cell's and another selection role's it does not), enabled state and
     bounds placed at the surface's origin; two candidates the order does not tell apart are
-    `Ambiguous`, bounds off the display place a node nowhere, and what a dump cannot show (a
-    range's value, the announcers) is no difference (`tree::Unobservable`). `invoke` is refused
+    `Ambiguous`, bounds off the display place a node nowhere, and what a dump cannot show or the
+    read does not report (a range's value, the announcers, a selection role's toggled state) is no
+    difference (`tree::Unobservable`). `invoke` is refused
     naming `os_invoke`: UI Automator performs no action. Held by `android_tree::*` and, through
     the lane on a scripted emulator answering with literal dumps of the headless app's pages, by
     `scenarios::the_android_roles_scenario_passes_through_the_lane_on_the_headless_app` and
@@ -1347,6 +1358,12 @@ graph LR
     runtime (`every_input_is_refused_naming_the_xcode_and_the_runtime_before_anything_is_sent`),
     which is the rule D23 states, not this item.
   - **The scenarios on S: not met.** No Mac was at hand; the runs are owed (below).
+  - **The accessibility read (2026-11-24): built, not run on S.** The Simulator bridges the iOS
+    app's elements into the Mac's accessibility API on the device's window (Apple's
+    `AccessibilityPlatformTranslation`, which `idb` reads through the framework and which
+    Simulator.app serves to any public `AXUIElement` client, as `ldomaradzki/xctree` and
+    `mgcrea/cupertino` read it), so the lane reads the app's tree there and presses through
+    `AXPress`, and the `ios-roles` and `ios-a11y` scenarios exist with their headless halves.
 - **Spike (2026-11-20), no-go.** No Mac was at hand, so the spike read `idb`'s record rather than
   run a prototype; D23 gives the evidence and its scope (Indigo suppressed from Xcode 27, DTUHID the
   default there; no loss recorded before it, where the lane refuses all the same). Besides it:
@@ -1374,12 +1391,55 @@ graph LR
     (`ios_simulator_host::*`: the launch values in `simctl`'s environment alone and no inherited
     `SIMCTL_CHILD_` one, the screenshot read back from its file and refused past its bound by its
     length or as it grows, the output bound, the deadline, a host without `xcrun`).
+  - The accessibility read on every host (`driver_it`, Windows 11 and WSL Ubuntu 24.04,
+    2026-11-24): `ios_simulator_tree::each_accesskit_role_takes_the_trait_accesskit_ios_sets`,
+    `each_trait_reads_as_the_bridges_role_and_folds_back`,
+    `the_role_table_covers_the_vocabulary_once`,
+    `the_window_is_titled_by_the_device_and_its_runtime`,
+    `every_simulator_sharing_the_title_counts`, `each_read_lists_the_simulators_again`,
+    `the_window_is_chosen_by_what_each_window_names`,
+    `a_target_renamed_or_removed_since_connecting_is_refused`,
+    `a_window_naming_any_other_uuid_is_not_the_devices`,
+    `a_level_read_short_is_marked_whatever_stopped_it`,
+    `the_walk_reads_its_depth_and_marks_what_lies_past_it`,
+    `the_walk_reads_its_budget_and_leaves_out_a_gone_element`,
+    `a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone`,
+    `the_search_keeps_to_its_budget_and_depth`,
+    `a_group_gone_mid_search_cuts_the_search_short`,
+    `the_search_reaches_devicehubs_screen_seven_levels_down`,
+    `the_search_reaches_a_screen_inside_simulator_apps_bezel`,
+    `the_search_refuses_two_windows_and_finds_none_in_none`,
+    `the_screen_is_the_group_with_the_windows_shape`,
+    `an_elements_points_land_on_the_windows_pixels`, `a_static_texts_label_is_its_value`,
+    `the_screen_projects_to_the_apps_tree`,
+    `the_elements_of_a_container_voiceover_skips_find_their_nodes`,
+    `an_app_node_is_matched_once`, `an_app_past_the_budget_projects_as_truncated`,
+    `an_element_fits_only_the_node_whose_facts_it_shows`, `an_ambiguous_match_is_refused`,
+    `a_press_refuses_an_element_it_cannot_tell_apart`,
+    `a_permission_taken_back_mid_read_is_named`, `a_press_names_its_own_elements_deadline`,
+    `the_lane_reads_and_presses_through_the_simulators_window`,
+    `the_lane_presses_nothing_it_cannot_match`,
+    `the_lane_refuses_a_window_it_cannot_see_and_a_read_it_was_not_handed`,
+    `the_roles_page_has_a_row_for_each_role`; through the lane on a scripted Simulator window
+    answering with the headless app's pages written out by hand from `accesskit_ios` 0.2.2's
+    rules, `scenarios::the_ios_roles_scenario_passes_through_the_lane_on_the_headless_app`,
+    `scenarios::an_ios_role_row_fails_when_the_bridge_serves_another_role` and
+    `scenarios::the_ios_accessibility_scenario_passes_through_the_lane_but_the_activations_effect`
+    (the press reaches the scripted window, not the headless app); and the shared walk's level
+    cut by an element gone, `windows_lane::an_element_gone_mid_walk_cuts_its_level_short`. Each
+    fix of the review's rounds taken out by hand fails one of them. The Mac's half
+    (`accessibility::MacAccessibility`, the shared client `lane::ax`) type-checks for
+    aarch64-apple-darwin (WSL, nightly `cargo check --lib`); its clippy is CI's cross-typecheck.
   - The scenarios on the headless target (CI): `scenarios::the_ios_input_scenario_passes_on_the_headless_target`,
     `the_safe_area_scenario_measures_a_padded_window_on_the_headless_target` (the headless window's
     own safe area, `Launch::window_insets`),
     `the_safe_area_scenario_fails_a_portrait_window_that_reports_no_inset`.
   - Owed on S (`FLUI_IOS_SIMULATOR_UDID`, `FLUI_IOS_SCENARIO_APP`, `FLUI_IOS_SCENARIO_BUNDLE`,
-    `FLUI_REQUIRE_IOS_SIMULATOR=1`): `ios_simulator::the_ios_scenarios_run_on_a_simulator`, which
+    `FLUI_REQUIRE_IOS_SIMULATOR=1`, Accessibility granted to the process running the tests, the
+    device's window on screen): `ios_simulator::the_ios_accessibility_scenario_runs_through_the_simulators_window`
+    and `ios_simulator::the_ios_roles_scenario_runs_through_the_simulators_window`, which pin the
+    bridge's roles for `accesskit_ios`'s traits, whether it serves `AXIdentifier`, and the screen's
+    place in Simulator.app and in DeviceHub; `ios_simulator::the_ios_scenarios_run_on_a_simulator`, which
     needs the scenario apps packaged for the simulator first (`examples/scenario_app.rs` builds
     for the desktops alone); the app reaching the host's socket through `SIMCTL_CHILD_` values;
     `simctl io screenshot`'s size against the window, upright and turned; `simctl launch`'s output
@@ -1410,7 +1470,25 @@ graph LR
     tried and dropped: an output form the lane did not know skipped the terminate and leaked the
     app.
   - The `adb` and `xcrun` doors run their tools through one bounded runner, `lane::tool`.
-  - The `ios-*` scenarios are `ios_input` (the tap on the pad and the press beside it) and
+  - The accessibility read is `lane::ios_simulator::accessibility` (`HostAccessibility`, the
+    Mac's `MacAccessibility` on macOS, handed to the lane by `IosSimulatorLane::read_through`),
+    `tree` and `roles`. The read hands back the elements as served; naming, placing and matching
+    them is pure code the scripted window goes through too. The Simulator's process is not looked
+    up by name (AppKit reports DeviceHub's pid as -1): every owner of a window on screen is asked
+    within a second for its windows titled `<device> – <runtime>`, taken by an allow-list every
+    host goes through (`tree::choose_window`: the one naming the device's UDID, whatever the
+    others name; else the one naming no UUID, only while no other listed simulator shares the
+    title; any other UUID never; two naming the UDID, or two naming none, refused), and the
+    device looked up by its UDID in the listing read before each read, renamed or removed
+    refused. The screen is found by walking every group of
+    the window within ten levels: an `iOSContentGroup` (DeviceHub) when there is one, else the
+    shallowest group of the app's window's shape (Simulator.app, inside its bezel or not), which a
+    search left partial by a group gone or its budget does not take.
+    `accesskit_ios` serves the elements VoiceOver reads, so an element is matched among the
+    descendants of the node its nearest matched ancestor fits. The client is shared with the macOS
+    lane as `lane::ax`, and `Lane::invoke` is handed the app's tree as `read_tree` is.
+  - The `ios-*` scenarios are `ios_input` (the tap on the pad and the press beside it),
+    `accessibility` and `roles` through the lane (`ios-a11y`, `ios-roles`) and
     `safe_area` (a `SafeArea`'s child inset by the padding the window reports, the `Insets` app);
     Home and return need a button the lane cannot press, and the old `ios-execution` delegate
     cases drove a probe binary's own protocol, which is no driver scenario.

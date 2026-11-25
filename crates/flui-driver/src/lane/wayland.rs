@@ -412,7 +412,7 @@ mod lane {
             Ok(tree)
         }
 
-        fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
+        fn invoke(&mut self, placement: &Placement, identifier: &str, _app: &Tree) -> Result<()> {
             let bus = A11yBus::connect(self.session_bus.as_deref(), LANE)?;
             bus.invoke(WindowTarget::of(self.pid, placement), identifier)
         }

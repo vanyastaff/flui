@@ -88,10 +88,12 @@ app's trees, frames and input, and this crate composes that with what only the O
   device or button it lacks, a chord the OS shell takes. Nothing is pressed, so nothing is
   released.
 - **A lane imports no other lane.** What more than one lane uses is a module of `lane`:
-  `lane::walk` (the bounded accessibility walk), `lane::pacing` (the guard-watched slices of a
-  pause and the echo deadline), `lane::screen` (a window's geometry from its device origin) and
-  `lane::tool` (a host tool, `adb` or `xcrun`, run to its end within a deadline and a bound on
-  what it prints).
+  `lane::walk` (the bounded accessibility walk), `lane::ax` (the macOS accessibility API's rules,
+  such as an element's label, on every host, and its client on macOS, which the macOS lane and
+  the iOS Simulator lane read through),
+  `lane::pacing` (the guard-watched slices of a pause and the echo deadline), `lane::screen` (a
+  window's geometry from its device origin) and `lane::tool` (a host tool, `adb` or `xcrun`, run
+  to its end within a deadline and a bound on what it prints).
 - **A lane's OS code builds on its OS only; its tables build everywhere.** `lane::windows` keeps
   the key, role, coordinate and activity tables, the safety rules and the contact frames pure, so
   Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
@@ -103,7 +105,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   server, AT-SPI or libei are Linux only (libei with the `wayland` feature). `lane::android` is
   host code that drives `adb`, so all of it builds on every host, and its tests script the device
   (`testing::ScriptedAdb`); `lane::ios_simulator` drives `xcrun` the same way
-  (`testing::ScriptedXcrun`), and only starting an app needs a Unix host, whose socket the
+  (`testing::ScriptedXcrun`) and reads the Simulator's window through `HostAccessibility`
+  (`testing::ScriptedSimulatorScreen`; the Mac's `MacAccessibility` alone is
+  `cfg(target_os = "macos")`), and only starting an app needs a Unix host, whose socket the
   simulator reaches. `lane::chrome` (feature `chrome`) is host code on every desktop: its
   keys, actions, input-method steps and screenshot decoding are pure tables, and what reaches a
   browser goes through its session.
@@ -122,8 +126,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   It refuses a second contact, a sequence that ends with a key down (which would never be sent),
   the keys and chords that leave the app or change the device (the fallbacks of AOSP's
   `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
-  the mouse included, going down at the display's edge; before each press, key and text the
-  app's window must hold the focus.
+  the mouse included, going down at the display's edge; before each press, key, text and scroll
+  one `dumpsys window` must show the window the lane located holding the focus, compared by its
+  hash, frame and rotation: another window of the app's title is `NotForeground`, the same
+  window moved or turned is `Busy` until the lane locates it again.
 - **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
@@ -136,13 +142,21 @@ app's trees, frames and input, and this crate composes that with what only the O
   the app's root, where `FluiView.install` puts it, and a node fits an app node by structure and
   the order the adapter adds children in (those `accesskit_consumer`'s filter keeps), the class
   `lane::android::roles` gives its AccessKit role, its content description, its toggled state
-  (a radio button's selection included) and enabled state, and its bounds at the surface's
-  origin; two candidates the order does not tell apart are `Error::Ambiguous`, and bounds off the
-  display place a node nowhere. Only a matched node carries the app's role and identifier; what a
-  dump cannot show (`tree::Unobservable`) projects as the app published it. No dump runs while
-  any accessibility service does (`safety::check_dump`): the dump suspends every one. The OS tree
-  and the app's are of one revision (`Window::compare_projection`). `invoke` is refused, since
-  UI Automator performs no accessibility action.
+  where the app's read reports it (a radio button's selection included; a grid cell's, and that
+  of a list item, list box option, menu list option, tab or tree item publishing a selection, it
+  does not report, and the match does not read the dump's: `tree::Unobservable::UnreportedToggle`)
+  and enabled state, and its bounds at the surface's origin; two candidates the order does not
+  tell apart are `Error::Ambiguous`, and bounds off the display place a node nowhere. Only a
+  matched node carries the app's role and identifier; what a dump cannot show
+  (`tree::Unobservable`) projects as the app published it. Only the read of the tree dumps: the
+  window is located from `dumpsys window` (`device::parse_windows`): the focused window by its
+  hash, on the default display, located again after the dump, which a replaced or moved window
+  or another turn makes `Busy`; so input and capture pause no accessibility service, and no dump runs while
+  any service does (`safety::check_dump`). `invoke` is refused, since UI Automator performs no
+  accessibility action.
+- **The OS tree is compared with the app's tree of its own revision, on every lane:**
+  `Window::compare_projection` reads the app's tree again while it moves, by the rule its
+  rustdoc states, and answers `Busy` when it never held still.
 - **The iOS Simulator lane sends no input** until a supported channel exists (the flui-driver
   spec's rule; `lane::ios_simulator::xcode` has the evidence): `Lane::check` refuses every input
   event as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything
@@ -154,6 +168,42 @@ app's trees, frames and input, and this crate composes that with what only the O
   nothing runs as an app that already exited. The launch values reach the app as
   `SIMCTL_CHILD_` variables in `simctl`'s environment, never in a command's text or debug form,
   and no such variable inherited from the driver's environment reaches it.
+- **The iOS Simulator lane reads what the Simulator serves the Mac, and matches it.** The
+  Simulator vends the iOS app's elements to AppKit as elements of the device's window (Apple's
+  private translation framework), which the public `AXUIElement` API reads; the lane takes no
+  private framework. Apple documents none of it: the roles the bridge gives each trait are
+  inferred, whether it carries the app's identifier is unconfirmed, and until runs on a Mac pin
+  both the read stands for VoiceOver on iOS only as far as they confirm it (`docs/gaps.md`).
+  The read hands back the elements as served (`accessibility::ScreenElement`), and everything
+  after it is pure code both the Mac and the scripted window go through (`ios_simulator::tree`).
+  The window is one on screen titled `<device> – <runtime>`, found without looking the
+  Simulator's process up by name, and taken by an allow-list that every host goes through, the
+  scripted window included (`tree::choose_window`): the one window naming the device's UDID is
+  taken, whatever the others name; else the one naming no UUID, only while no other listed
+  simulator, in any state, shares the title; one naming any other UUID never; two naming the
+  UDID, or two naming none when none names it, are refused. A device renamed or removed since
+  the lane connected is refused (`accessibility::screen_title`). The screen's elements are read
+  by a pure walk over a source (`accessibility::walk_screen`): a level the node budget or a
+  vanished element cuts is marked unread on its parent, the screen included, and a group gone
+  mid-search cuts the screen search short. Every walk over an OS tree takes a step that finds an
+  element gone as its level cut, never ended (`lane::walk`); `ax::child_at` answers
+  `kAXErrorInvalidUIElement`, the parent gone, as that. Every element the read asks is given the
+  client's deadline and carries it, so a timeout, a press's included, names the deadline of the
+  element its call was asked of, or says that element refused it. The screen is found by walking every group of the
+  window within ten levels (`tree::find_screen`), each group's children listed by the bounded
+  listing the screen's walk shares (`accessibility::list_children`): an `iOSContentGroup` when
+  there is one, else the shallowest group of the app's window's shape, which a search left
+  partial by a group gone or its budget does not take. `Lane::read_tree` and `Lane::invoke` are handed
+  the app's own tree, and each element is matched among the descendants of the node its nearest
+  matched ancestor fits (the bridge serves only the elements VoiceOver reads), an app node once,
+  by the role `lane::ios_simulator::roles` gives `accesskit_ios`'s trait, its label (a static
+  text's from its value, the rule `lane::ax::label` the macOS lane shares), its checked and
+  enabled state, an identifier it carries, and its frame on the window; two candidates alike are
+  `Error::Ambiguous`. A press finds its element again by the facts the read gave, refusing none,
+  two, and one on a read that stopped short (`tree::locate`), and presses it through `AXPress`
+  (`accessibility::pressed`). A failure while the process is no longer trusted answers the
+  Accessibility permission, wherever it comes, except a press already sent: one not answered,
+  or whose element went away, keeps `may_have_run` and names the permission in its message.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

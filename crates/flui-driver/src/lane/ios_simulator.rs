@@ -8,9 +8,13 @@
 //! - **Isolation.** The simulator itself: nothing the lane does touches the host's desktop, so it
 //!   has no guard and takes no permission.
 //! - **Reading.** The screen through `simctl io screenshot` ([`screenshot`]): a UIKit window fills
-//!   its screen, so the screen is the window, and one of another size is refused. The lane reads
-//!   no accessibility tree: UIKit's is served inside the simulator, which no public host API
-//!   reads.
+//!   its screen, so the screen is the window, and one of another size is refused. The app's
+//!   accessibility tree, the one VoiceOver on iOS reads, through the Mac's accessibility API on
+//!   the Simulator's window, where the Simulator bridges the iOS app's elements
+//!   ([`accessibility`]); the lane is handed that read ([`IosSimulatorLane::read_through`], the
+//!   Mac's on macOS) and matches what it shows to the app's own tree by role, label, state and
+//!   bounds ([`tree`], the role table [`roles`]), and presses an element through `AXPress`. A lane
+//!   handed none, on any other host, reads no tree.
 //! - **Process.** [`IosSimulatorLane::start`] installs the app when asked and starts it afresh
 //!   with a Unix socket in a private directory of the host as its endpoint, which the simulator
 //!   shares, and its token, both as `SIMCTL_CHILD_` launch values (ADR-0239). When the lane ends
@@ -26,8 +30,11 @@
 //! Simulator (`testing::ScriptedXcrun`) as well as the host's `xcrun` ([`xcrun::HostXcrun`]),
 //! and starting an app needs a Unix host, whose socket the simulator reaches.
 
+pub mod accessibility;
 pub mod device;
+pub mod roles;
 pub mod screenshot;
+pub mod tree;
 pub mod xcode;
 pub mod xcrun;
 
@@ -35,13 +42,15 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use flui_protocol::session::{Isolation, Placement};
+use flui_protocol::tree::Tree;
 
+use self::accessibility::{HostAccessibility, HostScreen, ScreenRequest};
 use self::device::{Simulator, Udid};
 use self::xcode::XcodeVersion;
 use self::xcrun::{Xcrun, XcrunCommand, XcrunReply, command_failed};
 use crate::coordinates::{DevicePoint, WindowGeometry};
 use crate::error::{Error, Result};
-use crate::lane::{ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
+use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
 use crate::pixels::Image;
 use crate::steps::OsEvent;
 
@@ -226,6 +235,9 @@ pub struct IosSimulatorLane {
     simulator: Simulator,
     xcode: Option<XcodeVersion>,
     bundle: String,
+    /// The Mac's accessibility API on the Simulator's window, which the lane reads the app's tree
+    /// through; `None` reads no tree.
+    accessibility: Option<Box<dyn HostAccessibility>>,
     /// Whether the lane started the app (or may have: a launch that timed out), which it ends at
     /// its end.
     app_started: bool,
@@ -270,6 +282,7 @@ impl IosSimulatorLane {
             simulator,
             xcode,
             bundle,
+            accessibility: None,
             app_started: false,
             #[cfg(unix)]
             endpoint: None,
@@ -287,6 +300,78 @@ impl IosSimulatorLane {
     #[must_use]
     pub fn xcode(&self) -> Option<&XcodeVersion> {
         self.xcode.as_ref()
+    }
+
+    /// Read the app's accessibility tree, and press its elements, through `accessibility`: the
+    /// Mac's API on the Simulator's window (`accessibility::MacAccessibility`, on macOS) or a
+    /// scripted one. The lane then reports [`AccessibilityApi::SimulatorAx`].
+    #[must_use]
+    pub fn read_through(mut self, accessibility: Box<dyn HostAccessibility>) -> Self {
+        self.accessibility = Some(accessibility);
+        self
+    }
+
+    /// Which screen a read of the window `placement` describes is of: the simulator's window by
+    /// its title as `simctl` lists it now, how many other simulators share that title, and the
+    /// app's window it shows. The listing is read before each read, since a simulator made,
+    /// renamed or removed since the lane connected counts ([`accessibility::screen_title`]).
+    ///
+    /// # Errors
+    ///
+    /// As [`accessibility::screen_title`]; the Simulator's failure to list its devices.
+    fn screen_request(&mut self, placement: &Placement) -> Result<ScreenRequest> {
+        let listing = checked(
+            self.xcrun.as_mut(),
+            &XcrunCommand::ListDevices,
+            device::MAX_LISTING,
+            SHORT,
+        )?;
+        let simulators = device::parse_devices(&listing.stdout).map_err(xcrun::lane_error)?;
+        let (title, others_titled) = accessibility::screen_title(&simulators, &self.simulator)?;
+        Ok(ScreenRequest::new(
+            title,
+            self.simulator.udid.clone(),
+            others_titled,
+            placement.size,
+            placement.scale,
+        ))
+    }
+
+    /// The Mac's accessibility API the lane reads through.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotSupported`] naming `capability` when the lane was handed none.
+    fn host_accessibility(&mut self, capability: &str) -> Result<&mut dyn HostAccessibility> {
+        match self.accessibility.as_deref_mut() {
+            Some(accessibility) => Ok(accessibility),
+            None => Err(Error::not_supported(
+                capability,
+                format!(
+                    "the {LANE} lane reads the app through the Mac's accessibility API on the \
+                     Simulator's window, which only a run on macOS hands it"
+                ),
+            )),
+        }
+    }
+
+    /// The screen of the window `placement` describes as the Simulator serves it, and where its
+    /// elements are placed: `capability` names what a lane handed no read refuses.
+    fn screen(
+        &mut self,
+        placement: &Placement,
+        capability: &str,
+    ) -> Result<(ScreenRequest, HostScreen, tree::Placing)> {
+        // Refused before anything is asked when the lane reads through nothing.
+        self.host_accessibility(capability)?;
+        let request = self.screen_request(placement)?;
+        let screen = self.host_accessibility(capability)?.read(&request)?;
+        let placing = tree::Placing {
+            screen: screen.frame,
+            size: placement.size,
+            scale: placement.scale,
+        };
+        Ok((request, screen, placing))
     }
 
     /// Install `app` when it names a bundle, and start it afresh with a new endpoint and token as
@@ -405,12 +490,17 @@ impl Lane for IosSimulatorLane {
     }
 
     fn capabilities(&self) -> LaneCapabilities {
-        LaneCapabilities::new(
+        let capabilities = LaneCapabilities::new(
             Vec::new(),
             false,
             Isolation::Simulator,
             PositionFidelity::OrderOnly,
-        )
+        );
+        if self.accessibility.is_some() {
+            capabilities.accessibility(AccessibilityApi::SimulatorAx)
+        } else {
+            capabilities
+        }
     }
 
     fn guard(&mut self) -> Option<&mut dyn ActivityGuard> {
@@ -455,6 +545,37 @@ impl Lane for IosSimulatorLane {
         Ok(())
     }
 
+    fn read_tree(&mut self, placement: &Placement, app: &Tree) -> Result<Tree> {
+        let (_, screen, placing) = self.screen(placement, "os_accessibility_tree")?;
+        let mut projected =
+            tree::read(&screen, app, placing).map_err(tree::TreeError::into_error)?;
+        for root in &mut projected.roots {
+            root.window = Some(placement.window);
+        }
+        Ok(projected)
+    }
+
+    fn invoke(&mut self, placement: &Placement, identifier: &str, app: &Tree) -> Result<()> {
+        self.host_accessibility("os_invoke")?;
+        if tree::element_of(&app.roots, identifier).is_none() {
+            return Err(Error::not_found(format!(
+                "the app publishes no element whose identifier is {identifier:?}"
+            )));
+        }
+        let (request, screen, placing) = self.screen(placement, "os_invoke")?;
+        let element = tree::matched_element(&screen, app, placing, identifier)
+            .map_err(tree::TreeError::into_error)?
+            .ok_or_else(|| {
+                Error::not_found(format!(
+                    "the Simulator shows no element that fits the app's {identifier:?}: \
+                     VoiceOver would not reach it"
+                ))
+            })?
+            .clone();
+        self.host_accessibility("os_invoke")?
+            .press(&request, &element)
+    }
+
     fn capture_window(&mut self, placement: &Placement) -> Result<Image> {
         let png = self.screenshot()?;
         screenshot::window_image(&png, placement)
@@ -477,6 +598,7 @@ impl std::fmt::Debug for IosSimulatorLane {
             .field("simulator", &self.simulator)
             .field("xcode", &self.xcode)
             .field("bundle", &self.bundle)
+            .field("reads_tree", &self.accessibility.is_some())
             .field("app_started", &self.app_started)
             .finish_non_exhaustive()
     }
@@ -498,8 +620,9 @@ pub fn host_simulator() -> Result<(xcrun::HostXcrun, Udid)> {
 }
 
 /// Start `app` on the simulator `udid` that `xcrun` reaches and drive it: the simulator held
-/// ([`SimulatorLock::acquire`]), the lane connected, the app started afresh, the driver attached
-/// to its socket within `connect_wait`, the lane attached to the driver. The app ends with the
+/// ([`SimulatorLock::acquire`]), the lane connected, reading through the Mac's accessibility API
+/// on macOS (`accessibility::MacAccessibility`), the app started afresh, the driver attached to
+/// its socket within `connect_wait`, the lane attached to the driver. The app ends with the
 /// session.
 ///
 /// # Errors
@@ -514,7 +637,10 @@ pub fn launch(
     connect_wait: Duration,
 ) -> Result<crate::Driver> {
     let lock = SimulatorLock::acquire(udid)?;
-    let mut lane = IosSimulatorLane::connect(xcrun, lock, app.bundle())?;
+    let lane = IosSimulatorLane::connect(xcrun, lock, app.bundle())?;
+    #[cfg(target_os = "macos")]
+    let lane = lane.read_through(Box::new(accessibility::MacAccessibility::new()));
+    let mut lane = lane;
     let started = lane.start(app)?;
     let driver = crate::Driver::attach(&started.endpoint, &started.token, connect_wait)?;
     driver.with_lane(lane)

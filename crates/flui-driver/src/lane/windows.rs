@@ -578,7 +578,7 @@ mod lane {
             Ok(tree)
         }
 
-        fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
+        fn invoke(&mut self, placement: &Placement, identifier: &str, _app: &Tree) -> Result<()> {
             let _units = DeviceUnits::enter();
             let (window, _) = self.find(placement)?;
             uia::invoke(window, identifier)

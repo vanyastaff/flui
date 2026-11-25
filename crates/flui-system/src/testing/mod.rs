@@ -31,7 +31,7 @@ use std::{cell::Cell, cell::RefCell, fmt, rc::Rc};
 
 use flui_platform::Unsupported;
 use flui_platform::WindowId;
-use flui_platform::capability::scripted::{Answer, Scenario, Script};
+use flui_platform::capability::scripted::{Answer, Scenario, Script, ScriptHold};
 use flui_platform::capability::{
     CapabilityRegistrar, Plugin, ProviderContext, Resolver, WindowRef,
 };
@@ -135,10 +135,13 @@ impl ScriptedFileDialogs {
         self.save.answer_next(Answer::value(result));
     }
 
-    /// Hold every later dialog open until it is released.
-    pub fn hold(&self) {
-        self.open.hold();
-        self.save.hold();
+    /// Hold every later dialog open, both kinds, while the returned holds
+    /// live (one of the open script, one of the save script; see
+    /// [`Script::hold`]); [`release_open`](Self::release_open) and
+    /// [`release_save`](Self::release_save) answer a held one.
+    #[must_use = "dialogs are held only while the holds are alive"]
+    pub fn hold(&self) -> [ScriptHold; 2] {
+        [self.open.hold(), self.save.hold()]
     }
 
     /// Answer the oldest held open dialog; `false` when none is held.

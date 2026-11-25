@@ -10,7 +10,8 @@
   sync; X11, Wayland and Android mark it for the clipboard managers and keyboards that read the
   mark; the Web writes it as an ordinary entry and warns once in a debug build.
   `flui_native::testing::clipboard` is the scenario every host's clipboard runs.
-- **`flui-testing`**: `ScriptedClipboard::is_concealed` and
+- **`flui-interaction`** (`testing`, re-exported by `flui_testing::host`):
+  `ScriptedClipboard::is_concealed` and
   `ScriptedClipboard::answer_concealment`.
 
 ### Changed

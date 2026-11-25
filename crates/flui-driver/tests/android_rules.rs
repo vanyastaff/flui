@@ -20,7 +20,9 @@ use flui_driver::protocol::input::PointerDevice;
 use flui_driver::steps::OsEvent;
 use flui_driver::testing::ScriptedAdb;
 
-use crate::android_lane::{GETEVENT, abilities, connected, inputs, raw_capture, scripted, tap};
+use crate::android_lane::{
+    GETEVENT, abilities, connected, inputs, placement, raw_capture, scripted, tap,
+};
 
 fn press_at(device: PointerDevice, at: DevicePoint) -> Result<(), Refusal> {
     let mut held = HeldInput::new();
@@ -259,10 +261,16 @@ fn each_session_dumps_to_a_file_of_its_own() {
             .and_then(|line| line.split_whitespace().nth(3).map(str::to_owned))
             .expect("a dump")
     };
+    // Only a read of the tree dumps; it fails to match the empty app tree once it has.
+    let read = |adb: &ScriptedAdb| {
+        let mut lane = connected(adb);
+        let empty = flui_driver::protocol::tree::Tree::new(Vec::new(), false);
+        let _ = lane.read_tree(&placement(), &empty);
+    };
     let first = scripted(true, true);
-    drop(connected(&first));
+    read(&first);
     let second = scripted(true, true);
-    drop(connected(&second));
+    read(&second);
     let (one, two) = (dump_path(&first), dump_path(&second));
     assert_ne!(one, two, "two sessions on one device dump apart");
     assert!(

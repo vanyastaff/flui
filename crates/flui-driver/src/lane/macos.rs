@@ -550,7 +550,7 @@ mod lane {
             Ok(tree)
         }
 
-        fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
+        fn invoke(&mut self, placement: &Placement, identifier: &str, _app: &Tree) -> Result<()> {
             Self::permitted(Permission::Accessibility)?;
             let target = self.find(placement)?;
             ax::press(self.pid, target.frame, target.scale, identifier)

@@ -29,11 +29,12 @@ use flui_protocol::method::{Method as _, RunReload};
 use flui_protocol::reload::{ReloadParams, ReloadReport, ReloadTier};
 use flui_protocol::session::{Capabilities, ClientRole, HelloReply};
 use flui_protocol::version::PROTOCOL_VERSION;
+use interprocess::local_socket::Listener;
 use interprocess::local_socket::traits::Listener as _;
-use interprocess::local_socket::{Listener, Stream};
 use serde_json::Value;
 
 use super::listener::bind;
+use super::nonblocking::NonblockingStream;
 use crate::error::{CliResult, ResultExt as _};
 
 /// The longest pause between two turns of the endpoint.
@@ -165,7 +166,7 @@ struct Admission {
 }
 
 struct Client {
-    stream: Stream,
+    stream: NonblockingStream,
     reader: LineReader,
     unwritten: Vec<u8>,
     phase: Phase,
@@ -216,6 +217,14 @@ impl Turns {
                 // Dropped: the client reads the end of its connection.
                 continue;
             }
+            let stream = match NonblockingStream::try_new(stream) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    // Dropped, as one past the most clients is.
+                    crate::ui::debug(format!("the run endpoint could not poll a client: {error}"));
+                    continue;
+                }
+            };
             let Some(next) = self.next_id.checked_add(1) else {
                 // Refused: an id is never used twice.
                 continue;
@@ -470,6 +479,7 @@ mod tests {
 
     use super::RunEndpoint;
     use crate::agent::client::{Connection, Failure, name};
+    use crate::agent::nonblocking::NonblockingStream;
     use crate::agent::{Credentials, Endpoint};
 
     const TOKEN: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
@@ -587,15 +597,25 @@ mod tests {
         );
     }
 
-    /// Whether the endpoint ends `stream` (it reads the end of the stream) within `within`.
-    fn closed_within(stream: &Stream, within: Duration) -> bool {
+    /// Whether the endpoint ends `stream` (it reads the end of the stream) within `within`. A
+    /// named pipe takes no read timeout, so the stream is polled.
+    fn closed_within(stream: &NonblockingStream, within: Duration) -> bool {
         use std::io::Read as _;
 
-        stream
-            .set_recv_timeout(Some(within))
-            .expect("a read timeout");
+        let deadline = std::time::Instant::now() + within;
         let mut byte = [0_u8; 1];
-        matches!((&*stream).read(&mut byte), Ok(0))
+        loop {
+            match (&*stream).read(&mut byte) {
+                Ok(0) => return true,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return false;
+                    }
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Ok(_) | Err(_) => return false,
+            }
+        }
     }
 
     /// What bounds a client: a hello in a schema the run does not serve is refused `version`;
@@ -618,18 +638,24 @@ mod tests {
             serde_json::from_str(&BufReader::new(&newer).lines().next().unwrap().unwrap()).unwrap();
         assert_eq!(refused["error"]["code"], "version", "{refused}");
 
-        let silent = connect();
+        let polled = || NonblockingStream::try_new(connect()).expect("non-blocking");
+        let silent = polled();
         assert!(
             closed_within(&silent, Duration::from_secs(5)),
             "a client that sends no hello is closed"
         );
 
         let endpoint = RunEndpoint::start(TOKEN.to_owned()).expect("the endpoint starts");
-        let connect = || Stream::connect(name(endpoint.address()).unwrap()).expect("connect");
+        let polled = || {
+            NonblockingStream::try_new(
+                Stream::connect(name(endpoint.address()).unwrap()).expect("connect"),
+            )
+            .expect("non-blocking")
+        };
         let held = (0..super::MAX_CLIENTS)
-            .map(|_| connect())
-            .collect::<Vec<Stream>>();
-        let past = connect();
+            .map(|_| polled())
+            .collect::<Vec<NonblockingStream>>();
+        let past = polled();
         assert!(
             closed_within(&past, Duration::from_secs(5)),
             "one past the most clients is closed"

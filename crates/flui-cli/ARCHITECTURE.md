@@ -440,7 +440,13 @@ the contract crate `flui-protocol`: the launch variables and the shortest token
   connection of the export the launch names, its lines queued until the export
   appears; a reload closes the clients whose connections went with the
   document, and closes those connections in the page all the same, in case one
-  belongs to the next document. `flui mcp` does not change. The WebSocket is
+  belongs to the next document. `flui mcp` does not change. The relay and
+  `flui run`'s own endpoint (`agent::supervisor`, `run.reload`) poll their
+  clients through `agent::nonblocking::NonblockingStream`, which reads and
+  writes a non-blocking Windows named pipe as a Unix socket reads and writes:
+  a pipe answers an empty read as it answers a closed one, so an empty write
+  tells them apart, and answers a write into its full buffer with `Ok(0)`,
+  which reads as `WouldBlock`. The WebSocket is
   `tungstenite`'s handshake and framing over a loopback `TcpStream`, no TLS.
   Safari is refused ([The driver agent cannot reach a page in Safari](../../docs/gaps.md#the-driver-agent-cannot-reach-a-page-in-safari)).
 - **Serve.** `flui mcp` speaks MCP over stdio (hand-written JSON-RPC: six
