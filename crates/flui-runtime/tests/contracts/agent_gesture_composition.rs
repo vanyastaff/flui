@@ -534,6 +534,51 @@ fn entries_made(
         .collect()
 }
 
+/// A tap and a drag play with the window's primary pointer, and a drag must pass that pointer's
+/// pan slop: on Android and iOS a tap presses a touch contact and a drag of 10 px is refused,
+/// inside a finger's slop; on Linux and Windows a tap presses a mouse and the same drag plays,
+/// past a mouse's.
+#[test]
+fn a_tap_and_a_drag_play_with_the_windows_primary_pointer() {
+    use flui_protocol::input::{DeviceClass, DragParams, InputKind};
+    let rows = [
+        (TargetPlatform::Android, DeviceClass::Touch),
+        (TargetPlatform::iOS, DeviceClass::Touch),
+        (TargetPlatform::Linux, DeviceClass::Mouse),
+        (TargetPlatform::Windows, DeviceClass::Mouse),
+    ];
+    for (platform, device) in rows {
+        let heard = Heard::default();
+        let setting = Setting::preset(platform);
+        let (mut host, _agent, window, lease) = shown(setting.window(), &setting.pad(&heard));
+        let _ = host.pump(Duration::from_millis(16));
+        let mut tap = ask::<method::ElementTap>(&lease, TapParams::new(named("Pad")));
+        let outcome = answered(&mut host, &mut tap, 30)
+            .0
+            .unwrap_or_else(|error| panic!("{platform:?}: {error:?}"));
+        let presses: Vec<DeviceClass> = entries_made(&mut host, &window, &outcome)
+            .into_iter()
+            .filter(|entry| entry.kind == InputKind::PointerDown)
+            .map(|entry| entry.device)
+            .collect();
+        assert_eq!(presses, vec![device], "{platform:?}: the tap's press");
+        let point = |x: f64| Target::Point {
+            window: lease.window(),
+            at: flui_protocol::geometry::LogicalPoint::new(x, 20.0),
+        };
+        let drag: DragParams =
+            serde_json::from_value(json!({ "target": point(20.0), "to": point(30.0) }))
+                .expect("a drag reads");
+        let mut drag = ask::<method::ElementDragTo>(&lease, drag);
+        let answer = answered(&mut host, &mut drag, 60).0;
+        assert_eq!(
+            answer.as_ref().err().map(|error| error.code),
+            (device == DeviceClass::Touch).then_some(ErrorCode::InvalidArgument),
+            "{platform:?}: a drag of 10 px: {answer:?}"
+        );
+    }
+}
+
 /// A long press naming no duration holds the window's long-press timeout and 300 ms, up to the
 /// 4000 ms the reply bound counts: a 500 ms timeout holds 800 ms; a 3700 ms timeout, exactly at
 /// the ceiling, still plays; a 3701 ms one is refused.
