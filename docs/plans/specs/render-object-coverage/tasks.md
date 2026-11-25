@@ -186,7 +186,7 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   `the_mount_check_refuses_a_directory_it_cannot_list`, each over literal sources or a
   temporary directory and each failing with the matcher reverted;
   `a_family_entry_is_the_file_its_name_mounts` over the expansion of `family_files!`;
-  `the_family_macro_reads_the_family_directory`;
+  `the_family_macro_reads_the_family_directory`; `coverage_map_lists_every_render_object_type`;
   `family_files_are_mounted_and_listed`; the two existing guards pass.
 - **Checks:** clippy and nextest for `flui-objects`; the `checks` job's document steps (typos,
   lychee, unmounted-tests).

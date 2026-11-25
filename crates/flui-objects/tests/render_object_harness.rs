@@ -17,6 +17,7 @@
 //! | `RenderPadding` | `harness_padding_*` | yes | yes | — | yes | queries |
 //! | `RenderCustomSingleChildLayoutBox` | `harness_custom_single_child_layout_*` | yes | yes | yes | yes | queries, baseline |
 //! | `RenderCustomMultiChildLayoutBox` | `harness_custom_multi_child_layout_*` | yes | yes | yes | yes | queries |
+//! | `RenderAlign` | `harness_align_*`, `harness_nested_extreme_alignments_*`, `harness_aligning_boxes_*` | yes | — | yes | — | dry baseline, finite semantics |
 //! | `RenderCenter` | `harness_center_*` | yes | — | — | yes | — |
 //! | `RenderAspectRatio` | `harness_aspect_ratio_*` | yes | — | — | yes | — |
 //! | `RenderBaseline` | `harness_baseline_*` | yes | — | — | yes | queries |
@@ -113,16 +114,17 @@
 //! | `RenderSliverFloatingPinnedPersistentHeader` | `harness_sliver_persistent_header_floating_pinned_*` | yes | — | — | — | state machine |
 //!
 //! [`catalog_covers_every_render_object_name`] guards the catalog: every type
-//! of `RENDER_OBJECT_TYPES` must appear, as a whole identifier, inside a row (a
-//! column-0 `fn harness_*` under any visibility, with no attribute over it and
-//! no block comment opened above it, up to its closing column-0 `}`) of this
-//! file or of a family file under `tests/harness/` that `FAMILY_FILES` lists
-//! and this file mounts, so a type with no row fails CI. `rows_naming` gives
-//! the whole rule. The guard reads text: a row or mount line written at column
-//! 0 inside a multi-line string literal is indistinguishable from code, so
-//! literal guard input in these files is written on one line with `\n`
-//! escapes, and a block-comment opener inside one is spliced in from
-//! `BLOCK_COMMENT_OPENER`.
+//! of `RENDER_OBJECT_TYPES` must appear, as a whole identifier in code (not in
+//! a comment), inside a row (a column-0 `fn harness_*` under any visibility,
+//! with no attribute over it and no block comment opened above it, up to its
+//! closing column-0 `}`) of this file or of a family file under
+//! `tests/harness/` that `FAMILY_FILES` lists and this file mounts, so a type
+//! with no row fails CI; [`coverage_map_lists_every_render_object_type`] holds
+//! the table above to the same list. `rows_naming` gives the whole rule, and
+//! `compiled_at_top_level` the limits of a guard that reads text, which these
+//! files keep to: literal guard input is written on one line with `\n`
+//! escapes, and no string holds a `/*` its line does not close (one is spelled
+//! through `BLOCK_COMMENT_OPENER`) or a `//` followed by a block comment.
 
 #![allow(
     clippy::disallowed_methods,
@@ -13747,17 +13749,38 @@ fn mount_lines(name: &str) -> [String; 2] {
     ]
 }
 
-/// The code of `line`: the text before its first `//`, trimmed.
-fn code_of(line: &str) -> &str {
-    line.split_once("//").map_or(line, |(code, _)| code).trim()
+/// The code of `line`, trimmed: the text before its first `//`, without the
+/// block comments that open and close on the line. An opener whose comment
+/// does not close on the line, or holds another opener before its first
+/// closer (block comments nest), is kept with the rest of the line, so
+/// `first_block_comment` sees it. Strings are not told apart from code
+/// (`compiled_at_top_level` states what that costs).
+fn code_of(line: &str) -> String {
+    let mut rest = line.split_once("//").map_or(line, |(code, _)| code);
+    let mut code = String::new();
+    while let Some(open) = rest.find(BLOCK_COMMENT_OPENER) {
+        let inside = &rest[open + BLOCK_COMMENT_OPENER.len()..];
+        let Some(close) = inside.find("*/") else {
+            break;
+        };
+        if inside[..close].contains(BLOCK_COMMENT_OPENER) {
+            break;
+        }
+        code.push_str(&rest[..open]);
+        code.push(' ');
+        rest = &inside[close + "*/".len()..];
+    }
+    code.push_str(rest);
+    code.trim().to_owned()
 }
 
 /// The two characters that open a block comment, spelled in two pieces so that
 /// this file, which the guard reads, holds no opener in its code.
 const BLOCK_COMMENT_OPENER: &str = concat!("/", "*");
 
-/// The index of the first line whose code (`code_of`) holds a block-comment
-/// opener anywhere: at its start, after code, or closed again on the line.
+/// The index of the first line whose code (`code_of`) still holds a
+/// block-comment opener: one whose comment does not close on that line. The
+/// line itself is read as code up to the opener; the lines below it are not.
 fn first_block_comment(lines: &[&str]) -> Option<usize> {
     lines
         .iter()
@@ -13772,19 +13795,27 @@ fn first_block_comment(lines: &[&str]) -> Option<usize> {
 ///   attribute (starts with `#[`) or does not end an item (with `;` or `}`): a
 ///   `#[cfg(..)]` or any other attribute over the item, on one line or over
 ///   several, refuses it, and so does a one-line `#[attr] item;` right above
-///   it; an item right below an inner attribute is refused too. `code_of` cuts
-///   at the first `//` even inside a string, so an item right below a line
-///   whose string holds `//` may be refused as well;
-/// - it stands below the first line that opens a block comment
-///   (`first_block_comment`), closed or not.
+///   it; an item right below an inner attribute is refused too;
+/// - it stands below the first line that opens a block comment which does not
+///   close on that line (`first_block_comment`). An item on the opener's own
+///   line counts; a comment that opens and closes on one line hides nothing.
 ///
-/// Column 0 is read as the top level of the file. rustfmt, which CI's format
-/// check holds, indents the items inside an item, but not the contents of a
-/// string literal, a macro invocation's body or a `#[rustfmt::skip]` item: a
-/// row or mount line written at column 0 inside one of those is
-/// indistinguishable from code. Guard input written as a string literal in a
-/// file the guard reads therefore goes on one line with `\n` escapes, as this
-/// file's tests write it.
+/// The guard reads text, and these are its limits, which the root and the
+/// family files keep to:
+/// - Column 0 is read as the top level of the file. rustfmt, which CI's format
+///   check holds, indents the items inside an item, but not the contents of a
+///   string literal, a macro invocation's body or a `#[rustfmt::skip]` item:
+///   a row or mount line written at column 0 inside one of those is
+///   indistinguishable from code. Guard input written as a string literal
+///   goes on one line with `\n` escapes, as this file's tests write it.
+/// - Strings are not told apart from code. A `/*` inside a string that its
+///   line does not close reads as an opener, so every row below it stops
+///   counting (the catalog's failure names the line); a string spells it
+///   through `BLOCK_COMMENT_OPENER`. A `//`
+///   inside a string reads as a line comment, which refuses the item right
+///   below it and hides a block comment opened after it on the line, so the
+///   rows inside that comment would count: no line holds a string with `//`
+///   and then a block comment.
 fn compiled_at_top_level(lines: &[&str]) -> Vec<bool> {
     let block_comment = first_block_comment(lines);
     let mut compiled = Vec::with_capacity(lines.len());
@@ -13825,6 +13856,12 @@ fn is_mounted(root: &str, name: &str) -> bool {
 /// after one space when the signature itself is longer; either line belongs
 /// to the row. Lines are read without a `\r` before their `\n`, so a source
 /// saved with CRLF ends its rows where an LF source does.
+///
+/// The name is searched in the code of each line (`code_of`, cut again at a
+/// block comment left open), so a comment that names a type does not cover
+/// it, and a row's lines below an unclosed opener are not read. A string
+/// that names it does: by convention a row that names a type in a string,
+/// such as an assertion message, exercises it.
 fn rows_naming(root: &str, families: &[(&str, &str)], type_name: &str) -> usize {
     let mounted = families
         .iter()
@@ -13835,22 +13872,25 @@ fn rows_naming(root: &str, families: &[(&str, &str)], type_name: &str) -> usize 
         .map(|source| {
             let lines: Vec<&str> = source.lines().collect();
             let compiled = compiled_at_top_level(&lines);
+            let read_to = first_block_comment(&lines).map_or(lines.len(), |opener| opener + 1);
             (0..lines.len())
                 .filter(|&start| compiled[start] && opens_row(lines[start]))
                 .filter(|&start| {
-                    let after = if code_of(lines[start]).ends_with('}') {
-                        &[][..]
+                    let end = if code_of(lines[start]).ends_with('}') {
+                        start + 1
                     } else {
-                        let after = &lines[start + 1..];
-                        let length = after
+                        lines[start + 1..]
                             .iter()
                             .position(|line| line.starts_with('}'))
-                            .unwrap_or(after.len());
-                        &after[..length]
+                            .map_or(lines.len(), |length| start + 1 + length)
                     };
-                    std::iter::once(lines[start])
-                        .chain(after.iter().copied())
-                        .any(|line| names_whole_identifier(line, type_name))
+                    lines[start..end.min(read_to)].iter().any(|line| {
+                        let code = code_of(line);
+                        let code = code
+                            .split_once(BLOCK_COMMENT_OPENER)
+                            .map_or(code.as_str(), |(before, _)| before);
+                        names_whole_identifier(code, type_name)
+                    })
                 })
                 .count()
         })
@@ -14003,6 +14043,18 @@ fn the_guard_ends_a_row_at_its_own_end() {
             "pub(super) fn harness_a() {} // the row to come\n\nfn shown_node() {\n    RenderShown::new();\n}\n",
         ),
         (
+            "a one-line row with a block comment after it",
+            "pub(super) fn harness_a() {} /* the row to come */\n\nfn shown_node() {\n    RenderShown::new();\n}\n",
+        ),
+        (
+            "a one-line row whose comment names the type",
+            "pub(super) fn harness_a() {} // RenderShown to come\n",
+        ),
+        (
+            "a row that names the type only in a comment",
+            "pub(super) fn harness_a() {\n    // RenderShown is covered elsewhere\n    other(); /* RenderShown */\n}\n",
+        ),
+        (
             "a row closed with a comment",
             "pub(super) fn harness_a() {\n    other();\n} // RenderShown\n\nfn shown_node() {\n    RenderShown::new();\n}\n",
         ),
@@ -14033,6 +14085,10 @@ fn the_guard_ends_a_row_at_its_own_end() {
             "a signature longer than its line, the brace after one space",
             "pub(super) fn harness_a_with_a_name_longer_than_the_line()\n {\n    RenderShown::new();\n}\n",
         ),
+        (
+            "a row that names the type in a string",
+            "pub(super) fn harness_a() {\n    check(\"RenderShown lays out\");\n}\n",
+        ),
     ];
     for (form, family) in rows_naming_it {
         let families = [("shown", family)];
@@ -14060,8 +14116,10 @@ fn the_guard_skips_a_row_the_compiler_does_not_build() {
             format!("{BLOCK_COMMENT_OPENER}\n{row}*/\n"),
         ),
         (
-            "below a block comment",
-            format!("{BLOCK_COMMENT_OPENER} rows */\nconst A: u8 = 0;\n{row}"),
+            "inside a nested block comment closed once on its line",
+            format!(
+                "{BLOCK_COMMENT_OPENER} a {BLOCK_COMMENT_OPENER} b */\nconst A: u8 = 0;\n{row}*/\n"
+            ),
         ),
         (
             "inside a block comment opened after code, below a row",
@@ -14085,12 +14143,26 @@ fn the_guard_skips_a_row_the_compiler_does_not_build() {
             "below a closed item",
             format!("mod outer {{\n    fn f() {{}}\n}}\n{row}"),
         ),
+        (
+            "below a block comment closed on its line",
+            format!("{BLOCK_COMMENT_OPENER} rows */\nconst A: u8 = 0;\n{row}"),
+        ),
+        // The opener's own line is code up to the opener: the row there
+        // counts what it names before it, and nothing below it is read.
+        (
+            "on the line that opens a block comment",
+            format!(
+                "pub(super) fn harness_a() {{ RenderShown::new(); {BLOCK_COMMENT_OPENER} a note\n    RenderOther::new(); */\n}}\n"
+            ),
+        ),
     ];
     for (form, family) in &counted {
         let families = [("shown", family.as_str())];
         assert_eq!(rows_naming(root, &families, "RenderShown"), 1, "{form}");
         assert_eq!(rows_naming(family, &[], "RenderShown"), 1, "{form}");
     }
+    let (_, on_the_opener_line) = counted.last().expect("the table has cases");
+    assert_eq!(rows_naming(on_the_opener_line, &[], "RenderOther"), 0);
 }
 
 #[test]
@@ -14180,8 +14252,10 @@ fn the_guard_refuses_a_family_file_that_is_not_mounted() {
             format!("    {BLOCK_COMMENT_OPENER}\nconst A: u8 = 0;\n{pair}*/\n"),
         ),
         (
-            "below a closed block comment",
-            format!("{BLOCK_COMMENT_OPENER} rows */\nconst A: u8 = 0;\n{pair}"),
+            "inside a nested block comment closed once on its line",
+            format!(
+                "{BLOCK_COMMENT_OPENER} a {BLOCK_COMMENT_OPENER} b */\nconst A: u8 = 0;\n{pair}*/\n"
+            ),
         ),
         (
             "inside a block comment opened after code, below an item",
@@ -14210,6 +14284,10 @@ fn the_guard_refuses_a_family_file_that_is_not_mounted() {
         (
             "with CRLF line ends",
             "fn other() {}\r\n#[path = \"harness/shown.rs\"]\r\nmod shown;\r\n",
+        ),
+        (
+            "below a block comment closed on its line",
+            "/* rows */\nconst A: u8 = 0;\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
         ),
     ];
     for (form, root) in accepted {
@@ -14293,6 +14371,21 @@ fn the_mount_check_refuses_a_directory_it_cannot_list() {
 /// removed with its contents when dropped, after a failed assertion too.
 fn scratch_directory() -> tempfile::TempDir {
     tempfile::tempdir().unwrap_or_else(|error| panic!("cannot create a scratch directory: {error}"))
+}
+
+#[test]
+fn coverage_map_lists_every_render_object_type() {
+    // The header's table rows are `//! | `RenderX` | …`; each type once.
+    let root = include_str!("render_object_harness.rs");
+    let mut mapped: Vec<&str> = root
+        .lines()
+        .filter_map(|line| line.strip_prefix("//! | `"))
+        .filter_map(|rest| rest.split_once('`').map(|(name, _)| name))
+        .collect();
+    mapped.sort_unstable();
+    let mut types = RENDER_OBJECT_TYPES.to_vec();
+    types.sort_unstable();
+    assert_eq!(mapped, types);
 }
 
 #[test]
