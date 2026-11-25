@@ -62,7 +62,7 @@ impl Aimed {
     ///
     /// `invalid_argument` for a point in another window, or a target of a kind this agent does
     /// not know.
-    pub(super) fn of(target: &Target, window: WindowId) -> Result<Self, AgentError> {
+    pub(super) fn try_new(target: &Target, window: WindowId) -> Result<Self, AgentError> {
         match target {
             Target::Element(element) => Ok(Self::Element(*element)),
             Target::Locator(locator) => Ok(Self::Locator(locator.clone())),
@@ -219,7 +219,19 @@ impl Composed {
                 fling,
             } => gestures::swipe(aim, direction, distance, velocity, fling, &defaults)
                 .map_err(unplayable)?,
-            Self::Pinch(scale) => gestures::pinch(aim, scale).map_err(unplayable)?,
+            Self::Pinch(scale) => {
+                let pinch = gestures::pinch(aim, scale).map_err(unplayable)?;
+                // A pinch whose scale change does not pass the slop starts no scale in this
+                // window.
+                if !settings.touch.exceeds_scale_slop(scale) {
+                    return Err(AgentError::UnplayableInput(format!(
+                        "a pinch to a scale of {scale} does not pass this window's scale slop of \
+                         {}",
+                        settings.touch.scale_slop()
+                    )));
+                }
+                pinch
+            }
         })
     }
 }
@@ -374,8 +386,8 @@ impl GestureAct {
     }
 }
 
-/// The targets are not ready for `why`: hold on, or answer it at the last attempt, which runs on
-/// the frame the deadline passed on.
+/// The targets are not ready for `why`: hold on, or answer it at the last attempt, the first at or
+/// past the deadline, on a frame or on a turn without one.
 fn not_yet(ctx: &AttemptContext<'_>, reply: &ReplySender<ActOutcome>, why: AgentError) -> Attempt {
     if ctx.last {
         return answer(reply, Err(why));
@@ -420,6 +432,7 @@ fn inject(
         element,
         snapshot,
         before,
+        deadline: Some(ctx.deadline),
     };
     // Past here only the platform's wake runs, before anything is queued.
     ctx.if_panics.set(AgentError::Panicked);
@@ -561,11 +574,11 @@ fn hold(ctx: &mut ServeContext<'_, ActOutcome>, asked: Asked<'_>) -> Answer<ActO
         checks,
         semantic,
     } = asked;
-    let target = match Aimed::of(target, ctx.window) {
+    let target = match Aimed::try_new(target, ctx.window) {
         Ok(target) => target,
         Err(error) => return Answer::Now(Err(error)),
     };
-    let to = match to.map(|to| Aimed::of(to, ctx.window)).transpose() {
+    let to = match to.map(|to| Aimed::try_new(to, ctx.window)).transpose() {
         Ok(to) => to,
         Err(error) => return Answer::Now(Err(error)),
     };
@@ -669,7 +682,7 @@ impl Serve for method::ElementTap {
 
     fn serve(ctx: &mut ServeContext<'_, ActOutcome>, params: TapParams) -> Answer<ActOutcome> {
         let invoke = gestures::tap_action(params.button);
-        let target = match Aimed::of(&params.target, ctx.window) {
+        let target = match Aimed::try_new(&params.target, ctx.window) {
             Ok(target) => target,
             Err(error) => return Answer::Now(Err(error)),
         };
@@ -853,6 +866,7 @@ impl Serve for method::ElementPressKeys {
             element: None,
             snapshot: params.options.snapshot,
             before,
+            deadline: Some(deadline_of(ctx.state.clock().now(), &params.options)),
         };
         ctx.runtime
             .queue_injection(ctx.state, injecting, ctx.park());

@@ -95,7 +95,8 @@ pub(crate) trait AgentSide {
     /// against the frame just committed, and one whose target passed queues its input.
     fn advance_held_acts(&self, ui_runtime: &UiRuntime);
 
-    /// The earliest deadline of an act an agent holds on a window that is not closing.
+    /// The earliest deadline of an act an agent holds, or of the input an act queued, on a window
+    /// that is not closing.
     fn next_act_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant>;
 
     /// The earliest deadline of a wait an agent parked on a window that is not closing.
@@ -218,10 +219,12 @@ impl AgentSide for AgentOwnerSide {
     }
 
     fn after_turn(&self, ui_runtime: &UiRuntime) {
-        // A held act whose deadline passed is answered on a turn without a frame too. The waits
-        // are evaluated whichever panics, and the first panic of the two continues after both.
+        // A held act whose deadline passed is answered on a turn without a frame too, and so is
+        // the input an act queued that no frame started by its deadline. The waits are evaluated
+        // whichever panics, and the first panic continues after all three.
         let mut first = FirstPanic::new();
         first.contain(|| ui_runtime.advance_held_acts(super::agent_held::Pass::Expired));
+        first.contain(|| ui_runtime.expire_act_input());
         first.contain(|| ui_runtime.evaluate_agent_waits(false));
         first.resume();
     }

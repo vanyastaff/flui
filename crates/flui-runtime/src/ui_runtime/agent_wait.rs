@@ -11,7 +11,6 @@
 //! an answer (`unsatisfied`, with the last observation and why the window had not settled), not
 //! an error.
 
-use std::panic::resume_unwind;
 use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
@@ -24,6 +23,7 @@ use web_time::Instant;
 
 use super::UiRuntime;
 use super::agent::{AgentError, ReplySender, send_reply};
+use super::agent_serve::PanicAnswer;
 use crate::presentation::PresentationState;
 use crate::settledness::{TURNS_AT_ONE_INSTANT, Unsettled};
 
@@ -103,11 +103,16 @@ impl UiRuntime {
     /// The owner half of `wait.until`, `wait.settled` and `wait.frames`: evaluates a condition
     /// that does not read settledness against what the window has committed, and parks the wait
     /// when it does not hold yet. A condition that reads settledness is parked for the host's list.
+    ///
+    /// The frames a wait counts are asked for before it is parked: the wake reaches the platform,
+    /// user code, and one that panics has parked nothing, so the serving turn answers `if_panics`
+    /// and nothing answers the wait again.
     pub(super) fn park_agent_wait(
         &self,
         state: &PresentationState,
         params: WaitParams,
         reply: ReplySender<WaitOutcome>,
+        if_panics: &PanicAnswer,
     ) {
         let timeout = Duration::from_millis(params.effective_timeout_ms());
         let now = state.clock().now();
@@ -135,11 +140,11 @@ impl UiRuntime {
             send_reply(&pending.reply, None, Err(AgentError::TooManyWaits));
             return;
         }
-        let keeps_frames_coming = counts_frames(&pending.condition);
-        state.agent_waits.borrow_mut().push(pending);
-        if keeps_frames_coming {
+        if counts_frames(&pending.condition) {
+            if_panics.set(AgentError::Panicked);
             self.request_agent_frame_for(state);
         }
+        state.agent_waits.borrow_mut().push(pending);
     }
 
     /// Evaluates every parked wait whose condition holds without reading settledness: after the
@@ -194,9 +199,11 @@ impl UiRuntime {
                     Some(None) => {}
                     None => {
                         // The evaluation consumed the wait; the sender kept apart still
-                        // answers it, and the panic continues once the rest are put back.
-                        send_reply(&reply, None, Err(AgentError::Malformed));
+                        // answers it, behind the evaluation's panic, and the panic continues
+                        // once the rest are put back.
                         first_panic.absorb(settle_failure);
+                        first_panic
+                            .contain(|| send_reply(&reply, None, Err(AgentError::Malformed)));
                         keep.extend(waits);
                         break;
                     }
@@ -208,13 +215,13 @@ impl UiRuntime {
             *parked = keep;
             let keeps_frames_coming = parked.iter().any(|wait| counts_frames(&wait.condition));
             drop(parked);
+            // The wake is the platform's, user code: contained, so a wake that panics for one
+            // window leaves the next windows' waits answered and the first panic first.
             if keeps_frames_coming {
-                self.request_agent_frame_for(state);
+                first_panic.contain(|| self.request_agent_frame_for(state));
             }
         }
-        if let Some(payload) = first_panic.into_payload() {
-            resume_unwind(payload);
-        }
+        first_panic.resume();
     }
 
     /// Evaluates `wait` as `answering` allows and answers it when it ends (its condition holds,

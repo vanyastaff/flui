@@ -484,6 +484,7 @@ impl Serve for method::InputInject {
             element: None,
             snapshot: params.snapshot,
             before,
+            deadline: None,
         };
         ctx.runtime
             .queue_injection(ctx.state, injecting, ctx.park());
@@ -598,7 +599,8 @@ impl Serve for method::WaitUntil {
     /// deadline, the idle end).
     fn serve(ctx: &mut ServeContext<'_, WaitOutcome>, params: WaitParams) -> Answer<WaitOutcome> {
         ctx.if_panics.set(AgentError::Malformed);
-        ctx.runtime.park_agent_wait(ctx.state, params, ctx.park());
+        ctx.runtime
+            .park_agent_wait(ctx.state, params, ctx.park(), &ctx.if_panics);
         Answer::Later
     }
 }
@@ -617,7 +619,8 @@ impl Serve for method::WaitSettled {
         let mut wait = WaitParams::new(ctx.window, Condition::Settled);
         wait.timeout_ms = params.timeout_ms;
         ctx.if_panics.set(AgentError::Malformed);
-        ctx.runtime.park_agent_wait(ctx.state, wait, ctx.park());
+        ctx.runtime
+            .park_agent_wait(ctx.state, wait, ctx.park(), &ctx.if_panics);
         Answer::Later
     }
 }
@@ -633,7 +636,8 @@ impl Serve for method::WaitFrames {
         let mut wait = WaitParams::new(ctx.window, Condition::Frames(params.frames));
         wait.timeout_ms = params.timeout_ms;
         ctx.if_panics.set(AgentError::Malformed);
-        ctx.runtime.park_agent_wait(ctx.state, wait, ctx.park());
+        ctx.runtime
+            .park_agent_wait(ctx.state, wait, ctx.park(), &ctx.if_panics);
         Answer::Later
     }
 }

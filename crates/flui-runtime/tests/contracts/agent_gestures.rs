@@ -516,6 +516,95 @@ fn an_act_whose_target_never_passes_names_the_check_and_sends_nothing() {
     }
 }
 
+/// "Busy", whose press marks the view for a rebuild, the count it shows, and "Covered", under a
+/// cover that takes its hit.
+#[derive(Clone, StatefulView)]
+struct Busy;
+
+struct BusyState {
+    presses: Signal<u32>,
+}
+
+impl StatefulView for Busy {
+    type State = BusyState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        BusyState {
+            presses: ctx.signal(0),
+        }
+    }
+}
+
+impl ViewState<Busy> for BusyState {
+    fn build(&self, _view: &Busy, ctx: &dyn BuildContext) -> impl IntoView {
+        let presses = self.presses;
+        Column::new(vec![
+            RawButton::new(Text::new("Busy"))
+                .on_pressed(move |ctx| presses.update(ctx, |count| *count += 1))
+                .into_view()
+                .boxed(),
+            Text::new(format!("Pressed {}", presses.get(ctx)))
+                .into_view()
+                .boxed(),
+            SizedBox::new(120.0, 30.0)
+                .child(Stack::new(vec![
+                    RawButton::new(Text::new("Covered"))
+                        .on_pressed(|_| {})
+                        .into_view()
+                        .boxed(),
+                    Positioned::fill(
+                        Listener::new()
+                            .behavior(HitTestBehavior::Opaque)
+                            .child(SizedBox::expand()),
+                    )
+                    .into_view()
+                    .boxed(),
+                ]))
+                .into_view()
+                .boxed(),
+        ])
+    }
+}
+
+/// The last attempt of a held act may run on a turn without a frame, at the tree revision of the
+/// frame before, while the app has work pending. The element held still over the frames before,
+/// so the answer names the check that failed, `receives` for a covered button, never `stable`.
+#[test]
+fn a_last_attempt_on_a_turn_without_a_frame_names_the_check_that_failed() {
+    let mut rig = crate::agent_rig::Rig::showing(&Busy);
+    let mut tap = TapParams::new(named("Covered"));
+    tap.options = timeout(tap.options, 200);
+    let mut tap = rig
+        .lease
+        .call::<method::ElementTap>(tap)
+        .expect("the inbox has room");
+    for _ in 0..8 {
+        rig.frame();
+    }
+    assert!(tap.try_take().is_none(), "held while covered");
+    // The turn past the deadline drains a press that leaves a rebuild pending, then attempts the
+    // act once more, before any frame.
+    let mut busy = rig
+        .window
+        .call::<method::SemanticsAct>(ActParams::new(named("Busy"), ActionName::Invoke))
+        .expect("the inbox has room");
+    rig.clock.advance(Duration::from_millis(200));
+    rig.runtime.pump_background();
+    busy.try_take()
+        .expect("pressed at the drain")
+        .expect("pressed");
+    let refused = tap
+        .try_take()
+        .expect("answered on the turn past its deadline")
+        .expect_err("covered to the end");
+    assert_eq!(refused.code, ErrorCode::NotActionable, "{refused:?}");
+    assert_eq!(
+        refused.failed,
+        Some(ActionabilityCheck::Receives),
+        "{refused:?}"
+    );
+}
+
 /// An act answered at its timeout is dropped: the target turning actionable on the frame after
 /// the answer gets no press.
 #[test]
@@ -846,13 +935,15 @@ fn the_semantic_path_performs_the_semantics_action_that_does_the_same() {
     }
 }
 
-/// A window that draws nothing still answers a held act at its deadline, which wakes the host's
-/// loop: a tap whose target never passes, and a scroll whose step was queued as the window
-/// stopped drawing, which is withdrawn so no scroll goes out after the answer, the window seen
-/// again included. Meanwhile the runtime lists no cause a frame would serve, since none runs.
+/// A window that draws nothing still answers an act at its deadline, which wakes the host's loop,
+/// and nothing of it goes out after the answer, the window seen again included: a tap whose target
+/// never passes; a tap whose target passes once the deadline's turn finds the window idle, whose
+/// input no frame starts (`timeout`); keys queued at once, which no frame starts either; and a
+/// scroll whose step was queued as the window stopped drawing, which is withdrawn. Meanwhile the
+/// runtime lists no cause a frame would serve, since none runs.
 #[test]
 fn a_window_that_draws_nothing_answers_a_held_act_at_its_deadline() {
-    let rows: [(&str, Ask, ErrorCode); 2] = [
+    let rows: [(&str, Ask, ErrorCode); 4] = [
         (
             "a tap on a disabled target",
             |lease| {
@@ -861,6 +952,28 @@ fn a_window_that_draws_nothing_answers_a_held_act_at_its_deadline() {
                 ask::<method::ElementTap>(lease, tap)
             },
             ErrorCode::NotActionable,
+        ),
+        (
+            "a tap on a target that passes",
+            |lease| {
+                let mut tap = TapParams::new(named("Go"));
+                tap.options = timeout(tap.options, 200);
+                ask::<method::ElementTap>(lease, tap)
+            },
+            ErrorCode::Timeout,
+        ),
+        (
+            "keys queued at once",
+            |lease| {
+                let mut keys: PressKeysParams = serde_json::from_value(json!({
+                    "window": lease.window(),
+                    "keys": ["a"],
+                }))
+                .expect("press keys reads");
+                keys.options = timeout(keys.options, 200);
+                ask::<method::ElementPressKeys>(lease, keys)
+            },
+            ErrorCode::Timeout,
         ),
         (
             "a scroll with its step queued",
@@ -873,7 +986,7 @@ fn a_window_that_draws_nothing_answers_a_held_act_at_its_deadline() {
         ),
     ];
     for (case, call, code) in rows {
-        let (mut host, _agent, window, lease, _presses) = shown();
+        let (mut host, _agent, window, lease, presses) = shown();
         let journaled = journal(&mut host, &window).entries.len();
         host.set_window_visible(false);
         let _ = host.pump(Duration::from_millis(16));
@@ -909,7 +1022,80 @@ fn a_window_that_draws_nothing_answers_a_held_act_at_its_deadline() {
             journaled,
             "{case}: nothing went out after the answer"
         );
+        assert_eq!(
+            presses.go.load(Ordering::SeqCst),
+            0,
+            "{case}: nothing pressed"
+        );
     }
+}
+
+/// Input under way when its window stops drawing is answered within the act's timeout and the
+/// time the input takes to play past it, the play bound the reply counts: a long press whose
+/// press went out before the window was hidden answers `timeout` with the ticks that went out in
+/// full, and nothing more of it goes out when the window is seen again.
+#[test]
+fn input_whose_window_stops_drawing_is_answered_within_its_play_time() {
+    let (mut host, _agent, window, lease, _presses) = shown();
+    let journaled = journal(&mut host, &window).entries.len();
+    let mut press: LongPressParams = serde_json::from_value(json!({
+        "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+        "duration_ms": 1_000,
+    }))
+    .expect("a long press reads");
+    press.options = timeout(press.options, 300);
+    let mut press = ask::<method::ElementLongPress>(&lease, press);
+    let mut pressed = false;
+    for _ in 0..30 {
+        let _ = host.pump(Duration::from_millis(16));
+        let mut read = window
+            .call::<method::InputJournal>(JournalParams::new(window.id()))
+            .expect("the inbox has room");
+        let _ = host.pump(Duration::ZERO);
+        let entries = read
+            .try_take()
+            .expect("read at the drain")
+            .expect("the journal is read")
+            .entries;
+        if entries[journaled..]
+            .iter()
+            .any(|entry| entry.kind == InputKind::PointerDown)
+        {
+            pressed = true;
+            break;
+        }
+    }
+    assert!(pressed, "the press went out while the window drew");
+    host.set_window_visible(false);
+    let asked_by = host.clock().elapsed();
+    let Some(answer) = host.run_until_answered(
+        &mut press,
+        Duration::from_millis(16),
+        Duration::from_secs(5),
+    ) else {
+        panic!("answered while the window draws nothing");
+    };
+    let refused = answer.expect_err("its input did not play out");
+    assert_eq!(refused.code, ErrorCode::Timeout, "{refused:?}");
+    let effect = refused.effect.expect("a partial effect");
+    assert!(
+        effect.sent.is_some_and(|sent| sent >= 1),
+        "the press went out in full: {effect:?}"
+    );
+    assert!(
+        host.clock().elapsed().saturating_sub(asked_by) < Duration::from_millis(1_500),
+        "answered within its play time past the timeout"
+    );
+    let cut = journal(&mut host, &window).entries.len();
+    host.set_window_visible(true);
+    for _ in 0..80 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert_eq!(
+        journal(&mut host, &window).entries.len(),
+        cut,
+        "nothing of it went out after the answer"
+    );
 }
 
 /// "Row 0" to "Row 149", each a line of text.
@@ -1265,6 +1451,76 @@ fn scroll_until_refuses_a_read_that_leaves_some_out() {
     }
 }
 
+/// A strict locator that matches 25 elements is refused naming all 25 and the first ten of them,
+/// whether a gesture resolves it or `scroll_until` looks for it under its scrollable; a locator
+/// that picks the first of them acts on it.
+#[test]
+fn a_strict_locator_counts_every_match_it_refuses() {
+    type Make = fn(&InputLease) -> AgentAnswer<ActOutcome>;
+    let rows: [(&str, Make, Option<usize>); 3] = [
+        (
+            "a tap on 25 twins",
+            |lease| ask::<method::ElementTap>(lease, TapParams::new(named("Twin"))),
+            Some(25),
+        ),
+        (
+            "scroll_until 25 rows under the scrollable",
+            |lease| {
+                let rows = Locator::default().name_matching(TextMatch::prefix("Row "));
+                ask::<method::ElementScrollUntil>(
+                    lease,
+                    ScrollUntilParams::new(named("Tall"), rows),
+                )
+            },
+            Some(25),
+        ),
+        (
+            "a tap on the first of 25 twins",
+            |lease| {
+                let first = Locator::named("Twin").pick(Pick::First);
+                ask::<method::ElementTap>(lease, TapParams::new(Target::Locator(first)))
+            },
+            None,
+        ),
+    ];
+    for (case, make, matched) in rows {
+        let (mut host, _agent, window) = serving(
+            &Crowd {
+                twins: 25,
+                rows: 25,
+            },
+            2_000,
+        );
+        let lease = window
+            .input_lease()
+            .expect("an open window leases its input");
+        let mut asked = make(&lease);
+        let answer = answered(&mut host, &mut asked, 60).0;
+        match (answer, matched) {
+            (Err(refused), Some(matched)) => {
+                assert_eq!(refused.code, ErrorCode::Ambiguous, "{case}: {refused:?}");
+                assert_eq!(
+                    refused.message,
+                    format!("the locator matches {matched} elements"),
+                    "{case}"
+                );
+                assert_eq!(refused.candidates.len(), 10, "{case}: {refused:?}");
+                assert!(
+                    refused
+                        .candidates
+                        .iter()
+                        .all(|line| !line.is_empty() && !line.contains('\n')),
+                    "{case}: one outline line each: {refused:?}"
+                );
+            }
+            (Ok(outcome), None) => {
+                assert!(outcome.element.is_some(), "{case}: {outcome:?}");
+            }
+            (answer, matched) => panic!("{case}: {answer:?}, expected {matched:?} matched"),
+        }
+    }
+}
+
 /// Every gesture, and a perf span's start and stop, crosses the wire through the connection's
 /// lease on its window: asked over the protocol, each is answered by the window, none refused as
 /// asked without a lease. A gesture the method table gains has a row here or fails the coverage
@@ -1369,4 +1625,80 @@ fn every_gesture_crosses_the_wire_through_the_connections_lease() {
             "{name} went through the lease: {answer}"
         );
     }
+}
+
+/// Sends `params` to `name` over `session` as request `id`, and the line that answers it, pumping
+/// `host` until it comes.
+fn ask_over_wire(
+    session: &mut flui_runtime::agent::Session,
+    host: &mut HeadlessHost,
+    id: &str,
+    name: &str,
+    params: serde_json::Value,
+) -> serde_json::Value {
+    let waker = Waker::from(CountingWaker::new().shared());
+    let now = Instant::now();
+    session.receive(
+        &crate::agent_wire::line(&json!({ "id": id, "method": name, "params": params })),
+        now,
+    );
+    session.poll(now, &waker);
+    for _ in 0..200 {
+        let _ = host.pump(Duration::from_millis(16));
+        session.poll(now, &waker);
+        if let Some(line) = crate::agent_wire::transmitted(session)
+            .into_iter()
+            .find(|line| line["id"] == json!(id))
+        {
+            return line;
+        }
+    }
+    panic!("{name} is answered");
+}
+
+/// A perf span asked over the protocol is its connection's, through the connection's lease: when
+/// the connection that started it ends, the span ends with its lease, and the next driver's
+/// `perf.stop` finds none to end. Asked without the lease, the span would belong to the window's
+/// handles every connection shares, and outlive its connection.
+#[test]
+fn a_perf_span_asked_over_the_wire_ends_with_its_connection() {
+    let service = crate::agent_wire::service(Limits::default(), None);
+    let (mut host, _agent, _presses) = crate::agent_wire::shown(&service);
+    let waker = Waker::from(CountingWaker::new().shared());
+    let mut first = crate::agent_wire::greeted(&service, Instant::now(), &waker);
+    let listed = ask_over_wire(&mut first, &mut host, "windows", "windows.list", json!({}));
+    let handle = listed["result"]["windows"][0].clone();
+    let started = ask_over_wire(
+        &mut first,
+        &mut host,
+        "start",
+        method::PerfStart::NAME,
+        json!({ "window": handle }),
+    );
+    assert!(started.get("error").is_none(), "started: {started}");
+    drop(first);
+    for _ in 0..4 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    let mut next = crate::agent_wire::greeted(&service, Instant::now(), &waker);
+    let listed = ask_over_wire(&mut next, &mut host, "windows", "windows.list", json!({}));
+    let handle = listed["result"]["windows"][0].clone();
+    let stopped = ask_over_wire(
+        &mut next,
+        &mut host,
+        "stop",
+        method::PerfStop::NAME,
+        json!({ "window": handle }),
+    );
+    assert_eq!(
+        stopped["error"]["code"],
+        json!("invalid_argument"),
+        "the span ended with its connection: {stopped}"
+    );
+    assert!(
+        stopped["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("no perf span runs")),
+        "{stopped}"
+    );
 }

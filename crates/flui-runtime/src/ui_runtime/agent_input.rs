@@ -43,7 +43,7 @@ use flui_protocol::method::{self, Method};
 use flui_protocol::{
     act::ActOutcome, act::Effect, act::EffectKind, act::JournalSpan, geometry::LogicalPoint,
     input::ActionSequence, input::ImeAction, input::InputPath, input::PlannedInput,
-    input::PointerDevice, input::Released, input::SourceKind, input::TimedInput,
+    input::PointerDevice, input::Released, input::STEP, input::SourceKind, input::TimedInput,
     snapshot::Snapshot, tree::ElementRef,
 };
 use flui_semantics::TreeSnapshot;
@@ -244,6 +244,17 @@ impl Script {
     /// How many ticks the script has left.
     fn len(&self) -> usize {
         self.ticks.len()
+    }
+
+    /// How long a window at 60 Hz takes to play the script: the time its ticks last, and a frame
+    /// ([`STEP`]) for each, as [`ActionSequence::plays_within`] counts it. Saturates.
+    fn plays_within(&self) -> Duration {
+        let ticks = u32::try_from(self.ticks.len()).unwrap_or(u32::MAX);
+        self.ticks
+            .iter()
+            .map(|tick| tick.lasts)
+            .fold(Duration::ZERO, Duration::saturating_add)
+            .saturating_add(STEP.saturating_mul(ticks))
     }
 
     /// This script, then `next`: `next`'s ticks after this one's, its sources as it names them.
@@ -692,6 +703,58 @@ struct Injection {
     reply: ReplySender<ActOutcome>,
     /// The window's journal entries its ticks so far made.
     observed: Option<JournalSpan>,
+    /// The deadline of the act that queued it, and how long its script takes to play
+    /// ([`Script::plays_within`]); `None` for `input.inject`. See [`Injection::expiry`].
+    deadline: Option<(Instant, Duration)>,
+}
+
+impl Injection {
+    /// Whether one of its ticks has started.
+    fn started(&self) -> bool {
+        self.current.is_some() || self.script.len() != self.total
+    }
+
+    /// The ticks that went out in full.
+    fn played(&self) -> usize {
+        self.total
+            .saturating_sub(self.script.len())
+            .saturating_sub(usize::from(self.current.is_some()))
+    }
+
+    /// The answer an act's input gets at `now` if its act's promise has run out (ADR-0288 §4):
+    /// none of its ticks started by the act's deadline, or, under way by then, it has not ended
+    /// within its play time past it. `None` while it may still play, and always for input whose
+    /// asker bounds its own reply (`input.inject`).
+    fn expiry(&self, now: Instant) -> Option<AgentError> {
+        let (deadline, plays) = self.deadline?;
+        if !self.started() {
+            return (now >= deadline).then_some(AgentError::InputTimedOut);
+        }
+        let ends_by = deadline.checked_add(plays).unwrap_or(deadline);
+        if now < ends_by {
+            return None;
+        }
+        let played = self.played();
+        Some(if played == 0 {
+            AgentError::InputTimedOut
+        } else {
+            AgentError::InputPartial {
+                failure: Box::new(AgentError::InputTimedOut),
+                played: u32::try_from(played).unwrap_or(u32::MAX),
+                total: u32::try_from(self.total).unwrap_or(u32::MAX),
+            }
+        })
+    }
+
+    /// The instant [`Self::expiry`] next answers it at.
+    fn expires_at(&self) -> Option<Instant> {
+        let (deadline, plays) = self.deadline?;
+        Some(if self.started() {
+            deadline.checked_add(plays).unwrap_or(deadline)
+        } else {
+            deadline
+        })
+    }
 }
 
 /// A tick whose inputs or time are still running.
@@ -720,6 +783,9 @@ pub(super) struct Injecting {
     pub(super) snapshot: Snapshot,
     /// The tree the input starts on, for a delta.
     pub(super) before: Option<TreeSnapshot>,
+    /// The deadline of the act that queues it, on the presentation's clock; `None` for
+    /// `input.inject`, whose asker bounds its own reply. See [`UiRuntime::expire_act_input`].
+    pub(super) deadline: Option<Instant>,
 }
 
 impl AgentInput {
@@ -742,8 +808,10 @@ impl AgentInput {
             element,
             snapshot,
             before,
+            deadline,
         } = injecting;
         let total = script.len();
+        let deadline = deadline.map(|deadline| (deadline, script.plays_within()));
         self.injections = self
             .injections
             .checked_add(1)
@@ -759,8 +827,43 @@ impl AgentInput {
             before,
             reply,
             observed: None,
+            deadline,
         })));
         Ok(InjectionId(self.injections))
+    }
+
+    /// Take off the queue every act's input whose promise ran out by `now`
+    /// ([`Injection::expiry`]), each with the answer it gets. What one under way left held stays
+    /// with its lease, as a failed injection's does; nothing of any of them goes out after this.
+    fn expire(&mut self, now: Instant) -> Vec<(ReplySender<ActOutcome>, AgentError)> {
+        let mut expired = Vec::new();
+        let mut at = 0;
+        while at < self.jobs.len() {
+            let answer = match &self.jobs[at] {
+                Job::Inject(injection) => injection.expiry(now),
+                Job::Release { .. } => None,
+            };
+            let Some(answer) = answer else {
+                at += 1;
+                continue;
+            };
+            let Some(Job::Inject(injection)) = self.jobs.remove(at) else {
+                unreachable!("BUG: the job just read is an injection");
+            };
+            expired.push((injection.reply, answer));
+        }
+        expired
+    }
+
+    /// The earliest instant an act's queued input is answered at if it has not played by then.
+    fn next_deadline(&self) -> Option<Instant> {
+        self.jobs
+            .iter()
+            .filter_map(|job| match job {
+                Job::Inject(injection) => injection.expires_at(),
+                Job::Release { .. } => None,
+            })
+            .min()
     }
 
     /// Take injection `id` off the queue if none of its ticks has started, to be dropped unsent
@@ -881,7 +984,7 @@ impl AgentInput {
                 started: now,
                 boundary,
                 lasts,
-                steps: steps.into(),
+                steps: VecDeque::from(steps),
             });
         }
         if !injection.script.ticks.is_empty() {
@@ -899,10 +1002,7 @@ impl AgentInput {
         let Some(Job::Inject(injection)) = jobs.pop_front() else {
             unreachable!("BUG: the front job is an injection");
         };
-        let played = injection
-            .total
-            .saturating_sub(injection.script.len())
-            .saturating_sub(1);
+        let played = injection.played();
         let total = injection.total;
         Turn::Failed(batch, error, played, total, injection.reply)
     }
@@ -1027,7 +1127,37 @@ impl UiRuntime {
         for state in self.presentations.iter() {
             first.contain(|| self.advance_window_input(state, now));
         }
+        // After the boundary's input went on: what could start at it has.
+        first.contain(|| self.expire_act_input());
         first.resume();
+    }
+
+    /// Answer every act's queued input whose act's promise has run out, on each presentation's
+    /// clock (ADR-0400 §2): none of its ticks started by the act's deadline (`timeout`, nothing
+    /// played), or under way then and not ended within its play time past it (`timeout`, with
+    /// the ticks played). Each answer runs contained, after the queue is let go; the first panic
+    /// continues once every window's are sent.
+    ///
+    /// Run at a frame boundary after its input went on, and at an owner turn without a frame
+    /// after the acts whose deadline passed were attempted, so the input a last attempt queued on
+    /// a frame starts on that frame, and a window that draws no frame answers its acts at their
+    /// deadline whatever they queued ([`Self::next_act_input_deadline`] wakes the owner then).
+    pub(super) fn expire_act_input(&self) {
+        let mut first = FirstPanic::new();
+        for state in self.presentations.iter() {
+            let now = state.clock().now();
+            let expired = state.agent_input.borrow_mut().expire(now);
+            for (reply, answer) in expired {
+                first.contain(|| send_reply(&reply, None, Err(answer)));
+            }
+        }
+        first.resume();
+    }
+
+    /// The earliest instant [`Self::expire_act_input`] answers an act's queued input at, in
+    /// `state`'s window, on its clock.
+    pub(super) fn next_act_input_deadline(state: &PresentationState) -> Option<Instant> {
+        state.agent_input.borrow().next_deadline()
     }
 
     fn advance_window_input(&self, state: &PresentationState, now: Instant) {

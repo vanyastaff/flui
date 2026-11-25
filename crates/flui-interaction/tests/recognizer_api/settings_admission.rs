@@ -1400,6 +1400,39 @@ fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
     }
 }
 
+/// The fling range the host reports is a touch's: a touch reads its slowest and fastest, in that
+/// order; a mouse and a pen keep the authored range.
+fn reported_fling_range_is_a_touchs_alone() {
+    let authored = GestureSettings::default()
+        .try_with_fling_velocity(80.0, 7_000.0)
+        .expect("a fling range in order");
+    let geometry = GestureGeometry::new(DevicePixelRatio::ONE).with_fling_speeds(
+        flui_platform::FlingSpeeds::try_new(400.0, 9_000.0).expect("a fling range"),
+    );
+    let settings = GestureSettings::resolve_preferences(
+        &authored,
+        &GesturePreferences::default(),
+        Some(&geometry),
+    )
+    .expect("a representable range");
+    for (kind, expected) in [
+        (PointerKind::Touch, (400.0, 9_000.0)),
+        (PointerKind::Mouse, (80.0, 7_000.0)),
+        (
+            PointerKind::Pen {
+                tool: flui_platform::input::pointer::PenTool::Tip,
+            },
+            (80.0, 7_000.0),
+        ),
+    ] {
+        assert_eq!(
+            settings.fling_velocity_range_for(kind),
+            expected,
+            "{kind:?}"
+        );
+    }
+}
+
 #[test]
 fn admitted_gesture_settings_contract() {
     let cases: &[(&str, fn())] = &[
@@ -1452,6 +1485,10 @@ fn admitted_gesture_settings_contract() {
             scale_retains_first_contact_profile_until_last_release,
         ),
         ("double tap candidate", double_tap_candidate_retains_policy),
+        (
+            "reported fling range is a touch's",
+            reported_fling_range_is_a_touchs_alone,
+        ),
         (
             "tap and drag candidate",
             tap_and_drag_retains_consecutive_candidate_profile,

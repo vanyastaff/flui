@@ -117,6 +117,8 @@ mod agent_gestures;
 mod agent_input;
 #[path = "contracts/agent_perf.rs"]
 mod agent_perf;
+#[path = "contracts/agent_rig.rs"]
+mod agent_rig;
 #[path = "contracts/announce.rs"]
 mod announce;
 #[path = "contracts/close_vetoes.rs"]

@@ -3,35 +3,43 @@
 //! queued, leaves nothing to play; and when two wakes of one turn panic, the act's and a later
 //! one (the window's, which still holds acts, or a parked wait's), the first continues.
 //!
-//! The headless host's wake cannot fail, so these drive a runtime of their own, on a manual
-//! clock, whose wake panics while the test says so, each time with its own number.
+//! The headless host's wake cannot fail, so these drive [`Rig`], a runtime of their own whose wake
+//! panics while the test says so.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use flui_foundation::{ManualClock, MonotonicClock};
 use flui_protocol::method;
 use flui_protocol::{
     act::ActOutcome, act::ActParams, error::ErrorCode, input::InputPath, input::InputPolicy,
-    input::Journal, input::JournalParams, input::PressKeysParams, input::TapParams,
-    locator::Locator, locator::Target, snapshot::Snapshot, wait::Condition, wait::WaitOutcome,
+    input::PressKeysParams, input::ScrollUntilParams, input::TapParams, locator::Locator,
+    locator::Target, snapshot::Snapshot, wait::Condition, wait::FramesParams, wait::WaitOutcome,
     wait::WaitParams, wire::ActionName,
 };
-use flui_runtime::sink::{FrameSink, SubmitVerdict};
-use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
-use flui_view::dev_agent::{AgentAnswer, AgentWindow, InputLease};
+use flui_view::dev_agent::AgentAnswer;
 use flui_view::prelude::*;
-use flui_widgets::{Column, RawButton, Text};
+use flui_widgets::{Column, ListView, RawButton, SizedBox, Text};
 
-/// "Go", which counts its presses, and "Gated", which has no handler and so is disabled.
+use crate::agent_rig::Rig;
+
+/// "Go", which counts its presses, "Gated", which has no handler and so is disabled, and "Items",
+/// a list of 100 rows 20 px tall in a viewport 60 px tall.
 #[derive(Clone, StatelessView)]
 struct Pads(Arc<AtomicU32>);
 
 impl StatelessView for Pads {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
         let go = Arc::clone(&self.0);
+        let rows = ListView::builder(100, 20.0, |index| {
+            Some(
+                SizedBox::new(200.0, 20.0)
+                    .child(Text::new(format!("Item {index}")))
+                    .into_view()
+                    .boxed(),
+            )
+        })
+        .semantics_label("Items");
         Column::new(vec![
             RawButton::new(Text::new("Go"))
                 .on_pressed(move |_: &mut EventContext<'_>| {
@@ -40,134 +48,29 @@ impl StatelessView for Pads {
                 .into_view()
                 .boxed(),
             RawButton::new(Text::new("Gated")).into_view().boxed(),
+            SizedBox::new(200.0, 60.0).child(rows).into_view().boxed(),
         ])
     }
 }
 
-struct Discard;
-
-impl FrameSink for Discard {
-    fn surface_size(&mut self) -> (u32, u32) {
-        (200, 200)
-    }
-
-    fn submit(
-        &mut self,
-        _epoch: flui_foundation::FrameEpoch,
-        _scene: flui_layer::ScenePublication,
-    ) -> SubmitVerdict {
-        SubmitVerdict::Presented
-    }
+/// [`Pads`] shown by a [`Rig`], and how many times "Go" was pressed.
+fn rig() -> (Rig, Arc<AtomicU32>) {
+    let go = Arc::new(AtomicU32::new(0));
+    (Rig::showing(&Pads(Arc::clone(&go))), go)
 }
 
-/// [`Pads`] shown by a runtime of its own, its agent window and a lease on its input. While
-/// `failing` is set, its wake panics with `wake <n>`, `n` counting the wakes that panicked.
-struct Rig {
-    runtime: UiRuntime,
-    clock: ManualClock,
-    failing: Arc<AtomicBool>,
-    window: AgentWindow,
-    lease: InputLease,
-    go: Arc<AtomicU32>,
-}
-
-impl Rig {
-    fn new() -> Self {
-        let clock = ManualClock::new();
-        let failing = Arc::new(AtomicBool::new(false));
-        let wake = {
-            let failing = Arc::clone(&failing);
-            let failed = AtomicU32::new(0);
-            Arc::new(move || {
-                if failing.load(Ordering::SeqCst) {
-                    let n = failed.fetch_add(1, Ordering::SeqCst) + 1;
-                    std::panic::panic_any(format!("wake {n}"));
-                }
-            })
-        };
-        let runtime = UiRuntime::try_new(
-            crate::owner_publication::window(),
-            1.0,
-            RuntimeHostServices::new(
-                wake,
-                Arc::new(AtomicBool::new(false)),
-                &flui_painting::FontCollection::new(),
-                flui_scheduler::ClockSource::Manual(clock.clone()),
-            ),
-        )
-        .expect("runtime");
-        let go = Arc::new(AtomicU32::new(0));
-        runtime
-            .attach_root_widget(&Pads(Arc::clone(&go)))
-            .expect("mount");
-        let window = runtime
-            .dev_agent_window(runtime.presentation_id())
-            .expect("the runtime hosts its primary presentation");
-        let lease = window
-            .input_lease()
-            .expect("an open window leases its input");
-        let mut rig = Self {
-            runtime,
-            clock,
-            failing,
-            window,
-            lease,
-            go,
-        };
-        for _ in 0..4 {
-            rig.frame();
-        }
-        rig
+/// No input went out since the journal held `journaled` entries, over 20 frames, and "Go" was
+/// never pressed.
+fn played_nothing(rig: &mut Rig, go: &AtomicU32, journaled: usize, case: &str) {
+    for _ in 0..20 {
+        rig.frame();
     }
-
-    fn frame(&mut self) {
-        self.clock.advance(Duration::from_millis(16));
-        let _ = self.runtime.pump(
-            &mut flui_runtime::pump::SampledClock(self.clock.now()),
-            &mut Discard,
-        );
-    }
-
-    /// An owner turn with no frame whose wakes fail: the panic it continues with.
-    fn failing_turn(&mut self) -> String {
-        self.failing.store(true, Ordering::SeqCst);
-        let turned = catch_unwind(AssertUnwindSafe(|| self.runtime.pump_background()));
-        self.failing.store(false, Ordering::SeqCst);
-        let payload = turned.expect_err("a panic continues out of the turn");
-        payload
-            .downcast_ref::<String>()
-            .cloned()
-            .unwrap_or_else(|| "a payload of another type".to_owned())
-    }
-
-    /// The window's input journal, read within 30 frames.
-    fn journal(&mut self) -> Journal {
-        let mut read = self
-            .window
-            .call::<method::InputJournal>(JournalParams::new(self.window.id()))
-            .expect("the inbox has room");
-        for _ in 0..30 {
-            if let Some(journal) = read.try_take() {
-                return journal.expect("the journal is read");
-            }
-            self.frame();
-        }
-        panic!("the journal is not read within 30 frames");
-    }
-
-    /// No input went out since the journal held `journaled` entries, over 20 frames, and "Go"
-    /// was never pressed.
-    fn played_nothing(&mut self, journaled: usize, case: &str) {
-        for _ in 0..20 {
-            self.frame();
-        }
-        assert_eq!(self.go.load(Ordering::SeqCst), 0, "{case}: nothing pressed");
-        assert_eq!(
-            self.journal().entries.len(),
-            journaled,
-            "{case}: no input of it went out"
-        );
-    }
+    assert_eq!(go.load(Ordering::SeqCst), 0, "{case}: nothing pressed");
+    assert_eq!(
+        rig.journal().entries.len(),
+        journaled,
+        "{case}: no input of it went out"
+    );
 }
 
 fn named(name: &str) -> Target {
@@ -200,7 +103,7 @@ fn a_wake_that_panics_as_a_gesture_is_held_or_queued_leaves_nothing_to_play() {
         }),
     ];
     for (case, ask) in rows {
-        let mut rig = Rig::new();
+        let (mut rig, go) = rig();
         let journaled = rig.journal().entries.len();
         let mut asked = ask(&rig);
         assert_eq!(rig.failing_turn(), "wake 1", "{case}");
@@ -209,7 +112,7 @@ fn a_wake_that_panics_as_a_gesture_is_held_or_queued_leaves_nothing_to_play() {
         };
         let refused = answer.expect_err("the wake panicked");
         assert_eq!(refused.code, ErrorCode::Platform, "{case}: {refused:?}");
-        rig.played_nothing(journaled, case);
+        played_nothing(&mut rig, &go, journaled, case);
     }
 }
 
@@ -243,7 +146,7 @@ fn the_first_wake_that_panics_in_a_turn_continues_and_its_act_plays_nothing() {
         }),
     ];
     for (case, beside) in rows {
-        let mut rig = Rig::new();
+        let (mut rig, go) = rig();
         let journaled = rig.journal().entries.len();
         let mut tap = TapParams::new(named("Go"));
         tap.options.timeout_ms = Some(50);
@@ -261,7 +164,7 @@ fn the_first_wake_that_panics_in_a_turn_continues_and_its_act_plays_nothing() {
         };
         let answered = answer.expect_err("its wake panicked");
         assert_eq!(answered.code, ErrorCode::Platform, "{case}: {answered:?}");
-        rig.played_nothing(journaled, case);
+        played_nothing(&mut rig, &go, journaled, case);
         drop(beside);
     }
 }
@@ -292,7 +195,7 @@ fn a_wake_that_panics_after_a_semantics_action_ran_leaves_its_answer_true() {
         }),
     ];
     for (case, ask) in rows {
-        let mut rig = Rig::new();
+        let (mut rig, go) = rig();
         let mut asked = ask(&rig);
         if case.starts_with("a held tap") {
             rig.runtime.pump_background();
@@ -319,6 +222,131 @@ fn a_wake_that_panics_after_a_semantics_action_ran_leaves_its_answer_true() {
         for _ in 0..10 {
             rig.frame();
         }
-        assert_eq!(rig.go.load(Ordering::SeqCst), 1, "{case}: pressed once");
+        assert_eq!(go.load(Ordering::SeqCst), 1, "{case}: pressed once");
     }
+}
+
+/// A held `element.scroll_until` steps at frame boundaries, each step's input queued after the
+/// wake that asks for the frame playing it. A wake that panics there leaves the step unqueued and
+/// answers the search that the window panicked, not that resolving its scrollable did, and
+/// nothing of the step plays.
+#[test]
+fn a_wake_that_panics_as_a_scroll_step_is_queued_answers_the_search_and_plays_nothing() {
+    let (mut rig, go) = rig();
+    let mut until = ScrollUntilParams::new(named("Items"), Locator::named("Item 99"));
+    until.options.timeout_ms = Some(60_000);
+    let mut until = rig
+        .lease
+        .call::<method::ElementScrollUntil>(until)
+        .expect("the inbox has room");
+    // Served, held, and its first step queued and played while the wake holds.
+    for _ in 0..3 {
+        rig.frame();
+    }
+    assert!(until.try_take().is_none(), "the search holds");
+    let mut answer = None;
+    for _ in 0..60 {
+        let _ = rig.failing_frame();
+        answer = until.try_take();
+        if answer.is_some() {
+            break;
+        }
+    }
+    let Some(answer) = answer else {
+        panic!("a step was queued through a wake that panicked");
+    };
+    let refused = answer.expect_err("its step's wake panicked");
+    assert_eq!(refused.code, ErrorCode::Platform, "{refused:?}");
+    assert_eq!(
+        refused.message, "the window panicked while answering",
+        "{refused:?}"
+    );
+    // What went out before the panic is the earlier steps'; the step it stopped never plays.
+    let journaled = rig.journal().entries.len();
+    played_nothing(&mut rig, &go, journaled, "a scroll step");
+}
+
+/// A `wait.frames` asks for the frames it counts before it is parked: a wake that panics there
+/// parks nothing, and the wait is answered once, that the window panicked; nothing keeps it
+/// counting or asking for frames afterwards.
+#[test]
+fn a_wake_that_panics_as_a_frames_wait_is_parked_answers_it_once() {
+    let mut rig = Rig::showing(&Text::new("Still"));
+    let frames: FramesParams = serde_json::from_value(serde_json::json!({
+        "window": rig.window.id(),
+        "frames": 1_000,
+        "timeout_ms": 60_000,
+    }))
+    .expect("frames params read");
+    let mut parked = rig
+        .window
+        .call::<method::WaitFrames>(frames)
+        .expect("the inbox has room");
+    assert_eq!(rig.failing_turn(), "wake 1");
+    let Some(answer) = parked.try_take() else {
+        panic!("answered in the turn that served it");
+    };
+    let refused = answer.expect_err("the wake panicked");
+    assert_eq!(refused.code, ErrorCode::Platform, "{refused:?}");
+    assert_eq!(
+        refused.message, "the window panicked while answering",
+        "{refused:?}"
+    );
+    for _ in 0..4 {
+        rig.frame();
+    }
+    let now = flui_foundation::MonotonicClock::now(&rig.clock);
+    let mut unsettled = flui_runtime::settledness::Unsettled::new(now);
+    rig.runtime.unsettled(now, &mut unsettled);
+    assert!(
+        unsettled
+            .causes()
+            .all(|cause| cause.cleared_by != flui_protocol::wait::ClearedBy::NextFrame),
+        "no parked wait keeps asking for frames: {unsettled:?}"
+    );
+}
+
+/// A wait answer pass contains each window's wake: when the wake panics for the first window's
+/// waits, which keep frames coming, the next window's waits are still answered (one past its
+/// timeout ends `unsatisfied`), and the first panic, `wake 1`, continues once every window had
+/// its turn.
+#[test]
+fn a_wake_that_panics_for_one_window_leaves_the_next_windows_waits_answered() {
+    let (mut rig, _go) = rig();
+    let second = rig.runtime.install_presentation(
+        rig.runtime
+            .assemble_presentation(crate::owner_publication::window()),
+    );
+    rig.runtime
+        .attach_root_widget_to(second, &Text::new("Second"))
+        .expect("mount the second window");
+    let other = rig
+        .runtime
+        .dev_agent_window(second)
+        .expect("the runtime hosts its second presentation");
+    for _ in 0..4 {
+        rig.frame();
+    }
+    let wait = |window: &flui_view::dev_agent::AgentWindow, timeout_ms: u64| {
+        let wait = WaitParams::new(window.id(), Condition::Frames(1_000)).timeout_ms(timeout_ms);
+        window
+            .call::<method::WaitUntil>(wait)
+            .expect("the inbox has room")
+    };
+    let _first: AgentAnswer<WaitOutcome> = wait(&rig.window, 60_000);
+    let mut due: AgentAnswer<WaitOutcome> = wait(&other, 50);
+    let _held: AgentAnswer<WaitOutcome> = wait(&other, 60_000);
+    rig.runtime.pump_background();
+    assert!(due.try_take().is_none(), "parked until its timeout");
+    rig.clock.advance(Duration::from_millis(100));
+    assert_eq!(rig.failing_turn(), "wake 1");
+    let Some(answer) = due.try_take() else {
+        panic!("the second window's wait past its timeout was answered");
+    };
+    let outcome = answer.expect("a timeout is an answer");
+    assert_eq!(
+        outcome.end,
+        flui_protocol::wait::WaitEnd::Unsatisfied,
+        "{outcome:?}"
+    );
 }

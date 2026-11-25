@@ -25,8 +25,8 @@ use flui_protocol::method::{self, Method};
 use flui_protocol::{
     act::ActOutcome, act::ActionabilityParams, act::Effect, act::EffectKind, act::JournalSpan,
     input::Direction, input::InputPath, input::ScrollUntilParams, locator::LocateParams,
-    locator::Locator, locator::Pick, locator::Target, snapshot::Snapshot, tree::ElementId,
-    tree::ElementRef, tree::Node, tree::ReadQuery, tree::Rect,
+    locator::Locator, locator::Match, locator::Pick, locator::Target, locator::resolve_strict,
+    snapshot::Snapshot, tree::ElementId, tree::ElementRef, tree::Node, tree::ReadQuery, tree::Rect,
 };
 use flui_semantics::TreeSnapshot;
 use flui_view::dev_agent::AgentAnswer;
@@ -49,9 +49,6 @@ const CONTENT_NODES: usize = 4096;
 /// How many of the window's matches of the locator one step looks among for one under the
 /// scrollable.
 const MAX_MATCHES: u32 = 4096;
-
-/// How many candidates an ambiguous match under the scrollable names.
-const CANDIDATES: usize = 10;
 
 /// A scrollable's content at one attempt: each descendant and its bounds, in tree order, and the
 /// descendants as a set to look a match up in.
@@ -203,6 +200,7 @@ impl ScrollSearch {
             element: Some(scrollable),
             snapshot: Snapshot::None,
             before: None,
+            deadline: Some(ctx.deadline),
         };
         // Past here only the platform's wake runs, before anything is queued.
         ctx.if_panics.set(AgentError::Panicked);
@@ -235,31 +233,18 @@ impl ScrollSearch {
                          among (4096): narrow it",
             });
         }
-        let under: Vec<_> = matches
+        let under: Vec<&Match> = matches
             .matches
             .iter()
             .filter(|found| content.holds(found.element.element))
-            .collect();
-        let picked = match (self.until.pick, under.as_slice()) {
-            (_, []) => None,
-            (Pick::Strict, [only]) => Some(only),
-            (Pick::Strict, several) => {
-                return Err(AgentError::Ambiguous {
-                    matched: several.len(),
-                    candidates: several
-                        .iter()
-                        .take(CANDIDATES)
-                        .map(|found| {
-                            flui_protocol::tree::outline(std::slice::from_ref(&found.node))
-                        })
-                        .collect::<Vec<String>>(),
-                });
-            }
-            (Pick::Last, several) => several.last(),
-            (Pick::Nth(index), several) => usize::try_from(index)
+            .collect::<Vec<&Match>>();
+        let picked = match self.until.pick {
+            Pick::Strict => resolve_strict(under.iter().copied(), 0).map_err(AgentError::from)?,
+            Pick::Last => under.last().copied(),
+            Pick::Nth(index) => usize::try_from(index)
                 .ok()
-                .and_then(|index| several.get(index)),
-            (_, several) => several.first(),
+                .and_then(|index| under.get(index).copied()),
+            _ => under.first().copied(),
         };
         let Some(found) = picked else {
             return Ok(None);
@@ -345,7 +330,7 @@ impl Serve for method::ElementScrollUntil {
         let Some(lease) = ctx.lease else {
             return Answer::Now(Err(unleased()));
         };
-        let scrollable = match Aimed::of(&params.target, ctx.window) {
+        let scrollable = match Aimed::try_new(&params.target, ctx.window) {
             Ok(scrollable) => scrollable,
             Err(error) => return Answer::Now(Err(error)),
         };

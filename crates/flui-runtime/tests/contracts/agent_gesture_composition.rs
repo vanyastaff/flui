@@ -439,3 +439,65 @@ fn a_gesture_on_a_clipped_element_stays_inside_the_part_shown() {
         }
     }
 }
+
+/// A fling naming no velocity is composed from the fling range the window's host reports for a
+/// touch, not the authored one: a host that flings only from 3000 px/s, above twice the authored
+/// slowest, gets a stroke released at twice that, 6000 px/s, which its recognisers hear as a
+/// fling, and a swipe that releases slower than 3000 px/s.
+#[test]
+fn a_default_fling_is_composed_from_the_range_the_host_reports() {
+    use flui_foundation::geometry::DevicePixelRatio;
+    use flui_platform::{FlingSpeeds, GestureGeometry};
+
+    let reported = GestureGeometry::new(DevicePixelRatio::ONE)
+        .with_fling_speeds(FlingSpeeds::try_new(3_000.0, 9_000.0).expect("a fling range"));
+    let authored = GestureSettings::default().fling_velocity_range_for(PointerKind::Mouse);
+    assert!(
+        2.0 * authored.0 < 3_000.0,
+        "the host's slowest fling is above twice the authored one: {authored:?}"
+    );
+    for (default, flings) in [(Unnamed::Fling, true), (Unnamed::Swipe, false)] {
+        let heard = Heard::default();
+        let window = crate::agent_rig::Rig::window_reporting(reported);
+        let mut rig = crate::agent_rig::Rig::on(
+            window,
+            (800, 600),
+            &Pad {
+                heard: heard.clone(),
+                width: 800,
+            },
+        );
+        // The host delivers its preferences, and the window reads its gesture geometry with them.
+        rig.runtime
+            .apply_system_preferences_for_test(SystemPreferences::default());
+        rig.frame();
+        let mut asked = ask_default(&rig.lease, default);
+        let mut answer = None;
+        for _ in 0..400 {
+            rig.frame();
+            answer = asked.try_take();
+            if answer.is_some() {
+                break;
+            }
+        }
+        let outcome = answer
+            .expect("answered within 400 frames")
+            .unwrap_or_else(|error| panic!("{default:?}: {error:?}"));
+        assert_eq!(outcome.effect.kind, flui_protocol::act::EffectKind::Ran);
+        let releases = heard.releases.borrow();
+        let [release] = releases.as_slice() else {
+            panic!("{default:?}: one release: {releases:?}");
+        };
+        if flings {
+            assert!(
+                (5_000.0..=7_500.0).contains(release),
+                "{default:?}: released at {release} px/s, twice the host's 3000"
+            );
+        } else {
+            assert!(
+                *release < 3_000.0,
+                "{default:?}: released at {release} px/s, below the host's 3000"
+            );
+        }
+    }
+}

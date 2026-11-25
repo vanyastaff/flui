@@ -25,8 +25,9 @@ use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
     act::ActOutcome, act::ActionRequest, act::ActionabilityCheck, act::ActionabilityParams,
     act::Effect, act::EffectKind, act::EffectUnit, error::ErrorCode, error::ErrorObject,
-    error::HandleKind, error::Retry, events::EventFilter, input::InputPath, locator::LocateParams,
-    locator::Locator, locator::Matches, locator::Pick, record::RecordParams, snapshot::Snapshot,
+    error::HandleKind, error::Retry, events::EventFilter, input::InputPath, locator::Ambiguity,
+    locator::LocateParams, locator::Locator, locator::Matches, locator::Pick,
+    locator::STRICT_CANDIDATES, locator::resolve_strict, record::RecordParams, snapshot::Snapshot,
     snapshot::SnapshotReading, tree::ElementId, tree::ElementRef, tree::ReadQuery, tree::Tree,
     tree::WindowId, wait::WaitOutcome, wire::ActionName,
 };
@@ -174,7 +175,7 @@ pub(crate) enum AgentError {
     /// A strict locator matches several elements.
     #[error("the locator matches {matched} elements")]
     Ambiguous {
-        /// How many it matched, at most the candidates looked at.
+        /// How many it matched, those past the candidates included.
         matched: usize,
         /// An outline of each match, for the caller to tell them apart.
         candidates: Vec<String>,
@@ -233,6 +234,10 @@ pub(crate) enum AgentError {
     /// Input a held act queued failed with this answer.
     #[error("{}", .0.message)]
     InputFailed(Box<ErrorObject>),
+    /// The input an act queued did not play within the act's timeout: no frame started it by the
+    /// deadline, or the window stopped drawing before it played out.
+    #[error("the window drew no frames to play the act's input within its timeout")]
+    InputTimedOut,
 }
 
 impl AgentError {
@@ -253,6 +258,7 @@ impl AgentError {
             Self::InputPartial { failure, .. } => failure.code(),
             Self::InputFailed(answer) => answer.code,
             Self::NotActionable { .. } => ErrorCode::NotActionable,
+            Self::InputTimedOut => ErrorCode::Timeout,
             Self::RuntimeGone => ErrorCode::ShuttingDown,
             Self::PresentationGone
             | Self::LeaseReleased
@@ -290,6 +296,7 @@ impl AgentError {
             | Self::TooManyPerfSpans
             | Self::InputQueueFull
             | Self::TooManyActs
+            | Self::InputTimedOut
             | Self::TreeBusy(_) => Retry::Soon,
             Self::NoMatch | Self::NotActionable { .. } => Retry::WhenAppears,
             Self::InputFailed(answer) => answer.retry,
@@ -945,13 +952,9 @@ pub(super) fn locate(
     })
 }
 
-/// How many matches a strict locator is resolved over: two say it is ambiguous, ten name the
-/// candidates.
-const STRICT_CANDIDATES: u32 = 10;
-
 /// The one element `locator` matches in `state`'s committed tree now, as its pick says: a strict
-/// pick that matches several is `ambiguous` with an outline of each candidate, never the first,
-/// and none is `not_found`.
+/// pick that matches several is `ambiguous`, counting every match and naming the first
+/// candidates ([`resolve_strict`]), never the first; none is `not_found`.
 pub(super) fn resolve(
     state: &PresentationState,
     window: WindowId,
@@ -963,19 +966,22 @@ pub(super) fn resolve(
         params.max_matches = Some(STRICT_CANDIDATES);
     }
     let matches = locate(state, window, &params)?;
-    match matches.matches.as_slice() {
-        [] => Err(AgentError::NoMatch),
-        [only] => Ok(only.element.element),
-        several if strict => Err(AgentError::Ambiguous {
-            matched: several.len(),
-            candidates: several
-                .iter()
-                .map(|candidate| {
-                    flui_protocol::tree::outline(std::slice::from_ref(&candidate.node))
-                })
-                .collect(),
-        }),
-        [first, ..] => Ok(first.element.element),
+    let found = if strict {
+        resolve_strict(matches.matches.iter(), matches.truncated).map_err(AgentError::from)?
+    } else {
+        matches.matches.first()
+    };
+    found
+        .map(|found| found.element.element)
+        .ok_or(AgentError::NoMatch)
+}
+
+impl From<Ambiguity> for AgentError {
+    fn from(ambiguity: Ambiguity) -> Self {
+        Self::Ambiguous {
+            matched: ambiguity.matched,
+            candidates: ambiguity.candidates,
+        }
     }
 }
 

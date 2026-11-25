@@ -74,6 +74,8 @@ pub(super) struct AttemptContext<'a> {
     pub(super) window: WindowId,
     /// The presentation's clock, now.
     pub(super) now: Instant,
+    /// The act's deadline, which the input it queues carries.
+    pub(super) deadline: Instant,
     /// The deadline has passed: the attempt is the last.
     pub(super) last: bool,
     /// The input lease the act injects through.
@@ -120,6 +122,7 @@ impl HeldAct {
     /// One attempt in `ctx`'s window: the act back while it holds on.
     fn attempt(mut self, ctx: &mut AttemptContext<'_>) -> Option<Self> {
         ctx.lease = self.lease;
+        ctx.deadline = self.deadline;
         ctx.last = ctx.now >= self.deadline;
         let attempt = match &mut self.holding {
             Holding::Gesture(gesture) => gesture.attempt(ctx, &self.reply),
@@ -192,11 +195,13 @@ impl UiRuntime {
         }
         if_panics.set(AgentError::Panicked);
         self.request_agent_frame_for(state);
+        let now = state.clock().now();
         let mut ctx = AttemptContext {
             runtime: self,
             state,
             window: window_of(state.id()),
-            now: state.clock().now(),
+            now,
+            deadline: now,
             last: false,
             lease: None,
             if_panics,
@@ -238,6 +243,7 @@ impl UiRuntime {
                         state,
                         window: window_of(state.id()),
                         now,
+                        deadline: now,
                         last: false,
                         lease: None,
                         if_panics: &if_panics,
@@ -272,13 +278,19 @@ impl UiRuntime {
         first.resume();
     }
 
-    /// The earliest deadline among the held acts of windows that are not closing, on the
-    /// presentations' clocks.
+    /// The earliest deadline of an act on a window that is not closing, on the presentations'
+    /// clocks: a held act's, and that of the input an act queued that has not played yet
+    /// ([`UiRuntime::expire_act_input`]), so an act is answered by it whether or not its window
+    /// draws.
     pub(super) fn next_held_act_deadline(&self) -> Option<Instant> {
         self.presentations
             .iter()
             .filter(|presentation| !presentation.closing_requested.get())
-            .filter_map(|presentation| presentation.agent_acts.borrow().next_deadline())
+            .filter_map(|presentation| {
+                let held = presentation.agent_acts.borrow().next_deadline();
+                let queued = Self::next_act_input_deadline(presentation);
+                held.into_iter().chain(queued).min()
+            })
             .min()
     }
 }
