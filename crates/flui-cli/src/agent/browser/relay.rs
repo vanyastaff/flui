@@ -143,10 +143,12 @@ enum Outcome {
 /// released ([`BrowserLink::release`]), so it does not live as long as the document.
 #[derive(Clone, Copy)]
 enum Leaving {
-    /// The client went, broke the protocol or fell too far behind, or the relay stops: its
-    /// page connection is closed, which ends its place in the app's agent.
+    /// The client went, broke the protocol or fell too far behind, or the relay lets go of it
+    /// on a reload or as it stops: its page connection is closed, which ends its place in the
+    /// app's agent.
     Close,
-    /// The page ended the connection, or never opened it: nothing is left to close there.
+    /// The page ended the connection, or never opened it: nothing is left to close there,
+    /// whatever made the relay let go of the client.
     Ended,
 }
 
@@ -296,9 +298,10 @@ impl Turns {
                 }
             }
             // The document goes, and every page connection with it, so their clients are
-            // closed. Each is closed in the page all the same: one opened while the event was
-            // on its way belongs to the next document, and would hold its place in the app's
-            // agent. A client still waiting for the export connects to the next document.
+            // closed. Each is closed in the page all the same, unless the page ended it itself,
+            // and released either way: one opened while the event was on its way belongs to
+            // the next document, and would hold its place in the app's agent. A client still
+            // waiting for the export connects to the next document.
             LinkEvent::Navigated => {
                 let open = self
                     .clients
