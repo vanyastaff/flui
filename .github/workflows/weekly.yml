@@ -96,7 +96,10 @@ jobs:
       # `trybuild`, .config/nextest.toml) stay out: they compare rustc's
       # diagnostics against checked-in `.stderr` files, which track the
       # locked dependency versions, so against a fresh lockfile they report
-      # wording changes, not breakage.
+      # wording changes, not breakage. The `*_the_locked_*` tests stay out for
+      # the same reason: each asserts that Cargo.lock holds the accesskit
+      # release a role table was transcribed from, so a newer accesskit fails
+      # them as a reminder to re-read the table, not as breakage.
       - name: cargo nextest run (lib + integration)
         run: >
           cargo nextest run
@@ -104,7 +107,7 @@ jobs:
           --lib --bins --tests
           --features flui/material,flui/cupertino,flui/native
           --no-fail-fast
-          -E 'not (group(trybuild))'
+          -E 'not (group(trybuild) | test(/_the_locked_/))'
 
   nightly-canary:
     name: nightly canary (check + clippy + future-incompat, advisory)
