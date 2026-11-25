@@ -61,6 +61,8 @@ struct StreamState {
     timed: VecDeque<(std::time::Instant, String)>,
     ended: Option<String>,
     responder: Option<Responder>,
+    /// Whether the stream's binding unwinds as it is dropped.
+    unwinds_on_drop: bool,
 }
 
 impl StreamState {
@@ -270,6 +272,20 @@ impl ScriptedAdb {
         self
     }
 
+    /// Let every open stream whose command starts with `prefix` unwind as it is dropped, as a
+    /// binding the driver does not own may.
+    pub fn unwind_streams_on_drop(&self, prefix: &str) {
+        let script = lock(&self.script);
+        for (command, state) in &script.open {
+            if command.starts_with(prefix) {
+                state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .unwinds_on_drop = true;
+            }
+        }
+    }
+
     /// End every open stream whose command starts with `prefix`, as a program that exits does.
     pub fn end_stream(&self, prefix: &str) {
         let script = lock(&self.script);
@@ -407,6 +423,7 @@ impl Adb for ScriptedAdb {
             timed: VecDeque::new(),
             ended: rule.ends.then(|| format!("`adb {text}` ended")),
             responder: rule.responder,
+            unwinds_on_drop: false,
         }));
         script.open.push((text.clone(), Arc::clone(&state)));
         Ok(Box::new(ScriptedStream {
@@ -516,9 +533,18 @@ impl AdbStream for ScriptedStream {
 
 impl Drop for ScriptedStream {
     fn drop(&mut self) {
-        let mut script = lock(&self.script);
-        script.log.push(format!("{} ended", self.command));
-        let state = Arc::clone(&self.state);
-        script.open.retain(|(_, open)| !Arc::ptr_eq(open, &state));
+        let unwinds = {
+            let mut script = lock(&self.script);
+            script.log.push(format!("{} ended", self.command));
+            let state = Arc::clone(&self.state);
+            script.open.retain(|(_, open)| !Arc::ptr_eq(open, &state));
+            self.state().unwinds_on_drop
+        };
+        if unwinds {
+            std::panic::resume_unwind(Box::new(format!(
+                "the scripted stream `{}` unwound as it was dropped",
+                self.command
+            )));
+        }
     }
 }

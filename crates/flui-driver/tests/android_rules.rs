@@ -338,61 +338,64 @@ fn each_session_dumps_to_a_file_of_its_own() {
     );
 }
 
+/// The names of the files in `directory`, sorted.
+#[cfg(unix)]
+fn names_in(directory: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(directory)
+        .expect("the directory")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    names
+}
+
 /// A dump's removal takes its own files and the earlier dumps', never a later dump's: the line of
 /// dump 2, ended by the host at its deadline and still running on the device, removes nothing
-/// dump 3 wrote. Run through the host's `sh`, as the device's runs it.
+/// dump 3 wrote. Run through the host's `sh`, as the device's runs it, in a directory whose name
+/// the shell would split: from the parent, a split line would reach `b/…` there.
 #[cfg(unix)]
 #[test]
 fn a_dumps_removal_takes_no_later_dumps_files() {
-    // A directory whose name the shell would split and unquote: the lines hold it as one word.
     let parent = tempfile::tempdir().expect("a temporary directory");
-    let directory = tempfile::Builder::new()
-        .prefix("dumps a'b $(c) ")
-        .tempdir_in(parent.path())
-        .expect("a directory with a space and a quote");
-    // A file of the same name beside it, which a split or unquoted directory would reach.
-    std::fs::write(parent.path().join("flui-driver-0a1b-1.xml"), "x").expect("written");
-    let root = directory.path().to_str().expect("a UTF-8 path");
+    let directory = parent.path().join("dumps a b");
+    std::fs::create_dir(&directory).expect("a directory with spaces");
+    // What the split line's last word names, relative to the shell's directory.
+    std::fs::create_dir(parent.path().join("b")).expect("a directory");
+    let reached = parent.path().join("b").join("flui-driver-0a1b-1.xml");
+    std::fs::write(&reached, "x").expect("written");
+    let root = directory.to_str().expect("a UTF-8 path");
     let files = flui_driver::lane::android::uiautomator::DumpFiles::in_directory(root, "0a1b");
-    let written = [
+    for name in [
         "1.xml",
         "1.xml.err",
         "2.xml",
         "2.xml.err",
         "3.xml",
         "3.xml.err",
-    ];
-    for name in written {
-        std::fs::write(
-            directory.path().join(format!("flui-driver-0a1b-{name}")),
-            "x",
-        )
-        .expect("a dump's file");
+    ] {
+        std::fs::write(directory.join(format!("flui-driver-0a1b-{name}")), "x")
+            .expect("a dump's file");
     }
     // Another session's file, and one whose number is no number.
-    std::fs::write(directory.path().join("flui-driver-ffff-1.xml"), "x").expect("written");
-    std::fs::write(directory.path().join("flui-driver-0a1b-x.xml"), "x").expect("written");
-    let left = || {
-        let mut names: Vec<String> = std::fs::read_dir(directory.path())
-            .expect("the directory")
-            .map(|entry| {
-                entry
-                    .expect("an entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect();
-        names.sort();
-        names
+    std::fs::write(directory.join("flui-driver-ffff-1.xml"), "x").expect("written");
+    std::fs::write(directory.join("flui-driver-0a1b-x.xml"), "x").expect("written");
+    let run = |line: String| {
+        let ran = std::process::Command::new("sh")
+            .args(["-c", &line])
+            .current_dir(parent.path())
+            .status()
+            .expect("sh runs");
+        assert!(ran.success(), "{line}");
     };
-    let ran = std::process::Command::new("sh")
-        .args(["-c", &files.removal_through(2)])
-        .status()
-        .expect("sh runs");
-    assert!(ran.success());
+    run(files.removal_through(2));
     assert_eq!(
-        left(),
+        names_in(&directory),
         [
             "flui-driver-0a1b-3.xml",
             "flui-driver-0a1b-3.xml.err",
@@ -401,15 +404,46 @@ fn a_dumps_removal_takes_no_later_dumps_files() {
         ]
     );
     // The lane's end takes every file of its session's dumps, and no other session's.
+    run(files.removal());
+    assert_eq!(names_in(&directory), ["flui-driver-ffff-1.xml"]);
+    assert!(reached.exists(), "the line was not split at the spaces");
+}
+
+/// A dump's line, run through the host's `sh` with a stand-in `uiautomator` that writes the dump
+/// it is told to, in a directory whose name holds a space, a quote and a command substitution:
+/// it prints the dump it wrote, and removes it after.
+#[cfg(unix)]
+#[test]
+fn a_dump_line_holds_its_directory_as_one_word() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let parent = tempfile::tempdir().expect("a temporary directory");
+    let bin = parent.path().join("bin");
+    std::fs::create_dir(&bin).expect("a directory");
+    let tool = bin.join("uiautomator");
+    std::fs::write(&tool, "#!/bin/sh\nprintf '<hierarchy/>' > \"$2\"\n").expect("written");
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).expect("executable");
+    let directory = parent.path().join("dumps a'b $(c)");
+    std::fs::create_dir(&directory).expect("a directory with a quote");
+    let root = directory.to_str().expect("a UTF-8 path");
+    let files = flui_driver::lane::android::uiautomator::DumpFiles::in_directory(root, "0a1b");
+    let path = std::env::var("PATH").unwrap_or_default();
     let ran = std::process::Command::new("sh")
-        .args(["-c", &files.removal()])
-        .status()
+        .args(["-c", &files.dump_line(4)])
+        .env("PATH", format!("{}:{path}", bin.display()))
+        .current_dir(parent.path())
+        .output()
         .expect("sh runs");
-    assert!(ran.success());
-    assert_eq!(left(), ["flui-driver-ffff-1.xml"]);
-    assert!(
-        parent.path().join("flui-driver-0a1b-1.xml").exists(),
-        "nothing outside the directory is removed"
+    assert_eq!(
+        String::from_utf8_lossy(&ran.stdout),
+        "<hierarchy/>",
+        "{}",
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    assert_eq!(
+        names_in(&directory),
+        Vec::<String>::new(),
+        "the dump is removed"
     );
 }
 

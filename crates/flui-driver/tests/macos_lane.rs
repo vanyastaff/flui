@@ -1005,7 +1005,8 @@ fn input_the_app_would_not_read_as_itself_is_refused_before_any_event() {
 
 /// What the run is told of each input: a keystroke, a press and a release posted are said, a
 /// move is where the pointer goes and is not, a text run posted in part (its press without its
-/// release) is said and holds nothing, and a stroke never posted is not said.
+/// release) is said and holds its key until a release lets it go (the release of everything, or
+/// the next whole run's release of the same key), and a stroke never posted is not said.
 #[test]
 fn every_input_that_was_posted_is_said_to_the_run() {
     let said = |delivered: &Delivered| delivered.effect(1).is_some();
@@ -1048,6 +1049,15 @@ fn every_input_that_was_posted_is_said_to_the_run() {
     .expect("released");
     assert_eq!(released, [Keystroke::Release(TEXT_KEY, None)]);
     assert_eq!(keys.held(), [] as [u16; 0]);
+    // A run posted in part, then a whole run, whose release lets the same key up: nothing stays
+    // held, so a lone modifier tap after it counts as one.
+    let mut keys = HeldKeys::new();
+    let _ = keys.deliver(run, &mut Delivered::default(), |_, _| {
+        Err(SendFailure::partly_sent(no_event()))
+    });
+    keys.deliver(run, &mut Delivered::default(), |_, _| Ok(()))
+        .expect("the whole run is posted");
+    assert_eq!(keys.held(), [] as [u16; 0], "the whole run let the key up");
     // A run refused whole leaves nothing down.
     let mut keys = HeldKeys::new();
     let refused = keys.deliver(run, &mut Delivered::default(), |_, _| {

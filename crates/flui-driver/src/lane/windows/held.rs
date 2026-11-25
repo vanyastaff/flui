@@ -59,6 +59,8 @@ pub enum Keystroke {
     UnshiftFor(u16),
     /// A UTF-16 unit, pressed and released as a Unicode packet.
     Unit(u16),
+    /// The release of the Unicode packet carrying a UTF-16 unit whose press went out alone.
+    UnitUp(u16),
 }
 
 impl OsInput for Keystroke {
@@ -78,6 +80,7 @@ impl Keystroke {
             Self::ShiftFor(_) => vec![KeyEdge::Down(SHIFT)],
             Self::UnshiftFor(_) => vec![KeyEdge::Up(SHIFT)],
             Self::Unit(_) => vec![KeyEdge::Down(PACKET), KeyEdge::Up(PACKET)],
+            Self::UnitUp(_) => vec![KeyEdge::Up(PACKET)],
         }
     }
 }
@@ -91,6 +94,9 @@ pub struct HeldKeys {
     held: Vec<u16>,
     /// The keys pressed with a Shift the lane added for them.
     shifted: Vec<u16>,
+    /// The UTF-16 units of the Unicode packets whose press went out without their release, which
+    /// leave [`PACKET`] down until a packet's release.
+    packets: Vec<u16>,
     /// The shell's shortcuts as the OS has seen the lane's keys.
     shortcuts: ShellShortcuts,
 }
@@ -106,6 +112,12 @@ impl HeldKeys {
     #[must_use]
     pub fn held(&self) -> &[u16] {
         &self.held
+    }
+
+    /// The UTF-16 units of the Unicode packets whose press went out without their release.
+    #[must_use]
+    pub fn packets(&self) -> &[u16] {
+        &self.packets
     }
 
     /// The strokes `input` takes from this state. A key event whose strokes would complete a
@@ -174,6 +186,10 @@ impl HeldKeys {
                 }
                 KeyEdge::Up(key) => {
                     self.held.retain(|code| *code != key.code);
+                    // Any packet's release lets `VK_PACKET` up, whatever unit it carries.
+                    if key == PACKET {
+                        self.packets.clear();
+                    }
                     self.shortcuts.release(key, &self.held)
                 }
             };
@@ -196,7 +212,7 @@ impl HeldKeys {
     /// says Windows took it; only then `confirm` (that the guard saw it come back), whose failure
     /// is reported with the stroke already recorded and said, so a release of everything releases
     /// it and the run says it went out. A stroke Windows took in part (a character's press
-    /// without its release) is said, and what its part left down recorded ([`PACKET`]).
+    /// without its release) is said, and its unit recorded as a packet left down.
     ///
     /// # Errors
     ///
@@ -220,11 +236,14 @@ impl HeldKeys {
     }
 
     /// Record what the part of `stroke` that went out left down: a Unicode packet's press without
-    /// its release leaves [`PACKET`] down, which the release of everything lets go of. Every other
-    /// stroke is one event, all or nothing.
+    /// its release leaves its unit's packet down, which the release of everything lets go of with
+    /// that packet's own release ([`Keystroke::UnitUp`]). Every other stroke is one event, all or
+    /// nothing.
     fn record_part(&mut self, stroke: Keystroke) {
-        if matches!(stroke, Keystroke::Unit(_)) && !self.held.contains(&PACKET.code) {
-            self.held.push(PACKET.code);
+        if let Keystroke::Unit(unit) = stroke
+            && !self.packets.contains(&unit)
+        {
+            self.packets.push(unit);
         }
     }
 
@@ -282,15 +301,27 @@ impl HeldKeys {
                 first.get_or_insert(error);
             }
         }
+        // A packet left down goes up with its own release, the unit it carried in it; one release
+        // lets `VK_PACKET` up for every packet recorded.
+        if let Some(&unit) = self.packets.first()
+            && let Err(error) = self.send_unless_shortcut(Keystroke::UnitUp(unit), &mut send)
+        {
+            first.get_or_insert(error);
+        }
         match first {
             None => Ok(()),
-            Some(first) if self.held.is_empty() => Err(first),
+            Some(first) if self.held.is_empty() && self.packets.is_empty() => Err(first),
             Some(first) => Err(Error::ReleaseFailed {
                 lane: LANE.to_owned(),
                 held: self
                     .held
                     .iter()
                     .map(|&code| keys::name_of(code))
+                    .chain(
+                        self.packets
+                            .iter()
+                            .map(|unit| format!("the Unicode packet of U+{unit:04X}")),
+                    )
                     .collect::<Vec<String>>(),
                 message: first.to_string(),
                 first: None,

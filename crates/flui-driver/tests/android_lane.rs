@@ -1850,6 +1850,28 @@ fn a_pen_hover_is_no_input_that_acts() {
     assert!(!refused.may_have_run(), "{refused:?}");
 }
 
+/// A pen's hover whose report was written and never confirmed may have reached the device, and
+/// still acts on nothing: the run counts it as no input that acts.
+#[test]
+fn an_unanswered_hover_is_no_input_that_acts() {
+    fn no_answer_to_the_hover(line: &str) -> Vec<String> {
+        if line.contains("\"syncToken\":\"2\"") {
+            return Vec::new();
+        }
+        answer_syncs(line)
+    }
+    let adb = scripted_with(true, Some(no_answer_to_the_hover));
+    let mut lane = connected(&adb);
+    let events = tap(PointerDevice::Pen, DevicePoint::new(300, 600));
+    lane.check(&events).expect("a pen");
+    let mut delivered = Delivered::default();
+    let failed = lane
+        .send_counted(&events[0], &mut delivered)
+        .expect_err("the hover's sync goes unanswered");
+    assert!(failed.may_have_run(), "{failed:?}");
+    assert!(delivered.effect(1).is_none(), "a hover acts on nothing");
+}
+
 /// A pen report the device never read (its `uinput` command ended) never reached the device: the
 /// run counts nothing and answers the plain failure. One written and never confirmed reached it
 /// and may have run: the run counts it as such.

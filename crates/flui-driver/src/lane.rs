@@ -571,12 +571,20 @@ impl LaneWorker {
             .spawn(move || {
                 let mut lane = lane;
                 while let Ok((state, job)) = inbox.recv() {
-                    if state
+                    let runs = state
                         .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                    {
-                        job(&mut lane);
+                        .is_ok();
+                    // A job and what it holds are code the driver does not own: run, or dropped
+                    // when it was cancelled, it is under containment, its answer nobody receives
+                    // included, so a destructor's panic never ends the worker before the release
+                    // at its end. Nobody waits for that panic: it is destroyed here.
+                    let mut served = FirstPanic::new();
+                    if runs {
+                        served.contain(|| job(&mut lane));
+                    } else {
+                        served.retire(job);
                     }
+                    drop(served);
                 }
                 // The worker is ending: nothing may stay pressed. A panic of the lane, its
                 // destructor or a log subscriber here has no one left to be raised to, so it is
@@ -675,8 +683,9 @@ impl LaneWorker {
 impl Drop for LaneWorker {
     fn drop(&mut self) {
         drop(self.jobs.take());
-        // The thread contains what panics at its end; a payload that still reaches the join has
-        // no one to be raised to here, and is destroyed under containment (ADR-0281).
+        // No payload reaches the join while the thread contains every job, every job it drops
+        // and its own end (`ending.retire(lane)`); this arm is kept so a panic that ever escapes
+        // that containment is destroyed here, never raised from a destructor (ADR-0281).
         if let Some(Err(payload)) = self.thread.take().map(JoinHandle::join) {
             discard_payload(payload);
         }

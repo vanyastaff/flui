@@ -51,6 +51,7 @@ use crate::lane::windows::activity::LANE_TAG;
 use crate::lane::windows::contacts::{Frame, Phase, PointerKind};
 use crate::lane::windows::keys::{Modifier, VirtualKey};
 use crate::lane::windows::safety::LANE;
+use crate::lane::windows::send_input;
 
 /// A window, by the value of its `HWND`: a value that names a window, kept as an integer so the
 /// lane that holds it stays `Send`.
@@ -318,7 +319,7 @@ fn send(inputs: &[INPUT], what: &str) -> std::result::Result<(), SendFailure> {
     let size = i32::try_from(size_of::<INPUT>()).expect("BUG: an INPUT is a few dozen bytes");
     // SAFETY: fully initialized `INPUT`s and the size of one.
     let sent = unsafe { SendInput(inputs, size) };
-    crate::lane::windows::send_input::outcome(sent, inputs.len(), what)
+    send_input::outcome(sent, inputs.len(), what)
 }
 
 fn mouse(dx: i32, dy: i32, data: u32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
@@ -451,15 +452,25 @@ pub(super) fn key(key: VirtualKey, pressed: bool) -> std::result::Result<(), Sen
     )
 }
 
-/// Press and release the UTF-16 unit `unit` as a Unicode packet.
-pub(super) fn unicode(unit: u16) -> std::result::Result<(), SendFailure> {
-    send(
-        &[
-            key_input(0, unit, KEYEVENTF_UNICODE),
-            key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
-        ],
-        "a character",
-    )
+/// Send `events`, the keyboard events of one stroke ([`send_input::packet_events`]), in one call.
+pub(super) fn keyboard(
+    events: &[send_input::KeyboardEvent],
+    what: &str,
+) -> std::result::Result<(), SendFailure> {
+    let inputs: Vec<INPUT> = events
+        .iter()
+        .map(|event| {
+            let mut flags = KEYBD_EVENT_FLAGS(0);
+            if event.unicode {
+                flags |= KEYEVENTF_UNICODE;
+            }
+            if event.up {
+                flags |= KEYEVENTF_KEYUP;
+            }
+            key_input(event.virtual_key, event.scan, flags)
+        })
+        .collect();
+    send(&inputs, what)
 }
 
 /// The key that types `c` on the keyboard layout of `window`'s thread, and whether it needs
