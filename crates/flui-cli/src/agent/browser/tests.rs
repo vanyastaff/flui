@@ -3,11 +3,12 @@
 //! name one that is not on `PATH`).
 
 use std::collections::VecDeque;
-use std::io::{self, Read as _, Write as _};
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use flui_protocol::endpoint::PolledStream;
 use flui_protocol::framing::LineReader;
 use flui_protocol::launch::{ENDPOINT_EXTRA, PAGE_LAUNCH_GLOBAL, TOKEN_EXTRA};
 use interprocess::local_socket::Stream;
@@ -16,8 +17,9 @@ use interprocess::local_socket::traits::Stream as _;
 use super::launch::{LaunchError, LaunchedBrowser};
 use super::relay::Relay;
 use super::*;
-use crate::agent::nonblocking::NonblockingStream;
+use crate::agent::listener::polled;
 use crate::agent::{Endpoint, Session};
+use crate::testing::until_ready;
 
 /// How long a test waits for a line or an end.
 const WAIT: Duration = Duration::from_secs(20);
@@ -177,7 +179,7 @@ fn relayed(link: Box<dyn BrowserLink>) -> (tempfile::TempDir, Session, Relay) {
 /// A client of the session's endpoint, reading line by line. A named pipe takes no read
 /// timeout, so the stream is polled.
 struct Client {
-    stream: NonblockingStream,
+    stream: PolledStream<Stream>,
     reader: LineReader,
 }
 
@@ -190,46 +192,32 @@ impl Client {
             Stream::connect(crate::agent::client::name(endpoint).expect("the endpoint is a name"))
                 .expect("the relay accepts");
         Self {
-            stream: NonblockingStream::try_new(stream).expect("non-blocking"),
+            stream: polled(stream).expect("non-blocking"),
             reader: LineReader::new(1 << 20),
         }
     }
 
     fn send(&mut self, line: &str) {
         let line = format!("{line}\n");
-        let deadline = Instant::now() + WAIT;
         let mut written = 0;
         while written < line.len() {
-            match (&self.stream).write(&line.as_bytes()[written..]) {
-                Ok(count) => written += count,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    assert!(Instant::now() < deadline, "the relay reads within {WAIT:?}");
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                Err(error) => panic!("the relay reads: {error}"),
-            }
+            written += until_ready(WAIT, "room for the line", || {
+                (&self.stream).write(&line.as_bytes()[written..])
+            })
+            .expect("the relay reads");
         }
     }
 
     /// The next line; `None` once the relay closed the connection.
     fn next(&mut self) -> Option<String> {
-        let deadline = Instant::now() + WAIT;
         let mut chunk = [0_u8; 4096];
         loop {
             if let Some(line) = self.reader.next_line().expect("a line within bounds") {
                 return Some(String::from_utf8(line).expect("UTF-8"));
             }
-            assert!(
-                Instant::now() < deadline,
-                "no line and no end within {WAIT:?}"
-            );
-            match (&self.stream).read(&mut chunk) {
-                Ok(0) => return None,
+            match until_ready(WAIT, "line or end", || (&self.stream).read(&mut chunk)) {
+                Ok(0) | Err(_) => return None,
                 Ok(read) => self.reader.push(&chunk[..read]),
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(_) => return None,
             }
         }
     }

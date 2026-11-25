@@ -30,6 +30,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TryRecvError, TrySendE
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use flui_protocol::endpoint::PolledStream;
 use flui_protocol::events::Event;
 use flui_protocol::framing::LineReader;
 use flui_protocol::session::HelloReply;
@@ -56,9 +57,6 @@ pub(crate) const INCOMING_ROOM: usize = 16;
 /// How long a write may make no progress before the connection is called broken: an app that
 /// stopped reading.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The most one write offers a non-blocking named pipe, which takes a write whole or not at all.
-const WRITE_CHUNK: usize = 512;
 
 /// Where the app's agent listens.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,9 +305,10 @@ enum Received {
     End,
 }
 
-/// The stream, as the connection's thread owns it, non-blocking.
+/// The stream, as the connection's thread owns it, non-blocking. A local endpoint is polled by
+/// the rule its app reads and writes it by ([`PolledStream`]); a TCP stream ends with `Ok(0)`.
 enum Io {
-    Local(Stream),
+    Local(PolledStream<Stream>),
     Tcp(TcpStream),
 }
 
@@ -319,7 +318,7 @@ impl Io {
             Endpoint::Local(address) => {
                 let stream = Stream::connect(local_name(address)?)?;
                 stream.set_nonblocking(true)?;
-                Ok(Self::Local(stream))
+                Ok(Self::Local(PolledStream::new(stream)))
             }
             Endpoint::Forwarded(address) => {
                 let stream = TcpStream::connect_timeout(address, CONNECT_TIMEOUT)?;
@@ -337,7 +336,7 @@ impl Io {
             Self::Tcp(stream) => (&*stream).read(buffer),
         };
         match read {
-            Ok(0) => Ok(self.ended()),
+            Ok(0) => Ok(Received::End),
             Ok(count) => Ok(Received::Bytes(count)),
             Err(error)
                 if matches!(
@@ -351,28 +350,15 @@ impl Io {
         }
     }
 
-    /// What an empty read means. A non-blocking named pipe answers an empty read the way it
-    /// answers a closed one, so it is told apart by an empty write, which fails only on a closed
-    /// pipe; elsewhere an empty read is the end.
-    fn ended(&self) -> Received {
-        match self {
-            Self::Local(stream) if cfg!(windows) => match (&*stream).write(&[]) {
-                Ok(_) => Received::Nothing,
-                Err(_) => Received::End,
-            },
-            Self::Local(_) | Self::Tcp(_) => Received::End,
-        }
-    }
-
-    /// Write `line` whole, a chunk at a time, giving up after [`WRITE_TIMEOUT`] without progress.
+    /// Write `line` whole, as the stream takes it, giving up after [`WRITE_TIMEOUT`] without
+    /// progress.
     fn write_line(&self, line: &[u8]) -> std::result::Result<(), String> {
         let mut progress = Instant::now();
         let mut written = 0;
         while written < line.len() {
-            let end = line.len().min(written + WRITE_CHUNK);
             let wrote = match self {
-                Self::Local(stream) => (&*stream).write(&line[written..end]),
-                Self::Tcp(stream) => (&*stream).write(&line[written..end]),
+                Self::Local(stream) => (&*stream).write(&line[written..]),
+                Self::Tcp(stream) => (&*stream).write(&line[written..]),
             };
             match wrote {
                 Ok(count) if count > 0 => {

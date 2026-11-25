@@ -21,6 +21,7 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendE
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use flui_protocol::endpoint::PolledStream;
 use flui_protocol::envelope::{Greeting, Request, RequestId, ServerLine, Unread};
 use flui_protocol::error::{ErrorCode, ErrorObject, Retry};
 use flui_protocol::framing::{LineReader, MAX_LINE};
@@ -29,12 +30,11 @@ use flui_protocol::method::{Method as _, RunReload};
 use flui_protocol::reload::{ReloadParams, ReloadReport, ReloadTier};
 use flui_protocol::session::{Capabilities, ClientRole, HelloReply};
 use flui_protocol::version::PROTOCOL_VERSION;
-use interprocess::local_socket::Listener;
 use interprocess::local_socket::traits::Listener as _;
+use interprocess::local_socket::{Listener, Stream};
 use serde_json::Value;
 
-use super::listener::bind;
-use super::nonblocking::NonblockingStream;
+use super::listener::{bind, polled};
 use crate::error::{CliResult, ResultExt as _};
 
 /// The longest pause between two turns of the endpoint.
@@ -166,7 +166,7 @@ struct Admission {
 }
 
 struct Client {
-    stream: NonblockingStream,
+    stream: PolledStream<Stream>,
     reader: LineReader,
     unwritten: Vec<u8>,
     phase: Phase,
@@ -217,7 +217,7 @@ impl Turns {
                 // Dropped: the client reads the end of its connection.
                 continue;
             }
-            let stream = match NonblockingStream::try_new(stream) {
+            let stream = match polled(stream) {
                 Ok(stream) => stream,
                 Err(error) => {
                     // Dropped, as one past the most clients is.
@@ -452,7 +452,7 @@ impl Client {
     fn write(&mut self) -> io::Result<bool> {
         while !self.unwritten.is_empty() {
             match (&self.stream).write(&self.unwritten) {
-                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
                 Ok(written) => {
                     self.unwritten.drain(..written);
                 }
@@ -471,6 +471,7 @@ mod tests {
     use std::time::Duration;
 
     use flui_protocol::build::Diagnostics;
+    use flui_protocol::endpoint::PolledStream;
     use flui_protocol::reload::{ReloadReport, ReloadTier, Reloaded};
     use flui_protocol::session::ClientRole;
     use interprocess::local_socket::Stream;
@@ -479,8 +480,9 @@ mod tests {
 
     use super::RunEndpoint;
     use crate::agent::client::{Connection, Failure, name};
-    use crate::agent::nonblocking::NonblockingStream;
+    use crate::agent::listener::polled;
     use crate::agent::{Credentials, Endpoint};
+    use crate::testing::ready_within;
 
     const TOKEN: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
     const WAIT: Duration = Duration::from_secs(10);
@@ -599,23 +601,14 @@ mod tests {
 
     /// Whether the endpoint ends `stream` (it reads the end of the stream) within `within`. A
     /// named pipe takes no read timeout, so the stream is polled.
-    fn closed_within(stream: &NonblockingStream, within: Duration) -> bool {
+    fn closed_within(stream: &PolledStream<Stream>, within: Duration) -> bool {
         use std::io::Read as _;
 
-        let deadline = std::time::Instant::now() + within;
         let mut byte = [0_u8; 1];
-        loop {
-            match (&*stream).read(&mut byte) {
-                Ok(0) => return true,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if std::time::Instant::now() >= deadline {
-                        return false;
-                    }
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Ok(_) | Err(_) => return false,
-            }
-        }
+        matches!(
+            ready_within(within, || (&*stream).read(&mut byte)),
+            Some(Ok(0))
+        )
     }
 
     /// What bounds a client: a hello in a schema the run does not serve is refused `version`;
@@ -638,24 +631,21 @@ mod tests {
             serde_json::from_str(&BufReader::new(&newer).lines().next().unwrap().unwrap()).unwrap();
         assert_eq!(refused["error"]["code"], "version", "{refused}");
 
-        let polled = || NonblockingStream::try_new(connect()).expect("non-blocking");
-        let silent = polled();
+        let silent = polled(connect()).expect("non-blocking");
         assert!(
             closed_within(&silent, Duration::from_secs(5)),
             "a client that sends no hello is closed"
         );
 
         let endpoint = RunEndpoint::start(TOKEN.to_owned()).expect("the endpoint starts");
-        let polled = || {
-            NonblockingStream::try_new(
-                Stream::connect(name(endpoint.address()).unwrap()).expect("connect"),
-            )
-            .expect("non-blocking")
+        let connect = || {
+            polled(Stream::connect(name(endpoint.address()).unwrap()).expect("connect"))
+                .expect("non-blocking")
         };
         let held = (0..super::MAX_CLIENTS)
-            .map(|_| polled())
-            .collect::<Vec<NonblockingStream>>();
-        let past = polled();
+            .map(|_| connect())
+            .collect::<Vec<PolledStream<Stream>>>();
+        let past = connect();
         assert!(
             closed_within(&past, Duration::from_secs(5)),
             "one past the most clients is closed"
