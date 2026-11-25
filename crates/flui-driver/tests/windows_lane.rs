@@ -1789,12 +1789,19 @@ fn fake_window() -> FakeTree {
 
 const UIA_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// An element gone while its properties are read is left out, its siblings read on, and its level
+/// marked read short with the tree truncated: the one rule (`walk::Cut::ElementGone`) every walk
+/// over an OS tree holds, the iOS Simulator's screen walk included, since the gone element could
+/// have been the twin of one read.
 #[test]
 fn the_walk_reads_the_window_and_leaves_a_gone_element_out() {
     let mut tree = fake_window();
     tree.gone = Some(4);
     let read = walk::read(&mut tree, &0, UIA_TIMEOUT).expect("the window reads");
-    assert!(!read.truncated);
+    assert!(read.truncated, "a gap is a short read");
+    let items = &read.roots[0].children[1];
+    assert!(items.children_unread, "{items:?}");
+    assert!(!read.roots[0].children_unread);
     let outline = normalized_outline(&read.roots);
     assert_eq!(
         outline,

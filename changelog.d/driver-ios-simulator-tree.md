@@ -31,14 +31,17 @@
   own trees; the scripted window shares `choose_window` and `locate`), and an element gone
   anywhere in the read while the process is no longer trusted answers the Accessibility
   permission refused. A press refuses an
-  element that two read as, or one on a read that stopped short; a press sent and not answered,
+  element that two read as, or one on a read that stopped short, with a retry unless a bound cut
+  the read; a press sent and not answered,
   or whose element went away, keeps `may_have_run` when the Accessibility permission is gone
   afterwards, as the macOS lane's `AXPress` does (`lane::ax::pressed`, the answer both lanes
   give); and a timeout names the deadline of the element its call was asked of, or says that
   element refused it.
 - **The accessibility walks mark a vanished element's level cut** (`flui-driver`): on Windows,
-  macOS and Linux, a step to a next child that finds an element gone (the parent, or the sibling
-  the step is asked from) leaves the parent's children marked unread (`children_unread`) and the
+  macOS and Linux, and in the iOS Simulator's screen walk, one rule with its cause
+  (`lane::walk::Cut`): a step to a next child that finds an element gone (the parent, or the
+  sibling the step is asked from), or an element gone while its properties are read (left out,
+  its siblings read on), leaves the parent's children marked unread (`children_unread`) and the
   read truncated (`Tree::truncated`, whose remedy then is to read again), and a search that
   meets one says so.
 - **`AccessibilityApi::activates`** (`flui-driver`): whether a lane's API performs an element's

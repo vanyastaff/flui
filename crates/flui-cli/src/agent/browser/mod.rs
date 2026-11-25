@@ -154,13 +154,26 @@ pub(crate) fn preload(values: &[(&str, &str)]) -> String {
     )
 }
 
+/// The page's record of the relay's connections, made on first use: the connections open, by
+/// the relay's ID, and the IDs the relay abandoned ([`ABANDON_FUNCTION`]). An expression every
+/// function below reads it through; it lives as long as the document.
+macro_rules! relay_record {
+    () => {
+        "(globalThis[Symbol.for('flui.agent.relay')] ??= { open: new Map(), abandoned: new Set() })"
+    };
+}
+
 /// Connects to the page's export: called with the export's name, the connection's ID and the
-/// report function. `null` while the page defines no export yet; it throws when the export
-/// refuses the connection or speaks another version. Every line of the connection is reported
-/// as `[id, line]`, and its end as `[id, null]`.
+/// report function. `null` while the page defines no export yet, and for an ID the relay
+/// abandoned; it throws when the export refuses the connection or speaks another version. Every
+/// line of the connection is reported as `[id, line]`, and its end as `[id, null]`.
 pub(crate) fn connect_function() -> String {
     format!(
         "(name, id, report) => {{
+            const relay = {relay};
+            if (relay.abandoned.has(id)) {{
+                return null;
+            }}
             const page = globalThis[name];
             if (page === undefined || page === null || typeof page.connect !== 'function') {{
                 return null;
@@ -169,16 +182,40 @@ pub(crate) fn connect_function() -> String {
                 throw new Error(`the page's agent speaks version ${{page.version}} of its export, \
                                  not {PAGE_EXPORT_VERSION}`);
             }}
-            return page.connect((line) => report(JSON.stringify([id, line])));
-        }}"
+            const connection = page.connect((line) => {{
+                if (line === null) {{
+                    relay.open.delete(id);
+                }}
+                report(JSON.stringify([id, line]));
+            }});
+            relay.open.set(id, connection);
+            return connection;
+        }}",
+        relay = relay_record!(),
     )
 }
 
 /// Sends its argument on the connection it is called on.
 pub(crate) const SEND_FUNCTION: &str = "function (line) { this.send(line); }";
 
-/// Ends the connection it is called on.
-pub(crate) const CLOSE_FUNCTION: &str = "function () { this.close(); }";
+/// Ends the connection it is called on, given the connection's ID. Closing a connection the page
+/// already ended does nothing.
+pub(crate) const CLOSE_FUNCTION: &str = concat!(
+    "function (id) { ",
+    relay_record!(),
+    ".open.delete(id); this.close(); }"
+);
+
+/// Abandons the connection whose ID it is given, for a connect call the page did not answer in
+/// time: the page may still run that call. It closes the connection if the call opened one, and
+/// makes the call open none if it has not run yet. Called as [`connect_function`] is, so a
+/// report function follows the ID; it takes none.
+pub(crate) const ABANDON_FUNCTION: &str = concat!(
+    "(id) => { const relay = ",
+    relay_record!(),
+    "; relay.abandoned.add(id); const connection = relay.open.get(id); relay.open.delete(id); \
+     if (connection !== undefined) { connection.close(); } }"
+);
 
 /// What a report of [`connect_function`]'s says: the connection's ID and the line, or `None`
 /// when the app ended the connection. `None` for a report it did not make.

@@ -471,7 +471,9 @@ pub struct Tree {
     pub count: usize,
     /// Whether the read left anything out: its depth or its node budget ran out, for which read
     /// a subtree with `root`, or more nodes; or an element went away while the read walked it,
-    /// leaving its parent's children unread (`Node::children_unread`), for which read again.
+    /// for which read again. An element gone leaves its parent's children marked unread
+    /// (`Node::children_unread`), whether it took the rest of the list with it or was one
+    /// element of a list read on to its end, which a read leaves out of the list.
     pub truncated: bool,
     /// What the read found wrong with the published tree, in the order it
     /// walked it. Reported, never repaired: the nodes read as published.

@@ -103,7 +103,7 @@ fn transition(
 }
 
 #[test]
-fn every_event_moves_the_unanswered_requests_as_the_rules_say() {
+fn every_event_moves_the_pending_requests_as_the_rules_say() {
     use WaitsFor::{Answering, Clock, Hold, Test};
     let transitions = vec![
         transition(
