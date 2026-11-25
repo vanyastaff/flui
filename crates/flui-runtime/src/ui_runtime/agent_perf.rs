@@ -3,49 +3,62 @@
 //!
 //! The frames are the window's own telemetry: the [`FrameSnapshot`]s its frame clock records
 //! when a sink settles a frame. After each frame the runtime's drive reaches the agent through
-//! [`AgentSide::after_frame`](super::AgentSide::after_frame), and a running span takes the
+//! [`AgentSide::after_frame`](super::AgentSide::after_frame), and each running span takes the
 //! snapshots recorded since its cursor; `perf.stop` takes the last ones before it answers. A
-//! window with no span running pays one borrow and one check per frame.
+//! window with no span running pays one borrow per frame.
 //!
 //! # What a span counts
 //!
-//! A frame is one the window presented. Its frame time is its work: from its segment's start
-//! (build, layout, paint) to the return of its submit. Against the refresh period of the
-//! display the window is on, a frame whose work exceeds the period missed its present deadline
-//! and is dropped; one whose work exceeds `jank_multiplier` periods is janky instead, so the two
-//! counts never hold the same frame. While the period is unknown for any frame of the span,
-//! neither count can be judged and both are `None`. Input-to-present latency is not joined
-//! here: `input_to_present` is `None`.
+//! A frame is one the window presented. Its frame time is the owner thread's work on it: its
+//! segment, from the start of build to the end of paint (compositing and freezing the scene
+//! included). The submit is not part of it: the instant the telemetry takes after the submit
+//! includes the wait for the next vsync on a backend whose present blocks (wgpu's Fifo on
+//! Vulkan and Wayland), and no instant separates that wait from the encoding and raster before
+//! it. So a frame time is comparable across backends and holds no vsync wait, and raster work,
+//! on the owner thread inside the submit or on a raster thread after the hand-off, is not
+//! counted; the `submit` phase of a worst frame reports the submit's span, vsync wait included.
+//!
+//! Each frame is judged against the refresh period of the display the window is on when the
+//! frame is taken, right after it is presented. A frame whose work exceeds one period missed
+//! its present deadline and is dropped; a dropped frame whose work also exceeds
+//! `jank_multiplier` periods is janky too, so `janky` counts the hitches among the dropped
+//! frames and a budget on `dropped` holds them. A frame taken while the period was unknown
+//! leaves both counts unjudged (`None`) for the span. The report's `refresh_period_ms` is the
+//! period every frame was judged against, or `None` once frames were judged against different
+//! ones (the window moved to another display) or one had none; a span with no frame reports
+//! the period at its stop. Input-to-present latency is not joined here: `input_to_present` is
+//! `None`.
 //!
 //! A span keeps the frame times of its last [`MAX_SAMPLES`] frames, the slowest
 //! [`MAX_WORST`] frames at most, and counts every frame: past the cap the oldest time gives way,
 //! so the percentiles describe the last [`MAX_SAMPLES`] frames while `frames`, the largest
-//! time, `dropped`, `janky` and `worst` cover the whole span. A span with no frame reports zero
-//! for every percentile.
+//! time, `dropped`, `janky` and `worst` cover the whole span. Among frames of equal time the
+//! earliest is kept and reported first. A span with no frame reports zero for every percentile.
 //!
-//! # Who owns a span
+//! # Whose a span is
 //!
-//! A span is its starter's, a [`SpanOwner`]: the input lease the call was asked through, which
-//! is one conversation's (a connection holds one lease per window, ADR-0400 §2), or, for a call
-//! asked through no lease, the window handles every such caller shares. Only its owner stops
-//! it. A lease's span goes when the lease is released, at the drain that releases what the
-//! lease holds ([`DevAgentSlot::take_released`](super::agent::DevAgentSlot::take_released)), so
-//! a conversation that ends without `perf.stop` leaves nothing that blocks the next one. A span
-//! asked through no lease ends when the window handles are all dropped: the next frame, or the
-//! next `perf` call, finds it orphaned and lets it go.
+//! A span is its caller's: the input lease the call was asked through ([`LeaseId`], minted
+//! for one holder and never reused by the window), which over the wire is one connection's (a
+//! connection holds one lease per window, ADR-0400 §2). `perf.start` and `perf.stop` asked
+//! through no lease are refused `invalid_argument`, so no two callers share a span. A window
+//! keeps one span per caller, at most [`MAX_SPANS`]: measuring only reads, so one caller's span
+//! never refuses another's start, and a development tool that measures beside the driver
+//! leaves the driver's span alone. A caller's span goes when its lease is released, at the
+//! drain that releases what the lease holds
+//! ([`DevAgentSlot::take_released`](super::agent::DevAgentSlot::take_released)), so a
+//! connection that ends without `perf.stop` leaves nothing behind.
 //!
 //! # Edges
 //!
-//! - `perf.start` while a span runs on the window is refused `invalid_argument`, whoever owns
-//!   it: the running span keeps its frames, and its owner's `perf.stop` ends it.
-//! - `perf.stop` with no span running, or one another owner started, is refused
-//!   `invalid_argument`, and the span runs on.
-//! - A window that closes between the two drops its span with it; `perf.stop` answers `gone`,
+//! - `perf.start` while the caller's own span runs is refused `invalid_argument`, and the
+//!   span keeps its frames; with [`MAX_SPANS`] spans running it is refused `busy`.
+//! - `perf.stop` from a caller with no span running is refused `invalid_argument`; the other
+//!   callers' spans run on.
+//! - A window that closes between the two drops its spans with it; `perf.stop` answers `gone`,
 //!   as every call on a closed window does.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::Weak;
 
 use flui_protocol::method;
 use flui_protocol::perf::{
@@ -60,7 +73,6 @@ use super::UiRuntime;
 use super::agent::AgentError;
 use super::agent_serve::{Answer, Serve, ServeContext};
 use crate::presentation::PresentationState;
-use crate::semantics_host::SemanticsHandle;
 
 /// How many frame times a span keeps for its percentiles: a minute at 60 Hz.
 pub(super) const MAX_SAMPLES: usize = 3600;
@@ -68,74 +80,67 @@ pub(super) const MAX_SAMPLES: usize = 3600;
 /// The most slowest frames a span reports, whatever `worst` asks for.
 pub(super) const MAX_WORST: usize = 64;
 
+/// How many spans a window keeps at once, one per caller: twice the connections the agent's
+/// service admits by default, with room for callers in the process. Each holds about 30 KiB.
+pub(super) const MAX_SPANS: usize = 8;
+
 /// How many slowest frames a span reports when `worst` is absent.
 const DEFAULT_WORST: usize = 5;
 
-/// The refresh periods of work that make a frame janky when `jank_multiplier` is absent.
+/// The refresh periods of work that make a dropped frame janky when `jank_multiplier` is
+/// absent: JankStats' default.
 const DEFAULT_JANK_MULTIPLIER: f64 = 2.0;
 
-/// A window agent's frame sampling: the span `perf.start` began, if one runs. Owner thread only.
+/// A window agent's frame sampling: the spans `perf.start` began, one per caller. Owner thread
+/// only.
 #[derive(Debug, Default)]
 pub(crate) struct PerfSampling {
-    span: RefCell<Option<PerfSpan>>,
+    spans: RefCell<Vec<PerfSpan>>,
 }
 
 /// One slow frame, as the report names it.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct SlowFrame {
     pub(super) frame: u64,
+    /// The frame time: the segment's span.
     pub(super) ms: f64,
     pub(super) build_ms: f64,
     pub(super) layout_ms: f64,
     pub(super) paint_ms: f64,
+    /// The submit's span, the vsync wait included where the backend's present blocks.
     pub(super) submit_ms: f64,
 }
 
-/// Who started a span, and so who may stop it (module docs, "Who owns a span").
-#[derive(Debug, Clone)]
-pub(super) enum SpanOwner {
-    /// The input lease the call was asked through: one conversation's. Released, it takes the
-    /// span with it.
-    Lease(LeaseId),
-    /// The window handles a call asked through no lease shares: once none is alive nobody can
-    /// stop it.
-    Handles(Weak<SemanticsHandle>),
+/// The refresh periods a span's frames were judged against so far.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PeriodsSeen {
+    /// No frame was taken yet.
+    NoFrame,
+    /// Every frame was judged against this period.
+    Steady(Duration),
+    /// Frames were judged against different periods.
+    Changed,
+    /// A frame was taken while the period was unknown: neither count can be judged.
+    Unknown,
 }
 
-impl SpanOwner {
-    /// The owner of a call asked through `lease`, or through none from a window whose handles
-    /// share `handles`.
-    fn of(lease: Option<LeaseId>, handles: Weak<SemanticsHandle>) -> Self {
-        match lease {
-            Some(lease) => Self::Lease(lease),
-            None => Self::Handles(handles),
-        }
-    }
-
-    /// Whether the owner can still stop the span: a lease until its release takes the span,
-    /// the handles while one is alive.
-    fn is_held(&self) -> bool {
-        match self {
-            Self::Lease(_) => true,
-            Self::Handles(handles) => handles.strong_count() > 0,
-        }
-    }
-
-    /// Whether `self` and `other` are the same caller.
-    fn is(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Lease(own), Self::Lease(other)) => own == other,
-            (Self::Handles(own), Self::Handles(other)) => Weak::ptr_eq(own, other),
-            (Self::Lease(_), Self::Handles(_)) | (Self::Handles(_), Self::Lease(_)) => false,
+impl PeriodsSeen {
+    /// What is seen once a frame judged against `period` is taken too.
+    fn with(self, period: Option<Duration>) -> Self {
+        match (self, period) {
+            (Self::Unknown, _) | (_, None) => Self::Unknown,
+            (Self::NoFrame, Some(period)) => Self::Steady(period),
+            (Self::Steady(seen), Some(period)) if seen == period => self,
+            (Self::Steady(_) | Self::Changed, Some(_)) => Self::Changed,
         }
     }
 }
 
-/// The frames of one span between `perf.start` and `perf.stop`.
+/// The frames of one caller's span between `perf.start` and `perf.stop`.
 #[derive(Debug)]
 pub(super) struct PerfSpan {
-    /// Who started it, and may stop it.
-    owner: SpanOwner,
+    /// Whose it is: only this caller stops it, and its release ends it.
+    caller: LeaseId,
     /// The last snapshot taken; the next pull starts after it.
     cursor: Option<FrameId>,
     jank_multiplier: f64,
@@ -144,24 +149,39 @@ pub(super) struct PerfSpan {
     /// The frame times of the last [`MAX_SAMPLES`] frames, oldest first, in milliseconds.
     times: VecDeque<f64>,
     largest_ms: f64,
-    /// The slowest frames so far, slowest first, at most `worst_kept`.
+    /// The slowest frames so far, slowest first and the earliest first among equal times, at
+    /// most `worst_kept`.
     slowest: Vec<SlowFrame>,
     dropped: u32,
     janky: u32,
-    /// A frame of the span was taken while the display's period was unknown.
-    unjudged: bool,
+    periods: PeriodsSeen,
+}
+
+/// `duration` in milliseconds.
+fn ms(duration: Duration) -> f64 {
+    duration.as_secs_f64() * 1000.0
+}
+
+/// The refresh period of the display `presentation` is on, when known.
+fn refresh_period(presentation: &PresentationState) -> Option<Duration> {
+    presentation
+        .window_display
+        .get()
+        .and_then(|display| display.refresh_period)
+        .map(flui_platform::RefreshPeriod::get)
 }
 
 impl PerfSpan {
-    /// A span keeping `worst_kept` slowest frames, judging jank at `jank_multiplier` periods.
+    /// `caller`'s span keeping `worst_kept` slowest frames, judging jank at `jank_multiplier`
+    /// periods, taking the frames recorded after `cursor`.
     pub(super) fn new(
-        owner: SpanOwner,
+        caller: LeaseId,
         cursor: Option<FrameId>,
         jank_multiplier: f64,
         worst_kept: usize,
     ) -> Self {
         Self {
-            owner,
+            caller,
             cursor,
             jank_multiplier,
             worst_kept,
@@ -171,28 +191,19 @@ impl PerfSpan {
             slowest: Vec::with_capacity(worst_kept),
             dropped: 0,
             janky: 0,
-            unjudged: false,
+            periods: PeriodsSeen::NoFrame,
         }
     }
 
-    /// Whether its owner can still stop it.
-    fn is_held(&self) -> bool {
-        self.owner.is_held()
-    }
-
-    /// Takes the frames `presentation` recorded since the cursor, judged against its display's
-    /// period now.
-    fn pull(&mut self, presentation: &PresentationState) {
+    /// Takes the frames `presentation` presented since the cursor, judged against its
+    /// display's period now.
+    pub(super) fn pull(&mut self, presentation: &PresentationState) {
         let snapshots = presentation.clock().frames_since(self.cursor);
         let Some(last) = snapshots.last() else {
             return;
         };
         self.cursor = Some(last.frame_id);
-        let period = presentation
-            .window_display
-            .get()
-            .and_then(|display| display.refresh_period)
-            .map(flui_platform::RefreshPeriod::get);
+        let period = refresh_period(presentation);
         for snapshot in snapshots
             .iter()
             .filter(|snapshot| snapshot.present_outcome == PresentOutcome::Presented)
@@ -209,27 +220,27 @@ impl PerfSpan {
         }
         self.times.push_back(frame.ms);
         self.largest_ms = self.largest_ms.max(frame.ms);
-        match period.map(|period| period.as_secs_f64() * 1000.0) {
-            Some(period) if frame.ms > period * self.jank_multiplier => {
+        self.periods = self.periods.with(period);
+        if let Some(period) = period.map(ms)
+            && frame.ms > period
+        {
+            self.dropped = self.dropped.saturating_add(1);
+            if frame.ms > period * self.jank_multiplier {
                 self.janky = self.janky.saturating_add(1);
             }
-            Some(period) if frame.ms > period => self.dropped = self.dropped.saturating_add(1),
-            Some(_) => {}
-            None => self.unjudged = true,
         }
-        if self.worst_kept > 0 {
-            let at = self.slowest.partition_point(|kept| kept.ms >= frame.ms);
-            if at < self.worst_kept {
-                if self.slowest.len() == self.worst_kept {
-                    self.slowest.pop();
-                }
-                self.slowest.insert(at, frame);
+        // After every kept frame at least as slow, so the earliest of equal times stays.
+        let at = self.slowest.partition_point(|kept| kept.ms >= frame.ms);
+        if at < self.worst_kept {
+            if self.slowest.len() == self.worst_kept {
+                self.slowest.pop();
             }
+            self.slowest.insert(at, frame);
         }
     }
 
-    /// The report over the span, with `period` the display's period now.
-    pub(super) fn report(&self, period: Option<Duration>) -> PerfReport {
+    /// The report over the span, with `period_now` the display's period at the stop.
+    pub(super) fn report(&self, period_now: Option<Duration>) -> PerfReport {
         let mut sorted: Vec<f64> = self.times.iter().copied().collect();
         sorted.sort_by(f64::total_cmp);
         let mut report = PerfReport::default();
@@ -241,8 +252,13 @@ impl PerfSpan {
             percentile(&sorted, 0.99),
             self.largest_ms,
         );
-        report.refresh_period_ms = period.map(|period| period.as_secs_f64() * 1000.0);
-        let judged = !self.unjudged && period.is_some();
+        let (period, judged) = match self.periods {
+            PeriodsSeen::NoFrame => (period_now, period_now.is_some()),
+            PeriodsSeen::Steady(period) => (Some(period), true),
+            PeriodsSeen::Changed => (None, true),
+            PeriodsSeen::Unknown => (None, false),
+        };
+        report.refresh_period_ms = period.map(ms);
         report.dropped = judged.then_some(self.dropped);
         report.janky = judged.then_some(self.janky);
         report.worst = self
@@ -272,12 +288,9 @@ pub(super) fn percentile(sorted: &[f64], quantile: f64) -> f64 {
 
 /// A presented frame's work and phases, in milliseconds.
 fn slow_frame(snapshot: &FrameSnapshot) -> SlowFrame {
-    let ms = |duration: Duration| duration.as_secs_f64() * 1000.0;
     SlowFrame {
         frame: snapshot.frame_id.get(),
-        ms: ms(snapshot
-            .submit_at
-            .saturating_duration_since(snapshot.segment_start)),
+        ms: ms(snapshot.segment_span()),
         build_ms: ms(snapshot.phase_duration(flui_scheduler::FramePhase::Build)),
         layout_ms: ms(snapshot.phase_duration(flui_scheduler::FramePhase::Layout)),
         paint_ms: ms(snapshot.phase_duration(flui_scheduler::FramePhase::Paint)),
@@ -296,38 +309,31 @@ fn frame_sample(frame: &SlowFrame) -> FrameSample {
 }
 
 impl PerfSampling {
-    /// Whether a span is kept, orphaned or not.
+    /// How many spans run.
     #[cfg(test)]
-    pub(super) fn runs(&self) -> bool {
-        self.span.borrow().is_some()
+    pub(super) fn running(&self) -> usize {
+        self.spans.borrow().len()
     }
 
-    /// Takes the frames `presentation` presented since the last pull into the running span, or
-    /// lets an orphaned span go.
+    /// Takes the frames `presentation` presented since each running span's last pull.
     pub(super) fn after_frame(&self, presentation: &PresentationState) {
-        let mut span = self.span.borrow_mut();
-        match span.as_mut() {
-            None => {}
-            Some(running) if running.is_held() => running.pull(presentation),
-            Some(_) => *span = None,
+        for span in self.spans.borrow_mut().iter_mut() {
+            span.pull(presentation);
         }
     }
 
-    /// Lets go the span one of `released` owns: its conversation has ended.
+    /// Lets go the spans `released` started: their callers have gone.
     pub(super) fn forget(&self, released: &[LeaseId]) {
-        let mut span = self.span.borrow_mut();
-        if span.as_ref().is_some_and(
-            |span| matches!(span.owner, SpanOwner::Lease(lease) if released.contains(&lease)),
-        ) {
-            *span = None;
-        }
+        self.spans
+            .borrow_mut()
+            .retain(|span| !released.contains(&span.caller));
     }
 
-    /// Starts a span for `owner`, from what `presentation` recorded so far.
+    /// Starts `caller`'s span, from what `presentation` recorded so far.
     fn start(
         &self,
         presentation: &PresentationState,
-        owner: SpanOwner,
+        caller: LeaseId,
         params: &PerfStartParams,
     ) -> Result<(), AgentError> {
         let jank_multiplier = params.jank_multiplier.unwrap_or(DEFAULT_JANK_MULTIPLIER);
@@ -342,56 +348,53 @@ impl PerfSampling {
                 usize::try_from(worst).unwrap_or(MAX_WORST)
             })
             .min(MAX_WORST);
-        let mut span = self.span.borrow_mut();
-        if span.as_ref().is_some_and(PerfSpan::is_held) {
+        let mut spans = self.spans.borrow_mut();
+        if spans.iter().any(|span| span.caller == caller) {
             return Err(AgentError::InvalidArgument {
-                reason: "a perf span already runs on this window; perf.stop ends it",
+                reason: "this caller's perf span already runs on this window; its perf.stop ends it",
             });
+        }
+        if spans.len() == MAX_SPANS {
+            return Err(AgentError::TooManyPerfSpans);
         }
         let cursor = presentation
             .clock()
             .frames_since(None)
             .last()
             .map(|snapshot| snapshot.frame_id);
-        *span = Some(PerfSpan::new(owner, cursor, jank_multiplier, worst_kept));
+        spans.push(PerfSpan::new(caller, cursor, jank_multiplier, worst_kept));
         Ok(())
     }
 
-    /// Ends the span `owner` started and reports it, its last frames taken first.
+    /// Ends `caller`'s span and reports it, its last frames taken first.
     fn stop(
         &self,
         presentation: &PresentationState,
-        owner: &SpanOwner,
+        caller: LeaseId,
     ) -> Result<PerfReport, AgentError> {
-        let mut kept = self.span.borrow_mut();
-        let mut span = match kept.take().filter(PerfSpan::is_held) {
-            Some(span) if span.owner.is(owner) => span,
-            Some(other) => {
-                *kept = Some(other);
-                return Err(AgentError::InvalidArgument {
-                    reason: "the perf span on this window is another caller's; its perf.stop ends it",
-                });
-            }
-            None => {
-                return Err(AgentError::InvalidArgument {
-                    reason: "no perf span runs on this window; perf.start begins one",
-                });
-            }
+        let mut spans = self.spans.borrow_mut();
+        let Some(at) = spans.iter().position(|span| span.caller == caller) else {
+            return Err(AgentError::InvalidArgument {
+                reason: "this caller has no perf span on this window; perf.start begins one",
+            });
         };
-        drop(kept);
+        let mut span = spans.swap_remove(at);
         span.pull(presentation);
-        let period = presentation
-            .window_display
-            .get()
-            .and_then(|display| display.refresh_period)
-            .map(flui_platform::RefreshPeriod::get);
-        Ok(span.report(period))
+        Ok(span.report(refresh_period(presentation)))
+    }
+}
+
+/// What `perf.start` or `perf.stop` asked through no lease answers: a span is its caller's,
+/// and the lease is the caller.
+fn unleased() -> AgentError {
+    AgentError::InvalidArgument {
+        reason: "perf.start and perf.stop are asked through an input lease, whose span it is",
     }
 }
 
 impl UiRuntime {
-    /// A frame has passed: every window agent's running perf span takes the frames presented
-    /// since its last pull.
+    /// A frame has passed: every window agent's running perf spans take the frames presented
+    /// since their last pull.
     pub(super) fn sample_agent_perf(&self) {
         for presentation in self.presentations.iter() {
             if let Some(slot) = &*presentation.dev_agent.borrow() {
@@ -402,29 +405,33 @@ impl UiRuntime {
 }
 
 impl Serve for method::PerfStart {
-    /// Begins keeping the window's presented frames (module docs, "Edges").
+    /// Begins keeping the window's presented frames for the caller (module docs, "Edges").
     fn serve(ctx: &mut ServeContext<'_, Empty>, params: PerfStartParams) -> Answer<Empty> {
         let slot = ctx.state.dev_agent.borrow();
         let Some(slot) = slot.as_ref() else {
             return Answer::Now(Err(AgentError::PresentationGone));
         };
-        let owner = SpanOwner::of(ctx.lease, slot.window_handles());
+        let Some(caller) = ctx.lease else {
+            return Answer::Now(Err(unleased()));
+        };
         Answer::Now(
             slot.perf
-                .start(ctx.state, owner, &params)
+                .start(ctx.state, caller, &params)
                 .map(|()| Empty::default()),
         )
     }
 }
 
 impl Serve for method::PerfStop {
-    /// Ends the span the caller started and reports its frames (module docs).
+    /// Ends the caller's span and reports its frames (module docs).
     fn serve(ctx: &mut ServeContext<'_, PerfReport>, _: WindowParams) -> Answer<PerfReport> {
         let slot = ctx.state.dev_agent.borrow();
         let Some(slot) = slot.as_ref() else {
             return Answer::Now(Err(AgentError::PresentationGone));
         };
-        let owner = SpanOwner::of(ctx.lease, slot.window_handles());
-        Answer::Now(slot.perf.stop(ctx.state, &owner))
+        let Some(caller) = ctx.lease else {
+            return Answer::Now(Err(unleased()));
+        };
+        Answer::Now(slot.perf.stop(ctx.state, caller))
     }
 }

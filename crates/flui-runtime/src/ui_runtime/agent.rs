@@ -136,6 +136,10 @@ pub(crate) enum AgentError {
     /// dropped, or stops it) before another is taken.
     #[error("the window's runtime already holds as many recordings as it admits")]
     TooManyRecordings,
+    /// The window already keeps as many perf spans as it admits, one per caller; one ends (its
+    /// caller stops it, or its lease is released) before another is taken.
+    #[error("the window already keeps as many perf spans as it admits")]
+    TooManyPerfSpans,
     /// The runtime cannot start a recording: `reason` says why.
     #[error("{reason}")]
     RecordingRefused {
@@ -242,6 +246,7 @@ impl AgentError {
             | Self::TooManyWaits
             | Self::TooManySubscriptions
             | Self::TooManyRecordings
+            | Self::TooManyPerfSpans
             | Self::InputQueueFull
             | Self::TooManyActs
             | Self::TreeBusy(_) => ErrorCode::Busy,
@@ -282,6 +287,7 @@ impl AgentError {
             | Self::TooManyWaits
             | Self::TooManySubscriptions
             | Self::TooManyRecordings
+            | Self::TooManyPerfSpans
             | Self::InputQueueFull
             | Self::TooManyActs
             | Self::TreeBusy(_) => Retry::Soon,
@@ -757,12 +763,6 @@ impl AgentPort for DevAgentPort {
 impl DevAgentSlot {
     pub(crate) fn withdraw(&self) {
         self.port.close();
-    }
-
-    /// The semantics handle every window handle vended since the last time none was alive
-    /// shares: dead once they are all dropped, and replaced by the next vend.
-    pub(super) fn window_handles(&self) -> Weak<SemanticsHandle> {
-        Weak::clone(&self.collecting)
     }
 
     /// How many leases the window's handles have let go that the owner has not released yet.

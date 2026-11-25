@@ -243,8 +243,12 @@ fn done(outcome: Result<Value, ErrorObject>) -> (Work, Duration) {
 
 /// The window methods asked through the connection's input lease on the window: the ones whose
 /// effect stays the connection's (synthetic input it holds, a perf span it started), so it goes
-/// with the connection (ADR-0400 §2). `element.scroll_into_view` is a semantics action and holds
-/// nothing. `contracts/agent_gestures.rs` sends every gesture over the wire through it.
+/// with the connection (ADR-0400 §2). A perf span is the caller's whose lease it was asked
+/// through, and the window refuses `perf.*` asked through none, so an observer's `perf.start`
+/// takes a lease too: it holds no input, since an observer may call nothing that injects.
+/// `element.scroll_into_view` is a semantics action and holds nothing.
+/// `contracts/agent_gestures.rs` sends every gesture over the wire through it, and
+/// `contracts/agent_perf.rs` the spans of two connections.
 const LEASED: &[&str] = &[
     InputInject::NAME,
     InputRelease::NAME,

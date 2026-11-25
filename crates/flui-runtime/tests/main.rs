@@ -115,6 +115,8 @@ mod agent_gesture_unwinding;
 mod agent_gestures;
 #[path = "contracts/agent_input.rs"]
 mod agent_input;
+#[path = "contracts/agent_perf.rs"]
+mod agent_perf;
 #[path = "contracts/announce.rs"]
 mod announce;
 #[path = "contracts/close_vetoes.rs"]
