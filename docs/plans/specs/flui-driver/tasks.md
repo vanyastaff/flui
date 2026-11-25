@@ -576,9 +576,9 @@ graph LR
   - a send that panics skips `disarm`, so the guard watches until the next `arm` or the lane's
     drop, and its pending `foreign_input` survives; the worker's panicked-job path, which already
     releases, is where it would be disarmed;
-  - after a send that went through, `Error::ReleaseFailed` has no `first`, so it carries no
-    effect and reads as not run (`may_have_run` false) although the input went out, and its doc
-    says a retry does not cure it while the next sequence's release retries what stays held.
+  - after a send that went through, a release that fails comes inside `Error::PartlySent`
+    (may have run, no retry); what stays open is that `ReleaseFailed`'s doc says a retry does
+    not cure it while the next sequence's release retries what stays held.
 - **Evidence (2026-11-19):**
   - `flui-driver`'s `driver_it`:
     - `failure_matrix::every_failure_row_holds_on_every_fixture`: every failure scenario on the

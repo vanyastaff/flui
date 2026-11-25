@@ -829,6 +829,15 @@ fn the_windows_are_read_from_the_live_parts_of_the_reply() {
                 &format!("\n{}  mRotation=0\n", forged(last_anr_header)),
             ),
         ),
+        ("the displays' part after the windows' part", {
+            let displays = "WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)\n  \
+                                Display: mDisplayId=0 (organized) rootTasks=2 mUserId=0\n    \
+                                mCurrentFocus=Window{4f2a1b u0 \
+                                dev.flui.scenario/android.app.NativeActivity}\n    \
+                                mRotation=0 mDeferredRotationPauseCount=0\n";
+            assert!(WINDOWS.contains(displays));
+            format!("{}{displays}", WINDOWS.replace(displays, ""))
+        }),
     ] {
         assert_ne!(reply, WINDOWS, "{case}");
         let refused = device::parse_windows(&reply).expect_err(case);
@@ -1933,10 +1942,30 @@ fn a_device_whose_focus_is_on_another_display_is_refused() {
         refused.to_string().contains("named no display holding"),
         "{refused}"
     );
+    // Either side of the floor: a device below Android 10 prints no such line, and one whose API
+    // level was not read is held to the rule rather than let through.
+    for (properties, located) in [
+        ("28\n\n1\n", true),
+        ("29\n\n1\n", false),
+        ("adb: a warning first\n\n1\n", false),
+    ] {
+        let unnamed = WINDOWS.replace("  mTopFocusedDisplayId=0\n", "");
+        let adb = scripted(true, true)
+            .reply_once("shell getprop", AdbReply::new(0, properties))
+            .reply_once("shell dumpsys window -a |", AdbReply::new(0, unnamed));
+        let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+        assert_eq!(
+            lane.locate_window(&placement()).is_ok(),
+            located,
+            "{properties:?}"
+        );
+    }
 }
 
-/// The display holding the device's focus is read from its own line only, the first one: the
-/// same words in a window's title, or a later line, name nothing.
+/// The display holding the device's focus is read from its own line, printed once after the
+/// window list: the same words inside a window's title line name nothing, a line a title prints
+/// ahead of the window list's end is not it, two such lines are refused, and a line of another
+/// shape is no such line.
 #[test]
 fn the_focused_display_is_read_from_its_own_line() {
     let in_title = WINDOWS.replace(
@@ -1950,17 +1979,43 @@ fn the_focused_display_is_read_from_its_own_line() {
             .focused_display,
         Some(device::DEFAULT_DISPLAY)
     );
+    // A title's line break prints a line of its own ahead of the real one, which follows the
+    // window list: two lines, refused.
+    let forged_first = WINDOWS.replace(
+        "  Window #1 Window{8d7e6f5 u0 StatusBar}:",
+        "  Window #1 Window{8d7e6f5 u0 x\nmTopFocusedDisplayId=0\nStatusBar}:",
+    );
+    assert_ne!(forged_first, WINDOWS);
+    let refused = device::parse_windows(&forged_first).expect_err("two lines");
+    assert!(refused.contains("more than once"), "{refused}");
+    // A title's line alone, inside the window list, with the real line gone: no display named.
+    let forged_alone = forged_first.replace("  mTopFocusedDisplayId=0\n", "");
+    assert_eq!(
+        device::parse_windows(&forged_alone)
+            .expect("windows")
+            .focused_display,
+        None
+    );
     let later = WINDOWS.replace(
         "  mTopFocusedDisplayId=0\n",
         "  mTopFocusedDisplayId=0\n  mTopFocusedDisplayId=2\n",
     );
     assert_ne!(later, WINDOWS);
-    assert_eq!(
-        device::parse_windows(&later)
-            .expect("windows")
-            .focused_display,
-        Some(device::DEFAULT_DISPLAY)
-    );
+    assert!(device::parse_windows(&later).is_err(), "two lines");
+    // A line of another shape (empty, or not a number) is no such line.
+    for malformed in ["mTopFocusedDisplayId=", "mTopFocusedDisplayId=two"] {
+        let reply = WINDOWS.replace(
+            "  mTopFocusedDisplayId=0\n",
+            &format!("  {malformed}\n  mTopFocusedDisplayId=0\n"),
+        );
+        assert_eq!(
+            device::parse_windows(&reply)
+                .expect("windows")
+                .focused_display,
+            Some(device::DEFAULT_DISPLAY),
+            "{malformed}"
+        );
+    }
     let unnamed = WINDOWS.replace("  mTopFocusedDisplayId=0\n", "");
     assert_eq!(
         device::parse_windows(&unnamed)
@@ -2145,6 +2200,113 @@ fn a_press_after_the_window_moved_to_another_display_is_refused_as_the_locate_is
     assert!(inputs(&adb).is_empty(), "nothing was sent");
 }
 
+/// One event the lane sends as several commands, cut after one of them went out, says it may
+/// have run, and invites no retry, which would type that part again; a key down the lane holds
+/// for its release puts nothing on the device, and a run refused at the release says nothing ran.
+#[test]
+fn a_run_says_what_of_an_event_went_out_command_by_command() {
+    let moved = WINDOWS.replace("frame=[0,60][1080,2400]", "frame=[0,100][1080,2440]");
+    // "ab", then the window moves before the Enter: one command of the one event went out.
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    let _moves_after_ab = adb
+        .clone()
+        .reply_once("shell dumpsys window -a |", AdbReply::new(0, WINDOWS))
+        .reply_once("shell dumpsys window -a |", AdbReply::new(0, moved.clone()));
+    let refused = lane::send_guarded(&mut lane, &[OsEvent::Text("ab\ncd".to_owned())])
+        .expect_err("the window moved");
+    assert_eq!(inputs(&adb), vec!["shell input text 'ab'"]);
+    assert_partly_sent(&refused, 1, 1);
+    let detail = refused.effect().and_then(|effect| effect.detail.clone());
+    assert!(
+        detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("1 command")),
+        "{detail:?}"
+    );
+    // The key held down for its release, refused at it: nothing went out.
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    let _moved = adb.reply_once("shell dumpsys window -a |", AdbReply::new(0, moved));
+    let refused = lane::send_guarded(
+        &mut lane,
+        &[
+            OsEvent::KeyDown("a".to_owned()),
+            OsEvent::KeyUp("a".to_owned()),
+        ],
+    )
+    .expect_err("the window moved");
+    assert!(matches!(refused, Error::Busy { .. }), "{refused:?}");
+    assert!(!refused.may_have_run(), "{refused:?}");
+}
+
+/// A press whose answer was lost after `adb` started it (here, more output than its bound) may
+/// have gone down: only a press the device answered by refusing is forgotten, and the release
+/// cancels this one.
+#[test]
+fn a_press_whose_answer_is_lost_is_cancelled_by_the_release() {
+    let adb = scripted(true, true).reply_once(
+        "shell input touchscreen motionevent DOWN",
+        AdbReply::new(0, "x".repeat(70 * 1024)),
+    );
+    let mut lane = connected(&adb);
+    let _failed = lane::send_guarded(
+        &mut lane,
+        &tap(PointerDevice::Touch, DevicePoint::new(300, 600)),
+    )
+    .expect_err("the press's answer was lost");
+    assert_eq!(
+        adb.commands("shell input touchscreen motionevent CANCEL")
+            .len(),
+        1,
+        "{:?}",
+        adb.log()
+    );
+}
+
+/// A capture is a read: one that times out says nothing may have run.
+#[test]
+fn a_capture_that_times_out_says_nothing_ran() {
+    let adb = scripted(true, true).timeout_once("exec-out screencap");
+    let mut lane = connected(&adb);
+    let refused = lane
+        .capture_window(&placement())
+        .expect_err("the capture timed out");
+    assert!(matches!(refused, Error::Timeout { .. }), "{refused:?}");
+    assert!(!refused.may_have_run(), "{refused:?}");
+}
+
+/// A pen press whose device binding unwinds while its report goes out takes the pen's device
+/// with it: the release after it works from no stale record and writes nothing more.
+#[test]
+fn a_pen_report_that_unwinds_ends_its_device() {
+    /// Answers every sync, and unwinds at the pen's press.
+    fn unwinds_at_the_press(line: &str) -> Vec<String> {
+        if line.contains("\"BTN_TOUCH\",1") {
+            std::panic::resume_unwind(Box::new("the device binding unwound"));
+        }
+        answer_syncs(line)
+    }
+    let adb = scripted_with(true, Some(unwinds_at_the_press));
+    let mut lane = connected(&adb);
+    let events = tap(PointerDevice::Pen, DevicePoint::new(300, 600));
+    lane.check(&events).expect("a pen");
+    lane.send(&events[0]).expect("the pen enters");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test catches the device's unwind to release after it"
+    )]
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lane.send(&events[1])));
+    flui_foundation::panic::discard_payload(unwound.expect_err("the device unwound"));
+    let written = adb.log().len();
+    lane.release_all().expect("nothing is held");
+    let after: Vec<String> = adb.log().into_iter().skip(written).collect();
+    assert!(
+        after.iter().all(|line| !line.contains("shell uinput -")),
+        "{after:?}"
+    );
+}
+
 /// A press whose device binding unwinds may have gone down: the release after it cancels the
 /// contact.
 #[test]
@@ -2238,7 +2400,7 @@ fn a_window_that_moves_within_a_sequence_stops_it_after_what_went_out() {
     );
     assert!(matches!(refused, Error::PartlySent { .. }), "{refused:?}");
     assert_eq!(inputs(&adb), vec!["shell input keyevent KEYCODE_A"]);
-    assert_partly_sent(&refused, 2, 3);
+    assert_partly_sent(&refused, 1, 3);
     // The next sequence starts with nothing sent: its own refusal invites the call again.
     let _moved_again = adb.reply_once(
         "shell dumpsys window -a |",
@@ -2303,7 +2465,7 @@ fn any_failure_after_part_of_a_sequence_went_out_says_it_may_have_run() {
         Some(flui_driver::protocol::error::ErrorCode::NotForeground),
         "{refused:?}"
     );
-    assert_partly_sent(&refused, 2, 3);
+    assert_partly_sent(&refused, 1, 3);
     // The windows unreadable after the key.
     let adb = scripted(true, true);
     let mut lane = connected(&adb);
@@ -2318,7 +2480,7 @@ fn any_failure_after_part_of_a_sequence_went_out_says_it_may_have_run() {
         matches!(&refused, Error::PartlySent { first, .. } if matches!(**first, Error::Lane { .. })),
         "{refused:?}"
     );
-    assert_partly_sent(&refused, 2, 3);
+    assert_partly_sent(&refused, 1, 3);
     // The scroll's command refused by the device after the key went out.
     let adb = scripted(true, true);
     let mut lane = connected(&adb);
@@ -2327,7 +2489,7 @@ fn any_failure_after_part_of_a_sequence_went_out_says_it_may_have_run() {
         AdbReply::new(1, "").stderr("Error: no mouse"),
     );
     let refused = lane::send_guarded(&mut lane, &key_then_scroll).expect_err("the scroll failed");
-    assert_partly_sent(&refused, 2, 3);
+    assert_partly_sent(&refused, 1, 3);
     // A failure before anything that acts went out (a tap refused at its press, after its move)
     // says nothing ran.
     let adb = scripted(true, true);

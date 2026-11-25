@@ -159,7 +159,9 @@ pub enum Printed {
     /// A status a Java command or `am` writes, where a failure is written too (`input`, `am`,
     /// `install`, `forward`).
     Status,
-    /// Data that may hold any text: a window dump, an image, a property, a window title.
+    /// Data that may hold any text: a window dump, an image, a property, a window title. A command
+    /// that prints data reads, and sends nothing that acts on the app: its timeout says nothing
+    /// may have run.
     Data,
 }
 

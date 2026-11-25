@@ -461,12 +461,13 @@ impl LiveParts {
                 .iter()
                 .any(|line| !line.trim().is_empty())
         });
-        let expected = if anr_printed { 2 } else { 1 };
-        if displays.len() != expected {
-            return refused("a displays' part's header more or fewer times than its parts hold");
-        }
-        let Some(&live) = displays.last() else {
-            return refused("no displays' part");
+        let live = match (anr_printed, &displays[..]) {
+            (false, [live]) | (true, [_, live]) => *live,
+            _ => {
+                return refused(
+                    "a displays' part's header more or fewer times than its parts hold",
+                );
+            }
         };
         if live > windows {
             return refused("the displays' part after the windows' part");
@@ -565,10 +566,35 @@ struct DisplaysReading {
 struct WindowsReading {
     windows: Vec<ListedWindow>,
     focus: FocusLine,
-    /// The display the first `mTopFocusedDisplayId=` line of its own names.
+    /// The display the last `mTopFocusedDisplayId=` line of its own names, and that line's
+    /// place in the reply.
     focused_display: Option<DisplayId>,
-    /// Whether that line was read.
-    focused_display_read: bool,
+    focused_display_at: Option<usize>,
+    /// How many such lines the part printed.
+    focused_display_lines: usize,
+    /// Where the last window's header stands in the reply.
+    last_window_at: Option<usize>,
+}
+
+impl WindowsReading {
+    /// The display holding the device's focus, as the window manager prints it once, after the
+    /// window list: a line before the last window's header is a window's title, and two lines
+    /// hold a forged one, which is refused.
+    fn focused_display(&self) -> std::result::Result<Option<DisplayId>, String> {
+        if self.focused_display_lines > 1 {
+            return Err(
+                "`dumpsys` printed the display holding the device's input focus more than once, \
+                 which the window manager does not: a window's title may have printed one"
+                    .to_owned(),
+            );
+        }
+        let after_the_windows = match (self.focused_display_at, self.last_window_at) {
+            (Some(line), Some(window)) => line > window,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        Ok(self.focused_display.filter(|_| after_the_windows))
+    }
 }
 
 /// The windows the [`WINDOWS`] line printed as `printed`: see [`Windows`].
@@ -582,13 +608,15 @@ struct WindowsReading {
 /// included; where that section prints none (before Android 10), the focus is the windows'
 /// part's. A window's frame is the first `frame=` or `mFrame=` after its header. The display
 /// holding the device's focus is a line of its own in the windows' part,
-/// `mTopFocusedDisplayId=<id>` whole, the first one read. A reply that heads no part is read
-/// whole, and a line the parser does not know is skipped.
+/// `mTopFocusedDisplayId=<id>` whole, printed once after the window list
+/// ([`WindowsReading::focused_display`]). A reply that heads no part is read whole, and a line
+/// the parser does not know is skipped.
 ///
 /// # Errors
 ///
-/// When the headers do not have the window manager's shape, or the default display's section
-/// names no rotation from 0 to 3, so the lane cannot tell how the display is turned.
+/// When the headers do not have the window manager's shape, the display holding the device's
+/// focus is printed more than once, or the default display's section names no rotation from 0
+/// to 3, so the lane cannot tell how the display is turned.
 pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
     let lines: Vec<&str> = printed.lines().collect();
     let live = LiveParts::of(&lines)?;
@@ -621,10 +649,9 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
             && !value.is_empty()
             && value.chars().all(|c| c.is_ascii_digit() || c == '-')
         {
-            if !listed.focused_display_read {
-                listed.focused_display_read = true;
-                listed.focused_display = DisplayId::parse(value);
-            }
+            listed.focused_display_lines += 1;
+            listed.focused_display_at = Some(at);
+            listed.focused_display = DisplayId::parse(value);
             continue;
         }
         if let Some((_, window)) = line.split_once("mCurrentFocus=") {
@@ -655,6 +682,7 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
             continue;
         }
         if part.lists_windows() && line.starts_with("Window #") {
+            listed.last_window_at = Some(at);
             in_window = false;
             if listed.windows.len() < MAX_WINDOWS
                 && let Some(name) = WindowName::parse(line)
@@ -680,11 +708,12 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
     let rotation = displays
         .rotation
         .ok_or_else(|| "`dumpsys` printed no rotation of the default display".to_owned())?;
+    let focused_display = listed.focused_display()?;
     Ok(Windows {
         rotation,
         windows: listed.windows,
         focus: displays.focus.or(listed.focus),
-        focused_display: listed.focused_display,
+        focused_display,
     })
 }
 

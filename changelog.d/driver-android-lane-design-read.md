@@ -2,10 +2,11 @@
 
 - **`flui-driver`**: `Error::PartlySent { effect, retry, first }`: a call that went out in part
   before `first` ended it. `lane::send_guarded` answers it, on every lane, for whatever ends an OS
-  sequence once the lane took an event that acts (`OsEvent::acts`): a refusal, an interruption of
-  the guard, a failed command, a release that fails after the last event; its effect counts the
-  events taken (`Effect::partial`, in events) and it invites no retry. A failure that names an
-  effect of its own and invites no retry (a command that timed out) stays as it is.
+  sequence once the device took a command of it (`Lane::send_counted`): a refusal, an
+  interruption of the guard, a failed command, a release that fails after the last event; its
+  effect counts the events the device took any command of (`Effect::partial`, in events) and it
+  invites no retry. A failure that names an effect of its own and invites no retry (a command
+  that timed out) stays as it is.
 - **`flui-driver`**: `testing::ScriptedLane::reading_tree` reads the OS tree through a named API,
   answering each read from the app's tree.
 
@@ -14,7 +15,7 @@
 - **`flui-driver`**: `Error::Busy`, `Error::NotFound`, `Error::InputHeld` and
   `Error::NotActionable` carry the effect an app's answer names (part of an input it played).
   `Error::from_wire` reads an effect on a code whose variant holds none as `Error::PartlySent`,
-  the code and retry as the app said, where it dropped the effect before.
+  with the code and retry the app said, where the retry was answered as `never`.
 - **`flui-driver`**: `Window::compare_projection` reads again on a `NotFound` or `Ambiguous` only
   through a lane that matches against the app's tree; any other lane's answers at once. A tree
   that never held still answers `Error::Busy` with the busy code's `Retry::Soon`, the lane's last
