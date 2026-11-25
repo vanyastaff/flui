@@ -38,7 +38,7 @@
   give); and a timeout names the deadline of the element its call was asked of, or says that
   element refused it.
 - **The accessibility walks mark a vanished element's level cut** (`flui-driver`): on Windows,
-  macOS and Linux, and in the iOS Simulator's screen walk, one rule with its cause
+  macOS and Linux (`lane::walk::read`), and in the iOS Simulator's screen walk, one rule with its cause
   (`lane::walk::Cut`): a step to a next child that finds an element gone (the parent, or the
   sibling the step is asked from), or an element gone while its properties are read (left out,
   its siblings read on), leaves the parent's children marked unread (`children_unread`) and the

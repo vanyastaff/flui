@@ -36,8 +36,8 @@
 //!   its nearest matched ancestor fits, not among that node's children alone, and an app node
 //!   matched once is matched to nothing else. When the screen's one child is an unnamed group
 //!   (the app's root as a container), its children are read as the screen's, and FLUI's
-//!   announcers, which the app's read leaves out, are left out of the projection
-//!   ([`ANNOUNCERS`]).
+//!   announcers, which the app's read leaves out, are left out of the projection when that root
+//!   list was read whole ([`ANNOUNCERS`]).
 //! - **What fits.** An element fits an app node when its native role is the one
 //!   [`roles::native_for`] gives the app node's AccessKit role and toggled state, its label is the
 //!   app node's name, its enabled and checked states are the app node's, an identifier it carries
@@ -1036,11 +1036,12 @@ fn project(
     });
     root.children_unread = root_cut.is_some();
     // The announcers the app's read leaves out: the root's last children of their shape that no
-    // app node fits. A list that ended early ends where the read stopped, not at the announcers,
-    // so its last children are kept; a list read to its end with a gap (an element gone while
-    // read, `Cut::ElementGone`) still ends at them.
+    // app node fits, taken only from a root list read whole. A list that ended early ends where
+    // the read stopped, not at the announcers; a list with a gap (`Cut::ElementGone`) may have
+    // lost an announcer to it, so its last two of that shape need not both be announcers. Either
+    // way its last children are kept, and the read is already marked short.
     let mut left_out = 0;
-    while !root_cut.is_some_and(Cut::ends_list)
+    while root_cut.is_none()
         && left_out < ANNOUNCERS
         && root
             .children
