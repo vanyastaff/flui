@@ -2377,3 +2377,65 @@ fn a_gesture_on_a_handle_never_given_is_unknown() {
         .expect_err("no such element");
     assert_eq!(refused.code, ErrorCode::UnknownHandle, "{refused:?}");
 }
+
+/// `scroll_until` reads up to 4096 of the scrollable's descendants and 4096 of the window's
+/// matches, and refuses only a read that leaves some out: exactly at each bound it searches (4093
+/// rows under the scrollable make its 4096 descendants with the nodes that hold them).
+#[test]
+fn scroll_until_reads_exactly_up_to_its_bounds() {
+    type Expected = Result<(), ErrorCode>;
+    let rows: [(&str, Crowd, &str, Expected); 4] = [
+        (
+            "4096 matches",
+            Crowd {
+                twins: 4096,
+                rows: 3,
+            },
+            "Twin",
+            Err(ErrorCode::NotFound),
+        ),
+        (
+            "4097 matches",
+            Crowd {
+                twins: 4097,
+                rows: 3,
+            },
+            "Twin",
+            Err(ErrorCode::InvalidArgument),
+        ),
+        (
+            "4093 rows",
+            Crowd {
+                twins: 0,
+                rows: 4093,
+            },
+            "Row 0",
+            Ok(()),
+        ),
+        (
+            "4094 rows",
+            Crowd {
+                twins: 0,
+                rows: 4094,
+            },
+            "Row 0",
+            Err(ErrorCode::NotSupported),
+        ),
+    ];
+    for (case, crowd, sought, expected) in rows {
+        let (mut host, _agent, window) = serving(&crowd, 400);
+        let lease = window
+            .input_lease()
+            .expect("an open window leases its input");
+        let mut asked = ask::<method::ElementScrollUntil>(
+            &lease,
+            ScrollUntilParams::new(named("Tall"), Locator::named(sought)),
+        );
+        let answer = answered(&mut host, &mut asked, 400).0;
+        match (answer, expected) {
+            (Ok(_), Ok(())) => {}
+            (Err(refused), Err(code)) => assert_eq!(refused.code, code, "{case}: {refused:?}"),
+            (answer, expected) => panic!("{case}: {answer:?}, not {expected:?}"),
+        }
+    }
+}
