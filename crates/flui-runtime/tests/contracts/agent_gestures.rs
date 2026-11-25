@@ -1943,11 +1943,10 @@ fn a_gesture_answers_by_its_target_and_path_rules() {
     }
 }
 
-/// Whether `host`'s list names a cause only a frame clears.
-fn owes_a_frame(host: &mut HeadlessHost) -> bool {
-    host.unsettled()
-        .causes()
-        .any(|cause| cause.cleared_by == ClearedBy::NextFrame)
+/// Whether `host`'s loop runs a frame at once: what a window holding acts asks for, as a wake, not
+/// as a cause of the application's (ADR-0400 §3), which the test checks apart.
+fn asks_for_a_frame(host: &mut HeadlessHost) -> bool {
+    host.time_to_next_frame() == Some(Duration::ZERO)
 }
 
 /// A gated tap, held until `timeout_ms` passes, through `lease`; on the semantic path when
@@ -2001,8 +2000,14 @@ fn each_held_act_ends_on_its_own() {
         let _ = host.pump(Duration::from_millis(16));
     }
     assert!(
-        owes_a_frame(&mut host),
+        asks_for_a_frame(&mut host),
         "a window holding acts asks for frames"
+    );
+    assert!(
+        host.unsettled()
+            .causes()
+            .all(|cause| cause.cleared_by != ClearedBy::NextFrame),
+        "the frames a held act asks for are the agent's wake, not the application's cause"
     );
     drop(first);
     let gone = answered(&mut host, &mut through_first, 4)
@@ -2026,7 +2031,7 @@ fn each_held_act_ends_on_its_own() {
         let _ = host.pump(Duration::from_millis(16));
     }
     assert!(
-        !owes_a_frame(&mut host),
+        !asks_for_a_frame(&mut host),
         "a window holding no act asks for no frame"
     );
 }
