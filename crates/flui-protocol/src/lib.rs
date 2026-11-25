@@ -99,6 +99,8 @@ pub mod report;
 pub mod semantics;
 pub mod session;
 pub mod snapshot;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod tree;
 pub mod verdict;
 pub mod version;

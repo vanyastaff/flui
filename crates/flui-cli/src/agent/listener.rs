@@ -13,6 +13,60 @@ use interprocess::local_socket::{Listener, ListenerNonblockingMode, ListenerOpti
 
 use super::client::name;
 
+/// What an endpoint still owes one client, written from the front as the client takes it. Each
+/// byte is moved once: a write advances an offset, and the bytes go only once all of them are
+/// written, so a reply a Windows pipe takes [`flui_protocol::endpoint::PIPE_WRITE_CHUNK`] bytes
+/// at a time costs work linear in its length.
+#[derive(Debug, Default)]
+pub(crate) struct Unwritten {
+    bytes: Vec<u8>,
+    /// How much of `bytes` is written.
+    sent: usize,
+}
+
+impl Unwritten {
+    /// How many bytes are still owed.
+    pub(crate) fn len(&self) -> usize {
+        self.bytes.len() - self.sent
+    }
+
+    /// Whether nothing is owed.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Owes `bytes` after what is owed already.
+    pub(crate) fn extend_from_slice(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+    }
+
+    /// Owes nothing more.
+    pub(crate) fn clear(&mut self) {
+        self.bytes.clear();
+        self.sent = 0;
+    }
+
+    /// Writes what `stream` takes: `true` once all of it is written, `false` when the stream
+    /// has no room.
+    ///
+    /// # Errors
+    ///
+    /// The write failed, or the stream took nothing and said so (`WriteZero`).
+    pub(crate) fn write_to(&mut self, mut stream: impl io::Write) -> io::Result<bool> {
+        while self.sent < self.bytes.len() {
+            match stream.write(&self.bytes[self.sent..]) {
+                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
+                Ok(written) => self.sent += written,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        self.clear();
+        Ok(true)
+    }
+}
+
 /// `stream`, a client of an endpoint this command serves or a test's client of one, polled.
 ///
 /// # Errors
@@ -81,12 +135,67 @@ mod tests {
     use interprocess::local_socket::traits::{Listener as _, Stream as _};
     use interprocess::local_socket::{Listener, Stream};
 
-    use super::{bind, polled};
+    use super::{Unwritten, bind, polled};
     use crate::agent::client::name;
     use crate::testing::until_ready;
 
     /// How long a test waits for the other end.
     const WAIT: Duration = Duration::from_secs(10);
+
+    /// Takes at most a pipe's chunk per write, and nothing once `room` is spent.
+    struct Chunked {
+        room: usize,
+        taken: Vec<u8>,
+    }
+
+    impl io::Write for Chunked {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let count = buf.len().min(PIPE_WRITE_CHUNK).min(self.room);
+            if count == 0 {
+                return Err(io::Error::from(io::ErrorKind::WouldBlock));
+            }
+            self.room -= count;
+            self.taken.extend_from_slice(&buf[..count]);
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// What a client is owed leaves from the front by an offset: a write that takes a chunk
+    /// moves no byte of the rest, and the whole is written in order once the client has room.
+    /// Fails if a partial write drains the front of the buffer, which moves the whole tail per
+    /// chunk and makes a reply's cost quadratic in its length.
+    #[test]
+    fn what_a_client_is_owed_leaves_by_an_offset() {
+        let reply = (0..4 * PIPE_WRITE_CHUNK)
+            .map(|i| u8::try_from(i % 251).expect("BUG: below 251"))
+            .collect::<Vec<u8>>();
+        let mut owed = Unwritten::default();
+        owed.extend_from_slice(&reply);
+
+        let mut client = Chunked {
+            room: PIPE_WRITE_CHUNK,
+            taken: Vec::new(),
+        };
+        assert!(
+            !owed.write_to(&mut client).expect("a write"),
+            "the client is full"
+        );
+        assert_eq!(owed.len(), 3 * PIPE_WRITE_CHUNK);
+        assert_eq!(owed.bytes, reply, "no byte moved");
+        assert_eq!(owed.sent, PIPE_WRITE_CHUNK);
+
+        client.room = usize::MAX;
+        assert!(
+            owed.write_to(&mut client).expect("a write"),
+            "all of it is written"
+        );
+        assert!(owed.is_empty());
+        assert_eq!(client.taken, reply, "written whole and in order");
+    }
 
     /// A private endpoint, its listener, and one client connected to it with the server's end
     /// accepted.

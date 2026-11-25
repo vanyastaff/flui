@@ -361,12 +361,14 @@ impl Io {
                 Self::Tcp(stream) => (&*stream).write(&line[written..]),
             };
             match wrote {
-                Ok(count) if count > 0 => {
+                // Neither a polled local stream nor a socket takes nothing from a write of
+                // something unless it can take nothing more.
+                Ok(0) => return Err("could not write to the app: it took nothing".to_owned()),
+                Ok(count) => {
                     written += count;
                     progress = Instant::now();
                     continue;
                 }
-                Ok(_) => {}
                 Err(error)
                     if matches!(
                         error.kind(),

@@ -39,12 +39,6 @@ impl<S> PolledStream<S> {
     pub const fn new(stream: S) -> Self {
         Self { stream }
     }
-
-    /// The stream it reads and writes.
-    #[must_use]
-    pub const fn get_ref(&self) -> &S {
-        &self.stream
-    }
 }
 
 impl<S> Read for &PolledStream<S>
@@ -110,131 +104,96 @@ fn write_pipe(pipe: &mut impl Write, buf: &[u8]) -> io::Result<usize> {
     }
 }
 
+/// The pipe rule's table, run on every host; `tests/endpoint.rs` drives [`PolledStream`] itself.
 #[cfg(test)]
 mod tests {
-    use std::collections::VecDeque;
-    use std::io::{self, Read, Write};
+    use std::io;
 
     use super::{PIPE_WRITE_CHUNK, read_pipe, write_pipe};
-
-    /// What a scripted pipe answers next.
-    #[derive(Clone, Copy, Debug)]
-    enum Answer {
-        /// A read returns these bytes; a write takes this many.
-        Bytes(usize),
-        /// The call fails: the pipe is closed.
-        Closed,
-    }
-
-    /// A pipe that answers each read and each write from its script, and records what each
-    /// write offered.
-    #[derive(Default)]
-    struct Scripted {
-        reads: VecDeque<Answer>,
-        writes: VecDeque<Answer>,
-        offered: Vec<usize>,
-    }
-
-    impl Read for Scripted {
-        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            match self
-                .reads
-                .pop_front()
-                .expect("BUG: the script names every read")
-            {
-                Answer::Bytes(count) => Ok(count.min(buf.len())),
-                Answer::Closed => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
-            }
-        }
-    }
-
-    impl Write for Scripted {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            self.offered.push(buf.len());
-            match self
-                .writes
-                .pop_front()
-                .expect("BUG: the script names every write")
-            {
-                Answer::Bytes(count) => Ok(count.min(buf.len())),
-                Answer::Closed => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
-            }
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
+    use crate::testing::{PipeAnswer, ScriptedPipe};
 
     /// What a read or a write came to: a count, or the kind of its error.
     type Outcome = Result<usize, io::ErrorKind>;
 
-    /// A read case: the pipe's answers to the reads and to the empty-write probes, and what the
-    /// read comes to.
+    /// A read case: the buffer's length, the pipe's answers to the reads and to the empty-write
+    /// probes, and what the read comes to.
     struct ReadCase {
         case: &'static str,
-        reads: &'static [Answer],
-        probes: &'static [Answer],
+        buf: usize,
+        reads: &'static [PipeAnswer],
+        probes: &'static [PipeAnswer],
         read: Outcome,
     }
 
     /// A read, from the pipe's answers to the read and to each probe after it: nothing has come
     /// while the pipe is open, the end once it is closed, and the bytes the peer wrote just
-    /// before it closed. Fails if an empty read is handed on as the end, or a pipe found closed
-    /// drops what it still holds.
+    /// before it closed; each probe is a write of nothing, and a read into no room probes not
+    /// at all. Fails if an empty read is handed on as the end, a pipe found closed drops what
+    /// it still holds, a probe writes bytes, or a read into no room probes.
     #[test]
     fn a_pipe_read_tells_nothing_yet_from_the_end() {
-        use Answer::{Bytes, Closed};
+        use PipeAnswer::{Bytes, Closed};
 
         let cases = [
             ReadCase {
                 case: "bytes",
+                buf: 64,
                 reads: &[Bytes(5)],
                 probes: &[],
                 read: Ok(5),
             },
             ReadCase {
                 case: "nothing yet",
+                buf: 64,
                 reads: &[Bytes(0)],
                 probes: &[Bytes(0)],
                 read: Err(io::ErrorKind::WouldBlock),
             },
             ReadCase {
                 case: "the end",
+                buf: 64,
                 reads: &[Bytes(0), Bytes(0)],
                 probes: &[Closed],
                 read: Ok(0),
             },
             ReadCase {
                 case: "a line, then the end, between the read and the probe",
+                buf: 64,
                 reads: &[Bytes(0), Bytes(7)],
                 probes: &[Closed],
                 read: Ok(7),
             },
             ReadCase {
                 case: "a failed read",
+                buf: 64,
                 reads: &[Closed],
                 probes: &[],
                 read: Err(io::ErrorKind::BrokenPipe),
             },
+            ReadCase {
+                case: "no room to read into",
+                buf: 0,
+                reads: &[Bytes(0)],
+                probes: &[],
+                read: Ok(0),
+            },
         ];
         for ReadCase {
             case,
+            buf,
             reads,
             probes,
             read,
         } in cases
         {
-            let mut pipe = Scripted {
-                reads: reads.iter().copied().collect(),
-                writes: probes.iter().copied().collect(),
-                ..Scripted::default()
-            };
-            let outcome = read_pipe(&mut pipe, &mut [0_u8; 64]).map_err(|error| error.kind());
+            let pipe = ScriptedPipe::new(reads.iter().copied(), probes.iter().copied());
+            let outcome = read_pipe(&mut &pipe, &mut vec![0_u8; buf]).map_err(|error| error.kind());
             assert_eq!(outcome, read, "{case}");
-            assert!(
-                pipe.reads.is_empty() && pipe.writes.is_empty(),
-                "{case}: every scripted call is made"
+            assert!(pipe.is_spent(), "{case}: every scripted call is made");
+            assert_eq!(
+                pipe.offered(),
+                vec![0; probes.len()],
+                "{case}: each probe writes nothing"
             );
         }
     }
@@ -244,7 +203,7 @@ mod tests {
     struct WriteCase {
         case: &'static str,
         len: usize,
-        answer: Answer,
+        answer: PipeAnswer,
         written: Outcome,
         offered: usize,
     }
@@ -253,7 +212,7 @@ mod tests {
     /// if a write offers more than [`PIPE_WRITE_CHUNK`], or hands on a write of nothing.
     #[test]
     fn a_pipe_write_offers_at_most_its_buffer() {
-        use Answer::{Bytes, Closed};
+        use PipeAnswer::{Bytes, Closed};
 
         let cases = [
             WriteCase {
@@ -300,13 +259,10 @@ mod tests {
             offered,
         } in cases
         {
-            let mut pipe = Scripted {
-                writes: VecDeque::from([answer]),
-                ..Scripted::default()
-            };
-            let outcome = write_pipe(&mut pipe, &vec![b'a'; len]).map_err(|error| error.kind());
+            let pipe = ScriptedPipe::new([], [answer]);
+            let outcome = write_pipe(&mut &pipe, &vec![b'a'; len]).map_err(|error| error.kind());
             assert_eq!(outcome, written, "{case}");
-            assert_eq!(pipe.offered, [offered], "{case}: what the write offered");
+            assert_eq!(pipe.offered(), [offered], "{case}: what the write offered");
         }
     }
 }

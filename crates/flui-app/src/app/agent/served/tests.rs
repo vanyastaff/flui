@@ -1229,13 +1229,9 @@ fn a_client_that_stops_reading_does_not_hold_up_detach() {
                 id += 1;
             }
             match (&client.stream).write(&pending) {
-                Ok(count) if count > 0 => {
+                Ok(count) => {
                     pending.drain(..count);
                     refused_since = None;
-                }
-                Ok(_) => {
-                    refused_since.get_or_insert_with(Instant::now);
-                    std::thread::sleep(Duration::from_millis(1));
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     refused_since.get_or_insert_with(Instant::now);
