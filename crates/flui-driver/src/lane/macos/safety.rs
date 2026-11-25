@@ -83,38 +83,6 @@ pub fn permitted(permission: Permission, granted: bool) -> Result<(), Refusal> {
     }
 }
 
-/// What the lane's `AXPress` of the element `identifier` answered: `offered`, whether it offers
-/// the action, then `perform`, the press, made only when it does, under `deadline`, with
-/// `trusted` asked after a failure. The answer every `AXPress` gives (`lane::ax::pressed`, the
-/// iOS Simulator lane's too), the lane's refusal for a process no longer trusted being the
-/// Accessibility permission missing ([`Refusal::MissingPermission`]): a press already sent and
-/// not answered, or whose element went away, keeps `may_have_run` whatever the trust.
-///
-/// # Errors
-///
-/// As `lane::ax::pressed`, the untrusted refusal naming `macos_permission_accessibility`.
-pub fn pressed(
-    offered: Result<bool, crate::lane::walk::ProviderError>,
-    perform: impl FnOnce() -> Result<(), crate::lane::walk::ProviderError>,
-    identifier: &str,
-    deadline: std::time::Duration,
-    trusted: impl Fn() -> bool,
-) -> crate::error::Result<()> {
-    crate::lane::ax::pressed(
-        offered,
-        perform,
-        identifier,
-        Some(deadline),
-        trusted,
-        || {
-            Refusal::MissingPermission {
-                permission: Permission::Accessibility,
-            }
-            .into_error()
-        },
-    )
-}
-
 /// Why the lane refuses an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]

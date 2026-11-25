@@ -200,8 +200,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   the chrome (an element gone, or the budget) is the search's (`tree::SearchReach`). The choice
   is `tree::choose_screen`: an `iOSContentGroup` wherever it was found, else the shallowest plain
   group, refused when the chrome was cut, with no retry offered when the budget cut it. The read
-  as a whole is `tree::read_screen`, every host's: the search, the walk, and the screen's frame
-  read again after it, a screen moved or gone meanwhile answering `Error::Busy`.
+  as a whole is `tree::read_screen`, the Mac's and the tests' over their own trees: the search,
+  the walk, and the screen's frame alone read again after it, a screen moved or gone meanwhile
+  answering `Error::Busy` (the permission refused when the source says so). The scripted window
+  (`testing::ScriptedSimulatorScreen`) serves a screen already read and shares only
+  `tree::choose_window` and `tree::locate`.
   `Lane::read_tree` and `Lane::invoke` are handed
   the app's own tree, and each element is matched among the descendants of the node its nearest
   matched ancestor fits (the bridge serves only the elements VoiceOver reads), an app node once,

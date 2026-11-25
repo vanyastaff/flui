@@ -1,6 +1,7 @@
 //! The Mac's half of [`HostAccessibility`]: the windows on screen of the device's title, and the
 //! accessibility client's calls (`lane::ax`) as the pure read asks them (`tree::read_screen`:
-//! the screen search, the walk of its elements and the frame read again after it, every host's).
+//! the screen search, the walk of its elements and the frame read again after it, which the
+//! tests drive over their own trees).
 //!
 //! The Simulator's process is not looked up by name: Simulator.app hosts the device's window
 //! before Xcode 27 and DeviceHub from it, and AppKit reports DeviceHub's process id as -1. The
@@ -114,15 +115,6 @@ impl ScreenRead {
         };
         Ok(ax::child_at(self.ask(parent), index)?.map(TimedElement::new))
     }
-
-    /// `element`'s frame in the Mac's points, when it has one.
-    fn frame(
-        &mut self,
-        element: &TimedElement,
-    ) -> std::result::Result<Option<PointFrame>, ProviderError> {
-        Ok(ax::frame(self.ask(element))?
-            .map(|(x, y, width, height)| PointFrame::new(x, y, width, height)))
-    }
 }
 
 impl HostAccessibility for MacAccessibility {
@@ -232,6 +224,14 @@ impl WindowTree for ScreenRead {
 
     fn failure(&mut self, error: ProviderError) -> Error {
         self.failed(error)
+    }
+
+    fn frame(
+        &mut self,
+        element: &TimedElement,
+    ) -> std::result::Result<Option<PointFrame>, ProviderError> {
+        Ok(ax::frame(self.ask(element))?
+            .map(|(x, y, width, height)| PointFrame::new(x, y, width, height)))
     }
 
     fn facts(&mut self, element: &TimedElement) -> std::result::Result<WindowFacts, ProviderError> {
