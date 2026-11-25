@@ -280,12 +280,26 @@ fn each_session_dumps_to_a_file_of_its_own() {
                 .is_some_and(|extension| extension == "xml"),
         "{one}"
     );
-    // The dump ends by removing every file of its session's dumps, its own and any an earlier
-    // dump the host ended left, so what such dumps leave stays bounded.
-    let line = &first.commands("exec-out uiautomator dump")[0];
-    let every = one.replace("-1.xml", "-*.xml");
+    // The session's token, read out of the path: `/data/local/tmp/flui-driver-<session>-1.xml`.
+    let session_of = |path: &str| {
+        path.strip_prefix("/data/local/tmp/flui-driver-")
+            .and_then(|rest| rest.strip_suffix("-1.xml"))
+            .expect("a first dump's path")
+            .to_owned()
+    };
+    let session = session_of(&one);
     assert!(
-        line.ends_with(&format!("; rm -f {every} {every}.err")),
+        !session.is_empty() && session.chars().all(|c| c.is_ascii_hexdigit()),
+        "{session}"
+    );
+    // The dump ends by removing its own files and every earlier dump's of its session, never a
+    // later one's (`DumpFiles::removal_through`, whose shell is run below).
+    let line = &first.commands("exec-out uiautomator dump")[0];
+    assert!(
+        line.contains(&format!(
+            "for f in /data/local/tmp/flui-driver-{session}-*.xml \
+             /data/local/tmp/flui-driver-{session}-*.xml.err;"
+        )) && line.contains("if [ \"$n\" -le 1 ]; then rm -f \"$f\"; fi"),
         "{line}"
     );
     // Each dump of a session has a path of its own: a file an earlier dump left is never read.
@@ -303,14 +317,81 @@ fn each_session_dumps_to_a_file_of_its_own() {
     assert_ne!(paths[0], paths[1]);
     // Each lane's end removes what a dump of its session ended at its deadline may have left.
     drop(lane);
-    let later = paths[0].replace("-1.xml", "-*.xml");
+    let later = session_of(&paths[0]);
+    let removal = |session: &str| {
+        format!(
+            "shell rm -f /data/local/tmp/flui-driver-{session}-*.xml \
+             /data/local/tmp/flui-driver-{session}-*.xml.err"
+        )
+    };
     assert_eq!(
         first.commands("shell rm -f"),
-        vec![
-            format!("shell rm -f {every} {every}.err"),
-            format!("shell rm -f {later} {later}.err"),
+        vec![removal(&session), removal(&later)]
+    );
+}
+
+/// A dump's removal takes its own files and the earlier dumps', never a later dump's: the line of
+/// dump 2, ended by the host at its deadline and still running on the device, removes nothing
+/// dump 3 wrote. Run through the host's `sh`, as the device's runs it.
+#[cfg(unix)]
+#[test]
+fn a_dumps_removal_takes_no_later_dumps_files() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let root = directory.path().to_str().expect("a UTF-8 path");
+    let files = flui_driver::lane::android::uiautomator::DumpFiles::in_directory(root, "0a1b");
+    let written = [
+        "1.xml",
+        "1.xml.err",
+        "2.xml",
+        "2.xml.err",
+        "3.xml",
+        "3.xml.err",
+    ];
+    for name in written {
+        std::fs::write(
+            directory.path().join(format!("flui-driver-0a1b-{name}")),
+            "x",
+        )
+        .expect("a dump's file");
+    }
+    // Another session's file, and one whose number is no number.
+    std::fs::write(directory.path().join("flui-driver-ffff-1.xml"), "x").expect("written");
+    std::fs::write(directory.path().join("flui-driver-0a1b-x.xml"), "x").expect("written");
+    let left = || {
+        let mut names: Vec<String> = std::fs::read_dir(directory.path())
+            .expect("the directory")
+            .map(|entry| {
+                entry
+                    .expect("an entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        names.sort();
+        names
+    };
+    let ran = std::process::Command::new("sh")
+        .args(["-c", &files.removal_through(2)])
+        .status()
+        .expect("sh runs");
+    assert!(ran.success());
+    assert_eq!(
+        left(),
+        [
+            "flui-driver-0a1b-3.xml",
+            "flui-driver-0a1b-3.xml.err",
+            "flui-driver-0a1b-x.xml",
+            "flui-driver-ffff-1.xml",
         ]
     );
+    // The lane's end takes every file of its session's dumps, and no other session's.
+    let ran = std::process::Command::new("sh")
+        .args(["-c", &files.removal()])
+        .status()
+        .expect("sh runs");
+    assert!(ran.success());
+    assert_eq!(left(), ["flui-driver-ffff-1.xml"]);
 }
 
 #[test]

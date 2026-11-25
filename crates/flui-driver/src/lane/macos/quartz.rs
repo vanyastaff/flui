@@ -20,6 +20,7 @@ use objc2_core_graphics::{
 };
 
 use crate::error::{Error, Result};
+use crate::lane::SendFailure;
 use crate::lane::macos::activity::LANE_TAG;
 use crate::lane::macos::held::{Keystroke, TEXT_KEY};
 use crate::lane::macos::keys::{self, KeyCode, Modifier, SHIFT};
@@ -120,13 +121,18 @@ fn key_event(
     Ok(())
 }
 
-/// Post `stroke` to the process `pid`, carrying `flags`.
-pub(super) fn keystroke(pid: libc::pid_t, stroke: Keystroke, flags: u64) -> Result<()> {
+/// Post `stroke` to the process `pid`, carrying `flags`: a text run whose release could not be
+/// made after its press was posted fails as partly sent.
+pub(super) fn keystroke(
+    pid: libc::pid_t,
+    stroke: Keystroke,
+    flags: u64,
+) -> std::result::Result<(), SendFailure> {
     let text = |character: Option<char>, units: &mut [u16; 2]| -> Option<usize> {
         character.map(|c| c.encode_utf16(units).len())
     };
     let mut units = [0_u16; 2];
-    match stroke {
+    let posted = match stroke {
         Keystroke::Press(key, character) => {
             let length = text(character, &mut units);
             key_event(pid, key, true, flags, length.map(|n| &units[..n]))
@@ -139,9 +145,11 @@ pub(super) fn keystroke(pid: libc::pid_t, stroke: Keystroke, flags: u64) -> Resu
         Keystroke::UnshiftFor(_) => key_event(pid, SHIFT, false, flags, None),
         Keystroke::Text(chunk) => {
             key_event(pid, TEXT_KEY, true, flags, Some(chunk.units()))?;
-            key_event(pid, TEXT_KEY, false, flags, Some(chunk.units()))
+            return key_event(pid, TEXT_KEY, false, flags, Some(chunk.units()))
+                .map_err(SendFailure::partly_sent);
         }
-    }
+    };
+    posted.map_err(SendFailure::from)
 }
 
 /// The event type and button of a mouse event of `kind`.

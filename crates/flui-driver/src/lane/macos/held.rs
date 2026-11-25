@@ -14,6 +14,7 @@
 use crate::error::{Error, Result};
 use crate::lane::macos::keys::{self, KeyCode, Modifier, SHIFT, TextChunk, TextStroke};
 use crate::lane::macos::safety::{KeyEdge, LANE, ModifierTaps, Refusal};
+use crate::lane::{Delivered, OsInput, SendFailure};
 
 /// A key event, its key resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +54,13 @@ pub enum Keystroke {
     UnshiftFor(u16),
     /// A run of text, pressed and released as one key event carrying it.
     Text(TextChunk),
+}
+
+impl OsInput for Keystroke {
+    /// Every stroke is a key event the app may see.
+    fn acts(&self) -> bool {
+        true
+    }
 }
 
 /// The key code a text event carries: `0`. An app takes typed text from the event's text, not
@@ -190,8 +198,9 @@ impl HeldKeys {
         completed
     }
 
-    /// Post `stroke` through `post`, which takes the flags the event carries, and record it once
-    /// `post` says it went out.
+    /// Post `stroke` through `post`, which takes the flags the event carries, and record it and
+    /// say it in `delivered` once `post` says it went out. A stroke posted in part (a text run's
+    /// press without its release) is said and not recorded: it holds nothing.
     ///
     /// # Errors
     ///
@@ -199,9 +208,11 @@ impl HeldKeys {
     pub fn deliver(
         &mut self,
         stroke: Keystroke,
-        post: impl FnOnce(Keystroke, u64) -> Result<()>,
+        delivered: &mut Delivered,
+        post: impl FnOnce(Keystroke, u64) -> std::result::Result<(), SendFailure>,
     ) -> Result<()> {
-        post(stroke, self.flags_after(stroke))?;
+        let flags = self.flags_after(stroke);
+        delivered.send(&stroke, || post(stroke, flags))?;
         let _ = self.apply(stroke);
         Ok(())
     }

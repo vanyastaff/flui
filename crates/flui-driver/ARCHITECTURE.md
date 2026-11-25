@@ -67,13 +67,16 @@ app's trees, frames and input, and this crate composes that with what only the O
   refusal, the guard's interruption, a failed command, a release that fails after the last
   event, `send_guarded` answers as `Error::PartlySent` around it, on every lane, read from one
   record (`lane::Delivered`): the lane says each input of an event that reached the device
-  (`Lane::send_counted`: an event sent whole is one input where it acts by default; Windows,
-  X11 and macOS say each keystroke, button and click of the wheel, Android each command, an
-  `input` line or a pen report, one whose answer was lost included), the run counts every event
-  taken whole, a pause and a move included, and the failing event where part of it went out
-  (`Effect::partial`, in events; Android's commands in its detail), and no retry is invited,
-  which would send them again; a failure with an effect of its own that invites no retry (a
-  timed-out command) stays as it is.
+  (`Lane::send_counted`, through `Delivered::send`, whose input's type says whether it acts
+  (`lane::OsInput`), so a lane's housekeeping, the X11 keymap change and its settle, is never
+  said; a send that put part of its input out, a `SendInput` that inserted some of its events,
+  says that part (`lane::SendFailure`). By default an event sent whole is one input where it
+  acts; the held parts of Windows, X11 and macOS say each keystroke, button and click of the
+  wheel, and Android each command, an `input` line or a pen report, taken or unanswered), the
+  run counts every event taken whole, a pause and a move included, and the failing event where
+  part of it went out (`Effect::partial`, in events; Android's commands taken and unanswered in
+  its detail), and no retry is invited, which would send them again; a failure with an effect of
+  its own that invites no retry (a timed-out command) stays as it is.
 - **A person's interruption followed by a failed release is cannot-verify, the held input
   named.** When the guard sees the person's input, the run stops and is cannot-verify: the input
   that reached the app is no longer the scenario's, so neither a pass nor a failure of the app can
@@ -125,8 +128,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   between commands, so `lane::android::held::HeldInput` sends a key at its release (alone, or as
   one `keycombination` with the modifiers held) and holds only the one `motionevent` contact and
   the pen's range and touch, each recorded when its command returned (the pen's when its `uinput`
-  device answered a sync); a timed-out press is held and cancelled at the release, and a key a
-  timed-out command may have left down is named in `Error::ReleaseFailed`, never pressed again.
+  device answered a sync); a press whose answer was lost (a timeout, a bound, a pipe) is held and
+  cancelled at the release, and a key a command whose answer was lost may have left down is
+  named in `Error::ReleaseFailed`, never pressed again; a command whose `adb` never started holds
+  nothing.
   It refuses a second contact, a sequence that ends with a key down (which would never be sent),
   the keys and chords that leave the app or change the device (the fallbacks of AOSP's
   `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
@@ -139,13 +144,15 @@ app's trees, frames and input, and this crate composes that with what only the O
   change on the device waits for, once a locate and once before each such command; `-a` is what
   prints the frames. A window that takes no focus over the press point is not checked
   (`docs/gaps.md`). A contact going down is recorded before its command goes out, so a send that
-  times out or unwinds leaves it for the release to cancel.
+  times out, loses its answer or unwinds leaves it for the release to cancel.
 - **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
-  its own: a window dump at a path of the session's, and a forward from a loopback port the lane
-  picked, asked for with `--no-rebind` (a port another session holds is refused and another
-  picked) and removed by that port at its end once `adb` made it or may have.
+  its own: each window dump at a path of its own, removed with the earlier ones by every dump that
+  runs to its end (never a later dump's) and with all of the session's by the lane's end, and a
+  forward from a loopback port the lane picked, asked for with `--no-rebind` (a port another
+  session holds is refused and another picked) and removed by that port at its end once `adb`
+  made it or may have (its answer lost).
 - **The Android lane finds the app's nodes by matching, never by guessing.** `accesskit_android`
   sets no `viewIdResourceName`, so `Lane::read_tree` is handed the app's own tree and
   `lane::android::tree` matches the dump to it: the root is the child of the decor view that fits

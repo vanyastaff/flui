@@ -18,8 +18,8 @@ use flui_driver::lane::macos::safety::{
 use flui_driver::lane::macos::screen::{self, PointRect, WindowInfo};
 use flui_driver::lane::macos::version::MacosVersion;
 use flui_driver::lane::macos::{self, callback, frame};
-use flui_driver::lane::release_outcome;
 use flui_driver::lane::windows;
+use flui_driver::lane::{Delivered, SendFailure, release_outcome};
 use flui_driver::pixels::Image;
 use flui_driver::projection::Projection;
 use flui_driver::protocol::error::{ErrorCode, HandleKind};
@@ -491,7 +491,7 @@ fn chord(names: &[&str]) -> Vec<KeyInput> {
 fn post_all(keys: &mut HeldKeys, inputs: &[KeyInput]) {
     for input in inputs {
         for stroke in keys.plan(input) {
-            keys.deliver(stroke, |_, _| Ok(()))
+            keys.deliver(stroke, &mut Delivered::default(), |_, _| Ok(()))
                 .expect("every stroke is posted");
         }
     }
@@ -711,13 +711,14 @@ fn every_event_carries_the_modifiers_the_lane_holds() {
     let command = Keystroke::Press(keys::COMMAND, None);
     assert_eq!(keys.flags_after(command), Modifier::Command.flag());
     let mut posted = Vec::new();
-    keys.deliver(command, |stroke, flags| {
+    keys.deliver(command, &mut Delivered::default(), |stroke, flags| {
         posted.push((stroke, flags));
         Ok(())
     })
     .expect("posted");
     keys.deliver(
         Keystroke::Press(KeyCode(0x00), Some('a')),
+        &mut Delivered::default(),
         |stroke, flags| {
             posted.push((stroke, flags));
             Ok(())
@@ -727,7 +728,7 @@ fn every_event_carries_the_modifiers_the_lane_holds() {
     assert_eq!(keys.flags(), Modifier::Command.flag());
     let text = keys.plan(&KeyInput::Text("x".into()));
     for stroke in text {
-        keys.deliver(stroke, |stroke, flags| {
+        keys.deliver(stroke, &mut Delivered::default(), |stroke, flags| {
             posted.push((stroke, flags));
             Ok(())
         })
@@ -746,17 +747,26 @@ fn every_event_carries_the_modifiers_the_lane_holds() {
 #[test]
 fn a_key_is_held_only_once_its_event_was_posted() {
     let mut keys = HeldKeys::new();
-    let refused = keys.deliver(Keystroke::Press(keys::CONTROL, None), |_, _| {
-        Err(Error::Lane {
-            lane: "macos".into(),
-            unavailable: false,
-            message: "no event".into(),
-        })
-    });
+    let refused = keys.deliver(
+        Keystroke::Press(keys::CONTROL, None),
+        &mut Delivered::default(),
+        |_, _| {
+            Err(Error::Lane {
+                lane: "macos".into(),
+                unavailable: false,
+                message: "no event".into(),
+            }
+            .into())
+        },
+    );
     assert!(refused.is_err());
     assert!(keys.held().is_empty(), "a press never posted is not held");
-    keys.deliver(Keystroke::Press(keys::CONTROL, None), |_, _| Ok(()))
-        .expect("posted");
+    keys.deliver(
+        Keystroke::Press(keys::CONTROL, None),
+        &mut Delivered::default(),
+        |_, _| Ok(()),
+    )
+    .expect("posted");
     let failed = keys.release_all(|_, _| {
         Err(Error::Lane {
             lane: "macos".into(),
@@ -857,7 +867,7 @@ fn a_move_with_a_button_down_is_a_drag_and_a_press_lands_where_the_pointer_went(
     let post = |pointer: &mut Pointer, step: Step| -> Vec<MouseEvent> {
         let events = pointer.plan(step).expect("a step the lane posts");
         pointer
-            .deliver(&events, |_| Ok(()))
+            .deliver(&events, &mut Delivered::default(), |_| Ok(()))
             .expect("every event posted");
         events
     };
@@ -981,7 +991,9 @@ fn input_the_app_would_not_read_as_itself_is_refused_before_any_event() {
             to: at(1.0, 1.0),
         })
         .expect("a mouse move");
-    placed.deliver(&moved, |_| Ok(())).expect("posted");
+    placed
+        .deliver(&moved, &mut Delivered::default(), |_| Ok(()))
+        .expect("posted");
     assert_eq!(
         capability(placed.plan(Step::Up {
             device: PointerDevice::Mouse,
@@ -990,6 +1002,64 @@ fn input_the_app_would_not_read_as_itself_is_refused_before_any_event() {
         Some("os_input_device".to_owned()),
         "a release of a button that is not down"
     );
+}
+
+/// What the run is told of each input: a keystroke, a press and a release posted are said, a
+/// move is where the pointer goes and is not, a text run posted in part (its press without its
+/// release) is said and holds nothing, and a stroke never posted is not said.
+#[test]
+fn every_input_that_was_posted_is_said_to_the_run() {
+    let said = |delivered: &Delivered| delivered.effect(1).is_some();
+    let no_event = || flui_driver::Error::Lane {
+        lane: "macos".into(),
+        unavailable: false,
+        message: "no event".into(),
+    };
+    let control = Keystroke::Press(keys::CONTROL, None);
+    let mut delivered = Delivered::default();
+    HeldKeys::new()
+        .deliver(control, &mut delivered, |_, _| Ok(()))
+        .expect("posted");
+    assert!(said(&delivered));
+    let mut delivered = Delivered::default();
+    let refused = HeldKeys::new().deliver(control, &mut delivered, |_, _| Err(no_event().into()));
+    assert!(refused.is_err());
+    assert!(!said(&delivered));
+    let mut keys = HeldKeys::new();
+    let mut delivered = Delivered::default();
+    let half = keys.deliver(control, &mut delivered, |_, _| {
+        Err(SendFailure::partly_sent(no_event()))
+    });
+    assert!(half.is_err());
+    assert!(said(&delivered));
+    assert!(
+        keys.held().is_empty(),
+        "a stroke posted in part holds nothing"
+    );
+    // The pointer: a move alone is not said, a press is.
+    let mut pointer = Pointer::new();
+    let moved = pointer
+        .plan(Step::Move {
+            device: PointerDevice::Mouse,
+            to: at(3.5, 3.5),
+        })
+        .expect("a move");
+    let mut delivered = Delivered::default();
+    pointer
+        .deliver(&moved, &mut delivered, |_| Ok(()))
+        .expect("posted");
+    assert!(!said(&delivered), "a move acts on nothing");
+    let down = pointer
+        .plan(Step::Down {
+            device: PointerDevice::Mouse,
+            button: PointerButton::Primary,
+        })
+        .expect("a press");
+    let mut delivered = Delivered::default();
+    pointer
+        .deliver(&down, &mut delivered, |_| Ok(()))
+        .expect("posted");
+    assert!(said(&delivered));
 }
 
 #[test]
@@ -1008,16 +1078,24 @@ fn a_pointer_change_is_held_only_once_its_event_was_posted() {
             to: at(3.5, 3.5),
         })
         .expect("a move");
-    pointer.deliver(&moved, |_| Ok(())).expect("posted");
+    pointer
+        .deliver(&moved, &mut Delivered::default(), |_| Ok(()))
+        .expect("posted");
     let down = pointer
         .plan(Step::Down {
             device: PointerDevice::Mouse,
             button: PointerButton::Primary,
         })
         .expect("a press");
-    assert!(pointer.deliver(&down, failing).is_err());
+    assert!(
+        pointer
+            .deliver(&down, &mut Delivered::default(), failing)
+            .is_err()
+    );
     assert_eq!(pointer.buttons(), 0, "a press never posted is not held");
-    pointer.deliver(&down, |_| Ok(())).expect("posted");
+    pointer
+        .deliver(&down, &mut Delivered::default(), |_| Ok(()))
+        .expect("posted");
     assert_eq!(pointer.buttons(), 0b1);
     let failed = pointer.release_all(failing);
     assert!(
@@ -1097,8 +1175,12 @@ fn a_release_without_accessibility_is_refused_and_names_what_stays_held() {
         safety::permitted(Permission::Accessibility, granted).map_err(Refusal::into_error)
     };
     let mut keys = HeldKeys::new();
-    keys.deliver(Keystroke::Press(keys::COMMAND, None), |_, _| Ok(()))
-        .expect("posted");
+    keys.deliver(
+        Keystroke::Press(keys::COMMAND, None),
+        &mut Delivered::default(),
+        |_, _| Ok(()),
+    )
+    .expect("posted");
     let refused = keys.release_all(|_, _| post_without(false));
     assert!(
         matches!(&refused, Err(Error::ReleaseFailed { held, message, .. })
@@ -1126,7 +1208,9 @@ fn a_release_without_accessibility_is_refused_and_names_what_stays_held() {
         },
     ] {
         let events = pointer.plan(step).expect("a mouse step");
-        pointer.deliver(&events, |_| Ok(())).expect("posted");
+        pointer
+            .deliver(&events, &mut Delivered::default(), |_| Ok(()))
+            .expect("posted");
     }
     let refused = pointer.release_all(|_| post_without(false));
     assert!(
@@ -1611,7 +1695,9 @@ fn the_release_of_everything_keeps_what_it_released_apart_from_what_failed() {
         },
     ] {
         let events = pointer.plan(step).expect("a plan");
-        pointer.deliver(&events, |_| Ok(())).expect("posted");
+        pointer
+            .deliver(&events, &mut Delivered::default(), |_| Ok(()))
+            .expect("posted");
     }
     let mut mouse_flags = Vec::new();
     let both = macos::release_held(
@@ -1692,7 +1778,9 @@ fn a_panicking_part_of_the_release_still_lets_the_other_go() {
             },
         ] {
             let events = pointer.plan(step).expect("a plan");
-            pointer.deliver(&events, |_| Ok(())).expect("posted");
+            pointer
+                .deliver(&events, &mut Delivered::default(), |_| Ok(()))
+                .expect("posted");
         }
         let mut mouse_tried = false;
         let (resumed, captured) = flui_testing::log_capture::capture(|| {
@@ -1748,7 +1836,9 @@ fn each_mouse_button_is_pressed_once_and_released_where_the_pointer_is() {
     }
     let to = at(5.5, 6.5);
     let moved = pointer.plan(Step::Move { device, to }).expect("a move");
-    pointer.deliver(&moved, |_| Ok(())).expect("posted");
+    pointer
+        .deliver(&moved, &mut Delivered::default(), |_| Ok(()))
+        .expect("posted");
     assert_eq!(pointer.position(), Some(to));
     for (button, quartz) in [
         (PointerButton::Middle, MouseButton::MIDDLE),
@@ -1760,7 +1850,9 @@ fn each_mouse_button_is_pressed_once_and_released_where_the_pointer_is() {
             pressed.iter().map(|event| event.kind).collect::<Vec<_>>(),
             [MouseKind::Down(quartz)]
         );
-        pointer.deliver(&pressed, |_| Ok(())).expect("posted");
+        pointer
+            .deliver(&pressed, &mut Delivered::default(), |_| Ok(()))
+            .expect("posted");
         assert_eq!(
             capability(pointer.plan(down(button))),
             Some("os_input_device".to_owned()),
@@ -1787,7 +1879,9 @@ fn each_mouse_button_is_pressed_once_and_released_where_the_pointer_is() {
 
     for button in [PointerButton::Primary, PointerButton::Secondary] {
         let pressed = pointer.plan(down(button)).expect("a press");
-        pointer.deliver(&pressed, |_| Ok(())).expect("posted");
+        pointer
+            .deliver(&pressed, &mut Delivered::default(), |_| Ok(()))
+            .expect("posted");
     }
     let failed = pointer.release_all(|event| match event.kind {
         MouseKind::Up(MouseButton::RIGHT) => Err(no_event()),

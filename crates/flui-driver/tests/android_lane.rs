@@ -19,7 +19,7 @@ use flui_driver::lane::android::screencap::{self, Raw};
 use flui_driver::lane::android::uiautomator::{Bounds, UiDump};
 use flui_driver::lane::android::uinput;
 use flui_driver::lane::android::{AndroidApp, AndroidLane};
-use flui_driver::lane::{self, Lane as _, PositionFidelity};
+use flui_driver::lane::{self, Delivered, Lane as _, PositionFidelity};
 use flui_driver::protocol::geometry::LogicalSize;
 use flui_driver::protocol::input::{PointerButton, PointerDevice};
 use flui_driver::protocol::session::{Isolation, Placement};
@@ -1678,31 +1678,43 @@ fn a_timed_out_press_is_held_and_cancelled() {
     );
 }
 
+/// A key whose command's answer was lost, by its deadline or past its output's bound, may have
+/// been left down: it is named once, never pressed again, and the run says it may have run.
 #[test]
 fn a_key_a_timed_out_command_may_have_left_down_is_named_once() {
-    let adb = scripted(true, true).timeout_once("shell input keyevent");
-    let mut lane = connected(&adb);
-    let failed = lane::send_guarded(
-        &mut lane,
-        &[
-            OsEvent::KeyDown("Enter".to_owned()),
-            OsEvent::KeyUp("Enter".to_owned()),
-        ],
-    )
-    .expect_err("the key timed out");
-    match failed {
-        Error::ReleaseFailed { held, message, .. } => {
-            assert_eq!(held, vec!["KEYCODE_ENTER"]);
-            assert!(message.contains("did not end within"), "{message}");
-        }
-        other => panic!("expected the key named as held, got {other}"),
-    }
-    assert_eq!(
-        inputs(&adb),
-        vec!["shell input keyevent KEYCODE_ENTER"],
-        "never pressed again"
+    let timed_out = scripted(true, true).timeout_once("shell input keyevent");
+    let past_its_bound = scripted(true, true).reply_once(
+        "shell input keyevent",
+        AdbReply::new(0, "x".repeat(70 * 1024)),
     );
-    lane.release_all().expect("named once");
+    for (adb, said) in [
+        (timed_out, "did not end within"),
+        (past_its_bound, "printed more than"),
+    ] {
+        let mut lane = connected(&adb);
+        let failed = lane::send_guarded(
+            &mut lane,
+            &[
+                OsEvent::KeyDown("Enter".to_owned()),
+                OsEvent::KeyUp("Enter".to_owned()),
+            ],
+        )
+        .expect_err("the key's answer was lost");
+        assert!(failed.may_have_run(), "{failed:?}");
+        match failed {
+            Error::ReleaseFailed { held, message, .. } => {
+                assert_eq!(held, vec!["KEYCODE_ENTER"]);
+                assert!(message.contains(said), "{message}");
+            }
+            other => panic!("expected the key named as held, got {other}"),
+        }
+        assert_eq!(
+            inputs(&adb),
+            vec!["shell input keyevent KEYCODE_ENTER"],
+            "never pressed again"
+        );
+        lane.release_all().expect("named once");
+    }
 }
 
 #[test]
@@ -1803,6 +1815,48 @@ fn a_pen_goes_through_its_uinput_device_and_leaves_at_the_end() {
         inputs(&adb)
             .iter()
             .all(|line| !line.contains("motionevent"))
+    );
+}
+
+/// A pen report the device never read (its `uinput` command ended) never reached the device: the
+/// run counts nothing and answers the plain failure. One written and never confirmed reached it
+/// and may have run: the run counts it as such.
+#[test]
+fn a_pen_report_counts_as_it_reached_the_device() {
+    // The device ended after the pen's first run: the next run's first report is never written.
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    let events = tap(PointerDevice::Pen, DevicePoint::new(300, 600));
+    lane::send_guarded(&mut lane, &events[..1]).expect("the pen enters and leaves");
+    adb.end_stream("shell uinput -");
+    let failed = lane::send_guarded(&mut lane, &events).expect_err("the device ended");
+    assert!(matches!(failed, Error::Lane { .. }), "{failed:?}");
+    assert!(!failed.may_have_run(), "{failed:?}");
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    lane.check(&events).expect("a pen");
+    lane.send(&events[0]).expect("the pen enters");
+    adb.end_stream("shell uinput -");
+    let mut delivered = Delivered::default();
+    assert!(lane.send_counted(&events[1], &mut delivered).is_err());
+    assert!(delivered.effect(1).is_none(), "nothing reached the device");
+    // The press written and never confirmed: its sync goes unanswered.
+    fn no_answer_to_the_press(line: &str) -> Vec<String> {
+        if line.contains("\"syncToken\":\"3\"") {
+            return Vec::new();
+        }
+        answer_syncs(line)
+    }
+    let adb = scripted_with(true, Some(no_answer_to_the_press));
+    let mut lane = connected(&adb);
+    lane.check(&events).expect("a pen");
+    lane.send(&events[0]).expect("the pen enters");
+    let mut delivered = Delivered::default();
+    assert!(lane.send_counted(&events[1], &mut delivered).is_err());
+    let detail = delivered.effect(1).and_then(|effect| effect.detail);
+    assert_eq!(
+        detail.as_deref(),
+        Some("1 command(s) of the run reached the device and may have run")
     );
 }
 
@@ -2264,6 +2318,21 @@ fn a_run_says_what_of_an_event_went_out_command_by_command() {
         commands(&refused).as_deref(),
         Some("the device took 3 command(s) of the run")
     );
+    // "ab" and the Enter taken, and "cd"'s answer lost past its bound: taken and unanswered are
+    // named apart.
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    let _cd_unanswered = adb.reply_once(
+        "shell input text 'cd'",
+        AdbReply::new(0, "x".repeat(70 * 1024)),
+    );
+    let refused = lane::send_guarded(&mut lane, &[OsEvent::Text("ab\ncd".to_owned())])
+        .expect_err("\"cd\"'s answer was lost");
+    assert_partly_sent(&refused, 1, 1);
+    assert_eq!(
+        commands(&refused).as_deref(),
+        Some("the device took 2 command(s) of the run, and 1 more may have run")
+    );
     // The key held down for its release, refused at it: nothing went out.
     let adb = scripted(true, true);
     let mut lane = connected(&adb);
@@ -2305,6 +2374,14 @@ fn a_press_whose_answer_is_lost_is_cancelled_by_the_release() {
     // The move and the press, of the tap's four events.
     assert!(failed.may_have_run(), "{failed:?}");
     assert_partly_sent(&failed, 2, 4);
+    assert_eq!(
+        failed
+            .effect()
+            .and_then(|effect| effect.detail.clone())
+            .as_deref(),
+        Some("1 command(s) of the run reached the device and may have run"),
+        "the press is named as may have run, not as taken"
+    );
 }
 
 /// A press whose `adb` never started never reached the device: the lane forgets it, cancels
