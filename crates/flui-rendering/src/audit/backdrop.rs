@@ -838,6 +838,8 @@ impl Walk<'_> {
                 color: run.color().unwrap_or(color),
                 font_size: f64::from(run.font_size()) * scale,
             })
+            // A transparent run paints nothing to read; a text with no other run is not judged.
+            .filter(|run| !run.color.is_transparent())
             .collect();
         let judged = !runs.is_empty() && !paragraph.text().trim().is_empty();
         let backdrop = if !judged {

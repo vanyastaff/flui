@@ -4,9 +4,10 @@
 //! [`PipelineOwner::audit_text_contrast`] judges each text the frame paints by WCAG 2.2's
 //! contrast minimum (success criterion 1.4.3): the contrast ratio of the colour its glyphs
 //! paint in against the colour painted behind them is at least 4.5:1, or 3:1 for large text
-//! (at least 24 logical px, or at least 18.66 px bold, CSS's 18 pt and 14 pt), less a 0.01
-//! tolerance that is Flutter's, not WCAG's (`CONTRAST_TOLERANCE` says why). The development
-//! agent's `audit.a11y` is its caller.
+//! (at least 24 logical px, or at least 18.66 px bold, CSS's 18 pt and 14 pt). The ratio is
+//! compared as computed: WCAG does not round it, and the colours come exact from the scene, so
+//! there is no sampling error for a tolerance to absorb (Flutter's guideline allows 0.01 because
+//! it samples pixels). The development agent's `audit.a11y` is its caller.
 //!
 //! Both colours come from the frame's scene, read in paint order, in the logical pixels the
 //! frame was laid out in:
@@ -39,7 +40,9 @@
 //!   [`ContrastUnknown::NonFinite`].
 //!
 //! A text under a clip of any shape is judged against what is behind its box: the clip hides
-//! part of the text, not the fill behind what shows.
+//! part of the text, not the fill behind what shows. A glyph run whose colour is fully
+//! transparent paints nothing to read and is not judged, and a text with no other run is left
+//! out of the answer: it is neither a finding nor unchecked.
 //!
 //! The module only reads a frame the pipeline already produced: it changes no layout, paint,
 //! layer or phase.
@@ -67,12 +70,6 @@ const LARGE_TEXT_PX: f64 = 24.0;
 
 /// The smallest large bold text, in logical px: 14 pt.
 const LARGE_BOLD_TEXT_PX: f64 = 18.66;
-
-/// How far below its requirement a ratio may fall and still meet it. Not WCAG's (1.4.3 does
-/// not round): Flutter's `textContrastGuideline` passes a ratio within 0.01 of its requirement
-/// (`MinimumTextContrastGuideline._tolerance`, `flutter_test`'s `accessibility.dart`), and the
-/// same margin keeps a pair tuned against it, at 4.49:1, from failing here.
-const CONTRAST_TOLERANCE: f64 = 0.01;
 
 /// A font size this close to a threshold, in logical px, is at it: run sizes are `f32`, and
 /// 18.66 has no exact `f32`.
@@ -291,9 +288,9 @@ fn reading(
     })
 }
 
-/// Whether `reading` meets its requirement, within the tolerance.
+/// Whether `reading` meets its requirement (module docs: no tolerance).
 fn meets(reading: ContrastReading) -> bool {
-    reading.ratio + CONTRAST_TOLERANCE >= reading.required
+    reading.ratio >= reading.required
 }
 
 /// How far above its requirement a reading is; negative below it.
@@ -309,8 +306,8 @@ fn contrast_ratio(a: Color, b: Color) -> f64 {
     (lighter + 0.05) / (darker + 0.05)
 }
 
-/// WCAG's relative luminance of an opaque sRGB colour, computed in `f64` so a ratio is exact to
-/// far below the 0.01 tolerance.
+/// WCAG's relative luminance of an opaque sRGB colour, computed in `f64` from the colour's `f32`
+/// channels.
 fn relative_luminance(color: Color) -> f64 {
     let channel = |value: f32| {
         let value = f64::from(value);

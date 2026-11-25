@@ -1327,8 +1327,10 @@ six reasons are every `ContrastUnknown`. A text under
 a clip of any shape is judged against what is behind its box: the clip hides part of the text,
 not the fill behind what shows. Colours are the run's span colour or the paragraph command's,
 sizes the run's times the axis scale it is painted under; the requirement is WCAG 1.4.3's 4.5:1,
-or 3:1 from 24 px or 18.66 px bold, less 0.01, the tolerance of Flutter's
-`textContrastGuideline` (WCAG does not round). A text's element is the nearest render object,
+or 3:1 from 24 px or 18.66 px bold, compared as computed: WCAG does not round, and the colours
+are exact, so the 0.01 Flutter's `textContrastGuideline` allows for its sampled pixels has nothing
+to absorb here. A glyph run whose colour is fully transparent paints nothing and is not judged;
+a text with no other run is left out. A text's element is the nearest render object,
 the painter or above, with a committed semantics node.
 
 **Why.** The scene holds the colours exactly, where pixels mix the text's antialiasing into the

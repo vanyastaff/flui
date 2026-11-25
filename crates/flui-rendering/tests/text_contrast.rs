@@ -1,6 +1,7 @@
 //! The contrast rule over a painted frame, through the public API: a text's colour against
-//! the fill painted behind it, read from the frame's scene, at WCAG's large-text thresholds and
-//! its 0.01 tolerance; a text whose colours the commands do not determine reported as not
+//! the fill painted behind it, read from the frame's scene, at WCAG's large-text thresholds with
+//! the ratio unrounded; a transparent run not judged; a text whose colours the commands do not
+//! determine reported as not
 //! checked, with the reason its layers, clips, save layers, transforms and later paints give.
 
 use std::fmt;
@@ -257,18 +258,18 @@ fn contrast_is_judged_against_the_threshold_its_size_and_weight_need() {
             Expect::Below(4.5),
         ),
         (
-            "within the 0.01 tolerance",
+            "4.495:1 is under 4.5: the ratio is not rounded",
             grey_against_white(4.495),
             16.0,
             regular,
-            Expect::Meets(4.5),
+            Expect::Below(4.5),
         ),
         (
-            "past the 0.01 tolerance",
-            grey_against_white(4.485),
+            "4.505:1 meets 4.5",
+            grey_against_white(4.505),
             16.0,
             regular,
-            Expect::Below(4.5),
+            Expect::Meets(4.5),
         ),
         (
             "a half-transparent black is the grey it shows over white, under 4.5",
@@ -282,6 +283,37 @@ fn contrast_is_judged_against_the_threshold_its_size_and_weight_need() {
         let texts = judged(leaf(move |ctx| {
             fill(ctx, Color::WHITE);
             write(ctx, color, size, weight);
+        }));
+        assert_eq!(found(name, &texts), expect, "{name}: {texts:#?}");
+    }
+}
+
+/// A glyph run that paints nothing, its colour fully transparent, is not judged: a text of
+/// transparent runs alone is left out of the answer, and one with a visible run is judged by it.
+#[test]
+fn a_transparent_run_is_not_judged() {
+    let transparent = Color::BLACK.with_alpha(0);
+    let styled = |text: &'static str, color: Color| {
+        TextSpan::styled(
+            text,
+            TextStyle::default().with_color(color).with_font_size(16.0),
+        )
+    };
+    for (name, spans, expect) in [
+        (
+            "a transparent text",
+            vec![styled(TEXT, transparent)],
+            Expect::NoText,
+        ),
+        (
+            "a transparent span beside a black one",
+            vec![styled("Con", transparent), styled("trast", Color::BLACK)],
+            Expect::Meets(4.5),
+        ),
+    ] {
+        let texts = judged(leaf(move |ctx| {
+            fill(ctx, Color::WHITE);
+            write_span(ctx, TextSpan::with_children(spans.clone()));
         }));
         assert_eq!(found(name, &texts), expect, "{name}: {texts:#?}");
     }
