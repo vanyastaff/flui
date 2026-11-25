@@ -254,6 +254,53 @@ impl Client {
         Ok(())
     }
 
+    /// Writes `bytes`, a line the agent may refuse before its end, until all of it is written
+    /// or the agent answers or closes: while a write makes no progress, what the agent sent is
+    /// read into the buffer. Bounded by [`RECV`] without progress, not by the line's length,
+    /// which a Windows pipe takes a buffer (512 bytes) at a time, as fast as the agent polls.
+    fn send_until_answered(&mut self, bytes: &[u8]) {
+        let mut progress = Instant::now();
+        let mut written = 0;
+        let mut chunk = [0_u8; 8192];
+        while written < bytes.len() {
+            // At most what the pipe's buffer holds, per write.
+            let end = bytes.len().min(written + 512);
+            match (&self.stream).write(&bytes[written..end]) {
+                Ok(count) if count > 0 => {
+                    written += count;
+                    progress = Instant::now();
+                    continue;
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                // The agent closed while the line was being written.
+                Err(_) => return,
+            }
+            match read_some(&self.stream, &mut chunk) {
+                Ok(0) => return,
+                Ok(read) => {
+                    self.buffer.extend_from_slice(&chunk[..read]);
+                    if self.buffer.contains(&b'\n') {
+                        return;
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) => {}
+                Err(_) => return,
+            }
+            assert!(
+                progress.elapsed() < RECV,
+                "the agent neither read nor answered for {RECV:?}, {written} of {} bytes written",
+                bytes.len()
+            );
+            std::thread::sleep(Duration::from_micros(200));
+        }
+    }
+
     fn send(&mut self, value: &Value) {
         let mut bytes = serde_json::to_vec(value).expect("serializes");
         bytes.push(b'\n');
@@ -886,8 +933,8 @@ fn malformed_unknown_and_unserved_requests() {
 
         let mut oversized = vec![b'a'; MAX_LINE + 16];
         oversized.push(b'\n');
-        // The agent may stop reading before the line ends.
-        let _ = client.send_bytes(&oversized);
+        // The agent refuses the line once it is longer than the limit, before its end.
+        client.send_until_answered(&oversized);
         let reply = client.reply("an oversized line");
         assert_eq!(reply["error"]["code"], "invalid_argument", "{reply}");
         assert!(
