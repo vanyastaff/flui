@@ -13,7 +13,7 @@
 //! - **Fidelity.** Order only: Android resamples moves, and each command is its own process, so
 //!   the timing between events is not the sequence's.
 //! - **Safety.** Before a sequence, `Lane::check` refuses what leaves the app or changes the device
-//!   ([`safety`]); before each press, key, text and scroll, one `dumpsys window` must show the
+//!   ([`safety`]); before each press, key, text and scroll, one `dumpsys window -a` must show the
 //!   window the lane located holding the input focus, by its hash, at the frame and turn the lane
 //!   located it at. What the lane holds is released on every exit ([`held`]), and what stays
 //!   held is named ([`crate::Error::ReleaseFailed`]).
@@ -56,7 +56,6 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use flui_protocol::act::{Effect, EffectKind};
-use flui_protocol::error::Retry;
 use flui_protocol::input::PointerDevice;
 use flui_protocol::launch::{ENDPOINT_EXTRA, EXIT_ON_DISCONNECT_EXTRA, TOKEN_EXTRA};
 use flui_protocol::session::{Isolation, Placement};
@@ -190,8 +189,9 @@ pub struct AndroidLane {
     guard: Option<GeteventGuard>,
     pen: Option<PenDevice>,
     screen: Option<Screen>,
-    /// The commands the device took since the lane last released everything, which it does at
-    /// the end of every sequence: what of the sequence under way already went out.
+    /// The commands of the sequence under way the device took: counted by [`Lane::send`],
+    /// cleared where a sequence begins ([`Lane::check`]) and where [`Lane::release_all`], which
+    /// ends it, begins. A release's own commands are not counted.
     delivered: usize,
     /// Whether the lane started the app, which it stops at its end.
     app_started: bool,
@@ -460,7 +460,7 @@ impl AndroidLane {
         Ok(screen)
     }
 
-    /// Where the windows are, from one `dumpsys window` ([`device::WINDOWS`]), whose focused
+    /// Where the windows are, from one `dumpsys window -a` ([`device::WINDOWS`]), whose focused
     /// window must be the app's.
     fn read_windows(&mut self) -> Result<device::Windows> {
         let run = Run {
@@ -470,6 +470,20 @@ impl AndroidLane {
         let printed = run_shell(self.adb.as_mut(), device::WINDOWS, run)?.text();
         let windows = device::parse_windows(&printed)
             .map_err(|why| lane_error(format!("`dumpsys window` answered no windows: {why}")))?;
+        // Keys and text go to the display holding the device's focus: another than the one the
+        // lane drives would take them, whatever window holds the default display's focus.
+        if let Some(display) = windows.focused_display
+            && display != device::DEFAULT_DISPLAY
+        {
+            return Err(Error::not_supported(
+                "android_default_display",
+                format!(
+                    "display {display} holds the device's input focus, and the {LANE} lane drives \
+                     the default display only, which `input`, `screencap` and the rotation it \
+                     reads are of"
+                ),
+            ));
+        }
         let focus = windows.focus.as_ref();
         safety::check_focus(focus.map(|name| name.title.as_str()), &self.package)
             .map_err(Refusal::into_error)?;
@@ -481,9 +495,8 @@ impl AndroidLane {
     /// the [`Screen`] the lane located. A window of the same title (an activity's window leaving
     /// as it is started again, split screen) is another window, so the app is not in front; the
     /// same window moved, resized or turned would take the command at another place than the
-    /// lane computed it for, so it is busy until the lane locates it again. Once part of the
-    /// sequence went out, that busy says it may have run and invites no retry, which would send
-    /// that part again.
+    /// lane computed it for, so it is busy until the lane locates it again. What went out of the
+    /// sequence before any of these refusals is said by [`Lane::send`].
     fn check_focus(&mut self) -> Result<()> {
         let windows = self.read_windows()?;
         let (Some(located), Some(focus)) = (&self.screen, &windows.focus) else {
@@ -499,25 +512,35 @@ impl AndroidLane {
             .into_error());
         }
         let surface = windows.focused_frame();
-        if surface == Some(located.surface) && windows.rotation == located.rotation {
-            return Ok(());
+        if surface != Some(located.surface) || windows.rotation != located.rotation {
+            return Err(Error::busy(format!(
+                "the app's window {} moved or the display turned since the {LANE} lane located \
+                 it (at {:?} turned {} then, at {surface:?} turned {} now): locate it again",
+                located.window, located.surface, located.rotation, windows.rotation
+            )));
         }
-        let message = format!(
-            "the app's window {} moved or the display turned since the {LANE} lane located it \
-             (at {:?} turned {} then, at {surface:?} turned {} now): locate it again",
-            located.window, located.surface, located.rotation, windows.rotation
-        );
-        if self.delivered == 0 {
-            return Err(Error::busy(message));
+        Ok(())
+    }
+
+    /// Send `event`'s commands, each that needs the focus after [`Self::check_focus`], counting
+    /// those the device took in [`Self::delivered`].
+    fn send_commands(&mut self, event: &OsEvent) -> Result<()> {
+        if let OsEvent::Pause(duration) = event {
+            return self.pause(*duration);
         }
-        Err(Error::Busy {
-            effect: Some(Effect::new(EffectKind::MayHaveRun).detail(format!(
-                "{} commands of the sequence went out before the window moved; the rest did not",
-                self.delivered
-            ))),
-            message: format!("{message}, after part of the sequence went out"),
-            retry: Retry::Never,
-        })
+        let abilities = self.abilities();
+        let commands = self
+            .held
+            .plan(event, &abilities)
+            .map_err(Refusal::into_error)?;
+        for command in commands {
+            if command.needs_focus() {
+                self.check_focus()?;
+            }
+            self.deliver(&command)?;
+            self.delivered = self.delivered.saturating_add(1);
+        }
+        Ok(())
     }
 
     /// Send `command`, recording what the device took.
@@ -527,10 +550,7 @@ impl AndroidLane {
             None => self.pen_report(command),
         };
         match &sent {
-            Ok(()) => {
-                self.held.took(command);
-                self.delivered = self.delivered.saturating_add(1);
-            }
+            Ok(()) => self.held.took(command),
             Err(Error::Timeout { .. }) => self.held.unsure(command),
             Err(_) => {}
         }
@@ -771,6 +791,9 @@ impl Lane for AndroidLane {
     }
 
     fn check(&mut self, events: &[OsEvent]) -> Result<()> {
+        // A sequence begins here: nothing of it went out yet, whatever an earlier one that
+        // unwound before its release left counted.
+        self.delivered = 0;
         let abilities = self.abilities();
         let mut held = self.held.clone();
         for event in events {
@@ -788,25 +811,23 @@ impl Lane for AndroidLane {
         Ok(())
     }
 
+    /// A failure after part of the sequence went out, whatever ended it (a refusal, a read of
+    /// the windows, a command), says the call may have run and invites no retry, which would
+    /// send that part again ([`Error::PartlySent`]).
     fn send(&mut self, event: &OsEvent) -> Result<()> {
-        if let OsEvent::Pause(duration) = event {
-            return self.pause(*duration);
-        }
-        let abilities = self.abilities();
-        let commands = self
-            .held
-            .plan(event, &abilities)
-            .map_err(Refusal::into_error)?;
-        for command in commands {
-            if command.needs_focus() {
-                self.check_focus()?;
-            }
-            self.deliver(&command)?;
-        }
-        Ok(())
+        self.send_commands(event)
+            .map_err(|error| match self.delivered {
+                0 => error,
+                delivered => error.after_partly_sent(Effect::new(EffectKind::MayHaveRun).detail(
+                    format!("{delivered} commands of the sequence went out before it failed"),
+                )),
+            })
     }
 
     fn release_all(&mut self) -> Result<()> {
+        // The sequence ends here, so its count goes first: a release that fails or unwinds part
+        // way leaves the next sequence starting from nothing sent.
+        self.delivered = 0;
         let contact = self.release_part(Part::Contact);
         let pen = self.release_part(Part::Pen);
         // A key a timed-out command may have left down has no release through `input`: it is
@@ -823,7 +844,6 @@ impl Lane for AndroidLane {
             })
         };
         self.held.forget_plans();
-        self.delivered = 0;
         crate::lane::release_outcome([contact, pen, keys])
     }
 

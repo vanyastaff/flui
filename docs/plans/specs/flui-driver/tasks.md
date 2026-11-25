@@ -1148,7 +1148,9 @@ graph LR
     window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`); the
     reply's `WINDOW MANAGER` part headers and where the focus is printed on each Android version
     (the default display's section from Android 10, the windows' part before), with a `LAST ANR`
-    part in the reply;
+    part in the reply; the windows' frames present in the one `dumpsys window -a` reading, its
+    `mTopFocusedDisplayId=`, and what that dump under the window manager's lock costs before each
+    press;
     `uiautomator dump` answering while the app animates; `screencap`'s raw header and
     format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
     endpoint forward and the app's exit when the session ends; which window is under the point
@@ -1197,9 +1199,11 @@ graph LR
     on (`enabled_accessibility_services`, a list never set or emptied being none) or touch
     exploration is, naming `android_tree_dump` and the services (`docs/gaps.md`). Input and
     capture take no dump. The window is the focused one by its hash, on the default display, read
-    with the rotation from one `dumpsys window`; the focus check before each press, key, text and
-    scroll reads it again and compares hash, frame and rotation (another window `NotForeground`,
-    the same one moved or turned `Busy`); a read of the tree locates the window again after the
+    with the rotation from one `dumpsys window -a`; the focus check before each press, key, text
+    and scroll reads it again and compares hash, frame and rotation (another focused display
+    `android_default_display`, another window `NotForeground`, the same one moved or turned
+    `Busy`, any of them after part of the sequence went out `PartlySent`); a read of the tree
+    locates the window again after the
     dump, and a window replaced, moved or turned in between answers `Busy`.
   - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
     sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,

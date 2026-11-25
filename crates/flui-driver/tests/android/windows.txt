@@ -1,3 +1,7 @@
+WINDOW MANAGER LAST ANR (dumpsys window lastanr)
+WINDOW MANAGER POLICY STATE (dumpsys window policy)
+WINDOW MANAGER ANIMATOR STATE (dumpsys window animator)
+WINDOW MANAGER SESSIONS (dumpsys window sessions)
 WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)
   Display: mDisplayId=0 (organized) rootTasks=2 mUserId=0
     mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}
@@ -19,4 +23,8 @@ WINDOW MANAGER WINDOWS (dumpsys window windows)
   Window #4 Window{1a2b3c4 u0 com.android.launcher3/com.android.launcher3.uioverrides.QuickstepLauncher}:
     mDisplayId=0 rootTaskId=1 mSession=Session{1f2e3d4 2345:u0a10100} mClient=android.os.BinderProxy@ae5f6a7
     Frames: parent=[0,0][1080,2400] display=[0,0][1080,2400] frame=[0,0][1080,2400] last=[0,0][1080,2400] insetsChanged=false
+  mTopFocusedDisplayId=0
   mRotation=0
+WINDOW MANAGER TRACE (dumpsys window trace)
+WINDOW MANAGER LOGGING (dumpsys window logging)
+WINDOW MANAGER HIGH REFRESH RATE BLACKLIST (dumpsys window refresh)

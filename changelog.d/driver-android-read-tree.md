@@ -10,13 +10,16 @@
   order does not tell apart answer `Error::Ambiguous`, and what a dump cannot show (a range's
   value, the announcer nodes, a toggled state the app's read does not report) is no difference
   (`lane::android::tree::Unobservable`). The roles scenario checks the match itself.
-- **`flui-driver`**: the Android lane locates the app's window from one `dumpsys window`, which
-  the window manager dumps under one lock: the default display's focused window, its frame found
-  by the window's hash, and the default display's rotation, read from the reply's live parts, so
-  pressing, typing and capturing go on while an accessibility service runs. A press, key, text or
+- **`flui-driver`**: the Android lane locates the app's window from one `dumpsys window -a`,
+  which the window manager dumps under one lock, `-a` printing the windows' frames: the default
+  display's focused window, its frame found by the window's hash, and the default display's
+  rotation, read from the reply's live parts, so pressing, typing and capturing go on while an
+  accessibility service runs. Another display holding the device's input focus answers
+  `not_supported` naming `android_default_display`. A press, key, text or
   scroll goes only to the window the lane located, at the frame and turn it located it at:
   another window of the app's title answers `Error::NotForeground`, the same window moved or
-  turned `Error::Busy`, which, once part of the sequence went out, says it may have run
+  turned `Error::Busy`. Whatever ends a sequence after part of it went out answers
+  `Error::PartlySent` around its own failure, which says that part may have run
   (`Error::effect`) and invites no retry. Only the read of the tree takes a `uiautomator dump`,
   which suspends every accessibility service: while any service is on (an empty service list
   being none), on a device or an emulator, or while the settings it reads show neither way, the

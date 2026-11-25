@@ -168,7 +168,6 @@ impl<'d> Window<'d> {
                          shows; the same call answers the same while the app keeps changing",
                         TREE_SETTLE.as_millis()
                     ),
-                    effect: None,
                     retry: flui_protocol::error::Retry::Never,
                 });
             }
