@@ -30,7 +30,7 @@
 //!   projects the window's accessibility tree onto the wire's nodes (`Lane::read_tree`) through
 //!   the bounded walk of `lane::walk`, the window frame's own controls left out
 //!   ([`frame`]), and presses an element by its identifier (`Lane::invoke`, `AXPress`), answered
-//!   as [`press::pressed`] says.
+//!   as [`press::answer`] says.
 //! - **Capture.** ScreenCaptureKit's capture of the window alone, from macOS 14 (`capture`).
 //!
 //! The pure parts (the key, role, coordinate and activity tables, the safety rules, the held keys,

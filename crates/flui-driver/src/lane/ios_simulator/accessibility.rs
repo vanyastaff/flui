@@ -475,6 +475,10 @@ pub struct ScreenWalk<E> {
     pub children_unread: bool,
     /// Whether the walk stopped short anywhere.
     pub truncated: bool,
+    /// Whether an element went away during the walk (a parent while its children were listed,
+    /// an element while its attributes were read, or one past the depth before it said whether
+    /// it has a child): what a source that answers a gone element as a refusal is asked about.
+    pub met_gone: bool,
 }
 
 impl<E> ScreenWalk<E> {
@@ -570,19 +574,23 @@ pub fn walk_screen<S: ScreenSource>(
     let mut walk = ScreenWalker {
         visited: 0,
         truncated: false,
+        met_gone: false,
     };
     let level = walk.children_of(source, screen, 0)?;
     Ok(ScreenWalk {
         elements: level.children,
         children_unread: level.unread,
         truncated: walk.truncated,
+        met_gone: walk.met_gone,
     })
 }
 
-/// A walk's count of elements and whether it stopped short anywhere.
+/// A walk's count of elements, whether it stopped short anywhere, and whether an element went
+/// away.
 struct ScreenWalker {
     visited: usize,
     truncated: bool,
+    met_gone: bool,
 }
 
 /// One parent's children as a walk read them, and whether some were left unread.
@@ -606,12 +614,16 @@ impl ScreenWalker {
         self.visited += listed.children.len();
         let unread = listed.is_cut();
         self.truncated |= unread;
+        self.met_gone |= listed.cut == Some(ListCut::ParentGone);
         let mut children = Vec::with_capacity(listed.children.len());
         for handle in listed.children {
             let mut element = match source.element(&handle) {
                 Ok(element) => element,
                 // An element that went away while it was read is left out.
-                Err(ProviderError::Gone) => continue,
+                Err(ProviderError::Gone) => {
+                    self.met_gone = true;
+                    continue;
+                }
                 Err(error) => return Err(error),
             };
             let grandchildren = if depth + 1 >= MAX_DEPTH {
@@ -620,6 +632,7 @@ impl ScreenWalker {
                 let probe = list_children(|index| source.child_at(&handle, index), 0)?;
                 element.children_unread = probe.is_cut();
                 self.truncated |= probe.is_cut();
+                self.met_gone |= probe.cut == Some(ListCut::ParentGone);
                 Vec::new()
             } else {
                 let level = self.children_of(source, &handle, depth + 1)?;

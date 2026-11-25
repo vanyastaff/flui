@@ -207,7 +207,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   group, refused when the chrome was cut, with no retry offered when the budget cut it. The read
   as a whole is `tree::read_screen`, the Mac's and the tests' over their own trees: the search,
   the walk, and the screen's frame alone read again after it, a screen moved or gone meanwhile
-  answering `Error::Busy` (the permission refused when the source says so). The scripted window
+  answering `Error::Busy`. An element gone anywhere in the read (the search, the walk, the
+  frame) goes through one trust check, the source's failure asked once per stage: while the
+  process is no longer trusted it is the permission refused, never a cut or a busy screen. The scripted window
   (`testing::ScriptedSimulatorScreen`) serves a screen already read and shares only
   `tree::choose_window` and `tree::locate`.
   `Lane::read_tree` and `Lane::invoke` are handed

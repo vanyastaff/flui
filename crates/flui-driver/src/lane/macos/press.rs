@@ -1,4 +1,4 @@
-//! What the lane's `AXPress` answers ([`pressed`]): the answer every `AXPress` gives
+//! What the lane's `AXPress` answers ([`answer`]): the answer every `AXPress` gives
 //! (`lane::ax::pressed`, the iOS Simulator lane's too), with the lane's own refusal for a process
 //! no longer trusted. It builds on every host, so its answers are pinned on Linux CI; the press
 //! itself is `cfg(target_os = "macos")`.
@@ -19,7 +19,7 @@ use crate::lane::walk::ProviderError;
 /// # Errors
 ///
 /// As `lane::ax::pressed`, the untrusted refusal naming `macos_permission_accessibility`.
-pub fn pressed(
+pub fn answer(
     offered: std::result::Result<bool, ProviderError>,
     perform: impl FnOnce() -> std::result::Result<(), ProviderError>,
     identifier: &str,
