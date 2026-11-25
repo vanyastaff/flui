@@ -35,6 +35,17 @@
 - `flui_protocol::input::gestures`: the one composition of each gesture into an action sequence,
   which the agent and the driver's OS lane both play; and `Plan::tick_ends`, where each tick of a
   plan ends.
+- `flui_protocol::input::gestures::Defaults`: what a gesture takes where its call names no
+  duration, velocity or distance and a window's settings decide it. The app's agent fills it from
+  the window's own `GestureSettings`, so a default long press outlasts that window's long-press
+  timeout and a default fling releases above its fling velocity; a composer with no window takes
+  `Defaults::WINDOWLESS`. A window whose long-press timeout asks for a press past
+  `Defaults::LONGEST_LONG_PRESS_MS` refuses a long press naming no duration, naming the duration to
+  give.
+- `flui_protocol::input::gestures::chord_keys`, the one reader of a chord such as `Control+a`.
+- `GestureSettings::fling_velocity_range_for`: the release speeds a pointer kind flings between,
+  the host's for a touch where it reports them.
+- `flui_semantics::element_id_of`, the wire handle of the element a render object contributes.
 
 ### Changed
 
@@ -55,6 +66,13 @@
 - A settled wait on a window counts that window's causes and the application's: a redraw, a
   scheduled frame, tree work and pointer motion are listed for each window that has work for a
   frame, so another window's animation no longer keeps a still window unsettled.
+- `SemanticsOwner::actionability_wire` returns an `ActionabilityReading`: the facts the wire
+  carries and the part of the element the window shows. The agent aims a gesture's extent at that
+  part: a swipe naming no distance goes most of the way from its point to the edge of the part
+  shown, and a pinch's radius is that part's.
+- The agent refuses a drag shorter than the window's drag slop (`invalid_argument`).
+- `Tester::press_keys` reads its chord with `gestures::chord_keys` and refuses one that does not
+  read (`Control+`, `a++b`, a spaced `Control + a`) instead of pressing part of it.
 
 ### Fixed
 
