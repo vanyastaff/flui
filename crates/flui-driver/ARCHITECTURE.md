@@ -165,19 +165,34 @@ app's trees, frames and input, and this crate composes that with what only the O
   both the read stands for VoiceOver on iOS only as far as they confirm it (`docs/gaps.md`).
   The read hands back the elements as served (`accessibility::ScreenElement`), and everything
   after it is pure code both the Mac and the scripted window go through (`ios_simulator::tree`).
-  The window is the one on screen titled `<device> – <runtime>`, of those naming no other
-  simulator, found without looking the Simulator's process up by name; two windows, or a title
-  another listed simulator shares, are refused. The screen is found by walking every group of the
-  window within ten levels (`tree::find_screen`): an `iOSContentGroup` when there is one, else the
-  shallowest group of the app's window's shape. `Lane::read_tree` and `Lane::invoke` are handed
+  The window is one on screen titled `<device> – <runtime>`, found without looking the
+  Simulator's process up by name, and taken by an allow-list that every host goes through, the
+  scripted window included (`tree::choose_window`): the one window naming the device's UDID is
+  taken, whatever the others name; else the one naming no UUID, only while no other listed
+  simulator, in any state, shares the title; one naming any other UUID never; two naming the
+  UDID, or two naming none when none names it, are refused. A device renamed or removed since
+  the lane connected is refused (`accessibility::screen_title`). The screen's elements are read
+  by a pure walk over a source (`accessibility::walk_screen`): a level the node budget or a
+  vanished element cuts is marked unread on its parent, the screen included, and a group gone
+  mid-search cuts the screen search short. Every walk over an OS tree takes a step that finds an
+  element gone as its level cut, never ended (`lane::walk`); `ax::child_at` answers
+  `kAXErrorInvalidUIElement`, the parent gone, as that. Every element the read asks is given the
+  client's deadline and carries it, so a timeout, a press's included, names the deadline of the
+  element its call was asked of, or says that element refused it. The screen is found by walking every group of the
+  window within ten levels (`tree::find_screen`), each group's children listed by the bounded
+  listing the screen's walk shares (`accessibility::list_children`): an `iOSContentGroup` when
+  there is one, else the shallowest group of the app's window's shape, which a search left
+  partial by a group gone or its budget does not take. `Lane::read_tree` and `Lane::invoke` are handed
   the app's own tree, and each element is matched among the descendants of the node its nearest
   matched ancestor fits (the bridge serves only the elements VoiceOver reads), an app node once,
   by the role `lane::ios_simulator::roles` gives `accesskit_ios`'s trait, its label (a static
   text's from its value, the rule `lane::ax::label` the macOS lane shares), its checked and
   enabled state, an identifier it carries, and its frame on the window; two candidates alike are
-  `Error::Ambiguous`. A press finds its element again by the facts the read gave, refusing none
-  and two (`tree::locate`), and presses it through `AXPress`. A failure while the process is no
-  longer trusted answers the Accessibility permission, wherever it comes.
+  `Error::Ambiguous`. A press finds its element again by the facts the read gave, refusing none,
+  two, and one on a read that stopped short (`tree::locate`), and presses it through `AXPress`
+  (`accessibility::pressed`). A failure while the process is no longer trusted answers the
+  Accessibility permission, wherever it comes, except a press already sent: one not answered,
+  or whose element went away, keeps `may_have_run` and names the permission in its message.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

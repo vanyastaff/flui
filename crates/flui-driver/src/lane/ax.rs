@@ -14,7 +14,8 @@ mod client;
 #[cfg(target_os = "macos")]
 pub(crate) use self::client::{
     MESSAGING_TIMEOUT_SECONDS, Visit, Walker, actions, application, attribute, boolean, child_at,
-    elements, frame, name, number_text, perform, read_error, settable, string, timeout, trusted,
+    elements, frame, name, number_text, perform, read_error, set_messaging_timeout, settable,
+    string, timeout, trusted,
 };
 
 use flui_protocol::wire::Role;
