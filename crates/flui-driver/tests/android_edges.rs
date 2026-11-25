@@ -27,7 +27,7 @@ use flui_driver::{Awaited, Error, Isolation};
 
 use crate::android_lane::{
     FOCUSED, GETEVENT, PACKAGE, PROBED, USAGE, WINDOWS, abilities, answer_syncs, capability,
-    connected, focus_of, inputs, png_of, raw_capture, scripted, scripted_with, tap,
+    connected, focus_of, inputs, placement, png_of, raw_capture, scripted, scripted_with, tap,
 };
 
 const AT: DevicePoint = DevicePoint::new(300, 600);
@@ -1208,12 +1208,46 @@ fn a_probe_whose_command_ends_at_once_finds_no_uinput() {
     );
 }
 
+/// A panic of the `Adb` (a binding the driver does not own) at one step of the lane's end leaves
+/// the steps after it to run, and is resumed once they ran: the session's dumps removal unwinds,
+/// and the forward is removed all the same.
+#[test]
+fn a_panic_at_one_step_of_the_lanes_end_leaves_the_others_to_run() {
+    let adb = scripted(true, true)
+        .reply("shell 'am'", AdbReply::new(0, ""))
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .reply_once(
+            "forward --no-rebind",
+            AdbReply::new(0, "x".repeat(70 * 1024)),
+        )
+        .unwind_once("shell rm -f");
+    let app = AndroidApp::try_new(PACKAGE, "a.B").expect("an app");
+    let mut lane = connected(&adb);
+    assert!(lane.start(&app).is_err(), "the forward's answer was lost");
+    let empty = flui_driver::protocol::tree::Tree::new(Vec::new(), false);
+    let _ = lane.read_tree(&placement(), &empty);
+    let mut caught = flui_foundation::panic::FirstPanic::new();
+    assert!(
+        caught.contain(|| drop(lane)).is_none(),
+        "the step's panic is resumed"
+    );
+    flui_foundation::panic::discard_payload(caught.into_payload().expect("the payload"));
+    assert_eq!(adb.commands("shell rm -f").len(), 1);
+    assert_eq!(
+        adb.commands("forward --remove").len(),
+        1,
+        "the forward is removed after the panic"
+    );
+}
+
 #[test]
 fn a_lane_that_started_no_app_stops_nothing_when_it_ends() {
     let adb = scripted(true, true);
     drop(connected(&adb));
     assert_eq!(adb.commands("shell 'am'"), Vec::<String>::new());
     assert_eq!(adb.commands("forward"), Vec::<String>::new());
+    // A lane that never read the tree left no dump to remove.
+    assert_eq!(adb.commands("shell rm -f"), Vec::<String>::new());
     // A forward `adb` refused for another reason is no rule of the lane's: nothing is removed, and
     // the app it started is still stopped.
     let adb = scripted(true, true)

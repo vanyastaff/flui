@@ -24,39 +24,76 @@ pub const MAX_NODES: u32 = 100_000;
 /// The deepest a node of a dump may sit.
 pub const MAX_DEPTH: usize = 256;
 
-/// Where a session has its dump numbered `dump` written on the device: a directory the shell may
-/// write, a file named for the session (`session` is lowercase hex) and the dump, so two sessions
-/// on one device never read each other's dump, and no dump reads a file an earlier one left.
-#[must_use]
-pub fn dump_path(session: &str, dump: u64) -> String {
-    format!("/data/local/tmp/flui-driver-{session}-{dump}.xml")
+/// The directory the lane's dumps go to on the device: one the shell may write.
+pub const DUMP_DIRECTORY: &str = "/data/local/tmp";
+
+/// Where a session's window dumps live: one file per dump, `<directory>/flui-driver-<session>-<n>.xml`,
+/// numbered from 1, with what the dump said on its error stream beside it at `.err`. Two sessions
+/// on one device never read each other's dumps, and no dump reads a file an earlier one left.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DumpFiles {
+    /// The part of every path before the dump's number.
+    stem: String,
 }
 
-/// Every file a session's dumps write, as words of the device's shell: the dumps and their error
-/// streams, whatever their number.
-#[must_use]
-pub fn session_dumps(session: &str) -> String {
-    let every = dump_path(session, 0).replace("-0.xml", "-*.xml");
-    format!("{every} {every}.err")
-}
+impl DumpFiles {
+    /// The dumps of the session `session` (lowercase hex) in [`DUMP_DIRECTORY`].
+    #[must_use]
+    pub fn of_session(session: &str) -> Self {
+        Self::in_directory(DUMP_DIRECTORY, session)
+    }
 
-/// The line that dumps the active window to the session's dump numbered `dump` and prints it, or,
-/// where the dump wrote no file, what it said on its error stream ([`DumpFailure`]). Each dump has
-/// a path of its own ([`dump_path`]), so a file an earlier dump left (one whose command the host
-/// ended at its deadline, before its removal ran) is never printed as this dump's; and the line
-/// ends by removing every file of the session's dumps ([`session_dumps`]), so what dumps the host
-/// ended left goes with the next that runs to its end.
-///
-/// The dump connects to accessibility as `UiAutomation` does, which suspends the accessibility
-/// services running (TalkBack among them) until it ends.
-#[must_use]
-pub fn dump_line(session: &str, dump: u64) -> String {
-    let path = dump_path(session, dump);
-    format!(
-        "uiautomator dump {path} >/dev/null 2>{path}.err; cat {path} 2>/dev/null || cat \
-         {path}.err; rm -f {}",
-        session_dumps(session)
-    )
+    /// The dumps of the session `session` in `directory`.
+    #[must_use]
+    pub fn in_directory(directory: &str, session: &str) -> Self {
+        Self {
+            stem: format!("{directory}/flui-driver-{session}-"),
+        }
+    }
+
+    /// The file of dump number `dump`.
+    #[must_use]
+    pub fn path(&self, dump: u64) -> String {
+        format!("{}{dump}.xml", self.stem)
+    }
+
+    /// The shell line that removes the files of dump number `dump` and of every earlier dump of
+    /// the session, never a later one's: a dump the host ended at its deadline whose line still
+    /// runs on the device removes nothing a newer dump wrote.
+    #[must_use]
+    pub fn removal_through(&self, dump: u64) -> String {
+        let stem = &self.stem;
+        format!(
+            "for f in {stem}*.xml {stem}*.xml.err; do n=${{f#{stem}}}; n=${{n%%.*}}; case $n in \
+             ''|*[!0-9]*) ;; *) if [ \"$n\" -le {dump} ]; then rm -f \"$f\"; fi ;; esac; done"
+        )
+    }
+
+    /// The shell line that removes every file of the session's dumps, as the lane's end does.
+    #[must_use]
+    pub fn removal(&self) -> String {
+        let stem = &self.stem;
+        format!("rm -f {stem}*.xml {stem}*.xml.err")
+    }
+
+    /// The line that dumps the active window to dump number `dump` and prints it, or, where the
+    /// dump wrote no file, what it said on its error stream ([`DumpFailure`]). Each dump has a path
+    /// of its own, so a file an earlier dump left (one whose command the host ended at its
+    /// deadline, before its removal ran) is never printed as this dump's; and the line ends by
+    /// removing its own files and the earlier dumps' ([`Self::removal_through`]), so what dumps
+    /// the host ended left goes with the next that runs to its end.
+    ///
+    /// The dump connects to accessibility as `UiAutomation` does, which suspends the
+    /// accessibility services running (TalkBack among them) until it ends.
+    #[must_use]
+    pub fn dump_line(&self, dump: u64) -> String {
+        let path = self.path(dump);
+        format!(
+            "uiautomator dump {path} >/dev/null 2>{path}.err; cat {path} 2>/dev/null || cat \
+             {path}.err; {}",
+            self.removal_through(dump)
+        )
+    }
 }
 
 /// Why a `uiautomator dump` wrote no file, where it says so: each a state of the device that

@@ -7,6 +7,7 @@
 use crate::error::{Error, Result};
 use crate::lane::windows::keys::{self, Modifier, SHIFT, TextStroke, VirtualKey};
 use crate::lane::windows::safety::{KeyEdge, LANE, Refusal, ShellShortcuts};
+use crate::lane::{ActingInput, Delivered, OsInput, SendFailure};
 
 /// `VK_PACKET`, the key a Unicode packet arrives as.
 pub const PACKET: VirtualKey = VirtualKey {
@@ -58,6 +59,13 @@ pub enum Keystroke {
     UnshiftFor(u16),
     /// A UTF-16 unit, pressed and released as a Unicode packet.
     Unit(u16),
+}
+
+impl OsInput for Keystroke {
+    /// Every stroke is a key event the app may see, the mask's included.
+    fn acts(&self) -> bool {
+        true
+    }
 }
 
 impl Keystroke {
@@ -184,9 +192,11 @@ impl HeldKeys {
         completed
     }
 
-    /// Send `stroke` through `send` and record it as soon as `send` says Windows took it; only
-    /// then `confirm` (that the guard saw it come back), whose failure is reported with the
-    /// stroke already recorded, so a release of everything releases it.
+    /// Send `stroke` through `send` and record it, and say it in `delivered`, as soon as `send`
+    /// says Windows took it; only then `confirm` (that the guard saw it come back), whose failure
+    /// is reported with the stroke already recorded and said, so a release of everything releases
+    /// it and the run says it went out. A stroke Windows took in part (a character's press
+    /// without its release) is said and not recorded: it holds nothing.
     ///
     /// # Errors
     ///
@@ -194,10 +204,11 @@ impl HeldKeys {
     pub fn deliver(
         &mut self,
         stroke: Keystroke,
-        send: impl FnOnce() -> Result<()>,
+        delivered: &mut Delivered,
+        send: impl FnOnce() -> std::result::Result<(), SendFailure>,
         confirm: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        send()?;
+        delivered.send(&stroke, send)?;
         let _ = self.apply(stroke);
         confirm()
     }
@@ -310,8 +321,9 @@ impl HeldButtons {
         }
     }
 
-    /// Send a press (`pressed`) or release of `button` through `send`, record it as soon as
-    /// `send` says Windows took it, and only then `confirm`, as [`HeldKeys::deliver`] does.
+    /// Send a press (`pressed`) or release of `button` through `send`, record it and say it in
+    /// `delivered` as soon as `send` says Windows took it, and only then `confirm`, as
+    /// [`HeldKeys::deliver`] does.
     ///
     /// # Errors
     ///
@@ -320,10 +332,11 @@ impl HeldButtons {
         &mut self,
         button: u8,
         pressed: bool,
-        send: impl FnOnce() -> Result<()>,
+        delivered: &mut Delivered,
+        send: impl FnOnce() -> std::result::Result<(), SendFailure>,
         confirm: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        send()?;
+        delivered.send(&ActingInput, send)?;
         self.apply(button, pressed);
         confirm()
     }
@@ -374,4 +387,31 @@ impl HeldButtons {
             _ => "the forward mouse button",
         }
     }
+}
+
+/// What a `SendInput` call that inserted `inserted` of its `total` events answers: one that
+/// inserted them all succeeds, and one that inserted only some fails as partly sent, since the
+/// events it did insert reached the desktop.
+///
+/// # Errors
+///
+/// [`Error::Lane`] naming `what` when Windows took fewer than `total`, partly sent when it took
+/// any.
+pub fn inserted(inserted: u32, total: usize, what: &str) -> std::result::Result<(), SendFailure> {
+    if usize::try_from(inserted).ok() == Some(total) {
+        return Ok(());
+    }
+    let error = Error::Lane {
+        lane: LANE.to_owned(),
+        unavailable: false,
+        message: format!(
+            "Windows took {inserted} of the {total} events of {what} (blocked: the app may run \
+             elevated, or the desktop changed)"
+        ),
+    };
+    Err(if inserted > 0 {
+        SendFailure::partly_sent(error)
+    } else {
+        SendFailure::from(error)
+    })
 }

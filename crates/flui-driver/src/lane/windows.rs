@@ -112,7 +112,8 @@ mod lane {
     use crate::error::{Error, Result};
     use crate::lane::pacing::{ECHO_WITHIN, slices};
     use crate::lane::{
-        AccessibilityApi, ActivityGuard, Delivered, Lane, LaneCapabilities, PositionFidelity,
+        AccessibilityApi, ActingInput, ActivityGuard, Delivered, Lane, LaneCapabilities,
+        PositionFidelity, SendFailure,
     };
     use crate::steps::OsEvent;
 
@@ -346,20 +347,12 @@ mod lane {
                 self.checked(window, None)?;
                 let before = self.guard.echoes();
                 let guard = &self.guard;
-                let mut taken = false;
-                let sent = self.keys.deliver(
+                self.keys.deliver(
                     stroke,
-                    || {
-                        send_stroke(stroke)?;
-                        taken = true;
-                        Ok(())
-                    },
+                    delivered,
+                    || send_stroke(stroke),
                     || echo_since(guard, before),
-                );
-                if taken {
-                    delivered.input();
-                }
-                sent?;
+                )?;
             }
             Ok(())
         }
@@ -387,21 +380,13 @@ mod lane {
             };
             let before = self.guard.echoes();
             let guard = &self.guard;
-            let mut taken = false;
-            let sent = self.buttons.deliver(
+            self.buttons.deliver(
                 physical,
                 pressed,
-                || {
-                    win32::mouse_button(physical, pressed)?;
-                    taken = true;
-                    Ok(())
-                },
+                delivered,
+                || win32::mouse_button(physical, pressed),
                 || echo_since(guard, before),
-            );
-            if taken {
-                delivered.input();
-            }
-            sent
+            )
         }
 
         fn pointer(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
@@ -423,9 +408,7 @@ mod lane {
                         let (contacts, slot) = self.contacts_and(kind);
                         let device = device(slot, kind)?;
                         contacts.down(pointer, kind, |frame| {
-                            device.inject(frame)?;
-                            delivered.input();
-                            Ok(())
+                            delivered.send(&ActingInput, || device.inject(frame))
                         })
                     }
                     None => self.mouse_button(*button, true, delivered),
@@ -439,9 +422,7 @@ mod lane {
                         let (contacts, slot) = self.contacts_and(kind);
                         let device = device(slot, kind)?;
                         contacts.up(pointer, kind, |frame| {
-                            device.inject(frame)?;
-                            delivered.input();
-                            Ok(())
+                            delivered.send(&ActingInput, || device.inject(frame))
                         })
                     }
                     None => self.mouse_button(*button, false, delivered),
@@ -457,8 +438,7 @@ mod lane {
                         return Ok(());
                     }
                     let before = self.guard.echoes();
-                    win32::wheel(*delta_x, *delta_y)?;
-                    delivered.input();
+                    delivered.send(&ActingInput, || win32::wheel(*delta_x, *delta_y))?;
                     echo_since(&self.guard, before)
                 }
                 _ => Ok(()),
@@ -499,8 +479,9 @@ mod lane {
         }
     }
 
-    /// Send one keystroke through `SendInput`.
-    fn send_stroke(stroke: Keystroke) -> Result<()> {
+    /// Send one keystroke through `SendInput`: a character Windows took in part (its press without
+    /// its release) fails as partly sent.
+    fn send_stroke(stroke: Keystroke) -> std::result::Result<(), SendFailure> {
         match stroke {
             Keystroke::Press(key) => win32::key(key, true),
             Keystroke::Release(key) => win32::key(key, false),
@@ -607,8 +588,8 @@ mod lane {
                 &mut self.keys,
                 &mut self.buttons,
                 &mut self.contacts,
-                send_stroke,
-                |button| win32::mouse_button(button, false),
+                |stroke| send_stroke(stroke).map_err(Error::from),
+                |button| win32::mouse_button(button, false).map_err(Error::from),
                 |frame| {
                     let slot = match frame.kind {
                         PointerKind::Touch => &mut *touch,

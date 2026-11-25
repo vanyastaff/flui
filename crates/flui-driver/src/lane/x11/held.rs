@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use crate::lane::x11::keys::{self, Keysym, Modifier, NO_SYMBOL, SHIFT_L};
 use crate::lane::x11::safety::{Keycode, LANE, Refusal, ShellShortcuts};
+use crate::lane::{ActingInput, Delivered, OsInput};
 
 /// How long the lane waits after it maps or empties a key before the next stroke.
 pub const MAP_SETTLE: Duration = Duration::from_millis(50);
@@ -159,6 +160,14 @@ pub enum Keystroke {
     Unmap(Keycode),
     /// Wait [`MAP_SETTLE`].
     Settle,
+}
+
+impl OsInput for Keystroke {
+    /// A press or a release reaches the app; a mapping, its undoing and a wait are the lane's
+    /// housekeeping, which the app never sees as input.
+    fn acts(&self) -> bool {
+        matches!(self, Self::Press(_) | Self::Release(_))
+    }
 }
 
 /// What the lane holds: see the [module docs](self).
@@ -399,9 +408,10 @@ impl HeldInput {
         }
     }
 
-    /// Send `stroke` through `send`, recording it once the server took it; then wait for its echo
-    /// through `echo`. A press is held, and a mapping kept to be emptied, even when its echo never
-    /// comes.
+    /// Send `stroke` through `send`, recording it once the server took it, and saying it in
+    /// `delivered` where it reaches the app ([`OsInput`]: a press or a release, never a mapping or
+    /// a wait); then wait for its echo through `echo`. A press is held, and a mapping kept to be
+    /// emptied, even when its echo never comes.
     ///
     /// # Errors
     ///
@@ -410,10 +420,11 @@ impl HeldInput {
         &mut self,
         stroke: Keystroke,
         keymap: &Keymap,
+        delivered: &mut Delivered,
         send: impl FnOnce() -> crate::Result<()>,
         echo: impl FnOnce() -> crate::Result<()>,
     ) -> crate::Result<()> {
-        send()?;
+        delivered.send(&stroke, send)?;
         self.record(stroke, keymap);
         if matches!(stroke, Keystroke::Press(_) | Keystroke::Release(_)) {
             echo()?;
@@ -543,8 +554,8 @@ impl HeldButtons {
             .unwrap_or(0)
     }
 
-    /// Press (`pressed`) or release `button` through `send`, recording it once the server took
-    /// it; then wait for its echo through `echo`.
+    /// Press (`pressed`) or release `button` through `send`, recording it and saying it in
+    /// `delivered` once the server took it; then wait for its echo through `echo`.
     ///
     /// # Errors
     ///
@@ -553,10 +564,11 @@ impl HeldButtons {
         &mut self,
         button: u8,
         pressed: bool,
+        delivered: &mut Delivered,
         send: impl FnOnce() -> crate::Result<()>,
         echo: impl FnOnce() -> crate::Result<()>,
     ) -> crate::Result<()> {
-        send()?;
+        delivered.send(&ActingInput, send)?;
         if pressed {
             self.0 |= Self::bit(button);
         } else {
@@ -576,6 +588,7 @@ impl HeldButtons {
         &mut self,
         delta_x: i32,
         delta_y: i32,
+        delivered: &mut Delivered,
         mut send: impl FnMut(u8, bool) -> crate::Result<()>,
         mut echo: impl FnMut() -> crate::Result<()>,
     ) -> crate::Result<()> {
@@ -585,7 +598,13 @@ impl HeldButtons {
             };
             for _ in 0..clicks {
                 for pressed in [true, false] {
-                    self.deliver(button, pressed, || send(button, pressed), &mut echo)?;
+                    self.deliver(
+                        button,
+                        pressed,
+                        delivered,
+                        || send(button, pressed),
+                        &mut echo,
+                    )?;
                 }
             }
         }
