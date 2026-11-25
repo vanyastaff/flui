@@ -244,7 +244,7 @@ graph LR
       `a_match_carries_the_node_and_the_revision_it_was_read_on`,
       `resolving_a_strict_locator_with_several_matches_is_ambiguous`,
       `ambiguity_lists_at_most_ten_candidates`, `a_choice_made_with_pick_resolves`,
-      `a_miss_lists_the_nearest_elements`, `a_handle_is_not_rebound_when_a_slot_is_reused`;
+      `a_handle_is_not_rebound_when_a_slot_is_reused`;
     - `actionability::the_first_failed_check_names_why_an_element_cannot_be_acted_on`, one table
       of not in the tree, outside the window, no size, hidden, no earlier reading, moved, a disabled
       ancestor, covered and nothing hit; `what_covers_the_point_is_named_by_its_outline`,
