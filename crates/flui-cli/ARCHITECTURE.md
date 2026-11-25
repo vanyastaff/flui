@@ -440,7 +440,9 @@ the contract crate `flui-protocol`: the launch variables and the shortest token
   connection of the export the launch names, its lines queued until the export
   appears; a reload closes the clients whose connections went with the
   document, and closes those connections in the page all the same, in case one
-  belongs to the next document. `flui mcp` does not change. The relay and
+  belongs to the next document, except a connection the page ended itself.
+  Every connection the relay lets go of, closed or ended, is released, so the
+  page may drop it. `flui mcp` does not change. The relay and
   `flui run`'s own endpoint (`agent::supervisor`, `run.reload`) poll their
   clients through `flui_protocol::endpoint::PolledStream` (`agent::listener::polled`),
   the one rule the app's agent and the driver read and write a local endpoint

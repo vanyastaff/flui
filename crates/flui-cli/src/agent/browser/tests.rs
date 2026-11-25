@@ -341,6 +341,68 @@ fn a_client_too_far_behind_is_closed_with_its_page_connection() {
     eventually(&state, |page| page.released == [id.clone()]);
 }
 
+/// A connection the page ended whose client the relay still holds when the page reloads is
+/// released and not closed again in the page. Its end and the reload come in one batch of the
+/// tab's events, so no turn lets the client go first. Fails if a reload closes every open
+/// connection in the page, the ones the page ended included.
+#[test]
+fn a_reload_releases_a_connection_the_page_ended_without_closing_it() {
+    let state = Arc::new(Mutex::new(Page::default()));
+    let (_project, session, _relay) = relayed(Box::new(Tab(Arc::clone(&state))));
+    let mut client = Client::connect(&session);
+    client.send("hello");
+    assert_eq!(client.next().as_deref(), Some("echo:hello"));
+    let id = page(&state).received[0].0.clone();
+    {
+        let mut page = page(&state);
+        let last = serde_json::json!([id, "last"]).to_string();
+        let end = serde_json::json!([id, null]).to_string();
+        page.events.push_back(LinkEvent::Report(last));
+        page.events.push_back(LinkEvent::Report(end));
+        page.events.push_back(LinkEvent::Navigated);
+    }
+    while client.next().is_some() {}
+    eventually(&state, |page| page.released == [id.clone()]);
+    assert!(
+        page(&state).closed.is_empty(),
+        "a connection the page ended is not closed again"
+    );
+}
+
+/// A connection the page ended whose client has not read what it was sent yet is released and
+/// not closed again in the page when the relay stops. Fails if a stopping relay closes every
+/// open connection in the page, the ones the page ended included.
+#[test]
+fn a_stopping_relay_releases_a_connection_the_page_ended_without_closing_it() {
+    let state = Arc::new(Mutex::new(Page::default()));
+    let (_project, session, relay) = relayed(Box::new(Tab(Arc::clone(&state))));
+    let mut client = Client::connect(&session);
+    client.send("hello");
+    assert_eq!(client.next().as_deref(), Some("echo:hello"));
+    let id = page(&state).received[0].0.clone();
+    {
+        // A line past what any host buffers for a client that does not read, then the end, in
+        // one batch: by the time the client reads a byte of the line, the page has ended it.
+        let mut page = page(&state);
+        let backlog = serde_json::json!([id, "x".repeat(8 << 20)]).to_string();
+        let end = serde_json::json!([id, null]).to_string();
+        page.events.push_back(LinkEvent::Report(backlog));
+        page.events.push_back(LinkEvent::Report(end));
+    }
+    let mut chunk = [0_u8; 4096];
+    let read = until_ready(WAIT, "the backlog", || (&client.stream).read(&mut chunk))
+        .expect("the client reads");
+    assert!(read > 0, "the relay closed the client before the stop");
+    drop(relay);
+    let seen = page(&state);
+    assert_eq!(seen.released, [id], "released as the relay stops");
+    assert!(
+        seen.closed.is_empty(),
+        "a connection the page ended is not closed again: {:?}",
+        seen.closed
+    );
+}
+
 #[test]
 fn the_relay_ends_with_its_browser() {
     let state = Arc::new(Mutex::new(Page::default()));
