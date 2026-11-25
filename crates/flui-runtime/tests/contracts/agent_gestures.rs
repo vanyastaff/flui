@@ -2091,3 +2091,140 @@ fn a_frames_wait_gives_up_at_its_own_timeout() {
         "{outcome:?}"
     );
 }
+
+/// `audit.a11y` cannot judge target sizes against a minimum that is no size: a window whose mouse
+/// minimum target is 0 lists `target_size` as not checked, naming the pointer.
+#[test]
+fn target_size_with_no_minimum_is_not_checked() {
+    use flui_interaction::gesture::{GestureProfiles, GestureSettings};
+    use flui_platform::TargetPlatform;
+    use flui_platform::input::pointer::PointerKind;
+    let mut values = GestureSettings::preset(TargetPlatform::Linux, PointerKind::Mouse).values();
+    values.min_target = 0.0;
+    let mouse = GestureSettings::try_from_values(values).expect("a minimum of 0 is admitted");
+    let windows = Arc::new(Mutex::new(Vec::new()));
+    let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
+    let mut host = HeadlessHost::new(
+        HeadlessWindow::new(200, 400)
+            .with_platform(TargetPlatform::Linux)
+            .with_gesture_preset(
+                GestureProfiles::preset(TargetPlatform::Linux).with_kind(PointerKind::Mouse, mouse),
+            ),
+    )
+    .with_dev_agent(&mut agent);
+    host.attach(&Board {
+        presses: Presses::default(),
+    })
+    .expect("mount");
+    let _ = host.pump(Duration::from_millis(16));
+    let window = windows
+        .lock()
+        .pop()
+        .expect("the host handed the agent its window");
+    let _ = host.pump(Duration::from_millis(16));
+    let mut params = flui_protocol::audit::AuditParams::new(window.id());
+    params.rules = vec![flui_protocol::audit::AuditRule::TargetSize];
+    let mut audited = window
+        .call::<method::AuditA11y>(params)
+        .expect("the inbox has room");
+    let report = answered(&mut host, &mut audited, 2).0.expect("audited");
+    let [entry] = report.not_checked.as_slice() else {
+        panic!("target_size is not checked: {report:#?}");
+    };
+    assert_eq!(
+        entry.reason,
+        "the minimum target of a mouse, this window's primary pointer, is not a finite positive size"
+    );
+}
+
+/// A wheel turned by lines scrolls by lines, not by pixels: one line down moves a list's rows
+/// more than a pixel.
+#[test]
+fn an_injected_scroll_by_lines_scrolls_by_lines() {
+    use flui_protocol::input::{ActionSequence, InputParams, InputSource, ScrollUnit, WheelAction};
+    let (mut host, _agent, window, lease, _presses) = shown();
+    let before = bounds(&mut host, &window, "Item 1");
+    let at = bounds(&mut host, &window, "Items").center();
+    let scroll = ActionSequence::new(vec![InputSource::Wheel {
+        id: "wheel".to_owned(),
+        actions: vec![WheelAction::Scroll {
+            at,
+            delta_x: 0.0,
+            delta_y: 1.0,
+            unit: ScrollUnit::Line,
+        }],
+    }]);
+    let mut scrolled = lease
+        .call::<method::InputInject>(InputParams::new(window.id(), scroll))
+        .expect("the inbox has room");
+    answered(&mut host, &mut scrolled, 20)
+        .0
+        .expect("the scroll plays");
+    for _ in 0..10 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    let after = bounds(&mut host, &window, "Item 1");
+    assert!(
+        before.y - after.y > 5.0,
+        "a line moves more than a pixel: {before:?} to {after:?}"
+    );
+}
+
+/// At its deadline `scroll_until` withdraws its own step and nothing else queued: input queued
+/// before the step, behind a long injection, and a release queued before it still run and answer.
+#[test]
+fn scroll_until_withdraws_only_its_own_step() {
+    use flui_protocol::input::{
+        ActionSequence, InputParams, InputSource, PointerAction, PointerDevice,
+    };
+    let pause = |ms: u64| {
+        ActionSequence::new(vec![InputSource::Pointer {
+            id: "pen".to_owned(),
+            device: PointerDevice::Mouse,
+            actions: vec![PointerAction::Pause { duration_ms: ms }],
+        }])
+    };
+    for release_before in [false, true] {
+        let (mut host, _agent, window, lease, _presses) = shown();
+        let mut front = lease
+            .call::<method::InputInject>(InputParams::new(window.id(), pause(600)))
+            .expect("the inbox has room");
+        let _ = host.pump(Duration::from_millis(16));
+        let mut before = None;
+        let mut released = None;
+        if release_before {
+            released = Some(
+                lease
+                    .call::<method::InputRelease>(flui_protocol::session::WindowParams::new(
+                        window.id(),
+                    ))
+                    .expect("the inbox has room"),
+            );
+        } else {
+            before = Some(
+                lease
+                    .call::<method::InputInject>(InputParams::new(window.id(), pause(16)))
+                    .expect("the inbox has room"),
+            );
+        }
+        let mut until = ScrollUntilParams::new(named("Items"), Locator::named("Item 99"));
+        until.options = timeout(until.options, 100);
+        let mut until = ask::<method::ElementScrollUntil>(&lease, until);
+        let ended = answered(&mut host, &mut until, 30)
+            .0
+            .expect_err("the deadline passes with the step still queued");
+        assert_eq!(ended.code, ErrorCode::NotFound, "{ended:?}");
+        answered(&mut host, &mut front, 60)
+            .0
+            .expect("the long injection plays");
+        if let Some(mut released) = released {
+            answered(&mut host, &mut released, 10)
+                .0
+                .expect("the release queued before the step runs");
+        } else if let Some(mut before) = before {
+            answered(&mut host, &mut before, 10)
+                .0
+                .expect("the injection queued before the step plays");
+        }
+    }
+}
