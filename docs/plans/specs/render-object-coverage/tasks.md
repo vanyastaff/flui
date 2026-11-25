@@ -25,7 +25,8 @@
   element's manager and, as full blocks, the `LazyMultiBoxRender` implementation and the
   configuration of each of the four lazy slivers. A new lazy sliver (RC8, RC9, RC27) puts its
   block in a file of its own beside it and does not edit it. The tasks that do edit it are
-  RC38, RC39 and RC24, one at a time, in that order where they meet.
+  RC38, RC39 and RC24, one at a time, in that order where they meet. RC43 moves the four
+  lazy slivers' readers in `flui-objects` and does not touch it.
 - **A record a task makes untrue is that task's to rewrite.** A task that changes what a
   sentence of an `ARCHITECTURE.md`, a module's documentation or an ADR states owns that
   sentence and names it under "Owns".
@@ -45,13 +46,23 @@
   is not gated; it waits on its dependency.
 - **An ADR task is a design change:** it is read with the design lenses before it merges
   (AGENTS.md, "Before a merge"), and the code tasks it blocks do not start until it is
-  accepted.
+  accepted. It merges `Proposed`. The change that accepts it writes the `Supersedes:` and
+  `Superseded-by:` pair, leaves the superseded record's text as it is, and adds one bullet per
+  unbuilt section under "Accepted ADR sections not built yet" of
+  [gaps.md](../../../gaps.md#accepted-adr-sections-not-built-yet); each code task removes the
+  bullets it builds, and the last writes `Implemented` on the record.
+- **An ADR for a frozen pipeline waits with its code.** RC16, RC19, RC23, RC26 and RC29
+  decide in `flui-layer`, `flui-rendering`, `flui-painting` or `flui-engine`. Each is written
+  when its first code task may start: the freeze has lifted, or the owner has written an
+  exception beside that task here. RC14 decides in no frozen crate and is written now.
 - **The record first.** A task that pins a tracker row marked `†` in
   [requirements.md](requirements.md) reads the thread before writing the test and corrects the
   row. A task of R19–R26 checks the pitfalls it relies on against the other framework's source
   or tracker and replaces "recollection" in its requirement with what it found.
-- **The shared row.** A task whose object keeps a `ShownChildren` adds its call of
-  `harness_<object>_hits_and_publishes_a_child_only_where_it_paints`.
+- **The shared row.** A task whose object keeps an `OverflowClip` or a `ShownChildren` adds
+  its call of `harness_<object>_hits_and_publishes_a_child_only_where_it_paints`, with both
+  builders; `every_keeper_of_a_shown_record_runs_the_shared_row` (RC1) fails the crate's
+  tests until it does.
 - **Runs owed on devices.** A task whose behaviour a host decides (a wheel's units, an IME, a
   pointer kind) adds the row to `crates/flui-native/platform-parity.toml`, restates
   `docs/platform-parity.md` from it, and names the platforms in its pull request. The tasks
@@ -62,84 +73,87 @@
 | Task | Content | Req. | Crates | Depends on | Gated | Status |
 |------|---------|------|--------|------------|:-----:|--------|
 | RC0 | Harness reads family modules; the guard counts `pub` rows, whole names and mounted files; `docs/testing.md` drops the copied count | R1 | `flui-objects` (tests), docs | — | | not started |
-| RC1 | The `shown` module (`OverflowClip`, `ShownChildren`); six overflow objects and the carousel move onto it; the gap entry leaves | R2 | `flui-objects`, docs | RC0 | | not started |
+| RC1 | The `shown` module with `OverflowClip`, the shared row and its guard; six overflow objects move onto it; the gap entry leaves | R2 | `flui-objects`, docs | RC0 | | not started |
+| RC43 | `ShownChildren` and the sliver frame; the carousel, the list, the fixed-extent list and the grid move onto it; `PinnedChildren` returns its slots and keeps none | R2 | `flui-objects`, docs | RC1 | | not started |
 | RC2 | Sliver pass-through base; six proxies move to it | R3, R4 | `flui-objects` | RC0 | | not started |
-| RC3 | `MaxPaintRect`, `RenderSliverClip<S>`, `SliverClipRect`, `SliverClipRRect` | R3 | `flui-objects`, `flui-widgets` | RC1, RC2 | | not started |
+| RC3 | `MaxPaintRect`, `RenderSliverClip<S>`, `SliverClipRect`, `SliverClipRRect` | R3 | `flui-objects`, `flui-widgets` | RC43, RC2 | | not started |
 | RC4 | `RenderDecoratedSliver`, `DecoratedSliver` | R4 | `flui-objects`, `flui-widgets` | RC3 | | not started |
 | RC5 | `BlockSemantics`, `SliverVisibility` | R9 | `flui-widgets`, `flui-material` docs | — | | not started |
 | RC6 | `RenderOverflowBar`, `OverflowBar` | R9 | `flui-objects`, `flui-widgets` | RC0 | | not started |
 | RC7 | `RenderImage` colour, blend mode and opacity | R10 | `flui-objects`, `flui-widgets` | RC0 | | not started |
-| RC8 | The walk takes its extent source; `RenderSliverVariedExtentList` with authored extents, `SliverVariedExtentList`, the `ListView` constructor | R5 | `flui-objects`, `flui-view`, `flui-widgets` | RC0, RC42 | | not started |
-| RC9 | `RenderTreeSliver` with the reveal map and roster edits, `TreeSliver` and its roster | R6 | `flui-objects`, `flui-view`, `flui-widgets` | RC8, RC1, RC42 | | not started |
-| RC10 | `RenderPinnedHeaderSliver`, `RenderSliverResizingHeader`, `HeaderFrame`, their widgets; group rows | R7 | `flui-objects`, `flui-widgets` | RC1, RC37 | | not started |
+| RC8 | The walk takes its extent source; `RenderSliverVariedExtentList` with authored extents, `SliverVariedExtentList`, the `ListView` constructor | R5 | `flui-objects`, `flui-view`, `flui-widgets` | RC0, RC42, RC43 | | not started |
+| RC9 | `RenderTreeSliver` with the reveal map and roster snapshots, `TreeSliver` and its roster | R6 | `flui-objects`, `flui-view`, `flui-widgets` | RC8, RC43, RC42 | | not started |
+| RC10 | `RenderPinnedHeaderSliver`, `RenderSliverResizingHeader`, `HeaderFrame`, their widgets; group rows | R7 | `flui-objects`, `flui-widgets` | RC43 | | not started |
 | RC11 | `RenderSliverFloatingHeader`, `SliverFloatingHeader`; the floating state leaves `sliver_persistent_header.rs` | R7 | `flui-objects`, `flui-widgets` | RC10 | | not started |
 | RC12 | `RenderSliverLayoutBuilder` and its element, `RenderSliverFractionalPadding`, `PageView::pad_ends` | R8 | `flui-objects`, `flui-view`, `flui-widgets` | RC2 | | not started |
 | RC13 | "Mapping decisions" entries for what stays covered by a different design; the nested-scroll behaviours against ADR-0209 | R18 | docs, `flui-widgets` (tests) | — | | not started |
-| RC14 | ADR: a tap is classified against the regions on the path of its down, by the binding; ADR-0208's rule 4 names two producers of a hold | R12 | `docs/adr` | — | | not started |
-| RC15 | Tap regions, the pointer route: event, registry, snapshot, hold, capability, liveness, `RenderTapRegion`, `TapRegion`, the popup's group | R12 | `flui-interaction`, `flui-objects`, `flui-view`, `flui-runtime`, `flui-widgets`, `flui-testing` | RC14, RC0, RC37 | | not started |
-| RC16 | ADR: a subtree's filter and its group blend are paint effects | R11, R26 | `docs/adr` | — | | not started |
+| RC14 | ADR: a tap is classified against the regions on the path of its down, by the binding; it supersedes ADR-0208 §2 rule 4 in part | R12 | `docs/adr`, `docs/gaps.md` | — | | not started |
+| RC15 | Tap regions, the pointer route: event, registry, snapshot, every end of a contact, hold, capability, group liveness, `RenderTapRegion`, `TapRegion`, the popup's group, the field's overlays, the `flui-sdk` re-exports | R12 | `flui-interaction`, `flui-objects`, `flui-view`, `flui-runtime`, `flui-widgets`, `flui-sdk`, `flui-testing` | RC14, RC0 | | not started |
+| RC16 | ADR: a subtree's filter and its group blend are paint effects | R11, R26 | `docs/adr`, `docs/gaps.md` | — | with RC17 | not started |
 | RC17 | The filter effect and the records of the effect order, `RenderColorFiltered`, `RenderImageFiltered` and their widgets | R11 | `flui-rendering`, `flui-engine` (tests), `flui-objects`, `flui-widgets` | RC16, RC0 | yes | not started |
 | RC18 | `RenderImage` inversion and filter quality | R10 | `flui-painting`, `flui-engine`, `flui-objects`, `flui-widgets` | RC7, RC16 | yes | not started |
-| RC19 | ADR: a paragraph lays out the boxes its spans embed | R13, R14 | `docs/adr` | — | | not started |
+| RC19 | ADR: a paragraph lays out the boxes its spans embed, and an editing value holds its placeholders | R13, R14 | `docs/adr`, `docs/gaps.md` | — | with RC20 | not started |
 | RC20 | Span children are `InlineSpan`s; a measured placeholder is tied to its child by its ordinal and shapes as an inline box | R13 | `flui-painting` and moved call sites | RC19 | yes | not started |
-| RC21 | `RenderParagraph` inline children, the span builder, `Text::rich` and `RichText` | R13 | `flui-objects`, `flui-view`, `flui-widgets` | RC20, RC1 | | not started |
-| RC22 | `RenderEditable` inline children; the field builds its spans from the value; where a U+FFFC may enter; the obscured field | R14 | `flui-objects`, `flui-widgets` | RC21 | | not started |
-| RC23 | ADR: lazy children are requested by a typed key | R16 | `docs/adr` | — | | not started |
+| RC21 | `RenderParagraph` inline children, the span builder, `Text::rich` and `RichText` | R13 | `flui-objects`, `flui-view`, `flui-widgets` | RC20, RC43 | | not started |
+| RC22 | `RenderEditable` inline children; the editing value holds its placeholders' ids and is edited by range in the controller and the input session; the field builds its spans from it; the obscured field | R14 | `flui-objects`, `flui-widgets` | RC21 | | not started |
+| RC23 | ADR: lazy children are requested by a typed key | R16 | `docs/adr`, `docs/gaps.md` | — | with RC24 | not started |
 | RC24 | The request strategy, its element, retain set and pinned set take a key type | R16 | `flui-rendering`, `flui-view` | RC23 | yes | not started |
-| RC25 | `RenderTwoAxisViewport`, the uniform-cell layout, `TwoAxisScrollView`, one contact on two owners | R16 | `flui-objects`, `flui-view`, `flui-widgets` | RC24, RC1 | | not started |
-| RC26 | ADR: a sliver states a per-child paint transform, and the list wheel is a sliver | R15, R25 | `docs/adr` | RC23 | | not started |
-| RC27 | `WheelGeometry`, `RenderSliverWheel`; the record's transform, opacity and two-part rule | R15 | `flui-objects`, `flui-view` | RC31, RC1 | | not started |
-| RC28 | `ListWheelScrollView`, `WheelSnap`, `DetentSteps` in the scrollable, the looping wheel | R15 | `flui-widgets` | RC27 | | not started |
-| RC29 | ADR: a native view is a scene node the host places | R17 | `docs/adr`, `docs/gaps.md` | owner decision | | not started |
+| RC25 | `RenderTwoAxisViewport`, the uniform-cell layout, `TwoAxisScrollView`, one contact on two owners | R16 | `flui-objects`, `flui-view`, `flui-widgets` | RC24, RC43 | | not started |
+| RC26 | ADR: a sliver states a per-child paint transform, the list wheel is a sliver, and a notch is the snap policy's step | R15, R25 | `docs/adr`, `docs/gaps.md` | RC23 | with RC31 | not started |
+| RC27 | `WheelGeometry`, `RenderSliverWheel`; the record's transform, opacity and two-part rule | R15 | `flui-objects`, `flui-view` | RC31, RC43 | | not started |
+| RC28 | `ListWheelScrollView`, `WheelSnap`, `SnapPolicy::step` and the packet table in the scrollable, the looping wheel | R15 | `flui-widgets`, `flui-native` (the parity rows) | RC27 | | not started |
+| RC29 | ADR: a native view is a scene node the host places | R17 | `docs/adr`, `docs/gaps.md` | owner decision | with RC30 | not started |
 | RC30 | Native views, broken into tasks when RC29 is accepted | R17 | set by RC29 | RC29 | yes | not started |
 | RC31 | The sliver per-child transform seam: the hook, the hit-test transform, a twice-painted child walked once | R15, R25 | `flui-rendering` | RC26 | yes | not started |
-| RC32 | Tap regions, accessibility activations: one door for every caller, classification by ancestry, the consuming stop | R12 | `flui-semantics`, `flui-view`, `flui-runtime`, `flui-testing`, `flui-widgets` (tests) | RC15 | | not started |
+| RC32 | Tap regions, accessibility activations: one production door, a class for every action, classification by ancestry, the consuming stop and its typed outcome | R12 | `flui-protocol`, `flui-view`, `flui-runtime`, `flui-testing`, `flui-widgets` (tests) | RC15 | | not started |
 | RC33 | `AnchoredPlacement`; the popup menu and the selection toolbar move onto it | R23 | `flui-widgets` | — | | not started |
-| RC34 | `RenderFirstThatFits`, `FirstThatFits` | R24 | `flui-objects`, `flui-widgets` | RC1 | | not started |
-| RC35 | The leading-run rule; `RenderWrap` with `max_runs` and an indicator; a stateful `Wrap` that relabels it | R22 | `flui-objects`, `flui-widgets` | RC1, RC37 | | not started |
+| RC34 | `RenderFirstThatFits`, `FirstThatFits` | R24 | `flui-objects`, `flui-widgets` | RC43 | | not started |
+| RC35 | The leading-run rule; `RenderWrap` with `max_runs`, an indicator and a keyed reserve; a stateful `Wrap` that relabels it on the split's wake | R22 | `flui-objects`, `flui-widgets` | RC43 | | not started |
 | RC36 | The `tracks` module; `TableColumnWidth` becomes `TrackSize` in every crate and package; `RenderTable` moves onto it | R21 | `flui-objects`, `flui-widgets`, `flui-sdk`, `flui-material` | — | | not started |
-| RC37 | The after-frame helper; `GeometryObserver`, `VisibilityObserver` | R19 | `flui-widgets` | — | | not started |
-| RC38 | Sticky rows in `RenderSliverList` and `RenderSliverVariedExtentList`; one index kept outside the band; the list moves onto the shown record | R20 | `flui-objects`, `flui-view`, `flui-widgets` | RC8, RC1 | | not started |
-| RC39 | `ItemEffect` on the four lazy slivers; the fixed-extent list and the grid move onto the shown record | R25 | `flui-objects`, `flui-view`, `flui-widgets` | RC31, RC38 | | not started |
+| RC37 | `GeometryObserver`, a leader watch around its child | R19 | `flui-widgets` | — | | not started |
+| RC44 | `LeaderGeometry` reports the leader chain's transform and clip; `VisibilityObserver` with thresholds and a margin | R19 | `flui-rendering`, `flui-layer`, `flui-widgets` | RC37 | yes | not started |
+| RC38 | Sticky rows in `RenderSliverList` and `RenderSliverVariedExtentList`; the lazy element's one set kept outside the band | R20 | `flui-objects`, `flui-view`, `flui-widgets` | RC8, RC43 | | not started |
+| RC39 | `ItemEffect` on the four lazy slivers | R25 | `flui-objects`, `flui-view`, `flui-widgets` | RC31, RC38 | | not started |
 | RC40 | The group layer, the blend mode on `PaintOpacity`, `RenderBlendGroup`, `RenderMask`, `BlendGroup`, `Mask` | R26 | `flui-layer`, `flui-engine`, `flui-rendering`, `flui-objects`, `flui-widgets` | RC16, RC17 | yes | not started |
 | RC41 | `RenderGrid`, `GridParentData`, `Grid`, `GridCell` | R21 | `flui-objects`, `flui-widgets` | RC36, RC1, RC0 | | not started |
-| RC42 | `Virtualizer::splice` and `extent_of`; the module documentation states what the code does | R5, R6 | `flui-rendering` | — | defect fix | not started |
+| RC42 | `Virtualizer::splice`, which returns its anchor correction, and `extent_of`; the module documentation states what the code does | R5, R6 | `flui-rendering` | — | defect fix | not started |
 
 "Defect fix" in the Gated column: the task edits a frozen crate and the freeze admits it as a
 defect fix (AGENTS.md, "Build what is accepted before designing further"); the owner confirms
 that reading for RC42 in [design.md](design.md), "Decisions for the owner", 12 and 13. RC3
-edits `flui-engine` on the same ground only if its readback row shows a seam.
+edits `flui-engine` on the same ground only if its readback row shows a seam. "With RCn": an
+ADR for a frozen pipeline, written when that code task may start ("Execution rules").
 
 ## Order and parallelism
 
 1. **RC0 first.** Every task that adds a harness row depends on it.
 2. **Then, in parallel** (file sets are disjoint): RC1, RC2, RC5, RC6, RC7, RC13, RC33, RC36,
-   RC37, RC42, and the ADR tasks RC14, RC16, RC19, RC23, which touch only `docs/adr/`.
-3. **After RC1:** RC34. **After RC1 and RC37:** RC10 and RC35 in parallel (RC35 owns
-   `wrap.rs` after RC1 leaves it). **After RC1 and RC2:** RC3, then RC4. **After RC2:** RC12.
-   **After RC10:** RC11. **After RC14 and RC37:** RC15, then RC32. **After RC36 and RC1:**
-   RC41.
-4. **After RC42:** RC8. **After RC8 and RC1:** RC9 and RC38 one after the other, in either
+   RC37, RC42, and the one ADR task that is written now, RC14.
+3. **After RC1:** RC43, and RC41 once RC36 has landed. **After RC43:** RC34, and RC10 and
+   RC35 in parallel (RC35 owns `wrap.rs` after RC1 leaves it). **After RC43 and RC2:** RC3,
+   then RC4. **After RC2:** RC12. **After RC10:** RC11. **After RC14:** RC15, then RC32.
+4. **After RC42 and RC43:** RC8. **After RC8:** RC9 and RC38 one after the other, in either
    order: both edit `virtualized_band.rs`.
-5. **Gated, once the freeze lifts or an exception is written:** RC17, then RC18 and RC40;
-   RC20, then RC21 and RC22; RC24, then RC25; RC26 is written after RC23 is accepted, then
-   RC31, then RC27 and RC28, and RC39 after RC31 and RC38. RC17, RC24, RC31 and RC40 each edit
+5. **Gated, once the freeze lifts or an exception is written,** each ADR first and its code
+   after it is accepted: RC16, then RC17, then RC18 and RC40; RC19, then RC20, then RC21 and
+   RC22; RC23, then RC24, then RC25; RC26 after RC23, then RC31, then RC27 and RC28, and RC39
+   after RC31 and RC38; RC44 after RC37. RC17, RC24, RC31, RC40 and RC44 each edit
    `flui-rendering`, and no two of them run at once unless their files in it differ (RC17 and
    RC40 share `traits/paint_effects.rs` and the same paragraphs of its `ARCHITECTURE.md`;
    RC24 is `context/layout.rs`; RC31 is `traits/render_sliver.rs`, the sliver hit-test
-   context and two walks). RC42 is `virtualization/` alone and meets none of them. RC20 and
-   RC18 are `flui-painting` with different files.
+   context and two walks; RC44 is `pipeline/owner/leader_watch.rs` and one paragraph of the
+   `ARCHITECTURE.md`). RC42 is `virtualization/` alone and meets none of them. RC20 and RC18
+   are `flui-painting` with different files; RC40 and RC44 are `flui-layer` with different
+   files.
 6. **`sliver_adaptor.rs` has one writer at a time:** RC38, then RC39; RC24 before or after
    the pair, never between a branch and its merge.
 7. **RC29 waits for the owner.**
 
-If the owner strikes W19, the after-frame helper lands with the first of RC10, RC15 and RC35
-to start, and the other two depend on that task instead of RC37.
-
-Two files are edited by tasks that do not depend on each other and are rebased, not owned
-twice: `crates/flui-widgets/src/navigator/page_route.rs` (a doc sentence in RC5, the popup's
-group in RC15) and `crates/flui-widgets/src/popup_menu.rs` (the placement in RC33, passing the
-opener's group in RC15). Whoever lands second rebases.
+Files edited by tasks that do not depend on each other are rebased, not owned twice:
+`crates/flui-widgets/src/navigator/page_route.rs` (a doc sentence in RC5, the popup's group in
+RC15), `crates/flui-widgets/src/popup_menu.rs` (the placement in RC33, passing the opener's
+group in RC15) and `crates/flui-widgets/src/text/selection_menu/toolbar.rs` (the placement in RC33,
+joining the field's group in RC15). Whoever lands second rebases.
 
 The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 are
 `flui-widgets` alone.
@@ -151,55 +165,70 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 - **What:** W1. The guard's matching moves into one function, `rows_naming`, with W1's three
   rules: a row is a column-0 `fn harness_` under any visibility; a type counts only as a whole
   identifier; a family file counts only when it is listed in `FAMILY_FILES` and mounted from
-  the root at column 0. `family_files_are_mounted_and_listed` reads `tests/harness/`. A type
+  the root at column 0. `family_files_are_mounted_and_listed` reads `tests/harness/` and
+  takes a directory that does not exist as the empty set, which is what this task leaves. A
+  type
   the substring match covered only through a longer name gets its own row here. No existing
   row moves. `docs/testing.md` links `RENDER_OBJECT_TYPES` instead of saying "81".
 - **Owns:** `crates/flui-objects/tests/render_object_harness.rs` (the guards and the module
-  list), `crates/flui-objects/tests/harness/` (new, empty until RC1), the harness paragraph of
-  `docs/testing.md`.
+  list), the harness paragraph of `docs/testing.md`. It creates no directory:
+  `crates/flui-objects/tests/harness/` appears with RC1's first family file.
 - **Tests:** `the_guard_counts_a_pub_row_of_a_family_file`,
   `the_guard_refuses_a_name_inside_a_longer_one`,
-  `the_guard_refuses_a_family_file_that_is_not_mounted`, each over literal sources and each
-  failing with the matcher reverted; `family_files_are_mounted_and_listed`; the two existing
-  guards pass.
+  `the_guard_refuses_a_family_file_that_is_not_mounted`,
+  `the_mount_check_takes_a_missing_directory_as_no_files`, each over literal sources or a
+  temporary directory and each failing with the matcher reverted;
+  `family_files_are_mounted_and_listed`; the two existing guards pass.
 - **Checks:** clippy and nextest for `flui-objects`; the `checks` job's document steps (typos,
   lychee, unmounted-tests).
 - **Depends:** — **Size:** S
 
-### RC1. The shown answer
+### RC1. The shown answer: the overflow record
 
-- **What:** W2 and the seam of [design.md](design.md), "The shown answer".
-  `crates/flui-objects/src/shown.rs` with `OverflowClip` and with `ShownChildren` as far as
-  it has callers: parts with a slot and a clip, the announced slots, the sliver frame and its
-  hit mapping. `OverflowClip` replaces the `has_visual_overflow` field in `RenderStack`,
-  `RenderIndexedStack`, `RenderWrap`, `RenderFittedBox`, `RenderAnimatedSize` and
-  `RenderConstraintsTransformBox`: each commits on every `Ok` exit of its layout, reports the
-  clip from `describe_approximate_paint_clip`, and keeps its public `has_visual_overflow()`
-  as a read of the record. `RenderSliverCarousel` moves from its private `Shown` table to
-  `ShownChildren`, its pinned slot committed as announced. The generic shared row is added to
-  the harness. The gap entry "An overflow clip cuts off paint but not semantics or input
-  regions" leaves `docs/gaps.md`. "Mapping decisions" records the contract with its three
-  states and the hit rule of an unclipped overflow.
+- **What:** W2's first task and the seam of [design.md](design.md), "The shown answer".
+  `crates/flui-objects/src/shown.rs` with `OverflowClip` (`begin`, `commit`, `clip`). It
+  replaces the `has_visual_overflow` field in `RenderStack`, `RenderIndexedStack`,
+  `RenderWrap`, `RenderFittedBox`, `RenderAnimatedSize` and `RenderConstraintsTransformBox`:
+  each one's `perform_layout` is `begin`, its own `lay_out`, `commit`; each reports the clip
+  from `describe_approximate_paint_clip` and keeps its public `has_visual_overflow()` as a
+  read of the record. The generic shared row with its two builders and the guard that every
+  keeper of a record runs it are added to the harness. The gap entry "An overflow clip cuts
+  off paint but not semantics or input regions" leaves `docs/gaps.md`. "Mapping decisions"
+  records the contract and the hit rule of an unclipped overflow.
 - **Owns:** `crates/flui-objects/src/shown.rs` (new), `layout/stack.rs`, `wrap.rs`,
-  `fitted_box.rs`, `animated_size.rs`, `constraints_transform_box.rs`,
-  `sliver/carousel/render.rs`; `crates/flui-objects/tests/harness/shown.rs` (new); that entry
-  of `docs/gaps.md`. Not owned, because the accessors keep their meaning:
-  `crates/flui-testing/src/widgets.rs` and the two documents of `flui-rendering` that name
-  `has_visual_overflow`; the task's last step is `rg has_visual_overflow` and a reading of
-  each hit against the code.
-- **Tests:** `harness_<object>_cuts_semantics_and_regions_at_its_overflow_clip` for the six
-  objects (one table), `harness_<object>_overflow_clip_publishes_what_a_clip_rect_publishes`
-  (alone and under a scrollable), `harness_overflow_answer_survives_a_layout_that_fails`,
-  `harness_an_overflow_answer_is_cleared_by_a_layout_that_returns_early`,
-  `harness_no_overflow_reports_no_clip`,
-  `harness_an_unclipped_overflow_is_painted_and_published_but_hit_only_inside_the_box`,
-  `harness_a_sliver_part_is_hit_where_it_is_painted`,
-  `harness_sliver_carousel_hits_and_publishes_a_child_only_where_it_paints`,
-  `harness_sliver_carousel_publishes_its_pinned_child_without_painting_it`; the carousel's
-  existing rows unchanged.
+  `fitted_box.rs`, `animated_size.rs`, `constraints_transform_box.rs`;
+  `crates/flui-objects/tests/harness/shown.rs` (new); that entry of `docs/gaps.md`. Not
+  owned, because the accessors keep their meaning: `crates/flui-testing/src/widgets.rs` and
+  the two documents of `flui-rendering` that name `has_visual_overflow`; the task's last step
+  is `rg has_visual_overflow` and a reading of each hit against the code.
+- **Tests:** R2's rows for the six overflow objects, as named there, the shared row for each,
+  `every_keeper_of_a_shown_record_runs_the_shared_row` and
+  `the_keeper_guard_finds_a_record_field_in_literal_source`.
 - **Checks:** clippy and nextest for `flui-objects`; nextest for `flui-widgets` and
   `flui-testing` (the objects' widgets and the overflow probe have tests there).
 - **Depends:** RC0 **Size:** M
+
+### RC43. The shown answer: the per-child record and the lazy slivers `main` has
+
+- **What:** W2's second task. `ShownChildren` and `ShownPass` as far as they have callers:
+  parts with a slot and a clip, the announced slots, the sliver frame and its hit mapping,
+  `begin` and `commit`. `PinnedChildren::lay_out` returns the slots it laid out; its `slots`
+  field, `is_pinned_slot` and `clear_slots` are deleted. `RenderSliverCarousel` moves from
+  its private `Shown` table, and `RenderSliverList`, `RenderSliverFixedExtentList` and
+  `RenderSliverGrid` from `is_pinned_slot`, onto the record, their pinned slots announced. No
+  behaviour changes. The record "Lazy slivers lay out a pinned child outside the band" of
+  `crates/flui-objects/ARCHITECTURE.md` is rewritten for the three states. The last step is
+  `rg 'is_pinned_slot|clear_slots' crates/ docs/adr/` with no hit left.
+- **Owns:** the `ShownChildren` half of `crates/flui-objects/src/shown.rs`,
+  `sliver/pinned.rs`, `sliver/carousel/render.rs`, the readers (`paint`, `hit_test`, the
+  semantics visit, the clip hooks) and the `perform_layout` wrapper of `sliver_list.rs`,
+  `sliver_fixed_extent_list.rs` and `sliver_grid.rs`; that paragraph of the
+  `ARCHITECTURE.md`; its rows in `tests/harness/shown.rs`.
+- **Tests:** R2's rows for the per-child record, as named there, with the failed-layout row,
+  the shared row and the pinned-slot row run for each of the four slivers; their existing
+  rows and ADR-0265's tests unchanged.
+- **Checks:** clippy and nextest for `flui-objects`, `flui-view` and `flui-widgets`.
+- **Depends:** RC1; before RC8, which edits the walk's call in `sliver_list.rs` **Size:** M
 
 ### RC2. The sliver pass-through base
 
@@ -240,7 +269,9 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   the evidence, and this task lands without it.
 - **Checks:** clippy and nextest for `flui-objects` and `flui-widgets`; the readback suite at
   one test thread.
-- **Depends:** RC1, RC2 **Size:** M
+- **Owed on devices:** the seam row runs on lavapipe; two adjacent clipped slivers at a
+  fractional offset on each host's GPU backend are a row of `platform-parity.toml`.
+- **Depends:** RC43 (the sliver frame), RC2 **Size:** M
 
 ### RC4. Decorated sliver
 
@@ -260,8 +291,10 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 
 ### RC5. `BlockSemantics` and `SliverVisibility`
 
-- **What:** W6, the two compositions. The three documents that say FLUI has no
-  `BlockSemantics` are corrected.
+- **What:** W6, the two compositions. `rg BlockSemantics` has four hits outside this spec.
+  The three that say FLUI has no `BlockSemantics` are corrected. The fourth,
+  `docs/adr/ADR-0020-transition-modal-route-seam.md` ("Not carried: … `BlockSemantics`"),
+  lists what the modal route carries, which this task does not change, and stays.
 - **Owns:** `crates/flui-widgets/src/semantics/block_semantics.rs` (new),
   `crates/flui-widgets/src/scroll/sliver_visibility.rs` (new), their test modules; the doc
   comments in `crates/flui-widgets/src/navigator/page_route.rs`,
@@ -310,7 +343,8 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 ### RC42. The offset index's edit in the middle — a defect fix in a frozen crate
 
 - **What:** [design.md](design.md), "The offset index". `Virtualizer::splice(at, removed,
-  inserted)` in O(log n) plus the runs touched, with the anchor moved with its item;
+  inserted) -> Option<AnchorCorrection>` in O(log n) plus the runs touched, with the anchor
+  moved with its item and the change of that item's offset returned;
   `Virtualizer::extent_of(index) -> Option<ItemExtent>`; the module documentation of
   `virtualization/mod.rs` corrected where it says a mid-list insert or delete goes through
   `set_count`. ADR-0003 decided both the edit and the public `ItemExtent`; the code and the
@@ -320,7 +354,9 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 - **Frozen-crate files:** `crates/flui-rendering/src/virtualization/mod.rs`, `sumtree.rs`.
 - **Owns:** those and their tests.
 - **Tests:** in `flui-rendering`'s tests: `a_splice_keeps_the_extents_on_both_sides`,
-  `a_splice_moves_the_anchor_with_its_item`, `a_splice_of_a_removed_anchor_lands_on_the_edit`,
+  `a_splice_moves_the_anchor_with_its_item`,
+  `a_splice_above_the_anchor_returns_its_correction` (and none for one below it),
+  `a_splice_of_a_removed_anchor_lands_on_the_edit`,
   a property test of `splice` against the item-wise model of the test build,
   `extent_of_returns_what_set_measured_stored` (100.0 after extents that do not sum exactly);
   the existing virtualization tests and every lazy-list row of the harness unchanged.
@@ -333,13 +369,15 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 - **What:** W8 and the walk's half of "The offset index". `walk_virtualizer_band` takes a
   `BandExtents`; `MeasuredExtents` is today's rule and `RenderSliverList` passes it;
   `AuthoredExtents` asks, validates, stores and lays the child out tight at the stored
-  extent. `ItemExtentDelegate`, `ItemExtentDimensions`, `EAGER_EXTENT_LIMIT` with its perf
+  extent, and re-stores the first visible item each pass so the index holds the walk's
+  anchor. The list keeps `ShownChildren` from its first version, with its pinned slots
+  announced. `ItemExtentDelegate`, `ItemExtentDimensions`, `EAGER_EXTENT_LIMIT` with its perf
   scenario, `RenderSliverVariedExtentList` with `set_placement`; its `LazyMultiBoxRender`
   block, configuration and alias in a new file of `flui-view`; `SliverVariedExtentList` and
   the `ListView` constructor. `MAX_UNBOUNDED_WINDOW_CHILDREN` stays in `sliver_grid.rs`
   untouched. The mapping decision "A lazy list records only measured extents" is rewritten
-  for two extent sources; the dimensions without a scroll offset, the three count cases and
-  the eager limit are recorded.
+  for two extent sources; the dimensions without a scroll offset, the three count cases, the
+  eager limit and the rule for each writer of the index (W8) are recorded.
 - **Owns:** `crates/flui-objects/src/sliver/item_extent.rs`, `sliver_varied_extent_list.rs`
   (new), `virtualized_band.rs`, the one call of the walk in `sliver_list.rs`; that paragraph
   of `crates/flui-objects/ARCHITECTURE.md`;
@@ -357,61 +395,56 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   `…_lays_an_item_out_at_exactly_its_extent`, `…_refuses_a_non_finite_extent`,
   `…_of_zero_extents_builds_a_bounded_window`,
   `…_with_an_endless_source_asks_only_its_window`,
-  `…_restores_a_deep_offset_without_walking_from_zero`),
+  `…_restores_a_deep_offset_without_walking_from_zero`,
+  `…_publishes_its_pinned_child_without_painting_it`,
+  `…_keeps_the_visible_items_in_place_when_items_above_are_first_asked`), the shared row,
   `harness_the_measured_list_lays_out_as_before_over_the_shared_walk`; the existing list,
   grid and fixed-extent rows unchanged; a widget test
   `a_varied_extent_list_view_scrolls_to_an_exact_offset`; the perf scenario held by
   `flui_testing::perf::Baselines`.
 - **Checks:** clippy and nextest for `flui-objects`, `flui-view`, `flui-widgets`.
-- **Depends:** RC0, RC42 **Size:** L
+- **Depends:** RC0, RC42, RC43 **Size:** L
 
 ### RC9. Tree sliver
 
-- **What:** W9. `TreeRowDelegate` with its revision and edits, `RosterEdit`,
-  `RosterRevision`, `TreeIndentation`, `TreeReveal`, the reveal map, `RenderTreeSliver` on
-  the authored extent source with the indent as cross-axis offset; its block, configuration
-  and alias in a new file of `flui-view`; `TreeSliver` with its node source, controller and
-  roster, the roster's edit log, rows keyed by node id. "Mapping decisions" records the
-  departures from Flutter. Its first step settles whether the lazy element re-slots a keyed
-  row whose index moved ([design.md](design.md), "Unverified").
+- **What:** W9. `TreeRowDelegate` as an immutable snapshot with its length, revision and
+  edits, `RosterEdit`, `RosterRevision` typed by `RosterId`, `TreeIndentation`, `TreeReveal`,
+  the reveal map, `RenderTreeSliver` on the authored extent source with the indent as
+  cross-axis offset and the seven writers of its index as W9 lists them; its block,
+  configuration and alias in a new file of `flui-view`; `TreeSliver` with its node source,
+  controller and roster, the roster's copy-on-write rows and edit log, a new roster in
+  `did_update_view` when the extent rule, the source or the controller changes, rows keyed by
+  node id. "Mapping decisions" records the departures from Flutter. Its first step settles
+  whether the lazy element re-slots a keyed row whose index moved
+  ([design.md](design.md), "Unverified").
 - **Owns:** `crates/flui-objects/src/sliver/sliver_tree/` (new),
   `crates/flui-objects/tests/harness/tree_sliver.rs` (new),
   `crates/flui-view/src/element/sliver_tree.rs` (new),
   `crates/flui-widgets/src/scroll/tree_sliver/` (new) and its test module; what the walk needs
   in `virtualized_band.rs` to map the window through the reveal map and to place a child at a
   cross-axis offset.
-- **Tests:** R6's eleven harness rows and ten widget tests, as named there.
+- **Tests:** R6's harness rows and widget tests, as named there, and the shared row.
 - **Checks:** clippy and nextest for `flui-objects`, `flui-view`, `flui-widgets`.
-- **Depends:** RC8, RC1, RC42; not at the same time as RC38 **Size:** L
+- **Depends:** RC8, RC43, RC42; not at the same time as RC38 **Size:** L
 
 ### RC10. Pinned and resizing child-sized headers
 
-- **What:** W10, `RenderPinnedHeaderSliver`, `RenderSliverResizingHeader`, `HeaderFrame` with
-  its listenable notified through the after-frame helper, widgets `PinnedHeaderSliver` and
-  `SliverResizingHeader`; the check of the prototype flags against the children. The group
-  rows of R7, over the new headers and the existing pinned one; a failing row is fixed in the
-  group.
+- **What:** W10, `RenderPinnedHeaderSliver`, `RenderSliverResizingHeader`, `HeaderFrame` as
+  an inherited value the header's layout wakes its widget to rebuild when it changes,
+  widgets `PinnedHeaderSliver` and `SliverResizingHeader`; the check of the prototype flags
+  against the children. The group rows of R7, over the new headers and the existing pinned
+  one; a failing row is fixed in the group.
 - **Owns:** `crates/flui-objects/src/sliver/child_sized_header.rs` (new),
   `crates/flui-objects/tests/harness/child_sized_header.rs` (new),
   `crates/flui-widgets/src/scroll/pinned_header_sliver.rs`, `sliver_resizing_header.rs`,
   `header_frame.rs` (new) and their test modules;
   `crates/flui-objects/src/sliver/sliver_main_axis_group.rs` and `sliver_cross_axis_group.rs`
   only if a group row fails.
-- **Tests:** `harness_pinned_header_takes_its_extent_from_its_child`,
-  `harness_pinned_header_taller_than_the_viewport_stays_finite`,
-  `harness_resizing_header_never_paints_hits_or_publishes_its_prototypes`,
-  `harness_resizing_header_reports_its_minimum_as_obstruction`,
-  `harness_resizing_header_without_a_maximum_prototype_takes_its_childs_intrinsic_extent`,
-  `harness_resizing_header_refuses_children_that_differ_from_its_prototype_flags`,
-  `harness_child_sized_header_publishes_its_extents_and_overlap`,
-  `harness_a_pinned_header_in_a_group_leaves_with_its_group`,
-  `harness_two_pinned_headers_in_one_group_stack`,
-  `harness_a_pinned_header_in_a_cross_axis_group_sits_below_a_preceding_pinned_sliver`; widget
-  tests `a_pinned_header_is_read_where_it_is_painted`,
-  `a_header_child_repaints_when_content_scrolls_under_it` and the child-sized case of
-  `a_pinned_header_keeps_a_following_clip_at_its_edge` (when RC3 has landed).
+- **Tests:** R7's rows and widget tests, as named there, except those RC11 names; the
+  shared row; the child-sized case of `a_pinned_header_keeps_a_following_clip_at_its_edge`
+  when RC3 has landed.
 - **Checks:** clippy and nextest for `flui-objects` and `flui-widgets`.
-- **Depends:** RC1, RC37 **Size:** M
+- **Depends:** RC43 **Size:** M
 
 ### RC11. Floating child-sized header
 
@@ -470,30 +503,42 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 ### RC14. ADR: tap classification
 
 - **What:** the ADR of W12, in the shape of `docs/adr/README.md`, with the options of
-  [design.md](design.md): the typed event with its four phases and its origins; the registry
-  held with the build owner and handed to the binding; the contact's snapshot at the down;
-  the per-kind slop for a tap; a consuming region as a hold; liveness as "current page and
-  presented"; the one activation door with its two-way ancestry, its table of actions and
-  what it leaves to the focus scope; whether a down that stops a fling is a tap. In the same
-  pull request ADR-0208's rule 4 is rewritten to name both producers of a hold, and the row
-  "consuming region, outside contact" is added to the table the ADR states (the test row
-  lands with RC15). Its first step settles the W12 points of [design.md](design.md),
-  "Unverified", by reading `crates/flui-interaction/src/gesture/arena/`.
-- **Owns:** one new file in `docs/adr/`; rule 4 and the table of
-  `docs/adr/ADR-0208-gesture-ownership-table-and-composition.md`.
+  [design.md](design.md). It records what W12 holds fixed and answers W12's eight scenarios,
+  each with the type or the named test that rules the failure out: a class for every action;
+  the typed outcome of a stopped activation and the order under a panic; the doors tests
+  use; liveness per group at the snapshot; the snapshot from the unpruned hit path and the
+  terminal event for every end of a contact; a field's overlays in its group; configuration
+  read at delivery; a down that stops a fling. It carries `Supersedes: ADR-0208 §2 rule 4
+  only (who admits a hold)` and states the ownership row "consuming region, outside contact"
+  itself. ADR-0208 is not edited in this task. Its first step settles the W12 points of
+  [design.md](design.md), "Unverified", by reading
+  `crates/flui-interaction/src/gesture/arena/` and the binding's teardown paths.
+- **On acceptance** (the owner's change, or this task's last commit once the owner says
+  so): ADR-0208 gets `Superseded-by:` for §2 rule 4 only and keeps its text, and
+  `docs/gaps.md` gets one bullet per unbuilt section of the new ADR, the ownership row among
+  them. RC15 and RC32 remove them.
+- **Owns:** one new file in `docs/adr/`; the header line of
+  `docs/adr/ADR-0208-gesture-ownership-table-and-composition.md`; its bullets in
+  `docs/gaps.md`.
 - **Checks:** the `checks` job's document steps, the ADR-number step; a design read.
 - **Depends:** — **Size:** M
 
 ### RC15. Tap regions, the pointer route
 
 - **What:** W12 as RC14 decides it, without the accessibility route: `TapRegionEvent`,
-  `TapPhase`, `TapOrigin`, `TapRegionRegistry` and its ids; the snapshot taken on the down and
-  cached on `CachedPointerRoute`, with the slop latch; the hold a consuming region admits and
-  its row in the ownership table; the registry on `BuildOwner` and the infallible
-  `tap_regions()` capability; `RenderTapRegion` and its published render id; `TapRegion` with
-  its liveness read after each frame; `PopupRoute::tap_region_group`.
-- **Owns:** a new module `crates/flui-interaction/src/pointer/tap_region.rs`, the collection in
-  `crates/flui-interaction/src/binding/mod.rs`; the registry's field in
+  `TapPhase`, `TapOrigin`, `TapRegionRegistry` and its ids, an entry being an identity and a
+  `Weak` to its state's cell; the snapshot taken from the hit-test result of the down and
+  kept on `CachedPointerRoute`, with the slop latch and the group liveness asked then; the
+  terminal event delivered from the one place a cached route is removed; the hold a
+  consuming region admits and its row in the ownership table; the registry on `BuildOwner`
+  and the infallible `tap_regions()` capability; `RenderTapRegion`; `TapRegion` and
+  `TapRegionGroup::maybe_of`; `PopupRoute::tap_region_group`; the field's handles and
+  toolbar joining the field's group; the names re-exported from `flui_sdk::interaction`. The
+  paragraph "A hold is an admission kind" of `crates/flui-interaction/docs/ARCHITECTURE.md`
+  is rewritten for two producers, and the task removes its bullets from `docs/gaps.md`.
+- **Owns:** a new module `crates/flui-interaction/src/pointer/tap_region.rs`, the collection
+  and the route removal in `crates/flui-interaction/src/binding/mod.rs`, that paragraph of
+  `crates/flui-interaction/docs/ARCHITECTURE.md`; the registry's field in
   `crates/flui-view/src/owner/build_owner.rs`, the capability in
   `crates/flui-view/src/context/build_context.rs` and its implementations; the wiring in
   `crates/flui-runtime/src/presentation/assembly.rs`;
@@ -501,59 +546,51 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   `crates/flui-objects/tests/harness/tap_region.rs` (new);
   `crates/flui-widgets/src/interaction/tap_region.rs` (new) and its test module; the builder on
   `PopupRoute` in `crates/flui-widgets/src/navigator/page_route.rs` and its use in
-  `popup_menu.rs`; the new row in `crates/flui-testing/src/ownership.rs`.
-- **Tests:** `a_tap_on_an_overlay_above_a_region_is_outside_it`,
-  `a_tap_inside_a_group_member_is_inside_every_member`,
-  `a_tap_inside_a_popup_is_inside_its_opener`,
-  `a_tap_on_an_empty_part_of_a_region_is_inside_it`,
-  `a_tap_on_a_second_field_is_outside_the_first`,
-  `a_drag_that_starts_outside_reports_down_and_up_but_no_tap`,
-  `a_secondary_button_outside_is_reported_with_its_button`,
-  `a_consumed_outside_tap_reaches_no_detector`,
-  `a_drag_that_starts_outside_a_consuming_region_still_scrolls`,
-  `a_consumed_outside_tap_cancels_no_listener`,
-  `a_cancelled_contact_reports_cancel_and_no_up`,
-  `a_contact_that_leaves_its_slop_and_returns_is_no_tap`,
-  `a_region_mounted_during_a_contact_hears_nothing_of_it`,
-  `a_region_on_a_covered_page_hears_no_outside_tap`,
-  `a_region_on_a_branch_that_is_not_shown_hears_no_outside_tap`,
-  `a_region_under_an_offstage_parent_hears_no_outside_tap`,
-  `an_up_is_classified_against_the_path_of_its_down`,
-  `a_panicking_outside_callback_leaves_the_registry_usable`; a harness row
+  `popup_menu.rs`; the group of the overlay entries in
+  `crates/flui-widgets/src/text/editable_text/handles.rs`,
+  `text/selection_area/handles.rs` and `text/selection_menu/toolbar.rs`; the re-export lines
+  of `crates/flui-sdk/src/lib.rs` and its surface test; the new row in
+  `crates/flui-testing/src/ownership.rs`.
+- **Tests:** R12's tests, as named there, except those RC32 names; a harness row
   `harness_tap_region_marks_its_hit_entry_and_joins_the_hits_below`; the ownership table's
   new row.
 - **Checks:** clippy and nextest for `flui-interaction`, `flui-objects`, `flui-view`,
-  `flui-runtime`, `flui-widgets`, `flui-testing`.
-- **Owed on devices:** an outside tap from touch, mouse and stylus on each host, as a row of
-  `platform-parity.toml`.
-- **Depends:** RC14, RC0, RC37 **Size:** L
+  `flui-runtime`, `flui-widgets`, `flui-sdk`, `flui-testing`.
+- **Owed on devices:** an outside tap from touch, mouse and stylus on each host, and a first
+  click on an inactive window on macOS, as rows of `platform-parity.toml`.
+- **Depends:** RC14, RC0 **Size:** L
 
 ### RC32. Tap regions, accessibility activations
 
-- **What:** W12's activation route. The two accessors on `SemanticsActionInvocation`;
-  `deliver_semantics_action` in `flui-view`, with the two-way ancestry walk, the exhaustive
-  match over `SemanticsAction` and one `TapRegionEvent` with `TapOrigin::Semantics`;
-  `PresentationState::dispatch_semantics_action` and `flui_testing::a11y::
-  invoke_semantics_action` call it; the tests of `flui-widgets` that resolve an action and
-  invoke it by hand only to deliver it move onto `Harness::invoke_semantics_action`, and the
-  ones that keep an invocation across a rebuild to test a stale one stay, each with a comment
-  that says it tests `invoke` itself; `SemanticsActionInvocation::invoke` joins
-  `disallowed-methods` with its one `#[expect]`.
-- **Owns:** `crates/flui-semantics/src/owner.rs` (the accessors); a new module in
-  `crates/flui-view/src/` for the door; `crates/flui-runtime/src/presentation/accessibility.rs`;
-  `crates/flui-testing/src/a11y.rs`; the call sites in
-  `crates/flui-widgets/tests/catalog_disclosure.rs`, `catalog_slider.rs`, `scroll.rs` and
-  `semantics.rs`; the sentence of `crates/flui-widgets/ARCHITECTURE.md` that names
-  `PipelineOwner::resolve_semantics_action` as the route; the entry in `clippy.toml`; new
-  cases in the tap-region test module of `flui-widgets` and in `flui-runtime`'s tests.
+- **What:** W12's activation route as RC14 decides it. The class of every `SemanticsAction`,
+  held where the ADR puts it (recommended: beside the enum in `flui-protocol`);
+  `deliver_semantics_action`, with the two-way ancestry walk and one `TapRegionEvent` with
+  `TapOrigin::Semantics`; the typed outcome of a stopped activation through
+  `PresentationState::dispatch_semantics_action` and the agent's act outcome, with the act
+  schema's expectation changed and justified in the pull request;
+  `SemanticsActionInvocation::invoke` joins `disallowed-methods` with its one `#[expect]`.
+  `flui_testing::a11y::invoke_semantics_action` calls the door and gains nothing. No test
+  moves onto `Harness`: the widget tests that resolve and invoke by hand are test code,
+  exempt from the lint, and move with ADR-0400's migration. A `Tester` verb for a semantic
+  action is added here only with the agreement of the testing-platform spec's owner.
+- **Owns:** a new module in `crates/flui-view/src/` for the door;
+  `crates/flui-runtime/src/presentation/accessibility.rs` and the semantic arm of
+  `crates/flui-runtime/src/ui_runtime/agent.rs`; the class and the outcome's variant in
+  `crates/flui-protocol/src/` with its schema expectation; the one call in
+  `crates/flui-testing/src/a11y.rs`; the sentence of `crates/flui-widgets/ARCHITECTURE.md`
+  that names `PipelineOwner::resolve_semantics_action` as the route; the entry in
+  `clippy.toml`; new cases in the tap-region test module of `flui-widgets` and in
+  `flui-runtime`'s tests; its bullets in `docs/gaps.md`.
 - **Tests:** `a_screen_reader_activation_is_classified_by_ancestry`,
   `an_activation_of_a_merged_node_above_a_region_is_inside_it`,
   `a_screen_reader_activation_is_classified_once`,
-  `a_consumed_outside_activation_does_not_run_its_action` (one table over the runtime's entry
-  and the harness's), `a_scroll_action_outside_a_consuming_region_still_runs`. `rg
-  'resolve_semantics_action'` finds the door, the stale-invocation tests and no other caller
-  that also invokes.
-- **Checks:** clippy and nextest for `flui-semantics`, `flui-view`, `flui-runtime`,
+  `a_consumed_outside_activation_does_not_run_its_action`,
+  `a_consumed_outside_activation_is_reported_as_consumed`,
+  `a_panicking_region_callback_still_decides_the_activation`,
+  `every_semantics_action_has_a_tap_class` (or the compile-time form),
+  `a_scroll_action_outside_a_consuming_region_still_runs`. `rg '\.invoke\(\)'` over
+  production code finds the door and no other caller of an invocation.
+- **Checks:** clippy and nextest for `flui-protocol`, `flui-view`, `flui-runtime`,
   `flui-testing`, `flui-widgets`; workspace clippy once, for the new disallowed method.
 - **Depends:** RC15 **Size:** M
 
@@ -565,8 +602,9 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   composite (alpha and blend mode as one step, on `PaintOpacity`), the clip, the filter, the
   transform; a filter as a function of the size; bounds and rounding; the group layer for
   blend and mask, with its measured cost; what a filter over a native view does until W17
-  decides. Its first step checks the prior art the order cites.
-- **Owns:** one new file in `docs/adr/`. **Depends:** — **Size:** M
+  decides. Its first step checks the prior art the order cites. Written when RC17 may start.
+- **Owns:** one new file in `docs/adr/`; on acceptance its bullets in `docs/gaps.md`, which
+  RC17, RC18 and RC40 remove. **Depends:** — **Size:** M
 
 ### RC17. Subtree filters — gated
 
@@ -591,6 +629,8 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   that gives three effects as the whole order.
 - **Checks:** clippy and nextest for `flui-rendering`, `flui-objects`, `flui-widgets`,
   `flui-engine` (readback suites at one test thread).
+- **Owed on devices:** the readback rows run on lavapipe; a filtered subtree on each host's
+  GPU backend is a row of `platform-parity.toml`.
 - **Depends:** RC16, RC0 **Size:** M
 
 ### RC18. Image inversion and filter quality — gated
@@ -610,12 +650,14 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 ### RC19. ADR: inline boxes
 
 - **What:** the ADR of W14: the span tree, the ordinal that ties a measured placeholder to
-  its child and why no id is minted, the placeholder's two size forms, where measurement
-  sits, intrinsics and dry layout, no implicit scaling, the semantics order and label, and
-  the editing value's rules: one U+FFFC per placeholder, the field building its spans from
-  the value, the write points where a U+FFFC is removed and the one method that inserts a
-  placeholder, the obscured field.
-- **Owns:** one new file in `docs/adr/`. **Depends:** — **Size:** M
+  its child in a paragraph, the placeholder's two size forms, where measurement sits,
+  intrinsics and dry layout, no implicit scaling, the semantics order and label, and the
+  editing value: one type that holds the text and an id per U+FFFC, changed only by a range
+  replace and `insert_placeholder`, held by the controller and by the input session's
+  document; the field building its spans from it; the obscured field. Written when RC20 may
+  start.
+- **Owns:** one new file in `docs/adr/`; on acceptance its bullets in `docs/gaps.md`, which
+  RC20, RC21 and RC22 remove. **Depends:** — **Size:** M
 
 ### RC20. Span children and inline-box shaping — gated
 
@@ -658,21 +700,25 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   `flui-view` if the multi-child render view needs one.
 - **Tests:** R13's ten harness rows and six widget tests, as named there.
 - **Checks:** clippy and nextest for `flui-objects`, `flui-widgets`, `flui-view`.
-- **Depends:** RC20, RC1 **Size:** L
+- **Depends:** RC20, RC43 **Size:** L
 
 ### RC22. Editable inline children
 
 - **What:** W14 for `RenderEditable`, on `InlineBoxes`: the caret, selection and deletion
-  rules of R14. The field builds its span tree from the controller's value and asks an
-  inline-child builder for each placeholder in order. The controller's write points
-  (`insert_str`, `insert_str_at`, `set_text`, the IME commit) remove U+FFFC from incoming
-  text; `insert_placeholder` and the restoring constructor are the two ways one enters. An
-  obscured field masks a placeholder and builds no child.
+  rules of R14. The editing value becomes the type RC19 decides (working name
+  `EditingText`): the text with one `PlaceholderId` per U+FFFC, changed by `replace(range,
+  &str)` and `insert_placeholder`. `ControllerInner.text` and the session document's
+  `Doc.text` are both that type, `SessionWrite` carries it, and the controller's write
+  methods become calls of `replace`. The field builds its span tree from the value, asks an
+  inline-child builder for each `PlaceholderId` and keys the child by it. An obscured field
+  masks a placeholder and builds no child.
 - **Owns:** `crates/flui-objects/src/text/editable.rs` and `text/editable/`, its harness rows;
-  `crates/flui-widgets/src/text/controller.rs` (the write points and the two new entries),
+  `crates/flui-widgets/src/text/editing_text.rs` (new), `controller.rs` (the stored value and
+  its write methods), `text_store.rs` (the document's text and the write-back),
   `crates/flui-widgets/src/text/editable_text/field_view.rs` and `obscuring.rs`, the
   inline-child builder beside them.
-- **Tests:** R14's seven harness rows and three widget tests, as named there.
+- **Tests:** R14's harness rows and widget tests, as named there; the existing
+  text-store and controller suites unchanged.
 - **Checks:** clippy and nextest for `flui-objects` and `flui-widgets` (the editable-text
   suites).
 - **Owed on devices:** composing and deleting beside a placeholder through each host's IME,
@@ -683,8 +729,9 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 
 - **What:** the ADR of W16: the request strategy, retain set and pinned set generic over a
   key; one owner of the key-to-child mapping, with the swap and the keep-alive removal; the
-  three options.
-- **Owns:** one new file in `docs/adr/`. **Depends:** — **Size:** M
+  three options. Written when RC24 may start.
+- **Owns:** one new file in `docs/adr/`; on acceptance its bullets in `docs/gaps.md`, which
+  RC24 and RC25 remove. **Depends:** — **Size:** M
 
 ### RC24. The request strategy takes a key type — gated
 
@@ -693,8 +740,8 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 - **Frozen-crate files:** `crates/flui-rendering/src/context/layout.rs` (the request and
   retain entries) and the erased context behind them.
 - **Owns:** those, `crates/flui-view/src/element/sliver_adaptor.rs`, `sparse_children.rs` and
-  the lazy slivers' files beside them. The index a sticky header keeps outside the band
-  (RC38, if it has landed) becomes a key the retain set names.
+  the lazy slivers' files beside them. The set kept outside the band (RC38, if it has
+  landed) becomes a set of keys the retain set names.
 - **Tests:** the rows of `family_sliver_lists` and the lazy-list widget suites unchanged;
   in `flui-rendering`'s tests, `a_keyed_request_builds_the_child_for_its_key`,
   `a_retain_set_drops_only_the_children_outside_it`,
@@ -706,24 +753,28 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 ### RC25. Two-axis viewport
 
 - **What:** W16: `Vicinity`, `TwoAxisLayout`, `RenderTwoAxisViewport<L>`, the uniform-cell
-  layout with pinned rows and columns, `TwoAxisScrollView`. The first step of the widget is
-  the entry in `scroll_owner.rs` that begins, updates and ends one contact on two owners
-  under one `FirstPanic`, with its two tests.
+  layout with pinned rows and columns, `TwoAxisScrollView` with `DiagonalDrag`. The first
+  step of the widget is the entry in `scroll_owner.rs` that begins, updates and ends one
+  contact on two owners under one `FirstPanic`, with its two tests.
 - **Owns:** `crates/flui-objects/src/sliver/viewport/two_axis.rs` (new),
   `crates/flui-objects/tests/harness/two_axis_viewport.rs` (new), a keyed element in
   `flui-view`, `crates/flui-widgets/src/scroll/two_axis_scroll_view.rs` (new) and its test
   module; the two-owner entry in `crates/flui-widgets/src/scroll/scroll_owner.rs`.
-- **Tests:** R16's ten harness rows and six widget tests, as named there.
+- **Tests:** R16's harness rows and widget tests, as named there.
 - **Checks:** clippy and nextest for `flui-objects`, `flui-view`, `flui-widgets`.
-- **Depends:** RC24, RC1 **Size:** L
+- **Depends:** RC24, RC43 **Size:** L
 
 ### RC26. ADR: a sliver's per-child transform, and the wheel
 
 - **What:** the ADR of W15 and of the seam of [design.md](design.md), written after RC23 is
   accepted, because a wheel keyed by a signed index on the typed-key seam is one of its
-  options. It works the reverse group's arithmetic for the looping wheel and names the
-  fallback.
-- **Owns:** one new file in `docs/adr/`. **Depends:** RC23 **Size:** M
+  options. It weighs the two forms with the costs of [design.md](design.md), "Decisions for
+  the owner", 2, works the reverse group's arithmetic for the looping wheel before it is
+  accepted and names the fallback. It records the notch: `SnapPolicy::step` beside
+  ADR-0209 §9's `target`, the one `WheelMotion` target, and the table of packets per host.
+  Written when RC31 may start.
+- **Owns:** one new file in `docs/adr/`; on acceptance its bullets in `docs/gaps.md`, which
+  RC31, RC27 and RC28 remove. **Depends:** RC23 **Size:** M
 
 ### RC31. The sliver per-child transform seam — gated
 
@@ -749,43 +800,46 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   file of `flui-view`. The record gains what the wheel is the first to use: a part's
   transform and opacity, `transform_of`, and the two-part rule.
 - **Owns:** `crates/flui-objects/src/sliver/wheel/` (new), `crates/flui-objects/src/shown.rs`
-  (after RC1), `crates/flui-objects/tests/harness/wheel.rs` (new),
+  (after RC43), `crates/flui-objects/tests/harness/wheel.rs` (new),
   `crates/flui-view/src/element/sliver_wheel.rs` (new).
-- **Tests:** R15's nine harness rows, as named there.
+- **Tests:** R15's nine harness rows, as named there, and the shared row.
 - **Checks:** clippy and nextest for `flui-objects`, `flui-view`.
-- **Depends:** RC31, RC1 **Size:** L
+- **Depends:** RC31, RC43 **Size:** L
 
 ### RC28. The wheel widget
 
 - **What:** `ListWheelScrollView`, its controller, `WheelSnap`, the looping wheel in the form
-  RC26 decides, and the step rule of [design.md](design.md), "One settle rule … and one step
-  rule": `DetentSteps`, the scrollable's handling of a `Detents` or `Lines` event when one is
-  set, the pending target kept on the wheel sequence, and the wheel's implementor.
-- **Owns:** `crates/flui-widgets/src/scroll/list_wheel/` (new) and its test module;
-  `crates/flui-widgets/src/scroll/detent_steps.rs` (new); the wheel-event branch of
-  `crates/flui-widgets/src/scroll/scrollable.rs` and the pending target in `scroll_owner.rs`.
-- **Tests:** `a_looping_wheel_scrolls_past_its_last_item_to_its_first`,
-  `a_wheel_settles_on_an_item`, `a_wheel_reports_its_selected_item_once_per_change`,
-  `a_wheel_child_reads_the_selected_item_in_its_first_build`,
-  `one_notch_of_a_mouse_wheel_moves_one_item`, `two_quick_notches_move_two_items`,
-  `a_touchpad_scroll_of_a_wheel_settles_on_an_item`,
-  `a_scrollable_without_detent_steps_scrolls_a_notch_as_before`,
-  `a_tap_on_a_wheel_item_reaches_its_detector`; the existing wheel-scroll tests of the
-  scrollable unchanged.
+  RC26 decides, and the notch of [design.md](design.md), "One settle rule for a scrollable,
+  and a notch that moves one item": the provided `SnapPolicy::step`, the split of
+  `wheel_axis_delta` so the axis is chosen once, the packet-to-items function with the
+  fraction carried on `WheelMotion`, and `WheelSnap`'s implementation. The record "Wheel
+  precision selects local animation policy" of `crates/flui-widgets/ARCHITECTURE.md` is
+  rewritten to the whole rule.
+- **Owns:** `crates/flui-widgets/src/scroll/list_wheel/` (new) and its test module; the
+  method in `crates/flui-widgets/src/scroll/nested/snap.rs`; `WheelMotion`, `wheel_claim`
+  and `wheel_axis_delta` in `crates/flui-widgets/src/scroll/scrollable.rs`; that record of
+  the `ARCHITECTURE.md`.
+- **Tests:** R15's widget tests, as named there; the record's four tests
+  (`notched_wheel_accumulates_distance_and_eases_out_in_150ms`,
+  `precise_and_unknown_wheels_interrupt_synthetic_motion_once`,
+  `replacing_or_unmounting_a_scrollable_retires_its_notched_motion`,
+  `dragging_interrupts_notched_motion_and_windows_progress_independently`) unchanged.
 - **Checks:** clippy and nextest for `flui-widgets`.
-- **Owed on devices:** which unit each host reports for a mouse wheel and for a touchpad, as
-  a row of `platform-parity.toml`.
-- **Depends:** RC27; not at the same time as RC25, which also edits `scroll_owner.rs`
-  **Size:** M
+- **Owed on devices:** the packet each host sends for a mouse wheel, a high-resolution
+  wheel and a touchpad, and that a browser's wheel scrolls a picker and settles, as rows of
+  `platform-parity.toml`.
+- **Depends:** RC27 **Size:** M
 
 ### RC29. ADR: native views
 
 - **What:** the ADR of W17, after the owner decides that native views enter the contract and
   for which hosts. It answers each row of R17's table and R17's two rules: a view without a
   placement in a frame is hidden with that frame, and a host that cannot embed a view
-  answers with a typed refusal, the headless host included.
+  answers with a typed refusal, the headless host included. Written when the owner has
+  decided and RC30's first task may start.
 - **Owns:** one new file in `docs/adr/`; the gap entry "No native views inside the UI" is
-  rewritten to point at it. **Depends:** owner decision **Size:** L
+  rewritten to point at it, with a bullet per unbuilt section on acceptance.
+  **Depends:** owner decision **Size:** L
 
 ### RC30. Native views — gated
 
@@ -836,35 +890,30 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   `harness_first_that_fits_hides_the_others_from_hits_and_semantics`,
   `harness_first_that_fits_on_one_axis_ignores_the_other`,
   `harness_first_that_fits_dry_layout_makes_the_same_choice`; widget test
-  `a_layout_builder_in_an_alternative_builds_once_per_pass_and_settles`.
+  `a_layout_builder_in_an_alternative_builds_once_per_pass_and_settles`; the shared row.
 - **Checks:** clippy and nextest for `flui-objects` and `flui-widgets`.
-- **Depends:** RC1 **Size:** S
+- **Depends:** RC43 **Size:** S
 
 ### RC35. A wrap that stops
 
 - **What:** W22. `layout/leading_run.rs`; `RenderToolbarItems` calls it; `RenderWrap` gains
-  `max_runs`, the indicator and `WrapSplit`; `Wrap` gains its two builder methods and, with
-  an indicator, a state that relabels it through the after-frame helper. The two records
+  `max_runs`, the indicator, the reserve with its key (the constraints, the wrap's
+  configuration and the main-axis sizes of the children before the indicator) and
+  `WrapSplit` with its wake; `Wrap` gains its two builder methods and, with an indicator, a
+  state that installs the wake and rebuilds the indicator when the count changed
+  ([design.md](design.md), "A value a frame decided reaches a widget on a change"). The two
+  records
   that say a wrap cannot hide what does not fit are rewritten: the module documentation of
   `toolbar_items.rs` and the mapping decision "A toolbar row hides…".
 - **Owns:** `crates/flui-objects/src/layout/leading_run.rs` (new), `wrap.rs` (after RC1),
   `toolbar_items.rs`; that paragraph of `crates/flui-objects/ARCHITECTURE.md`;
   `crates/flui-objects/tests/harness/wrap_overflow.rs` (new);
   `crates/flui-widgets/src/wrap/` and its test module.
-- **Tests:** `harness_wrap_stops_after_its_maximum_runs`,
-  `harness_wrap_places_its_indicator_at_the_end_of_the_last_run`,
-  `harness_wrap_hides_its_indicator_when_everything_fits`,
-  `harness_wrap_reports_the_number_of_hidden_children`,
-  `harness_wrap_split_is_stable_when_the_indicator_changes_width`,
-  `harness_wrap_keeps_its_reserve_when_the_indicator_shrinks`,
-  `harness_wrap_hidden_children_are_not_hit_or_published`,
-  `harness_wrap_without_a_maximum_lays_out_as_before`; widget tests
-  `a_wrap_relabels_its_indicator_in_the_frame_after_the_count_changed`,
-  `a_wrap_whose_label_widens_settles`, `a_wrap_without_an_indicator_schedules_nothing`; the
-  rows of `RenderToolbarItems` unchanged. `rg 'cannot hide'` and `rg 'RenderWrap'` over the
-  two records find no sentence that says a wrap cannot hide a child.
+- **Tests:** R22's rows and widget tests, as named there; the shared row; the rows of
+  `RenderToolbarItems` unchanged. `rg 'cannot hide'` and `rg 'RenderWrap'` over the two
+  records find no sentence that says a wrap cannot hide a child.
 - **Checks:** clippy and nextest for `flui-objects` and `flui-widgets`.
-- **Depends:** RC1, RC37 **Size:** M
+- **Depends:** RC43 **Size:** M
 
 ### RC36. Tracks
 
@@ -873,15 +922,19 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   `resolve`. No behaviour change. The pull request says why `flui-sdk`'s surface test
   changes: it pins a re-export by name, and the name is the thing replaced.
 - **Owns:** `crates/flui-objects/src/layout/tracks.rs` (new), `table_column.rs` (deleted),
-  `table.rs`; `crates/flui-widgets/src/layout/table.rs` and `crates/flui-widgets/tests/
-  table.rs`; the re-export in `crates/flui-sdk/src/lib.rs` and the two lines of
-  `crates/flui-sdk/tests/surface.rs`; `packages/flui-material/src/data_table.rs` and
-  `packages/flui-material/tests/data_table.rs`; each document that names the old type; the
-  changelog fragment that names the rename.
+  `table.rs`; the table's lines of `crates/flui-objects/tests/render_object_harness.rs` (its
+  import and its rows' uses of the type); `crates/flui-widgets/src/layout/table.rs` and
+  `crates/flui-widgets/tests/table.rs`; the re-export in `crates/flui-sdk/src/lib.rs` and the
+  two lines of `crates/flui-sdk/tests/surface.rs`; `packages/flui-material/src/data_table.rs`
+  and `packages/flui-material/tests/data_table.rs`; each document that names the old type;
+  the two unreleased fragments that name it, `changelog.d/widgets-one-path.md` and
+  `changelog.d/claude-project-thread-wzs1nq.md`, corrected to the new name if they have not
+  been released; its own fragment, which names the rename.
 - **Tests:** the rows of `RenderTable`, the `Table` widget tests, `flui-sdk`'s surface test and
   the data table's tests green under the new name; the mutation run over `resolve` is caught
   by them, or the task adds the row that catches it. `rg 'TableColumnWidth'` across `crates/`,
-  `packages/`, `docs/` and each `ARCHITECTURE.md` finds nothing outside this spec.
+  `packages/`, `docs/`, `changelog.d/` and each `ARCHITECTURE.md` finds it only in this spec,
+  in the task's own fragment and in released entries of `CHANGELOG.md`.
 - **Checks:** clippy and nextest for `flui-objects`, `flui-widgets`, `flui-sdk`,
   `packages/flui-material`, and the facade's own tests.
 - **Depends:** — **Size:** M
@@ -898,70 +951,76 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 - **Checks:** clippy and nextest for `flui-objects` and `flui-widgets`.
 - **Depends:** RC36, RC1, RC0 **Size:** L
 
-### RC37. Observers and the after-frame helper
+### RC37. The geometry observer
 
-- **What:** W19 and [design.md](design.md), "One callback after each frame". `AfterFrame`
-  with its three rules (a `Weak` to its owner, the next run scheduled before delivery,
-  delivery through `commit`); `GeometryObserver`, `VisibilityObserver`, `ObservedGeometry`,
-  `ObservedVisibility` as its first users.
-- **Owns:** `crates/flui-widgets/src/after_frame.rs` (new),
-  `crates/flui-widgets/src/observe/` (new) and its test module.
-- **Tests:** `a_geometry_observer_reports_a_size_change_once`,
-  `a_geometry_observer_reports_nothing_when_nothing_changed`,
-  `a_visibility_observer_reports_the_fraction_a_viewport_leaves`,
-  `a_visibility_observer_reports_zero_for_an_offstage_subtree`,
-  `a_visibility_observer_under_a_rotation_reports_its_bounding_fraction`,
-  `an_observer_that_changes_nothing_requests_no_frame`,
-  `an_observer_callback_that_resizes_its_subtree_settles`,
-  `a_panicking_observer_leaves_the_others_reporting`,
-  `an_observer_that_panicked_reports_its_next_change`,
-  `a_disposed_observer_runs_no_callback`.
+- **What:** W19's ungated half. `GeometryObserver` and `ObservedGeometry`: a private leader
+  around the child, a `LeaderWatch` taken in `create_state`, a listener that holds a `Weak`
+  to the state's cell and delivers through `commit`. Its first step measures a few hundred
+  observers in a list against the perf baselines ([design.md](design.md), "Unverified").
+- **Owns:** `crates/flui-widgets/src/observe/` (new) and its test module.
+- **Tests:** R19's tests, as named there, except those RC44 names.
 - **Checks:** clippy and nextest for `flui-widgets`.
-- **Depends:** — **Size:** M
+- **Depends:** — **Size:** S
+
+### RC44. The visibility observer — gated
+
+- **What:** W19's gated half. `LeaderGeometry` gains the leader chain's transform and its
+  resolved clip, read from the applied `SceneVersion`, so a watch reports a change of either;
+  `VisibilityObserver` and `ObservedVisibility` with thresholds and a margin. The record
+  "A follower's build hears its leader's geometry after paint" of
+  `crates/flui-rendering/ARCHITECTURE.md` is rewritten: what a watch reports, and why a
+  watch and not a post-frame check, in terms that hold since ADR-0367. No ADR: the fields
+  are additive on a `#[non_exhaustive]` struct and change no decision. Its first step shows
+  that the clip a leader's chain resolves equals the clip `presented_placement` reports for
+  the same node.
+- **Frozen-crate files:** `crates/flui-rendering/src/pipeline/owner/leader_watch.rs`, that
+  paragraph of `crates/flui-rendering/ARCHITECTURE.md`; the read in
+  `crates/flui-layer/src/scene/version.rs`.
+- **Owns:** those and `crates/flui-widgets/src/observe/visibility.rs` (new, after RC37) with
+  its tests.
+- **Tests:** in `flui-rendering`'s tests
+  `a_leader_watch_reports_a_change_of_its_clip_and_transform` and the existing leader-watch
+  tests unchanged; widget tests
+  `a_visibility_observer_reports_the_fraction_a_viewport_leaves`,
+  `a_visibility_observer_reports_only_when_a_threshold_is_crossed`,
+  `a_visibility_observer_with_a_margin_reports_before_its_subtree_shows`,
+  `a_visibility_observer_reports_zero_for_an_offstage_subtree`,
+  `a_visibility_observer_under_a_rotation_reports_its_bounding_fraction`; the selection
+  handles' suites unchanged.
+- **Checks:** clippy and nextest for `flui-layer`, `flui-rendering`, `flui-widgets`,
+  `flui-sdk` (the plugin hook that listens to a watch).
+- **Depends:** RC37 **Size:** M
 
 ### RC38. Sticky rows
 
 - **What:** W20. `StickyRows`, `sliver/sticky_rows.rs`, the mode on `RenderSliverList` and
   `RenderSliverVariedExtentList`, `.sticky_rows(..)` on their widgets and on `ListView`.
-  `LazyMultiBoxRender::kept_outside_band`, honoured by the lazy element's manager in its
-  build admission and in the retain band's eviction. `RenderSliverList` moves onto
-  `ShownChildren`, its pinned slots committed as announced. The function that builds a lazy
-  sliver's parts in one order and commits once (`sliver/band_parts.rs`) is built here with
-  its band and sticky steps.
+  `LazyMultiBoxRender::kept_outside_band`. The lazy element's manager forms one kept set
+  per service pass, from the held children and that index, resolved to resident elements
+  before the reconcile, and its reconcile, its eviction and its build admission read it. The
+  function that builds a lazy sliver's pass in one order and commits once
+  (`sliver/band_parts.rs`) is built here with its band, pinned and sticky steps; the pinned
+  step leaves out the index the sticky rule takes.
 - **Owns:** `crates/flui-objects/src/sliver/sticky_rows.rs`, `band_parts.rs` (new),
   `sliver_list.rs`, `sliver_varied_extent_list.rs` (after RC8), `virtualized_band.rs`;
   `crates/flui-objects/tests/harness/sticky_rows.rs` (new);
-  `crates/flui-view/src/element/sliver_adaptor.rs` (the trait method, the manager's
-  admission, `ListConfig`), `sparse_children.rs` (`retain_band`),
+  `crates/flui-view/src/element/sliver_adaptor.rs` (the trait method, the manager's kept
+  set and admission, `ListConfig`), `sparse_children.rs` (the reconcile and `retain_band`),
   `sliver_varied_extent_list.rs` (its configuration, after RC8); the paragraph of
   `crates/flui-view/ARCHITECTURE.md` on what the lazy element keeps built;
   `crates/flui-widgets/src/scroll/sliver_list.rs`, `sliver_varied_extent_list.rs`,
   `list_view.rs`.
-- **Tests:** `harness_sticky_row_stays_at_the_leading_edge_within_its_section`,
-  `harness_sticky_row_is_pushed_off_by_the_next_header`,
-  `harness_sticky_row_is_hit_before_the_row_it_covers`,
-  `harness_sticky_row_reports_its_extent_as_obstruction`,
-  `harness_sticky_row_works_in_all_four_axis_directions`,
-  `harness_the_list_without_sticky_rows_paints_and_hits_as_before`,
-  `harness_sliver_list_hits_and_publishes_a_child_only_where_it_paints`; widget tests
-  `a_sticky_header_far_above_the_band_stays_built_and_painted`,
-  `a_sticky_header_that_is_no_longer_current_is_released`,
-  `a_focused_sticky_header_is_painted_and_hit`,
-  `revealing_a_row_stops_below_the_sticky_header`,
-  `a_sticky_header_is_read_before_its_sections_rows`,
-  `a_list_of_ten_thousand_sections_builds_only_its_window`; the lazy-list and pinned-child
+- **Tests:** R20's rows and widget tests, as named there; the lazy-list and pinned-child
   suites of `flui-view` and `flui-widgets` unchanged.
 - **Checks:** clippy and nextest for `flui-objects`, `flui-view` and `flui-widgets`.
-- **Depends:** RC8, RC1; not at the same time as RC9 (`virtualized_band.rs`) or RC24
+- **Depends:** RC8, RC43; not at the same time as RC9 (`virtualized_band.rs`) or RC24
   (`sliver_adaptor.rs`) **Size:** L
 
 ### RC39. Item effects
 
 - **What:** W25. `ItemEffect`, `ItemProgress`, `ItemAppearance`, `sliver/item_effect.rs`; the
-  effect as the third step of `band_parts.rs`, not applied to a stuck header; the optional
+  effect as the last step of `band_parts.rs`, not applied to a stuck header; the optional
   effect on the four lazy slivers and `.item_effect(..)` on their widgets.
-  `RenderSliverFixedExtentList` and `RenderSliverGrid` move onto `ShownChildren`, their
-  pinned slots committed as announced.
 - **Owns:** `crates/flui-objects/src/sliver/item_effect.rs` (new), `band_parts.rs` (after
   RC38), `sliver_list.rs`, `sliver_varied_extent_list.rs`, `sliver_fixed_extent_list.rs`,
   `sliver_grid.rs`; `crates/flui-objects/tests/harness/item_effect.rs` (new); the
@@ -999,6 +1058,8 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   `flui_testing::perf::Baselines` for one group.
 - **Checks:** clippy and nextest for `flui-layer`, `flui-engine`, `flui-rendering`,
   `flui-objects`, `flui-widgets` (readback suites at one test thread).
+- **Owed on devices:** the readback rows run on lavapipe; a blend group and a mask on each
+  host's GPU backend are rows of `platform-parity.toml`.
 - **Depends:** RC16, RC17 **Size:** L
 
 ## Validation evidence

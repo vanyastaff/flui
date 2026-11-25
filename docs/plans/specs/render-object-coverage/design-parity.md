@@ -38,7 +38,8 @@ file they all own it.
   3. *A file* counts only when it is mounted. `family_files_are_mounted_and_listed` reads the
      directory (`CARGO_MANIFEST_DIR/tests/harness`), and fails for a file that is not in
      `FAMILY_FILES`, for a listed file whose `#[path]` and `mod` lines are missing from the
-     root at column 0, and for a listed name with no file. CI's unmounted-tests step globs
+     root at column 0, and for a listed name with no file. A directory that does not exist
+     is the empty set: git stores no empty directory, and this change adds no family file. CI's unmounted-tests step globs
      `tests/*.rs` only, so this test is the rung for the subdirectory (ADR-0303: a test of the
      owning crate).
 - **The guard is tested on text.** Three tests call `rows_naming` and the mount check on
@@ -69,19 +70,24 @@ Each also has a public `has_visual_overflow()` accessor, which `flui-testing` re
 (`crates/flui-testing/src/widgets.rs`, `has_visual_overflow`) and two documents of
 `flui-rendering` name.
 
-- **Shape.** The `shown` module of [design.md](design.md), "The shown answer", is built here.
-  The six objects each hold an `OverflowClip`. Their layout computes "a child overflows" as a
-  value and commits it on every `Ok` exit; `paint` clips only when `clip(behavior, size)` is
-  `Some`, and `describe_approximate_paint_clip` returns the same value for every child. The
-  bool field and its reset are deleted from the six in the same change.
-- **The public accessor stays.** `has_visual_overflow()` on each object returns
-  `OverflowClip::overflows()`. Its meaning is unchanged where a layout succeeds, and after a
-  layout that fails it now reports the last committed answer instead of `false`. `flui-testing`
-  and the documents that name the accessor stay true and are not edited.
-- **`RenderSliverCarousel`** moves from its private `Shown` table to `ShownChildren`, its
-  ADR-0265 pinned slot committed as announced, with no behaviour change (its rows are the
-  check), so the per-child form has a production user from the day it lands.
-  Its `describe_semantics_clip` keeps returning `SemanticsClip::Bounds` for an item's mask.
+- **Shape, first task.** The `shown` module of [design.md](design.md), "The shown answer", is
+  built here with `OverflowClip`. The six objects each hold one. Their `lay_out` returns the
+  size with "a child overflows" as a value, and `perform_layout` is `begin`, `lay_out`,
+  `commit`; `paint` clips only when `clip(behavior, size)` is `Some`, and
+  `describe_approximate_paint_clip` returns the same value for every child. The bool field
+  and its reset are deleted from the six in the same change.
+- **The public accessor stays.** `has_visual_overflow()` on each object returns the record's
+  bool. Its meaning is unchanged where a layout succeeds; after a layout that fails it
+  reports `true`, the state `begin` wrote, where today it reports whatever the failed pass
+  reached. `flui-testing` and the documents that name the accessor stay true and are not
+  edited.
+- **Shape, second task.** `ShownChildren` lands with every lazy sliver `main` has:
+  `RenderSliverCarousel` moves from its private `Shown` table, and `RenderSliverList`,
+  `RenderSliverFixedExtentList` and `RenderSliverGrid` stop asking
+  `PinnedChildren::is_pinned_slot` in `paint` and `hit_test`. Each announces the slots
+  `PinnedChildren::lay_out` returns; `slots`, `is_pinned_slot` and `clear_slots` are deleted.
+  No behaviour changes (their rows and ADR-0265's tests are the check). The carousel's
+  `describe_semantics_clip` keeps returning `SemanticsClip::Bounds` for an item's mask.
 - **What an overflow clip does to semantics** is what any authored clip does
   ([design.md](design.md), "Which clip hook"): the six objects report through the paint-clip
   hook, as `RenderClip` does, and add no semantics-clip override. R2 holds that by comparison,
@@ -89,12 +95,14 @@ Each also has a public `has_visual_overflow()` accessor, which `flui-testing` re
   under a `RenderClipRect` of the box publish, alone and under a scrollable.
 - **Hit testing** is unchanged and now stated: an overflowing child is hit only inside its
   parent's box, clipped or not (R2, #19445).
-- **Breaks.** None in public API: the fields are private and the accessors stay. One visible
-  change of behaviour: after a failed layout `has_visual_overflow()` keeps the last committed
-  answer.
+- **Breaks.** None in public API: the fields are private, the accessors stay and
+  `PinnedChildren` is private to the `sliver` module. One visible change of behaviour: after a failed layout
+  `has_visual_overflow()` is `true` and a lazy sliver's children are neither hit nor
+  published until a layout succeeds.
 - **Alternatives** are those of the seam ([design.md](design.md)).
-- **Mapping decisions to record:** the contract of the shown answer with its three states;
-  the hit rule of an unclipped overflow.
+- **Mapping decisions to record:** the contract of the shown answer with its three states
+  (rewriting "Lazy slivers lay out a pinned child outside the band"); the hit rule of an
+  unclipped overflow.
 
 ## W3. The sliver pass-through base and the maximum paint rectangle
 
@@ -287,9 +295,17 @@ and `gapless_playback`, and none for colour, blend mode, opacity, inversion or f
   reaches that the index has not been told, the source asks the delegate, validates the
   answer (finite, not negative; otherwise a layout error naming the index) and stores it. The
   child is laid out tight on the main axis at the stored extent, read back with `extent_of`,
-  never recovered from two offsets and never replaced by the child's own size. A change of
-  delegate (`should_relayout`), or of dimensions when `depends_on_dimensions` is true, calls
-  `invalidate_from(0)`; a change of count calls `set_count`.
+  never recovered from two offsets and never replaced by the child's own size.
+- **Every writer of the index** ([design.md](design.md), "One owner, every writer"). A change
+  of delegate (`should_relayout`), or of dimensions when `depends_on_dimensions` is true, is
+  `invalidate_from(0)`. The lazy element's `set_item_count` is the count's one source, and
+  the walk's `set_count` at the start of a pass repeats it. An index whose builder answers
+  `ChildLayout::NoChild` ends the list there, as it does for `SliverList`: the count the
+  element reports next is the truth. The adaptive default estimate applies only to items
+  not yet asked. The source re-stores the first visible item each pass, which hands the
+  walk's anchor to the index and changes no extent.
+- **Readers.** The list is born on `ShownChildren`: its band children are parts and its
+  ADR-0265 pinned slots are announced. It has no `is_pinned_slot` call to remove.
 - **The count, and how much one layout asks.** `LazyMultiBoxRender::create` takes a `usize`,
   and an `ItemCount::Unknown` source that probes as endless arrives as `usize::MAX`.
 
@@ -307,10 +323,18 @@ and `gapless_playback`, and none for colour, blend mode, opacity, inversion or f
   too slow' budget", and it stays where it is with that meaning.
 - **What a resize costs.** With a delegate that depends on the dimensions, a change of
   dimensions invalidates every answer, and each layout of a continuous resize asks again: at
-  most `EAGER_EXTENT_LIMIT` calls in the eager case, the window otherwise. That is the bound,
-  and the documentation states it. A delegate that returns `false` from
-  `depends_on_dimensions` (a table of fixed heights) is asked once per item for its life.
-  Answers are not kept per dimensions.
+  most `EAGER_EXTENT_LIMIT` calls in the eager case, the window otherwise. That is the bound
+  the limit exists to set: the perf scenario sizes it so that one eager layout fits its
+  stated share of a frame, and a resize frame is one such layout. A delegate that returns
+  `false` from `depends_on_dimensions` (a table of fixed heights) is asked once per item for
+  its life.
+  - *Alternative: ask only the window while the dimensions change and fill when they
+    settle.* Cheaper frames, but the fill needs a layout nothing asks for once the resize
+    stops, and the extent is estimated for as long as the user drags. Rejected while the
+    limit holds the cost.
+  - *Alternative: keep the stale answers and refine the window.* Rows outside the window
+    then sit at extents authored for other dimensions, and the "exact" extent is wrong.
+    Rejected.
 - **An unbounded main axis** uses `bounded_unbounded_window` as the measured list does, which
   is also the bound when every extent is zero.
 - **Why the eager case exists.** With every extent known, the scroll extent is exact, the
@@ -350,41 +374,62 @@ gets wrong.
   holds the offset index of W8. Flutter extends the list by inheritance; here both objects
   drive the same walk with the authored extent source, the tree's adding the indent.
 - **One owner.** The widget's state owns the expansion state of every node, the flattened
-  roster of rows, and one clock per running toggle. The render object keeps one thing across
-  layouts, the offset index, and it is a cache of the roster's extents: every change to it is
-  a roster edit delivered through the one channel below, or a reset. It holds no expansion
-  state and no animation.
+  roster of rows, and one clock per running toggle. The render object owns one thing across
+  layouts, the offset index, a cache of the extents of the roster snapshot it holds. It holds
+  no expansion state and no animation, and "Every writer of the index" below is the whole
+  list of what changes it.
 - **The roster** *(`flui-widgets`)*: the visible nodes in depth-first order, each with its
   depth. It is eager over *expanded* nodes only: a node's children are asked from the
   application's node source when the node expands, and row widgets are built lazily by the
   sliver's element, each under a key made from its node's id so that a row keeps its state
   when rows are inserted above it ([design.md](design.md), "Unverified"). While a block
   collapses its rows stay in the roster as ghosts; when the clock ends they leave it.
-- **How the render object learns which rows changed.** The roster numbers its states
-  (`RosterRevision` *(proposed)*, minted by `IdMint`) and keeps a bounded log of
-  `RosterEdit { at, removed, inserted }` *(proposed)*, one per expand or per collapse that
-  ended. The delegate hands the log on:
+- **What the render object reads is a snapshot.** The delegate is a value of the roster at
+  one revision, and its answers never change for its life: an edit makes the roster's next
+  value (the rows are shared and copied once per edit while a snapshot is held, the cost a
+  `Vec` insert already has) and the object reads the one it holds until `update` hands it
+  the next. No answer can come from a revision the index has not applied.
 
   ```rust
+  /// One revision of a tree's visible rows. An implementor is immutable.
   pub trait TreeRowDelegate {
+      fn len(&self) -> usize;
       fn extent(&self, index: usize, dimensions: &ItemExtentDimensions) -> f64;
+      fn depends_on_dimensions(&self) -> bool { true }
       fn depth(&self, index: usize) -> usize;
       fn revision(&self) -> RosterRevision;
-      /// The edits after `since`, oldest first, or `None` when the log no longer reaches it.
+      /// The edits after `since`, oldest first; `None` when `since` is of another roster or
+      /// the log no longer reaches it.
       fn edits_since(&self, since: RosterRevision) -> Option<Vec<RosterEdit>>;
-      fn should_relayout(&self, old: &dyn TreeRowDelegate) -> bool;
   }
   ```
 
-  The lazy element calls `set_item_count` before `update(config)`
-  (`sliver_adaptor.rs`, `update_render_object`), so the tree's `set_item_count` only records
-  the count. In `update` the object asks for the edits since the revision it last applied
-  and applies each as `Virtualizer::splice(at, removed, inserted)`, in order, so several
-  toggles in one build arrive as several splices. `None` (the log was outrun, or the tree
-  was replaced) is a reset: `set_count` and `invalidate_from(0)`. After the edits the index's
-  length must equal the recorded count; a mismatch is a reset with a diagnostic, never an
-  index used at the wrong length. Rows on either side of an edit keep their extents, and the
-  scroll anchor moves with its row.
+  `RosterRevision { roster: RosterId, edit }` *(proposed)* is typed per roster: `RosterId`
+  comes from a private `AtomicIdMint`, as `OverlayEntryId` does
+  (`crates/flui-widgets/src/overlay/entry.rs`), and the edit number from the roster's own
+  `IdMint`, so a replaced roster cannot answer for the old one's number. A changed extent
+  rule, node source or controller is a new roster, started in `did_update_view`; there is no
+  `should_relayout`, and one channel carries every reason to reset. The log is bounded and
+  holds `RosterEdit { at, removed, inserted }` *(proposed)*, one per expand or per collapse
+  that ended.
+- **Every writer of the index** ([design.md](design.md), "One owner, every writer").
+  1. `update(config)`. Edits since the applied revision are applied as
+     `Virtualizer::splice`, in order, so several toggles in one build are several splices,
+     and each returned correction joins the sliver's pending scroll correction: the row at
+     the top of the window stays where it is. `None` is a reset: `set_count(len)` and
+     `invalidate_from(0)`. Afterwards the index's length must equal the snapshot's `len()`;
+     a mismatch is a reset with a diagnostic, never an index used at the wrong length.
+  2. The authored source, in the walk: `set_measured` for a row not yet asked, and the
+     re-store of the first visible row that hands over the anchor.
+  3. A change of dimensions when `depends_on_dimensions` is true: `invalidate_from(0)`.
+  4. The walk's `set_count` at the start of a pass. The tree passes its snapshot's `len()`,
+     which `update` has already made the index's length, so it changes nothing.
+  5. The lazy element's `set_item_count`, its clamp included. The tree ignores it: the
+     count's one source is the snapshot, which the same build produced.
+  6. The walk's truncation on `ChildLayout::NoChild`. The tree's row builder is total over
+     the snapshot it was built with, so the answer is a defect: the band ends there for the
+     pass with a diagnostic, and the next pass starts again from `len()`.
+  7. The adaptive default estimate, which moves only rows not yet asked.
 - **What the render object is given.** Its `Config` holds:
   - `Rc<dyn TreeRowDelegate>` *(proposed)*, above. The lazy family's parent data type is
     fixed by the trait, so a row's depth cannot live there as Flutter's
@@ -440,7 +485,8 @@ gets wrong.
 - **Departures from Flutter to record in "Mapping decisions":** a row is laid out in the
   extent left after its indent (Flutter lays it out at the full extent and shifts it, so it
   overflows the trailing edge by its indent); all four axis directions; children on demand;
-  the reveal is a layout result; the roster's edits are the only way the index changes.
+  the reveal is a layout result; the delegate is a snapshot, and the seven writers of the
+  index.
 - **Alternative: the render object diffs the old and the new roster.** No log, and an O(n)
   comparison per build over rows that are answers of a delegate, not values the object holds.
   Rejected.
@@ -498,19 +544,20 @@ same three behaviours with extents measured from children.
   first: the number of children must be one plus the prototypes the flags name, and a
   difference is a typed layout error that states both numbers. No child is read by a
   position the flags imply before that check.
-- **What the child can read.** `HeaderFrame` *(proposed)*: current, minimum and maximum extent
-  and whether content is scrolled under the header (the overlap is positive or the header is
-  shrunk). The widget's state owns it and hands it to the render object and, through
-  `HeaderFrame::of(ctx)`, to the child. The object writes it when layout commits and marks it
-  changed when a value differs.
+- **What the child can read.** `HeaderFrame` *(proposed)*: the minimum and maximum extent and
+  whether content is scrolled under the header (the overlap is positive or the header is
+  shrunk). The current extent is not in it: it is the child's own constraint, which a child
+  reads in the same frame with a `LayoutBuilder`. `HeaderFrame::of(ctx)` is an inherited
+  value, so a child that reads it depends on it like any other.
 - **How the child learns it changed.** A pinned header's "content is scrolled under it" flips
-  on a scroll that lays out neither the header's child nor anything that repaints it, so a
-  value written in layout reaches nobody. `HeaderFrame::listenable()` is a `ChangeNotifier`
-  the widget's state notifies after the frame, through the after-frame helper
-  ([design.md](design.md)), when the frame was marked changed; a child that paints from the
-  frame listens, as a carousel item listens to `CarouselItemScope::listenable`. The
-  notification is one frame late, which the documentation states. A header whose content must
-  follow in the same frame uses the existing persistent header, which builds during layout.
+  on a scroll that lays out neither the header's child nor anything that repaints it. The
+  header is the owner that knows: it writes the frame to the record it shares with the
+  widget's state when layout commits, and calls the state's wake when the value differs
+  from the last ([design.md](design.md), "A value a frame decided reaches a widget on a
+  change"). The state rebuilds with the new value and the dependents of `HeaderFrame::of`
+  rebuild with it; a scroll that changes nothing wakes nobody. The child follows one frame
+  late, which the documentation states. A header whose content must follow in the same
+  frame uses the existing persistent header, which builds during layout.
 - **Overlap arithmetic.** The floating header's return under a preceding pinned sliver is where
   Flutter's review found a `min` for a `max` (PR #151145). The geometry is written once in the
   shared state machine, and R7's row runs it in both scroll directions and all four axis
@@ -591,6 +638,12 @@ returns a `HitMetadata`, and the gesture binding already reads one kind of it on
 (`FirstClickTarget`, read by `first_click_route` in
 `crates/flui-interaction/src/binding/mod.rs`).
 
+The mechanism is the tap ADR's to decide ([design.md](design.md), "ADRs this spec needs").
+This section is its brief: the shape this spec holds fixed, and the scenarios the ADR answers
+with a type or a named test before it is accepted. The tasks build what the ADR accepts.
+
+### What the spec holds fixed
+
 - **The event** *(proposed, `flui-interaction`)*:
 
   ```rust
@@ -608,124 +661,125 @@ returns a `HitMetadata`, and the gesture binding already reads one kind of it on
   pub enum TapOrigin { Pointer(PointerKind), Semantics }
   ```
 
-  Every region that hears a contact's `Down` hears exactly one `Up` or one `Cancel` for it:
-  `Cancel` when the platform cancels the contact or the presentation closes under it. `Tap`
-  follows an `Up` whose contact never exceeded the hit slop of its pointer kind
-  (`GestureSettings::exceeds_hit_slop(kind, delta)`), latched on the cached route by the first
-  move that exceeds it, so a contact that leaves and returns is not a tap. `Tap` is kinematic
-  and independent of the arena, so a region learns of a tap whoever won the contact. A drag
-  reports `Down` and `Up` and no `Tap` (#138190). Every button is reported (#136706).
-  `TapOrigin` is `#[non_exhaustive]` because a host action without a contact (a status-bar
-  tap, #177992) gets a variant of its own when a host first produces one; no such action is
-  delivered as a pointer at an invented position, and FLUI's hosts produce none today.
-- **The registry** *(proposed, `flui-interaction`, `TapRegionRegistry`)*: an `Rc` the
-  `BuildOwner` holds, as it holds the focus manager, and that the presentation hands to its
-  `GestureBinding`. It holds the mounted regions (id, group, live, consumes outside taps,
-  callbacks); `TapRegionId` and `TapRegionGroup` are minted by `IdMint`. It is state only the
-  owner thread touches (`Rc`, `RefCell`); callbacks run through
-  `flui_foundation::panic::commit` with the borrow released, and a callback that registers or
-  removes a region during delivery gets a typed outcome, not a second borrow.
-- **How a widget reaches it.** `LifecycleContext::tap_regions() -> Rc<TapRegionRegistry>`
-  *(proposed, `flui-view`)*, infallible like `focus_manager()`: the registry exists wherever
-  a build owner does, and without a gesture binding (a bare element test) regions register
-  and hear nothing. `TapRegion` takes it in `create_state` (the state is born bound) and holds
-  a guard whose `Drop` removes the region. There is no surface widget and no surface render
-  object.
-- **What a contact reports to.** On a down the binding hit-tests, resolves the route, drops the
-  result and admits a `CachedPointerRoute`. In the same pass, before `drop(result)`, the
-  registry takes the contact's *snapshot* and stores it on the cached route: the ids of the
-  regions that are registered and live at that moment, and which of them are on the path.
-  Every later event of the contact is delivered from the snapshot. A region mounted after the
-  down is not in it and hears nothing of that contact; one unmounted after the down is
-  skipped. The up and the tap are never classified against a second hit test, so a region
-  that moved between down and up cannot flip the answer.
+  A region that hears a contact's `Down` hears exactly one `Up` or one `Cancel` for it,
+  whatever ends the contact. `Tap` follows an `Up` whose contact never exceeded the hit slop
+  of its pointer kind (`GestureSettings::exceeds_hit_slop(kind, delta)`), latched by the
+  first move that exceeds it, so a contact that leaves and returns is not a tap. `Tap` is
+  kinematic and independent of the arena: a region learns of a tap whoever won the contact.
+  A drag reports `Down` and `Up` and no `Tap` (#138190). Every button is reported (#136706).
+  A host action without a contact (a status-bar tap, #177992) gets a `TapOrigin` variant when
+  a host first produces one; none is delivered as a pointer at an invented position.
+- **One registry, in the binding's presentation** *(proposed, `flui-interaction`,
+  `TapRegionRegistry`)*: an `Rc` the `BuildOwner` holds, as it holds the focus manager, and
+  hands to its `GestureBinding`. `LifecycleContext::tap_regions()` *(proposed, `flui-view`)*
+  is infallible like `focus_manager()`; without a gesture binding regions register and hear
+  nothing. `TapRegion` takes it in `create_state` and holds a guard whose `Drop` removes the
+  region. An entry is an identity (`TapRegionId`, `TapRegionGroup`, both from the registry's
+  `IdMint`) and a `Weak` to the state's cell; the callbacks, the consume flag and the group
+  are read from the cell at delivery. State only the owner thread touches (`Rc`, `RefCell`);
+  callbacks run through `flui_foundation::panic::commit` with the borrow released, and a
+  callback that registers or removes a region during delivery gets a typed outcome. There is
+  no surface widget and no surface render object.
 - **`RenderTapRegion`** *(proposed, `flui-objects`, `interaction/tap_region.rs`)*: a proxy box
   whose `metadata()` is its `TapRegionMember` and which joins the hits below it
-  (`joins_hits_below`), so a region under another is still on the path. It adds itself to the
-  path wherever the point is inside its box, whether or not its child takes the hit (#112924).
-  Its widget's state publishes the render object's id to the registry on attach and detach,
-  the way `RenderSubtreeAnchor` publishes its id into a `SubtreeAnchor`.
+  (`joins_hits_below`), so a region under another is still on the path. It is on the path
+  wherever the point is inside its box, whether or not its child takes the hit (#112924).
+- **Inside or outside is decided once, from the hit path of the down.** The registry takes a
+  snapshot when the binding has hit-tested the down, and every later event of the contact is
+  delivered from it. A region mounted after the down hears nothing of that contact; one
+  unmounted after it is skipped. Nothing is classified against a second hit test, so a
+  region that moved between down and up cannot flip the answer.
 - **Groups.** A down inside any member of a group is inside every member. `PopupRoute` gains
   `.tap_region_group(group)` *(proposed)*, and the route wraps its page in a `TapRegion` of
   that group, so a menu pushed with `PageHandle::push_popup` is inside its opener (#128317).
-- **Consuming an outside tap.** For a down outside a consuming region the registry joins the
-  contact as a *hold* (`ArenaMembership::holding_contact`, ADR-0208 rule 4), between the hit
-  test and `arena().close(pointer)`. The members that do not move, a tap or a long press, lose
-  on its admission and later ones are refused, so no detector under the tap acts (#135327). A
-  drag or a scroll still takes the contact from the hold, and the raw `Listener`s on the route
-  are not cancelled, because nothing claimed the contact (rule 5): a selection drag in a field
-  under an open menu still runs, and the menu is still told of the outside `Down`. The arena
-  holds members weakly; the registry keeps the `Rc`.
+  A region's group is readable below it (`TapRegionGroup::maybe_of(ctx)` *(proposed)*).
+- **Consuming an outside tap is a hold.** For a down outside a consuming region the registry
+  joins the contact as a hold (`ArenaMembership::holding_contact`), between the hit test and
+  `arena().close(pointer)`. The members that do not move lose on its admission and later
+  ones are refused, so no detector under the tap acts (#135327). A drag or a scroll still
+  takes the contact from the hold, and the raw `Listener`s on the route are not cancelled,
+  because nothing claimed the contact (ADR-0208 §2 rule 5): a selection drag in a field
+  under an open menu still runs. This makes a second producer of a hold, which is the part
+  of ADR-0208 §2 rule 4 the tap ADR supersedes ([design.md](design.md)).
+  - *Alternative: resolve the registry's member as accepted,* Flutter's form. A claimed
+    hand-off sends `Cancel { reason: Claimed }` to every other `Listener` on the route and
+    makes every moving member lose. Rejected ("Decisions for the owner", 14).
+- **An accessibility activation passes one door.** An activation never reaches the binding.
+  One function resolves the request, classifies it, tells the registry and invokes or does
+  not (`deliver_semantics_action` *(proposed)*, recommended in `flui-view`, which owns the
+  `BuildOwner` that holds the registry). `PresentationState::dispatch_semantics_action`
+  (`crates/flui-runtime/src/presentation/accessibility.rs`), which the hosts and the
+  development agent reach, calls it. `SemanticsActionInvocation::invoke` joins
+  `disallowed-methods` in `clippy.toml`, and the one call inside the door carries the
+  `#[expect]` with its reason. Classification is by render ancestry in both directions: the
+  regions passed on the way from the target's render object to the root, and a live region
+  whose own render object has the target as an ancestor (a region below a merged node).
+  `SemanticsActionInvocation` already exposes `node_id()` and `action()`. No pointer is
+  synthesised (PR #183093). A keyboard activation is not classified: it has no position, and
+  keeping keys inside a popup is its route's focus scope.
 
-  ADR-0208's rule 4 names one producer of a hold, a moving scrollable. The tap ADR's change
-  rewrites that sentence for two producers and adds the row "consuming region, outside
-  contact" to the ownership table that `assert_ownership_table` checks.
-  - *Alternative: resolve the registry's member as accepted,* Flutter's form. Under rule 5 a
-    claimed hand-off sends `Cancel { reason: Claimed }` to every other `Listener` on the
-    route and makes every moving member lose, so a scroll that starts outside a menu is dead
-    and a text field's selection drag stops. Rejected ("Decisions for the owner", 14).
-- **Liveness.** A region is live while two things hold: the page it is on is the current one
-  (`PageHandle::is_current()`, an inherited value the widget depends on, where there is a
-  page), and its render object was presented by the last frame
-  (`PipelineOwner::presented_placement(id)` is `Some`). The state reads the second after each
-  frame through the after-frame helper ([design.md](design.md)) and writes the flag to its
-  registry entry. A region in a branch that is not shown, under an offstage parent or behind a
-  `Visibility` is therefore not live, with no rule per container, and a region is live one
-  frame after it first paints, which is before a pointer can land on it. A group hears outside
-  events while any member is live. No navigator observer is involved (PR #155297) and
-  `TickerMode` is not read: it mutes animations, and a region under a paused ticker can still
-  be on screen.
-  - *Cost.* One `presented_placement` per mounted region per drawn frame; the documentation
-    states it.
-- **Accessibility activations: one function, every door.** An activation never reaches the
-  binding. Today three kinds of caller resolve a request and invoke it:
-  `PresentationState::dispatch_semantics_action`
-  (`crates/flui-runtime/src/presentation/accessibility.rs`, reached by
-  `UiRuntime::dispatch_accessibility` and by the development agent),
-  `flui_testing::a11y::invoke_semantics_action` (behind `Harness::invoke_semantics_action`),
-  and tests of `flui-widgets` that call `resolve_semantics_action` and `invoke()` themselves
-  (in `catalog_disclosure.rs`, `catalog_slider.rs`, `scroll.rs` and `semantics.rs`). A rule
-  written into the first is bypassed by the other two.
-  - `flui-view` gains `deliver_semantics_action(owner, registry, request)` *(proposed, in a
-    module of its own)*: it resolves the request, classifies it, tells the registry, and
-    invokes or does not. `flui-runtime`'s dispatch and `flui-testing`'s door both call it.
-    The tests that invoke by hand only to deliver an action move onto the harness door.
-    Those that keep an invocation across a rebuild to show a stale one is safe test
-    `invoke` itself and stay as they are.
-  - The rung that keeps it the only door: `SemanticsActionInvocation::invoke` joins
-    `disallowed-methods` in `clippy.toml`, and the one call inside
-    `deliver_semantics_action` carries the `#[expect]` with its reason. Test code is exempt
-    from that lint at the crate root (ADR-0303 §5), which is why the delivering tests are
-    moved by hand in the same change.
-  - `flui-semantics`: `SemanticsActionInvocation` exposes its action and the id of its node
-    *(proposed accessors; today only `invoke` is public)*.
-  - *Classification is by render ancestry, in both directions.* The function walks from the
-    target's render object to the root (`PipelineOwner::render_tree()`, `RenderTree::parent`)
-    and collects the `TapRegionMember`s it passes: the target is inside those regions. A live
-    region whose own render object has the target as an ancestor (a region below a node that
-    merged its descendants) also counts as inside, found by walking up from each live region's
-    published render id. Every other live region is outside.
-  - *Which actions count.* One exhaustive `match` over `flui_protocol::semantics::
-    SemanticsAction`, which is not `#[non_exhaustive]`, so a new variant does not compile
-    until it is classed. Recommended to the ADR: an action that acts on its target is a tap
-    (`Click`, `ShowContextMenu`, `Expand`, `Collapse`, `Increment`, `Decrement`, `SetValue`,
-    `SetNumericValue`, `SetTextSelection`, `ReplaceSelectedText`, `Focus`, `CustomAction`);
-    one that only moves the view or the reader's attention is not (`ScrollIntoView`, the four
-    scroll actions, `SetScrollOffset`, `ShowTooltip`, `HideTooltip`, `Blur`) and is invoked
-    without classification.
-  - For a tap, the registry is handed one `TapRegionEvent` with `TapPhase::Tap` and
-    `TapOrigin::Semantics`, delivers it once, and answers whether a consuming region was
-    outside; if so the action is not invoked. No pointer is synthesised (PR #183093).
-  - *A keyboard activation is not classified.* It has no position. Keeping the keys inside a
-    popup is its route's focus scope; the ADR states that a consuming region does not stop
-    Enter on a control outside it that still has focus.
+### What the ADR answers
+
+Each is a failure the first design allowed. The ADR names, for each, the type or the test
+that rules it out; R12 lists the tests.
+
+1. **Every action has a class.** `SemanticsAction` is `#[non_exhaustive]` (the `vocabulary!`
+   macro of `flui-protocol` emits it), so a `match` in another crate needs a wildcard and a
+   new action falls through it unclassed. Recommended: the class is a method beside the enum
+   in `flui-protocol`, where a `match` without a wildcard compiles; an action that acts on
+   its target is a tap (`Click`, `ShowContextMenu`, `Expand`, `Collapse`, `Increment`,
+   `Decrement`, `SetValue`, `SetNumericValue`, `SetTextSelection`, `ReplaceSelectedText`,
+   `Focus`, `CustomAction`) and one that only moves the view or the reader's attention is
+   not. Otherwise a test over `SemanticsAction::ALL`.
+2. **A stopped activation says so.** `dispatch_semantics_action` returns `Ok(())` whatever
+   happened and the agent then reports `EffectKind::Ran`, so a consumed action reads as run;
+   mapped to an error the agent's wildcard arm would report `NodeNotFound`. The ADR adds one
+   typed outcome for "a consuming region stopped it" that the dispatch returns and the agent
+   reports as itself, which changes the act schema of `flui-protocol`. It also fixes the
+   order under a panic: every region is told, the action is invoked unless consumed, and the
+   first panic resumes afterwards (`FirstPanic`).
+3. **The tests use the doors applications have.** ADR-0400 deletes `Harness` and `LaidOut`,
+   so nothing new lands on `Harness::invoke_semantics_action` and no test moves onto it. An
+   activation is tested through the runtime's dispatch and through `Tester`'s semantic path;
+   `Tester` has no verb that performs an action on a located node today
+   ([design.md](design.md), "Unverified"). `flui-testing`'s existing door calls the one
+   function for as long as it exists. The widget tests that resolve and invoke by hand are
+   test code, exempt from the lint (ADR-0303 §5), and move with ADR-0400's migration.
+4. **Liveness is one rule, per group, at the snapshot.** A popup covers its opener, whose
+   page is then not current (`PageHandle::is_current()`), while the opener's region is in
+   the popup's group and must still count. Recommended: at the snapshot the registry asks
+   each entry's cell whether its render object is presented
+   (`PipelineOwner::presented_placement`) and its page, where it has one, is current; a
+   group is live when any member is, and every member of a live group hears. No stored flag
+   and no per-frame read. `TickerMode` is not read: it mutes animations, and a region under
+   a paused ticker can still be on screen.
+5. **The snapshot sees the whole path, and every end of a contact reaches it.** The binding
+   prunes the hit path for a first click (`first_click_route` keeps the first-click target
+   and drops its ancestors) before the route is resolved, so membership read after the
+   pruning puts a region outside a contact that is inside it. It also ends contacts itself:
+   a second `Down` on a live pointer supersedes the first, the pointer cap evicts the
+   oldest, and the platform, a lost capture, a removed device or a closing presentation
+   cancel. The ADR takes membership from the result the hit test returned, says whether a
+   click that only activates the window reports at all, and delivers the terminal event
+   from the one place a cached route is removed, with a row per cause.
+6. **A field's own overlays are inside it.** Selection handles, the selection toolbar and
+   the magnifier are overlay entries (`text/editable_text/handles.rs`,
+   `text/selection_menu/toolbar.rs`), outside the field's render subtree; a press on a handle
+   would dismiss the field it belongs to. The field reads its ambient group and its overlay
+   entries join it.
+7. **A rebuilt region uses what it was rebuilt with.** Nothing is copied at `create_state`
+   ("Rules every item follows"); the ADR's test changes the callback and the consume flag
+   between two contacts.
+8. **A fling stopped by a down** (#144221†). Recommended: a contact on which the scrollable
+   admitted its hold reports `Down` and `Up` and no `Tap` ([design.md](design.md),
+   "Unverified", for how the registry sees it).
+
 - **Crates.** `flui-interaction` (event, registry, the snapshot in the binding),
-  `flui-objects` (`RenderTapRegion`), `flui-view` (the capability, the one activation door),
-  `flui-runtime` (wiring), `flui-semantics` (the two accessors), `flui-testing` (its door),
-  `flui-widgets` (`TapRegion`, the popup's group). None is frozen.
-- **A fling stopped by a down** (#144221†). Recommended in the ADR: a contact on which the
-  scrollable admitted its hold (rule 4) reports `Down` and `Up` and no `Tap`
-  ([design.md](design.md), "Unverified", for how the registry sees it).
+  `flui-objects` (`RenderTapRegion`), `flui-view` (the capability, the door),
+  `flui-runtime` (wiring, the outcome), `flui-protocol` (the class, the act schema),
+  `flui-sdk` (the per-name re-exports of `flui_sdk::interaction`, so a package can name the
+  event and the group), `flui-testing`, `flui-widgets` (`TapRegion`, the popup's group, the
+  field's overlays). None is frozen.
 - **Alternative: a surface render object that caches hit results,** as Flutter has. It needs
   the path inside a pointer handler, which the protocol does not carry
   (`crates/flui-rendering/ARCHITECTURE.md`, "The hit-test path is driver-owned"), so it means a
@@ -738,8 +792,6 @@ returns a `HitMetadata`, and the gesture binding already reads one kind of it on
 - **Alternative: a tap from the arena's winner** instead of the kinematic rule. A region would
   then hear no tap when a detector under the pointer won, which is the case a region exists
   for. Rejected.
-- **Alternative: classify an activation inside `dispatch_semantics_action`.** One host's
-  door; the harness and any test that invokes an action pass it by. Rejected.
 
 ## W13. Subtree filters
 
@@ -876,18 +928,31 @@ The seam is designed once and both text objects use it.
   never stands inside them. The caret beside a placeholder takes the line's height and can
   stand after a trailing one; the selection highlight is painted after the inline children it
   covers (#30688).
-  - *One owner of "value and placeholders agree".* The field builds the span tree from the
-    controller's value: it splits the text at each U+FFFC and asks an inline-child builder
-    *(proposed)* for the child of the n-th one. The application supplies no second text, so
-    a span tree whose text differs from the value cannot be made (#107432), and there is no
-    check to run and nothing to refuse.
-  - *A U+FFFC that did not come from the application.* The controller's write points are
-    where text enters the value (`insert_str`, `insert_str_at`, `set_text`, an IME commit).
-    Each removes U+FFFC from incoming text, so a paste or an IME cannot add a placeholder. A
-    placeholder enters through one method, `insert_placeholder` *(proposed)*, and a restored
-    value through a constructor that states it carries placeholders. A field with no
-    inline-child builder draws a U+FFFC that is already in its value as the replacement
-    glyph, as today.
+  - *One owner: the editing value.* In a field an ordinal is not an identity: after a
+    deletion or a restored value the n-th placeholder is another chip. The value is one type,
+    `EditingText` *(proposed, working name, beside `controller.rs`)*: the text and one
+    `PlaceholderId` per U+FFFC, in order, with ids from the controller's own `IdMint`. It is
+    changed by two methods and has no other way in: `replace(range, &str)`, which removes
+    U+FFFC from the incoming text and drops the ids of the placeholders inside the range, and
+    `insert_placeholder(at) -> PlaceholderId`. A value made from a plain string has no
+    placeholders.
+  - *Both holders of the text are that type.* The controller's stored text
+    (`ControllerInner.text`) and the input session's document (`Doc.text`,
+    `text_store.rs`) are `String`s today, and a session writes its whole text back
+    (`SessionWrite`, `write_session`). With both an `EditingText`, the session's edits, which
+    already arrive as range replacements (`TextStoreEdit::replace`), keep every placeholder
+    outside the range with its id, and the write-back carries text and ids together. No path
+    strips placeholders from a whole value, so a composition beside a chip cannot delete it,
+    and a paste or an IME cannot add one. `insert_str`, `insert_str_at`, `set_text` and
+    `backspace` become calls of `replace`.
+  - *Who builds the spans.* The field builds the span tree from the value: it splits the
+    text at each U+FFFC and asks an inline-child builder *(proposed)* for the child of that
+    `PlaceholderId`, and keys the child by it, so a chip keeps its state when another is
+    deleted before it. The application supplies no second text, so a span tree whose text
+    differs from the value cannot be made (#107432). A read-only paragraph has no edits and
+    keeps ordinals. A field with no inline-child builder draws a U+FFFC as the replacement
+    glyph, as today. The field has no undo stack today; one that lands restores values, and
+    a value carries its ids.
   - *An obscured field.* `RenderEditable` is given masked text and "never sees the source
     characters" (`editable.rs`); the mask maps one character to one obscuring character. A
     placeholder is masked like any character, one position for one position, and its child
@@ -895,8 +960,11 @@ The seam is designed once and both text objects use it.
   - A controller that turns typed text into chips, what a chip serialises to, and keeping an
     application's own list of chips in step with deletions are catalog work on top of this.
 - **ADR.** The span tree change, the ordinal rule, the placement of measurement, the scaling
-  rule and the editing value's rules (who builds the spans, where a U+FFFC may enter, the
-  obscured field) are cross-crate and hard to reverse.
+  rule and the editing value's type (who builds the spans, the two methods that change it,
+  the obscured field) are cross-crate and hard to reverse.
+- **Alternative: ordinals in a field, with U+FFFC stripped at each write point.** A session
+  write is the whole value, so stripping it deletes the field's own placeholders, and an
+  ordinal names a different chip after any deletion. Rejected.
 - **Alternative: a separate widgets-layer span tree** that lowers to the painting one. Two
   trees to keep in step. Rejected.
 - **Alternative: a list of boxes and a list of nodes zipped with the children,** Flutter's
@@ -960,17 +1028,19 @@ context, and the element is `SliverMultiBoxAdaptor`.
     origin and the re-centre is an extra rule. The fallback if the reverse group's arithmetic
     does not work out.
 - **Scrolling.** A released drag or fling settles through a `SnapPolicy` *(proposed:
-  `WheelSnap`)* beside `PageSnap`. A mouse wheel's notch is a step, not a release, and goes
-  through `DetentSteps` ([design.md](design.md), "One settle rule … and one step rule"): the
-  wheel's implementor steps from the item the previous step was heading for, so two quick
-  notches move two items and one notch moves one whatever the host's line height (#125291†).
-  A touchpad's pixel stream scrolls freely and settles at its end. The controller is the
-  fixed-extent form of `ScrollController`. Bringing a tapped item to the centre (#24089†) is
+  `WheelSnap`)* beside `PageSnap`. A mouse wheel's notch is a step, not a release:
+  `WheelSnap` implements `SnapPolicy::step` ([design.md](design.md), "One settle rule for a
+  scrollable, and a notch that moves one item"), and the scrollable's one `WheelMotion`
+  holds where the wheel is heading, so two quick notches move two items and one notch moves
+  one whatever the host's line height (#125291†). What counts as a notch on each host is
+  that section's table; a touchpad's pixel stream, and every browser packet, scrolls freely
+  and settles at its end. The controller is the fixed-extent form of `ScrollController`. Bringing a tapped item to the centre (#24089†) is
   the catalog's use of the tap that R15's test shows reaching the item.
 - **Alternative: a box viewport as in Flutter.** It needs lazy children on the box layout
   context and a second lazy element: a second form of the request strategy, in a frozen crate.
   With W16's typed key a wheel keyed by a signed index becomes possible there, and looping
-  becomes simple; the ADR weighs this against the sliver.
+  becomes simple; the ADR weighs this against the sliver with the costs of
+  [design.md](design.md), "Decisions for the owner", 2.
 - **Alternative: an eager wheel** (all children built). Fine for a 12-item picker, wrong for a
   date wheel of thousands. Rejected as the only form.
 
@@ -1011,8 +1081,12 @@ strategy is keyed by `usize` and retains one contiguous band.
   by division, and pinned rows and columns are ranges, not per-cell lookups.
 - **Widget.** `TwoAxisScrollView` *(proposed)*, which owns two scroll positions and one
   two-axis drag (`DragSlot::pan()`), and gives each axis that can scroll its component of the
-  motion. An axis whose content fits takes none and blocks nothing (#144982). Table and tree
-  views are layouts on top, outside this spec.
+  motion. An axis whose content fits takes none and blocks nothing (#144982).
+  `DiagonalDrag::{Free, Locked}` *(proposed)* says what a drag off the axes does: `Free`
+  moves both, and `Locked` gives a contact to the axis that led when it left the slop, which
+  is what a table wants. It is a filter on the deltas after both owners began, so the
+  contract below is the same for both. Table and tree views are layouts on top, outside
+  this spec.
 - **One contact, two owners, begun together or not at all.** Each axis has a `ScrollOwner`,
   and one owner's `begin_contact` resumes its `FirstPanic` before it returns
   (`crates/flui-widgets/src/scroll/scroll_owner.rs`), so two calls in a row leave the second
@@ -1026,7 +1100,8 @@ strategy is keyed by `usize` and retains one contiguous band.
   resumed. No code begins one contact on two owners today ([design.md](design.md),
   "Unverified").
 - **A resize or a jump mid-frame** invalidates the region; the request strategy's fixpoint
-  (ADR-0017) settles it in the frame (#147292†).
+  (ADR-0017) settles it in the frame within ADR-0308's bound, and a frame that reaches the
+  bound paints what it has, logs, and goes on in the next (#147292†).
 - **Alternative: a second request seam for boxes,** leaving the sliver one alone. Two
   implementations of the build-during-layout rule, the retain rule and the pinned rule.
   Rejected.

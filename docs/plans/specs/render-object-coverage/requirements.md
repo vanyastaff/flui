@@ -18,11 +18,14 @@
   [ADR-0224](../../../adr/ADR-0224-geometry-aware-semantics-child-selection.md),
   [ADR-0226](../../../adr/ADR-0226-semantics-reading-order-and-sibling-barriers.md),
   [ADR-0265](../../../adr/ADR-0265-pinned-lazy-children-and-the-focusable-list.md),
+  [ADR-0276](../../../adr/ADR-0276-a-follower-takes-its-leaders-full-transform-and-may-hide-with-its-clips.md),
   [ADR-0304](../../../adr/ADR-0304-the-scene-is-retained-and-damage-is-the-footprint-of-its-patch.md),
+  [ADR-0308](../../../adr/ADR-0308-layout-build-fixpoint-charges-only-passes-without-progress.md),
   [ADR-0322](../../../adr/ADR-0322-a-control-mounts-one-element-for-its-behaviours.md),
   [ADR-0325](../../../adr/ADR-0325-a-context-is-bound-as-ctx-and-a-description-builder-has-no-with.md).
-  The spec changes one of them: the tap ADR rewrites the sentence of ADR-0208's rule 4 that
-  names who produces a hold and adds a row to its ownership table (R12). It builds one thing
+  The spec changes one of them: the tap ADR supersedes the part of ADR-0208 §2 rule 4 that
+  names who produces a hold, and states the new row of the ownership table itself; ADR-0208
+  keeps its text (R12). It builds one thing
   an accepted record decided and the code lacks, ADR-0003's insert and delete in the middle
   of the offset index (R6). It names six new ADRs that must be accepted before the tasks that
   depend on them start ([design.md](design.md), "ADRs this spec needs").
@@ -141,8 +144,9 @@ bullets and ADR-0306 has none, so the four crates are frozen.
 - **G3.** A gated change is the smallest one that serves its requirement, and it comes with the
   ADR that decides it. No task adds a hook to a frozen crate "for later".
 
-Ungated: R1–R5, R7–R9, R12, R18–R24 and the first half of R10. Gated in part: R11, R13–R17,
-R25, R26 and the second half of R10. R6 waits on one defect fix in `flui-rendering`
+Ungated: R1–R5, R7–R9, R12, R18, R20–R24, the geometry observer of R19 and the first half of
+R10. Gated in part: R11, R13–R17, R25, R26, the visibility observer of R19 (two fields on the
+leader watch) and the second half of R10. R6 waits on one defect fix in `flui-rendering`
 (`Virtualizer::splice`, which ADR-0003 decided and the code lacks); the freeze admits a defect
 fix, and the owner confirms that reading ([design.md](design.md), "Decisions for the owner",
 12). R5 uses one read that lands with the same fix (decision 13) and R3 may need a defect fix
@@ -195,12 +199,14 @@ and `RenderConstraintsTransformBox`, with a clip behaviour other than `Clip::Non
 - when nothing overflows, no clip is reported and no clip scope is pushed;
 - the answer that paint, semantics and input regions read is the one written by the last layout
   that returned `Ok`. Every such layout writes it, one that returns early included (no
-  children, a hidden index). Only a layout that fails leaves the previous answer, never a
-  cleared one;
+  children, a hidden index). After a layout that fails or panics the box clips to the size it
+  keeps: a failed pass has moved children, so no earlier answer is true of them;
 - the objects' public `has_visual_overflow()` reads the same answer.
 
-For every object of this spec that clips, hides or transforms a child (R3, R6, R7, R13, R15, R16,
-R20, R21, R22, R24, R25), and for `RenderSliverCarousel`, which already works this way:
+For every object of this spec that clips, hides or transforms a child (R3, R5, R6, R7, R13, R15,
+R16, R20, R21, R22, R24, R25), and for the four lazy slivers `main` has (the carousel, which
+already works this way, and the list, the fixed-extent list and the grid, which ask
+`PinnedChildren::is_pinned_slot` instead):
 
 - the clip, the transform and whether the child is shown at all are computed in layout and kept
   in one record ([design.md](design.md), "The shown answer"). Paint, hit testing, the
@@ -211,23 +217,36 @@ R20, R21, R22, R24, R25), and for `RenderSliverCarousel`, which already works th
   kept built for the focusable list, ADR-0265); absent (none of the three);
 - a sliver hits a child where it paints it in all four axis directions and both growth
   directions;
-- an object commits the record once per layout, whatever number of rules decided it.
+- an object commits the record once per layout, whatever number of rules decided it, and one
+  child is laid out by one of them;
+- after a layout that fails or panics the record is empty: no child is hit or published until
+  a layout succeeds, and the picture stays the last one painted;
+- no lazy sliver answers "is this slot pinned" anywhere but the record: `PinnedChildren`'s
+  `slots`, `is_pinned_slot` and `clear_slots` are gone;
+- a type that keeps a record runs the shared row, and a test of the crate fails for one that
+  does not.
 
 Acceptance: one row per object for the semantics and region cut-off
 (`harness_<object>_cuts_semantics_and_regions_at_its_overflow_clip`),
 `harness_<object>_overflow_clip_publishes_what_a_clip_rect_publishes` (one table over the six
 objects, alone and under a scrollable, with a child partly outside and one wholly outside),
-`harness_overflow_answer_survives_a_layout_that_fails`,
+`harness_an_overflow_box_clips_after_a_layout_that_fails` (a returned error and a panic),
 `harness_an_overflow_answer_is_cleared_by_a_layout_that_returns_early` (an overflowing stack
 loses its children; an indexed stack's index becomes none),
 `harness_no_overflow_reports_no_clip`,
 `harness_an_unclipped_overflow_is_painted_and_published_but_hit_only_inside_the_box`,
 `harness_a_sliver_part_is_hit_where_it_is_painted` (four axis directions, both growth
-directions), and for every object that keeps the per-child record the shared row
+directions), `harness_a_lazy_sliver_shows_nothing_after_a_layout_that_fails` (a returned
+error and a panic), `harness_overlapping_parts_are_hit_in_reverse_paint_order`,
+`harness_a_part_with_a_non_finite_clip_is_not_shown`,
+`every_keeper_of_a_shown_record_runs_the_shared_row` with its matcher's test on literal text,
+and for every object that keeps a record the shared row
 `harness_<object>_hits_and_publishes_a_child_only_where_it_paints`, run alone and under a
-scrollable. The carousel's existing rows stay green over the shared record, its pinned-slot row
-among them (`harness_sliver_carousel_publishes_its_pinned_child_without_painting_it`, named or
-added). The gap entry leaves [gaps.md](../../../gaps.md) in the same change.
+scrollable, with a layout that shows and one that takes the early exit. The four lazy
+slivers' existing rows stay green over the shared record, with a pinned-slot row for each
+(`harness_<sliver>_publishes_its_pinned_child_without_painting_it`, named or added), and `rg
+is_pinned_slot crates/` finds nothing. The gap entry leaves [gaps.md](../../../gaps.md) with
+the overflow objects' change.
 
 Flutter edge cases: `Clip::None` reports no clip even when content overflows; `RenderFittedBox`
 with `BoxFit::None` and an empty child reports no overflow.
@@ -330,8 +349,13 @@ Flutter's record:
 - The number of children built in one layout is bounded even when every extent is zero.
 - Extents that are known only by laying an item out are not this list's job: `SliverList`
   measures them, over the same offset index.
+- The list keeps the shown record from its first version (R2), and every operation that
+  writes its offset index is stated in the design, with the rule for each.
 
-Acceptance: `harness_varied_extent_list_places_items_at_the_sum_of_their_extents`,
+Acceptance: the shared row of R2 and
+`harness_varied_extent_list_publishes_its_pinned_child_without_painting_it`,
+`harness_varied_extent_list_keeps_the_visible_items_in_place_when_items_above_are_first_asked`,
+`harness_varied_extent_list_places_items_at_the_sum_of_their_extents`,
 `harness_varied_extent_list_gives_a_child_its_extent_whatever_the_child_wants` (a child that
 would be 30 high under an answer of 100: the child is 100 and the next item starts 100 later),
 `harness_varied_extent_list_asks_the_delegate_once_per_item_between_invalidations` (a counting
@@ -383,7 +407,13 @@ Flutter's record:
   index: it costs O(log n), the delegate is asked only for the rows it added, and every other
   row keeps its extent and its state. Several toggles in one build apply in the order they
   were made, and the row at the top of the viewport stays where it is when rows are added or
-  removed above it.
+  removed above it: the edit returns the correction and the sliver reports it.
+- A layout asks one revision of the rows, the one whose edits the offset index has applied.
+  An edit made after that revision was handed over is not seen until the next one is. A
+  replaced tree, controller or extent rule is a new roster: the index is reset, and the old
+  roster's revision numbers mean nothing to the new one.
+- The row count has one source, that revision. Nothing else lengthens or shortens the index:
+  not the element's item count, and not a row that failed to build.
 - A row publishes its level, its position in its sibling set and its expanded state.
 - All four axis directions work, and a right-to-left context indents from the right.
 
@@ -399,10 +429,19 @@ and row 1), `harness_tree_sliver_reveal_clip_holds_under_a_scroll_offset`,
 at row 10 of 10,000),
 `harness_tree_sliver_two_toggles_in_one_update_apply_in_order`,
 `harness_tree_sliver_an_outrun_edit_log_resets_the_index`,
-`harness_tree_sliver_a_toggle_above_the_viewport_keeps_the_top_row_in_place`; in
+`harness_tree_sliver_a_toggle_above_the_viewport_keeps_the_top_row_in_place` (every visible
+row already asked, so only the splice can correct),
+`harness_tree_sliver_answers_from_the_revision_it_was_given` (the roster is edited after the
+hand-over and before layout),
+`harness_tree_sliver_a_replaced_roster_with_the_same_edit_number_resets_the_index`,
+`harness_tree_sliver_a_row_that_fails_to_build_does_not_shorten_the_index`,
+`harness_tree_sliver_ignores_an_item_count_that_differs_from_its_revision`; in
 `flui-rendering`'s tests the splice's own (`a_splice_keeps_the_extents_on_both_sides`,
-`a_splice_moves_the_anchor_with_its_item`, `a_splice_of_a_removed_anchor_lands_on_the_edit`);
+`a_splice_moves_the_anchor_with_its_item`, `a_splice_above_the_anchor_returns_its_correction`,
+`a_splice_of_a_removed_anchor_lands_on_the_edit`);
 widget tests `a_row_keeps_its_state_when_rows_are_inserted_above_it`,
+`a_changed_extent_rule_starts_a_new_roster`,
+`a_toggle_during_a_layout_builder_pass_keeps_rows_and_extents_in_step`,
 `a_tree_row_publishes_its_level_and_expanded_state`, `collapsing_a_node_removes_its_rows`,
 `a_second_toggle_during_a_reveal_turns_it_back`,
 `a_parent_collapsing_over_an_animating_child_drops_the_childs_animation`,
@@ -442,11 +481,13 @@ objects.
   pinned sliver too, and can snap. It hears a scroll of a scrollable nested in its body.
 - Each reports the scroll obstruction it causes, so a reveal of a rectangle and R3's
   `FollowEdge` stop at its trailing edge. The resizing header's obstruction is its minimum.
-- Each publishes, for its child to read in paint or after, its current, minimum and maximum
-  extent and whether content has scrolled under it. The answer comes from the header's own
-  layout, not from a flag the next sliver sets. A child that listens is told after the frame
-  in which a value changed, including a change that lays out neither the child nor the
-  header (content scrolling under a pinned header), and repaints in the next frame.
+- Each publishes, for its child to read in build, its minimum and maximum extent and whether
+  content has scrolled under it; the current extent is the child's own constraint. The
+  answer comes from the header's own layout, not from a flag the next sliver sets. A child
+  that reads it is rebuilt in the frame after one in which a value changed, including a
+  change that lays out neither the child nor the header (content scrolling under a pinned
+  header). A scroll that changes none of the values rebuilds nothing, and no callback runs
+  per frame to find out.
 - A resizing header whose children are not the child and exactly the prototypes its
   configuration names is a layout error that states both numbers.
 - Inside a main-axis group a pinned header is pushed off by the end of its group, and two pinned
@@ -469,8 +510,10 @@ four axis directions), `harness_floating_header_snaps_open_when_released_past_ha
 `harness_a_pinned_header_in_a_cross_axis_group_sits_below_a_preceding_pinned_sliver`; widget
 tests `a_pinned_header_keeps_a_following_clip_at_its_edge`,
 `a_pinned_header_is_read_where_it_is_painted`,
-`a_header_child_repaints_when_content_scrolls_under_it` (the child is not laid out by the
-scroll), `a_floating_header_returns_on_a_scroll_of_its_nested_body`.
+`a_header_child_rebuilds_when_content_scrolls_under_it` (the child is not laid out by the
+scroll), `a_scroll_that_changes_no_header_value_rebuilds_nothing`,
+`a_rebuilt_header_delivers_to_its_current_child`,
+`a_floating_header_returns_on_a_scroll_of_its_nested_body`.
 
 Flutter edge cases: a header taller than the viewport; a child whose size changes while pinned.
 
@@ -626,29 +669,41 @@ own contract):
 
 Widget `TapRegion`, render object `RenderTapRegion`.
 
+The tap ADR decides the mechanism; these are what it must deliver
+([design-parity.md](design-parity.md), W12).
+
 - A region hears a typed event that says the phase, the buttons, and the origin (a pointer of
   a kind, or an accessibility activation). The phases are `Down`, then exactly one of `Up` and
   `Cancel`, and `Tap` after an `Up` whose contact never travelled past the hit slop of its
-  pointer kind.
+  pointer kind. Every way a contact ends delivers that one terminal event: an up, a platform
+  cancel, a second down on the same pointer, eviction at the pointer cap, a lost capture, a
+  removed device, a closing presentation.
 - A pointer event is *inside* a region when the region, or a region of its group, is on the hit
-  path of the contact's down; otherwise it is *outside*. Geometry is not consulted. The up and
-  the tap of a contact are classified against the path of its down.
-- A contact reports to the regions that were registered and live at its down, and to no
-  other: a region that mounts while the contact is down hears no `Up` and no `Tap` of it.
+  path of the contact's down as the hit test returned it, before the binding prunes that path
+  for any reason; otherwise it is *outside*. Geometry is not consulted. The up and the tap
+  of a contact are classified against the path of its down.
+- A contact reports to the groups that were live at its down, and to no other: a region that
+  mounts while the contact is down hears no `Up` and no `Tap` of it.
 - A region is on the path wherever a pointer lands inside its box, whether or not its child
   takes the hit.
 - A popup carries the group of the widget that opened it, so a tap inside the popup is inside
-  the opener.
+  the opener. A field's own overlays (its selection handles, its selection toolbar) are in
+  the field's group, so a press on one is inside the field.
 - A region can consume outside taps: the tap dismisses and no tap or long-press detector under
   it acts. A drag or a scroll that starts outside still runs, and a raw `Listener` under the
   contact is not cancelled by the region.
 - An accessibility activation is classified by render ancestry between its target and the
-  region, in either direction, once per activation, through every door that delivers one: the
-  runtime's, the development agent's and the test harness's. An action that acts on its
-  target is classified and stopped by a consuming region outside it; an action that only
-  scrolls, reveals or shows a tooltip is not. A keyboard activation is not classified.
-- A group hears outside events only while one of its members is live: on a page that is the
-  current one, and presented by the last frame. No navigator observer is involved.
+  region, in either direction, once per activation, at the one door production code has.
+  Every action has a class, and adding an action without one does not pass the checks. An
+  action that acts on its target is classified and stopped by a consuming region outside it;
+  one that only scrolls, reveals or shows a tooltip is not. A stopped activation is reported
+  as stopped to whoever asked, never as run and never as a missing node. A keyboard
+  activation is not classified.
+- A group is live when one of its members is presented and, where it has a page, on the
+  current one, decided once at the down. Every member of a live group hears, a member on a
+  page its own popup covers included. No navigator observer is involved and nothing is read
+  per frame.
+- A region uses the callbacks and the consume flag of its latest build.
 - An action the host performs without a contact (a scroll-to-top from the status bar) is never
   reported as a pointer at an invented position.
 
@@ -662,21 +717,33 @@ Acceptance: `a_tap_on_an_overlay_above_a_region_is_outside_it`,
 `a_consumed_outside_tap_reaches_no_detector`,
 `a_drag_that_starts_outside_a_consuming_region_still_scrolls`,
 `a_consumed_outside_tap_cancels_no_listener`,
-`a_cancelled_contact_reports_cancel_and_no_up`,
+`a_contact_that_ends_without_an_up_reports_cancel_once` (one table: a platform cancel, a
+second down on the pointer, eviction at the pointer cap, a lost capture, a removed device, a
+closing presentation),
+`a_first_click_inside_a_region_is_inside_it` (a first-click target under a region in an
+inactive window),
+`pressing_a_selection_handle_is_inside_the_fields_region`,
+`tapping_the_selection_toolbar_is_inside_the_fields_region`,
+`a_rebuilt_region_uses_its_new_callback_and_consume_flag`,
 `a_contact_that_leaves_its_slop_and_returns_is_no_tap` (touch and mouse, whose slops differ),
 `a_region_mounted_during_a_contact_hears_nothing_of_it`,
 `a_screen_reader_activation_is_classified_by_ancestry`,
 `an_activation_of_a_merged_node_above_a_region_is_inside_it`,
 `a_screen_reader_activation_is_classified_once`,
-`a_consumed_outside_activation_does_not_run_its_action` (one table over the runtime's entry
-and `Harness::invoke_semantics_action`),
+`a_consumed_outside_activation_does_not_run_its_action` (through the runtime's dispatch, the
+door the hosts and the agent use),
+`a_consumed_outside_activation_is_reported_as_consumed` (the dispatch's result and the
+agent's outcome),
+`a_panicking_region_callback_still_decides_the_activation`,
+`every_semantics_action_has_a_tap_class` (or the compile-time form the ADR chooses),
 `a_scroll_action_outside_a_consuming_region_still_runs`,
+`a_field_under_its_own_popup_still_hears_a_tap_outside_both`,
 `a_region_on_a_covered_page_hears_no_outside_tap`,
 `a_region_on_a_branch_that_is_not_shown_hears_no_outside_tap`,
 `a_region_under_an_offstage_parent_hears_no_outside_tap`,
 `an_up_is_classified_against_the_path_of_its_down`,
 `a_panicking_outside_callback_leaves_the_registry_usable`; the row "consuming region, outside
-contact" of ADR-0208's ownership table (`assert_ownership_table`).
+contact" that the tap ADR states, in `assert_ownership_table`.
 
 Flutter's record:
 
@@ -685,9 +752,9 @@ Flutter's record:
 | #138190, #140271 | `onTapOutside` fires on pointer down only, so a scroll that starts outside a text field unfocuses it and closes the keyboard; the callback carries no kind | **avoid**: the event's phase. **pin**: the drag test |
 | #177992, #175606 | A tap on the status bar makes the engine inject a touch at (0, 0), which is outside every region, so drawers and menus close | **avoid**: the last bullet |
 | #136706, #139555† | A region sees only the primary button; a desktop menu does not close on a right click outside | **pin**: the secondary-button test |
-| PR #155297, #153093 | Outside taps fired for regions on other routes; the fix uses a navigator observer and misses shell routes and branch switches, leaving stale regions | **avoid**: liveness is "current page and presented", read from the frame. **pin**: the covered-page, branch and offstage tests |
+| PR #155297, #153093 | Outside taps fired for regions on other routes; the fix uses a navigator observer and misses shell routes and branch switches, leaving stale regions | **avoid**: liveness is "presented and on the current page", asked per group at the down. **pin**: the covered-page, branch, offstage and field-under-its-popup tests |
 | #135327 | The click that closes a menu also fires the handler beneath it | **pin**: the consumed-tap test. FLUI departs where Flutter's claim also stops a scroll that starts outside: the drag test and the listener test pin the departure |
-| PR #183093, #167487 | With semantics on, a web click became a semantics action and bypassed regions; the fix hit-tests the centre of the node's rectangle, the node has no link to its region, a consuming region cannot stop the action, and a reviewer asked whether a tap can be handled twice | **avoid**: classification by ancestry in the one function every door calls. **pin**: the activation tests |
+| PR #183093, #167487 | With semantics on, a web click became a semantics action and bypassed regions; the fix hit-tests the centre of the node's rectangle, the node has no link to its region, a consuming region cannot stop the action, and a reviewer asked whether a tap can be handled twice | **avoid**: classification by ancestry at the one door, with a typed outcome when a region stops the action. **pin**: the activation tests |
 | #128317 (open) | A region around a dropdown cannot cover its menu, which is an overlay route outside the subtree | **avoid**: the popup's group. **pin**: the popup test |
 | #112924 | A region around a child that claims no hit hears no inside tap on its empty areas | **pin**: the empty-part test |
 | #127597, PR #148206 | The first field's outside callback does not fire on a tap in a second field; cause unconfirmed | **pin**: the second-field test |
@@ -754,11 +821,16 @@ without an offset, and queries a baseline only for `PlaceholderAlignment.baselin
 
 - The editing value's text holds one object-replacement character where each placeholder
   stands, so the text model and the paragraph have one offset space. The field builds its
-  spans from the value and asks for the child of each placeholder in order, so no span tree
-  with another text exists to disagree with it.
+  spans from the value and asks for the child of each placeholder, so no span tree with
+  another text exists to disagree with it.
+- A placeholder has an identity the value holds beside its character. Every edit of the
+  value, the controller's and an input session's alike, is a replacement of a range: a
+  placeholder outside the range keeps its identity and its child's state, and one inside it
+  is gone. A composition beside a placeholder leaves it in place.
 - A placeholder enters the value only through the method that inserts one. An
-  object-replacement character in pasted text, in an IME commit or in a programmatic
-  replacement of the text is removed where the text enters the value.
+  object-replacement character in pasted text, in composed text or in a programmatic
+  replacement of the text is removed from the incoming text, and no write removes one that
+  is already in the value.
 - An obscured field masks a placeholder as one obscuring character and builds no inline
   child; offsets count the same positions as in the unobscured field.
 - A placeholder is one caret stop and one deletion: the caret stands before or after it, never
@@ -777,14 +849,19 @@ Acceptance: `harness_editable_steps_the_caret_over_an_inline_child`,
 character outside the basic plane); widget tests
 `a_field_builds_one_inline_child_per_placeholder_in_its_value`,
 `pasting_an_object_replacement_character_adds_no_placeholder` (paste, `set_text` and an IME
-commit, one table), `an_obscured_field_masks_a_placeholder_and_builds_no_child`.
+commit, one table), `composing_beside_a_chip_keeps_the_chip` (a composition started, updated
+and committed through the input session),
+`deleting_the_first_of_two_chips_keeps_the_seconds_state`,
+`an_edit_through_any_controller_method_keeps_text_and_placeholders_in_step` (one table over
+the controller's write methods and a session write),
+`an_obscured_field_masks_a_placeholder_and_builds_no_child`.
 
 Flutter's record:
 
 | Issue | Scenario | Answer |
 |-------|----------|--------|
 | #30688, PR #80185 | Widget spans in the editable: the caret cannot reach the last position, its height does not follow the span, two leading spans fail an assertion, a span's background hides the selection | **pin**: the caret rows, the two-leading row, the selection row |
-| #107432 (open), #161213 | The text model holds the replaced text (six characters) while the engine counts one position for the span, so caret and backspace are wrong; a marker outside the basic plane counts as one or two | **avoid**: the first bullet: one text, from which the spans are built. **pin**: the multi-unit row and the one-child-per-placeholder test |
+| #107432 (open), #161213 | The text model holds the replaced text (six characters) while the engine counts one position for the span, so caret and backspace are wrong; a marker outside the basic plane counts as one or two | **avoid**: the first two bullets: one text with its placeholders' identities, from which the spans are built. **pin**: the multi-unit row, the one-child-per-placeholder test and the composition test |
 
 ### R15. A wheel of items scrolls around a cylinder
 
@@ -807,8 +884,12 @@ Widget `ListWheelScrollView`, render object `RenderSliverWheel`.
   and publishes nothing.
 - A released drag or fling settles on an item. One notch of a mouse wheel moves one item,
   whatever distance the host gives a line, and counts from where the previous notch was
-  heading: two quick notches move two items. A touchpad's pixel scroll moves freely and
-  settles on an item when it ends.
+  heading: two quick notches move two items. A notch is what the host says is one: a packet
+  in detents, whose fractions add up to a whole one before the wheel moves, or a packet the
+  host marks as notched. Any other packet, a touchpad's and every browser packet today,
+  scrolls by its pixels and the wheel settles on an item when the scroll ends.
+- The scrollable keeps one answer for where a wheel is heading. A drag, a programmatic
+  scroll or a replaced scrollable ends it, and the next notch counts from where the list is.
 
 Acceptance: `harness_wheel_hits_an_item_through_its_cylinder_transform_before_the_first_paint`,
 `harness_wheel_hits_the_magnified_item_through_the_magnifier_transform`,
@@ -825,7 +906,13 @@ Acceptance: `harness_wheel_hits_an_item_through_its_cylinder_transform_before_th
 looping wheel included), `one_notch_of_a_mouse_wheel_moves_one_item` (under two line heights),
 `two_quick_notches_move_two_items` (the second arrives while the first still animates),
 `a_touchpad_scroll_of_a_wheel_settles_on_an_item`,
-`a_scrollable_without_detent_steps_scrolls_a_notch_as_before`,
+`a_wheel_packet_steps_or_scrolls_by_its_unit_and_precision` (one table over the packets the
+hosts send: whole and fractional detents, notched lines, notched pixels, unmarked lines,
+precise pixels), `a_high_resolution_wheel_steps_once_per_whole_detent`,
+`a_notch_after_a_programmatic_scroll_steps_from_where_the_list_is`,
+`a_shifted_notch_steps_a_horizontal_wheel`,
+`a_scrollable_whose_policy_has_no_step_scrolls_a_notch_as_before`, the four tests the record
+"Wheel precision selects local animation policy" names, unchanged,
 `a_tap_on_a_wheel_item_reaches_its_detector`.
 
 Flutter's record (`rendering/list_wheel_viewport.dart` hit-tests with a transform saved into
@@ -839,7 +926,7 @@ parent data during paint, written only by the cylindrical paint path):
 | #31650 | A wheel under unbounded constraints produces a non-finite transform that crashes the engine | **pin**: the layout-error row |
 | #58144, #22999† | Changing the child count does not update the wheel: its element does not mark the render object for layout | **pin**: the count-change row |
 | #131544 (open) | Items at the band's edge jump in size: the magnification is a step | **pin**: the continuity row |
-| #125291† (open) | One click of a mouse wheel scrolls past several items | **avoid**: a notch is a step in items at the scrollable, never the host's pixels. **pin**: the two notch tests |
+| #125291† (open) | One click of a mouse wheel scrolls past several items | **avoid**: a notch is a step in items at the scrollable, never the host's pixels. **pin**: the two notch tests and the packet table |
 | #24089† | Tapping an item should bring it to the centre | Catalog work on top of the tap test |
 | #25074† (open) | There is no horizontal wheel | **avoid**: the first bullet. **pin**: the horizontal row |
 
@@ -859,11 +946,13 @@ Render object `RenderTwoAxisViewport`, widget `TwoAxisScrollView`.
 - The viewport clips only when a child extends past it, and never with `Clip::None`.
 - Pinned vicinities stay built outside the region (ADR-0265).
 - A drag scrolls every axis that can scroll: with one axis that cannot, a diagonal drag still
-  scrolls the other.
+  scrolls the other. The view says whether a drag off the axes moves both or is locked to
+  the axis that led.
 - The two axes begin a contact together or not at all. A listener of one axis that panics
   while the contact begins leaves both axes in the contact, and the panic is raised after
   both began; an axis that cannot begin leaves neither in it.
-- A resize or a jump that invalidates the built region during a frame settles in that frame.
+- A resize or a jump that invalidates the built region during a frame settles in that frame,
+  within the bound of ADR-0308.
 
 Acceptance: `harness_two_axis_viewport_builds_only_the_visible_region`,
 `harness_two_axis_viewport_builds_the_same_region_scrolling_either_way`,
@@ -879,6 +968,7 @@ row and column, each axis forward and reversed),
 pinned row and column, scrolled to the end; children built and laid out are counted); widget
 tests `a_diagonal_drag_scrolls_both_axes`,
 `a_diagonal_drag_with_one_unscrollable_axis_scrolls_the_other`,
+`a_locked_diagonal_drag_scrolls_the_axis_that_led`,
 `a_panic_while_one_axis_begins_a_contact_leaves_both_axes_in_it` (the other axis was
 flinging; it has stopped, and the next move scrolls both),
 `an_axis_that_cannot_begin_a_contact_begins_neither`,
@@ -970,23 +1060,37 @@ are recollections, not checked against their trackers or sources ([design.md](de
 
 Widgets `GeometryObserver` and `VisibilityObserver`.
 
-- After a frame, an observer reports its subtree's size, its rectangle in the window or in a
-  named ancestor, and the fraction of it the ancestors' clips leave visible, when any of them
-  changed since its last report. The first frame reports once.
-- The report is delivered after the frame is laid out and painted, with no borrow held, and asks
-  for no frame of its own: an observer whose callback changes nothing causes no further frame.
-- The fraction counts the clips and transforms the paint walk applies; it does not count
-  siblings painted over the subtree. A subtree that is not painted reports zero.
+- A geometry observer reports its subtree's size and its origin in the window when either
+  changed in a frame. The first frame reports once.
+- A visibility observer reports the fraction of its subtree the ancestors' clips leave
+  visible when the fraction crosses one of its thresholds; by default the one between nothing
+  shown and something shown. A margin grows or shrinks the clip the fraction is taken
+  against. It is gated: it needs the leader watch to report the clip and the transform.
+- A report is delivered after the frame is laid out and painted, with no borrow held, by the
+  owner that saw the change. An observer whose subtree does not move runs nothing in a
+  frame, and one whose callback changes nothing causes no further frame.
+- The fraction counts the clips and transforms the scene applies; it does not count siblings
+  painted over the subtree. A subtree that is not painted reports zero. A hidden window
+  draws no frame, so the last report stands; the documentation says what to combine it with.
 - A callback that changes layout runs again at most once per frame.
 - A callback that panics is contained and the observer goes on reporting later changes; the
   change that panicked is not delivered again.
-- After its widget is disposed an observer runs no callback and reads nothing.
+- A rebuilt observer calls the callback of its latest build. After its widget is disposed
+  an observer runs no callback and reads nothing.
 
 Acceptance: `a_geometry_observer_reports_a_size_change_once`,
+`a_geometry_observer_reports_a_scroll_that_moves_it`,
 `a_geometry_observer_reports_nothing_when_nothing_changed`,
+`an_observer_whose_subtree_does_not_move_runs_nothing_in_a_frame` (a counting post-frame
+lane under an unrelated animation),
+`a_rebuilt_observer_calls_its_new_callback`,
 `a_visibility_observer_reports_the_fraction_a_viewport_leaves`,
+`a_visibility_observer_reports_only_when_a_threshold_is_crossed` (a scroll of many frames
+across one threshold: one report),
+`a_visibility_observer_with_a_margin_reports_before_its_subtree_shows`,
 `a_visibility_observer_reports_zero_for_an_offstage_subtree`,
 `a_visibility_observer_under_a_rotation_reports_its_bounding_fraction`,
+`a_leader_watch_reports_a_change_of_its_clip_and_transform` (in `flui-rendering`'s tests),
 `an_observer_that_changes_nothing_requests_no_frame`,
 `an_observer_callback_that_resizes_its_subtree_settles`,
 `a_panicking_observer_leaves_the_others_reporting`,
@@ -1008,6 +1112,12 @@ impressions; a fraction that ignores occlusion being read as "seen".
   built while its section is in view, however far its own row has scrolled out of the band the
   list retains. It is not one of ADR-0265's pinned children, which are published and neither
   painted nor hit: the list keeps one index outside its band for it.
+- The lazy element has one set of children kept outside the band, the held ones and the
+  stuck header, and every check that spares or admits a child outside the band reads it. A
+  stuck header whose row content changes is rebuilt, and one whose index moves because a
+  keyed row was inserted above it keeps its element and its state.
+- One rule lays a stuck header out in a pass. A header that is both stuck and held (it has
+  focus) is laid out, placed and measured by the sticky rule alone.
 - The list reports the stuck header's extent as its scroll obstruction, so a reveal of a row
   stops below the header.
 - Finding the header for an offset costs O(log n) in the number of headers.
@@ -1021,6 +1131,10 @@ Acceptance: `harness_sticky_row_stays_at_the_leading_edge_within_its_section`,
 `a_sticky_header_far_above_the_band_stays_built_and_painted` (a section of a thousand rows,
 scrolled to its end), `a_sticky_header_that_is_no_longer_current_is_released`,
 `a_focused_sticky_header_is_painted_and_hit`,
+`harness_a_stuck_header_that_is_also_pinned_is_laid_out_once` (a counting child; its offset
+is the sticky rule's),
+`a_stuck_header_outside_the_band_rebuilds_when_its_data_changes` (keyless rows),
+`a_stuck_header_keeps_its_state_when_a_row_is_inserted_above_it` (keyed rows),
 `revealing_a_row_stops_below_the_sticky_header`,
 `a_sticky_header_is_read_before_its_sections_rows`,
 `a_list_of_ten_thousand_sections_builds_only_its_window`.
@@ -1071,9 +1185,12 @@ width stretching every column.
   indicator needs.
 - The indicator is told how many children are hidden, after the split is known: the wrap's
   widget rebuilds it in the frame after a layout changed the count, with nothing else
-  triggering the rebuild. Relabelling ends: room held for a wider indicator is kept until the
-  children or the constraints change, so the hidden count can only grow while a label
-  settles, and it is bounded by the number of children.
+  triggering the rebuild, and a layout that leaves the count as it was rebuilds nothing.
+  Relabelling ends: room held for a wider indicator is kept while the constraints, the
+  wrap's configuration and the sizes of the children before the indicator are the same, so
+  the hidden count can only grow while a label settles, and it is bounded by the number of
+  children. The indicator's own size is not part of that key; a change of any part of it
+  starts the room again from the indicator's size.
 - A hidden child is not painted, not hit and not published (R2). With nothing left over the
   indicator is hidden.
 - The rule that splits a run and holds room for an indicator is the one `RenderToolbarItems`
@@ -1086,9 +1203,13 @@ Acceptance: `harness_wrap_stops_after_its_maximum_runs`,
 `harness_wrap_split_is_stable_when_the_indicator_changes_width`,
 `harness_wrap_hidden_children_are_not_hit_or_published`,
 `harness_wrap_without_a_maximum_lays_out_as_before`,
-`harness_wrap_keeps_its_reserve_when_the_indicator_shrinks`; widget tests
+`harness_wrap_keeps_its_reserve_when_the_indicator_shrinks`,
+`harness_wrap_drops_its_reserve_when_a_child_changes_size` (and when the constraints or the
+spacing change); widget tests
 `a_wrap_relabels_its_indicator_in_the_frame_after_the_count_changed` (nothing but the layout
 changed), `a_wrap_whose_label_widens_settles` (9 hidden becoming 10),
+`a_wrap_whose_label_narrows_when_more_is_hidden_settles` (a label that becomes "99+"),
+`a_wrap_whose_count_did_not_change_rebuilds_nothing`,
 `a_wrap_without_an_indicator_schedules_nothing`; the rows of `RenderToolbarItems` unchanged.
 
 Pitfalls elsewhere (recollection): the indicator's label depends on the hidden count and the

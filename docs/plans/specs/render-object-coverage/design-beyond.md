@@ -27,7 +27,7 @@ A candidate is adopted when all four hold:
 
 | Candidate | Verdict | Item | Reason in one line |
 |-----------|---------|------|--------------------|
-| Geometry and visibility observers | Adopt | W19 | Every piece exists and is unfrozen; answers `SizeChangedLayoutNotifier` without notifications |
+| Geometry and visibility observers | Adopt (visibility gated) | W19 | A leader watch already reports a change of placement; visibility needs two more fields on it; answers `SizeChangedLayoutNotifier` without notifications |
 | Sticky rows in a lazy list; group-scoped pinning | Adopt | W20, R7 rows | The most asked-for list feature; rides the offset index and one index the lazy element keeps outside the band |
 | Grid over a shared track module | Adopt (subset) | W21 | The largest layout primitive Flutter lacks; `RenderTable` already holds half the algorithm |
 | Wrap that stops, with an indicator | Adopt | W22 | `RenderToolbarItems` already has the rule; the shown answer hides the rest |
@@ -54,58 +54,73 @@ A candidate is adopted when all four hold:
 | Lookahead layout, `content-visibility`, user shaders, subgrid and dense placement, multi-column and floats | Reject | — | "Rejected" below |
 
 Each adopted item is independent of the other seven in what it offers. Striking one strikes its
-requirement, its section here and its tasks. Two pieces are shared and outlive a strike: the
-after-frame helper W19 brings, which W22 and two parity items also use and which then lands
-with the first of them, and the single commit of a lazy sliver's shown answer, which W20 and
-W25 both join ([design.md](design.md), "Seams more than one item uses").
+requirement, its section here and its tasks. One piece is shared and outlives a strike: the
+single commit of a lazy sliver's shown answer, which W20 and W25 both join
+([design.md](design.md), "Seams more than one item uses").
 
 ## W19. Geometry and visibility observers
 
-- **What exists.** `AnchoredBox` (`crates/flui-widgets/src/anchored_box.rs`) publishes a
-  subtree's `RenderId` through a `SubtreeAnchor`. `PipelineOwner::box_size(id)`,
-  `transform_to(descendant, ancestor)` and `presented_placement(id) -> Option<PresentedPlacement
-  { transform, clip }>` are public; the last is the placement the paint walk composed for the
-  last frame, with every ancestor's clip. `LifecycleContext` gives a state `pipeline_owner()`
-  and `post_frame_handle()`, and a post-frame callback asks for no frame (ADR-0367).
-- **Shape** *(proposed, `crates/flui-widgets/src/observe/`)*:
-  - `GeometryObserver::new(on_change, child)` reports `ObservedGeometry { size, window_rect }`,
-    and with `.relative_to(anchor)` the rectangle in a named ancestor's space.
+- **What exists.** `LeaderWatch`
+  (`crates/flui-rendering/src/pipeline/owner/leader_watch.rs`): `PipelineCell::watch_leader`
+  returns a watch on the leader that publishes under a `LayerLink`. The pipeline owner
+  compares every live watch against each applied `SceneVersion` and, when the leader's
+  `LeaderGeometry { size, origin }` changed, queues one post-frame delivery to the watch's
+  listeners. A leader is a `RenderLeaderLayer` (`flui-objects`, `proxy/leader.rs`). The
+  selection handles of both text widgets and a plugin hook listen to one. There is no public
+  leader widget.
+- **Shape** *(proposed, `crates/flui-widgets/src/observe/`)*. Both observers wrap their child
+  in a leader of their own and hold a watch on it, taken in `create_state`:
+  - `GeometryObserver::new(on_change, child)` reports `ObservedGeometry { size, origin }`:
+    the child's size and its top-left corner in the window, what the watch reports today. It
+    needs nothing below `flui-widgets`.
   - `VisibilityObserver::new(on_change, child)` reports `ObservedVisibility { fraction,
-    visible_rect }`.
-
-  Both wrap the child in an `AnchoredBox`. The state takes the pipeline and the post-frame
-  handle in `create_state` and starts the after-frame helper ([design.md](design.md), "One
-  callback after each frame"), whose run reads the node, compares with the last report and
-  delivers a change. Registering asks for no frame, so an observer whose subtree does not
-  change costs one read per frame the application already draws and causes none.
-- **A callback that panics, and a widget that is gone.** The helper schedules its next run
-  before it delivers, so a panic in `on_change` is contained and the observer reports the
-  next change; the last report is recorded before delivery, so the value that panicked is not
-  delivered twice. The run holds a `Weak` to the state: after the widget is disposed it
-  reads nothing, calls nothing and schedules nothing.
-- **The fraction.** The node's box is mapped through `PresentedPlacement::transform`; the
-  fraction is the area of that shape's bounding rectangle inside `clip` over the bounding
-  rectangle's area. Under a rotation it is therefore a bounding fraction, which the report's
-  documentation says. A node with no presented placement (offstage, not painted) reports zero.
-  Siblings painted over the node are not counted: the documentation says "not clipped away",
-  never "seen".
-- **Feedback.** A callback that changes layout causes a frame; the next post-frame read reports
-  again, at most once per frame. An application whose callback converges settles; one that does
-  not is a loop of its own making, one report per frame, never a spin inside a frame.
-- **Cost bound.** `presented_placement` composes the node's ancestors, O(depth) per observer per
-  drawn frame. The documentation states it. In a lazy list only built items observe.
+    visible_rect }` when the fraction crosses one of its thresholds: `.thresholds(..)`, a
+    short validated list in `0.0 ..= 1.0`, by default the one crossing between nothing shown
+    and something shown; `.margin(..)` grows or shrinks the clip the fraction is taken
+    against, so a list can start loading before a row appears. This is the report an
+    intersection observer gives, and it cannot fire once per frame of a scroll unless the
+    application asks for a threshold per frame.
+- **What the visibility observer waits for.** The fraction needs the transform of the
+  leader's chain and the clip that chain resolves, and `LeaderGeometry` carries neither. The
+  scene already resolves both for a follower (ADR-0276's `LeaderClip::Hide`). One gated
+  change adds them to `LeaderGeometry`, which is `#[non_exhaustive]`, with a read on
+  `SceneVersion`, and rewrites the record "A follower's build hears its leader's geometry
+  after paint" ([design.md](design.md), "Decisions for the owner", 17). `GeometryObserver`
+  does not wait.
+- **Delivery.** The watch's listener holds a `Weak` to the state's cell and reads the current
+  `on_change` there, so a rebuilt observer calls what it was rebuilt with, and runs it through
+  `flui_foundation::panic::commit`. The watch clears its queued mark before its listeners run,
+  so a callback that panics is contained and the next change is delivered. Dropping the watch
+  with the state ends delivery. An observer whose child does not move costs nothing per
+  frame.
+- **The fraction.** The child's box is mapped through the chain's transform; the fraction is
+  the area of that shape's bounding rectangle inside the clip, grown by the margin, over the
+  bounding rectangle's area. Under a rotation it is therefore a bounding fraction, which the
+  report's documentation says. A leader that is not in the scene (offstage, not painted)
+  reports zero. Siblings painted over the child are not counted: the documentation says "not
+  clipped away", never "seen".
+- **A hidden window.** A presentation that is minimised or hidden draws no frame, so no
+  scene is applied and the last report stands. The documentation says so and names what to
+  combine it with, the application's lifecycle state (`flui_scheduler::AppLifecycleState`).
+- **Feedback.** A callback that changes layout causes a frame, and the frame's scene a new
+  comparison. An application whose callback converges settles; one that does not is a loop
+  of its own making, one report per frame, never a spin inside a frame.
 - **No render object.** Nothing is added to `flui-objects`.
 - **Replaced forms.** None in code. It is FLUI's answer for `SizeChangedLayoutNotifier`
   (requirements, "What is not here"): a typed callback, not a notification.
-- **Not included.** Throttling, dwell time ("half visible for a second") and occlusion: policy
-  an application builds on the report.
+- **Not included.** The rectangle in a named ancestor's space (an application subtracts two
+  reports), throttling, dwell time ("half visible for a second") and occlusion: policy an
+  application builds on the report.
 - **Pitfalls elsewhere (recollection).** Compose's `onGloballyPositioned` callbacks that set
   state and loop; the `visibility_detector` package's 500 ms timer, which leaks into tests; a
   fraction that ignores occlusion read as "seen".
+- **Alternative: read `presented_placement` after every frame and compare.** Ungated, and a
+  read per observer on every frame of every animation, with its own rules for a panic, a
+  disposed state and a rebuilt callback ([design.md](design.md), "A value a frame decided
+  reaches a widget on a change"). Rejected.
 - **Alternative: a render proxy that records its size into a cell in layout,** like
   `LayoutConstraintsCell`. Cheap for size; it cannot see a position that changes without its
-  own layout (a scroll), so visibility would need the post-frame read anyway. One mechanism.
-  Rejected.
+  own layout (a scroll). Rejected.
 - **Alternative: build the notification layer** (`NotificationListener`, senders). It is the
   gap "No scroll notifications", which is to build on `ScrollObserverScope`
   (`scroll/scroll_observer.rs`, module documentation); geometry does not bubble. Rejected here.
@@ -115,12 +130,14 @@ W25 both join ([design.md](design.md), "Seams more than one item uses").
 - **What exists.** `RenderSliverList` runs on `walk_virtualizer_band`; the geometry reports a
   scroll obstruction. A section per sliver in a `SliverMainAxisGroup` already works (R7's
   group rows) and costs a sliver per section. `PinnedChildren` (ADR-0265) keeps a lazy child
-  built outside the band, and it is not the mechanism for a stuck header: its set is computed
-  from the keep-alive leases alone (`sync_pinned` in
-  `crates/flui-view/src/element/sliver_adaptor.rs`), and by ADR-0265 §2 a pinned child is
-  neither painted nor hit and its extent enters nothing. A header whose row has left the band
-  is evicted today (`sparse_children.rs`, `retain_band`), and a request for an index outside
-  the band is skipped.
+  built outside the band, and it is not the mechanism for a stuck header: by ADR-0265 §2 a
+  pinned child is neither painted nor hit and its extent enters nothing. The lazy element
+  keeps a child outside the band through two checks that read the children a keep-alive
+  lease holds (`crates/flui-view/src/element/sparse_children.rs`): the reconcile carries a
+  keyless resident outside the band over without rebuilding it unless it is held, and
+  `retain_band` exempts the held children from eviction. A build request for an index
+  outside the band is skipped (`sliver_adaptor.rs`), so a header whose row has left the band
+  is evicted today and cannot be asked back.
 - **Shape.** A mode of the two lists on the shared walk (`RenderSliverList`,
   `RenderSliverVariedExtentList`), in a module of its own, `sliver/sticky_rows.rs` *(proposed)*:
   - `StickyRows` *(proposed)*: the header indices, strictly increasing, built by
@@ -130,36 +147,45 @@ W25 both join ([design.md](design.md), "Seams more than one item uses").
     and the next header `n`. Its stuck position is its natural offset, raised to the leading
     edge of the viewport (after any overlap), and lowered so that it ends where `n` begins.
     That position is committed as the child's paint offset in layout.
-  - *Keeping `h` built.* `LazyMultiBoxRender` gains `kept_outside_band(&self) -> Option<usize>`
-    *(proposed, default `None`)*: the one index the last layout wants built though it lies
-    outside the band. The lazy element's manager admits a build request for that index and
-    exempts it from the retain band's eviction; nothing else about the band changes. The
-    sliver writes the index in layout, asks for the child with `request_child_build`, and
-    lays it out as a resident when it arrives in the pass the build-during-layout fixpoint
-    runs next. Its extent enters the index as any measured item's does, with the anchor
-    correction `set_measured` returns. One index, so the retain set stays a band plus one.
-  - The stuck header is the last part of the list's `ShownChildren`, so it paints over the
-    rows, is hit before them and is read where it is painted. If the same row is also an
-    ADR-0265 pinned child (it holds focus), it is committed as shown, not as announced only:
-    shown includes published.
+  - *One set of children kept outside the band.* `LazyMultiBoxRender` gains
+    `kept_outside_band(&self) -> Option<usize>` *(proposed, default `None`)*: the one index
+    the last layout wants built though it lies outside the band. Once per service pass the
+    manager forms the kept set from the held children and that index, and resolves it to
+    the resident elements before the reconcile; an index with no resident (after a jump)
+    stays an index. The reconcile, the eviction and the build admission, which today skips
+    every request outside the band, read that set and nothing else. A stuck
+    header whose builder changed is therefore rebuilt like a row in the band, and a keyed
+    header that the reconcile moves to another index is the same kept element afterwards and
+    is not evicted there.
+  - *One rule lays the stuck header out.* In a pass where `h` lies outside the band the
+    sliver lays out its pinned children without `h`, whether or not `h` also holds a lease
+    (it has focus), and the sticky rule alone lays `h` out, positions it, stores its extent
+    in the index with the anchor correction `set_measured` returns, and adds its part. The
+    order is the one commit of [design.md](design.md): band, pinned, sticky, effect. A header
+    that is both stuck and focused is shown, which includes published; when another header
+    takes over it is a pinned child again for as long as its lease lasts. ADR-0265 §2 speaks
+    of pinned children outside the band and keeps its text: for a list with sticky rows the
+    band is the contiguous band and the kept index, which the record in
+    `crates/flui-view/ARCHITECTURE.md` states.
+  - The stuck header is the last part of the list's pass, so it paints over the rows, is hit
+    before them and is read where it is painted.
   - The list's geometry reports the stuck header's extent as its scroll obstruction, and the
     list's own answer for "the offset that reveals row `i`" subtracts it.
 - **Placement animations.** The stuck header takes no part in the list's `Placement` track: its
   offset is the sticky rule's, so an insert above it does not slide it.
 - **Limits, stated in the documentation:** one level pins; the fixed-extent list and the grid
   keep walks of their own and are not covered.
-- **`RenderSliverList` moves onto the shown record** in this change, its ADR-0265 pinned
-  slots committed as announced, because a stuck header needs paint order and a hit order the
-  list's readers do not have today. Its existing rows are the check.
 - **Widgets.** `SliverList` and `SliverVariedExtentList` gain `.sticky_rows(..)`; `ListView`'s
   builders pass it through. The lists' configurations in `sliver_adaptor.rs` carry the
   `Rc<StickyRows>`, so `ListConfig` stops being `Copy`.
-- **Crates.** `flui-objects`, `flui-view` (the trait method, the manager's two checks, the
-  configurations), `flui-widgets`. No frozen crate. The kept index is recorded in
-  `crates/flui-view/ARCHITECTURE.md`.
+- **Crates.** `flui-objects`, `flui-view` (the trait method, the manager's kept set and its
+  three readers, the configurations), `flui-widgets`. No frozen crate. The kept set is
+  recorded in `crates/flui-view/ARCHITECTURE.md`.
 - **Alternative: make the header an ADR-0265 pinned child.** It would change that ADR's rule
-  for one caller: a pinned child would sometimes paint and take hits, and the pinned set
-  would have a second source besides the keep-alive leases. Rejected.
+  for one caller: a pinned child would sometimes paint and take hits. Rejected.
+- **Alternative: honour the kept index in eviction and admission only.** The reconcile then
+  freezes a keyless stuck header at its old content and evicts a keyed one that moved.
+  Rejected.
 - **Replaced forms.** None; the group form stays for sections that are slivers of their own.
 - **Pitfalls elsewhere (recollection).** Compose's `scrollToItem` landing an item behind the
   sticky header; sticky headers flickering with item placement animations; SwiftUI pinning one
@@ -260,22 +286,25 @@ W25 both join ([design.md](design.md), "Seams more than one item uses").
 - **Who relabels the indicator.** A value written in layout wakes nobody:
   `ToolbarItemsSplit` is an `Rc<Cell<..>>` with no notifier, and the toolbar's widget
   rebuilds only when its controller does. `Wrap` with an indicator is therefore stateful. Its
-  state owns the `WrapSplit`, remembers the hidden count its indicator was built for, and
-  runs the after-frame helper ([design.md](design.md)): when the count the layout wrote
-  differs, it marks itself for a rebuild, and the next frame builds the indicator with the
-  new count. A `Wrap` without an indicator stays stateless and schedules nothing.
+  state owns the `WrapSplit` and installs a wake on it; the wrap calls the wake when the
+  hidden count a layout commits differs from the last
+  ([design.md](design.md), "A value a frame decided reaches a widget on a change"), and the
+  next frame builds the indicator with the new count. A layout that changes nothing wakes
+  nobody, and a `Wrap` without an indicator stays stateless and has no wake.
 - **The loop, and the rule that ends it.** The indicator's label depends on the hidden count,
-  and the count depends on the indicator's size. The reserve is the wider of the indicator now
-  and the reserve of the last layout with the same children and constraints, so it only
-  grows until the children or the constraints change. A wider reserve hides the same number
-  of children or more, so the hidden count only grows too and is bounded by the number of
-  children: the relabelling ends, after at most one rebuild per child in the worst case and
-  one in the usual one (a label that grew by a digit). Each step is a frame, so the label is
-  one frame behind the split while it settles and never wrong about a split that has
-  settled. A reserve that grew stays wide after the label shrinks again, until the children
-  or the constraints change: the split is stable at the price of a little room. The toolbar
-  already holds back "the wider of the button now and the button of the last collapsed
-  layout" for the same reason.
+  and the count depends on the indicator's size. `RenderWrap` holds a reserve and the key it
+  was taken under: the constraints, the wrap's configuration, and the main-axis sizes of the
+  children before the indicator, in order. The indicator's own size is not in the key. While
+  the key is unchanged the reserve is the wider of the indicator now and the stored reserve,
+  so a relabel can only widen it; when the key changes the reserve starts again from the
+  indicator's size. A wider reserve hides the same number of children or more, so under one
+  key the hidden count only grows and is bounded by the number of children: the relabelling
+  ends, after at most one rebuild per child and one in the usual case (a label that grew by
+  a digit). A label that narrows as more is hidden ("99+") leaves the reserve where it was
+  and ends the same way. Each step is a frame, so the label is one frame behind the split
+  while it settles and never wrong about a split that has settled. The split is stable at
+  the price of a little room, as the toolbar's is, which holds back "the wider of the button
+  now and the button of the last collapsed layout".
 - **Documents.** The module documentation of `toolbar_items.rs` ("That is what a `RenderWrap`,
   an offstage child or a layout delegate cannot do") and the mapping decision "A toolbar row
   hides…" in `crates/flui-objects/ARCHITECTURE.md` ("An offstage child, a `RenderWrap` or a
@@ -406,7 +435,8 @@ W25 both join ([design.md](design.md), "Seams more than one item uses").
   (`LayoutBuilder`) is rebuilt for each distinct set of constraints it is laid out under.
   Two layouts per pass under two sets rebuild it twice a pass, and the build-during-layout
   fixpoint sees its constraints change on every pass. With one set per child per pass the
-  fixpoint settles as it does for any parent. The documentation states the consequence: a
+  fixpoint settles as it does for any parent, inside ADR-0308's bound. The documentation
+  states the consequence: a
   `LayoutBuilder` inside an alternative that is not the last sees the lifted maximum on the
   chosen axes, not the incoming one.
 - **A probe is a real layout.** A dry layout would be cheaper and cannot answer for a child
@@ -462,16 +492,12 @@ W25 both join ([design.md](design.md), "Seams more than one item uses").
 - **Where it runs.** The four lazy slivers take an optional `Rc<dyn ItemEffect>`. After a
   layout places the band, the effect is evaluated for each placed child as one step of the
   single function that builds the sliver's parts ([design.md](design.md), "One commit per
-  layout"): band, sticky rule, effect, one commit. The effect does not commit, and it is not
+  layout"): band, pinned, sticky rule, effect, one commit. The effect does not commit, and it is not
   applied to a stuck header, whose part the sticky rule has already placed over the rows; a
   header that scaled or faded with the row under it would no longer cover it. A scroll lays
   the sliver out and rebuilds nothing. The transform is about the item's own box; the item's
   layout is untouched, so scroll extent and positions are the same with and without an
   effect.
-- **The lists move onto the record.** `RenderSliverFixedExtentList` and `RenderSliverGrid`
-  move onto `ShownChildren` in this change, their ADR-0265 pinned slots committed as
-  announced, as `RenderSliverList` did for sticky rows; an effect needs their readers to
-  read parts.
 - **Hit testing and semantics** go through the sliver transform seam
   ([design.md](design.md)): the item is hit and published through the transform it is painted
   with. This is why the item is gated by its dependency and edits no frozen crate itself.
