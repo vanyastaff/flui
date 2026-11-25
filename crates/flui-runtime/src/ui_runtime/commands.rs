@@ -558,7 +558,7 @@ impl UiRuntime {
 
     /// Whether a command or an owner job waits for a later turn: what a
     /// panicking drain must leave a wake for.
-    fn has_queued_work(&self) -> bool {
+    pub(super) fn has_queued_work(&self) -> bool {
         !self.rx.is_empty() || self.owner_jobs.has_queued()
     }
 

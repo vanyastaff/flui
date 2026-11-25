@@ -14,9 +14,10 @@ use std::time::Duration;
 use flui_foundation::{ManualClock, MonotonicClock};
 use flui_protocol::method;
 use flui_protocol::{
-    act::ActOutcome, error::ErrorCode, input::Journal, input::JournalParams,
-    input::PressKeysParams, input::TapParams, locator::Locator, locator::Target, wait::Condition,
-    wait::WaitOutcome, wait::WaitParams,
+    act::ActOutcome, act::ActParams, error::ErrorCode, input::InputPath, input::InputPolicy,
+    input::Journal, input::JournalParams, input::PressKeysParams, input::TapParams,
+    locator::Locator, locator::Target, snapshot::Snapshot, wait::Condition, wait::WaitOutcome,
+    wait::WaitParams, wire::ActionName,
 };
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
@@ -130,7 +131,7 @@ impl Rig {
     /// An owner turn with no frame whose wakes fail: the panic it continues with.
     fn failing_turn(&mut self) -> String {
         self.failing.store(true, Ordering::SeqCst);
-        let turned = catch_unwind(AssertUnwindSafe(|| self.runtime.drain_owner_inbox()));
+        let turned = catch_unwind(AssertUnwindSafe(|| self.runtime.pump_background()));
         self.failing.store(false, Ordering::SeqCst);
         let payload = turned.expect_err("a panic continues out of the turn");
         payload
@@ -251,7 +252,7 @@ fn the_first_wake_that_panics_in_a_turn_continues_and_its_act_plays_nothing() {
             .call::<method::ElementTap>(tap)
             .expect("the inbox has room");
         let beside = beside(&rig);
-        let _ = rig.runtime.drain_owner_inbox();
+        rig.runtime.pump_background();
         assert!(tap.try_take().is_none(), "{case}: held for stability");
         rig.clock.advance(Duration::from_millis(100));
         assert_eq!(rig.failing_turn(), "wake 1", "{case}");
@@ -262,5 +263,62 @@ fn the_first_wake_that_panics_in_a_turn_continues_and_its_act_plays_nothing() {
         assert_eq!(answered.code, ErrorCode::Platform, "{case}: {answered:?}");
         rig.played_nothing(journaled, case);
         drop(beside);
+    }
+}
+
+/// A semantics action that owes a reading has run once the reading is parked, so a wake that
+/// panics after it does not
+/// answer the act `platform`: the reading answers it with what ran, once, and the panic
+/// continues. A held tap on the semantic path, attempted on a turn without a frame past its
+/// deadline, and a `semantics.act` served at once each press "Go" and answer that they did.
+#[test]
+fn a_wake_that_panics_after_a_semantics_action_ran_leaves_its_answer_true() {
+    let rows: [(&str, Ask); 2] = [
+        ("a held tap on the semantic path", |rig| {
+            let mut tap = TapParams::new(named("Go"));
+            tap.options.timeout_ms = Some(50);
+            tap.options.via = Some(InputPolicy::require(InputPath::Semantic));
+            tap.options.snapshot = Snapshot::Delta;
+            rig.lease
+                .call::<method::ElementTap>(tap)
+                .expect("the inbox has room")
+        }),
+        ("semantics.act", |rig| {
+            rig.window
+                .call::<method::SemanticsAct>(
+                    ActParams::new(named("Go"), ActionName::Invoke).snapshot(Snapshot::Delta),
+                )
+                .expect("the inbox has room")
+        }),
+    ];
+    for (case, ask) in rows {
+        let mut rig = Rig::new();
+        let mut asked = ask(&rig);
+        if case.starts_with("a held tap") {
+            rig.runtime.pump_background();
+            assert!(asked.try_take().is_none(), "{case}: held for stability");
+            rig.clock.advance(Duration::from_millis(100));
+        }
+        assert_eq!(rig.failing_turn(), "wake 1", "{case}");
+        let mut answer = None;
+        for _ in 0..30 {
+            answer = asked.try_take();
+            if answer.is_some() {
+                break;
+            }
+            rig.frame();
+        }
+        let Some(answer) = answer else {
+            panic!("{case}: answered");
+        };
+        let outcome = match answer {
+            Ok(outcome) => outcome,
+            Err(error) => panic!("{case}: the action ran: {error:?}"),
+        };
+        assert_eq!(outcome.via, InputPath::Semantic, "{case}: {outcome:?}");
+        for _ in 0..10 {
+            rig.frame();
+        }
+        assert_eq!(rig.go.load(Ordering::SeqCst), 1, "{case}: pressed once");
     }
 }

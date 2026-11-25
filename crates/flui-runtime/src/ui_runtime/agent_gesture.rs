@@ -349,7 +349,7 @@ fn inject(
 /// Run `action` on `element` through the path an assistive technology's action takes, and
 /// answer `reply` with what it ran, once the reading it owes is taken.
 fn semantic_act(
-    ctx: &AttemptContext<'_>,
+    ctx: &mut AttemptContext<'_>,
     reply: &ReplySender<ActOutcome>,
     element: ElementRef,
     action: ActionName,
@@ -370,7 +370,8 @@ fn semantic_act(
         Ok(Served::Answered(outcome)) => answer(reply, Ok(outcome)),
         Ok(Served::Reading(owed)) => {
             // The reading is owed once the effect settled; the reply waits with it.
-            ctx.runtime.park_act_read(ctx.state, owed, reply.clone());
+            ctx.runtime
+                .park_act_read(ctx.state, owed, reply.clone(), ctx.caught);
             Attempt::Done
         }
         Err(error) => answer(reply, Err(error)),

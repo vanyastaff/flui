@@ -278,7 +278,7 @@ impl ScrollSearch {
     /// passed.
     fn found(
         &mut self,
-        ctx: &AttemptContext<'_>,
+        ctx: &mut AttemptContext<'_>,
         reply: &ReplySender<ActOutcome>,
         found: ElementRef,
     ) -> Attempt {
@@ -289,7 +289,8 @@ impl ScrollSearch {
             return answer(reply, Ok(outcome));
         }
         let owed = ReadingOwed::new(outcome, self.snapshot, self.before.take());
-        ctx.runtime.park_act_read(ctx.state, owed, reply.clone());
+        ctx.runtime
+            .park_act_read(ctx.state, owed, reply.clone(), ctx.caught);
         Attempt::Done
     }
 }

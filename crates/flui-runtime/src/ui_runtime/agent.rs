@@ -1164,11 +1164,17 @@ impl UiRuntime {
 
     /// Holds an action's reply until a frame has passed, and asks for one, so
     /// the reading comes even when the action dirtied nothing.
+    ///
+    /// The reading is parked first: the reply is handed on, and the reading
+    /// answers it. The code this runs after (the answer of a reading it
+    /// displaces, the platform's wake) runs contained in `after`, whose first
+    /// panic the caller continues without answering the act again.
     pub(super) fn park_act_read(
         &self,
         state: &PresentationState,
         owed: ReadingOwed,
         reply: ReplySender<ActOutcome>,
+        after: &mut FirstPanic,
     ) {
         let pending = PendingActRead { owed, reply };
         let displaced = {
@@ -1177,9 +1183,9 @@ impl UiRuntime {
             (parked.len() > MAX_OWED_READINGS).then(|| parked.remove(0))
         };
         if let Some(oldest) = displaced {
-            oldest.abandon();
+            after.contain(|| oldest.abandon());
         }
-        self.request_redraw_for(state);
+        after.contain(|| self.request_redraw_for(state));
     }
 
     /// Takes the readings the presentation owes, now that a frame has passed

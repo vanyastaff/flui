@@ -1074,8 +1074,7 @@ impl UiRuntime {
                     // is still open, since closing one takes the runtime mutably. Parking wakes
                     // the platform, so it runs behind a handler's panic, which stays first.
                     let owed = ReadingOwed::new(outcome, snapshot, before);
-                    sent.panic
-                        .contain(|| self.park_act_read(state, owed, reply));
+                    self.park_act_read(state, owed, reply, &mut sent.panic);
                     sent.resume();
                     return;
                 }

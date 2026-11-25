@@ -305,12 +305,20 @@ impl UiRuntime {
             }
             // A step caught a panic and answered with its own failure: that answer goes, and the
             // caught panic continues.
-            (Ok(answer), Some(payload)) => {
-                let result = match answer {
-                    Answer::Now(result) => result,
-                    Answer::Later => Err(if_panics.take()),
-                };
+            (Ok(Answer::Now(result)), Some(payload)) => {
                 self.fail_agent_job(&reply, None, result, payload);
+            }
+            // The handler answered its reply or handed it on (to a held act, a queued
+            // injection, a parked reading) before the panic was caught: what has it answers
+            // it, once, so nothing is answered here and the panic continues.
+            (Ok(Answer::Later), Some(payload)) => {
+                report.invoked += 1;
+                let mut first = FirstPanic::new();
+                first.record(payload);
+                if wake_after || self.has_queued_work() {
+                    first.contain(|| self.sender_prototype.wake_owner());
+                }
+                first.resume();
             }
             // A caught panic is the first failure; one after it is traced and not resumed.
             (Err(second), Some(payload)) => {
@@ -548,7 +556,9 @@ impl Serve for method::SemanticsAct {
             Ok(Served::Answered(outcome)) => Answer::Now(Ok(outcome)),
             Ok(Served::Reading(owed)) => {
                 // The reading is owed once the effect settled; the reply waits with it.
-                ctx.runtime.park_act_read(ctx.state, owed, ctx.park());
+                let reply = ctx.park();
+                let (runtime, state) = (ctx.runtime, ctx.state);
+                runtime.park_act_read(state, owed, reply, &mut ctx.caught);
                 Answer::Later
             }
             Err(error) => Answer::Now(Err(error)),
