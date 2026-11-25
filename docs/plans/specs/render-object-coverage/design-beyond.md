@@ -28,7 +28,7 @@ A candidate is adopted when all four hold:
 | Candidate | Verdict | Item | Reason in one line |
 |-----------|---------|------|--------------------|
 | Geometry and visibility observers | Adopt | W19 | Every piece exists and is unfrozen; answers `SizeChangedLayoutNotifier` without notifications |
-| Sticky rows in a lazy list; group-scoped pinning | Adopt | W20, R7 rows | The most asked-for list feature; rides the offset index and pinned children |
+| Sticky rows in a lazy list; group-scoped pinning | Adopt | W20, R7 rows | The most asked-for list feature; rides the offset index and one index the lazy element keeps outside the band |
 | Grid over a shared track module | Adopt (subset) | W21 | The largest layout primitive Flutter lacks; `RenderTable` already holds half the algorithm |
 | Wrap that stops, with an indicator | Adopt | W22 | `RenderToolbarItems` already has the rule; the shown answer hides the rest |
 | One placement policy for floating children | Adopt | W23 | Two bespoke delegates on `main`, with tooltip and dropdown still to come |
@@ -53,8 +53,11 @@ A candidate is adopted when all four hold:
 | Constraint-solver layout | Reject | — | A package over a layout trait, not core |
 | Lookahead layout, `content-visibility`, user shaders, subgrid and dense placement, multi-column and floats | Reject | — | "Rejected" below |
 
-Each adopted item is independent of the other seven. Striking one strikes its requirement, its
-section here and its tasks.
+Each adopted item is independent of the other seven in what it offers. Striking one strikes its
+requirement, its section here and its tasks. Two pieces are shared and outlive a strike: the
+after-frame helper W19 brings, which W22 and two parity items also use and which then lands
+with the first of them, and the single commit of a lazy sliver's shown answer, which W20 and
+W25 both join ([design.md](design.md), "Seams more than one item uses").
 
 ## W19. Geometry and visibility observers
 
@@ -71,11 +74,15 @@ section here and its tasks.
     visible_rect }`.
 
   Both wrap the child in an `AnchoredBox`. The state takes the pipeline and the post-frame
-  handle in `create_state`, and registers one post-frame callback that reads the node, compares
-  with the last report, delivers a change through `flui_foundation::panic::commit` with no
-  borrow held, and registers itself again. Registering asks for no frame, so an observer whose
-  subtree does not change costs one read per frame the application already draws and causes
-  none.
+  handle in `create_state` and starts the after-frame helper ([design.md](design.md), "One
+  callback after each frame"), whose run reads the node, compares with the last report and
+  delivers a change. Registering asks for no frame, so an observer whose subtree does not
+  change costs one read per frame the application already draws and causes none.
+- **A callback that panics, and a widget that is gone.** The helper schedules its next run
+  before it delivers, so a panic in `on_change` is contained and the observer reports the
+  next change; the last report is recorded before delivery, so the value that panicked is not
+  delivered twice. The run holds a `Weak` to the state: after the widget is disposed it
+  reads nothing, calls nothing and schedules nothing.
 - **The fraction.** The node's box is mapped through `PresentedPlacement::transform`; the
   fraction is the area of that shape's bounding rectangle inside `clip` over the bounding
   rectangle's area. Under a rotation it is therefore a bounding fraction, which the report's
@@ -105,31 +112,54 @@ section here and its tasks.
 
 ## W20. Sticky rows in a lazy list
 
-- **What exists.** `RenderSliverList` runs on `walk_virtualizer_band`; `PinnedChildren`
-  (ADR-0265) keeps a lazy child built outside the band; the geometry reports a scroll
-  obstruction. A section per sliver in a `SliverMainAxisGroup` already works (R7's group rows)
-  and costs a sliver per section.
+- **What exists.** `RenderSliverList` runs on `walk_virtualizer_band`; the geometry reports a
+  scroll obstruction. A section per sliver in a `SliverMainAxisGroup` already works (R7's
+  group rows) and costs a sliver per section. `PinnedChildren` (ADR-0265) keeps a lazy child
+  built outside the band, and it is not the mechanism for a stuck header: its set is computed
+  from the keep-alive leases alone (`sync_pinned` in
+  `crates/flui-view/src/element/sliver_adaptor.rs`), and by ADR-0265 §2 a pinned child is
+  neither painted nor hit and its extent enters nothing. A header whose row has left the band
+  is evicted today (`sparse_children.rs`, `retain_band`), and a request for an index outside
+  the band is skipped.
 - **Shape.** A mode of the two lists on the shared walk (`RenderSliverList`,
   `RenderSliverVariedExtentList`), in a module of its own, `sliver/sticky_rows.rs` *(proposed)*:
   - `StickyRows` *(proposed)*: the header indices, strictly increasing, built by
     `StickyRows::try_new` and shared by `Rc`. The header at or before an index is a binary
     search.
   - After the walk places the band, the module finds the header `h` for the first visible row
-    and the next header `n`. `h` is kept built as a pinned child when its own row is outside
-    the band. Its stuck position is its natural offset, raised to the leading edge of the
-    viewport (after any overlap), and lowered so that it ends where `n` begins. That position
-    is committed as the child's paint offset in layout.
-  - The stuck header is last in the list's `ShownChildren`, so it paints over the rows, is hit
-    before them and is read where it is painted.
+    and the next header `n`. Its stuck position is its natural offset, raised to the leading
+    edge of the viewport (after any overlap), and lowered so that it ends where `n` begins.
+    That position is committed as the child's paint offset in layout.
+  - *Keeping `h` built.* `LazyMultiBoxRender` gains `kept_outside_band(&self) -> Option<usize>`
+    *(proposed, default `None`)*: the one index the last layout wants built though it lies
+    outside the band. The lazy element's manager admits a build request for that index and
+    exempts it from the retain band's eviction; nothing else about the band changes. The
+    sliver writes the index in layout, asks for the child with `request_child_build`, and
+    lays it out as a resident when it arrives in the pass the build-during-layout fixpoint
+    runs next. Its extent enters the index as any measured item's does, with the anchor
+    correction `set_measured` returns. One index, so the retain set stays a band plus one.
+  - The stuck header is the last part of the list's `ShownChildren`, so it paints over the
+    rows, is hit before them and is read where it is painted. If the same row is also an
+    ADR-0265 pinned child (it holds focus), it is committed as shown, not as announced only:
+    shown includes published.
   - The list's geometry reports the stuck header's extent as its scroll obstruction, and the
     list's own answer for "the offset that reveals row `i`" subtracts it.
 - **Placement animations.** The stuck header takes no part in the list's `Placement` track: its
   offset is the sticky rule's, so an insert above it does not slide it.
 - **Limits, stated in the documentation:** one level pins; the fixed-extent list and the grid
   keep walks of their own and are not covered.
+- **`RenderSliverList` moves onto the shown record** in this change, its ADR-0265 pinned
+  slots committed as announced, because a stuck header needs paint order and a hit order the
+  list's readers do not have today. Its existing rows are the check.
 - **Widgets.** `SliverList` and `SliverVariedExtentList` gain `.sticky_rows(..)`; `ListView`'s
-  builders pass it through.
-- **Crates.** `flui-objects`, `flui-widgets`. No frozen crate.
+  builders pass it through. The lists' configurations in `sliver_adaptor.rs` carry the
+  `Rc<StickyRows>`, so `ListConfig` stops being `Copy`.
+- **Crates.** `flui-objects`, `flui-view` (the trait method, the manager's two checks, the
+  configurations), `flui-widgets`. No frozen crate. The kept index is recorded in
+  `crates/flui-view/ARCHITECTURE.md`.
+- **Alternative: make the header an ADR-0265 pinned child.** It would change that ADR's rule
+  for one caller: a pinned child would sometimes paint and take hits, and the pinned set
+  would have a second source besides the keep-alive leases. Rejected.
 - **Replaced forms.** None; the group form stays for sections that are slivers of their own.
 - **Pitfalls elsewhere (recollection).** Compose's `scrollToItem` landing an item behind the
   sticky header; sticky headers flickering with item placement animations; SwiftUI pinning one
@@ -149,7 +179,13 @@ section here and its tasks.
 - **The track module** *(proposed, `layout/tracks.rs`)*:
   - `TrackSize` is `TableColumnWidth` under the name its field uses, with the same six
     variants and the same `serde` derive. `TableColumnWidth` is deleted; the migration is the
-    rename, and `RenderTable`, `Table` and their tests move in the same change.
+    rename, and every user moves in the same change: `RenderTable`, `Table` and their tests;
+    the re-exports in `crates/flui-objects/src/lib.rs`, `crates/flui-widgets/src/lib.rs` and
+    `crates/flui-sdk/src/lib.rs` (`flui_sdk::rendering::objects`), with the two lines of
+    `crates/flui-sdk/tests/surface.rs` that pin the old name; and
+    `packages/flui-material/src/data_table.rs` with its tests, whose public
+    `column_width(TableColumnWidth)` becomes `column_width(TrackSize)`. The facade's surface
+    changes by one name, which the changelog fragment states with its replacement.
   - `resolve(tracks, available, gap, query) -> RenderResult<Vec<f64>>` is the table's width
     algorithm moved (`extent_for_spec`, `compute_column_widths`,
     `grow_and_shrink_column_widths`): it is already generic over one closure that answers a
@@ -174,7 +210,7 @@ section here and its tasks.
     takes the tallest child at its resolved width. Flex tracks on an unbounded axis are a
     layout error.
   - *A flex track has no content floor.* `TrackSize::Flex` is the table's: a child wider than
-    its share overflows its cell and the grid clips it through its `ChildClip`. The floor is
+    its share overflows its cell and the grid clips it through its `OverflowClip`. The floor is
     asked for explicitly, `Intrinsic { flex: Some(1.0) }`. CSS's implicit `min-width: auto` is
     the opposite default and its best-known surprise.
   - *Intrinsics and dry layout* run the same resolution over the children's intrinsic and dry
@@ -220,15 +256,31 @@ section here and its tasks.
   - The hidden children and, when everything fits, the indicator have no part in the wrap's
     `ShownChildren`.
   - Each layout writes a `WrapSplit` *(proposed: shown, hidden)*, the form of
-    `ToolbarItemsSplit`, which the widget reads after the frame to label the indicator.
+    `ToolbarItemsSplit`.
+- **Who relabels the indicator.** A value written in layout wakes nobody:
+  `ToolbarItemsSplit` is an `Rc<Cell<..>>` with no notifier, and the toolbar's widget
+  rebuilds only when its controller does. `Wrap` with an indicator is therefore stateful. Its
+  state owns the `WrapSplit`, remembers the hidden count its indicator was built for, and
+  runs the after-frame helper ([design.md](design.md)): when the count the layout wrote
+  differs, it marks itself for a rebuild, and the next frame builds the indicator with the
+  new count. A `Wrap` without an indicator stays stateless and schedules nothing.
 - **The loop, and the rule that ends it.** The indicator's label depends on the hidden count,
   and the count depends on the indicator's size. The reserve is the wider of the indicator now
-  and the reserve of the last layout with the same children and constraints. It can only grow
-  until the children or the constraints change, so the split settles after at most one further
-  layout. The toolbar already holds back "the wider of the button now and the button of the
-  last collapsed layout" for the same reason.
-- **Documents.** The sentence in `toolbar_items.rs` that says a wrap cannot hide what does not
-  fit is rewritten in the same change.
+  and the reserve of the last layout with the same children and constraints, so it only
+  grows until the children or the constraints change. A wider reserve hides the same number
+  of children or more, so the hidden count only grows too and is bounded by the number of
+  children: the relabelling ends, after at most one rebuild per child in the worst case and
+  one in the usual one (a label that grew by a digit). Each step is a frame, so the label is
+  one frame behind the split while it settles and never wrong about a split that has
+  settled. A reserve that grew stays wide after the label shrinks again, until the children
+  or the constraints change: the split is stable at the price of a little room. The toolbar
+  already holds back "the wider of the button now and the button of the last collapsed
+  layout" for the same reason.
+- **Documents.** The module documentation of `toolbar_items.rs` ("That is what a `RenderWrap`,
+  an offstage child or a layout delegate cannot do") and the mapping decision "A toolbar row
+  hides…" in `crates/flui-objects/ARCHITECTURE.md` ("An offstage child, a `RenderWrap` or a
+  layout delegate cannot hide a child by what layout decides") are rewritten in the same
+  change: a wrap with `max_runs` now can, and the toolbar remains for its expanded forms.
 - **The objects stay separate.** The toolbar's expanded state (a column, more columns, runs) is
   its own; `RenderOverflowBar` switches the whole axis. They share the run rule and the shown
   answer, not a type.
@@ -245,26 +297,42 @@ section here and its tasks.
 ## W23. One placement policy for a floating child
 
 - **What exists.** Two private single-child layout delegates: `MenuPlacement`
-  (`crates/flui-widgets/src/popup_menu.rs`), which flips across the anchor and then clamps, and
-  `ToolbarLayout` (`crates/flui-widgets/src/text/selection_menu/toolbar.rs`). No tooltip,
-  dropdown or autocomplete exists yet; each would be a third.
+  (`crates/flui-widgets/src/popup_menu.rs`), which loosens the constraints, flips across the
+  anchor and then clamps, so a menu that fits on neither side covers its anchor; and
+  `ToolbarLayout` (`crates/flui-widgets/src/text/selection_menu/toolbar.rs`), which goes over
+  or under its anchors with a gap. A layout delegate's methods take `&self`, and a delegate
+  is made anew on each build. No tooltip, dropdown or autocomplete exists yet; each would be
+  a third.
 - **Shape** *(proposed, `crates/flui-widgets/src/overlay/placement.rs`)*:
 
   ```rust
   #[non_exhaustive]
   pub enum PlacementSide { Above, Below, Start, End }
 
-  pub struct AnchoredPlacement { /* sides in order, alignment, gap, margin */ }
+  /// What happens when the child fits on no listed side.
+  #[non_exhaustive]
+  pub enum NoFit {
+      /// The child keeps its size and may cover the anchor.
+      Overlap,
+      /// The child is limited to the roomiest listed side, so it always fits there.
+      Shrink,
+  }
+
+  pub struct AnchoredPlacement { /* sides in order, alignment, gap, margin, no_fit */ }
 
   #[non_exhaustive]
   pub struct Placed {
       pub offset: Offset,
       pub side: PlacementSide,
+      pub covers_anchor: bool,
       pub anchor_in_area: bool,
   }
 
   impl AnchoredPlacement {
-      pub fn max_size(&self, anchor: Rect, area: Rect) -> Size;
+      /// The room beside the anchor on one side.
+      pub fn room(&self, anchor: Rect, area: Rect, side: PlacementSide) -> Size;
+      /// The largest size the child may take, before a side is known.
+      pub fn limit(&self, anchor: Rect, area: Rect) -> Size;
       pub fn place(
           &self,
           anchor: Rect,
@@ -276,25 +344,49 @@ section here and its tasks.
   }
   ```
 
-  A pure function, and one `SingleChildLayoutDelegate` over it that keeps `current` between
-  layouts.
-- **The order of the rules, fixed:** the child is limited to `max_size` first; a side is chosen
-  by whether the limited child fits there; the result is then shifted along the side to stay
-  inside the area less its margin.
-- **Stability.** `current` is kept while the child still fits on it. The preferred side is
-  taken back only when the child no longer fits where it is, so an anchor at the threshold does
-  not flip on every frame.
+  Pure functions, and one `SingleChildLayoutDelegate` over them.
+- **The order of the rules, fixed.** A delegate must constrain its child before it knows the
+  child's size, and the side depends on that size, so the limit cannot depend on the side
+  chosen. `limit` is therefore one of two side-independent sizes: under `NoFit::Shrink`, the
+  room of the roomiest listed side, so whatever the child's size it fits there; under
+  `NoFit::Overlap`, the area less its margin. Then `place` takes the first listed side whose
+  room holds the child, keeping `current` while the child still fits on it. Then the result
+  is shifted along the side to stay inside the area less its margin.
+- **When no side fits.** Only under `Overlap`. `place` takes the listed side with the most
+  room, clamps the child into the area and returns `covers_anchor: true`; the result is
+  finite and inside the area whenever the child is no larger than it. That is what the popup
+  menu does today, now stated and reported. A caller that must never cover its anchor (a
+  tooltip, an autocomplete under a field) asks for `Shrink` and gives its child a scrolling
+  body.
+- **Stability, and where the side is remembered.** `current` is kept while the child still
+  fits on it, so an anchor at the threshold does not flip on every frame. The delegate cannot
+  hold it: it is rebuilt each build. The popup's state owns a `PlacementMemory` *(proposed,
+  an `Rc<Cell<Option<PlacementSide>>>`)* created in `create_state` and hands it to each
+  build's delegate, which reads it before and writes it after `place`. It is state only the
+  owner thread touches, written in layout with no user code run, and it takes no part in the
+  delegate's `should_relayout`. It lives as long as the popup, so a new popup starts with no
+  side.
+- **The area.** Every caller gets it from one function, `PlacementArea::of(ctx)` *(proposed)*:
+  the overlay's rectangle less the `MediaQuery` view insets and padding (the keyboard, a
+  cutout), which makes the popup rebuild when the keyboard moves. The caller's margin is
+  applied on top. No popup subtracts an inset by hand.
 - **Edge cases.** A child larger than the area is placed at the area's start and the result is
   finite. An anchor outside the area gives `anchor_in_area: false`, and the caller hides or
-  keeps the child. The area is the caller's: a popup subtracts the keyboard's inset from it.
+  keeps the child.
 - **Replaced forms.** `MenuPlacement` and `ToolbarLayout` are deleted in the same change; the
-  popup menu and the selection toolbar configure the one delegate, and their placement tests
-  stay as they are.
+  popup menu configures the delegate with `NoFit::Overlap` and its present sides, the
+  selection toolbar with its over-and-under order and gap, and their placement tests stay as
+  they are. `packages/flui-cupertino/src/navigation_toolbar.rs` has a type of its own named
+  `ToolbarLayout`, a multi-child delegate for a navigation bar; it is another concept and
+  stays.
 - **Crates.** `flui-widgets` only. No render object.
 - **Name.** `Placement` in `flui-objects` is the slide of a lazy list's item, a different
   concept ([design.md](design.md), "Decisions for the owner", 11).
 - **Pitfalls elsewhere (recollection).** Popup libraries' flip oscillation and their rules
   against it; the order of size limit and flip; anchors scrolled out of view.
+- **Alternative: a limit per side, and a second layout of the child once the side is known.**
+  Exact room on the chosen side, and a child laid out twice whose size on the second pass can
+  move it to another side. Rejected.
 - **Alternative: a render object that reads the anchor through a leader and follower.**
   `Leader` and `Follower` place at composite time, after layout, so the child's size limit
   cannot depend on the side. The policy is a layout input. Rejected.
@@ -303,13 +395,23 @@ section here and its tasks.
 
 - **Shape.** `RenderFirstThatFits` *(proposed, `layout/first_that_fits.rs`)*, `Arity =
   Variable`, with `FitAxes { Horizontal, Vertical, Both }` *(proposed)*.
-- **Layout.** In order, each alternative is laid out with the incoming maximum lifted on the
-  chosen axes. The first whose size is finite and within the incoming maximum is the choice; it
-  is laid out under the incoming constraints and the object takes its size. When none fits, the
-  last is laid out under the incoming constraints. Laying a child out more than once in a pass
-  is what `RenderToolbarItems` already does.
-- **A probe is a real layout.** A dry layout would be cheaper and is refused by children that
-  build during layout; a real one answers for every child.
+- **Layout: each child once per pass, under one set of constraints.** Every alternative but
+  the last is laid out, in order, under the *probe constraints*: the incoming ones loosened,
+  with the maximum lifted on the chosen axes. The first whose size is finite and within the
+  incoming maximum is the choice, and it is shown at that size; it is not laid out again. The
+  object's size is that size constrained by the incoming constraints, with the child at the
+  start. The last alternative is never probed: when no earlier one fits it is laid out under
+  the incoming constraints, once.
+- **Why not probe and then lay out again.** A child that builds during layout
+  (`LayoutBuilder`) is rebuilt for each distinct set of constraints it is laid out under.
+  Two layouts per pass under two sets rebuild it twice a pass, and the build-during-layout
+  fixpoint sees its constraints change on every pass. With one set per child per pass the
+  fixpoint settles as it does for any parent. The documentation states the consequence: a
+  `LayoutBuilder` inside an alternative that is not the last sees the lifted maximum on the
+  chosen axes, not the incoming one.
+- **A probe is a real layout.** A dry layout would be cheaper and cannot answer for a child
+  that builds during layout: `RenderLayoutBuilder::compute_dry_layout` returns zero and
+  reports through `tracing::error!`.
 - **Shown.** Only the choice is in `ShownChildren`. The others stay mounted, so their state
   survives a switch; they are not painted, not hit and not published.
 - **Alternatives after the choice** are not laid out in that pass
@@ -317,7 +419,10 @@ section here and its tasks.
   a layout skips, they are laid out under the incoming constraints, which costs a layout each
   and changes nothing visible.
 - **Intrinsics** are the first alternative's; the dry layout makes the same choice from the
-  children's dry sizes.
+  children's dry sizes. With an alternative that builds during layout both inherit
+  `RenderLayoutBuilder`'s zero answer and its report, as any parent of one does; the
+  documentation says a parent that asks for intrinsics or a dry layout needs alternatives
+  that can answer.
 - **Documentation states:** an alternative that fills its constraints has no finite size when
   the limit is lifted and never fits; it belongs last.
 - **Widget.** `FirstThatFits::new(children).axes(..)`.
@@ -355,10 +460,18 @@ section here and its tasks.
   in viewport extents, for effects written about the centre. One definition; the two
   conventions other frameworks split over are both derived from it.
 - **Where it runs.** The four lazy slivers take an optional `Rc<dyn ItemEffect>`. After a
-  layout places the band, the shared module evaluates the effect for each placed child and
-  commits the result as the sliver's `ShownChildren`. A scroll lays the sliver out and rebuilds
-  nothing. The transform is about the item's own box; the item's layout is untouched, so scroll
-  extent and positions are the same with and without an effect.
+  layout places the band, the effect is evaluated for each placed child as one step of the
+  single function that builds the sliver's parts ([design.md](design.md), "One commit per
+  layout"): band, sticky rule, effect, one commit. The effect does not commit, and it is not
+  applied to a stuck header, whose part the sticky rule has already placed over the rows; a
+  header that scaled or faded with the row under it would no longer cover it. A scroll lays
+  the sliver out and rebuilds nothing. The transform is about the item's own box; the item's
+  layout is untouched, so scroll extent and positions are the same with and without an
+  effect.
+- **The lists move onto the record.** `RenderSliverFixedExtentList` and `RenderSliverGrid`
+  move onto `ShownChildren` in this change, their ADR-0265 pinned slots committed as
+  announced, as `RenderSliverList` did for sticky rows; an effect needs their readers to
+  read parts.
 - **Hit testing and semantics** go through the sliver transform seam
   ([design.md](design.md)): the item is hit and published through the transform it is painted
   with. This is why the item is gated by its dependency and edits no frozen crate itself.
@@ -382,20 +495,25 @@ section here and its tasks.
   isolated group, and the group is composited with a blend mode. A mask is two of them: the
   content in a source-over group, and inside it, after the content, the mask child in a
   destination-in group.
-- **Shape.** `PaintEffects` gains the group's blend mode, in the order the paint-effect ADR
-  fixes (opacity, group blend, filter, clip, transform; [design-parity.md](design-parity.md),
-  W13).
+- **Shape.** The group's blend mode is a field of `PaintOpacity`, the shape
+  `crates/flui-rendering/ARCHITECTURE.md` plans ("`blend` on `PaintOpacity`": an "additive
+  field on the `#[non_exhaustive]` struct"), so a node's group is composited once with an
+  alpha and a mode ([design-parity.md](design-parity.md), W13, "Order"). A node that asks
+  for a mode other than source-over, or for isolation, gets a group even at full opacity.
   - `RenderBlendGroup` *(proposed, `proxy/blend_group.rs`)*: a proxy whose `paint_effects`
-    returns the mode.
-  - `RenderMask` *(proposed, `proxy/mask.rs`)*: two children, content first. The mask child is
-    laid out tight at the content's size. It is painted, in its group, and is neither hit nor
-    published: the object's `hit_test` asks only the content and
-    `visits_child_for_semantics` is false for the mask.
+    returns the mode. Under an opacity on the same node the group fades and blends as one;
+    an opacity in an ancestor composites the already-blended result.
+  - `RenderMask` *(proposed, `proxy/mask.rs`)*: two children, content first. Its own effects
+    ask for an isolated source-over group; inside it the mask child is painted after the
+    content in a destination-in group. The mask child is laid out tight at the content's
+    size. It is painted, in its group, and is neither hit nor published: the object's
+    `hit_test` asks only the content and `visits_child_for_semantics` is false for the mask.
 - **No layer when there is nothing to composite:** an empty or fully transparent group pushes
   none.
 - **Gate.** `flui-layer` (the layer), `flui-engine` (lowering it to an offscreen group),
-  `flui-rendering` (the `PaintEffects` field). It follows the subtree filters, which add the
-  first new field.
+  `flui-rendering` (the field on `PaintOpacity`, and the records that state the composite:
+  the "Deferred producers" row and the documentation of `PaintEffects`). It follows the
+  subtree filters, which add the first new field.
 - **Widgets.** `BlendGroup::new(mode, child)`, `Mask::new(content, mask)`.
 - **Cost.** An offscreen group per use; unmeasured ([design.md](design.md), "Unverified"). The
   ADR measures it before the item is accepted.
