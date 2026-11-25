@@ -8,10 +8,13 @@ use serde_json::{Map, Value, json};
 
 use super::launch::AttachError;
 use super::socket::Socket;
-use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote, held_by};
+use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote, release_late};
 
 /// The page's function that reports to the link.
 const BINDING: &str = "__flui_agent_report";
+
+/// Where an answer's value names the page object it holds.
+pub(super) const HELD: &str = "objectId";
 
 /// A tab of a browser that speaks the DevTools protocol.
 pub(super) struct Cdp {
@@ -77,7 +80,15 @@ impl Cdp {
     }
 
     fn command(&mut self, method: &str, params: Value) -> Result<Value, LinkError> {
-        let deadline = Instant::now() + COMMAND_TIMEOUT;
+        self.command_by(method, params, Instant::now() + COMMAND_TIMEOUT)
+    }
+
+    fn command_by(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+    ) -> Result<Value, LinkError> {
         command(
             &mut self.socket,
             Some(&self.session),
@@ -85,6 +96,16 @@ impl Cdp {
             params,
             deadline,
         )
+    }
+
+    /// Lets the page drop `remote`, waiting for the answer no later than `deadline`.
+    fn release_by(&mut self, remote: Remote, deadline: Instant) -> Result<(), LinkError> {
+        self.command_by(
+            "Runtime.releaseObject",
+            json!({ "objectId": remote.0 }),
+            deadline,
+        )
+        .map(drop)
     }
 
     /// What a `Runtime` evaluation gave, or what it threw.
@@ -137,7 +158,12 @@ impl BrowserLink for Cdp {
         Ok(())
     }
 
-    fn call(&mut self, function: &str, args: &[&str]) -> Result<Option<Remote>, LinkError> {
+    fn call(
+        &mut self,
+        function: &str,
+        args: &[&str],
+        deadline: Instant,
+    ) -> Result<Option<Remote>, LinkError> {
         // An argument can only be a value here, so the report function is made in the call.
         let arguments = args
             .iter()
@@ -149,13 +175,14 @@ impl BrowserLink for Cdp {
             .collect::<Vec<String>>()
             .join(", ");
         let expression = format!("({function})({arguments})");
-        let result = self.command(
+        let result = self.command_by(
             "Runtime.evaluate",
             json!({ "expression": expression, "awaitPromise": true }),
+            deadline,
         )?;
         let result = Self::evaluated(result)?;
         Ok(result
-            .get("objectId")
+            .get(HELD)
             .and_then(Value::as_str)
             .map(|object| Remote(object.to_owned())))
     }
@@ -178,15 +205,15 @@ impl BrowserLink for Cdp {
     }
 
     fn release(&mut self, remote: Remote) {
-        let _ = self.command("Runtime.releaseObject", json!({ "objectId": remote.0 }));
+        let _ = self.release_by(remote, Instant::now() + COMMAND_TIMEOUT);
     }
 
     fn next_event(&mut self, deadline: Instant) -> Result<Option<LinkEvent>, LinkError> {
-        while let Some(answer) = self.socket.take_late() {
-            if let Some(remote) = held_by(&answer, "objectId") {
-                self.release(remote);
-            }
-        }
+        let mut late = self.socket.take_late();
+        release_late(&mut late, HELD, deadline, |remote, by| {
+            self.release_by(remote, by)
+        });
+        self.socket.keep_unreleased(late);
         loop {
             let Some(event) = self.socket.next_event(deadline)? else {
                 return Ok(None);
