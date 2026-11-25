@@ -2050,6 +2050,7 @@ fn a_turn_without_a_frame_answers_the_acts_due_and_keeps_the_rest() {
     let mut short = gated(&lease, 200, false);
     let _ = host.pump(Duration::ZERO);
     drop(abandoned);
+    let asked_at = host.clock().elapsed();
     let Some(answer) = host.run_until_answered(
         &mut short,
         Duration::from_millis(16),
@@ -2059,6 +2060,11 @@ fn a_turn_without_a_frame_answers_the_acts_due_and_keeps_the_rest() {
     };
     let refused = answer.expect_err("its target never passed");
     assert_eq!(refused.code, ErrorCode::NotActionable, "{refused:?}");
+    // The host loop sleeps until the owner's next wake: the earliest deadline, not a later one.
+    assert!(
+        host.clock().elapsed().saturating_sub(asked_at) < Duration::from_secs(1),
+        "answered at its deadline, the earliest the window holds"
+    );
     let _ = host.pump(Duration::ZERO);
     assert!(long.try_take().is_none(), "the act held to 60 s holds on");
 }
@@ -2438,4 +2444,184 @@ fn scroll_until_reads_exactly_up_to_its_bounds() {
             (answer, expected) => panic!("{case}: {answer:?}, not {expected:?}"),
         }
     }
+}
+
+/// "Gated", a button with no handler, so disabled; "Busy", whose press marks the view for a
+/// rebuild; and "Drop", whose press lets go of the lease it is handed.
+#[derive(Clone, StatefulView)]
+struct Holder {
+    lease: std::rc::Rc<std::cell::RefCell<Option<InputLease>>>,
+}
+
+struct HolderState {
+    presses: Signal<u32>,
+}
+
+impl StatefulView for Holder {
+    type State = HolderState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        HolderState {
+            presses: ctx.signal(0),
+        }
+    }
+}
+
+impl ViewState<Holder> for HolderState {
+    fn build(&self, view: &Holder, ctx: &dyn BuildContext) -> impl IntoView {
+        let presses = self.presses;
+        let lease = std::rc::Rc::clone(&view.lease);
+        Column::new(vec![
+            RawButton::new(Text::new("Gated")).into_view().boxed(),
+            RawButton::new(Text::new(format!("Busy {}", presses.get(ctx))))
+                .on_pressed(move |ctx| presses.update(ctx, |count| *count += 1))
+                .into_view()
+                .boxed(),
+            RawButton::new(Text::new("Drop"))
+                .on_pressed(move |_| drop(lease.borrow_mut().take()))
+                .into_view()
+                .boxed(),
+        ])
+    }
+}
+
+/// [`Holder`] shown by a [`crate::agent_rig::Rig`], and the cell its "Drop" empties.
+fn holder() -> (
+    crate::agent_rig::Rig,
+    std::rc::Rc<std::cell::RefCell<Option<InputLease>>>,
+) {
+    let cell = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let rig = crate::agent_rig::Rig::showing(&Holder {
+        lease: std::rc::Rc::clone(&cell),
+    });
+    (rig, cell)
+}
+
+/// A gated tap held to `timeout_ms` through `lease`.
+fn gated_through(lease: &InputLease, timeout_ms: u64) -> AgentAnswer<ActOutcome> {
+    let mut tap = TapParams::new(named("Gated"));
+    tap.options = timeout(tap.options, timeout_ms);
+    lease
+        .call::<method::ElementTap>(tap)
+        .expect("the inbox has room")
+}
+
+/// A lease let go while a drain runs (by a handler that drain reaches) is released by the next
+/// drain, behind the calls it already took: the act held through it holds on until then.
+#[test]
+fn a_lease_let_go_during_a_drain_is_released_by_the_next() {
+    let (mut rig, cell) = holder();
+    let lease = rig.window.input_lease().expect("leased");
+    // A lease let go before the drain, which the drain counts, and one let go during it.
+    let counted = rig.window.input_lease().expect("leased");
+    let mut held = gated_through(&lease, 60_000);
+    *cell.borrow_mut() = Some(lease);
+    rig.runtime.pump_background();
+    assert!(held.try_take().is_none(), "held while disabled");
+    drop(counted);
+    let mut dropped = rig
+        .window
+        .call::<method::SemanticsAct>(ActParams::new(named("Drop"), ActionName::Invoke))
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    dropped
+        .try_take()
+        .expect("pressed at the drain")
+        .expect("pressed");
+    assert!(cell.borrow().is_none(), "the handler let go of the lease");
+    assert!(
+        held.try_take().is_none(),
+        "the lease the drain saw let go after it began waits for the next drain"
+    );
+    rig.runtime.pump_background();
+    let gone = held
+        .try_take()
+        .expect("released by the next drain")
+        .expect_err("its lease went");
+    assert_eq!(gone.code, ErrorCode::Gone, "{gone:?}");
+}
+
+/// A window keeps the readings its actions owe for at most 256 of them: the 257th lets the
+/// oldest go, answered at once that its tree could not be read back, before any frame.
+#[test]
+fn the_oldest_owed_reading_is_answered_when_a_newer_one_displaces_it() {
+    let (mut rig, _cell) = holder();
+    let act = || ActParams::new(named("Busy 0"), ActionName::Invoke).snapshot(Snapshot::Delta);
+    let mut first = rig
+        .window
+        .call::<method::SemanticsAct>(act())
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    let mut rest: Vec<AgentAnswer<ActOutcome>> = Vec::new();
+    for batch in 0..8 {
+        for _ in 0..32 {
+            rest.push(
+                rig.window
+                    .call::<method::SemanticsAct>(act())
+                    .expect("the inbox has room"),
+            );
+        }
+        rig.runtime.pump_background();
+        assert!(
+            batch == 7 || first.try_take().is_none(),
+            "batch {batch}: the first reading is still owed"
+        );
+    }
+    let outcome = first
+        .try_take()
+        .expect("the 257th reading displaced the first")
+        .expect("the action ran");
+    assert!(outcome.readback_failed, "{outcome:?}");
+    assert!(
+        rest.iter_mut().all(|reading| reading.try_take().is_none()),
+        "the 256 newer readings are still owed"
+    );
+}
+
+/// The acts of every window are attempted and their deadlines wake the owner, whichever window
+/// holds them: with nothing held in the first window, an act in a second window is answered at
+/// its deadline on a turn without a frame, and the earliest deadline across windows is the one
+/// the owner wakes at.
+#[test]
+fn every_windows_acts_are_attempted_and_wake_the_owner() {
+    let (mut rig, _cell) = holder();
+    let second = rig.runtime.install_presentation(
+        rig.runtime
+            .assemble_presentation(crate::owner_publication::window()),
+    );
+    rig.runtime
+        .attach_root_widget_to(second, &RawButton::new(Text::new("Gated")))
+        .expect("mount the second window");
+    let other = rig
+        .runtime
+        .dev_agent_window(second)
+        .expect("the runtime hosts its second presentation");
+    let other_lease = other.input_lease().expect("leased");
+    for _ in 0..4 {
+        rig.frame();
+    }
+    // Nothing held in the first window: the second window's act is answered at its deadline.
+    let mut short = gated_through(&other_lease, 100);
+    rig.runtime.pump_background();
+    rig.clock.advance(Duration::from_millis(150));
+    rig.runtime.pump_background();
+    let refused = short
+        .try_take()
+        .expect("answered at its deadline")
+        .expect_err("disabled to the end");
+    assert_eq!(refused.code, ErrorCode::NotActionable, "{refused:?}");
+    // An act in each window: the owner wakes by the earlier deadline, the second window's.
+    let served_at = flui_foundation::MonotonicClock::now(&rig.clock);
+    let _long = gated_through(&rig.lease, 60_000);
+    let _short = gated_through(&other_lease, 100);
+    rig.runtime.pump_background();
+    let wake = rig
+        .runtime
+        .next_wake()
+        .expect("the deadlines wake the owner");
+    assert!(
+        wake <= served_at + Duration::from_millis(100),
+        "the owner wakes by the earlier deadline: {:?} past it",
+        wake.saturating_duration_since(served_at)
+    );
 }
