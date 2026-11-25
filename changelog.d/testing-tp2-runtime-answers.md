@@ -21,7 +21,9 @@
   semantics tree, `text_contrast` over the last applied frame, and every rule it cannot run
   listed in `not_checked`, so such a report is never `pass`. A target-size finding names the
   pointer it was judged for, the window's primary pointer; a disabled control's text is listed in
-  `not_checked`, since an inactive control's text has no contrast requirement.
+  `not_checked`, since an inactive control's text has no contrast requirement, and so is a text
+  whose control the disabled-state read did not reach. A report carries at most
+  `AuditReport::MAX_FINDINGS` findings and counts the rest in `truncated` (protocol 0.33, additive).
 - The development agent answers `perf.start` and `perf.stop` with a `PerfReport` of the frames a
   window presented between them: percentiles of each frame's work from build to the end of paint
   (the submit and the vsync wait a blocking present holds are not part of it), the slowest frames
@@ -48,9 +50,11 @@
   act's timeout passes, then injects at that frame's bounds; a refusal is `not_actionable` naming
   the failed check, and nothing is sent after an act's answer. Every act is answered by its
   deadline, the input it queued included: input no frame started by then is withdrawn and the act
-  answers `timeout`; input under way has its play time past the deadline. `scroll_until` scrolls a
-  viewport at a time until the element shows under the scrollable, and ends `not_found` once the
-  content stops moving. A window holds at most 64 acts (`busy` past it).
+  answers `timeout`; input under way has its play time past the deadline, and input that stops
+  before its last tick lets go of what it pressed. An act whose input played is answered by its
+  deadline and play time even when its window stops drawing before its reading. `scroll_until`
+  scrolls a viewport at a time until the element shows under the scrollable, and ends `not_found`
+  once the content stops moving. A window holds at most 64 acts (`busy` past it).
 - `flui_protocol::input::gestures`: the one composition of each gesture into an action sequence,
   which the agent and the driver both play, its sources named `gesture.mouse`, `gesture.touch`,
   `gesture.pinch.a`/`gesture.pinch.b` and `gesture.keys` so gestures on one input lease never share
@@ -68,7 +72,9 @@
   `Defaults::WINDOWLESS`. A window whose long-press timeout asks for a press past
   `Defaults::LONGEST_LONG_PRESS_MS` refuses a long press naming no duration, naming the duration to
   give.
-- `flui_protocol::input::gestures::chord_keys`, the one reader of a chord such as `Control+a`.
+- `flui_protocol::input::gestures::chord_keys`, the one reader of a chord such as `Control+a`, and
+  `gestures::is_one_key`, the one rule for a key a chord or key action names: `element.press_keys`
+  and `input.inject` refuse anything else `invalid_argument` (`GestureError::NotAKey`).
 - `flui_protocol::locator::resolve_strict`, `STRICT_CANDIDATES` and `Ambiguity`: one rule for a
   strict locator's pick, which the agent and the driver both follow, counting every match.
 - `GestureSettings::fling_velocity_range_for`: the release speeds a pointer kind flings between,
@@ -114,8 +120,8 @@
 
 ### Removed
 
-- `UiRuntime::next_wake_owing_floors` and `OwnerStatus::next_wake_owing_floors`: each runtime's wake,
-  and the owner registry's, read the floor rule the host gave at construction
+- `UiRuntime::next_wake_owing_floors` and `OwnerStatus::next_wake_owing_floors`: each runtime's
+  wake, and the owner registry's, read the floor rule the host gave at construction
   (`RuntimeHostServices::with_floor_owed`).
 
 ### Fixed
