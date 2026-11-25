@@ -230,7 +230,7 @@ pub enum GroupKind {
     /// Something a caller addresses. No row of it takes a hold.
     Subject,
     /// A development facility a call leaves state in. At least one row takes a hold, and every
-    /// row that takes or releases that kind of hold is here.
+    /// row that takes or releases one of the group's kinds of hold is here.
     Instrument,
     /// A family of reads with one output type. Every row is read-only and takes no hold.
     Examination,
@@ -269,8 +269,10 @@ Names reserved for groups that have no row yet. Each joins `GROUPS` with its fir
 A contributor places a new method by these steps, taking the first that applies:
 
 1. A lane serves it: `os`, or `device` for the device itself.
-2. It takes or releases a hold: the instrument of that `Held` kind. A hold of a new kind is a
-   new `Held` value and a new instrument group, added by a record.
+2. It takes or releases a hold: the instrument that owns that `Held` kind. A row that only
+   draws over a window (`MethodEffect::Annotates`) is `overlay`'s, and so is the kind of hold
+   it takes. Any other hold of a new kind is a new `Held` value and a new instrument group,
+   added by a record.
 3. Its output is an examination group's output type: that group.
 4. It reads what an instrument holds or recorded: that instrument. A journal belongs to the
    instrument one of whose methods produces its entries (`input.inject` makes the entries
@@ -596,8 +598,8 @@ Each `try_` twin follows.
   oldest first, each with its `seq`, and `dropped`. The last `seq` is the next `since`.
 - **Errors.** A code names the state that refused, never the method. A new method uses a code
   the list has before it adds one; a new code is added by the record that needs it.
-  `not_supported` names the missing `capability`. This record adds no code and two values:
-  `HandleKind::Connection`, and the field `ErrorObject::lost: Vec<Held>`, left out when empty,
+  `not_supported` names the missing `capability`. This record adds no code. It adds the value
+  `HandleKind::Connection` and the field `ErrorObject::lost: Vec<Held>`, left out when empty,
   for the one error a front end makes when a connection that held state is gone (§7).
 - **Versions.** The break is one version. An app that speaks it refuses an older client
   `version`, naming both (`ProtocolVersion::serves`). No server accepts an old name. A trace
@@ -984,8 +986,8 @@ tools keep their `flui_*` names and call the methods under their new names.
 | Rule | Held by |
 |------|---------|
 | A name is `group.member` in lower snake case, a group has no underscore, the table is sorted, and a tool name splits back into its method | `flui-protocol`'s `every_method_is_named_group_dot_member_once_and_listed_in_order`, which today's `every_method_is_named_group_dot_verb_once_and_listed_in_order` becomes |
-| Every group is in `GROUPS`, and every row fits its group's kind: a subject group takes no hold; an instrument group has a row that takes its kind, and every row that takes or releases that kind is in it; an examination group's rows are read-only, take no hold and share one output type; a lane group's rows are a lane's and reach the host | `every_row_fits_the_kind_of_its_group`, over `for_each_method!` with each row's output type |
-| A lane's row reaches the host; a row that reaches the host is in `Tier::Launch` or `Tier::Vision`; an annotating row is in `overlay` | `a_row_that_reaches_the_host_is_never_listed_by_default` |
+| Every group is in `GROUPS`, and every row fits its group's kind: a subject group takes no hold; an instrument group has a row that takes its kind, and every row that takes or releases that kind is in it; an examination group's rows are read-only, take no hold and share one output type; a lane group's rows are a lane's and reach the host; an annotating row is in `overlay` | `every_row_fits_the_kind_of_its_group`, over `for_each_method!` with each row's output type |
+| A lane's row reaches the host, and a row that reaches the host is in `Tier::Launch` or `Tier::Vision` | `a_row_that_reaches_the_host_is_never_listed_by_default` |
 | Every `Held` kind a row takes has its owner and its release in the table of §1 | `every_hold_has_a_release`: each kind is released by a row or is in the test's list of kinds only a lease's end releases (`clock`, `build_status`) |
 | The rows that change the app are exactly a list | `only_these_rows_change_the_app`, which replaces `what_ends_the_app_is_destructive_and_reads_never_act`: the acting and destructive rows by name, and the destructive ones `app.reload` and `session.close`, so a read declared to act is a line of the diff |
 | `repeatable` and `resendable` follow the effect and the hold | `a_row_that_takes_a_hold_is_never_sent_twice`, a table over every effect and every `Hold` |
