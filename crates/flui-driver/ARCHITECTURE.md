@@ -208,8 +208,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   as a whole is `tree::read_screen`, the Mac's and the tests' over their own trees: the search,
   the walk, and the screen's frame alone read again after it, a screen moved or gone meanwhile
   answering `Error::Busy`. An element gone anywhere in the read (the search, the walk, the
-  frame) goes through one trust check, the source's failure asked once per stage: while the
-  process is no longer trusted it is the permission refused, never a cut or a busy screen. The scripted window
+  frame) goes through one trust check, the source's failure asked twice at most: once before
+  the search answers, and once for the walk and the frame read again together. While the
+  process is no longer trusted it is the permission refused, never a cut, a short read or a busy
+  screen; while it is trusted, an element gone in the walk leaves its level unread and the read
+  truncated, so a press does not take a lone match it could have been the twin of. The scripted window
   (`testing::ScriptedSimulatorScreen`) serves a screen already read and shares only
   `tree::choose_window` and `tree::locate`.
   `Lane::read_tree` and `Lane::invoke` are handed
