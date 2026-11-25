@@ -289,7 +289,7 @@ closes or `input.release_actions` is called (F2, R14).
 
 A bounded ring per window (default 4096 entries) of delivered input, written by an input tap
 (ADR-0215 `InputTap`) the agent installs. Each entry holds sequence, device class, kind, logical
-position, timestamp and whether the driver injected it. `input.journal{since}` and `input` events
+position, timestamp and whether the driver injected it. `input.journal{since}` and `input.entry_added` events
 read it. OS-path actions observe through it (R13): after `os.perform_actions`, the driver waits up to the
 action timeout for journal entries matching kind, device and position (within one device pixel
 after the mapping in "Coordinates"). Match is `ran`; no match is `may_have_run` with what was seen.
@@ -406,7 +406,7 @@ virtual time has no latency.
 
 `recording.start{layers}` installs the ADR-0215 recording tap (input layer) and, where the build
 carries `flui-native`'s `native-capture`, the native capture hook (native layer). Rows stream to
-the driver as `record` events. `recording.stop` ends the recording with its `End` row. Privacy
+the driver as `recording.row` events. `recording.stop` ends the recording with its `End` row. Privacy
 follows ADR-0215 §5: text is redacted unless `keep_text` is set.
 
 ### Transports and launch contract
@@ -1029,7 +1029,7 @@ enforced, not just intended.
 | `windows-input` (contract child test + SendInput probe) | scenario: OS mouse, wheel, touch, pen and keys against the scenario gallery, verified through the journal, and a press beside the controls leaving them alone; native recording captured and held against the goldens (`recording.start{native}`) once the driver records native input |
 | `windows-notes` | scenario on a note field (`two_screens` is gone): chords, `VK_PACKET` text, IME through `input.inject`; DPI after resize once the driver resizes a window |
 | `web-input` (BiDi, wasm probe, JS API) | scenario on the chrome target: the same checks through the agent, and the probe's JS API is deleted |
-| `android-input` (adb, uinput, F-key probe, `status.txt`) | scenario on the android target: lane input, journal verification, `record` events replace F12 flush, and `dumpsys` reads stay as lane helpers (`AndroidLane::shell`) |
+| `android-input` (adb, uinput, F-key probe, `status.txt`) | scenario on the android target: lane input, journal verification, `recording.row` events replace F12 flush, and `dumpsys` reads stay as lane helpers (`AndroidLane::shell`) |
 | `macos-*` (Python, Swift, `screencapture`) | scenarios on the macos target; `tools/device-checks/` is deleted |
 | `ios-*` (Swift XCUITest, Python) | scenarios on the ios_simulator target: `ios-input` (the tap and the no-target tap) and `ios-safe-area`; Home and return need a button the lane cannot press, and the `ios-execution` delegate probe's cases drove a probe binary's own protocol, which is no driver scenario |
 | `live-smoke` (X11 XTEST; deleted with the probes, #1827) | the device-check scenarios on the x11 target (its press and wheel checks); its occlusion and close checks wait for driver operations that occlude and close a window |
@@ -1136,7 +1136,9 @@ fixture, with an identifier on every interactive widget.
   supersedes ADR-0095 §3.
 - **ADR-0240.** A semantics identifier, exported through AccessKit `author_id`.
 - **ADR-0241.** The driver trace format. It is related to ADR-0215, whose recording it embeds.
-- **ADR-0403.** The groups, names, columns and tiers of the method table, who owns what a call  leaves in the app, the reads of the application's state, and how `flui drive` and `flui mcp`  list the table. It supersedes ADR-0238 §1, §9 and §10 in part.
+- **ADR-0403.** The groups, names, columns and tiers of the method table, who owns what a call
+  leaves in the app, the reads of the application's state, and how `flui drive` and `flui mcp`
+  list the table. It supersedes ADR-0238 §1, §9 and §10 in part.
 
 ## Risks and open questions
 

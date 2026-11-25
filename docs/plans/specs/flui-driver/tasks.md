@@ -409,7 +409,7 @@ graph LR
     close and the emission after a frame each fails a test.
   - As built: `AgentWindow::subscribe` and the same on `SemanticsAgent`, answering an
     `EventStream` / `AgentEvents` with `try_next`, `recv_timeout` and `is_finished`. Left for
-    FD6: `input` events (the journal). Left for the announcement fan-out: `announcement` events.
+    FD6: `input.entry_added` events (the journal). Left for the announcement fan-out: `window.announcement_added` events.
     `frame.time_us` is not filled.
 - **Evidence, inspect (2026-10-31):**
   - `flui-foundation`'s `inspect::a_node_reference_prints_and_parses_as_one_text`.
@@ -458,9 +458,9 @@ graph LR
   - **Seam.** `flui-runtime` holds the fan-out and takes the capture's lines from `flui-app`
     through a trait whose values are `flui_protocol::native_recording`'s, so no crate edge is
     added.
-  - **Wire.** `RecordLayer::Native`; a native line goes as its own `record_native` event
+  - **Wire.** `RecordLayer::Native`; a native line goes as its own `recording.native_line` event
     `{recording, window, stream, line}`, a line being a stream's header, one of its rows, or a
-    `gap` naming the rows that stream lost, so `record` events stay as 0.9 sent them. A recording
+    `gap` naming the rows that stream lost, so `recording.row` events stay as 0.9 sent them. A recording
     of `native` records `input` too, and ends with the input layer's `end` row; `RecordSummary`
     counts the native losses apart (`native_lost_rows`).
   - **Bounds.** One 1024-row queue per recording; native rows take at most 768 of it, so input
