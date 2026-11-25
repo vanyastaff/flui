@@ -309,8 +309,9 @@ struct LeaseHolds {
     input: HeldInput,          // contacts and keys; a driver's lease only
     clock: Option<f64>,        // the rate the clock had before this lease set one
     span: Option<PerfSpan>,    // the lease's open span
-    build_status: bool,        // whether the banner shown is this lease's
 }
+/// The banner names the lease whose report it shows.
+struct BuildBanner { /* the report shown, */ holder: Option<LeaseId> }
 ```
 
 | `Held` | Taken by | Owner | Released by | Two connections |
@@ -332,7 +333,8 @@ struct LeaseHolds {
   is never refused for what observers hold.
 - A row that takes a hold is `repeatable` only when it annotates, and never `resendable`. A
   `recording.start`, `events.subscribe` or `perf.start` that timed out answers `may_have_run`,
-  as a call that changes the app does, since a second one would start a second.
+  as a call that changes the app does: a second one would start a second recording or stream,
+  or start the span again.
 
 ### §2. How a name is formed
 
