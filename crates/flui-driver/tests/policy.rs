@@ -650,13 +650,13 @@ fn a_composed_scroll_into_view_refuses_a_path_it_has_no_form_on() {
     );
 }
 
+/// One request the agent heard: its method and the `via` it carried.
+type Asked = (String, Option<InputPolicy>);
+
 /// A scripted agent whose hello serves `element.tap`, `element.long_press` and
 /// `element.scroll_until`, answering each that it ran synthetically, and each method it was asked
 /// with the `via` it was asked with.
-fn recording_via() -> (
-    ScriptedAgent,
-    Arc<Mutex<Vec<(String, Option<InputPolicy>)>>>,
-) {
+fn recording_via() -> (ScriptedAgent, Arc<Mutex<Vec<Asked>>>) {
     let asked = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&asked);
     let agent = ScriptedAgent::start(
@@ -695,9 +695,7 @@ fn a_scroll_until() -> flui_driver::protocol::input::ScrollUntilParams {
 }
 
 /// The method the agent was asked last, and its `via`.
-fn last_asked(
-    asked: &Mutex<Vec<(String, Option<InputPolicy>)>>,
-) -> Option<(String, Option<InputPolicy>)> {
+fn last_asked(asked: &Mutex<Vec<Asked>>) -> Option<Asked> {
     asked.lock().expect("the log").last().cloned()
 }
 
