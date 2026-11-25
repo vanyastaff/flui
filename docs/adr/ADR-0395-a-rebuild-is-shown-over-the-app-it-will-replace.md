@@ -12,6 +12,8 @@
   call of its that acts is answered `not_driver`", which the code read as every call that is not
   read-only): an observer may also call a method whose effect is `annotates`. The rest of
   ADR-0288 §8 (one driver's seat, the hello's role, what an observer never claims) is unchanged.
+- **Superseded-by:** [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
+  for §2's name `build.report` only: the method is `overlay.show_build_status`.
 - **Related:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) (every debug build
   serves the agent); [ADR-0393](ADR-0393-a-development-reload-applies-one-of-three-tiers-chosen-from-the-shape-of-the-edit.md)
   and [ADR-0394](ADR-0394-application-code-reloads-as-an-image-the-element-tree-adopts.md) (the

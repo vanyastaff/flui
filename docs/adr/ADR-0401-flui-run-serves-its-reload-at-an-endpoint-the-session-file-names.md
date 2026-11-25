@@ -2,6 +2,9 @@
 
 - **Status:** Accepted (2026-11-24)
 - **Date:** 2026-11-24
+- **Superseded-by:** [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
+  for the method name `run.reload` (§1) and the tool name `flui_reload` (§4) only: the method is
+  `app.reload`; §3's `run.reload` event of `flui run --json` keeps its name.
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md) (the method table and its
   conversation), [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) (the session
   `flui run --agent` writes), [ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md)

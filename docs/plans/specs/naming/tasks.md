@@ -305,3 +305,10 @@ RT…HR 9, M 10, C 2; сводные строки фасада, SDK и macros н
 | TN10 | фикстура `let_bound_event_closure_without_helper.rs` + `.stderr` | `let_bound_event_closure_without_adapter` | authoring-styles requirements |
 | TN11 | `harness_clip_rrect_wraps_child`, `bench_clip_rrect_radius_change`, `clip_rrect_*` тесты | `harness_clip_rounded_rect_wraps_child`, … | `flui-objects` `## Mapping decisions` — проверить `rg` |
 | TN12 | `flui_testing_it` | оставить (`docs/testing.md:516`) | — |
+
+## 6. Методы, события и инструменты протокола агента
+
+Утверждены владельцем 2026-11-24. Таблица «было → стало» для методов, событий, глаголов `Tester` и
+инструментов MCP, с источником каждого имени, — [ADR-0403](../../../adr/ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
+§3 и §5; здесь она не повторяется. Проход делается одним изменением вместе с версией протокола,
+которая отказывает старым именам (`docs/gaps.md`, запись ADR-0403).
