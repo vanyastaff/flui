@@ -700,11 +700,6 @@ jobs:
             echo "FLUI_REQUIRE_WAYLAND=1"
           } >> "$GITHUB_ENV"
 
-      # The hot-reload lifecycle tests load this fixture's cdylib from Cargo's
-      # artifact directory, where a test dependency alone may not put it.
-      - name: cargo build (the hot-reload fixture)
-        run: cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked
-
       # `--lib --bins --tests` builds and runs what has tests without linking
       # the ~60 examples, which the last step links on main. The nested tests
       # (groups `nested-cargo` and `trybuild` in .config/nextest.toml) run on
