@@ -40,6 +40,11 @@
     capture) and parity coverage (FD25), after the owner asked that the driver serve interface
     design and prove the whole parity matrix
 
+- **Names:** the methods, tiers and tools here are spelled as
+  [ADR-0403](../../../adr/ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
+  decides them. The code keeps the names it had until the changes `docs/gaps.md` lists for that
+  record land, so a test or a type cited as evidence below is spelled as the code spells it.
+
 ## Execution rules
 
 - One task is one worktree (`git worktree add`) and one PR, with
@@ -101,7 +106,7 @@ graph LR
 | FD14 | macOS lane: CGEvent, AX, ScreenCaptureKit, event-tap guard; `macos-*` scenarios; `tools/device-checks` macOS scripts deleted | R14a, R17, R32, R33, R35 | FD9 | [P] | L (types), M | 5 | — |
 | FD15 | iOS Simulator lane: HID spike with go/no-go, then the lane, `simctl` capture and process, `ios-*` scenarios | R32, R33, R35 | FD9 | — | L (types), S | 6 | — |
 | FD16 | Linux lanes: X11 (XTEST, AT-SPI, capture, XInput2 guard) and Wayland (libei, portals, isolated compositor only); `live-smoke` migrated | R14a, R14b, R17, R32, R32a, R33, R35 | FD9 | — | L, X, WL | 5 | — |
-| FD17 | Front ends: `flui drive` CLI with session file, announcement and `call`; `flui mcp` adapter (MCP 2026-07-28) with the core tool set and `--caps` groups | R28–R30, R28a | FD9, FD10 | — | L | 5 | — |
+| FD17 | Front ends as ADR-0403 §7 decides them: `flui drive` CLI with session file, announcement and `call`; `flui mcp` adapter (MCP 2026-07-28 and the handshake revisions) with the core tool set, `--caps` tiers and the ledger | R28–R30, R28a | FD9, FD10 | — | L | 5 | — |
 | FD18 | Inspector app (`tools/flui-inspector`) and `flui inspect`; its own scenario suite; baseline Review view; documented CLI fallback | R25, R31 | FD17, FD26 | — | L, W | 7 | — |
 | FD19 | `interaction_gallery` scenario suite on every target; delete desktop-mcp, xtask drivers, probes, device-check scripts; documentation | R35, R36, R36a, R45 | FD11–FD17, FD20–FD30 | — | all | 4 | IC |
 | FD20 | (Runtime part in testing-platform TP2, ADR-0400.) Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9, FD29 | [P] | L, W, A | 5 | — |
@@ -138,8 +143,9 @@ graph LR
     task that brings its types: the OS lanes (`os.*`, `os.perform_actions`, `os.screenshot`), baselines,
     recording and traces, layout, the other audits, reports, devices and exploration.
   - Every tier but `core` is a `--caps` group. `session` was added for session control beyond
-    the core (attach, capabilities, window placement, frame and settle waits, `clock.set`), and
-    ADR-0238 §9, R28a and the front-end list name it.
+    the core (attach, capabilities, window placement, frame and settle waits, the animation
+    clock). ADR-0403 §3 renames that tier `control` and moves launch and attach to a new tier,
+    `launch`; R28a and the front-end list name those.
   - The table reaches consumers through `for_each_method!` with concrete types, so no serde or
     schemars bound sits in a signature (ADR-0089 §2).
   - The ADR-0095 endpoint in `flui-devtools` still answers `windows`, `read`, `act` and `motion`
@@ -1626,20 +1632,31 @@ graph LR
 ### FD17. CLI and MCP
 
 - **Changes:**
-  - `flui-cli`: `flui drive <group> <verb>` with typed flags and `flui drive call`;
+  - `flui-cli`: `flui drive <group> <member>` with typed flags and `flui drive call`; a command
+    of a row that takes a hold keeps its connection for the hold's life, and a sequence that
+    leaves input held is refused (ADR-0403 §7);
   - the session file plus a `0600` token file;
   - human and `--json` output, exit codes 0, 1 and 2;
   - `flui drive trace replay|codegen|pack`;
   - the OS-input announcement with its grace period and `--yes`;
-  - `flui mcp` over the `flui-driver` `mcp` feature (`rmcp`), with the 13-tool core set listed by
-    default and `--caps input,inspect,pixels,record,perf,audit,explore,layout,vision`, `isError` errors,
-    snapshot deltas after acts and image content for captures.
+  - `flui mcp` over the `flui-driver` `mcp` feature (`rmcp`), as ADR-0403 §7 decides it: MCP
+    2026-07-28 and the handshake revisions; the 13-tool core set listed by default and
+    `--caps control,launch,input,inspect,pixels,record,perf,audit,explore,layout,vision`; no
+    row that reaches the host in the default list; `--role observer`; the ledger of what the
+    server's connection holds; a recording written to a file under a number of the server's;
+    resource updates on a `subscriptions/listen` stream; `isError` errors, snapshot deltas
+    after acts and image content for screenshots;
+  - the seven hand-written `flui_*` tools are deleted.
 - **Done when:**
-  - coverage tests show every method has a typed subcommand and is reachable as an MCP tool under
-    some tier;
-  - `tools/list` without `--caps` lists only the core set;
-  - an MCP stdio round trip (the client moved from desktop-mcp's `tests/support`) launches a
+  - coverage tests show every method has a typed subcommand, a row that releases a hold
+    excepted, and is an MCP tool under some tier, the rows ADR-0403 §7 keeps off MCP excepted;
+  - `tools/list` without `--caps` lists only the core set, and no row that reaches the host;
+  - the adapter's tests ADR-0403's Confirmation names pass (the revisions, the ledger, the
+    recording's file, the one update for a burst);
+  - an MCP stdio round trip (the client moved from desktop-mcp's `tests/support`) attaches to a
     headless-capable example, locates, taps and asserts;
+  - `rg` finds no `flui_windows`, `flui_read`, `flui_locate`, `flui_act`, `flui_wait`,
+    `flui_motion` or `flui_reload` outside `docs/adr/`;
   - CLI calls across invocations reuse handles.
 
 ### FD18. Inspector

@@ -244,20 +244,28 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 
 - **R28.** One protocol, three front ends: the Rust API (`flui_testing::Tester`), the `flui drive` CLI and the `flui mcp`
   server. All three expose the same operations, with the same names, parameters, results and
-  errors, generated from one method table. None can do what the others cannot.
-- **R28a.** MCP lists a **core tool set** by default, 13 tools enough to launch, read,
-  locate, act, type, wait, capture and audit a screen. The other methods are grouped into capability sets the client
-  enables with `--caps <group>`: `session` (attach, capabilities, window placement, frame and settle waits, the animation clock), `input`, `inspect`, `pixels`, `record`, `perf`, `audit`,
-  `explore`, `vision`, `layout`. Every method stays reachable from MCP; tiering only changes what is listed by
-  default, so a model does not choose among 50 tools. `--tools` and `--exclude-tools` filter by
-  name. A test measures the token size of the listed schemas, since context cost is the point of
-  tiering. Reads take `format: concise | detailed`.
-- **R29.** The MCP server follows MCP revision 2026-07-28. Each tool has an input and output
-  schema and honest `readOnlyHint`/`destructiveHint`, and tool failures come back as `isError`
-  results with ADR-0080's error object. Handles are explicit and expiring, never session state
-  inside the MCP connection. Tools are listed in a deterministic order. The adapter implements
-  the revision's per-request versioning and discovery, checked against the revision's spec text
-  when the adapter is built, and refuses an older revision with its version.
+  errors, generated from one method table. None can do what the others cannot, with one limit:
+  a front end whose connection can end before its caller's next call offers what a call leaves
+  on that connection (held input, a stream, a recording, a span, a clock rate, a build status)
+  only in the form ADR-0403 §7 gives it.
+- **R28a.** MCP lists a **core tool set** by default, 13 tools enough to reload, read, locate,
+  act, type, wait, take a screenshot and audit a screen. The other methods are in tiers a person
+  grants with `--caps <tier>`: `control` (capabilities, the build and configuration, window
+  placement and environment, frame and settle waits, the animation clock), `launch` (launch and
+  attach), `input`, `inspect`, `pixels`, `record`, `perf`, `audit`, `explore`, `vision`,
+  `layout`. A method that starts a process, opens another endpoint or goes through the operating
+  system is never in the core (ADR-0403 §7). Tiering only changes what is listed, so a model
+  does not choose among 50 tools. `--tools` and `--exclude-tools` filter by name. A test
+  measures the token size of the listed schemas, since context cost is the point of tiering.
+  Reads take `format: concise | detailed`.
+- **R29.** The MCP server serves MCP revision 2026-07-28, and the handshake revisions to a
+  client that opens with `initialize` (ADR-0403 §7). Each tool has an input and output schema
+  and honest hints from its row's effect, hold and reach, and tool failures come back as
+  `isError` results with ADR-0080's error object. Handles are explicit and expiring, never
+  session state inside the MCP connection. Tools are listed in a deterministic order. The
+  adapter implements the revision's per-request versioning and discovery, checked against the
+  revision's spec text when the adapter is built, and refuses a revision it does not serve with
+  the list of those it does.
 - **R30.** The CLI works across invocations without a daemon. `launch` writes a session file that
   later commands read; handles stay valid across commands because the app owns them.
 - **R31.** The inspector is a FLUI desktop app built on `flui-driver`. It shows the live trees, a

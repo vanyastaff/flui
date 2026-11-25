@@ -1136,6 +1136,7 @@ fixture, with an identifier on every interactive widget.
   supersedes ADR-0095 §3.
 - **ADR-0240.** A semantics identifier, exported through AccessKit `author_id`.
 - **ADR-0241.** The driver trace format. It is related to ADR-0215, whose recording it embeds.
+- **ADR-0403.** The groups, names, columns and tiers of the method table, who owns what a call  leaves in the app, the reads of the application's state, and how `flui drive` and `flui mcp`  list the table. It supersedes ADR-0238 §1, §9 and §10 in part.
 
 ## Risks and open questions
 
