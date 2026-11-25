@@ -281,7 +281,7 @@ impl Client {
                 Ok(0) => return,
                 Ok(read) => {
                     self.buffer.extend_from_slice(&chunk[..read]);
-                    if self.buffer.contains(&b'\n') {
+                    if self.reply_buffered() {
                         return;
                     }
                 }
@@ -299,6 +299,21 @@ impl Client {
             );
             std::thread::sleep(Duration::from_micros(200));
         }
+    }
+
+    /// Whether a reply is buffered: the complete event lines in front of it move to `events`,
+    /// as [`Self::reply`] keeps them, and the reply stays in the buffer for it.
+    fn reply_buffered(&mut self) -> bool {
+        while let Some(end) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let line: Value =
+                serde_json::from_slice(&self.buffer[..=end]).expect("the reply is JSON");
+            if line.get("event").is_none() {
+                return true;
+            }
+            self.buffer.drain(..=end);
+            self.events.push(line);
+        }
+        false
     }
 
     fn send(&mut self, value: &Value) {
