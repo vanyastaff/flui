@@ -1150,8 +1150,10 @@ graph LR
     (the default display's section from Android 10, the windows' part before), with a `LAST ANR`
     part in the reply; the windows' frames present in the one `dumpsys window -a` reading, its
     `mTopFocusedDisplayId=`, and what that dump under the window manager's lock costs before each
-    press;
-    `uiautomator dump` answering while the app animates; `screencap`'s raw header and
+    press; whether every dump, not only a session's first, finds the app's view still building
+    its tree after the previous dump turned its accessibility off; touch, mouse and pen input sent
+    and read back by the app with TalkBack's touch exploration on;
+    `uiautomator dump` answering while the app animates, and its `could not get idle state`; `screencap`'s raw header and
     format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
     endpoint forward and the app's exit when the session ends; which window is under the point
     before a press (a heads-up notification, the input method, an overlay), which the lane does

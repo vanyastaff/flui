@@ -5,7 +5,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flui_driver::protocol::act::{ActionabilityCheck, ActionabilityParams, Effect, EffectKind};
+use flui_driver::protocol::act::{
+    ActionabilityCheck, ActionabilityParams, Effect, EffectKind, EffectUnit,
+};
 use flui_driver::protocol::client::{CallError, Connection, EndChecks};
 use flui_driver::protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
 use flui_driver::protocol::geometry::LogicalPoint;
@@ -485,18 +487,42 @@ fn an_error_is_stated_on_the_wire_as_it_was_read() {
             .retry(Retry::Soon),
         ErrorObject::new(ErrorCode::Platform, "the OS refused")
             .effect(Effect::new(EffectKind::Partial)),
-        // A code whose variant names no effect, answered with one: part of the call went out.
-        ErrorObject::new(ErrorCode::Busy, "the window moved")
-            .effect(Effect::new(EffectKind::MayHaveRun).detail("1 commands went out"))
+        // Part of an input played before the failure, as the app counts it: on a busy, which
+        // holds an effect, with its own `soon`.
+        ErrorObject::new(ErrorCode::Busy, "the app was busy")
+            .effect(Effect::partial(2, 5, EffectUnit::Tick))
+            .retry(Retry::Soon),
+        // On a code whose variant holds none, with `never` and with the app's own `soon`.
+        ErrorObject::new(ErrorCode::InvalidArgument, "no such key")
+            .effect(Effect::partial(2, 5, EffectUnit::Tick))
             .retry(Retry::Never),
         ErrorObject::new(ErrorCode::NotForeground, "the shade is in front")
-            .effect(Effect::new(EffectKind::MayHaveRun).detail("2 commands went out"))
-            .retry(Retry::Never),
+            .effect(Effect::partial(1, 3, EffectUnit::Event))
+            .retry(Retry::Soon),
     ];
     for answer in answers {
         let read = Error::from_wire(answer.clone());
         assert_eq!(read.to_wire(), answer, "{read:?}");
     }
+    // A busy that holds the effect stays a busy; a code whose variant holds none is partly sent,
+    // its code and retry as the app said.
+    let busy = Error::from_wire(
+        ErrorObject::new(ErrorCode::Busy, "the app was busy")
+            .effect(Effect::partial(2, 5, EffectUnit::Tick))
+            .retry(Retry::Soon),
+    );
+    assert!(matches!(busy, Error::Busy { .. }), "{busy:?}");
+    assert!(busy.may_have_run());
+    let soon = Error::from_wire(
+        ErrorObject::new(ErrorCode::NotForeground, "the shade is in front")
+            .effect(Effect::partial(1, 3, EffectUnit::Event))
+            .retry(Retry::Soon),
+    );
+    assert!(matches!(soon, Error::PartlySent { .. }), "{soon:?}");
+    assert_eq!(
+        (soon.code(), soon.retry()),
+        (Some(ErrorCode::NotForeground), Retry::Soon)
+    );
     let mut unsupported = ErrorObject::new(ErrorCode::NotSupported, "no recorder");
     unsupported.capability = Some("record".to_owned());
     assert_eq!(Error::from_wire(unsupported.clone()).to_wire(), unsupported);

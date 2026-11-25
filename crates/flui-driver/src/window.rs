@@ -130,6 +130,8 @@ impl<'d> Window<'d> {
     /// As [`Self::read`] and [`Self::os_tree_against`]; [`Error::Busy`](crate::Error::Busy)
     /// naming the revisions when the tree moved on every one of those readings.
     fn read_against(&mut self) -> Result<(Tree, Tree)> {
+        // Only a lane that matches the app's tree can fail to match one the app no longer shows.
+        let matches_app_tree = self.lane_matches_app_tree()?;
         let mut settle_from: Option<Instant> = None;
         let mut readings = 0_usize;
         loop {
@@ -139,11 +141,15 @@ impl<'d> Window<'d> {
             let Some(before) = app.revision else {
                 return os.map(|os| (app, os));
             };
+            let unmatched = |error: &crate::Error| {
+                matches_app_tree
+                    && matches!(
+                        error,
+                        crate::Error::NotFound { .. } | crate::Error::Ambiguous { .. }
+                    )
+            };
             if let Err(error) = &os
-                && !matches!(
-                    error,
-                    crate::Error::NotFound { .. } | crate::Error::Ambiguous { .. }
-                )
+                && !unmatched(error)
             {
                 return os.map(|os| (app, os));
             }
@@ -158,18 +164,18 @@ impl<'d> Window<'d> {
                     || format!("revision {before} became one that reports none"),
                     |after| format!("revision {before} became {after}"),
                 );
-                // `Retry::Never`: the driver has read again for the whole bound already, and an app
-                // that republishes every frame moves through any later call the same way.
-                return Err(crate::Error::Busy {
-                    message: format!(
-                        "the app's tree changed while the OS tree was read against it, on each \
-                         of {readings} readings over more than {} ms after the first (last, \
-                         {moved}): the OS tree is not compared with a tree the app no longer \
-                         shows; the same call answers the same while the app keeps changing",
-                        TREE_SETTLE.as_millis()
-                    ),
-                    retry: flui_protocol::error::Retry::Never,
+                let last = os.err().map_or_else(String::new, |error| {
+                    format!("; the lane's last answer: {error}")
                 });
+                // `Retry::Soon`, the busy code's own: the app kept changing for the bound, which
+                // says nothing of whether it settles a moment later.
+                return Err(crate::Error::busy(format!(
+                    "the app's tree changed while the OS tree was read against it, on each of \
+                     {readings} readings over more than {} ms after the first (last, {moved}): \
+                     the OS tree is not compared with a tree the app no longer shows; read again \
+                     once the app settles{last}",
+                    TREE_SETTLE.as_millis()
+                )));
             }
         }
     }
@@ -229,15 +235,19 @@ impl<'d> Window<'d> {
     ///
     /// The two trees are of one revision of the app's tree, on every lane. The app's tree is read,
     /// then the OS tree, then the app's revision again; a tree that moved in between is read
-    /// again, and so is a match the lane could not make (`NotFound`, `Ambiguous`) while it moved;
-    /// any other failure of the lane (a refusal, its own `Busy`) is the answer, after one reading.
-    /// The reading is made at least three times and until two seconds have passed since the first
-    /// reading ended, since one reading through a device's lane can take longer than that; a tree
-    /// that moved on every one of them answers [`Error::Busy`](crate::Error::Busy) with
-    /// [`Retry::Never`](flui_protocol::error::Retry::Never): an app that republishes every frame
-    /// (a running clock, a progress bar) moves through any later call the same way. A read that
-    /// reports no revision is taken as it is. [`Self::os_tree`] reads the same way through a lane
-    /// that matches against the app's tree.
+    /// again, and so is, through a lane that matches against the app's tree
+    /// ([`AccessibilityApi::matches_app_tree`]), a match it could not make (`NotFound`,
+    /// `Ambiguous`) while the tree moved; any other failure of the lane (a refusal, its own
+    /// `Busy`, a `NotFound` of a lane that matches nothing against the app's tree) is the answer,
+    /// after one reading. The reading is made at least three times and until two seconds have
+    /// passed since the first reading ended, since one reading through a device's lane can take
+    /// longer than that; a tree that moved on every one of them answers
+    /// [`Error::Busy`](crate::Error::Busy) with the busy code's own
+    /// [`Retry::Soon`](flui_protocol::error::Retry::Soon), the lane's last answer in its message:
+    /// the app kept changing, and the same call holds once it settles, while an app that
+    /// republishes every frame (a running clock, a progress bar) answers the same on every call.
+    /// A read that reports no revision is taken as it is. [`Self::os_tree`] reads the same way
+    /// through a lane that matches against the app's tree.
     ///
     /// # Errors
     ///

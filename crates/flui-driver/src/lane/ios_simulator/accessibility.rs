@@ -348,6 +348,7 @@ pub fn screen_steady(before: PointFrame, after: Option<PointFrame>) -> Result<()
             "the device's screen moved or was resized while it was read (from {before:?} to \
              {after:?}), so its elements cannot be placed on the app's window: read again"
         ),
+        effect: None,
         retry: ErrorCode::Busy.default_retry(),
     })
 }

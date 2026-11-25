@@ -393,38 +393,103 @@ impl PartName {
 enum Part {
     /// Before any part's header: a reply that heads no part, read whole.
     Unheaded,
-    /// The `LAST ANR` part, the displays' part it prints of the ANR's moment included: not read.
-    LastAnr,
     /// The live displays' part: each display's header, focus and rotation.
     Displays,
     /// The live windows' part: each window's header, display and frame.
     Windows,
-    /// Any other part, and a displays' or windows' part past the live one: not read.
+    /// Any other part, the `LAST ANR` part and the displays' part it prints included: not read.
     Other,
 }
 
-impl Part {
-    /// The part a header naming `name` opens after the part `self`, the live displays' part
-    /// already begun when `displays_begun`, the live windows' part when `windows_begun`.
-    ///
-    /// `dumpsys window` prints `LAST ANR` first, with a displays' part of the ANR's moment inside
-    /// it, then the live displays' part, then the live windows' part, each once. A further header
-    /// of those names opens no live part: one a window's title forges ends the reading of its
-    /// part rather than replacing what was read, so such a reply locates no window instead of a
-    /// forged one.
-    fn after(self, name: PartName, displays_begun: bool, windows_begun: bool) -> Self {
-        let live_begun = displays_begun || windows_begun;
-        match name {
-            PartName::LastAnr if !live_begun => Self::LastAnr,
-            PartName::DisplayContents if self == Self::LastAnr => Self::LastAnr,
-            PartName::DisplayContents if !live_begun => Self::Displays,
-            PartName::Windows if !windows_begun => Self::Windows,
-            PartName::LastAnr | PartName::DisplayContents | PartName::Windows | PartName::Other => {
-                Self::Other
-            }
+/// Where the live parts of the [`WINDOWS`] reply begin, by the line of their header.
+///
+/// `dumpsys window -a` prints each part's header once, `LAST ANR` first: that part holds, when an
+/// ANR happened, the windows and a displays' part of the ANR's moment, under a displays' header
+/// of its own; then the live displays' part, and later the one windows' part. A window's title
+/// can hold line breaks and print a header's whole line, so the headers are counted against that
+/// shape before any part is read: a reply with a `LAST ANR` or windows' header more than once,
+/// or a displays' header more or fewer times than its `LAST ANR` part accounts for, holds a
+/// forged one, and is refused rather than read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LiveParts {
+    displays: usize,
+    windows: usize,
+}
+
+impl LiveParts {
+    /// The live parts of the reply whose lines are `lines`; `None` for a reply that heads no
+    /// part, which is read whole.
+    fn of(lines: &[&str]) -> std::result::Result<Option<Self>, String> {
+        let headers: Vec<(usize, PartName)> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(at, line)| PartName::of_header(line).map(|name| (at, name)))
+            .collect();
+        if headers.is_empty() {
+            return Ok(None);
         }
+        let named = |wanted: PartName| {
+            headers
+                .iter()
+                .filter(move |(_, name)| *name == wanted)
+                .map(|(at, _)| *at)
+        };
+        let refused = |why: &str| {
+            Err(format!(
+                "`dumpsys` printed {why}, which the window manager does not: a window's title \
+                 may have forged a part's header"
+            ))
+        };
+        let last_anr: Vec<usize> = named(PartName::LastAnr).collect();
+        let windows: Vec<usize> = named(PartName::Windows).collect();
+        let displays: Vec<usize> = named(PartName::DisplayContents).collect();
+        if last_anr.len() > 1 {
+            return refused("the `LAST ANR` part's header more than once");
+        }
+        let [windows] = windows[..] else {
+            return refused("the windows' part's header other than once");
+        };
+        // The `LAST ANR` part prints lines (the ANR's windows) only when an ANR happened, and a
+        // displays' part of the ANR's moment after them.
+        let anr_printed = last_anr.first().is_some_and(|&at| {
+            let next = headers
+                .iter()
+                .map(|(header, _)| *header)
+                .find(|&header| header > at)
+                .unwrap_or(lines.len());
+            lines[at + 1..next]
+                .iter()
+                .any(|line| !line.trim().is_empty())
+        });
+        let expected = if anr_printed { 2 } else { 1 };
+        if displays.len() != expected {
+            return refused("a displays' part's header more or fewer times than its parts hold");
+        }
+        let Some(&live) = displays.last() else {
+            return refused("no displays' part");
+        };
+        if live > windows {
+            return refused("the displays' part after the windows' part");
+        }
+        Ok(Some(Self {
+            displays: live,
+            windows,
+        }))
     }
 
+    /// The part the header at line `at` opens.
+    fn part_at(self, at: usize) -> Part {
+        if at == self.displays {
+            Part::Displays
+        } else if at == self.windows {
+            Part::Windows
+        } else {
+            Part::Other
+        }
+    }
+}
+
+impl Part {
     /// Whether the part lists the displays.
     fn lists_displays(self) -> bool {
         matches!(self, Self::Unheaded | Self::Displays)
@@ -500,43 +565,46 @@ struct DisplaysReading {
 struct WindowsReading {
     windows: Vec<ListedWindow>,
     focus: FocusLine,
-    /// The display its `mTopFocusedDisplayId=` names, printed once.
+    /// The display the first `mTopFocusedDisplayId=` line of its own names.
     focused_display: Option<DisplayId>,
+    /// Whether that line was read.
+    focused_display_read: bool,
 }
 
 /// The windows the [`WINDOWS`] line printed as `printed`: see [`Windows`].
 ///
 /// The reply is read by its parts, each opened by a header as the window manager prints one
-/// ([`PartName::of_header`]): the live displays' part and the live windows' part, each once,
-/// as [`Part::after`] tells them from the `LAST ANR` part, which holds the windows and a
-/// displays' part of the ANR's moment, and from a header a window's title forges. No other part
-/// is read. In the displays' part, the rotation is the first `mRotation=` of the default
-/// display's section ([`DEFAULT_DISPLAY`]) and the focus its first `mCurrentFocus=`, which wins,
-/// a `null` one included; where that section prints none (before Android 10), the focus is the
-/// windows' part's. A window's frame is the first `frame=` or `mFrame=` after its header. A reply
-/// that heads no part is read whole, and a line the parser does not know is skipped.
+/// ([`PartName::of_header`]): the live displays' part and the live windows' part, which
+/// [`LiveParts`] finds by counting the headers against the shape the window manager prints, and
+/// refuses a reply a window's title forged a header into. No other part is read. In the displays'
+/// part, the rotation is the first `mRotation=` of the default display's section
+/// ([`DEFAULT_DISPLAY`]) and the focus its first `mCurrentFocus=`, which wins, a `null` one
+/// included; where that section prints none (before Android 10), the focus is the windows'
+/// part's. A window's frame is the first `frame=` or `mFrame=` after its header. The display
+/// holding the device's focus is a line of its own in the windows' part,
+/// `mTopFocusedDisplayId=<id>` whole, the first one read. A reply that heads no part is read
+/// whole, and a line the parser does not know is skipped.
 ///
 /// # Errors
 ///
-/// When the default display's section names no rotation from 0 to 3, so the lane cannot tell
-/// how the display is turned.
+/// When the headers do not have the window manager's shape, or the default display's section
+/// names no rotation from 0 to 3, so the lane cannot tell how the display is turned.
 pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
+    let lines: Vec<&str> = printed.lines().collect();
+    let live = LiveParts::of(&lines)?;
     let mut displays = DisplaysReading::default();
     let mut listed = WindowsReading::default();
     let mut part = Part::Unheaded;
-    let (mut displays_begun, mut windows_begun) = (false, false);
     let mut section = Section::Unheaded;
     let mut in_window = false;
-    for printed_line in printed.lines() {
-        if let Some(name) = PartName::of_header(printed_line) {
-            part = part.after(name, displays_begun, windows_begun);
-            displays_begun |= part == Part::Displays;
-            windows_begun |= part == Part::Windows;
+    for (at, printed_line) in lines.iter().enumerate() {
+        if PartName::of_header(printed_line).is_some() {
+            part = live.map_or(Part::Other, |live| live.part_at(at));
             section = Section::Unheaded;
             in_window = false;
             continue;
         }
-        if matches!(part, Part::LastAnr | Part::Other) {
+        if part == Part::Other {
             continue;
         }
         let line = printed_line.trim();
@@ -549,9 +617,14 @@ pub fn parse_windows(printed: &str) -> std::result::Result<Windows, String> {
         }
         if part.lists_windows()
             && section == Section::Unheaded
-            && let Some(value) = word_value(line, "mTopFocusedDisplayId=")
+            && let Some(value) = line.strip_prefix("mTopFocusedDisplayId=")
+            && !value.is_empty()
+            && value.chars().all(|c| c.is_ascii_digit() || c == '-')
         {
-            listed.focused_display = DisplayId::parse(value);
+            if !listed.focused_display_read {
+                listed.focused_display_read = true;
+                listed.focused_display = DisplayId::parse(value);
+            }
             continue;
         }
         if let Some((_, window)) = line.split_once("mCurrentFocus=") {

@@ -648,7 +648,7 @@ fn a_foreign_motion_mid_run_ends_it_and_releases_its_button() {
     let outcome = window.perform(held);
     intruder.join().expect("the intruder moved the pointer");
     assert!(
-        matches!(outcome, Err(Error::InterruptedByUser { .. })),
+        matches!(&outcome, Err(Error::PartlySent { first, .. }) if matches!(**first, Error::InterruptedByUser { .. })),
         "the run ended on the foreign motion: {outcome:?}"
     );
     let journal = window.journal().expect("the journal");
