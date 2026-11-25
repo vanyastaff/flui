@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
 
-use super::queue::{Effect, Event, HeldRequests, Waits};
+use super::requests::{Effect, Event, Unanswered, Waits};
 use super::{Audit, Debt, Scenario, ScenarioFailure, TimelineKey, describe};
 use crate::capability::Resolver;
 
@@ -244,8 +244,8 @@ struct Due<R, A> {
     scheduled: TimelineKey,
 }
 
-/// The one owner of what the script holds (see [`HeldRequests`]).
-type Requests<R, A> = HeldRequests<EntryId, Held<R, A>, Due<R, A>>;
+/// The one owner of what the script holds (see [`Unanswered`]).
+type Requests<R, A> = Unanswered<EntryId, Held<R, A>, Due<R, A>>;
 type RequestEvent<R, A> = Event<EntryId, Held<R, A>, Due<R, A>>;
 type RequestEffect<R, A> = Effect<EntryId, Held<R, A>, Due<R, A>>;
 
@@ -535,13 +535,15 @@ where
     /// [`receive`](Self::receive) does, and hand back the ticket it waits
     /// by.
     ///
-    /// Dropping the ticket while the request is still held or scheduled
-    /// withdraws it, as a system dismisses what its caller stopped waiting
-    /// for (a dialog closed with its window, a started activity whose
-    /// requester left): its resolver is dropped, no step or release answers
-    /// it, it is no [`Unanswered`](ScenarioFailure::Unanswered) failure, and
-    /// [`withdrawn`](Self::withdrawn) counts it. A request answered already
-    /// is not affected.
+    /// Dropping the ticket while the request is still held, scheduled or
+    /// while its answer is made withdraws it, as a system dismisses what its
+    /// caller stopped waiting for (a dialog closed with its window, a started
+    /// activity whose requester left): its resolver is dropped, no more of
+    /// its answer is made and no step or release answers it, it is no
+    /// [`Unanswered`](ScenarioFailure::Unanswered) failure, and
+    /// [`withdrawn`](Self::withdrawn) counts it ([held
+    /// requests](Self#held-requests)). A request answered already is not
+    /// affected.
     ///
     /// # Panics
     ///
@@ -572,6 +574,22 @@ where
         self.cell.state.borrow_mut().requests.apply(event)
     }
 
+    /// Carry out an event that may start making a request's answer, and
+    /// hand out that request with its id, read in the same borrow that
+    /// marked it `Answering`.
+    fn start_answering(&self, event: RequestEvent<R, A>) -> Option<(EntryId, Rc<R>)> {
+        let mut state = self.cell.state.borrow_mut();
+        let RequestEffect::SendOn(id) = state.requests.apply(event) else {
+            return None;
+        };
+        let request = state
+            .requests
+            .payload(id)
+            .map(|held| Rc::clone(&held.request))
+            .expect("BUG: a request marked answering is in the unanswered requests");
+        Some((id, request))
+    }
+
     fn receive_as(&self, id: EntryId, request: R, resolver: Resolver<A>) {
         let request = Rc::new(request);
         {
@@ -582,46 +600,82 @@ where
             }
         }
         let mut first = FirstPanic::new();
-        if let RequestEffect::SendOn(id) =
-            self.apply(Event::Arrived(id, Held { request, resolver }))
+        if let Some((id, request)) =
+            self.start_answering(Event::Arrived(id, Held { request, resolver }))
         {
-            let _ = contained(&mut first, |first| self.send_on(id, first));
+            let _ = contained(&mut first, |first| self.answer_request(id, request, first));
         }
         first.resume();
     }
 
     /// The last hold went: send the kept requests on, one at a time, until
-    /// the queue says the drain is over. Returns how many were answered.
+    /// the unanswered requests say the drain is over. Returns how many were
+    /// answered.
     fn drain(&self, first: &mut FirstPanic) -> usize {
         let mut answered = 0;
-        while let RequestEffect::SendOn(id) = self.apply(Event::DrainNext) {
-            if contained(first, |first| self.send_on(id, first)) == Some(true) {
+        while let Some((id, request)) = self.start_answering(Event::DrainNext) {
+            if contained(first, |first| self.answer_request(id, request, first)) == Some(true) {
                 answered += 1;
             }
         }
         answered
     }
 
-    /// The request `id`, which waits in the queue while its answer is made;
-    /// `None` once a ticket withdrew it.
-    fn answering(&self, id: EntryId) -> Option<Rc<R>> {
-        self.cell
-            .state
-            .borrow()
-            .requests
-            .payload(id)
-            .map(|held| Rc::clone(&held.request))
+    /// Make the answer of the request `id` ([`send_on`](Self::send_on)),
+    /// then let go of this handle of it, whose `Drop` is the test's code
+    /// when it is the last. Runs inside [`contained`].
+    fn answer_request(&self, id: EntryId, request: Rc<R>, first: &mut FirstPanic) -> bool {
+        let answered = self.send_on(id, &request, first);
+        first.retire(request);
+        answered
+    }
+
+    /// Run one piece of the test's code while the answer of the request
+    /// `id` is made, contained, and say what became of it: its value, its
+    /// panic, or that a ticket withdrew the request meanwhile, in which case
+    /// the value is dropped as the test's code and the caller makes no more
+    /// of the answer. Every piece of the test's code that runs while an
+    /// answer is made goes through here.
+    fn while_answering<T>(
+        &self,
+        id: EntryId,
+        first: &mut FirstPanic,
+        run: impl FnOnce() -> T,
+    ) -> Ran<T> {
+        let outcome = first.contain(run);
+        match (self.is_answering(id), outcome) {
+            (true, Some(value)) => Ran::Done(value),
+            (true, None) => Ran::Panicked,
+            (false, outcome) => {
+                first.retire(outcome);
+                Ran::Withdrawn
+            }
+        }
+    }
+
+    /// Whether the request `id` is still being answered: no ticket withdrew
+    /// it since its answer began.
+    fn is_answering(&self, id: EntryId) -> bool {
+        self.cell.state.borrow().requests.is_answering(id)
+    }
+
+    /// Let go of `value`, whose drop is the test's code, while the answer of
+    /// the request `id` is made. Returns whether the request is still being
+    /// answered.
+    fn drop_while_answering<T>(&self, id: EntryId, first: &mut FirstPanic, value: T) -> bool {
+        !matches!(
+            self.while_answering(id, first, || drop(value)),
+            Ran::Withdrawn
+        )
     }
 
     /// Make the answer of the request `id` by the steps, then the standing
     /// answer. Returns whether it was answered now: `false` for one a step
     /// holds or answers later, one whose matcher or answer panicked (kept
-    /// for the test), one that ends unanswered and one withdrawn meanwhile.
-    /// Runs inside [`contained`].
-    fn send_on(&self, id: EntryId, first: &mut FirstPanic) -> bool {
-        let Some(request) = self.answering(id) else {
-            return false;
-        };
+    /// for the test), one that ends unanswered, and one a ticket withdrew
+    /// meanwhile, for which no more of the answer is made. Runs inside
+    /// [`contained`].
+    fn send_on(&self, id: EntryId, request: &R, first: &mut FirstPanic) -> bool {
         let candidates: Vec<(EntryId, Matcher<R>)> = self
             .cell
             .state
@@ -632,15 +686,22 @@ where
             .collect::<Vec<(EntryId, Matcher<R>)>>();
         // Matched with no borrow held; a matcher that re-entered and used a
         // step up leaves it gone, and the next candidate is tried. Each
-        // clone is let go under `first`: once its step is gone it is the
+        // clone is let go as the test's code: once its step is gone it is the
         // matcher's last, and the matcher's captures are the test's.
         let mut candidates = candidates.into_iter();
         while let Some((step_id, matches)) = candidates.next() {
-            let accepted = first.contain(|| matches(&request));
-            first.retire(matches);
+            let accepted = self.while_answering(id, first, || matches(request));
+            if !self.drop_while_answering(id, first, matches) {
+                let _ = self.drop_while_answering(id, first, candidates);
+                return false;
+            }
             match accepted {
-                Some(false) => {}
-                Some(true) => {
+                Ran::Withdrawn => {
+                    let _ = self.drop_while_answering(id, first, candidates);
+                    return false;
+                }
+                Ran::Done(false) => {}
+                Ran::Done(true) => {
                     let step = {
                         let mut state = self.cell.state.borrow_mut();
                         let position = state.steps.iter().position(|step| step.id == step_id);
@@ -650,29 +711,50 @@ where
                         // The other matchers and the used step are let go
                         // before the answer is given, so none of the test's
                         // values is still held while its answer runs.
-                        first.retire(candidates);
-                        first.retire(expect);
+                        if !self.drop_while_answering(id, first, candidates)
+                            || !self.drop_while_answering(id, first, expect)
+                        {
+                            let _ = self.drop_while_answering(id, first, answer);
+                            return false;
+                        }
                         let Some(answer) = answer else {
                             self.keep_for_test(id);
                             return false;
                         };
-                        return self.answer(id, &request, answer, first);
+                        return self.answer(id, request, answer, first);
                     }
                 }
-                None => {
-                    first.retire(candidates);
-                    self.keep_for_test(id);
+                Ran::Panicked => {
+                    if self.drop_while_answering(id, first, candidates) {
+                        self.keep_for_test(id);
+                    }
                     return false;
                 }
             }
         }
         let otherwise = self.cell.state.borrow().otherwise.clone();
         if let Some(otherwise) = otherwise {
-            let value = first.contain(|| otherwise(&request));
-            first.retire(otherwise);
-            return self.finish(id, value, first);
+            let value = self.while_answering(id, first, || otherwise(request));
+            if !self.drop_while_answering(id, first, otherwise) {
+                let _ = self.drop_while_answering(id, first, value);
+                return false;
+            }
+            return match value {
+                Ran::Done(value) => self.finish(id, value, first),
+                Ran::Panicked => {
+                    self.keep_for_test(id);
+                    false
+                }
+                Ran::Withdrawn => false,
+            };
         }
-        let described = describe(&*request, first);
+        // The request's `Debug` is the test's code too: one that panics is
+        // written as such and its panic kept, and one that withdrew the
+        // request leaves nothing to record.
+        let described = describe(request, first);
+        if !self.is_answering(id) {
+            return false;
+        }
         self.cell.scenario.fail(ScenarioFailure::Unexpected {
             script: self.cell.name,
             request: described,
@@ -681,16 +763,10 @@ where
         false
     }
 
-    /// Answer the request `id` with the answer the test's code made, or keep
-    /// it for the test, where it is, when that code panicked (`None`).
-    /// Returns whether it was answered: not when a ticket withdrew it while
-    /// its answer was made, and then the answer is dropped as the test's
-    /// code.
-    fn finish(&self, id: EntryId, value: Option<A>, first: &mut FirstPanic) -> bool {
-        let Some(value) = value else {
-            self.keep_for_test(id);
-            return false;
-        };
+    /// Answer the request `id` with `value`. Returns whether it was
+    /// answered: not when a ticket withdrew it while its answer was made,
+    /// and then the answer is dropped as the test's code.
+    fn finish(&self, id: EntryId, value: A, first: &mut FirstPanic) -> bool {
         let RequestEffect::Taken(_, held, _) = self.apply(Event::Answered(id)) else {
             first.retire(value);
             return false;
@@ -750,11 +826,11 @@ where
         if delay.is_zero() {
             return self.reply_now(id, request, reply, first);
         }
-        let what = Cow::Owned(format!(
-            "{}: the answer to {}",
-            self.cell.name,
-            describe(request, first)
-        ));
+        // The request's `Debug` is the test's code: one that withdraws the
+        // request leaves the scheduled answer orphaned, which the
+        // `Schedule` event hands back to be taken off the timeline.
+        let described = describe(request, first);
+        let what = Cow::Owned(format!("{}: the answer to {described}", self.cell.name));
         let at = self.cell.scenario.now().saturating_add(delay);
         let script = Rc::downgrade(&self.cell);
         let scheduled = self.cell.scenario.schedule(
@@ -766,26 +842,44 @@ where
                 }
             }),
         );
-        let _ = self.apply(Event::Schedule(id, Due { reply, scheduled }));
+        if let RequestEffect::Orphaned(_, due) =
+            self.apply(Event::Schedule(id, Due { reply, scheduled }))
+        {
+            // Withdrawn meanwhile: nothing serves the scheduled answer.
+            self.cell.scenario.unschedule(due.scheduled);
+            first.retire(due);
+        }
         false
     }
 
     fn answer_due(&self, id: EntryId) {
-        if let RequestEffect::Due(id, due) = self.apply(Event::ClockReached(id)) {
-            let mut first = FirstPanic::new();
-            let _ = contained(&mut first, |first| {
-                let Some(request) = self.answering(id) else {
-                    return false;
-                };
-                self.reply_now(id, &request, due.reply, first)
-            });
-            first.resume();
-        }
+        let (request, due) = {
+            let mut state = self.cell.state.borrow_mut();
+            let RequestEffect::Due(_, due) = state.requests.apply(Event::ClockReached(id)) else {
+                return;
+            };
+            let request = state
+                .requests
+                .payload(id)
+                .map(|held| Rc::clone(&held.request))
+                .expect("BUG: a request marked answering is in the unanswered requests");
+            (request, due)
+        };
+        let mut first = FirstPanic::new();
+        let _ = contained(&mut first, |first| {
+            let answered = self.reply_now(id, &request, due.reply, first);
+            // The request's last handle may be this one: its `Drop` is the
+            // test's code.
+            first.retire(request);
+            answered
+        });
+        first.resume();
     }
 
     /// Answer the request `id` with `reply`. Returns whether it was
-    /// answered: a computed answer that panicked keeps it for the test, and
-    /// an abandon ends it unanswered.
+    /// answered: a computed answer that panicked keeps it for the test, an
+    /// abandon ends it unanswered, and one a ticket withdrew while the
+    /// computed answer ran gets nothing more.
     fn reply_now(
         &self,
         id: EntryId,
@@ -794,10 +888,16 @@ where
         first: &mut FirstPanic,
     ) -> bool {
         match reply {
-            Reply::Value(value) => self.finish(id, Some(value), first),
+            Reply::Value(value) => self.finish(id, value, first),
             Reply::Computed(compute) => {
-                let value = first.contain(|| compute(request));
-                self.finish(id, value, first)
+                match self.while_answering(id, first, || compute(request)) {
+                    Ran::Done(value) => self.finish(id, value, first),
+                    Ran::Panicked => {
+                        self.keep_for_test(id);
+                        false
+                    }
+                    Ran::Withdrawn => false,
+                }
             }
             Reply::Abandon => {
                 self.end_answering_unanswered(id, first);
@@ -805,6 +905,18 @@ where
             }
         }
     }
+}
+
+/// What became of one piece of the test's code run while a request's answer
+/// was made ([`Script::while_answering`]).
+enum Ran<T> {
+    /// It returned this, and the request is still being answered.
+    Done(T),
+    /// It panicked (the panic is kept), and the request is still being
+    /// answered.
+    Panicked,
+    /// A ticket withdrew the request meanwhile.
+    Withdrawn,
 }
 
 /// What a double keeps for a request it received through
