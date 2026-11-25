@@ -900,6 +900,12 @@ fn the_agent_refuses_a_gesture_on_the_os_path() {
         let refused = answered(&mut host, &mut asked, 2).0.expect_err("refused");
         assert_eq!(refused.code, ErrorCode::NotSupported, "{case}: {refused:?}");
         assert_eq!(refused.capability.as_deref(), Some(capability), "{case}");
+        if capability == "synthetic_input" {
+            assert_eq!(
+                refused.message, "this gesture has no synthetic input that does the same",
+                "{case}"
+            );
+        }
         assert_eq!(presses.go.load(Ordering::SeqCst), 0, "{case}");
         let _ = host.pump(Duration::from_millis(16));
         assert_eq!(
@@ -1395,7 +1401,7 @@ fn item_1(pick: Pick) -> Locator {
 #[test]
 fn scroll_until_answers_by_its_deadline_direction_and_pick() {
     type Make = fn(&AgentWindow) -> ScrollUntilParams;
-    let rows: [(&str, Make, Result<&str, ErrorCode>); 7] = [
+    let rows: [(&str, Make, Result<&str, ErrorCode>); 9] = [
         (
             "past its deadline, the content still moving",
             |_| {
@@ -1410,6 +1416,20 @@ fn scroll_until_answers_by_its_deadline_direction_and_pick() {
             |_| {
                 let mut params = until("Columns", Locator::named("Col 30"));
                 params.direction = Some(Direction::Down);
+                params
+            },
+            Err(ErrorCode::NotFound),
+        ),
+        (
+            "the first match",
+            |_| until("Items", item_1(Pick::First)),
+            Ok("Item 1"),
+        ),
+        (
+            "a scrollable that never appears",
+            |_| {
+                let mut params = until("Nowhere", Locator::named("Item 60"));
+                params.options = timeout(params.options, 100);
                 params
             },
             Err(ErrorCode::NotFound),
@@ -1466,8 +1486,15 @@ fn scroll_until_answers_by_its_deadline_direction_and_pick() {
             }
             (Err(refused), Err(code)) => {
                 assert_eq!(refused.code, code, "{case}: {refused:?}");
+                if case == "a point" {
+                    assert_eq!(refused.message, "a point names no scrollable", "{case}");
+                }
             }
             (answer, expected) => panic!("{case}: {answer:?}, not {expected:?}"),
+        }
+        if case == "a scrollable that never appears" {
+            // Held for one to appear until its 100 ms timeout, six frames of 16 ms.
+            assert!(frames >= 6, "{case}: answered at frame {frames}");
         }
         if case.starts_with("past its deadline") {
             // 100 rows in a viewport of five take 20 steps, two frames each at least, to end.
@@ -1539,6 +1566,15 @@ fn scroll_until_refuses_a_read_that_leaves_some_out() {
             ScrollUntilParams::new(named("Tall"), Locator::named(sought)),
         );
         let refused = answered(&mut host, &mut asked, 400).0.expect_err("refused");
+        let says = match case {
+            "a scrollable of 4200 rows" => {
+                "the scrollable holds more descendants than a scroll reads (4096)"
+            }
+            _ => {
+                "the locator matches more elements in the window than a scroll looks among (4096): narrow it"
+            }
+        };
+        assert_eq!(refused.message, says, "{case}");
         assert_eq!(refused.code, code, "{case}: {refused:?}");
     }
 }
@@ -1892,6 +1928,14 @@ fn a_gesture_answers_by_its_target_and_path_rules() {
             (Err(refused), Err((code, says))) => {
                 assert_eq!(refused.code, code, "{case}: {refused:?}");
                 assert_eq!(refused.message, says, "{case}: {refused:?}");
+                if code == ErrorCode::NotSupported {
+                    let capability = if case.contains("os path") {
+                        "os_input"
+                    } else {
+                        "semantic_input"
+                    };
+                    assert_eq!(refused.capability.as_deref(), Some(capability), "{case}");
+                }
                 assert_eq!(frames, 1, "{case}: refused before anything is held");
             }
             (answer, expected) => panic!("{case}: {answer:?}, not {expected:?}"),
@@ -2012,4 +2056,33 @@ fn a_turn_without_a_frame_answers_the_acts_due_and_keeps_the_rest() {
     assert_eq!(refused.code, ErrorCode::NotActionable, "{refused:?}");
     let _ = host.pump(Duration::ZERO);
     assert!(long.try_take().is_none(), "the act held to 60 s holds on");
+}
+
+/// `wait.frames` holds out for its own timeout: a wait for 1000 frames asked to give up after
+/// 200 ms is answered `unsatisfied` once 200 ms of frames have passed.
+#[test]
+fn a_frames_wait_gives_up_at_its_own_timeout() {
+    let (mut host, _agent, window, _lease, _presses) = shown();
+    let frames: flui_protocol::wait::FramesParams = serde_json::from_value(json!({
+        "window": window.id(),
+        "frames": 1_000,
+        "timeout_ms": 200,
+    }))
+    .expect("frames params read");
+    let mut waited = window
+        .call::<method::WaitFrames>(frames)
+        .expect("the inbox has room");
+    let Some(answer) = host.run_until_answered(
+        &mut waited,
+        Duration::from_millis(16),
+        Duration::from_secs(2),
+    ) else {
+        panic!("answered at its 200 ms timeout");
+    };
+    let outcome = answer.expect("a timeout is an answer");
+    assert_eq!(
+        outcome.end,
+        flui_protocol::wait::WaitEnd::Unsatisfied,
+        "{outcome:?}"
+    );
 }

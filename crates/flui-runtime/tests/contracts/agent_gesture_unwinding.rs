@@ -165,6 +165,10 @@ fn the_first_wake_that_panics_in_a_turn_continues_and_its_act_plays_nothing() {
         };
         let answered = answer.expect_err("its wake panicked");
         assert_eq!(answered.code, ErrorCode::Platform, "{case}: {answered:?}");
+        assert_eq!(
+            answered.message, "the window panicked while answering",
+            "{case}: the wake's panic, not a step before it"
+        );
         played_nothing(&mut rig, &go, journaled, case);
         drop(beside);
     }
