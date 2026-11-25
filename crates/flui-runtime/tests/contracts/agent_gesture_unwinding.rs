@@ -553,6 +553,54 @@ fn app_code_that_panics_in_a_held_acts_attempt_answers_the_act_once() {
     }
 }
 
+/// "Boom", whose press panics.
+#[derive(Clone, StatelessView)]
+struct Boom;
+
+impl StatelessView for Boom {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        RawButton::new(Text::new("Boom")).on_pressed(|_: &mut EventContext<'_>| -> () {
+            std::panic::panic_any("a press that fails".to_owned())
+        })
+    }
+}
+
+/// The app's handler of injected input panics: the panic continues out of the frame whose boundary
+/// delivered the input, and the act whose input it was is still answered `ran`, once, by the frame
+/// after: the input went out.
+#[test]
+fn a_handler_of_injected_input_that_panics_continues_out_of_its_frame() {
+    let mut rig = Rig::showing(&Boom);
+    let mut tap = rig
+        .lease
+        .call::<method::ElementTap>(TapParams::new(named("Boom")))
+        .expect("the inbox has room");
+    let mut continued = None;
+    for _ in 0..20 {
+        if let Err(panic) = catch_unwind(AssertUnwindSafe(|| rig.frame())) {
+            continued = panic.downcast_ref::<String>().cloned();
+            break;
+        }
+    }
+    assert_eq!(
+        continued.as_deref(),
+        Some("a press that fails"),
+        "the handler's panic continues out of the frame"
+    );
+    let mut answered = None;
+    for _ in 0..4 {
+        let _ = catch_unwind(AssertUnwindSafe(|| rig.frame()));
+        if let Some(answer) = tap.try_take() {
+            answered = Some(answer);
+            break;
+        }
+    }
+    let outcome = answered
+        .expect("answered by the frame after its input")
+        .expect("its input went out");
+    assert_eq!(outcome.via, InputPath::Synthetic, "{outcome:?}");
+}
+
 /// A call whose serving catches a panic and hands its reply on (a tap whose hit-test panics as it
 /// is held) continues the panic out of the drain, and wakes the owner first when calls are still
 /// queued behind it, so they are drained at the next turn; with none queued it wakes no more than

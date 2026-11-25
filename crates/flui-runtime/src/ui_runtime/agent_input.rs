@@ -50,8 +50,8 @@ use flui_protocol::method::{self, Method};
 use flui_protocol::{
     act::ActOutcome, act::Effect, act::EffectKind, act::JournalSpan, geometry::LogicalPoint,
     input::ActionSequence, input::ImeAction, input::InputPath, input::PlannedInput,
-    input::PointerDevice, input::Released, input::STEP, input::SourceKind, input::TimedInput,
-    input::gestures, snapshot::Snapshot, tree::ElementRef,
+    input::PointerDevice, input::Released, input::SourceKind, input::TimedInput, input::gestures,
+    snapshot::Snapshot, tree::ElementRef,
 };
 use flui_semantics::TreeSnapshot;
 use flui_view::__runtime::LeaseId;
@@ -75,6 +75,10 @@ pub(super) struct Script {
     /// The pointer and wheel sources, by the index inputs name them with.
     sources: Vec<Source>,
     ticks: VecDeque<Tick>,
+    /// How long a window at 60 Hz takes to play it, as the reply bound counts it
+    /// ([`ActionSequence::plays_within`] of each sequence lowered into it). The plan's own ticks
+    /// give a move that names no duration a frame to last, which that count does not add twice.
+    plays: Duration,
 }
 
 /// A pointer or wheel source of a script.
@@ -186,7 +190,11 @@ pub(super) fn lower(sequence: &ActionSequence) -> Result<Script, AgentError> {
         });
         start = end;
     }
-    Ok(Script { sources, ticks })
+    Ok(Script {
+        sources,
+        ticks,
+        plays: sequence.plays_within(),
+    })
 }
 
 /// One planned input as the input the window takes.
@@ -253,20 +261,17 @@ impl Script {
         self.ticks.len()
     }
 
-    /// How long a window at 60 Hz takes to play the script: the time its ticks last, and a frame
-    /// ([`STEP`]) for each, as [`ActionSequence::plays_within`] counts it. Saturates.
+    /// How long a window at 60 Hz takes to play the script: what
+    /// [`ActionSequence::plays_within`] counts for each sequence it was lowered from, the bound a
+    /// reply to the act counts. Saturates.
     fn plays_within(&self) -> Duration {
-        let ticks = u32::try_from(self.ticks.len()).unwrap_or(u32::MAX);
-        self.ticks
-            .iter()
-            .map(|tick| tick.lasts)
-            .fold(Duration::ZERO, Duration::saturating_add)
-            .saturating_add(STEP.saturating_mul(ticks))
+        self.plays
     }
 
     /// This script, then `next`: `next`'s ticks after this one's, its sources as it names them.
     pub(super) fn then(mut self, next: Self) -> Self {
         let offset = self.sources.len();
+        self.plays = self.plays.saturating_add(next.plays);
         self.sources.extend(next.sources);
         self.ticks.extend(next.ticks.into_iter().map(|mut tick| {
             for step in &mut tick.steps {

@@ -1172,6 +1172,7 @@ fn a_window_that_draws_nothing_answers_a_held_act_at_its_deadline() {
         let _ = host.pump(Duration::from_millis(16));
         let mut asked = call(&lease);
         let _ = host.pump(Duration::ZERO);
+        let served_at = host.clock().elapsed();
         host.request_frame();
         let unsettled = host.unsettled();
         assert!(
@@ -1193,6 +1194,11 @@ fn a_window_that_draws_nothing_answers_a_held_act_at_its_deadline() {
         };
         let refused = answer.expect_err("nothing came of it");
         assert_eq!(refused.code, code, "{case}: {refused:?}");
+        assert_eq!(
+            host.clock().elapsed().saturating_sub(served_at),
+            Duration::from_millis(200),
+            "{case}: answered at its deadline, input none of whose ticks started included"
+        );
         host.set_window_visible(true);
         for _ in 0..5 {
             let _ = host.pump(Duration::from_millis(16));
@@ -1258,9 +1264,10 @@ fn input_whose_window_stops_drawing_is_answered_within_its_play_time() {
     let refused = answer.expect_err("its input did not play out");
     assert_eq!(refused.code, ErrorCode::Timeout, "{refused:?}");
     let effect = refused.effect.expect("a partial effect");
-    assert!(
-        effect.sent.is_some_and(|sent| sent >= 1),
-        "the press went out in full: {effect:?}"
+    assert_eq!(
+        (effect.sent, effect.total),
+        (Some(2), Some(4)),
+        "the move and the press went out in full, of the move, press, hold and lift: {effect:?}"
     );
     assert!(
         host.clock().elapsed().saturating_sub(asked_by) < Duration::from_millis(1_500),
@@ -1275,6 +1282,61 @@ fn input_whose_window_stops_drawing_is_answered_within_its_play_time() {
         journal(&mut host, &window).entries.len(),
         cut,
         "nothing of it went out after the answer"
+    );
+}
+
+/// Input under way when its window stops drawing is answered at the end of its act's promise and
+/// not before: the deadline, then the play time the reply counts (what its ticks last, and a frame
+/// for each), on an owner turn without a frame. A long press of 1000 ms whose press went out is
+/// still held a millisecond before that instant, and answered at it with the two ticks played.
+#[test]
+fn input_under_way_is_answered_at_its_deadline_and_play_time() {
+    let mut rig = crate::agent_rig::Rig::showing(&Board {
+        presses: Presses::default(),
+    });
+    let mut press: LongPressParams = serde_json::from_value(json!({
+        "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+        "duration_ms": 1_000,
+    }))
+    .expect("a long press reads");
+    press.options = timeout(press.options, 300);
+    let mut press = rig
+        .lease
+        .call::<method::ElementLongPress>(press)
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    let served = flui_foundation::MonotonicClock::now(&rig.clock);
+    // The move and the press go out on the boundaries after it passes; the hold starts.
+    for _ in 0..3 {
+        rig.frame();
+    }
+    let plays = gestures::long_press(
+        LogicalPoint::new(0.0, 0.0),
+        Some(1_000),
+        &gestures::Defaults::WINDOWLESS,
+    )
+    .plays_within();
+    let ends = served + Duration::from_millis(300) + plays;
+    let now = flui_foundation::MonotonicClock::now(&rig.clock);
+    rig.clock
+        .advance(ends.saturating_duration_since(now) - Duration::from_millis(1));
+    rig.runtime.pump_background();
+    assert!(
+        press.try_take().is_none(),
+        "held a millisecond before its promise ends"
+    );
+    rig.clock.advance(Duration::from_millis(1));
+    rig.runtime.pump_background();
+    let refused = press
+        .try_take()
+        .expect("answered as its promise ends")
+        .expect_err("its input did not play out");
+    assert_eq!(refused.code, ErrorCode::Timeout, "{refused:?}");
+    let effect = refused.effect.expect("a partial effect");
+    assert_eq!(
+        (effect.sent, effect.total),
+        (Some(2), Some(4)),
+        "the move and the press went out in full: {effect:?}"
     );
 }
 
@@ -2320,6 +2382,78 @@ fn a_turn_without_a_frame_answers_the_acts_due_and_keeps_the_rest() {
     );
     let _ = host.pump(Duration::ZERO);
     assert!(long.try_take().is_none(), "the act held to 60 s holds on");
+}
+
+/// Keys for "a" pressed in `lease`'s window, held to `timeout_ms`.
+fn keys_held_to(lease: &InputLease, timeout_ms: u64) -> AgentAnswer<ActOutcome> {
+    let mut keys: PressKeysParams = serde_json::from_value(json!({
+        "window": lease.window(),
+        "keys": ["a"],
+    }))
+    .expect("press keys reads");
+    keys.options = timeout(keys.options, timeout_ms);
+    ask::<method::ElementPressKeys>(lease, keys)
+}
+
+/// A window that draws nothing wakes the owner at the earliest deadline of any kind it holds: a
+/// tap held to 60 s, keys queued to 60 s, then keys queued to 200 ms, leave the last answered at
+/// its own deadline, not at a later one.
+#[test]
+fn a_window_wakes_at_the_earliest_deadline_of_its_acts_and_their_input() {
+    let (mut host, _agent, _window, lease, _presses) = shown();
+    host.set_window_visible(false);
+    let _ = host.pump(Duration::from_millis(16));
+    let _held = gated(&lease, 60_000, false);
+    let _queued = keys_held_to(&lease, 60_000);
+    let mut short = keys_held_to(&lease, 200);
+    let _ = host.pump(Duration::ZERO);
+    let asked_at = host.clock().elapsed();
+    let Some(answer) = host.run_until_answered(
+        &mut short,
+        Duration::from_millis(16),
+        Duration::from_secs(5),
+    ) else {
+        panic!("the keys queued to 200 ms are answered at their deadline");
+    };
+    let refused = answer.expect_err("no frame plays them");
+    assert_eq!(refused.code, ErrorCode::Timeout, "{refused:?}");
+    assert_eq!(
+        host.clock().elapsed().saturating_sub(asked_at),
+        Duration::from_millis(200),
+        "the owner woke at the earliest deadline"
+    );
+}
+
+/// `scroll_until` answered at a frame boundary past its deadline plays none of the step it queued
+/// before: the step a search queued when it was served is withdrawn at the boundary that answers
+/// the search, before the boundary's input would start it.
+#[test]
+fn scroll_until_answered_at_a_boundary_past_its_deadline_plays_its_queued_step_not() {
+    let mut rig = crate::agent_rig::Rig::showing(&Board {
+        presses: Presses::default(),
+    });
+    let journaled = rig.journal().entries.len();
+    let mut until = ScrollUntilParams::new(named("Items"), Locator::named("Item 99"));
+    until.options = timeout(until.options, 50);
+    let mut until = rig
+        .lease
+        .call::<method::ElementScrollUntil>(until)
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    assert!(until.try_take().is_none(), "its first step is queued");
+    rig.clock.advance(Duration::from_millis(100));
+    rig.frame();
+    let ended = until
+        .try_take()
+        .expect("answered at the boundary past its deadline")
+        .expect_err("Item 99 never showed");
+    assert_eq!(ended.code, ErrorCode::NotFound, "{ended:?}");
+    let entries = rig.journal().entries.split_off(journaled);
+    assert_eq!(
+        count_of(&entries, InputKind::Scroll),
+        0,
+        "nothing of the search went out: {entries:?}"
+    );
 }
 
 /// `wait.frames` holds out for its own timeout: a wait for 1000 frames asked to give up after

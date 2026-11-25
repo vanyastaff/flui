@@ -373,56 +373,75 @@ fn text_contrast_with_texts_it_cannot_judge_reports_a_partial_check() {
     );
 }
 
-/// On white, a faint text, and a disabled button whose label is as faint.
+/// On white, a faint text, and a disabled button whose label is as faint, the button first when
+/// `disabled_first`.
 #[derive(Clone, StatelessView)]
-struct DisabledLabel;
+struct DisabledLabel {
+    disabled_first: bool,
+}
 
 impl StatelessView for DisabledLabel {
     fn build(&self, _: &dyn BuildContext) -> impl IntoView {
         let faint = TextStyle::default()
             .with_color(Color::rgb(0xcc, 0xcc, 0xcc))
             .with_font_size(16.0);
-        ColoredBox::new(Color::WHITE).child(Column::new((
-            Text::new("Faint").style(faint.clone()),
-            RawButton::new(SizedBox::new(120.0, 48.0).child(Text::new("Off").style(faint))),
-        )))
+        let text = Text::new("Faint").style(faint.clone()).into_view().boxed();
+        let button =
+            RawButton::new(SizedBox::new(120.0, 48.0).child(Text::new("Off").style(faint)))
+                .into_view()
+                .boxed();
+        let children = if self.disabled_first {
+            vec![button, text]
+        } else {
+            vec![text, button]
+        };
+        ColoredBox::new(Color::WHITE).child(Column::new(children))
     }
 }
 
 /// The text of a disabled control is not judged: WCAG 1.4.3 exempts an inactive component. The
 /// faint label of a disabled button is no finding; it is listed in `not_checked` with that
-/// reason, while the faint text beside it is still a finding.
+/// reason, while the faint text beside it is still a finding, before or after it.
 #[test]
 fn text_contrast_lists_a_disabled_controls_text_as_not_checked() {
-    let ui_runtime = UiRuntime::for_test();
-    ui_runtime
-        .enter(|ui_runtime| {
-            ui_runtime.attach_root_widget_to_for_test(ui_runtime.presentation_id(), &DisabledLabel)
-        })
-        .expect("the page attaches");
-    let window = ui_runtime
-        .dev_agent_window(ui_runtime.presentation_id())
-        .expect("the ui_runtime hosts its primary presentation");
-    let mut sink = ScriptedSink::always_presents();
-    frame(&ui_runtime, &mut sink);
-    let report = audit(&ui_runtime, &window, &[AuditRule::TextContrast]);
-    let faint = find(&read(&ui_runtime, &window), "Faint").id;
-    let nodes: Vec<_> = report
-        .findings
-        .iter()
-        .map(|finding| finding.node.element)
-        .collect();
-    assert_eq!(nodes, vec![faint], "only the active text: {report:#?}");
-    let [entry] = report.not_checked.as_slice() else {
-        panic!("text_contrast is listed: {report:#?}");
-    };
-    assert_eq!(entry.rule, AuditRule::TextContrast);
-    assert_eq!(
-        entry.reason,
-        "1 of 2 texts could not be judged: \"Off\": its control is disabled, and an inactive \
-         control's text has no contrast requirement",
-        "{report:#?}"
-    );
+    for disabled_first in [false, true] {
+        let ui_runtime = UiRuntime::for_test();
+        ui_runtime
+            .enter(|ui_runtime| {
+                ui_runtime.attach_root_widget_to_for_test(
+                    ui_runtime.presentation_id(),
+                    &DisabledLabel { disabled_first },
+                )
+            })
+            .expect("the page attaches");
+        let window = ui_runtime
+            .dev_agent_window(ui_runtime.presentation_id())
+            .expect("the ui_runtime hosts its primary presentation");
+        let mut sink = ScriptedSink::always_presents();
+        frame(&ui_runtime, &mut sink);
+        let report = audit(&ui_runtime, &window, &[AuditRule::TextContrast]);
+        let faint = find(&read(&ui_runtime, &window), "Faint").id;
+        let nodes: Vec<_> = report
+            .findings
+            .iter()
+            .map(|finding| finding.node.element)
+            .collect();
+        assert_eq!(
+            nodes,
+            vec![faint],
+            "{disabled_first}: only the active text: {report:#?}"
+        );
+        let [entry] = report.not_checked.as_slice() else {
+            panic!("text_contrast is listed: {report:#?}");
+        };
+        assert_eq!(entry.rule, AuditRule::TextContrast);
+        assert_eq!(
+            entry.reason,
+            "1 of 2 texts could not be judged: \"Off\": its control is disabled, and an inactive \
+             control's text has no contrast requirement",
+            "{report:#?}"
+        );
+    }
 }
 
 /// A read of the semantics tree that stops short of a text's element cannot say whether its
@@ -433,7 +452,12 @@ fn text_contrast_does_not_judge_a_text_whose_control_the_read_did_not_reach() {
     let ui_runtime = UiRuntime::for_test();
     ui_runtime
         .enter(|ui_runtime| {
-            ui_runtime.attach_root_widget_to_for_test(ui_runtime.presentation_id(), &DisabledLabel)
+            ui_runtime.attach_root_widget_to_for_test(
+                ui_runtime.presentation_id(),
+                &DisabledLabel {
+                    disabled_first: false,
+                },
+            )
         })
         .expect("the page attaches");
     let window = ui_runtime

@@ -347,7 +347,8 @@ fn parameters_that_make_no_gesture_are_refused() {
         );
     }
     // A fling whose stroke the window chose is over in fewer than three moves of 16 ms is
-    // refused, naming what to give; one whose distance and velocity the call named is played.
+    // refused, naming what to give; one whose distance and velocity the call named is played. A
+    // stroke of 17 ms (43 px at the window's 2500 px/s) is just two frames long.
     let room = Aim::new(
         at(50.0, 50.0),
         Some(LogicalRect::new(0.0, 0.0, 100.0, 100.0)),
@@ -355,6 +356,7 @@ fn parameters_that_make_no_gesture_are_refused() {
     for (distance, velocity, refused) in [
         (None, None, true),
         (Some(40.0), None, true),
+        (Some(43.0), None, false),
         (None, Some(1_000.0), false),
         (Some(40.0), Some(2_500.0), false),
         (Some(150.0), None, false),
@@ -505,6 +507,15 @@ fn a_swipe_takes_its_room_in_each_direction() {
             ),
             Direction::Left,
             "move 10,40/16",
+        ),
+        (
+            "left, from bounds that do not start at the origin",
+            Aim::new(
+                at(50.0, 40.0),
+                Some(LogicalRect::new(10.0, 20.0, 100.0, 40.0)),
+            ),
+            Direction::Left,
+            "move 14,40/14",
         ),
         (
             "down",

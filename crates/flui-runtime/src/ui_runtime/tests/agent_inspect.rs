@@ -472,8 +472,11 @@ fn a_window_parks_a_bounded_number_of_layer_reads() {
     assert_eq!(error.code, ErrorCode::Busy);
     assert_eq!(error.retry, Retry::Soon);
     assert!(
-        error.message.starts_with("the tree is busy"),
-        "the tree is busy, not another busy: {}",
+        error.message.starts_with("the tree is busy")
+            && error
+                .message
+                .contains("the window parks as many layer reads as it admits"),
+        "the tree is busy, not another busy, and why: {}",
         error.message
     );
 
