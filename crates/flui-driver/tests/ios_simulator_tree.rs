@@ -959,7 +959,7 @@ fn a_level_read_short_is_marked_whatever_stopped_it() {
     assert!(!whole.truncated);
 }
 
-/// What a node of a test's window does after its facts were first read.
+/// What a node of a test's window does by the time its frame is read again, after the walk.
 #[derive(Debug, Clone, Copy)]
 enum Later {
     /// It moves to this frame.
@@ -979,10 +979,8 @@ struct Fixture {
     /// What a read of the node's facts answers instead of them: gone after it was listed, a
     /// timeout, a failure.
     facts_error: Option<ProviderError>,
-    /// What a read of the node's facts answers from its second read on.
+    /// What a read of the node's frame alone answers, once the walk is done.
     later: Option<Later>,
-    /// How many times its facts were read.
-    reads: usize,
 }
 
 /// A set of windows written out as nodes by index, each window a root.
@@ -990,6 +988,9 @@ struct Windows {
     nodes: Vec<Fixture>,
     /// How many elements' facts the search read.
     facts_read: usize,
+    /// Whether the process answers as no trusted accessibility client: every failure is then
+    /// the permission taken back.
+    untrusted: bool,
 }
 
 impl Windows {
@@ -997,6 +998,7 @@ impl Windows {
         Self {
             nodes: Vec::new(),
             facts_read: 0,
+            untrusted: false,
         }
     }
 
@@ -1020,7 +1022,6 @@ impl Windows {
             gone_after: None,
             facts_error: None,
             later: None,
-            reads: 0,
         });
         if let Some(parent) = parent {
             self.nodes[parent].children.push(index);
@@ -1041,23 +1042,25 @@ impl WindowTree for Windows {
     }
 
     fn failure(&mut self, error: ProviderError) -> Error {
-        accessibility::read_failure(error, true, None)
+        accessibility::read_failure(error, !self.untrusted, None)
+    }
+
+    fn frame(&mut self, element: &usize) -> Result<Option<PointFrame>, ProviderError> {
+        let node = &self.nodes[*element];
+        match node.later {
+            Some(Later::Moves(frame)) => Ok(Some(frame)),
+            Some(Later::Goes) => Err(ProviderError::Gone),
+            None => Ok(node.facts.frame),
+        }
     }
 
     fn facts(&mut self, element: &usize) -> Result<WindowFacts, ProviderError> {
         self.facts_read += 1;
-        let node = &mut self.nodes[*element];
-        node.reads += 1;
+        let node = &self.nodes[*element];
         if let Some(error) = &node.facts_error {
             return Err(error.clone());
         }
-        let mut facts = node.facts.clone();
-        match node.later {
-            Some(Later::Moves(frame)) if node.reads > 1 => facts.frame = Some(frame),
-            Some(Later::Goes) if node.reads > 1 => return Err(ProviderError::Gone),
-            _ => {}
-        }
-        Ok(facts)
+        Ok(node.facts.clone())
     }
 
     fn identity(&mut self, window: &usize) -> flui_driver::Result<Vec<Option<String>>> {
@@ -1578,8 +1581,9 @@ fn a_facts_read_that_fails_fails_the_search() {
 }
 
 /// The read is the search, the walk of the screen's elements and the screen's frame read again
-/// after it, every host's: a screen moved, resized or gone meanwhile answers busy, to be read
-/// again, never the window gone.
+/// after it, the Mac's and this test tree's: a screen moved, resized or gone meanwhile answers
+/// busy, to be read again, never the window gone; gone while the process is no longer trusted,
+/// it is the permission taken back.
 #[test]
 fn a_screen_moved_or_gone_during_the_read_is_read_again() {
     let simulator_app = || {
@@ -1615,6 +1619,18 @@ fn a_screen_moved_or_gone_during_the_read_is_read_again() {
             "{later:?}: {refused:?}"
         );
     }
+
+    // A screen gone while the process is no longer trusted is the permission taken back, which
+    // no read again serves.
+    let (mut windows, window, screen) = simulator_app();
+    windows.nodes[screen].later = Some(Later::Goes);
+    windows.untrusted = true;
+    let refused = tree::read_screen(&mut windows, &request(), vec![window]).expect_err("refused");
+    assert_eq!(
+        refused.missing_capability().as_deref(),
+        Some("macos_permission_accessibility"),
+        "{refused:?}"
+    );
 }
 
 /// Simulator.app's window: the screen a child of a group the bezel adds, beside the bezel's
@@ -1723,15 +1739,18 @@ fn the_search_refuses_two_windows_and_finds_none_in_none() {
         .expect("the window naming the device beside one naming none");
     assert_eq!(windows.nodes[first].children, [found]);
 
-    // A window of the title whose text runs past the limit names something else: the window
-    // that names the device is still taken, and the read does not fail.
+    // A window of the title whose text runs past the limit names something else, never none:
+    // beside a window that names no UUID it is left out, and that one is taken, where two that
+    // name none would be refused.
+    let named = std::mem::take(&mut windows.nodes[first].identity);
     windows.nodes[second].identity = vec![
         Some("x".repeat(accessibility::IDENTITY_TEXT_LIMIT + 1)),
         None,
     ];
     let (found, _) = tree::find_screen(&mut windows, &request(), vec![second, first])
-        .expect("the window naming the device beside one past the limit");
+        .expect("the window naming none beside one past the limit");
     assert_eq!(windows.nodes[first].children, [found]);
+    windows.nodes[first].identity = named;
 
     // Two windows that name the device are two of its windows: which one shows it is a guess.
     windows.nodes[second].identity = vec![Some(format!("device-{UDID}"))];

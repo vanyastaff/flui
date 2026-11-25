@@ -29,11 +29,13 @@
 //! - **Reading.** [`roles`] is the role table the accessibility API is read against; the lane
 //!   projects the window's accessibility tree onto the wire's nodes (`Lane::read_tree`) through
 //!   the bounded walk of `lane::walk`, the window frame's own controls left out
-//!   ([`frame`]), and presses an element by its identifier (`Lane::invoke`, `AXPress`).
+//!   ([`frame`]), and presses an element by its identifier (`Lane::invoke`, `AXPress`), answered
+//!   as [`press::pressed`] says.
 //! - **Capture.** ScreenCaptureKit's capture of the window alone, from macOS 14 (`capture`).
 //!
 //! The pure parts (the key, role, coordinate and activity tables, the safety rules, the held keys,
-//! the pointer plan, the frame projection and the release gates) build on every host, so their
+//! the pointer plan, the frame projection, the press's answer and the release gates) build on
+//! every host, so their
 //! tables run on Linux CI; the parts that call macOS are `cfg(target_os = "macos")`.
 
 pub mod activity;
@@ -42,6 +44,7 @@ pub mod frame;
 pub mod held;
 pub mod keys;
 pub mod pointer;
+pub mod press;
 pub mod roles;
 pub mod safety;
 pub mod screen;

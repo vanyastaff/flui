@@ -79,24 +79,27 @@ pub(crate) fn string(value: &CFType) -> Option<String> {
     value.downcast_ref::<CFString>().and_then(text)
 }
 
+/// The first `units` UTF-16 units of `value`, copied only that far: the whole string when it is
+/// no longer.
+fn prefix(value: &CFString, units: usize) -> String {
+    let limit = CFIndex::try_from(units).unwrap_or(CFIndex::MAX);
+    if value.length() <= limit {
+        return value.to_string();
+    }
+    // SAFETY: the range starts at the string's first unit and ends inside it, since the string
+    // is longer than `limit` units.
+    let cut = unsafe { CFString::with_substring(None, Some(value), CFRange::new(0, limit)) };
+    cut.map(|cut| cut.to_string()).unwrap_or_default()
+}
+
 /// The first [`OUTLINE_TEXT_LIMIT`] characters of `value`, copied only that far; `None` for an
 /// empty one.
 fn text(value: &CFString) -> Option<String> {
     // Two UTF-16 units hold any character, so this many units hold the characters kept.
-    let limit = CFIndex::try_from(OUTLINE_TEXT_LIMIT * 2).unwrap_or(CFIndex::MAX);
-    let length = value.length();
-    let text: String = if length > limit {
-        // SAFETY: the range starts at the string's first unit and ends inside it, since the
-        // string is longer than `limit` units.
-        let cut = unsafe { CFString::with_substring(None, Some(value), CFRange::new(0, limit)) };
-        match cut {
-            Some(cut) => cut.to_string(),
-            None => String::new(),
-        }
-    } else {
-        value.to_string()
-    };
-    let text: String = text.chars().take(OUTLINE_TEXT_LIMIT).collect();
+    let text: String = prefix(value, OUTLINE_TEXT_LIMIT * 2)
+        .chars()
+        .take(OUTLINE_TEXT_LIMIT)
+        .collect();
     (!text.is_empty()).then_some(text)
 }
 
@@ -105,16 +108,7 @@ fn text(value: &CFString) -> Option<String> {
 /// reads, so a longer text comes back longer than it reads and it can tell
 /// (`accessibility::window_identity`).
 pub(crate) fn string_within(value: &CFType, units: usize) -> Option<String> {
-    let value = value.downcast_ref::<CFString>()?;
-    let limit = CFIndex::try_from(units).unwrap_or(CFIndex::MAX);
-    let text: String = if value.length() > limit {
-        // SAFETY: the range starts at the string's first unit and ends inside it, since the
-        // string is longer than `limit` units.
-        let cut = unsafe { CFString::with_substring(None, Some(value), CFRange::new(0, limit)) };
-        cut.map(|cut| cut.to_string()).unwrap_or_default()
-    } else {
-        value.to_string()
-    };
+    let text = prefix(value.downcast_ref::<CFString>()?, units);
     (!text.is_empty()).then_some(text)
 }
 

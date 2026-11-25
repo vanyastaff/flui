@@ -1848,7 +1848,7 @@ fn a_window_that_is_gone_is_named_as_the_window_handle() {
 /// that permission missing.
 #[test]
 fn a_press_sent_keeps_its_effect_when_the_permission_goes() {
-    use flui_driver::lane::macos::safety::pressed;
+    use flui_driver::lane::macos::press::pressed;
     use flui_driver::lane::walk::ProviderError;
     let deadline = std::time::Duration::from_millis(5000);
     for failure in [ProviderError::Timeout, ProviderError::Gone] {
