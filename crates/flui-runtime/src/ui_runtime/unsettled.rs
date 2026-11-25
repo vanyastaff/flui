@@ -1,7 +1,7 @@
 //! The runtime's half of what keeps an application from being idle, and the answers to the waits
 //! that read it (ADR-0400 §3).
 
-use flui_foundation::{PresentationAddress, PresentationId};
+use flui_foundation::PresentationId;
 use flui_protocol::wait::{SettleScope, UnsettledReason};
 use web_time::Instant;
 
@@ -28,6 +28,10 @@ impl UiRuntime {
     ///   window's frames run, and demand it alone holds is not listed, as with frames off: what
     ///   serves its work is its window being seen, the frame its window is asked for (the host's
     ///   half), the settlement the in-flight floor bounds (a `Timer`) or a rebuild;
+    /// - a task woken on the owner's driver is the application's own work, which the next turn
+    ///   polls whatever any window holds: listed with no window as the frame it scheduled
+    ///   (`FrameScheduled`) while frames are on, and as `PendingWork` while they are off, when a
+    ///   background turn polls it;
     /// - every deadline the runtime wakes for (a gesture's, its geometry's, text preparation's, a
     ///   haptic delivery's, a frame-rate hold's, a dropped frame's retry, the in-flight floor
     ///   where the host owes it, a task's sleep, a drag's spring loading) is a `Timer` served at
@@ -40,23 +44,25 @@ impl UiRuntime {
     /// - a command or an owner job queued for the next turn is `PendingWork` of the whole
     ///   application, frames on or off.
     ///
-    /// A frame a covered window owes its surface is its host's half, never listed here. `now` is
-    /// the instant `into` was gathered at. Reads state and runs no user code.
-    pub fn unsettled(&self, now: Instant, into: &mut Unsettled) {
-        debug_assert_eq!(
-            into.at(),
-            now,
-            "the list is read at the instant it was gathered"
-        );
+    /// A frame a covered window owes its surface is its host's half, never listed here. Each
+    /// cause is read at [`Unsettled::at`], the instant `into` was gathered at. Reads state and
+    /// runs no user code.
+    pub fn unsettled(&self, into: &mut Unsettled) {
         let frames_enabled = self.scheduler.frames_enabled();
+        let task_woken = self.owner_frame.ready_task_count() != 0;
         if frames_enabled {
             // A redraw flag no presentation's work stands behind is a wake, not work: the
             // platform's, or a frame the agent asked for.
             if self.needs_redraw() {
-                self.list_frame_work(into, UnsettledReason::NeedsRedraw, &|_| false, false);
+                let _ = self.list_frame_work(into, UnsettledReason::NeedsRedraw, &|_| false);
             }
-            if self.scheduler.is_frame_scheduled() {
-                self.list_frame_work(into, UnsettledReason::FrameScheduled, &|_| false, true);
+            // A scheduled frame no presentation's work stands behind is the application's own
+            // (a woken task's is listed below, whatever the windows hold).
+            if self.scheduler.is_frame_scheduled()
+                && !self.list_frame_work(into, UnsettledReason::FrameScheduled, &|_| false)
+                && !task_woken
+            {
+                self.list_for_next_turn(into, UnsettledReason::FrameScheduled, None);
             }
             // A gesture deadline armed and not yet come is its own `Timer` below: a frame before
             // it serves nothing.
@@ -67,7 +73,7 @@ impl UiRuntime {
                 // gesture's deadline, a haptic delivery, a hold); it is named for none.
                 self.list_for_next_turn(into, UnsettledReason::PendingWork, None);
             } else if self.has_pending_tree_work() || self.presentations.iter().any(has_motion) {
-                self.list_frame_work(into, UnsettledReason::PendingWork, &has_motion, false);
+                let _ = self.list_frame_work(into, UnsettledReason::PendingWork, &has_motion);
             }
             for presentation in self.presentations.iter() {
                 if !presentation.closing_requested.get()
@@ -80,22 +86,29 @@ impl UiRuntime {
                 into.wake_at_once();
             }
         }
+        // A woken task is polled by the next turn, a frame's begin or a background turn alike: a
+        // window's frame work, served or not, holds nothing of it.
+        if task_woken {
+            let reason = if frames_enabled {
+                UnsettledReason::FrameScheduled
+            } else {
+                UnsettledReason::PendingWork
+            };
+            self.list_for_next_turn(into, reason, None);
+        }
         // A command or an owner job queued for the next turn (a signal written off the owner
         // thread, a capability's completion, a request a client sent) is drained by that turn,
         // a frame or a background turn alike.
         if self.has_queued_work() {
             self.list_for_next_turn(into, UnsettledReason::PendingWork, None);
         }
-        self.visit_armed_deadlines(
-            &|address: PresentationAddress| self.owes_floor(address),
-            &mut |presentation, at| {
-                into.deadline(
-                    UnsettledReason::Timer,
-                    presentation.map(super::agent::window_of),
-                    at,
-                );
-            },
-        );
+        self.visit_armed_deadlines(&mut |presentation, at| {
+            into.deadline(
+                UnsettledReason::Timer,
+                presentation.map(super::agent::window_of),
+                at,
+            );
+        });
         if let Some(at) = self.next_agent_deadline() {
             into.wake_at(at);
         }
@@ -130,29 +143,24 @@ impl UiRuntime {
     /// presentation whose work the next frame serves (or for which `also` holds), so a
     /// `wait.settled` on a window another window's demand does not touch is not held by it
     /// (ADR-0400 §3). Where only presentations no frame serves hold frame work, that work waits
-    /// for what serves it and the demand is not listed, as with frames off. Where no
-    /// presentation holds any, it is listed with no window when `of_application` says the
-    /// demand is the application's own (a frame a task scheduled), and not at all otherwise.
+    /// for what serves it and the demand is not listed, as with frames off. Returns whether any
+    /// presentation stands behind the demand, served or not: where none does, the demand is the
+    /// application's own, which the caller lists with no window.
     fn list_frame_work(
         &self,
         into: &mut Unsettled,
         reason: UnsettledReason,
         also: &dyn Fn(&PresentationState) -> bool,
-        of_application: bool,
-    ) {
-        let mut named = false;
-        let mut held = false;
+    ) -> bool {
+        let mut stood_behind = false;
         for presentation in self.presentations.iter() {
-            if presentation.has_frame_work_for_next_frame() || also(presentation) {
+            let served = presentation.has_frame_work_for_next_frame() || also(presentation);
+            if served {
                 self.list_for_next_turn(into, reason, Some(presentation.id()));
-                named = true;
-            } else if presentation.has_frame_work() {
-                held = true;
             }
+            stood_behind |= served || presentation.has_frame_work();
         }
-        if of_application && !named && !held {
-            self.list_for_next_turn(into, reason, None);
-        }
+        stood_behind
     }
 
     /// The host, after its turn and its own steps after it: answers from `host` every parked wait
@@ -234,7 +242,7 @@ impl UiRuntime {
     /// agent's owner side (`AgentSide::answer_from_runtime_half`).
     pub(super) fn answer_settled_agent_waits_from_own_half(&self, now: Instant) {
         let mut unsettled = Unsettled::new(now);
-        self.unsettled(now, &mut unsettled);
+        self.unsettled(&mut unsettled);
         self.answer_settled_agent_waits(&unsettled, SettleScope::RuntimeOnly);
     }
 

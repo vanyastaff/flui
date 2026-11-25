@@ -221,7 +221,7 @@ fn a_parked_wait_is_not_a_reason_the_window_has_not_settled() {
         .now();
     let gathered = || {
         let mut unsettled = crate::settledness::Unsettled::new(now);
-        ui_runtime.unsettled(now, &mut unsettled);
+        ui_runtime.unsettled(&mut unsettled);
         unsettled
     };
     let before = gathered();

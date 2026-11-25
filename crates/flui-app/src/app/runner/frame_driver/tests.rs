@@ -1241,29 +1241,8 @@ fn deadlines_survive_a_sibling_install_and_close() {
     teardown_platform_ui_runtime();
 }
 
-/// The loop's own raster host, put back however a row that swapped in its
-/// own ends.
 #[cfg(all(feature = "testing", not(target_os = "ios")))]
-struct LoopRasterHost(Option<super::super::raster_host::SharedRasterHost>);
-
-#[cfg(all(feature = "testing", not(target_os = "ios")))]
-impl LoopRasterHost {
-    /// Make `shared` the loop's raster host until the answer drops.
-    fn swap_in(shared: &super::super::raster_host::SharedRasterHost) -> Self {
-        Self(Some(super::super::host::APP_RUNTIME.with(|slot| {
-            std::mem::replace(&mut slot.borrow_mut().raster_host, shared.clone())
-        })))
-    }
-}
-
-#[cfg(all(feature = "testing", not(target_os = "ios")))]
-impl Drop for LoopRasterHost {
-    fn drop(&mut self) {
-        if let Some(host) = self.0.take() {
-            super::super::host::APP_RUNTIME.with(|slot| slot.borrow_mut().raster_host = host);
-        }
-    }
-}
+use super::super::raster_host::tests::LoopRasterHost;
 
 /// A window whose frames are off wakes the loop for none of its raster work:
 /// the surface it is owed is served only by its own frame, so the loop's
@@ -1345,10 +1324,13 @@ fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
 
 /// The loop's wake waives the in-flight floor of a window whose frame the
 /// raster thread settled and whose wake has returned, beside a window whose
-/// frame the thread still renders, whose floor it keeps (ADR-0305 §5).
+/// frame the thread still renders, whose floor it keeps (ADR-0305 §5). Each
+/// runtime is built as a runner builds one (`host::build_ui_runtime`), so the
+/// rule each reads is the one `build_lending_ui_runtime` installs.
 ///
-/// Red-check: let `AppRuntime::next_wake` read `next_wake()` instead of
-/// `next_wake_owing_floors` and the settled window's floor is reported.
+/// Red-check: leave `with_floor_owed` out of `build_lending_ui_runtime`, or
+/// let `OwnerStatus::next_wake` owe every floor, and the settled window's
+/// floor is reported.
 #[cfg(all(
     feature = "testing",
     not(any(target_os = "android", target_os = "ios"))
@@ -1356,11 +1338,19 @@ fn a_window_whose_frames_are_off_wakes_the_loop_for_none_of_its_surface() {
 fn the_loop_wakes_for_no_floor_of_a_window_the_raster_thread_settled() {
     use super::super::raster_host::{
         RasterSlot,
-        tests::{THREAD_WAIT, threaded_host_for_two},
+        tests::{THREAD_WAIT, attach_two, unattached_threaded_host},
     };
     let _clear = OwnerHostClearGuard::arm();
+    // Before the runtimes are built: the builder installs the rule of the
+    // loop's raster host.
+    let (shared, slots) = unattached_threaded_host();
+    let _previous = LoopRasterHost::swap_in(&shared);
     let prepared = || {
-        let runtime = UiRuntime::for_test();
+        let runtime = super::super::host::build_ui_runtime(
+            crate::app::window_test_support::headless_test_window(),
+            1.0,
+        )
+        .expect("the runner builds a runtime");
         runtime
             .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
             .expect("the root attaches");
@@ -1371,8 +1361,7 @@ fn the_loop_wakes_for_no_floor_of_a_window_the_raster_thread_settled() {
     };
     let (mut settled, mut drawn) = (prepared(), prepared());
     let (settled_at, drawn_at) = (settled.dispatcher().address, drawn.dispatcher().address);
-    let (shared, slots, wakes) = threaded_host_for_two(settled_at, drawn_at);
-    let _previous = LoopRasterHost::swap_in(&shared);
+    let wakes = attach_two(&shared, settled_at, drawn_at);
     let install = |installation: &mut WindowInstall| {
         let dispatcher = installation.dispatcher();
         let frame = installation
@@ -1410,13 +1399,21 @@ fn the_loop_wakes_for_no_floor_of_a_window_the_raster_thread_settled() {
     let render = slots.hold_next_render();
     frame_now(drawn_window, &drawn_frame);
     let rendering = render.began_within(THREAD_WAIT);
-    // Each window's floor, read with every floor counted.
+    // Each window's floor, read with every floor counted: while the raster
+    // host is turning, its rule cannot read it and owes every floor.
     let floor_of = |dispatcher| {
         let floor = Rc::new(Cell::new(None));
         let read = Rc::clone(&floor);
+        let turning = shared.clone();
         dispatch_platform_ui_runtime(
             dispatcher,
-            RuntimeTask::TestCallback(Box::new(move |ui_runtime| read.set(ui_runtime.next_wake()))),
+            RuntimeTask::TestCallback(Box::new(move |ui_runtime| {
+                read.set(
+                    turning
+                        .try_with(|_| ui_runtime.next_wake())
+                        .expect("the raster host is idle"),
+                );
+            })),
         )
         .expect("the runtime answers");
         floor.get()

@@ -302,7 +302,7 @@ fn a_wake_that_panics_as_a_frames_wait_is_parked_answers_it_once() {
     }
     let now = flui_foundation::MonotonicClock::now(&rig.clock);
     let mut unsettled = flui_runtime::settledness::Unsettled::new(now);
-    rig.runtime.unsettled(now, &mut unsettled);
+    rig.runtime.unsettled(&mut unsettled);
     assert!(
         unsettled
             .causes()

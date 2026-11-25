@@ -1297,11 +1297,15 @@ the window of each presentation whose work the next frame serves
 (`has_frame_work_for_next_frame`); a presentation that cannot be seen, whose sink is full or whose
 device was given up is named for none, and demand only such presentations hold is not listed, as
 with frames off; a scheduled frame no presentation's work asks for, and due work, carry no window.
-Input an act queued is the application's work, a redraw of its window until it has played; a
-queued command or owner job is `PendingWork` of the application. Every deadline it wakes for is a
-`Timer` at its instant, read from the one enumeration `UiRuntime::next_wake` also reads
-(`visit_armed_deadlines`), a presentation's in-flight floor in both only where the host owes it
-(`RuntimeHostServices::with_floor_owed`), so the two cannot disagree. A frame a covered window
+A task woken on the owner's driver is the application's, whatever any window holds: the next turn
+polls it, so it is a `FrameScheduled` of no window while frames are on and `PendingWork` of no
+window while a background turn polls it. Input an act queued is the application's work, a redraw
+of its window until it has played; a queued command or owner job is `PendingWork` of the
+application. Every deadline it wakes for is a `Timer` at its instant, read from the one
+enumeration `UiRuntime::next_wake` also reads (`visit_armed_deadlines`), a presentation's
+in-flight floor in both only where the host owes it (`RuntimeHostServices::with_floor_owed`, the
+one floor rule: the owner registry's wake, `OwnerStatus::next_wake`, reads each runtime's), so the
+two cannot disagree. A frame a covered window
 owes its surface is the host's half. Whether a host composes a half is fixed at construction
 (`RuntimeHostServices::composes_host_half`): a runtime whose host does not answers its settled
 waits itself from its own half (`HostHalf::Absent`), through the agent's owner side

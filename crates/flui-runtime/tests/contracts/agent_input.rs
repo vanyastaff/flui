@@ -790,7 +790,7 @@ fn a_queued_release_asks_for_the_frame_that_plays_it() {
     let owes_a_frame = |rig: &crate::agent_rig::Rig| {
         let now = flui_foundation::MonotonicClock::now(&rig.clock);
         let mut unsettled = flui_runtime::settledness::Unsettled::new(now);
-        rig.runtime.unsettled(now, &mut unsettled);
+        rig.runtime.unsettled(&mut unsettled);
         unsettled
             .causes()
             .any(|cause| cause.cleared_by == flui_protocol::wait::ClearedBy::NextFrame)

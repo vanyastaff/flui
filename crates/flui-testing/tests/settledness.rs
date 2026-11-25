@@ -201,14 +201,25 @@ impl std::future::Future for Parked {
     }
 }
 
-/// A widget whose task waits on a [`Parked`] future.
+/// A widget whose task waits on a [`Parked`] future, then sets `resolved`.
 #[derive(Clone, StatefulView)]
 struct Awaiting {
     parked: Parked,
+    resolved: Rc<Cell<bool>>,
+}
+
+impl Awaiting {
+    fn new(parked: &Parked) -> Self {
+        Self {
+            parked: parked.clone(),
+            resolved: Rc::default(),
+        }
+    }
 }
 
 struct AwaitingState {
     parked: Parked,
+    resolved: Rc<Cell<bool>>,
     task: Option<flui_scheduler::TaskToken>,
 }
 
@@ -218,6 +229,7 @@ impl StatefulView for Awaiting {
     fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
         AwaitingState {
             parked: self.parked.clone(),
+            resolved: Rc::clone(&self.resolved),
             task: None,
         }
     }
@@ -226,9 +238,13 @@ impl StatefulView for Awaiting {
 impl ViewState<Awaiting> for AwaitingState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         let parked = self.parked.clone();
-        self.task = ctx
-            .async_driver()
-            .map(|driver| driver.spawn_local(Box::pin(parked)));
+        let resolved = Rc::clone(&self.resolved);
+        self.task = ctx.async_driver().map(|driver| {
+            driver.spawn_local(Box::pin(async move {
+                parked.await;
+                resolved.set(true);
+            }))
+        });
     }
 
     fn build(&self, _view: &Awaiting, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -406,12 +422,8 @@ fn written_rows() -> Vec<Row> {
             persists: false,
             state: || {
                 let parked = Parked::default();
-                let mut served = Served::mounted(
-                    HeadlessWindow::new(40, 40),
-                    &Awaiting {
-                        parked: parked.clone(),
-                    },
-                );
+                let mut served =
+                    Served::mounted(HeadlessWindow::new(40, 40), &Awaiting::new(&parked));
                 let _ = served.host.pump(FRAME);
                 parked.release();
                 served.kept.push(Box::new(parked));
@@ -1102,6 +1114,259 @@ fn a_hidden_window_is_named_for_no_frame_whether_or_not_another_window_animates(
     served.kept.push(Box::new((number, spinning)));
 }
 
+/// **A woken task is the application's, whatever any window holds.** A task spawned on the
+/// owner's driver and woken is polled by the next turn, a frame or a background turn: one row
+/// beside a hidden window whose work no frame serves while a second window is seen (frames on),
+/// one with its only window hidden (frames off). In each the list names the task's cause with no
+/// window, and the host does not settle before the task has run.
+///
+/// Fails against a list that drops the application's scheduled frame whenever a window holds
+/// frame work no frame serves (the first row lists nothing and settles with the task unpolled),
+/// or that lists a woken task only while frames are on (the second row).
+#[test]
+fn a_woken_task_is_listed_for_the_application_whatever_a_window_holds() {
+    struct Row {
+        name: &'static str,
+        reason: UnsettledReason,
+        /// The host with the task's future still parked, and the flag the task sets once it
+        /// has run.
+        state: fn(&Parked) -> (Served, Rc<Cell<bool>>),
+    }
+    let rows = [
+        Row {
+            name: "beside a hidden window with frame work and a seen one with none",
+            reason: UnsettledReason::FrameScheduled,
+            state: |parked| {
+                let number = SharedSignal::new(10);
+                let awaiting = Awaiting::new(parked);
+                let resolved = Rc::clone(&awaiting.resolved);
+                let (mut served, _, _) = two_windows(
+                    &Shown {
+                        number: number.clone(),
+                    },
+                    &awaiting,
+                );
+                let hidden = served.host.primary_window();
+                served.host.set_window_occluded(hidden, true);
+                let _ = served.host.pump(FRAME);
+                number.set(12);
+                assert!(
+                    windows_named(&served.host.unsettled(), UnsettledReason::FrameScheduled)
+                        .is_empty(),
+                    "the frame the hidden window's change scheduled is listed for nobody"
+                );
+                let _ = served.host.pump(FRAME);
+                assert!(
+                    windows_named(&served.host.unsettled(), UnsettledReason::PendingWork)
+                        .is_empty(),
+                    "the hidden window's work is named for no frame"
+                );
+                served.kept.push(Box::new(number));
+                (served, resolved)
+            },
+        },
+        Row {
+            name: "with its only window hidden",
+            reason: UnsettledReason::PendingWork,
+            state: |parked| {
+                let awaiting = Awaiting::new(parked);
+                let resolved = Rc::clone(&awaiting.resolved);
+                let mut served = Served::mounted(HeadlessWindow::new(40, 40), &awaiting);
+                let hidden = served.host.primary_window();
+                served.host.set_window_occluded(hidden, true);
+                let _ = served.host.pump(FRAME);
+                (served, resolved)
+            },
+        },
+    ];
+    for row in rows {
+        let parked = Parked::default();
+        let (mut served, resolved) = (row.state)(&parked);
+        assert!(
+            served.host.unsettled().is_empty(),
+            "{}: nothing is listed before the task wakes: {:?}",
+            row.name,
+            served.host.unsettled().causes().collect::<Vec<_>>()
+        );
+        parked.release();
+        assert_eq!(
+            windows_named(&served.host.unsettled(), row.reason),
+            [None],
+            "{}: the woken task is the application's",
+            row.name
+        );
+        served
+            .host
+            .pump_until_settled(FRAME, 8)
+            .expect("the task runs and nothing is left");
+        assert!(
+            resolved.get(),
+            "{}: the host settled before the task ran",
+            row.name
+        );
+    }
+}
+
+/// **The list names exactly what a state holds, nothing beside it.** One row per state, each
+/// with the whole list it gives: a running animation is its window's redraw and `Ticker`, not
+/// also work a frame takes; a change is its window's redraw, scheduled frame and tree work; a
+/// request a client sent is `PendingWork` of the application until the turn that drains it; a
+/// task's sleep that came due while its only window is hidden (frames off) is the `Timer` at its
+/// instant alone, not also work a frame takes.
+///
+/// Fails against a list that names tree work for every presentation a frame serves whether or
+/// not it has any (the animation's row), that leaves a queued request out (the request's row),
+/// or that lists a frame's causes while frames are off (the sleep's row).
+#[test]
+fn the_list_names_exactly_what_each_state_holds() {
+    type Listed = Vec<(UnsettledReason, ClearedBy, Option<WindowId>)>;
+    struct Row {
+        name: &'static str,
+        /// The host in the state, and the whole list it gives.
+        state: fn() -> (Served, Listed),
+    }
+    let rows = [
+        Row {
+            name: "a running animation",
+            state: || {
+                let mut served =
+                    Served::mounted(HeadlessWindow::new(40, 40), &ActivityIndicator::new());
+                let _ = served.host.pump(FRAME);
+                let window = served.window().id();
+                (
+                    served,
+                    vec![
+                        (
+                            UnsettledReason::NeedsRedraw,
+                            ClearedBy::NextFrame,
+                            Some(window),
+                        ),
+                        (UnsettledReason::Ticker, ClearedBy::NextFrame, Some(window)),
+                    ],
+                )
+            },
+        },
+        Row {
+            name: "a change a frame shows",
+            state: || {
+                let number = SharedSignal::new(10);
+                let mut served = Served::mounted(
+                    HeadlessWindow::new(40, 40),
+                    &Shown {
+                        number: number.clone(),
+                    },
+                );
+                served
+                    .host
+                    .pump_until_settled(FRAME, 8)
+                    .expect("a still root settles");
+                number.set(12);
+                served.kept.push(Box::new(number));
+                let window = served.window().id();
+                (
+                    served,
+                    vec![
+                        (
+                            UnsettledReason::NeedsRedraw,
+                            ClearedBy::NextFrame,
+                            Some(window),
+                        ),
+                        (
+                            UnsettledReason::FrameScheduled,
+                            ClearedBy::NextFrame,
+                            Some(window),
+                        ),
+                        (
+                            UnsettledReason::PendingWork,
+                            ClearedBy::NextFrame,
+                            Some(window),
+                        ),
+                    ],
+                )
+            },
+        },
+        Row {
+            name: "a request a client sent, before its turn",
+            state: || {
+                let mut served = Served::mounted(HeadlessWindow::new(40, 40), &still());
+                served
+                    .host
+                    .pump_until_settled(FRAME, 8)
+                    .expect("a still root settles");
+                let request = served.wait_settled(1_000);
+                served.kept.push(Box::new(request));
+                (
+                    served,
+                    vec![(UnsettledReason::PendingWork, ClearedBy::NextFrame, None)],
+                )
+            },
+        },
+        Row {
+            name: "a task's sleep come due while its only window is hidden",
+            state: || {
+                let mut served = Served::mounted(
+                    HeadlessWindow::new(40, 40),
+                    &Sleeper::new(Duration::from_millis(100)),
+                );
+                let hidden = served.host.primary_window();
+                served.host.set_window_occluded(hidden, true);
+                let _ = served.host.pump(FRAME);
+                served.host.advance(Duration::from_millis(100));
+                (
+                    served,
+                    vec![(UnsettledReason::Timer, ClearedBy::Deadline, None)],
+                )
+            },
+        },
+    ];
+    for row in rows {
+        let (served, expected) = (row.state)();
+        let listed: Listed = served
+            .host
+            .unsettled()
+            .causes()
+            .map(|cause| (cause.reason, cause.cleared_by, cause.window))
+            .collect();
+        assert_eq!(listed, expected, "{}", row.name);
+    }
+}
+
+/// **A frame the agent asks of one window wakes the loop at once, beside a window that asks
+/// none.** A `wait.frames` parked on the second of two still windows asks each frame of that
+/// window: the host's loop wakes at once for it, and the list names no cause.
+///
+/// Fails against a runtime that wakes for the agent's frames only when every window asked one.
+#[test]
+fn an_agent_frame_of_one_window_wakes_the_loop_beside_a_window_that_asks_none() {
+    let (mut served, _, [_, second]) = two_windows(&still(), &still());
+    served
+        .host
+        .pump_until_settled(FRAME, 8)
+        .expect("both windows settle");
+    let window = served.windows.lock()[1].clone();
+    let params: flui_protocol::wait::FramesParams = serde_json::from_value(serde_json::json!({
+        "window": second,
+        "frames": 1_000_000,
+        "timeout_ms": 60_000,
+    }))
+    .expect("the parameters a client writes");
+    let _wait = window
+        .call::<flui_protocol::method::WaitFrames>(params)
+        .expect("the inbox has room");
+    let _ = served.host.pump(Duration::ZERO);
+    let listed = served.host.unsettled();
+    assert!(
+        listed.is_empty(),
+        "the agent's frames are no cause: {:?}",
+        listed.causes().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        served.host.time_to_next_frame(),
+        Some(Duration::ZERO),
+        "the loop wakes at once for the second window's frame"
+    );
+}
+
 /// Which window a cause of a frame's demand names.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Named {
@@ -1350,13 +1615,19 @@ fn a_runtime_that_sees_no_window_lists_its_deadlines_alone() {
 }
 
 /// **A covered window's frame request wakes the loop at the instant the window was asked for.**
-/// The host lists the request at that instant exactly, so its loop's wait ends where the window
-/// serves the frame, not a nanosecond after.
+/// The host lists the request at that instant exactly, with the window asked, so its loop's wait
+/// ends where the window serves the frame, not a nanosecond after.
 ///
-/// Fails against a host that converts the window's instant to the list's with any offset.
+/// Fails against a host that converts the window's instant to the list's with any offset, or
+/// that names no window for the request.
 #[test]
 fn a_covered_window_s_frame_request_wakes_the_loop_at_its_instant() {
     let served = covered_with_a_change();
+    assert_eq!(
+        windows_named(&served.host.unsettled(), UnsettledReason::FrameRequest),
+        [Some(served.window().id())],
+        "the request names the covered window"
+    );
     let asked = served
         .host
         .window()
@@ -1675,4 +1946,31 @@ fn a_retry_holds_only_its_own_window_s_causes() {
         "the loop wakes for the animation, not at the retry"
     );
     served.kept.push(Box::new((number, spinning)));
+}
+
+/// **A window opened with nothing to show keeps the loop asleep.** Beside a settled window, a
+/// second window opened with no root lists no cause and asks for no wake: a new presentation
+/// holds no frame the agent asked for.
+///
+/// Fails against a presentation born marked as asked for an agent's frame, which wakes the loop
+/// at once until its first frame.
+#[test]
+fn a_window_opened_with_nothing_to_show_keeps_the_loop_asleep() {
+    let mut served = Served::mounted(HeadlessWindow::new(40, 40), &still());
+    served
+        .host
+        .pump_until_settled(FRAME, 8)
+        .expect("a still root settles");
+    let _opened = served.host.open_window(HeadlessWindow::new(40, 40));
+    let listed = served.host.unsettled();
+    assert!(
+        listed.is_empty(),
+        "nothing is listed: {:?}",
+        listed.causes().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        served.host.time_to_next_frame(),
+        None,
+        "nothing wakes the loop"
+    );
 }

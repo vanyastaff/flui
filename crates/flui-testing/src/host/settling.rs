@@ -70,7 +70,7 @@ impl HeadlessHost {
         let mut unsettled = Unsettled::new(now);
         let runtime = self.ui_runtime.as_ref();
         if let Some(runtime) = runtime {
-            runtime.unsettled(now, &mut unsettled);
+            runtime.unsettled(&mut unsettled);
         }
         // The runtime's rule for what a dropped frame's retry holds, for a cause of a window's
         // presentation or of the whole application: the one rule both halves follow.

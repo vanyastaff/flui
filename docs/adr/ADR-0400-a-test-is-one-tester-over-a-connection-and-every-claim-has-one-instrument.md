@@ -295,8 +295,9 @@ impl Unsettled {
     pub fn wake(&self) -> Option<Instant>;
 }
 impl UiRuntime {
-    /// The runtime's half. A frame a surface owes is the host's half, never listed here.
-    pub fn unsettled(&self, now: Instant, into: &mut Unsettled);
+    /// The runtime's half, read at the instant `into` was gathered at. A frame a surface owes is
+    /// the host's half, never listed here.
+    pub fn unsettled(&self, into: &mut Unsettled);
     /// The host, after its turn: answers the parked `Settled` and idle waits from both halves.
     pub fn answer_settled(&mut self, now: Instant, host: HostHalf<'_>);
 }

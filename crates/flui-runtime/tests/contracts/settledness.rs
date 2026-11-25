@@ -148,7 +148,7 @@ fn run_until_idle(
         clock.advance(next);
         let _ = runtime.pump(&mut SampledClock(clock.now()), &mut Shown);
         half = Unsettled::new(clock.now());
-        runtime.unsettled(clock.now(), &mut half);
+        runtime.unsettled(&mut half);
         if half.is_empty() {
             break;
         }
@@ -512,7 +512,7 @@ fn a_queued_frame_s_settlement_answers_a_settled_wait_with_no_turn_after_it() {
         clock.advance(next);
         let _ = runtime.pump(&mut SampledClock(clock.now()), &mut sink);
         let mut after_turn = Unsettled::new(clock.now());
-        runtime.unsettled(clock.now(), &mut after_turn);
+        runtime.unsettled(&mut after_turn);
         for epoch in sink.0.drain(..) {
             let applied = runtime.settle_frame(FrameSettlement::new(
                 address,
@@ -522,7 +522,7 @@ fn a_queued_frame_s_settlement_answers_a_settled_wait_with_no_turn_after_it() {
             assert_eq!(applied, Settled::Applied);
         }
         half = Unsettled::new(clock.now());
-        runtime.unsettled(clock.now(), &mut half);
+        runtime.unsettled(&mut half);
         if half.is_empty() {
             emptied_by_a_settlement = !after_turn.is_empty();
             break;
@@ -548,7 +548,7 @@ fn listed(
     clock: &ManualClock,
 ) -> Vec<(UnsettledReason, ClearedBy, Option<WindowId>)> {
     let mut half = Unsettled::new(clock.now());
-    runtime.unsettled(clock.now(), &mut half);
+    runtime.unsettled(&mut half);
     half.causes()
         .map(|cause| (cause.reason, cause.cleared_by, cause.window))
         .collect()
@@ -599,11 +599,13 @@ fn a_presentation_whose_sink_is_full_is_named_for_no_frame() {
 }
 
 /// The in-flight floor of a window counts only where its host owes it, in the runtime's half as
-/// in its wake: one rule (`RuntimeHostServices::with_floor_owed`) decides both, so a host whose
-/// raster side settled the window's frames hears no `Timer` for a floor nothing wakes for.
+/// in its wake and in the owner registry's: one rule (`RuntimeHostServices::with_floor_owed`)
+/// decides all three, so a host whose raster side settled the window's frames hears no `Timer`
+/// for a floor nothing wakes for.
 ///
 /// Fails against a half that lists every floor whatever the host owes (the floor of a window it
-/// does not owe is listed), or a wake that reads a rule of its own (the two disagree).
+/// does not owe is listed), or a wake, the runtime's or the registry's (`OwnerStatus::next_wake`),
+/// that reads a rule of its own (they disagree).
 #[test]
 fn a_floor_the_host_does_not_owe_is_neither_listed_nor_woken_for() {
     for owed in [true, false] {
@@ -618,7 +620,7 @@ fn a_floor_the_host_does_not_owe_is_neither_listed_nor_woken_for() {
         assert_eq!(sink.0.len(), 1, "the frame is in flight");
 
         let mut half = Unsettled::new(clock.now());
-        runtime.unsettled(clock.now(), &mut half);
+        runtime.unsettled(&mut half);
         let floor_listed = half.causes().any(|cause| {
             cause.reason == UnsettledReason::Timer && cause.window == Some(window.id())
         });
@@ -628,7 +630,60 @@ fn a_floor_the_host_does_not_owe_is_neither_listed_nor_woken_for() {
             half.next_deadline(),
             "owed {owed}: the wake reads the rule the half reads"
         );
+        let owner = flui_runtime::owner::OwnerHost::new();
+        let _address = owner
+            .publication(owner.prepare_runtime(runtime))
+            .expect("publish runtime")
+            .commit();
+        assert_eq!(
+            owner.next_wake(),
+            Ok(half.next_deadline()),
+            "owed {owed}: the registry's wake reads the rule its runtime holds"
+        );
     }
+}
+
+/// A frame the development agent asks of a window drives a frame only while the window can be
+/// seen: a `wait.frames` parked on a seen window sets the redraw flag a runner's frame gate reads
+/// and wakes the runtime's half at once, as a wake and never a cause; once the window is hidden,
+/// the frame the wait asks again at the next turn's end sets neither.
+///
+/// Fails against a runtime that marks the redraw for a hidden window's agent frame, or wakes for
+/// it.
+#[test]
+fn an_agent_frame_drives_a_frame_only_of_a_window_that_can_be_seen() {
+    let clock = ManualClock::new();
+    let (mut runtime, _held, window) = idle_runtime(&clock, true);
+    let _wait = frames_that_hold_out(&window);
+    let turn = |runtime: &mut UiRuntime| {
+        clock.advance(Duration::from_millis(16));
+        let _ = runtime.pump(&mut SampledClock(clock.now()), &mut Shown);
+    };
+    // The redraw flag, whether the half wakes at once, and the causes it lists.
+    let asked = |runtime: &UiRuntime| {
+        let mut half = Unsettled::new(clock.now());
+        runtime.unsettled(&mut half);
+        (
+            runtime.needs_redraw(),
+            half.wake() == Some(clock.now()),
+            half.causes().count(),
+        )
+    };
+    turn(&mut runtime);
+    assert_eq!(
+        asked(&runtime),
+        (true, true, 0),
+        "seen: the wait's frame is asked, as a wake"
+    );
+
+    runtime.update_window_visibility(runtime.presentation_id(), false);
+    runtime.mark_rendered();
+    turn(&mut runtime);
+    assert_eq!(
+        asked(&runtime),
+        (false, false, 0),
+        "hidden: the wait asks for no frame"
+    );
 }
 
 /// A presentation whose device rebuild was given up is named for no frame: a redraw asked of it

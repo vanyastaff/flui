@@ -761,35 +761,23 @@ impl UiRuntime {
     /// the rule the runtime's half of what keeps the application from being idle reads too.
     #[must_use]
     pub fn next_wake(&self) -> Option<web_time::Instant> {
-        self.next_wake_owing_floors(&|address| self.owes_floor(address))
+        let mut earliest = self.next_agent_deadline();
+        self.visit_armed_deadlines(&mut |_, at| {
+            earliest = Some(earliest.map_or(at, |known| known.min(at)));
+        });
+        earliest
     }
 
     /// Whether the host owes the in-flight floor of the presentation at `address`: what it said
     /// at construction ([`RuntimeHostServices::with_floor_owed`](super::RuntimeHostServices::with_floor_owed)),
-    /// every floor where it said nothing.
+    /// every floor where it said nothing. The floor guards a settlement whose wake may be lost
+    /// (ADR-0305 §5); a host whose raster side has settled every frame it holds of a window, and
+    /// asked that window for the frame that drains them, owes the window that frame instead,
+    /// which the window's own host delivers once it can take one.
     pub(super) fn owes_floor(&self, address: PresentationAddress) -> bool {
         self.floor_owed
             .as_ref()
             .is_none_or(|floor_owed| floor_owed(address))
-    }
-
-    /// [`Self::next_wake`] with the in-flight floor of a presentation only where `floor_owed`
-    /// holds for its address, in place of the host's own rule (ADR-0305 §5). The floor guards a
-    /// settlement whose wake may be lost; a host whose raster side has settled every frame it
-    /// holds of a window, and asked that window for the frame that drains them, owes the window
-    /// that frame instead, which the window's own host delivers once it can take one. Every
-    /// other deadline counts.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn next_wake_owing_floors(
-        &self,
-        floor_owed: &dyn Fn(PresentationAddress) -> bool,
-    ) -> Option<web_time::Instant> {
-        let mut earliest = self.next_agent_deadline();
-        self.visit_armed_deadlines(floor_owed, &mut |_, at| {
-            earliest = Some(earliest.map_or(at, |known| known.min(at)));
-        });
-        earliest
     }
 
     /// The earliest deadline the development agent's owner side wakes for: a wait it parked or an
@@ -807,14 +795,12 @@ impl UiRuntime {
     }
 
     /// Every deadline the runtime wakes for, each with the presentation it belongs to (`None`
-    /// for the runtime's own), the in-flight floor of a presentation only where `floor_owed`
-    /// holds for its address. The one enumeration of them: [`Self::next_wake`] and the runtime's
-    /// half of what keeps it from being idle ([`Self::unsettled`]) both read it with the host's
-    /// rule for floors ([`Self::owes_floor`]), so the two cannot disagree. The agent's deadlines
-    /// ([`Self::next_agent_deadline`]) are not here.
+    /// for the runtime's own), the in-flight floor of a presentation only where the host owes it
+    /// ([`Self::owes_floor`]). The one enumeration of them: [`Self::next_wake`] and the runtime's
+    /// half of what keeps it from being idle ([`Self::unsettled`]) both read it, so the two
+    /// cannot disagree. The agent's deadlines ([`Self::next_agent_deadline`]) are not here.
     pub(super) fn visit_armed_deadlines(
         &self,
-        floor_owed: &dyn Fn(PresentationAddress) -> bool,
         visit: &mut dyn FnMut(Option<PresentationId>, web_time::Instant),
     ) {
         let ui_runtime_id = self.id();
@@ -837,7 +823,7 @@ impl UiRuntime {
                 // ADR-0389).
                 presentation.retry_served_at(),
                 presentation.in_flight_floor().filter(|_| {
-                    floor_owed(PresentationAddress {
+                    self.owes_floor(PresentationAddress {
                         ui_runtime_id,
                         presentation_id: presentation.id(),
                     })
