@@ -719,9 +719,13 @@ where
                         // The other matchers and the used step are let go
                         // before the answer is given, so none of the test's
                         // values is still held while its answer runs.
-                        if !self.drop_while_answering(id, first, candidates)
-                            || !self.drop_while_answering(id, first, expect)
-                        {
+                        // Both are let go, each contained on its own,
+                        // whatever the first one's drop did: a skipped
+                        // `expect` would drop as the matcher's last handle
+                        // outside the containment.
+                        let asked = self.drop_while_answering(id, first, candidates);
+                        let asked = self.drop_while_answering(id, first, expect) && asked;
+                        if !asked {
                             let _ = self.drop_while_answering(id, first, answer);
                             return false;
                         }

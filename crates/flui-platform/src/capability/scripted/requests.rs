@@ -1,4 +1,4 @@
-//! [`Pending`]: the one owner of a script's unanswered requests and of
+//! [`Pending`]: the one owner of a script's pending requests and of
 //! its holds, with the one transition function, [`Pending::apply`],
 //! every event goes through. The rules it carries out are stated once, on
 //! [`Script`](super::Script#held-requests).
@@ -99,7 +99,7 @@ struct Entry<K, T, D> {
     payload: T,
 }
 
-/// A script's unanswered requests, oldest first, its live holds and whether
+/// A script's pending requests, oldest first, its live holds and whether
 /// a drain is sending the kept requests on.
 #[derive(Debug)]
 pub(super) struct Pending<K, T, D> {
@@ -311,7 +311,7 @@ impl<K: Copy + Eq, T, D> Pending<K, T, D> {
             .map(|entry| (entry.key, &entry.payload))
     }
 
-    /// How many requests are unanswered, whatever each waits for.
+    /// How many requests are pending, whatever each waits for.
     pub(super) fn len(&self) -> usize {
         self.entries.len()
     }
