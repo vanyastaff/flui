@@ -23,31 +23,36 @@ own it.
   as `harness_snapshot.rs` is. `FAMILY_FILES` is `family_files![a, b]`: the macro takes the names
   alone and expands each to `(stringify!(name), include_str!("harness/<name>.rs"))`, so the text
   the guard counts is the file the name mounts. The expansion also imports the module
-  (`use self::<name> as _`), so a family whose `mod` line is missing, cfg-gated or commented out
-  does not compile. Existing rows stay where they are; only new families use files of their own.
+  (`use self::<name> as _`): a compile-time backstop, held by the compiler, for a mount the text
+  check reads as present but the compiler does not build (one inside a block comment opened
+  after code on an earlier line). No test reaches the import: a case that must not compile
+  needs a compile-fail suite, which `flui-objects` does not have, and a trybuild target for one
+  macro defined inside a test file would need the macro moved out of it. Existing rows stay
+  where they are; only new families use files of their own.
 - **What a row looks like in a family file.** The root's `family_*` table calls it, so it is
   `pub(super) fn harness_*`; the function the root calls in `harness_snapshot.rs` is `pub fn`
   for the same reason. A row nothing calls is dead code under `-D warnings`.
 - **The guard** is `rows_naming(root, families, type_name)`, which the tests call with the real
   sources and with literal text:
   1. *A row* starts at a column-0 line that opens `fn harness_` under any visibility (`pub`,
-     `pub(crate)`, `pub(super)`) and that the compiler builds at the top level of its file
-     (`compiled_at_top_level`, the rule a mount pair also meets, rule 3). Its body is its
-     opening line and the lines after it up to, not including, the next line that starts at
-     column 0: the row's own closing `}` with any comment after it, or, for a one-line row
-     such as `fn harness_x() {}`, the next item. A comment on the closing line is not read.
-     Line ends are read without `\r`, so a CRLF source ends its rows where an LF source does.
+     `pub(crate)`, `pub(super)`) and that the compiler builds (`compiled_at_top_level`, the
+     rule a mount pair also meets, rule 3). A row whose opening line ends with `}` (a one-line
+     row such as `fn harness_x() {}`) is that line alone; any other row is its opening line and
+     the lines after it up to, not including, the first that starts at column 0 with `}`, so a
+     comment on the closing line is not read. Other column-0 lines in between belong to the
+     row: rustfmt puts the `{` of a signature too long for its line there. Line ends are read
+     without `\r`, so a CRLF source ends its rows where an LF source does.
   2. *A name* counts only as a whole identifier (`names_whole_identifier`): not preceded or
      followed by a letter, a digit or an underscore. A row that names
      `RenderSliverFloatingHeaderBase` then does not cover `RenderSliverFloatingHeader`.
   3. *A file* counts only when it is mounted (`is_mounted`): its two mount lines are consecutive
-     at column 0 and the first is compiled at the top level (`compiled_at_top_level`). That
-     rule, shared with rows, refuses an item whose nearest code above (lines read up to their
-     first `//`, blank ones skipped) does not end an item (`;` or `}`) or is an attribute
-     (starts with `#[`, a one-line `#[attr] item;` included), an item inside one still open
-     (the brackets that lines ending in `{`, `(` or `[` open are not all closed by lines
-     starting with `}`, `)` or `]`; a close with nothing open makes the rest of the source
-     unsure, and unsure is refused), and an item below any line that opens a block comment.
+     at column 0 and the first is compiled (`compiled_at_top_level`). Column 0 is the top level
+     of the file, because rustfmt, which CI's format check holds, indents everything inside an
+     item. The rule, shared with rows, refuses an item whose nearest code above (lines read up
+     to their first `//`, blank ones skipped) does not end an item (`;` or `}`) or is an
+     attribute (starts with `#[`, a one-line `#[attr] item;` included), and an item below any
+     line that opens a block comment. The cut at `//` does not skip strings, so an item right
+     below a line whose string holds `//` may be refused too; it affects that one item only.
      The directory is `FAMILY_DIRECTORY`, which `mount_lines` and `family_directory()` read
      and the default arm of `family_files!` spells as a literal for `include_str!`
      (`the_family_macro_reads_the_family_directory` holds the two equal).
@@ -62,14 +67,15 @@ own it.
 - **The guard is tested on text**, so the change has tests that fail without it before any
   family file exists: `the_guard_counts_a_pub_row_of_a_family_file` (visibilities, CRLF),
   `the_guard_ends_a_row_at_its_own_end` (one-line rows, a closing `}` with a comment or
-  trailing whitespace, a signature wrapped before its brace),
-  `the_guard_skips_a_row_the_compiler_does_not_build` (an attribute over it, a block comment,
-  an item still open), `the_guard_refuses_a_name_inside_a_longer_one`,
+  trailing whitespace, rustfmt's column-0 `{` below a wrapped signature),
+  `the_guard_skips_a_row_the_compiler_does_not_build` (an attribute over it, a block comment),
+  `the_guard_refuses_a_name_inside_a_longer_one`,
   `the_guard_refuses_a_family_file_that_is_not_mounted` (every refused placement, and each
   message of `mount_problems`), `the_mount_check_takes_a_missing_directory_as_no_files`,
-  `the_mount_check_lists_the_stems_in_order`, `the_mount_check_refuses_a_directory_it_cannot_list`
-  (their scratch directories are `tempfile::tempdir()`, removed with their contents on drop),
-  `a_family_entry_is_the_file_its_name_mounts` and
+  `the_mount_check_refuses_a_directory_it_cannot_list` (their scratch directories are
+  `tempfile::tempdir()`, removed with their contents on drop), `the_mount_check_sorts_the_stems`
+  (over an unsorted list, through `rs_stems`), `a_family_entry_is_the_file_its_name_mounts`
+  (the pair the macro expands to; the import is the compiler's, above) and
   `the_family_macro_reads_the_family_directory`.
 - **What each later task still edits in the root.** One line in `RENDER_OBJECT_TYPES`, and the
   first task of a family adds its two mount lines, its name in `family_files![..]` and its

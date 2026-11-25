@@ -1079,7 +1079,7 @@ queries. The file header lists a per-type coverage map; `RENDER_OBJECT_TYPES`
 is the [manifest of the exported render types](../crates/flui-objects/tests/render_object_harness.rs);
 `catalog_covers_every_render_object_name` fails CI if any type is not named, as a
 whole identifier, in a row (a column-0 `fn harness_*` under any visibility, with no
-attribute over it, no block comment above it and no item open around it) of that
+attribute over it and no block comment above it) of that
 file or of a family file under `tests/harness/` that its `FAMILY_FILES` lists and
 that it mounts; `family_files_are_mounted_and_listed` fails CI if those three
 disagree; and `render_object_types_match_exports` fails CI if

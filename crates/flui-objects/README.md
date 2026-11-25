@@ -15,7 +15,7 @@ consumed by path (not published to crates.io).
 | `layout` | sizing, alignment, flex, stack, transform, fitted-box, intrinsics, overflow, rotation, table |
 | `proxy` | paint-effect proxies: opacity, clips, decoration, color, repaint boundary, leader/follower, shader mask |
 | `interaction` | hit-test/visibility proxies: absorb/ignore pointer, offstage, mouse region, metadata |
-| `text` | `RenderEditable`, `RenderParagraph` |
+| `text` | `RenderEditable`, `RenderIcon`, `RenderParagraph` |
 | `image` | `RenderImage` |
 | `sliver` | the `RenderSliver*` family + `RenderViewport` |
 
