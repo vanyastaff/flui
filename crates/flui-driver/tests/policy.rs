@@ -884,3 +884,43 @@ fn a_session_takes_the_pointers_its_agent_says_it_delivers() {
         ]
     );
 }
+
+/// A strict locator the driver resolves for a gesture it composes counts every element it
+/// matched, those the agent left out of its answer included, as the agent's own resolution does
+/// (`flui_protocol::locator::resolve_strict`), and names the first ten.
+#[test]
+fn a_composed_gesture_refuses_a_strict_locator_with_its_true_count() {
+    let agent = ScriptedAgent::start(
+        &[method::WindowsList::NAME, method::SemanticsLocate::NAME],
+        Box::new(move |name, _| match name {
+            "windows.list" => Reply::Result(json!({ "windows": ["w1"] })),
+            "semantics.locate" => {
+                let matches: Vec<serde_json::Value> = (1..=10)
+                    .map(|n| {
+                        json!({ "element": format!("w1/e{n}"), "revision": 1, "node": {
+                            "id": format!("e{n}"), "role": "button", "native_role": "Button",
+                        } })
+                    })
+                    .collect();
+                Reply::Result(json!({ "matches": matches, "truncated": 15 }))
+            }
+            _ => Reply::Close,
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let tap = TapParams::new(Target::Locator(Locator::identifier("row")));
+    let refused = driver.call::<method::ElementTap>(tap);
+    match refused {
+        Err(Error::Ambiguous {
+            message,
+            candidates,
+            ..
+        }) => {
+            assert!(message.starts_with("25 elements"), "{message}");
+            assert_eq!(candidates.len(), 10, "{candidates:?}");
+        }
+        other => panic!("a strict locator matching 25 elements is refused: {other:?}"),
+    }
+}

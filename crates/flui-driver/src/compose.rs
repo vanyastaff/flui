@@ -6,7 +6,9 @@
 //! gesture performs is [`gestures`](flui_protocol::input::gestures)'s, the one the agent plays.
 //!
 //! - **Locate.** A locator is resolved at the moment of the action, never cached (ADR-0238 §4):
-//!   strict with several matches is [`Error::Ambiguous`] with the first ten as outline lines;
+//!   strict with several matches is [`Error::Ambiguous`], counting every match and naming the
+//!   first ten as outline lines, by the one rule the agent follows too
+//!   (`flui_protocol::locator::resolve_strict`);
 //!   none waits once on the app's timeline for one to appear (`wait.until`), then is
 //!   [`Error::NotFound`].
 //! - **Actionability.** Pointer input waits, frame by frame, for the element to be attached,
@@ -291,7 +293,9 @@ fn resolve_locator(
     loop {
         let found = driver
             .agent::<method::SemanticsLocate>(LocateParams::new(locator.clone()), Duration::ZERO)?;
-        let Matches { matches, .. } = found;
+        let Matches {
+            matches, truncated, ..
+        } = found;
         match matches.as_slice() {
             [] if !waited => {
                 waited = true;
@@ -306,28 +310,20 @@ fn resolve_locator(
                 }
             }
             [] => return Err(not_found(locator)),
-            [only] => return Ok(only.element),
             [first, ..] if locator.pick != Pick::Strict => return Ok(first.element),
-            several => {
-                let candidates = several
-                    .iter()
-                    .take(10)
-                    .map(|found| {
-                        flui_protocol::tree::outline(std::slice::from_ref(&found.node))
-                            .lines()
-                            .next()
-                            .unwrap_or_default()
-                            .to_owned()
-                    })
-                    .collect();
-                return Err(Error::Ambiguous {
-                    message: format!(
-                        "{} elements match a strict locator; narrow it, or pick first, last or nth",
-                        several.len()
-                    ),
-                    candidates,
-                    retry: ErrorCode::Ambiguous.default_retry(),
-                });
+            reported => {
+                return match flui_protocol::locator::resolve_strict(reported.iter(), truncated) {
+                    Ok(Some(only)) => Ok(only.element),
+                    Ok(None) => Err(not_found(locator)),
+                    Err(ambiguity) => Err(Error::Ambiguous {
+                        message: format!(
+                            "{} elements match a strict locator; narrow it, or pick first, last or nth",
+                            ambiguity.matched
+                        ),
+                        candidates: ambiguity.candidates,
+                        retry: ErrorCode::Ambiguous.default_retry(),
+                    }),
+                };
             }
         }
     }
