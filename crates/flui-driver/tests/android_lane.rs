@@ -1818,6 +1818,38 @@ fn a_pen_goes_through_its_uinput_device_and_leaves_at_the_end() {
     );
 }
 
+/// A pen coming into range is where it goes, as a move is on every lane: a run refused at the
+/// pen's press, after its hover went out, says nothing ran and invites the retry.
+#[test]
+fn a_pen_hover_is_no_input_that_acts() {
+    let shade = WINDOWS.replace(
+        "mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}",
+        "mCurrentFocus=Window{9e u0 NotificationShade}",
+    );
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    let _shade_at_the_press = adb
+        .clone()
+        .reply_once("shell dumpsys window -a |", AdbReply::new(0, shade));
+    let refused = lane::send_guarded(
+        &mut lane,
+        &tap(PointerDevice::Pen, DevicePoint::new(300, 600)),
+    )
+    .expect_err("the shade took the focus");
+    assert!(
+        adb.log()
+            .iter()
+            .any(|line| line.contains("BTN_TOOL_PEN\",1")),
+        "the hover went out: {:?}",
+        adb.log()
+    );
+    assert!(
+        matches!(refused, Error::NotForeground { .. }),
+        "{refused:?}"
+    );
+    assert!(!refused.may_have_run(), "{refused:?}");
+}
+
 /// A pen report the device never read (its `uinput` command ended) never reached the device: the
 /// run counts nothing and answers the plain failure. One written and never confirmed reached it
 /// and may have run: the run counts it as such.

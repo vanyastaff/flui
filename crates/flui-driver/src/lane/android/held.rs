@@ -33,6 +33,7 @@ use super::device::InputCommands;
 use super::keys::{self, KeyName, Keycode, TextStroke};
 use super::safety::{self, Display, Refusal};
 use crate::coordinates::DevicePoint;
+use crate::lane::OsInput;
 use crate::steps::OsEvent;
 
 /// How many device pixels of a scroll turn the wheel one detent; the app turns a detent into a
@@ -141,6 +142,19 @@ pub enum Command {
         /// Where, in display pixels.
         at: DevicePoint,
     },
+}
+
+impl OsInput for Command {
+    /// A press, a lift, a cancel, a key, a chord, text and a scroll act on the app; a contact's or
+    /// the pen's move and the pen coming into or leaving range are where it goes, as a move is on
+    /// every lane ([`OsEvent::acts`]).
+    fn acts(&self) -> bool {
+        match self {
+            Self::Motion { action, .. } => !matches!(action, MotionAction::Move),
+            Self::Pen { change, .. } => matches!(change, PenChange::Press | PenChange::Lift),
+            Self::Key(_) | Self::Chord(_) | Self::Text(_) | Self::Scroll { .. } => true,
+        }
+    }
 }
 
 impl Command {

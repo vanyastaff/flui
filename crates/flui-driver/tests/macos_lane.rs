@@ -751,12 +751,11 @@ fn a_key_is_held_only_once_its_event_was_posted() {
         Keystroke::Press(keys::CONTROL, None),
         &mut Delivered::default(),
         |_, _| {
-            Err(Error::Lane {
+            Err(SendFailure::from(Error::Lane {
                 lane: "macos".into(),
                 unavailable: false,
                 message: "no event".into(),
-            }
-            .into())
+            }))
         },
     );
     assert!(refused.is_err());
@@ -1022,20 +1021,40 @@ fn every_input_that_was_posted_is_said_to_the_run() {
         .expect("posted");
     assert!(said(&delivered));
     let mut delivered = Delivered::default();
-    let refused = HeldKeys::new().deliver(control, &mut delivered, |_, _| Err(no_event().into()));
+    let refused = HeldKeys::new().deliver(control, &mut delivered, |_, _| {
+        Err(SendFailure::from(no_event()))
+    });
     assert!(refused.is_err());
     assert!(!said(&delivered));
+    // A text run posted in part leaves its key down, which the release lets go of.
     let mut keys = HeldKeys::new();
+    let run = keys
+        .plan(&KeyInput::Text("ab".to_owned()))
+        .into_iter()
+        .find(|stroke| matches!(stroke, Keystroke::Text(_)))
+        .expect("a text run");
     let mut delivered = Delivered::default();
-    let half = keys.deliver(control, &mut delivered, |_, _| {
+    let half = keys.deliver(run, &mut delivered, |_, _| {
         Err(SendFailure::partly_sent(no_event()))
     });
     assert!(half.is_err());
     assert!(said(&delivered));
-    assert!(
-        keys.held().is_empty(),
-        "a stroke posted in part holds nothing"
-    );
+    assert_eq!(keys.held(), [TEXT_KEY.0], "the run's press is down");
+    let mut released = Vec::new();
+    keys.release_all(|stroke, _| {
+        released.push(stroke);
+        Ok(())
+    })
+    .expect("released");
+    assert_eq!(released, [Keystroke::Release(TEXT_KEY, None)]);
+    assert_eq!(keys.held(), [] as [u16; 0]);
+    // A run refused whole leaves nothing down.
+    let mut keys = HeldKeys::new();
+    let refused = keys.deliver(run, &mut Delivered::default(), |_, _| {
+        Err(SendFailure::from(no_event()))
+    });
+    assert!(refused.is_err());
+    assert_eq!(keys.held(), [] as [u16; 0]);
     // The pointer: a move alone is not said, a press is.
     let mut pointer = Pointer::new();
     let moved = pointer

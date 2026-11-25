@@ -263,7 +263,9 @@ pub trait Lane: Send {
     ///
     /// As [`Self::send`].
     fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
-        delivered.send(event, || self.send(event))
+        delivered
+            .send(event, || self.send(event))
+            .map_err(Error::from)
     }
 
     /// The OS accessibility tree of the window `placement` describes, projected onto the wire's
@@ -576,11 +578,12 @@ impl LaneWorker {
                         job(&mut lane);
                     }
                 }
-                // The worker is ending: nothing may stay pressed. A panic of the lane or of a log
-                // subscriber here has no one left to be raised to, so it is destroyed under
-                // containment as the collector drops.
+                // The worker is ending: nothing may stay pressed. A panic of the lane, its
+                // destructor or a log subscriber here has no one left to be raised to, so it is
+                // destroyed under containment as the collector drops.
                 let mut ending = FirstPanic::new();
                 ending.contain(|| release_at_end(&mut lane));
+                ending.retire(lane);
                 drop(ending);
             })?;
         Ok(Self {
@@ -672,8 +675,10 @@ impl LaneWorker {
 impl Drop for LaneWorker {
     fn drop(&mut self) {
         drop(self.jobs.take());
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        // The thread contains what panics at its end; a payload that still reaches the join has
+        // no one to be raised to here, and is destroyed under containment (ADR-0281).
+        if let Some(Err(payload)) = self.thread.take().map(JoinHandle::join) {
+            discard_payload(payload);
         }
     }
 }

@@ -258,7 +258,11 @@ fn each_session_dumps_to_a_file_of_its_own() {
     let dump_path = |adb: &ScriptedAdb| {
         adb.commands("exec-out uiautomator dump")
             .first()
-            .and_then(|line| line.split_whitespace().nth(3).map(str::to_owned))
+            .and_then(|line| {
+                line.split_whitespace()
+                    .nth(3)
+                    .map(|word| word.replace('\'', ""))
+            })
             .expect("a dump")
     };
     // Only a read of the tree dumps; it fails to match the empty app tree once it has.
@@ -297,8 +301,8 @@ fn each_session_dumps_to_a_file_of_its_own() {
     let line = &first.commands("exec-out uiautomator dump")[0];
     assert!(
         line.contains(&format!(
-            "for f in /data/local/tmp/flui-driver-{session}-*.xml \
-             /data/local/tmp/flui-driver-{session}-*.xml.err;"
+            "for f in '/data/local/tmp/flui-driver-{session}-'*.xml \
+             '/data/local/tmp/flui-driver-{session}-'*.xml.err;"
         )) && line.contains("if [ \"$n\" -le 1 ]; then rm -f \"$f\"; fi"),
         "{line}"
     );
@@ -311,7 +315,11 @@ fn each_session_dumps_to_a_file_of_its_own() {
         .commands("exec-out uiautomator dump")
         .iter()
         .skip(1)
-        .filter_map(|line| line.split_whitespace().nth(3).map(str::to_owned))
+        .filter_map(|line| {
+            line.split_whitespace()
+                .nth(3)
+                .map(|word| word.replace('\'', ""))
+        })
         .collect();
     assert_eq!(paths.len(), 2, "{paths:?}");
     assert_ne!(paths[0], paths[1]);
@@ -320,8 +328,8 @@ fn each_session_dumps_to_a_file_of_its_own() {
     let later = session_of(&paths[0]);
     let removal = |session: &str| {
         format!(
-            "shell rm -f /data/local/tmp/flui-driver-{session}-*.xml \
-             /data/local/tmp/flui-driver-{session}-*.xml.err"
+            "shell rm -f '/data/local/tmp/flui-driver-{session}-'*.xml \
+             '/data/local/tmp/flui-driver-{session}-'*.xml.err"
         )
     };
     assert_eq!(
@@ -336,7 +344,14 @@ fn each_session_dumps_to_a_file_of_its_own() {
 #[cfg(unix)]
 #[test]
 fn a_dumps_removal_takes_no_later_dumps_files() {
-    let directory = tempfile::tempdir().expect("a temporary directory");
+    // A directory whose name the shell would split and unquote: the lines hold it as one word.
+    let parent = tempfile::tempdir().expect("a temporary directory");
+    let directory = tempfile::Builder::new()
+        .prefix("dumps a'b $(c) ")
+        .tempdir_in(parent.path())
+        .expect("a directory with a space and a quote");
+    // A file of the same name beside it, which a split or unquoted directory would reach.
+    std::fs::write(parent.path().join("flui-driver-0a1b-1.xml"), "x").expect("written");
     let root = directory.path().to_str().expect("a UTF-8 path");
     let files = flui_driver::lane::android::uiautomator::DumpFiles::in_directory(root, "0a1b");
     let written = [
@@ -392,6 +407,10 @@ fn a_dumps_removal_takes_no_later_dumps_files() {
         .expect("sh runs");
     assert!(ran.success());
     assert_eq!(left(), ["flui-driver-ffff-1.xml"]);
+    assert!(
+        parent.path().join("flui-driver-0a1b-1.xml").exists(),
+        "nothing outside the directory is removed"
+    );
 }
 
 #[test]

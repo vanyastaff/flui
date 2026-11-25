@@ -1209,8 +1209,9 @@ fn a_probe_whose_command_ends_at_once_finds_no_uinput() {
 }
 
 /// A panic of the `Adb` (a binding the driver does not own) at one step of the lane's end leaves
-/// the steps after it to run, and is resumed once they ran: the session's dumps removal unwinds,
-/// and the forward is removed all the same.
+/// the steps after it to run, and the device's own destructor panicking after it is a competing
+/// failure: nothing aborts, both are destroyed under containment, and the lane's end raises
+/// nothing to its caller, which has no one to raise it to.
 #[test]
 fn a_panic_at_one_step_of_the_lanes_end_leaves_the_others_to_run() {
     let adb = scripted(true, true)
@@ -1222,21 +1223,24 @@ fn a_panic_at_one_step_of_the_lanes_end_leaves_the_others_to_run() {
         )
         .unwind_once("shell rm -f");
     let app = AndroidApp::try_new(PACKAGE, "a.B").expect("an app");
-    let mut lane = connected(&adb);
+    let mut lane =
+        AndroidLane::connect(adb.device_unwinding_on_drop(), PACKAGE).expect("the lane connects");
+    lane.locate_window(&placement())
+        .expect("the window is found");
     assert!(lane.start(&app).is_err(), "the forward's answer was lost");
     let empty = flui_driver::protocol::tree::Tree::new(Vec::new(), false);
     let _ = lane.read_tree(&placement(), &empty);
-    let mut caught = flui_foundation::panic::FirstPanic::new();
-    assert!(
-        caught.contain(|| drop(lane)).is_none(),
-        "the step's panic is resumed"
-    );
-    flui_foundation::panic::discard_payload(caught.into_payload().expect("the payload"));
+    drop(lane);
     assert_eq!(adb.commands("shell rm -f").len(), 1);
     assert_eq!(
         adb.commands("forward --remove").len(),
         1,
         "the forward is removed after the panic"
+    );
+    assert_eq!(
+        adb.commands("the device's binding unwound").len(),
+        1,
+        "the device was dropped, last"
     );
 }
 

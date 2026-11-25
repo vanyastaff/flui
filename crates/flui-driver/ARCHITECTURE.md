@@ -68,11 +68,13 @@ app's trees, frames and input, and this crate composes that with what only the O
   event, `send_guarded` answers as `Error::PartlySent` around it, on every lane, read from one
   record (`lane::Delivered`): the lane says each input of an event that reached the device
   (`Lane::send_counted`, through `Delivered::send`, whose input's type says whether it acts
-  (`lane::OsInput`), so a lane's housekeeping, the X11 keymap change and its settle, is never
-  said; a send that put part of its input out, a `SendInput` that inserted some of its events,
-  says that part (`lane::SendFailure`). By default an event sent whole is one input where it
-  acts; the held parts of Windows, X11 and macOS say each keystroke, button and click of the
-  wheel, and Android each command, an `input` line or a pen report, taken or unanswered), the
+  (`lane::OsInput`), so a move, a pen's hover and a lane's housekeeping, the X11 keymap change
+  and its settle, are never said; a send that put part of its input out, a `SendInput` that
+  inserted some of its events, a macOS text run posted without its release, says that part
+  (`lane::SendFailure`), and the held record keeps what that part left down for the release. By
+  default an event sent whole is one input where it acts; the held parts of Windows, X11 and
+  macOS say each keystroke, button and click of the wheel, and Android each command, an `input`
+  line or a pen report, taken or unanswered, by the same type rule), the
   run counts every event taken whole, a pause and a move included, and the failing event where
   part of it went out (`Effect::partial`, in events; Android's commands taken and unanswered in
   its detail), and no retry is invited, which would send them again; a failure with an effect of
@@ -152,7 +154,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   runs to its end (never a later dump's) and with all of the session's by the lane's end, and a
   forward from a loopback port the lane picked, asked for with `--no-rebind` (a port another
   session holds is refused and another picked) and removed by that port at its end once `adb`
-  made it or may have (its answer lost).
+  made it or may have (its answer lost). Each step of the lane's end, and the destructors of its
+  device and streams (the binding's code), runs under one `FirstPanic`; a destructor has no
+  caller to raise to, so the first panic is logged and destroyed, and the lane worker retires the
+  lane under its own containment and destroys any payload its thread's join still carries.
 - **The Android lane finds the app's nodes by matching, never by guessing.** `accesskit_android`
   sets no `viewIdResourceName`, so `Lane::read_tree` is handed the app's own tree and
   `lane::android::tree` matches the dump to it: the root is the child of the decor view that fits

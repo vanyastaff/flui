@@ -196,11 +196,12 @@ impl HeldKeys {
     /// says Windows took it; only then `confirm` (that the guard saw it come back), whose failure
     /// is reported with the stroke already recorded and said, so a release of everything releases
     /// it and the run says it went out. A stroke Windows took in part (a character's press
-    /// without its release) is said and not recorded: it holds nothing.
+    /// without its release) is said, and what its part left down recorded ([`PACKET`]).
     ///
     /// # Errors
     ///
-    /// `send`'s failure, with nothing recorded; `confirm`'s, with the stroke recorded.
+    /// `send`'s failure, with only what a part it sent left down recorded; `confirm`'s, with the
+    /// stroke recorded.
     pub fn deliver(
         &mut self,
         stroke: Keystroke,
@@ -208,9 +209,23 @@ impl HeldKeys {
         send: impl FnOnce() -> std::result::Result<(), SendFailure>,
         confirm: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        delivered.send(&stroke, send)?;
+        if let Err(failure) = delivered.send(&stroke, send) {
+            if failure.is_partly_sent() {
+                self.record_part(stroke);
+            }
+            return Err(Error::from(failure));
+        }
         let _ = self.apply(stroke);
         confirm()
+    }
+
+    /// Record what the part of `stroke` that went out left down: a Unicode packet's press without
+    /// its release leaves [`PACKET`] down, which the release of everything lets go of. Every other
+    /// stroke is one event, all or nothing.
+    fn record_part(&mut self, stroke: Keystroke) {
+        if matches!(stroke, Keystroke::Unit(_)) && !self.held.contains(&PACKET.code) {
+            self.held.push(PACKET.code);
+        }
     }
 
     /// What of the shell's `inputs`, sent from this state, would take: a press the shell takes
@@ -387,31 +402,4 @@ impl HeldButtons {
             _ => "the forward mouse button",
         }
     }
-}
-
-/// What a `SendInput` call that inserted `inserted` of its `total` events answers: one that
-/// inserted them all succeeds, and one that inserted only some fails as partly sent, since the
-/// events it did insert reached the desktop.
-///
-/// # Errors
-///
-/// [`Error::Lane`] naming `what` when Windows took fewer than `total`, partly sent when it took
-/// any.
-pub fn inserted(inserted: u32, total: usize, what: &str) -> std::result::Result<(), SendFailure> {
-    if usize::try_from(inserted).ok() == Some(total) {
-        return Ok(());
-    }
-    let error = Error::Lane {
-        lane: LANE.to_owned(),
-        unavailable: false,
-        message: format!(
-            "Windows took {inserted} of the {total} events of {what} (blocked: the app may run \
-             elevated, or the desktop changed)"
-        ),
-    };
-    Err(if inserted > 0 {
-        SendFailure::partly_sent(error)
-    } else {
-        SendFailure::from(error)
-    })
 }

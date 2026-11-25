@@ -287,6 +287,13 @@ impl ScriptedAdb {
         Box::new(self.clone())
     }
 
+    /// The device, for the lane, its binding unwinding when the lane drops it, as a binding the
+    /// driver does not own may.
+    #[must_use]
+    pub fn device_unwinding_on_drop(&self) -> Box<dyn Adb> {
+        Box::new(UnwindsOnDrop(self.clone()))
+    }
+
     /// Every command run and stream opened, as its text, and every line written to a stream, as
     /// `<command> <- <line>`, in order.
     #[must_use]
@@ -407,6 +414,34 @@ impl Adb for ScriptedAdb {
             state,
             script: Arc::clone(&self.script),
         }))
+    }
+}
+
+/// A [`ScriptedAdb`] whose binding unwinds as it is dropped: see
+/// [`ScriptedAdb::device_unwinding_on_drop`].
+struct UnwindsOnDrop(ScriptedAdb);
+
+impl Adb for UnwindsOnDrop {
+    fn run(
+        &mut self,
+        command: &AdbCommand,
+        limit: usize,
+        timeout: Duration,
+    ) -> std::result::Result<AdbReply, RunFailure> {
+        self.0.run(command, limit, timeout)
+    }
+
+    fn open(&mut self, command: &AdbCommand, framing: Framing) -> Result<Box<dyn AdbStream>> {
+        self.0.open(command, framing)
+    }
+}
+
+impl Drop for UnwindsOnDrop {
+    fn drop(&mut self) {
+        lock(&self.0.script)
+            .log
+            .push("the device's binding unwound as it was dropped".to_owned());
+        std::panic::resume_unwind(Box::new("the scripted device's binding unwound on drop"));
     }
 }
 
