@@ -52,11 +52,14 @@ run-wrapper = 'test-desktop'
 # The hot-reload lifecycle tests load the fixture's cdylib from Cargo's artifact directory, on
 # the runner's dynamic-library search path. Cargo puts it there only for a build that names the
 # library: building it as the tests' dependency leaves it in the build directory, at a path of
-# Cargo's own. The setup script builds it before those tests, on every host, in the profile and
-# target directory Cargo's environment names (the tests' own, unless `--cargo-profile` or
-# `--target-dir` chose others, which nothing tells a setup script).
+# Cargo's own. The setup script builds it before those tests, on every host: in the dev profile,
+# for the host target, into the target directory `.cargo/config.toml` and `CARGO_TARGET_DIR`
+# name. Nothing tells a setup script the profile, target or target directory of the run
+# (`NEXTEST_PROFILE` is nextest's own profile), so a run with `--release`, `--cargo-profile`,
+# `--target` or `--target-dir` builds the fixture by hand with the same flags first. No
+# `--locked`: the run's own build already held the lockfile to it, or chose not to.
 [scripts.setup.build-hot-reload-fixture]
-command = "cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked --quiet"
+command = "cargo build -p flui-hot-reload-lifecycle-fixture --lib --quiet"
 
 [[profile.default.scripts]]
 filter = 'package(flui-hot-reload-lifecycle-fixture)'

@@ -2,9 +2,11 @@
 //! cargo-built plugin: the lifecycle `flui-hot-reload`'s own tests cannot
 //! reach, because building a plugin from inside a test is environment-fragile.
 //!
-//! The plugin is built before these tests by nextest's setup script
-//! `build-hot-reload-fixture` (`.config/nextest.toml`); under `cargo test`,
-//! build it first: `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`.
+//! nextest's setup script `build-hot-reload-fixture` (`.config/nextest.toml`)
+//! builds the plugin before these tests in the dev profile, for the host
+//! target, into the default target directory. Under `cargo test`, or a run with
+//! `--release`, `--cargo-profile`, `--target` or `--target-dir`, build it first
+//! with the same flags: `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`.
 //! Cargo publishes that directly built library to its artifact directory, and
 //! Cargo and nextest pass that directory in the dynamic-library search path.
 //! The tests consume that path rather than infer Cargo's private build layout
@@ -98,7 +100,7 @@ fn fixture_artifact_path() -> PathBuf {
     std::env::split_paths(&search_path)
         .map(|directory| directory.join(&filename))
         .find(|path| path.is_file())
-        .expect("fixture missing from the runner search path; nextest builds it (`build-hot-reload-fixture`), and under `cargo test` run `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked` first")
+        .expect("fixture missing from the runner search path; nextest's `build-hot-reload-fixture` builds it in the dev profile, for the host target, into the default target directory only: under `cargo test`, or with `--release`, `--cargo-profile`, `--target` or `--target-dir`, run `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked` with the same flags first")
 }
 
 /// Resolve and call the fixture's `fixture_tick` symbol through an already

@@ -78,14 +78,16 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      - name: cargo update --workspace (fresh lockfile in-memory only)
+      - name: cargo update --workspace (a fresh lockfile, never committed)
         run: cargo update --workspace
 
       - name: cargo build --workspace
         run: cargo build --workspace --all-targets
 
-      # ci.yml's `test` job scope without `--locked`, which the fresh
-      # lockfile above would fail. The trybuild suites (test group
+      # ci.yml's `test` job scope, against the lockfile `cargo update` rewrote
+      # on disk above, so no step here needs `--locked` (nor does the fixture
+      # build nextest's setup script runs, which follows the lockfile the run
+      # leaves). The trybuild suites (test group
       # `trybuild`, .config/nextest.toml) stay out: they compare rustc's
       # diagnostics against checked-in `.stderr` files, which track the
       # locked dependency versions, so against a fresh lockfile they report
