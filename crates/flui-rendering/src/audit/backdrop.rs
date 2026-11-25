@@ -985,3 +985,190 @@ fn boldness(weights: impl Iterator<Item = f32>) -> Boldness {
         (false, _) => Boldness::Regular,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use flui_foundation::geometry::{Matrix4, RRect, Radius, Rect};
+    use smallvec::SmallVec;
+
+    use super::{Region, axis_scale, intersect_unions, keeps_rects};
+
+    /// What a rounded rectangle surely covers is the two bands clear of its corners: the one
+    /// between the larger left and larger right radius, the one between the larger top and larger
+    /// bottom radius, each placed by the transform, and a band with no area is left out.
+    #[test]
+    fn a_rounded_rect_surely_covers_the_bands_clear_of_its_widest_corners() {
+        let place = Matrix4::translation(100.0, 200.0, 0.0);
+        let at = |rect: Rect<f64>| {
+            Rect::from_ltrb(
+                rect.left() + 100.0,
+                rect.top() + 200.0,
+                rect.right() + 100.0,
+                rect.bottom() + 200.0,
+            )
+        };
+        let rrect = RRect::new(
+            Rect::from_ltrb(10.0, 20.0, 110.0, 80.0),
+            Radius::new(5.0, 7.0),
+            Radius::new(11.0, 3.0),
+            Radius::new(2.0, 13.0),
+            Radius::new(9.0, 4.0),
+        );
+        let region = Region::of_rrect(&place, &rrect);
+        assert!(region.exact);
+        assert_eq!(region.may, at(rrect.rect));
+        assert_eq!(
+            region.sure.to_vec(),
+            [
+                at(Rect::from_ltrb(19.0, 20.0, 99.0, 80.0)),
+                at(Rect::from_ltrb(10.0, 27.0, 110.0, 67.0)),
+            ],
+        );
+
+        // Radii wider than the rectangle leave no band between left and right.
+        let narrow = RRect::from_rect_and_corners(
+            Rect::from_ltrb(0.0, 0.0, 10.0, 100.0),
+            Radius::new(8.0, 5.0),
+            Radius::new(8.0, 5.0),
+            Radius::new(8.0, 5.0),
+            Radius::new(8.0, 5.0),
+        );
+        let region = Region::of_rrect(&Matrix4::IDENTITY, &narrow);
+        assert_eq!(
+            region.sure.to_vec(),
+            [Rect::from_ltrb(0.0, 5.0, 10.0, 95.0)]
+        );
+
+        // Radii taller than the rectangle leave no band between top and bottom.
+        let short = RRect::from_rect_and_corners(
+            Rect::from_ltrb(0.0, 0.0, 100.0, 10.0),
+            Radius::new(5.0, 8.0),
+            Radius::new(5.0, 8.0),
+            Radius::new(5.0, 8.0),
+            Radius::new(5.0, 8.0),
+        );
+        let region = Region::of_rrect(&Matrix4::IDENTITY, &short);
+        assert_eq!(
+            region.sure.to_vec(),
+            [Rect::from_ltrb(5.0, 0.0, 95.0, 10.0)]
+        );
+
+        // A transform that does not keep rectangles leaves nothing surely covered.
+        let region = Region::of_rrect(&Matrix4::rotation_z(0.3), &rrect);
+        assert!(!region.exact);
+        assert!(region.sure.is_empty());
+    }
+
+    /// A rectangle under a rotation is known by its bounding box alone.
+    #[test]
+    fn a_rect_under_a_transform_that_keeps_rects_is_exact() {
+        let rect = Rect::from_ltrb(0.0, 0.0, 10.0, 10.0);
+        let scaled = Region::of_rect(&Matrix4::scaling(2.0, 3.0, 1.0), rect);
+        assert!(scaled.exact);
+        assert_eq!(
+            scaled.sure.to_vec(),
+            [Rect::from_ltrb(0.0, 0.0, 20.0, 30.0)]
+        );
+        let turned = Region::of_rect(&Matrix4::rotation_z(0.3), rect);
+        assert!(!turned.exact);
+        assert!(turned.sure.is_empty());
+    }
+
+    fn with(entries: &[(usize, f64)]) -> Matrix4 {
+        let mut matrix = Matrix4::IDENTITY;
+        for &(index, value) in entries {
+            matrix.m[index] = value;
+        }
+        matrix
+    }
+
+    /// The transforms that map every rectangle onto one: a scale and a translation, with a flip
+    /// or a quarter turn, and nothing that skews, rotates by another angle or projects.
+    #[test]
+    fn a_transform_keeps_rects_only_as_a_scale_translation_flip_or_quarter_turn() {
+        for (name, matrix, keeps) in [
+            ("identity", Matrix4::IDENTITY, true),
+            ("a scale", Matrix4::scaling(2.0, 3.0, 1.0), true),
+            ("a translation", Matrix4::translation(5.0, 6.0, 0.0), true),
+            ("a flip", Matrix4::scaling(-1.0, 1.0, 1.0), true),
+            (
+                "a quarter turn",
+                with(&[(0, 0.0), (1, 1.0), (4, -1.0), (5, 0.0)]),
+                true,
+            ),
+            (
+                "a quarter turn the other way",
+                with(&[(0, 0.0), (1, -1.0), (4, 1.0), (5, 0.0)]),
+                true,
+            ),
+            ("a rotation by 0.3", Matrix4::rotation_z(0.3), false),
+            ("a skew along x", with(&[(4, 0.5)]), false),
+            ("a skew along y", with(&[(1, 0.5)]), false),
+            ("a projection in x", with(&[(3, 0.1)]), false),
+            ("a projection in y", with(&[(7, 0.1)]), false),
+            ("a homogeneous scale", with(&[(15, 2.0)]), false),
+            (
+                "a matrix with a zero m0 and a non-zero m5",
+                with(&[(0, 0.0), (1, 1.0), (4, 1.0), (5, 2.0)]),
+                false,
+            ),
+        ] {
+            assert_eq!(keeps_rects(&matrix), keeps, "{name}");
+        }
+    }
+
+    /// A text counts at the smaller of its two axis scales, whichever axis that is, under a
+    /// rotation as under none.
+    #[test]
+    fn a_text_counts_at_the_smaller_of_its_axis_scales_under_a_rotation() {
+        let (sin, cos) = 0.3_f64.sin_cos();
+        let scaled_then_turned =
+            |x: f64, y: f64| with(&[(0, x * cos), (1, x * sin), (4, -y * sin), (5, y * cos)]);
+        for (name, matrix, scale) in [
+            ("x the smaller", scaled_then_turned(2.0, 3.0), 2.0),
+            ("y the smaller", scaled_then_turned(3.0, 2.0), 2.0),
+            ("no scale", Matrix4::IDENTITY, 1.0),
+        ] {
+            assert!((axis_scale(&matrix) - scale).abs() < 1e-12, "{name}");
+        }
+    }
+
+    /// The rectangles of `a` ∩ `b` are each pair's overlap without the empty ones, and past eight
+    /// the eight largest, largest first.
+    #[test]
+    fn the_overlaps_of_two_unions_keep_the_eight_largest() {
+        // Three horizontal bands of heights 1, 3 and 7 crossed with four vertical bands of
+        // widths 2, 5, 11 and 13: twelve overlaps whose areas are all different.
+        let across: Vec<Rect<f64>> = [(0.0, 1.0), (20.0, 3.0), (40.0, 7.0)]
+            .iter()
+            .map(|&(top, height)| Rect::from_ltrb(0.0, top, 100.0, top + height))
+            .collect();
+        let down: Vec<Rect<f64>> = [(0.0, 2.0), (20.0, 5.0), (40.0, 11.0), (60.0, 13.0)]
+            .iter()
+            .map(|&(left, width)| Rect::from_ltrb(left, 0.0, left + width, 100.0))
+            .collect();
+        let kept = intersect_unions(&across, &down);
+        let areas: Vec<f64> = kept.iter().map(Rect::area).collect();
+        assert_eq!(
+            areas,
+            [91.0, 77.0, 39.0, 35.0, 33.0, 15.0, 14.0, 13.0],
+            "{kept:?}"
+        );
+
+        // Exactly eight overlaps are all kept, in the order the pairs come.
+        let exactly: SmallVec<[Rect<f64>; 4]> = intersect_unions(&across[..2], &down);
+        let areas: Vec<f64> = exactly.iter().map(Rect::area).collect();
+        assert_eq!(areas, [2.0, 5.0, 11.0, 13.0, 6.0, 15.0, 33.0, 39.0]);
+
+        // An empty overlap is left out.
+        let apart = [
+            Rect::from_ltrb(0.0, 0.0, 10.0, 10.0),
+            Rect::from_ltrb(50.0, 50.0, 60.0, 60.0),
+        ];
+        let one = [Rect::from_ltrb(5.0, 5.0, 20.0, 20.0)];
+        assert_eq!(
+            intersect_unions(&apart, &one).to_vec(),
+            [Rect::from_ltrb(5.0, 5.0, 10.0, 10.0)]
+        );
+    }
+}
