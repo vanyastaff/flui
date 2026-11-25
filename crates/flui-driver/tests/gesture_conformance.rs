@@ -168,10 +168,13 @@ fn each_gesture_kind_routes_the_same_events_through_the_agent_and_the_os_lowerin
     let point = LogicalPoint::new(200.0, 150.0);
     let aim = Aim::new(point, Some(LogicalRect::new(150.0, 100.0, 100.0, 100.0)));
     let cases: [(&str, ActionSequence); 9] = [
-        ("tap", gestures::tap(point, PointerButton::Primary)),
+        (
+            "tap",
+            gestures::tap(point, PointerButton::Primary, &Defaults::WINDOWLESS),
+        ),
         (
             "double tap",
-            gestures::double_tap(point, PointerButton::Primary),
+            gestures::double_tap(point, PointerButton::Primary, &Defaults::WINDOWLESS),
         ),
         (
             "long press",
@@ -179,7 +182,12 @@ fn each_gesture_kind_routes_the_same_events_through_the_agent_and_the_os_lowerin
         ),
         (
             "drag",
-            gestures::drag(point, LogicalPoint::new(300.0, 260.0)),
+            gestures::drag(
+                point,
+                LogicalPoint::new(300.0, 260.0),
+                &Defaults::WINDOWLESS,
+            )
+            .expect("a drag"),
         ),
         (
             "swipe",

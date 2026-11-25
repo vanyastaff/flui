@@ -6,6 +6,7 @@
 //! The headless host's wake cannot fail, so these drive [`Rig`], a runtime of their own whose wake
 //! panics while the test says so.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -19,7 +20,7 @@ use flui_protocol::{
 };
 use flui_view::dev_agent::AgentAnswer;
 use flui_view::prelude::*;
-use flui_widgets::{Column, ListView, RawButton, SizedBox, Text};
+use flui_widgets::{Column, ListView, RawButton, SizedBox, Stack, Text};
 
 use crate::agent_rig::Rig;
 
@@ -349,4 +350,201 @@ fn a_wake_that_panics_for_one_window_leaves_the_next_windows_waits_answered() {
         flui_protocol::wait::WaitEnd::Unsatisfied,
         "{outcome:?}"
     );
+}
+
+/// A box 120 × 40 whose hit-test panics, as a render object that cannot be hit does.
+#[derive(Debug, Default)]
+struct PanicsWhenHitBox;
+
+impl flui_foundation::inspect::Inspect for PanicsWhenHitBox {
+    fn kind(&self) -> &'static str {
+        "PanicsWhenHitBox"
+    }
+
+    fn inspect(&self, _: &mut flui_foundation::inspect::Fields<'_>) {}
+}
+
+impl flui_rendering::traits::RenderBox for PanicsWhenHitBox {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut flui_rendering::BoxLayoutContext<'_, flui_foundation::Leaf, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_foundation::geometry::Size> {
+        Ok(flui_foundation::geometry::Size::new(120.0, 40.0))
+    }
+
+    fn paint(&self, _ctx: &mut flui_rendering::PaintContext<'_, flui_foundation::Leaf>) {}
+
+    fn hit_test(
+        &self,
+        _ctx: &mut flui_rendering::BoxHitTestContext<'_, flui_foundation::Leaf, Self::ParentData>,
+    ) -> bool {
+        panic!("a render object that cannot be hit")
+    }
+}
+
+#[derive(Clone)]
+struct PanicsWhenHit;
+
+impl flui_view::RenderView for PanicsWhenHit {
+    type Protocol = flui_rendering::protocol::BoxProtocol;
+    type RenderObject = PanicsWhenHitBox;
+
+    fn create_render_object(&self, _ctx: &flui_view::RenderObjectContext<'_>) -> PanicsWhenHitBox {
+        PanicsWhenHitBox
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &flui_view::RenderObjectContext<'_>,
+        _render_object: &mut PanicsWhenHitBox,
+    ) -> flui_rendering::RenderUpdateImpact {
+        flui_rendering::RenderUpdateImpact::NONE
+    }
+}
+
+impl View for PanicsWhenHit {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::render_variable(self)
+    }
+}
+
+/// "Show", whose press brings "Trap", a button under a box whose hit-test panics; and "Fails",
+/// whose handler panics.
+#[derive(Clone, StatefulView)]
+struct Traps;
+
+struct TrapsState {
+    shown: flui_view::Signal<bool>,
+}
+
+impl StatefulView for Traps {
+    type State = TrapsState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        TrapsState {
+            shown: ctx.signal(false),
+        }
+    }
+}
+
+impl ViewState<Traps> for TrapsState {
+    fn build(&self, _view: &Traps, ctx: &dyn BuildContext) -> impl IntoView {
+        let shown = self.shown;
+        let trap = if shown.get(ctx) {
+            Stack::new(vec![
+                RawButton::new(Text::new("Trap"))
+                    .on_pressed(|_| {})
+                    .into_view()
+                    .boxed(),
+                PanicsWhenHit.into_view().boxed(),
+            ])
+            .into_view()
+            .boxed()
+        } else {
+            SizedBox::new(120.0, 40.0).into_view().boxed()
+        };
+        Column::new(vec![
+            RawButton::new(Text::new("Show"))
+                .on_pressed(move |ctx| shown.update(ctx, |on| *on = true))
+                .into_view()
+                .boxed(),
+            trap,
+            RawButton::new(Text::new("Fails"))
+                .on_pressed(|_: &mut EventContext<'_>| {
+                    // Typed as a handler that returns, as a handler that fails sometimes is.
+                    if std::hint::black_box(true) {
+                        std::panic::panic_any("a handler that fails".to_owned());
+                    }
+                })
+                .into_view()
+                .boxed(),
+        ])
+    }
+}
+
+/// App code an attempt of a held act reaches at a frame boundary panics: the act is answered
+/// once, with the code and the step that failed, and the panic continues out of the frame. A tap
+/// held until its target appears, whose hit-test then panics, answers that the hit-test did; a
+/// tap held on the semantic path for its target to hold still, whose handler then panics,
+/// answers that the handler did, which may have run.
+#[test]
+fn app_code_that_panics_in_a_held_acts_attempt_answers_the_act_once() {
+    type Asked = fn(&mut Rig) -> AgentAnswer<ActOutcome>;
+    let rows: [(&str, Asked, &str, &str); 2] = [
+        (
+            "a hit-test",
+            |rig| {
+                let mut tap = TapParams::new(named("Trap"));
+                tap.options.timeout_ms = Some(60_000);
+                let tap = rig
+                    .lease
+                    .call::<method::ElementTap>(tap)
+                    .expect("the inbox has room");
+                rig.runtime.pump_background();
+                let mut show = rig
+                    .window
+                    .call::<method::SemanticsAct>(ActParams::new(named("Show"), ActionName::Invoke))
+                    .expect("the inbox has room");
+                rig.runtime.pump_background();
+                show.try_take()
+                    .expect("pressed at the drain")
+                    .expect("pressed");
+                tap
+            },
+            "the hit-test at element",
+            "a render object that cannot be hit",
+        ),
+        (
+            "a semantics handler",
+            |rig| {
+                let mut tap = TapParams::new(named("Fails"));
+                tap.options.timeout_ms = Some(60_000);
+                tap.options.via = Some(InputPolicy::require(InputPath::Semantic));
+                let tap = rig
+                    .lease
+                    .call::<method::ElementTap>(tap)
+                    .expect("the inbox has room");
+                rig.runtime.pump_background();
+                tap
+            },
+            "the handler of element",
+            "a handler that fails",
+        ),
+    ];
+    for (case, ask, says, payload) in rows {
+        let mut rig = Rig::showing(&Traps);
+        let mut asked = ask(&mut rig);
+        assert!(asked.try_take().is_none(), "{case}: held");
+        let mut continued = None;
+        for _ in 0..10 {
+            if let Err(panic) = catch_unwind(AssertUnwindSafe(|| rig.frame())) {
+                continued = Some(
+                    panic
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| panic.downcast_ref::<&str>().map(|text| (*text).to_owned()))
+                        .unwrap_or_else(|| "a payload of another type".to_owned()),
+                );
+                break;
+            }
+        }
+        assert_eq!(
+            continued.as_deref(),
+            Some(payload),
+            "{case}: the panic continues"
+        );
+        let Some(answer) = asked.try_take() else {
+            panic!("{case}: answered before the panic continued");
+        };
+        let refused = answer.expect_err("app code panicked");
+        assert_eq!(refused.code, ErrorCode::Platform, "{case}: {refused:?}");
+        assert!(refused.message.contains(says), "{case}: {refused:?}");
+        for _ in 0..4 {
+            let _ = catch_unwind(AssertUnwindSafe(|| rig.frame()));
+        }
+        assert!(asked.try_take().is_none(), "{case}: answered once");
+    }
 }

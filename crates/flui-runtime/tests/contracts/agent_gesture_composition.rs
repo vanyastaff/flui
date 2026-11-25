@@ -256,7 +256,7 @@ fn ask_default(lease: &InputLease, default: Unnamed) -> AgentAnswer<ActOutcome> 
 /// own gesture settings, so the window's recognisers take it as that gesture: on every
 /// platform's preset, and on a window whose long-press and double-tap timeouts the system's
 /// preferences raised or lowered. A long press is a long press, a double tap a double tap, a
-/// fling flings and a swipe does not, and a drag drags.
+/// fling flings and a swipe does not, and a drag drags and is dropped where it ends, not flung.
 #[test]
 fn a_default_gesture_is_recognised_as_that_gesture_in_every_window() {
     let platforms = [
@@ -326,7 +326,20 @@ fn a_default_gesture_is_recognised_as_that_gesture_in_every_window() {
                         setting.min_fling()
                     );
                 }
-                Unnamed::DragTo => assert_eq!(heard.drags.get(), 1, "{case}: a drag"),
+                Unnamed::DragTo => {
+                    // A drag holds still before it lifts, so it is dropped where it ends, never
+                    // flung on.
+                    assert_eq!(heard.drags.get(), 1, "{case}: a drag");
+                    let releases = heard.releases.borrow();
+                    let [release] = releases.as_slice() else {
+                        panic!("{case}: one release: {releases:?}");
+                    };
+                    assert!(
+                        *release < setting.min_fling(),
+                        "{case}: dropped at {release} px/s, under the {} px/s the window flings from",
+                        setting.min_fling()
+                    );
+                }
             }
         }
     }

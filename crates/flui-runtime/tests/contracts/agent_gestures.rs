@@ -335,7 +335,11 @@ fn the_agent_answers_every_gesture_with_what_it_ran() {
         ),
         (
             method::ElementFling::NAME,
-            |lease| ask::<method::ElementFling>(lease, swipe_up()),
+            |lease| {
+                let mut fling = swipe_up();
+                fling.distance = Some(80.0);
+                ask::<method::ElementFling>(lease, fling)
+            },
             InputPath::Synthetic,
             &[PointerDown, PointerMove, PointerUp],
         ),
@@ -578,21 +582,43 @@ fn a_last_attempt_on_a_turn_without_a_frame_names_the_check_that_failed() {
         .lease
         .call::<method::ElementTap>(tap)
         .expect("the inbox has room");
+    let mut located = rig
+        .window
+        .call::<method::SemanticsLocate>(LocateParams::new(Locator::named("Covered")))
+        .expect("the inbox has room");
     for _ in 0..8 {
         rig.frame();
     }
+    let covered = located
+        .try_take()
+        .expect("located")
+        .expect("located")
+        .matches[0]
+        .element;
     assert!(tap.try_take().is_none(), "held while covered");
-    // The turn past the deadline drains a press that leaves a rebuild pending, then attempts the
-    // act once more, before any frame.
+    // The turn past the deadline drains a press that leaves a rebuild pending and a second reader
+    // of the element, then attempts the act once more, before any frame.
     let mut busy = rig
         .window
         .call::<method::SemanticsAct>(ActParams::new(named("Busy"), ActionName::Invoke))
+        .expect("the inbox has room");
+    let mut polled = rig
+        .window
+        .call::<method::ElementActionability>(ActionabilityParams::new(covered))
         .expect("the inbox has room");
     rig.clock.advance(Duration::from_millis(200));
     rig.runtime.pump_background();
     busy.try_take()
         .expect("pressed at the drain")
         .expect("pressed");
+    let facts = polled
+        .try_take()
+        .expect("read at the drain")
+        .expect("its facts");
+    assert!(
+        facts.stable,
+        "a second reader of the frame the act read is told what it was: {facts:?}"
+    );
     let refused = tap
         .try_take()
         .expect("answered on the turn past its deadline")
@@ -797,7 +823,12 @@ fn a_gestures_reply_deadline_is_its_timeout_and_its_play_past_the_reply_timeout(
     session.receive(&crate::agent_wire::line(&tap), now);
     session.poll(now, &waker);
     let origin = LogicalPoint::new(0.0, 0.0);
-    let plays = gestures::double_tap(origin, PointerButton::Primary).plays_within();
+    let plays = gestures::double_tap(
+        origin,
+        PointerButton::Primary,
+        &gestures::Defaults::WINDOWLESS,
+    )
+    .plays_within();
     assert!(plays > Duration::ZERO);
     assert_eq!(
         session.next_deadline(),
@@ -937,13 +968,36 @@ fn the_semantic_path_performs_the_semantics_action_that_does_the_same() {
 
 /// A window that draws nothing still answers an act at its deadline, which wakes the host's loop,
 /// and nothing of it goes out after the answer, the window seen again included: a tap whose target
-/// never passes; a tap whose target passes once the deadline's turn finds the window idle, whose
+/// never passes; a tap on a point, ready at once, a forced tap, ready once attached, and a tap
+/// whose target passes once the deadline's turn finds the window idle, each of whose
 /// input no frame starts (`timeout`); keys queued at once, which no frame starts either; and a
 /// scroll whose step was queued as the window stopped drawing, which is withdrawn. Meanwhile the
 /// runtime lists no cause a frame would serve, since none runs.
 #[test]
 fn a_window_that_draws_nothing_answers_a_held_act_at_its_deadline() {
-    let rows: [(&str, Ask, ErrorCode); 4] = [
+    let rows: [(&str, Ask, ErrorCode); 6] = [
+        (
+            "a tap on a point, ready at once",
+            |lease| {
+                let mut tap = TapParams::new(Target::Point {
+                    window: lease.window(),
+                    at: LogicalPoint::new(10.0, 10.0),
+                });
+                tap.options = timeout(tap.options, 200);
+                ask::<method::ElementTap>(lease, tap)
+            },
+            ErrorCode::Timeout,
+        ),
+        (
+            "a forced tap, ready once attached",
+            |lease| {
+                let mut tap = TapParams::new(named("Go"));
+                tap.options = timeout(tap.options, 200);
+                tap.options.force = true;
+                ask::<method::ElementTap>(lease, tap)
+            },
+            ErrorCode::Timeout,
+        ),
         (
             "a tap on a disabled target",
             |lease| {
@@ -1190,7 +1244,36 @@ fn the_stability_check_remembers_every_element_read_between_two_frames() {
 #[test]
 fn a_gesture_answers_why_it_did_not_run() {
     type Setup = fn(&mut HeadlessHost, &AgentWindow, &InputLease) -> AgentAnswer<ActOutcome>;
-    let rows: [(&str, Setup, Result<(), ErrorCode>); 6] = [
+    let rows: [(&str, Setup, Result<(), ErrorCode>); 9] = [
+        (
+            "a pinch inside the scale slop",
+            |_, _, lease| {
+                let params: PinchParams = serde_json::from_value(json!({
+                    "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+                    "scale": 1.01,
+                }))
+                .expect("a pinch reads");
+                ask::<method::ElementPinch>(lease, params)
+            },
+            Err(ErrorCode::InvalidArgument),
+        ),
+        (
+            "a default fling over too short a stroke",
+            |_, _, lease| ask::<method::ElementFling>(lease, swipe_up()),
+            Err(ErrorCode::InvalidArgument),
+        ),
+        (
+            "a drag inside the drag slop",
+            |_, _, lease| {
+                let params: DragParams = serde_json::from_value(json!({
+                    "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+                    "to": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+                }))
+                .expect("a drag reads");
+                ask::<method::ElementDragTo>(lease, params)
+            },
+            Err(ErrorCode::InvalidArgument),
+        ),
         (
             "a pinch to no scale",
             |_, _, lease| {
@@ -1278,6 +1361,15 @@ fn a_gesture_answers_why_it_did_not_run() {
                 if code == ErrorCode::Ambiguous {
                     assert_eq!(refused.candidates.len(), 2, "{case}: {refused:?}");
                 }
+                let says = match case {
+                    "a pinch inside the scale slop" => "does not pass this window's scale slop",
+                    "a default fling over too short a stroke" => {
+                        "name a longer distance or a slower velocity"
+                    }
+                    "a drag inside the drag slop" => "does not pass this window's drag slop",
+                    _ => "",
+                };
+                assert!(refused.message.contains(says), "{case}: {refused:?}");
                 assert_eq!(presses.go.load(Ordering::SeqCst), 0, "{case}");
             }
             (answer, expected) => panic!("{case}: {answer:?}, not {expected:?}"),
@@ -1548,7 +1640,7 @@ fn every_gesture_crosses_the_wire_through_the_connections_lease() {
         ),
         (
             method::ElementFling::NAME,
-            json!({ "target": go, "direction": "up" }),
+            json!({ "target": go, "direction": "up", "distance": 80 }),
         ),
         (
             method::ElementPinch::NAME,

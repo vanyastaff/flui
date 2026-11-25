@@ -498,7 +498,12 @@ fn each_gesture_holds_for_its_timeout_and_the_input_its_parameters_play() {
         }])
         .plays_within()
     };
-    let tap = gestures::tap(origin, PointerButton::Primary).plays_within();
+    let tap = gestures::tap(
+        origin,
+        PointerButton::Primary,
+        &gestures::Defaults::WINDOWLESS,
+    )
+    .plays_within();
     let rows: [(&str, Duration, Duration); 11] = [
         (
             "a long press naming no duration: the longest a window may choose",
@@ -576,7 +581,13 @@ fn each_gesture_holds_for_its_timeout_and_the_input_its_parameters_play() {
                     "target": target, "to": target, "timeout_ms": 1_000,
                 })
             ),
-            gestures::drag(origin, origin).plays_within(),
+            gestures::drag(
+                origin,
+                flui_protocol::geometry::LogicalPoint::new(100.0, 0.0),
+                &gestures::Defaults::WINDOWLESS,
+            )
+            .expect("a drag past the slop")
+            .plays_within(),
         ),
         (
             "typing",

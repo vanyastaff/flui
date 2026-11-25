@@ -193,7 +193,11 @@ fn an_accepted_action_times_out(app: App) {
         .expect("its facts")
         .point
         .expect("a point to tap");
-    let tapped = window.perform(gestures::tap(at, PointerButton::Primary));
+    let tapped = window.perform(gestures::tap(
+        at,
+        PointerButton::Primary,
+        &gestures::Defaults::WINDOWLESS,
+    ));
     let Err(error) = tapped else {
         panic!("{app:?}: the tap answered in time: {tapped:?}");
     };

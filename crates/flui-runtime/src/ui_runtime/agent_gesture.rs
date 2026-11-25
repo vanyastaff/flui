@@ -25,6 +25,7 @@
 use std::time::Duration;
 
 use flui_interaction::gesture::GestureSettings;
+use flui_platform::TargetPlatform;
 use flui_platform::input::pointer::PointerKind;
 use flui_protocol::input::gestures::{self, Aim, Defaults, GestureError};
 use flui_protocol::method::{self, Method};
@@ -32,9 +33,9 @@ use flui_protocol::{
     act::ActOutcome, act::ActionRequest, act::ActionabilityCheck, act::ActionabilityParams,
     geometry::LogicalPoint, input::Direction, input::DragParams, input::GestureOptions,
     input::InputPath, input::LongPressParams, input::PinchParams, input::PointerButton,
-    input::PressKeysParams, input::ScrollIntoViewParams, input::SwipeParams, input::TapParams,
-    input::TypeTextParams, locator::Locator, locator::Target, snapshot::Snapshot, tree::ElementRef,
-    tree::WindowId, wire::ActionName,
+    input::PointerDevice, input::PressKeysParams, input::ScrollIntoViewParams, input::SwipeParams,
+    input::TapParams, input::TypeTextParams, locator::Locator, locator::Target, snapshot::Snapshot,
+    tree::ElementRef, tree::WindowId, wire::ActionName,
 };
 
 use super::agent::{
@@ -196,21 +197,12 @@ impl Composed {
         let unplayable = |error: GestureError| AgentError::UnplayableInput(error.to_string());
         let defaults = window_defaults(settings, self)?;
         Ok(match *self {
-            Self::Tap(button) => gestures::tap(aim.point, button),
-            Self::DoubleTap(button) => gestures::double_tap(aim.point, button),
+            Self::Tap(button) => gestures::tap(aim.point, button, &defaults),
+            Self::DoubleTap(button) => gestures::double_tap(aim.point, button, &defaults),
             Self::LongPress(duration_ms) => gestures::long_press(aim.point, duration_ms, &defaults),
             Self::Drag => {
                 let to = to.map_or(aim.point, |to| to.point);
-                let (dx, dy) = (to.x - aim.point.x, to.y - aim.point.y);
-                let slop = settings.mouse.pan_slop_for(PointerKind::Mouse);
-                // A drag shorter than the slop starts no drag in this window.
-                if dx.hypot(dy) <= slop {
-                    return Err(AgentError::UnplayableInput(format!(
-                        "a drag of {:.1} px does not pass this window's drag slop of {slop} px",
-                        dx.hypot(dy)
-                    )));
-                }
-                gestures::drag(aim.point, to)
+                gestures::drag(aim.point, to, &defaults).map_err(unplayable)?
             }
             Self::Swipe {
                 direction,
@@ -236,10 +228,26 @@ impl Composed {
     }
 }
 
-/// The gesture settings of a window, for the pointer kinds a composed gesture plays: a mouse
-/// (a tap, a double tap, a drag) and a touch contact (a long press, a swipe, a fling, a pinch).
+/// The pointer a window's platform is used with first: a touch contact on Android, iOS and
+/// Fuchsia, a mouse elsewhere. A composed tap, double tap and drag play with it, and the audit's
+/// target-size minimum is its.
+pub(super) fn primary_pointer(state: &PresentationState) -> PointerKind {
+    match state.platform {
+        TargetPlatform::Android | TargetPlatform::iOS | TargetPlatform::Fuchsia => {
+            PointerKind::Touch
+        }
+        _ => PointerKind::Mouse,
+    }
+}
+
+/// The gesture settings of a window, for the pointer kinds a composed gesture plays: its primary
+/// pointer (a tap, a double tap, a drag) and a touch contact (a long press, a swipe, a fling, a
+/// pinch).
 pub(super) struct WindowGestures {
-    mouse: GestureSettings,
+    /// The window's primary pointer ([`primary_pointer`]).
+    primary: PointerKind,
+    /// The settings of [`Self::primary`].
+    pointer: GestureSettings,
     touch: GestureSettings,
 }
 
@@ -247,8 +255,10 @@ impl WindowGestures {
     /// `state`'s settings now, its platform's preset with the system's preferences applied.
     fn of(state: &PresentationState) -> Self {
         let provider = state.gesture_settings.provider();
+        let primary = primary_pointer(state);
         Self {
-            mouse: provider.snapshot_for(PointerKind::Mouse),
+            primary,
+            pointer: provider.snapshot_for(primary),
             touch: provider.snapshot_for(PointerKind::Touch),
         }
     }
@@ -266,7 +276,9 @@ const LONG_PRESS_MARGIN_MS: u64 = 300;
 ///   windowless speed and never above the fastest it reports, so its release flings where the
 ///   stroke lasts the three samples a velocity is measured from; a swipe moves at that speed and
 ///   then holds still, so it lifts slower than any fling;
-/// - a swipe's stroke is at least twice the window's pan slop for a touch, so it drags.
+/// - a swipe's stroke is at least twice the window's pan slop for a touch, so it drags;
+/// - a tap, a double tap and a drag play with the window's primary pointer ([`primary_pointer`]),
+///   and a drag must pass that pointer's pan slop.
 ///
 /// # Errors
 ///
@@ -291,6 +303,8 @@ fn window_defaults(settings: &WindowGestures, composed: &Composed) -> Result<Def
         .max(Defaults::WINDOWLESS.fling_velocity)
         .min(max_fling);
     defaults.min_stroke = 2.0 * settings.touch.pan_slop_for(PointerKind::Touch);
+    defaults.pointer = device_of(settings.primary);
+    defaults.min_drag = settings.pointer.pan_slop_for(settings.primary);
     Ok(defaults)
 }
 
@@ -377,7 +391,10 @@ impl GestureAct {
                     return not_yet(ctx, reply, no_point());
                 };
                 let then = then.take().expect("BUG: a gesture performs once");
-                match agent_input::lower(&gestures::tap(aim.point, PointerButton::Primary)) {
+                let focusing = Composed::Tap(PointerButton::Primary)
+                    .sequence(aim, None, &WindowGestures::of(ctx.state))
+                    .and_then(|tap| agent_input::lower(&tap));
+                match focusing {
                     Ok(tap) => inject(ctx, reply, element, tap.then(then), snapshot),
                     Err(error) => answer(reply, Err(error)),
                 }
@@ -871,5 +888,14 @@ impl Serve for method::ElementPressKeys {
         ctx.runtime
             .queue_injection(ctx.state, injecting, ctx.park());
         Answer::Later
+    }
+}
+
+/// The protocol's name for a pointer `kind` a composed gesture plays with.
+fn device_of(kind: PointerKind) -> PointerDevice {
+    match kind {
+        PointerKind::Touch => PointerDevice::Touch,
+        PointerKind::Pen { .. } => PointerDevice::Pen,
+        _ => PointerDevice::Mouse,
     }
 }

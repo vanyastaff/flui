@@ -167,7 +167,10 @@ fn an_answer_that_did_not_arrive_releases_the_window_s_input() {
         .expect("a point to tap");
     let unanswered = Connection::call::<method::InputInject>(
         &mut driver,
-        InputParams::new(window, gestures::tap(at, PointerButton::Primary)),
+        InputParams::new(
+            window,
+            gestures::tap(at, PointerButton::Primary, &gestures::Defaults::WINDOWLESS),
+        ),
     );
     assert_eq!(
         unanswered,

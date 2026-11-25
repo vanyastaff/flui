@@ -56,12 +56,17 @@ const MIN_PINCH_RADIUS: f64 = 4.0;
 /// What a gesture takes where its call names no duration, velocity or distance and the window it
 /// plays in decides what is recognised as that gesture.
 ///
-/// The app's agent fills it from the window's own gesture settings (the long-press timeout, the
-/// fling velocities and the slop, which follow its platform and the system's preferences); a
-/// composer with no window to read, the driver's OS lane, takes [`Defaults::WINDOWLESS`].
+/// The app's agent fills it from the window's own gesture settings (the primary pointer of its
+/// platform, the long-press timeout, the fling velocities and the slops, which follow its platform
+/// and the system's preferences); a composer with no window to read, the driver's OS lane, takes
+/// [`Defaults::WINDOWLESS`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct Defaults {
+    /// The pointer a tap, a double tap and a drag play with: the window's primary pointer, a
+    /// touch contact where its platform's is touch and a mouse elsewhere. A long press, a swipe, a
+    /// fling and a pinch are touch gestures on every window.
+    pub pointer: PointerDevice,
     /// How long a long press holds, in milliseconds; at most
     /// [`Self::LONGEST_LONG_PRESS_MS`].
     pub long_press_ms: u64,
@@ -70,15 +75,20 @@ pub struct Defaults {
     /// The shortest stroke a swipe makes, in logical pixels, so it passes the slop a drag starts
     /// past.
     pub min_stroke: f64,
+    /// The drag slop of [`Self::pointer`], in logical pixels: a drag no longer than it starts no
+    /// drag, and [`drag`] refuses it.
+    pub min_drag: f64,
 }
 
 impl Defaults {
-    /// What a composer with no window to read takes: a press held 800 ms, and a stroke at
-    /// 2500 px/s at least 36 px long.
+    /// What a composer with no window to read takes: a mouse, a press held 800 ms, a stroke at
+    /// 2500 px/s at least 36 px long, and a drag longer than a mouse's 2 px slop.
     pub const WINDOWLESS: Self = Self {
+        pointer: PointerDevice::Mouse,
         long_press_ms: 800,
         fling_velocity: 2_500.0,
         min_stroke: 36.0,
+        min_drag: 2.0,
     };
 
     /// The longest a long press naming no duration holds, in milliseconds, which the reply bound
@@ -94,6 +104,13 @@ const MOUSE: &str = "gesture.mouse";
 
 /// The source id of a gesture's touch contact; a pinch's two are [`PINCH_CONTACTS`].
 const TOUCH: &str = "gesture.touch";
+
+/// The source id of a gesture's pen.
+const PEN: &str = "gesture.pen";
+
+/// The fewest moves a fling's stroke makes: with the press they are the three samples a velocity
+/// tracker measures a release from, so a stroke over in fewer lifts with no speed.
+const FLING_MOVES: u64 = 2;
 
 /// The source ids of a pinch's two touch contacts.
 const PINCH_CONTACTS: [&str; 2] = ["gesture.pinch.a", "gesture.pinch.b"];
@@ -134,6 +151,22 @@ pub enum GestureError {
         /// How fast, in logical pixels a second.
         velocity: f64,
     },
+    /// A fling whose distance or velocity the window chose and whose stroke is over in fewer
+    /// moves than a release velocity is measured from ([`FLING_MOVES`]), so it would lift with no
+    /// speed.
+    FlingTooShort {
+        /// How far, in logical pixels.
+        distance: f64,
+        /// How fast, in logical pixels a second.
+        velocity: f64,
+    },
+    /// A drag no longer than the slop a drag starts past.
+    DragTooShort {
+        /// How long, in logical pixels.
+        length: f64,
+        /// The slop, in logical pixels.
+        slop: f64,
+    },
     /// A pinch whose scale is not finite and above zero.
     NoScale {
         /// The scale asked for.
@@ -161,6 +194,15 @@ impl fmt::Display for GestureError {
                     "a stroke of {distance} px at {velocity} px/s goes nowhere"
                 )
             }
+            Self::FlingTooShort { distance, velocity } => write!(
+                f,
+                "a fling of {distance:.1} px at {velocity:.0} px/s is over before its release \
+                 speed can be measured: name a longer distance or a slower velocity"
+            ),
+            Self::DragTooShort { length, slop } => write!(
+                f,
+                "a drag of {length:.1} px does not pass this window's drag slop of {slop} px"
+            ),
             Self::NoScale { scale } => write!(f, "a pinch to scale {scale} is not one"),
             Self::EmptyChord { chord } => write!(f, "the chord {chord:?} names no key"),
             Self::UnreadableChord { chord } => {
@@ -203,12 +245,22 @@ const fn pause(duration_ms: u64) -> PointerAction {
     PointerAction::Pause { duration_ms }
 }
 
-/// `element.tap`: the mouse moves to `at`, presses `button` and releases it.
+/// The source id a gesture's `device` plays through.
+const fn source_of(device: PointerDevice) -> &'static str {
+    match device {
+        PointerDevice::Touch => TOUCH,
+        PointerDevice::Pen => PEN,
+        _ => MOUSE,
+    }
+}
+
+/// `element.tap`: the window's primary pointer ([`Defaults::pointer`]) moves to `at`, presses
+/// `button` and releases it.
 #[must_use]
-pub fn tap(at: LogicalPoint, button: PointerButton) -> ActionSequence {
+pub fn tap(at: LogicalPoint, button: PointerButton, defaults: &Defaults) -> ActionSequence {
     ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        MOUSE,
+        defaults.pointer,
+        source_of(defaults.pointer),
         vec![move_to(at, 0), down(button), up(button)],
     )])
 }
@@ -220,12 +272,13 @@ pub fn tap_action(button: PointerButton) -> Option<ActionName> {
     (button == PointerButton::Primary).then_some(ActionName::Invoke)
 }
 
-/// `element.double_tap`: two taps of `button` at `at`, 60 ms apart.
+/// `element.double_tap`: two taps of `button` at `at`, 60 ms apart, with the window's primary
+/// pointer.
 #[must_use]
-pub fn double_tap(at: LogicalPoint, button: PointerButton) -> ActionSequence {
+pub fn double_tap(at: LogicalPoint, button: PointerButton, defaults: &Defaults) -> ActionSequence {
     ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        MOUSE,
+        defaults.pointer,
+        source_of(defaults.pointer),
         vec![
             move_to(at, 0),
             down(button),
@@ -257,19 +310,37 @@ pub fn long_press(
     )])
 }
 
-/// `element.drag_to`: the mouse presses at `from`, moves to `to` over 300 ms and releases.
-#[must_use]
-pub fn drag(from: LogicalPoint, to: LogicalPoint) -> ActionSequence {
-    ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        MOUSE,
+/// `element.drag_to`: the window's primary pointer presses at `from`, moves to `to` over 300 ms,
+/// holds still for [`SWIPE_SETTLE_MS`] and releases, so it is dropped where it ends rather than
+/// flung on.
+///
+/// # Errors
+///
+/// [`GestureError::DragTooShort`] for a drag no longer than [`Defaults::min_drag`], which starts
+/// no drag.
+pub fn drag(
+    from: LogicalPoint,
+    to: LogicalPoint,
+    defaults: &Defaults,
+) -> Result<ActionSequence, GestureError> {
+    let length = (to.x - from.x).hypot(to.y - from.y);
+    if length.is_nan() || length <= defaults.min_drag {
+        return Err(GestureError::DragTooShort {
+            length,
+            slop: defaults.min_drag,
+        });
+    }
+    Ok(ActionSequence::new(vec![pointer(
+        defaults.pointer,
+        source_of(defaults.pointer),
         vec![
             move_to(from, 0),
             down(PointerButton::Primary),
             move_to(to, STROKE_MS),
+            pause(SWIPE_SETTLE_MS),
             up(PointerButton::Primary),
         ],
-    )])
+    )]))
 }
 
 /// The unit step on screen of `direction`.
@@ -326,7 +397,8 @@ fn room_of(aim: Aim, dx: f64, dy: f64) -> f64 {
 /// # Errors
 ///
 /// [`GestureError::StrokeGoesNowhere`] for a distance or velocity that is not finite and above
-/// zero.
+/// zero, and [`GestureError::FlingTooShort`] for a fling whose distance or velocity the window
+/// chose and whose stroke is over before its release speed can be measured.
 pub fn swipe(
     aim: Aim,
     direction: Direction,
@@ -335,8 +407,9 @@ pub fn swipe(
     fling: bool,
     defaults: &Defaults,
 ) -> Result<ActionSequence, GestureError> {
+    let (named_distance, named_velocity) = (distance, velocity);
     let (dx, dy) = step_of(direction);
-    let distance = distance.unwrap_or_else(|| {
+    let distance = named_distance.unwrap_or_else(|| {
         let room = room_of(aim, dx, dy);
         if room > 0.0 {
             (room * STROKE_SHARE).max(defaults.min_stroke)
@@ -344,16 +417,22 @@ pub fn swipe(
             0.0
         }
     });
-    let velocity = velocity.unwrap_or(defaults.fling_velocity);
+    let chosen = named_distance.is_none() || named_velocity.is_none();
+    let velocity = named_velocity.unwrap_or(defaults.fling_velocity);
     if !(distance.is_finite() && distance > 0.0 && velocity.is_finite() && velocity > 0.0) {
         return Err(GestureError::StrokeGoesNowhere { distance, velocity });
+    }
+    let stroke = stroke_ms(distance, velocity);
+    let step_ms = u64::try_from(super::STEP.as_millis()).unwrap_or(u64::MAX);
+    if fling && chosen && stroke.div_ceil(step_ms) < FLING_MOVES {
+        return Err(GestureError::FlingTooShort { distance, velocity });
     }
     let start = aim.point;
     let end = LogicalPoint::new(start.x + dx * distance, start.y + dy * distance);
     let mut actions = vec![
         move_to(start, 0),
         down(PointerButton::Primary),
-        move_to(end, stroke_ms(distance, velocity)),
+        move_to(end, stroke),
     ];
     if !fling {
         actions.push(pause(SWIPE_SETTLE_MS));
@@ -504,7 +583,7 @@ const ORIGIN: LogicalPoint = LogicalPoint::new(0.0, 0.0);
 impl PlayBound for super::TapParams {
     /// A double tap, the longer of the two gestures these parameters take.
     fn plays_within(&self) -> Duration {
-        double_tap(ORIGIN, self.button).plays_within()
+        double_tap(ORIGIN, self.button, &Defaults::WINDOWLESS).plays_within()
     }
 }
 
@@ -517,8 +596,14 @@ impl PlayBound for super::LongPressParams {
 }
 
 impl PlayBound for super::DragParams {
+    /// A drag far enough to pass any slop: its length does not change how long it plays.
     fn plays_within(&self) -> Duration {
-        drag(ORIGIN, ORIGIN).plays_within()
+        drag(
+            ORIGIN,
+            LogicalPoint::new(1_000.0, 0.0),
+            &Defaults::WINDOWLESS,
+        )
+        .map_or(Duration::ZERO, |sequence| sequence.plays_within())
     }
 }
 
@@ -563,7 +648,7 @@ impl PlayBound for super::PinchParams {
 impl PlayBound for super::TypeTextParams {
     /// The focusing tap, then the text.
     fn plays_within(&self) -> Duration {
-        tap(ORIGIN, PointerButton::Primary)
+        tap(ORIGIN, PointerButton::Primary, &Defaults::WINDOWLESS)
             .plays_within()
             .saturating_add(text(&self.text).plays_within())
     }
@@ -573,7 +658,7 @@ impl PlayBound for super::PressKeysParams {
     /// The focusing tap when there is a target, then the chords.
     fn plays_within(&self) -> Duration {
         let focus = if self.target.is_some() {
-            tap(ORIGIN, PointerButton::Primary).plays_within()
+            tap(ORIGIN, PointerButton::Primary, &Defaults::WINDOWLESS).plays_within()
         } else {
             Duration::ZERO
         };

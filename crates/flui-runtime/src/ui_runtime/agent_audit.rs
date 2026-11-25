@@ -23,26 +23,31 @@
 //! resolve, something is painted over it, the text below its contrast has no element to name),
 //! the rule is listed in `not_checked` with how many, the first three quoted with why and the
 //! rest counted, and the findings of the texts it judged are still reported: a partial check is
-//! never a pass.
+//! never a pass. The text of a disabled control, or of anything under one, is not judged: WCAG
+//! 1.4.3 exempts an inactive component, so each such text is listed in `not_checked` with that
+//! reason instead of a finding nobody can fix.
 //!
-//! The target-size minimum is the platform's for its primary pointer: the touch minimum on
-//! Android, iOS and Fuchsia, the mouse minimum elsewhere, as the window's gesture settings
-//! resolve them (`GestureSettings::min_target`). The testing kit's gesture-alternatives check
-//! holds a control to a finger's minimum instead, since it presses with one on every platform.
+//! The target-size minimum is the window's primary pointer's, the pointer a composed tap plays
+//! with (`agent_gesture::primary_pointer`): a touch contact on Android, iOS and Fuchsia, a mouse
+//! elsewhere, at the minimum the window's gesture settings resolve for it
+//! (`GestureSettings::min_target`). Each finding names the pointer it was judged for. The testing
+//! kit's gesture-alternatives check holds a control to a finger's minimum instead, since it
+//! presses with one on every platform.
 //!
 //! [`SemanticsOwner::audit_unnamed`]: flui_semantics::SemanticsOwner::audit_unnamed
 //! [`SemanticsOwner::audit_target_size`]: flui_semantics::SemanticsOwner::audit_target_size
 //! [`PipelineOwner::audit_text_contrast`]: flui_rendering::PipelineOwner::audit_text_contrast
 
 use flui_interaction::events::PointerKind;
-use flui_platform::TargetPlatform;
 use flui_protocol::audit::{AuditFinding, AuditParams, AuditReport, AuditRule};
 use flui_protocol::method;
-use flui_protocol::tree::{ElementRef, WindowId};
+use flui_protocol::tree::{ElementId, ElementRef, Node, ReadQuery, WindowId};
 use flui_rendering::audit::{ContrastOutcome, ContrastReading, TextContrast};
 use flui_semantics::{MinimumTarget, SemanticsOwner, WireReadError};
+use rustc_hash::FxHashSet;
 
-use super::agent::{IssuedHandles, placement_of};
+use super::agent::{IssuedHandles, placement_of, read_tree};
+use super::agent_gesture::primary_pointer;
 use super::agent_serve::{Answer, Serve, ServeContext};
 use crate::presentation::PresentationState;
 
@@ -116,12 +121,21 @@ fn run(state: &PresentationState, window: WindowId, rule: AuditRule) -> RuleOutc
     match rule {
         AuditRule::Unnamed => semantics_rule(state, |owner| owner.audit_unnamed(placement)),
         AuditRule::TargetSize => match minimum_target(state) {
-            Some(minimum) => {
-                semantics_rule(state, |owner| owner.audit_target_size(minimum, placement))
+            (Some(minimum), pointer) => {
+                match semantics_rule(state, |owner| owner.audit_target_size(minimum, placement)) {
+                    RuleOutcome::Checked(found) => RuleOutcome::Checked(
+                        found
+                            .into_iter()
+                            .map(|finding| judged_for(finding, pointer))
+                            .collect::<Vec<AuditFinding>>(),
+                    ),
+                    outcome => outcome,
+                }
             }
-            None => RuleOutcome::NotChecked(
-                "the platform's minimum target is not a finite positive size".to_owned(),
-            ),
+            (None, pointer) => RuleOutcome::NotChecked(format!(
+                "the minimum target of {pointer}, this window's primary pointer, is not a finite \
+                 positive size"
+            )),
         },
         AuditRule::TextContrast => text_contrast(state, window),
         _ => RuleOutcome::NotChecked("this app's agent does not run this rule".to_owned()),
@@ -147,15 +161,28 @@ fn semantics_rule(
 /// Why a semantics rule did not run before the first committed tree.
 const NO_TREE: &str = "no semantics tree has been committed yet";
 
-/// The minimum target of `state`'s platform for its primary pointer (module docs).
-fn minimum_target(state: &PresentationState) -> Option<MinimumTarget> {
-    let kind = match state.platform {
-        TargetPlatform::Android | TargetPlatform::iOS | TargetPlatform::Fuchsia => {
-            PointerKind::Touch
-        }
-        _ => PointerKind::Mouse,
+/// The minimum target of `state`'s window for its primary pointer, the pointer a composed tap
+/// plays with ([`primary_pointer`]), and the pointer's name for a finding (module docs).
+fn minimum_target(state: &PresentationState) -> (Option<MinimumTarget>, &'static str) {
+    let kind = primary_pointer(state);
+    let name = if kind == PointerKind::Touch {
+        "a touch contact"
+    } else {
+        "a mouse"
     };
-    MinimumTarget::try_new(state.gesture_settings.provider().min_target_for(kind))
+    (
+        MinimumTarget::try_new(state.gesture_settings.provider().min_target_for(kind)),
+        name,
+    )
+}
+
+/// `finding` of `target_size`, naming the pointer whose minimum it was judged against.
+fn judged_for(mut finding: AuditFinding, pointer: &str) -> AuditFinding {
+    finding.detail = format!(
+        "{}, judged for {pointer}, this window's primary pointer",
+        finding.detail
+    );
+    finding
 }
 
 /// `text_contrast` over the frame `state`'s scene last applied.
@@ -169,9 +196,19 @@ fn text_contrast(state: &PresentationState, window: WindowId) -> RuleOutcome {
     else {
         return RuleOutcome::NotChecked("the window has not painted a frame yet".to_owned());
     };
+    let inactive = inactive_elements(state, window);
     let mut findings = Vec::new();
     let mut unchecked: Vec<String> = Vec::new();
     for text in &texts {
+        let element = text.element.map(flui_semantics::element_id_of);
+        if element.is_some_and(|element| inactive.contains(&element)) {
+            unchecked.push(format!(
+                "\"{}\": its control is disabled, and an inactive control's text has no contrast \
+                 requirement",
+                quoted(&text.text)
+            ));
+            continue;
+        }
         match (&text.outcome, text.element) {
             (ContrastOutcome::Meets(_), _) => {}
             (ContrastOutcome::Below(reading), Some(element)) => findings.push(AuditFinding::new(
@@ -214,6 +251,30 @@ fn text_contrast(state: &PresentationState, window: WindowId) -> RuleOutcome {
         ),
     )
 }
+
+/// The elements of `state`'s committed semantics tree that are inactive: disabled, or under a
+/// disabled node, whose text WCAG 1.4.3 exempts from its contrast requirement. The walk reads at
+/// most [`INACTIVE_READ_NODES`] nodes; a node past them is judged as an active one.
+fn inactive_elements(state: &PresentationState, window: WindowId) -> FxHashSet<ElementId> {
+    fn walk(nodes: &[Node], under_disabled: bool, inactive: &mut FxHashSet<ElementId>) {
+        for node in nodes {
+            let disabled = under_disabled || node.disabled;
+            if disabled {
+                inactive.insert(node.id);
+            }
+            walk(&node.children, disabled, inactive);
+        }
+    }
+    let mut inactive = FxHashSet::default();
+    let query = ReadQuery::new().max_nodes(INACTIVE_READ_NODES);
+    if let Ok(tree) = read_tree(state, window, &query, true) {
+        walk(&tree.roots, false, &mut inactive);
+    }
+    inactive
+}
+
+/// The most semantics nodes [`inactive_elements`] reads.
+const INACTIVE_READ_NODES: usize = 1 << 16;
 
 /// A finding's detail for a text below its contrast.
 fn below_detail(text: &TextContrast, reading: &ContrastReading) -> String {

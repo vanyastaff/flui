@@ -53,18 +53,43 @@ fn strings(lines: &[&str]) -> Vec<String> {
 fn each_pointer_gesture_composes_to_its_sequence() {
     let point = at(50.0, 40.0);
     let aim = Aim::new(point, Some(LogicalRect::new(0.0, 20.0, 100.0, 40.0)));
-    let cases: [(&str, ActionSequence, Vec<Written>); 10] = [
+    let mut touch = Defaults::WINDOWLESS;
+    touch.pointer = PointerDevice::Touch;
+    touch.min_drag = 18.0;
+    let cases: [(&str, ActionSequence, Vec<Written>); 12] = [
         (
             "tap",
-            gestures::tap(point, PointerButton::Secondary),
+            gestures::tap(point, PointerButton::Secondary, &Defaults::WINDOWLESS),
             vec![(
                 PointerDevice::Mouse,
                 strings(&["move 50,40/0", "down Secondary", "up Secondary"]),
             )],
         ),
         (
+            "tap where the primary pointer is touch",
+            gestures::tap(point, PointerButton::Primary, &touch),
+            vec![(
+                PointerDevice::Touch,
+                strings(&["move 50,40/0", "down Primary", "up Primary"]),
+            )],
+        ),
+        (
+            "drag where the primary pointer is touch",
+            gestures::drag(point, at(50.0, 90.0), &touch).expect("past the touch slop"),
+            vec![(
+                PointerDevice::Touch,
+                strings(&[
+                    "move 50,40/0",
+                    "down Primary",
+                    "move 50,90/300",
+                    "pause 120",
+                    "up Primary",
+                ]),
+            )],
+        ),
+        (
             "double tap",
-            gestures::double_tap(point, PointerButton::Primary),
+            gestures::double_tap(point, PointerButton::Primary, &Defaults::WINDOWLESS),
             vec![(
                 PointerDevice::Mouse,
                 strings(&[
@@ -95,13 +120,14 @@ fn each_pointer_gesture_composes_to_its_sequence() {
         ),
         (
             "drag",
-            gestures::drag(point, at(10.0, 90.0)),
+            gestures::drag(point, at(10.0, 90.0), &Defaults::WINDOWLESS).expect("a drag"),
             vec![(
                 PointerDevice::Mouse,
                 strings(&[
                     "move 50,40/0",
                     "down Primary",
                     "move 10,90/300",
+                    "pause 120",
                     "up Primary",
                 ]),
             )],
@@ -302,6 +328,58 @@ fn parameters_that_make_no_gesture_are_refused() {
             matches!(refused, Err(GestureError::StrokeGoesNowhere { .. })),
             "{velocity}: {refused:?}"
         );
+    }
+    // A drag no longer than the slop of the pointer it plays with starts no drag.
+    let mut touch = Defaults::WINDOWLESS;
+    touch.pointer = PointerDevice::Touch;
+    touch.min_drag = 18.0;
+    for (defaults, to, refused) in [
+        (Defaults::WINDOWLESS, at(3.0, 1.0), true),
+        (Defaults::WINDOWLESS, at(3.1, 1.0), false),
+        (touch, at(19.0, 1.0), true),
+        (touch, at(19.5, 1.0), false),
+    ] {
+        let drag = gestures::drag(at(1.0, 1.0), to, &defaults);
+        assert_eq!(
+            matches!(drag, Err(GestureError::DragTooShort { .. })),
+            refused,
+            "{defaults:?} to {to:?}: {drag:?}"
+        );
+    }
+    // A fling whose stroke the window chose is over in fewer than three moves of 16 ms is
+    // refused, naming what to give; one whose distance and velocity the call named is played.
+    let room = Aim::new(
+        at(50.0, 50.0),
+        Some(LogicalRect::new(0.0, 0.0, 100.0, 100.0)),
+    );
+    for (distance, velocity, refused) in [
+        (None, None, true),
+        (Some(40.0), None, true),
+        (None, Some(1_000.0), false),
+        (Some(40.0), Some(2_500.0), false),
+        (Some(150.0), None, false),
+    ] {
+        let fling = gestures::swipe(
+            room,
+            Direction::Down,
+            distance,
+            velocity,
+            true,
+            &Defaults::WINDOWLESS,
+        );
+        assert_eq!(
+            matches!(fling, Err(GestureError::FlingTooShort { .. })),
+            refused,
+            "{distance:?} at {velocity:?}: {fling:?}"
+        );
+        if let Err(error) = fling {
+            assert!(
+                error
+                    .to_string()
+                    .contains("name a longer distance or a slower velocity"),
+                "{error}"
+            );
+        }
     }
     for scale in [0.0, -1.0, f64::NAN] {
         let refused = gestures::pinch(aim, scale);

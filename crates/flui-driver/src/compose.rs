@@ -716,7 +716,7 @@ pub(crate) fn tap(driver: &mut Driver, params: TapParams) -> Result<ActOutcome> 
         return Ok(answer);
     }
     let aim = aim(driver, &params.target, &params.options)?;
-    let sequence = gestures::tap(aim.point, params.button);
+    let sequence = gestures::tap(aim.point, params.button, &Defaults::WINDOWLESS);
     act(driver, aim, &params.options, sequence, semantic)
 }
 
@@ -727,7 +727,7 @@ pub(crate) fn double_tap(driver: &mut Driver, params: TapParams) -> Result<ActOu
         return Ok(answer);
     }
     let aim = aim(driver, &params.target, &params.options)?;
-    let sequence = gestures::double_tap(aim.point, params.button);
+    let sequence = gestures::double_tap(aim.point, params.button, &Defaults::WINDOWLESS);
     act(driver, aim, &params.options, sequence, None)
 }
 
@@ -756,7 +756,8 @@ pub(crate) fn drag_to(driver: &mut Driver, params: DragParams) -> Result<ActOutc
             from.window, to.window
         )));
     }
-    let sequence = gestures::drag(from.point, to.point);
+    let sequence = gestures::drag(from.point, to.point, &Defaults::WINDOWLESS)
+        .map_err(|error| invalid_gesture(&error))?;
     act(driver, from, &params.options, sequence, None)
 }
 
@@ -843,7 +844,7 @@ pub(crate) fn type_text(driver: &mut Driver, params: TypeTextParams) -> Result<A
 fn focus(driver: &mut Driver, aim: Aim, options: &GestureOptions) -> Result<ActOutcome> {
     let mut quiet = *options;
     quiet.snapshot = Snapshot::None;
-    let sequence = gestures::tap(aim.point, PointerButton::Primary);
+    let sequence = gestures::tap(aim.point, PointerButton::Primary, &Defaults::WINDOWLESS);
     act(driver, aim, &quiet, sequence, Some(ActionName::Focus))
 }
 
