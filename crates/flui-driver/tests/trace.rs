@@ -554,12 +554,11 @@ fn a_headless_replay_has_no_divergence_and_a_changed_app_diverges_at_its_wait() 
         (4, "wait.until")
     );
     assert_eq!(divergence.at, "/end");
+    // The changed app is idle with a count the wait cannot see change: the headless host,
+    // which composes its half, ends the wait idle (ADR-0400 §3).
     assert_eq!(
         (divergence.expected, divergence.actual),
-        (
-            serde_json::json!("satisfied"),
-            serde_json::json!("unsatisfied")
-        )
+        (serde_json::json!("satisfied"), serde_json::json!("idle"))
     );
 }
 

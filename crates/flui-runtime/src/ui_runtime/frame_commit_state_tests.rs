@@ -306,9 +306,7 @@ pub(crate) fn a_settlement_asks_for_work_the_gate_held_back() {
                 primary.arm_failure_retry(now);
                 // The ended backoff is no wake while the sink is full: no frame would follow.
                 assert!(
-                    ui_runtime
-                        .next_wake_excluding_agent_waits()
-                        .is_none_or(|wake| wake > now),
+                    ui_runtime.next_wake().is_none_or(|wake| wake > now),
                     "an ended backoff of a saturated presentation is no wake"
                 );
             }

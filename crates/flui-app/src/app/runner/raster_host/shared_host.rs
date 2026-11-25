@@ -189,6 +189,17 @@ impl SharedRasterHost {
         Some(read(&host))
     }
 
+    /// Whether the loop owes `address`'s window its in-flight floor
+    /// (`RasterHost::floor_owed`): while the host is turning the floor stands,
+    /// that turn answers it. The one rule the loop's wake and each runtime's
+    /// half of what keeps the application from being idle read
+    /// (`RuntimeHostServices::with_floor_owed`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn floor_owed(&self, address: PresentationAddress) -> bool {
+        self.try_read(|host| host.floor_owed(address))
+            .unwrap_or(true)
+    }
+
     /// Release `address`'s slot now, or when the turn that holds the host
     /// ends.
     pub(crate) fn detach(&self, address: PresentationAddress) {

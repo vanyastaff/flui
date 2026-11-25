@@ -7,7 +7,9 @@
   (§8; D1, D3, D4 and D7's naming rules stand);
   [ADR-0238](ADR-0238-flui-driver-protocol.md): §5's last sentence and §6's "the driver repeats"
   for the synthetic and semantic paths (§2), §8's `headless` feature and its edge to
-  `flui-testing` (§1), and §9's Rust front end, `Driver`, `Window`, `Element` and `expect` (§1);
+  `flui-testing` (§1), §9's Rust front end, `Driver`, `Window`, `Element` and `expect` (§1), and
+  §10's "the rules live in `flui-semantics` and `flui-testing` shares them": each rule lives with
+  its facts, target size in `flui-semantics` and contrast in `flui-rendering::audit` (§5);
   [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) §6, the script builders (§2);
   [ADR-0216](ADR-0216-gesture-alternatives.md): the gesture path of `assert_gesture_alternatives`
   driven through `PointerScript` (§2)
@@ -230,7 +232,8 @@ up; `assert_gesture_alternatives` (ADR-0216) drives a gesture through it.
 A gesture on the synthetic or semantic path is answered by the agent in the application: it
 locates, checks actionability at each frame boundary until the target is attached, visible,
 stable over two frames, enabled and receives the hit, or the action's timeout passes
-(ADR-0238 §6), and injects in the turn the check passed, aimed at that frame's bounds. A failure
+(ADR-0238 §6), and injects in the turn the check passed, aimed at the part of the element that
+frame shows. A failure
 is `TestError::NotActionable` with the failed check and nothing sent. The action's timeout is in
 its request: the conversation counts it as what the window may hold the act for (ADR-0288 §4),
 the held act's deadline is a wake of §3, and when it passes the agent drops the act, so nothing
@@ -284,7 +287,7 @@ pub enum ClearedBy {
     NextFrame,  // the next turn serves it
     Deadline,   // a turn at its deadline serves it: a timer, a frame's retry, a scenario step
     Test,       // only the test discharges it: held background work
-    Outside,    // something outside the application answers it: a platform reply in flight
+    Outside,    // something outside the application answers it: a platform reply, a future the host parked
 }
 pub enum SettleScope { Complete, RuntimeOnly } // a field of `WaitOutcome` and of the report
 pub enum WaitEnd { Satisfied, Unsatisfied, Idle } // how a wait ended: `WaitOutcome::end`
@@ -292,13 +295,15 @@ pub enum WaitEnd { Satisfied, Unsatisfied, Idle } // how a wait ended: `WaitOutc
 // flui_runtime
 pub struct Unsettled { /* causes, and the exact `Instant` of the earliest wake */ }
 impl Unsettled {
-    /// The one wake rule every host calls: now for a `NextFrame` cause, the earliest deadline of
-    /// a `Deadline` cause, a parked wait or a held act; never for `Test` or `Outside`.
+    /// The one wake rule every host calls: now for a `NextFrame` cause or a frame the agent asks
+    /// for, the earliest deadline of a `Deadline` cause, a parked wait or a held act; never for
+    /// `Test` or `Outside`.
     pub fn wake(&self) -> Option<Instant>;
 }
 impl UiRuntime {
-    /// The runtime's half. A frame a surface owes is the host's half, never listed here.
-    pub fn unsettled(&self, now: Instant, into: &mut Unsettled);
+    /// The runtime's half, read at the instant `into` was gathered at. A frame a surface owes is
+    /// the host's half, never listed here.
+    pub fn unsettled(&self, into: &mut Unsettled);
     /// The host, after its turn: answers the parked `Settled` and idle waits from both halves.
     pub fn answer_settled(&mut self, now: Instant, host: HostHalf<'_>);
 }
@@ -306,27 +311,35 @@ pub enum HostHalf<'a> { Complete(&'a Unsettled), Absent }
 ```
 
 The runtime's half derives each cause's `cleared_by` from its own state, so the combinations
-the host reads today are the runtime's: a redraw while a frame's retry is armed is a `Deadline`
-cause at the retry, and a redraw while the runtime's frames are off (no window seen) is not
-listed. Every host (the headless host, `AppRun`'s runner, each native runner) wakes at
+the host reads today are the runtime's: a cause of a window whose dropped frame's retry is armed
+is a `Deadline` cause at that retry (another window's retry holds nothing of it), and a redraw
+while the runtime's frames are off (no window seen), or of a window no frame serves (one not
+seen, one whose sink is full, one whose device was given up), is not listed. Every host (the headless host, `AppRun`'s runner, each native runner) wakes at
 `Unsettled::wake` and keeps no rule of its own; `HeadlessHost::pump_until_settled` and
 `time_to_next_frame` read it, and the runtime's `unsettled_causes` is deleted. A wake is an exact
 `Instant` owned by whoever armed it; `due_in_ms` is its rounded copy for the report.
 
 A wait holds out on the connection's clock. On a virtual clock the connection runs the host's loop,
-moving the clock to `Unsettled::wake`, an application's timers included, until the runtime answers,
+moving the clock to `Unsettled::wake`, an application's timers included (a cause the next turn
+serves is served at once, and one that the turn re-armed a frame period later or at the next
+deadline if that is sooner, as a display paces its frames), until the runtime answers,
 `limit` of virtual time has passed (the time a device would spend), or 10 000 turns have passed
 without the clock moving, which ends the wait `WaitEnd::Unsatisfied` with the causes that
 re-armed at the same instant (egui's `max_steps`). A wait whose condition is false ends
 `WaitEnd::Idle` with the remaining causes when the host's half is `Complete` and every remaining
 cause is `Test`: only the test can release it. An `Outside` cause keeps the wait parked to its
 limit, as an `Absent` half does. A host whose half is `Absent` (a runner until it composes one) is
-never idle, and its answers carry `SettleScope::RuntimeOnly`. `wait.settled` on a window counts
-that window's causes and the causes of the whole application.
+never idle, and its answers carry `SettleScope::RuntimeOnly`: the runtime answers from its own
+half wherever that host's outermost turn ends (an owner dispatch, a turn the host ran by itself, a
+frame's settlement outside any turn). `wait.settled` on a window counts that window's causes and
+the causes of the whole application: a redraw, a scheduled frame, tree work and pointer motion are
+causes of each window whose work the next frame serves, and a scheduled frame no window's work
+asks for is the whole application's. What the agent asks for itself (a held act's frames, a wait
+that counts frames) is a wake, never a cause; input an act queued is the application's work.
 
 A settle that does not end fails with every cause named. The runtime answers `wait.settled`,
-`wait.frames`, `audit.a11y`, `perf.start` and `perf.stop`, which are `not_answered!` today; the two
-captures stay with a host that has a renderer.
+`wait.frames`, `audit.a11y`, `perf.start` and `perf.stop`; the two captures stay with a host that
+has a renderer.
 
 ### §4. A frame's internals are read in process, through types
 
@@ -392,7 +405,7 @@ settles with the one vocabulary and no agent in the measured state.
 | A render object's field | `Frame::read::<R, T>` | `renderObject<T>`, `controller.dart:987`; by `TypeId`, never a name, never on the wire |
 | Pixels | `Settled::golden` (§6) | `matchesGoldenFile`, `matchers.dart:589` |
 | Semantics | `Tester::read`, `Tester::semantics` | `matchesSemantics`, `matchers.dart:666` |
-| Accessibility rules | `Settled::audit(&[AuditRule])`; `Tester::audit` on any connection, naming the frame it read | `meetsGuideline`, `matchers.dart:1301`; contrast from the draw commands' colours and target size from the hit region inside its clip, not from pixels (flutter/flutter#103235, #144121); each rule lives with its facts, names and target size in `flui-semantics`, contrast in `flui-rendering::audit` (the flui-driver spec's layout audit), and the runtime's `audit.a11y` and the kit both call them (ADR-0238 §10); a rule that cannot run is `cannot_verify`, never a pass |
+| Accessibility rules | `Settled::audit(&[AuditRule])`; `Tester::audit` on any connection, naming the frame it read | `meetsGuideline`, `matchers.dart:1301`; contrast from the draw commands' colours, not from pixels (Flutter's pixel-sampled `textContrastGuideline` passes white text on `#fafafa`, flutter/flutter#103235), and target size from the hit region inside the window and the clips that do not scroll: a scrollable's clip does not shrink a target along the axis it scrolls, since scrolling reveals the rest, so a row partly scrolled out is judged by its extent once revealed (judging the part a scrollable shows is the defect Flutter's tracker records for `MinimumTapTargetGuideline`, flutter/flutter#144121, which the rule avoids); each rule lives with its facts, names and target size in `flui-semantics`, contrast in `flui-rendering::audit` (the flui-driver spec's layout audit), and the runtime's `audit.a11y` calls them, which is how `Tester::audit` reaches them; the kit's gesture-alternatives audit (ADR-0238 §10) judges a target by the same `MinimumTarget::admits`; a rule that cannot run is `cannot_verify`, never a pass |
 | Time and animation | the virtual clock; `pump`, `pump_for`, `settle`, `freeze_at` | `pump`, `pumpAndSettle`, `widget_tester.dart:651`; a cause is named (#114063) and there are no zones |
 | Background work | `UnsettledReason::Background`; `work().hold()` and `run()`; a seed orders ready completions | `runAsync`; gpui's seeded scheduler |
 | Platform capabilities | `double::<D>()`: the double of the crate that owns the seam | `TestDefaultBinaryMessenger`; typed |
@@ -558,7 +571,7 @@ link-time test registry; a testing crate beside `flui-testing`.
   fixtures of `flui-testing`.
 - clippy: `deprecated` on the old forms with the `#[expect]` marker of §8, until the last one is
   deleted.
-- Tests of `flui-runtime`: a table with one row per `UnsettledReason` on which the host's settle
+- Tests of `flui-testing` and `flui-runtime`: a table with one row per `UnsettledReason` on which the host's settle
   and `wait(Settled)` agree, a row where both stay unsettled and name the cause and its
   `cleared_by`, and a row where both settle on the same state; a held background job never wakes
   the loop and ends a false wait `WaitEnd::Idle` naming it; a parked wait's deadline is reached
@@ -575,8 +588,10 @@ link-time test registry; a testing crate beside `flui-testing`.
   its end checks; `freeze_at` on an activity indicator gives a golden that reruns byte for byte; a
   chord after a `Gesture` that left a key down sends no second down; a golden off the canonical
   adapter is `CannotVerify`; a mismatch writes a diff and a failed run blesses nothing.
-- A test of `flui-protocol`: one `ActionSequence` per gesture kind, planned once, gives the same
-  routed events through the agent's injection, a platform lowering and a conformance row.
+- A conformance test: one `ActionSequence` per gesture kind, planned once, gives the same routed
+  events through the agent's injection, a platform lowering and a conformance row. `flui-driver`'s
+  `gesture_conformance` compares the first two; the conformance row waits for a plan lowered into
+  `HostInput` rows (`docs/gaps.md`).
 - One scenario of an example package runs headless in its `#[test]` and on a device in the
   nightly platform lanes through `each::<Device>`.
 - `flui-driver` has no `headless` feature and no edge to `flui-testing`.

@@ -1,0 +1,678 @@
+//! What the agent composes for a gesture whose call names no duration, velocity or distance
+//! (ADR-0400 §2): what the window it plays in recognises as that gesture, from the window's own
+//! gesture settings, and aimed at the part of its target the window shows.
+
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
+
+use flui_interaction::gesture::{GestureProfiles, GestureSettings};
+use flui_platform::input::pointer::PointerKind;
+use flui_platform::{GesturePreferences, SystemPreferences, TargetPlatform};
+use flui_protocol::method::{self, Method, WindowMethod};
+use flui_protocol::{
+    act::ActOutcome, error::ErrorCode, error::ErrorObject, input::JournalParams,
+    input::LongPressParams, input::PinchParams, input::SwipeParams, input::TapParams,
+    locator::Locator, locator::Target,
+};
+use flui_testing::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow};
+use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
+use flui_view::prelude::*;
+use flui_widgets::{ColoredBox, Column, DragSlot, GestureDetector, Row, Semantics, SizedBox};
+use parking_lot::Mutex;
+use serde_json::json;
+
+/// Keeps every window the host hands it.
+struct Windows(Arc<Mutex<Vec<AgentWindow>>>);
+
+impl DevAgentHook for Windows {
+    fn attach(&mut self) -> bool {
+        true
+    }
+
+    fn window_opened(&mut self, window: AgentWindow) {
+        self.0.lock().push(window);
+    }
+}
+
+/// `view` shown in `window`, its agent window and a lease on its input, after its first frames.
+fn shown(
+    window: HeadlessWindow,
+    view: &(impl View + Clone + 'static),
+) -> (HeadlessHost, HeadlessDevAgent, AgentWindow, InputLease) {
+    let windows = Arc::new(Mutex::new(Vec::new()));
+    let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
+    let mut host = HeadlessHost::new(window).with_dev_agent(&mut agent);
+    host.attach(view).expect("mount");
+    let _ = host.pump(Duration::from_millis(16));
+    let window = windows
+        .lock()
+        .pop()
+        .expect("the host handed the agent its window");
+    let _ = host.pump(Duration::from_millis(16));
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    (host, agent, window, lease)
+}
+
+/// Pumps 16 ms frames until `answer` is answered, at most `frames` of them; the frames it took.
+fn answered<T>(
+    host: &mut HeadlessHost,
+    answer: &mut AgentAnswer<T>,
+    frames: u32,
+) -> (Result<T, ErrorObject>, u32) {
+    for frame in 1..=frames {
+        let _ = host.pump(Duration::from_millis(16));
+        if let Some(answer) = answer.try_take() {
+            return (answer, frame);
+        }
+    }
+    panic!("no answer within {frames} frames");
+}
+
+fn named(name: &str) -> Target {
+    Target::Locator(Locator::named(name))
+}
+
+fn ask<M: Method<Output = ActOutcome> + WindowMethod>(
+    lease: &InputLease,
+    params: M::Params,
+) -> AgentAnswer<ActOutcome> {
+    lease.call::<M>(params).expect("the inbox has room")
+}
+
+/// What the pad's recognisers heard.
+#[derive(Clone, Default)]
+struct Heard {
+    long_presses: Rc<Cell<u32>>,
+    double_taps: Rc<Cell<u32>>,
+    drags: Rc<Cell<u32>>,
+    /// The speed each drag ended at, in logical pixels a second.
+    releases: Rc<RefCell<Vec<f64>>>,
+}
+
+/// "Pad", a surface that recognises a long press, a double tap and a drag; and "Drop" below it.
+#[derive(Clone, StatelessView)]
+struct Pad {
+    heard: Heard,
+    /// The pad's width, in logical pixels.
+    width: u32,
+}
+
+impl StatelessView for Pad {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let heard = self.heard.clone();
+        let (long_presses, double_taps) = (heard.long_presses, heard.double_taps);
+        let (drags, releases) = (heard.drags, heard.releases);
+        let pad = GestureDetector::new()
+            .on_long_press(move |_| long_presses.set(long_presses.get() + 1))
+            .on_double_tap(move |_| double_taps.set(double_taps.get() + 1))
+            .drag(
+                DragSlot::pan()
+                    .on_start(move |_, _| drags.set(drags.get() + 1))
+                    .on_end(move |_, details| {
+                        releases.borrow_mut().push(details.velocity.magnitude());
+                    }),
+            )
+            .child(
+                SizedBox::new(f64::from(self.width), 200.0)
+                    .child(ColoredBox::new(flui_painting::styling::Color::WHITE)),
+            );
+        Column::new(vec![
+            Semantics::new()
+                .label("Pad")
+                .container(true)
+                .child(pad)
+                .into_view()
+                .boxed(),
+            Semantics::new()
+                .label("Drop")
+                .container(true)
+                .child(
+                    SizedBox::new(200.0, 100.0)
+                        .child(ColoredBox::new(flui_painting::styling::Color::WHITE)),
+                )
+                .into_view()
+                .boxed(),
+        ])
+    }
+}
+
+/// How the window's gesture settings were set: a platform's preset, the system's long-press and
+/// double-tap timeouts where its preferences name them, and the range of release speeds a touch
+/// flings at where the window's own preset names one.
+#[derive(Clone, Copy, Debug)]
+struct Setting {
+    platform: TargetPlatform,
+    long_press: Option<Duration>,
+    double_tap: Option<Duration>,
+    /// The slowest and the fastest release that flings, in logical pixels a second.
+    fling: Option<(f64, f64)>,
+    /// The width of the window and of the pad in it, in logical pixels.
+    width: u32,
+}
+
+impl Setting {
+    const fn preset(platform: TargetPlatform) -> Self {
+        Self {
+            platform,
+            long_press: None,
+            double_tap: None,
+            fling: None,
+            width: 200,
+        }
+    }
+
+    /// The settings a touch contact is recognised with, before the system's preferences.
+    fn touch(self) -> GestureSettings {
+        let preset = GestureSettings::preset(self.platform, PointerKind::Touch);
+        match self.fling {
+            Some((min, max)) => preset
+                .try_with_fling_velocity(min, max)
+                .expect("a fling range in order"),
+            None => preset,
+        }
+    }
+
+    fn window(self) -> HeadlessWindow {
+        HeadlessWindow::new(self.width, 400)
+            .with_platform(self.platform)
+            .with_gesture_preset(
+                GestureProfiles::preset(self.platform).with_kind(PointerKind::Touch, self.touch()),
+            )
+    }
+
+    fn apply(self, host: &HeadlessHost) {
+        let mut preferences = GesturePreferences::default();
+        if let Some(long_press) = self.long_press {
+            preferences = preferences.with_long_press_timeout(long_press);
+        }
+        if let Some(double_tap) = self.double_tap {
+            preferences = preferences
+                .with_double_tap_interval(double_tap)
+                .with_double_click_interval(double_tap);
+        }
+        host.set_system_preferences(SystemPreferences::default().with_gestures(preferences));
+    }
+
+    fn pad(self, heard: &Heard) -> Pad {
+        Pad {
+            heard: heard.clone(),
+            width: self.width,
+        }
+    }
+
+    /// The least speed a touch release flings at in this window.
+    fn min_fling(self) -> f64 {
+        self.touch().fling_velocity_range_for(PointerKind::Touch).0
+    }
+}
+
+/// The gestures a call naming no duration, velocity or distance asks for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Unnamed {
+    LongPress,
+    DoubleTap,
+    Fling,
+    Swipe,
+    DragTo,
+}
+
+fn swipe_params() -> SwipeParams {
+    serde_json::from_value(json!({
+        "target": { "locator": { "name": { "match": "exact", "text": "Pad" } } },
+        "direction": "right",
+    }))
+    .expect("a swipe reads")
+}
+
+/// The gesture `default` asks of the pad, as its call names nothing but the target.
+fn ask_default(lease: &InputLease, default: Unnamed) -> AgentAnswer<ActOutcome> {
+    match default {
+        Unnamed::LongPress => {
+            let params: LongPressParams = serde_json::from_value(json!({
+                "target": { "locator": { "name": { "match": "exact", "text": "Pad" } } },
+            }))
+            .expect("a long press reads");
+            ask::<method::ElementLongPress>(lease, params)
+        }
+        Unnamed::DoubleTap => ask::<method::ElementDoubleTap>(lease, TapParams::new(named("Pad"))),
+        Unnamed::Fling => ask::<method::ElementFling>(lease, swipe_params()),
+        Unnamed::Swipe => ask::<method::ElementSwipe>(lease, swipe_params()),
+        Unnamed::DragTo => {
+            let params = serde_json::from_value(json!({
+                "target": { "locator": { "name": { "match": "exact", "text": "Pad" } } },
+                "to": { "locator": { "name": { "match": "exact", "text": "Drop" } } },
+            }))
+            .expect("a drag reads");
+            ask::<method::ElementDragTo>(lease, params)
+        }
+    }
+}
+
+/// A gesture whose call names no duration, velocity or distance is composed from the window's
+/// own gesture settings, so the window's recognisers take it as that gesture: on every
+/// platform's preset, and on a window whose long-press and double-tap timeouts the system's
+/// preferences raised or lowered. A long press is a long press, a double tap a double tap, a
+/// fling flings and a swipe does not, and a drag drags and is dropped where it ends, not flung.
+#[test]
+fn a_default_gesture_is_recognised_as_that_gesture_in_every_window() {
+    let platforms = [
+        TargetPlatform::Android,
+        TargetPlatform::iOS,
+        TargetPlatform::Linux,
+        TargetPlatform::MacOS,
+        TargetPlatform::Windows,
+        TargetPlatform::Fuchsia,
+        TargetPlatform::Unknown,
+    ];
+    let mut settings: Vec<Setting> = platforms.into_iter().map(Setting::preset).collect();
+    settings.push(Setting {
+        long_press: Some(Duration::from_millis(1_500)),
+        double_tap: Some(Duration::from_millis(700)),
+        ..Setting::preset(TargetPlatform::Android)
+    });
+    settings.push(Setting {
+        long_press: Some(Duration::from_millis(300)),
+        double_tap: Some(Duration::from_millis(150)),
+        ..Setting::preset(TargetPlatform::iOS)
+    });
+    // A window that flings only from a release faster than the windowless stroke, wide enough
+    // that a stroke at twice that speed lasts the samples the velocity tracker measures from.
+    settings.push(Setting {
+        fling: Some((3_000.0, 8_000.0)),
+        width: 800,
+        ..Setting::preset(TargetPlatform::Android)
+    });
+    let defaults = [
+        Unnamed::LongPress,
+        Unnamed::DoubleTap,
+        Unnamed::Fling,
+        Unnamed::Swipe,
+        Unnamed::DragTo,
+    ];
+    for setting in settings {
+        for default in defaults {
+            let heard = Heard::default();
+            let (mut host, _agent, _window, lease) = shown(setting.window(), &setting.pad(&heard));
+            setting.apply(&host);
+            let _ = host.pump(Duration::from_millis(16));
+            let mut asked = ask_default(&lease, default);
+            let outcome = answered(&mut host, &mut asked, 400)
+                .0
+                .unwrap_or_else(|error| panic!("{setting:?} {default:?}: {error:?}"));
+            assert_eq!(outcome.effect.kind, flui_protocol::act::EffectKind::Ran);
+            let case = format!("{setting:?} {default:?}");
+            match default {
+                Unnamed::LongPress => {
+                    assert_eq!(heard.long_presses.get(), 1, "{case}: a long press");
+                }
+                Unnamed::DoubleTap => {
+                    assert_eq!(heard.double_taps.get(), 1, "{case}: a double tap");
+                }
+                Unnamed::Fling | Unnamed::Swipe => {
+                    assert_eq!(heard.drags.get(), 1, "{case}: a drag");
+                    let releases = heard.releases.borrow();
+                    let [release] = releases.as_slice() else {
+                        panic!("{case}: one release: {releases:?}");
+                    };
+                    let flung = *release >= setting.min_fling();
+                    assert_eq!(
+                        flung,
+                        default == Unnamed::Fling,
+                        "{case}: released at {release} px/s, the window flings from {}",
+                        setting.min_fling()
+                    );
+                }
+                Unnamed::DragTo => {
+                    // A drag holds still before it lifts, so it is dropped where it ends, never
+                    // flung on.
+                    assert_eq!(heard.drags.get(), 1, "{case}: a drag");
+                    let releases = heard.releases.borrow();
+                    let [release] = releases.as_slice() else {
+                        panic!("{case}: one release: {releases:?}");
+                    };
+                    assert!(
+                        *release < setting.min_fling(),
+                        "{case}: dropped at {release} px/s, under the {} px/s the window flings from",
+                        setting.min_fling()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A long press naming no duration holds at most the ceiling the reply bound counts: a window
+/// whose long-press timeout leaves no room for one within it refuses the call, naming the
+/// duration to give, and a long press that names its duration plays.
+#[test]
+fn a_long_press_past_the_ceiling_is_refused_until_its_duration_is_named() {
+    let setting = Setting {
+        long_press: Some(Duration::from_millis(3_900)),
+        ..Setting::preset(TargetPlatform::Android)
+    };
+    let heard = Heard::default();
+    let (mut host, _agent, _window, lease) = shown(setting.window(), &setting.pad(&heard));
+    setting.apply(&host);
+    let _ = host.pump(Duration::from_millis(16));
+    let mut refused = ask_default(&lease, Unnamed::LongPress);
+    let refused = answered(&mut host, &mut refused, 60)
+        .0
+        .expect_err("past the ceiling");
+    assert_eq!(refused.code, ErrorCode::InvalidArgument, "{refused:?}");
+    assert!(refused.message.contains("name its duration"), "{refused:?}");
+    let params: LongPressParams = serde_json::from_value(json!({
+        "target": { "locator": { "name": { "match": "exact", "text": "Pad" } } },
+        "duration_ms": 4_200,
+    }))
+    .expect("a long press reads");
+    let mut named_press = ask::<method::ElementLongPress>(&lease, params);
+    answered(&mut host, &mut named_press, 400)
+        .0
+        .expect("a named long press plays");
+    assert_eq!(
+        heard.long_presses.get(),
+        1,
+        "the named press is a long press"
+    );
+}
+
+/// "Long", 2000 px wide and as tall as the window, which shows its first 200 px.
+#[derive(Clone, StatelessView)]
+struct Clipped;
+
+impl StatelessView for Clipped {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Row::new(vec![
+            Semantics::new()
+                .label("Long")
+                .container(true)
+                .child(
+                    SizedBox::new(2_000.0, 400.0)
+                        .child(ColoredBox::new(flui_painting::styling::Color::WHITE)),
+                )
+                .into_view()
+                .boxed(),
+        ])
+    }
+}
+
+/// A swipe naming no distance and a pinch on an element far wider than the window stay inside
+/// the part the window shows, where their contact lands: their extent is that part's, not the
+/// element's whole bounds.
+#[test]
+fn a_gesture_on_a_clipped_element_stays_inside_the_part_shown() {
+    type Ask = fn(&InputLease) -> AgentAnswer<ActOutcome>;
+    let rows: [(&str, Ask); 2] = [
+        ("a swipe right naming no distance", |lease| {
+            let params: SwipeParams = serde_json::from_value(json!({
+                "target": { "locator": { "name": { "match": "exact", "text": "Long" } } },
+                "direction": "right",
+            }))
+            .expect("a swipe reads");
+            ask::<method::ElementSwipe>(lease, params)
+        }),
+        ("a pinch to twice", |lease| {
+            let params: PinchParams = serde_json::from_value(json!({
+                "target": { "locator": { "name": { "match": "exact", "text": "Long" } } },
+                "scale": 2.0,
+            }))
+            .expect("a pinch reads");
+            ask::<method::ElementPinch>(lease, params)
+        }),
+    ];
+    for (case, call) in rows {
+        let (mut host, _agent, window, lease) = shown(HeadlessWindow::new(200, 400), &Clipped);
+        let mut asked = call(&lease);
+        let outcome = answered(&mut host, &mut asked, 200)
+            .0
+            .unwrap_or_else(|error| panic!("{case}: {error:?}"));
+        let span = outcome.observed.expect("its input went out");
+        let mut read = window
+            .call::<method::InputJournal>(JournalParams::new(window.id()))
+            .expect("the inbox has room");
+        let journal = answered(&mut host, &mut read, 2)
+            .0
+            .expect("the journal is read");
+        let points: Vec<_> = journal
+            .entries
+            .iter()
+            .filter(|entry| (span.from..=span.to).contains(&entry.seq))
+            .filter_map(|entry| entry.at)
+            .collect();
+        assert!(!points.is_empty(), "{case}: pointer input went out");
+        for at in points {
+            assert!(
+                (0.0..=200.0).contains(&at.x) && (0.0..=400.0).contains(&at.y),
+                "{case}: {at:?} is outside the 200 x 400 window"
+            );
+        }
+    }
+}
+
+/// A fling naming no velocity is composed from the fling range the window's host reports for a
+/// touch, not the authored one: a host that flings only from 3000 px/s, above twice the authored
+/// slowest, gets a stroke released at twice that, 6000 px/s, which its recognisers hear as a
+/// fling, and a swipe that releases slower than 3000 px/s.
+#[test]
+fn a_default_fling_is_composed_from_the_range_the_host_reports() {
+    use flui_foundation::geometry::DevicePixelRatio;
+    use flui_platform::{FlingSpeeds, GestureGeometry};
+
+    let reported = GestureGeometry::new(DevicePixelRatio::ONE)
+        .with_fling_speeds(FlingSpeeds::try_new(3_000.0, 9_000.0).expect("a fling range"));
+    let authored = GestureSettings::default().fling_velocity_range_for(PointerKind::Mouse);
+    assert!(
+        2.0 * authored.0 < 3_000.0,
+        "the host's slowest fling is above twice the authored one: {authored:?}"
+    );
+    for (default, flings) in [(Unnamed::Fling, true), (Unnamed::Swipe, false)] {
+        let heard = Heard::default();
+        let window = crate::agent_rig::Rig::window_reporting(reported);
+        let mut rig = crate::agent_rig::Rig::on(
+            window,
+            (800, 600),
+            &Pad {
+                heard: heard.clone(),
+                width: 800,
+            },
+        );
+        // The host delivers its preferences, and the window reads its gesture geometry with them.
+        rig.runtime
+            .apply_system_preferences_for_test(SystemPreferences::default());
+        rig.frame();
+        let mut asked = ask_default(&rig.lease, default);
+        let mut answer = None;
+        for _ in 0..400 {
+            rig.frame();
+            answer = asked.try_take();
+            if answer.is_some() {
+                break;
+            }
+        }
+        let outcome = answer
+            .expect("answered within 400 frames")
+            .unwrap_or_else(|error| panic!("{default:?}: {error:?}"));
+        assert_eq!(outcome.effect.kind, flui_protocol::act::EffectKind::Ran);
+        let releases = heard.releases.borrow();
+        let [release] = releases.as_slice() else {
+            panic!("{default:?}: one release: {releases:?}");
+        };
+        if flings {
+            assert!(
+                (5_000.0..=7_500.0).contains(release),
+                "{default:?}: released at {release} px/s, twice the host's 3000"
+            );
+        } else {
+            assert!(
+                *release < 3_000.0,
+                "{default:?}: released at {release} px/s, below the host's 3000"
+            );
+        }
+    }
+}
+
+/// The journal's entries of `window` that `outcome` says its act made.
+fn entries_made(
+    host: &mut HeadlessHost,
+    window: &AgentWindow,
+    outcome: &ActOutcome,
+) -> Vec<flui_protocol::input::JournalEntry> {
+    let span = outcome.observed.expect("its input went out");
+    let mut read = window
+        .call::<method::InputJournal>(JournalParams::new(window.id()))
+        .expect("the inbox has room");
+    answered(host, &mut read, 2)
+        .0
+        .expect("the journal is read")
+        .entries
+        .into_iter()
+        .filter(|entry| (span.from..=span.to).contains(&entry.seq))
+        .collect()
+}
+
+/// A tap and a drag play with the window's primary pointer, and a drag must pass that pointer's
+/// pan slop: on Android and iOS a tap presses a touch contact and a drag of 10 px is refused,
+/// inside a finger's slop; on Linux and Windows a tap presses a mouse and the same drag plays,
+/// past a mouse's.
+#[test]
+fn a_tap_and_a_drag_play_with_the_windows_primary_pointer() {
+    use flui_protocol::input::{DeviceClass, DragParams, InputKind};
+    let rows = [
+        (TargetPlatform::Android, DeviceClass::Touch),
+        (TargetPlatform::iOS, DeviceClass::Touch),
+        (TargetPlatform::Linux, DeviceClass::Mouse),
+        (TargetPlatform::Windows, DeviceClass::Mouse),
+    ];
+    for (platform, device) in rows {
+        let heard = Heard::default();
+        let setting = Setting::preset(platform);
+        let (mut host, _agent, window, lease) = shown(setting.window(), &setting.pad(&heard));
+        let _ = host.pump(Duration::from_millis(16));
+        let mut tap = ask::<method::ElementTap>(&lease, TapParams::new(named("Pad")));
+        let outcome = answered(&mut host, &mut tap, 30)
+            .0
+            .unwrap_or_else(|error| panic!("{platform:?}: {error:?}"));
+        let presses: Vec<DeviceClass> = entries_made(&mut host, &window, &outcome)
+            .into_iter()
+            .filter(|entry| entry.kind == InputKind::PointerDown)
+            .map(|entry| entry.device)
+            .collect();
+        assert_eq!(presses, vec![device], "{platform:?}: the tap's press");
+        let point = |x: f64| Target::Point {
+            window: lease.window(),
+            at: flui_protocol::geometry::LogicalPoint::new(x, 20.0),
+        };
+        let drag: DragParams =
+            serde_json::from_value(json!({ "target": point(20.0), "to": point(30.0) }))
+                .expect("a drag reads");
+        let mut drag = ask::<method::ElementDragTo>(&lease, drag);
+        let answer = answered(&mut host, &mut drag, 60).0;
+        assert_eq!(
+            answer.as_ref().err().map(|error| error.code),
+            (device == DeviceClass::Touch).then_some(ErrorCode::InvalidArgument),
+            "{platform:?}: a drag of 10 px: {answer:?}"
+        );
+    }
+}
+
+/// A long press naming no duration holds the window's long-press timeout and 300 ms, up to the
+/// 4000 ms the reply bound counts: a 500 ms timeout holds 800 ms; a 3700 ms timeout, exactly at
+/// the ceiling, still plays; a 3701 ms one is refused.
+#[test]
+fn a_default_long_press_holds_the_timeout_and_its_margin_up_to_the_ceiling() {
+    for (timeout_ms, held_ms) in [(500, Some(800_u64)), (3_700, Some(4_000)), (3_701, None)] {
+        let setting = Setting {
+            long_press: Some(Duration::from_millis(timeout_ms)),
+            ..Setting::preset(TargetPlatform::Android)
+        };
+        let heard = Heard::default();
+        let (mut host, _agent, window, lease) = shown(setting.window(), &setting.pad(&heard));
+        setting.apply(&host);
+        let _ = host.pump(Duration::from_millis(16));
+        let mut asked = ask_default(&lease, Unnamed::LongPress);
+        let answer = answered(&mut host, &mut asked, 400).0;
+        match (answer, held_ms) {
+            (Ok(outcome), Some(held_ms)) => {
+                let entries = entries_made(&mut host, &window, &outcome);
+                let time = |kind: flui_protocol::input::InputKind| {
+                    entries.iter().find(|entry| entry.kind == kind).map_or_else(
+                        || panic!("{timeout_ms} ms: a {kind:?} in {entries:?}"),
+                        |entry| entry.time_us,
+                    )
+                };
+                let down = time(flui_protocol::input::InputKind::PointerDown);
+                let up = time(flui_protocol::input::InputKind::PointerUp);
+                // The hold is a tick of its own, which starts a 16 ms frame after the press.
+                assert_eq!(up - down, (held_ms + 16) * 1_000, "{timeout_ms} ms: held");
+            }
+            (Err(refused), None) => {
+                assert_eq!(refused.code, ErrorCode::InvalidArgument, "{refused:?}");
+                assert!(refused.message.contains("4001 ms"), "{refused:?}");
+            }
+            (answer, held_ms) => panic!("{timeout_ms} ms: {answer:?}, expected {held_ms:?}"),
+        }
+    }
+}
+
+/// "Chip", 40 × 20, below a tall spacer.
+#[derive(Clone, StatelessView)]
+struct Chip;
+
+impl StatelessView for Chip {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Column::new(vec![
+            SizedBox::new(200.0, 200.0).into_view().boxed(),
+            Semantics::new()
+                .label("Chip")
+                .container(true)
+                .child(
+                    SizedBox::new(40.0, 20.0)
+                        .child(ColoredBox::new(flui_painting::styling::Color::WHITE)),
+                )
+                .into_view()
+                .boxed(),
+        ])
+    }
+}
+
+/// A swipe naming no distance on a target with little room goes at least twice the window's pan
+/// slop for a touch, so it drags: up from the middle of a 20 px chip in a window whose touch pan
+/// slop is 30 px, it goes 60 px.
+#[test]
+fn a_default_swipe_goes_at_least_twice_the_windows_touch_slop() {
+    let touch = GestureSettings::preset(TargetPlatform::Android, PointerKind::Touch)
+        .try_with_pan_slop(30.0)
+        .expect("a pan slop");
+    let window = HeadlessWindow::new(200, 400)
+        .with_platform(TargetPlatform::Android)
+        .with_gesture_preset(
+            GestureProfiles::preset(TargetPlatform::Android).with_kind(PointerKind::Touch, touch),
+        );
+    let (mut host, _agent, agent_window, lease) = shown(window, &Chip);
+    let params: SwipeParams = serde_json::from_value(json!({
+        "target": { "locator": { "name": { "match": "exact", "text": "Chip" } } },
+        "direction": "up",
+    }))
+    .expect("a swipe reads");
+    let mut asked = ask::<method::ElementSwipe>(&lease, params);
+    let outcome = answered(&mut host, &mut asked, 200)
+        .0
+        .expect("the swipe plays");
+    let entries = entries_made(&mut host, &agent_window, &outcome);
+    let ys: Vec<f64> = entries
+        .iter()
+        .filter_map(|entry| entry.at.map(|at| at.y))
+        .collect();
+    let (Some(start), Some(end)) = (ys.first(), ys.last()) else {
+        panic!("the swipe's points: {entries:?}");
+    };
+    assert!(
+        (start - end - 60.0).abs() < 0.01,
+        "went {} px from {start} to {end}",
+        start - end
+    );
+}

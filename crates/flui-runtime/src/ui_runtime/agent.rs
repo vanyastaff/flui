@@ -22,13 +22,15 @@ use std::sync::{Arc, Weak};
 use crate::renderer_binding::ViewHitTest;
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
+use flui_protocol::input::STEP;
 use flui_protocol::{
-    act::ActOutcome, act::ActionRequest, act::Actionability, act::ActionabilityParams, act::Effect,
-    act::EffectKind, act::EffectUnit, error::ErrorCode, error::ErrorObject, error::HandleKind,
-    error::Retry, events::EventFilter, input::InputPath, locator::LocateParams, locator::Matches,
-    record::RecordParams, snapshot::Snapshot, snapshot::SnapshotReading, tree::ElementId,
-    tree::ElementRef, tree::ReadQuery, tree::Tree, tree::WindowId, wait::WaitOutcome,
-    wire::ActionName,
+    act::ActOutcome, act::ActionRequest, act::ActionabilityCheck, act::ActionabilityParams,
+    act::Effect, act::EffectKind, act::EffectUnit, error::ErrorCode, error::ErrorObject,
+    error::HandleKind, error::Retry, events::EventFilter, input::InputPath, locator::Ambiguity,
+    locator::LocateParams, locator::Locator, locator::Matches, locator::Pick,
+    locator::STRICT_CANDIDATES, locator::resolve_strict, record::RecordParams, snapshot::Snapshot,
+    snapshot::SnapshotReading, tree::ElementId, tree::ElementRef, tree::ReadQuery, tree::Tree,
+    tree::WindowId, wait::WaitOutcome, wire::ActionName,
 };
 use flui_semantics::{
     Placement, SemanticsActionError, TreeSnapshot, WireActionError, WireLocateError, WireReadError,
@@ -36,6 +38,7 @@ use flui_semantics::{
 use flui_view::__runtime::{AgentPort, LeaseId, Reply, WindowCall};
 use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow};
 use parking_lot::{Mutex, RwLock};
+use web_time::Instant;
 
 use super::UiRuntime;
 use super::agent_serve::PanicAnswer;
@@ -136,6 +139,10 @@ pub(crate) enum AgentError {
     /// dropped, or stops it) before another is taken.
     #[error("the window's runtime already holds as many recordings as it admits")]
     TooManyRecordings,
+    /// The window already keeps as many perf spans as it admits, one per caller; one ends (its
+    /// caller stops it, or its lease is released) before another is taken.
+    #[error("the window already keeps as many perf spans as it admits")]
+    TooManyPerfSpans,
     /// The runtime cannot start a recording: `reason` says why.
     #[error("{reason}")]
     RecordingRefused {
@@ -170,7 +177,7 @@ pub(crate) enum AgentError {
     /// A strict locator matches several elements.
     #[error("the locator matches {matched} elements")]
     Ambiguous {
-        /// How many it matched, at most the candidates looked at.
+        /// How many it matched, those past the candidates included.
         matched: usize,
         /// An outline of each match, for the caller to tell them apart.
         candidates: Vec<String>,
@@ -206,6 +213,33 @@ pub(crate) enum AgentError {
         /// The ticks it had.
         total: u32,
     },
+    /// The input asked for makes no sequence the window plays: the plan's refusal (a bound, a
+    /// range, a shared name) or a gesture's (a stroke that goes nowhere), in its own words.
+    #[error("{0}")]
+    UnplayableInput(String),
+    /// A held act's target never passed `failed` before the act's timeout; nothing was sent.
+    #[error("the element was not {} within the act's timeout", failed.name())]
+    NotActionable {
+        /// The first check that failed at the last attempt.
+        failed: ActionabilityCheck,
+        /// What the hit-test reached instead, as its outline line.
+        covered_by: Option<String>,
+    },
+    /// The presentation already holds as many acts as it admits; one ends before another is
+    /// taken.
+    #[error("the window already holds as many acts as it admits")]
+    TooManyActs,
+    /// A scroll's content stopped moving before the locator resolved under it: its extent
+    /// ended, or it does not scroll.
+    #[error("the scrollable stopped moving before the locator resolved under it")]
+    ScrollEnded,
+    /// Input a held act queued failed with this answer.
+    #[error("{}", .0.message)]
+    InputFailed(Box<ErrorObject>),
+    /// The input an act queued did not play within the act's timeout: no frame started it by the
+    /// deadline, or the window stopped drawing before it played out.
+    #[error("the window drew no frames to play the act's input within its timeout")]
+    InputTimedOut,
 }
 
 impl AgentError {
@@ -219,9 +253,14 @@ impl AgentError {
             | Self::TooManyWaits
             | Self::TooManySubscriptions
             | Self::TooManyRecordings
+            | Self::TooManyPerfSpans
             | Self::InputQueueFull
+            | Self::TooManyActs
             | Self::TreeBusy(_) => ErrorCode::Busy,
             Self::InputPartial { failure, .. } => failure.code(),
+            Self::InputFailed(answer) => answer.code,
+            Self::NotActionable { .. } => ErrorCode::NotActionable,
+            Self::InputTimedOut => ErrorCode::Timeout,
             Self::RuntimeGone => ErrorCode::ShuttingDown,
             Self::PresentationGone
             | Self::LeaseReleased
@@ -232,8 +271,8 @@ impl AgentError {
             }
             Self::ActionUnsupported { .. } => ErrorCode::ActionUnsupported,
             Self::Disabled { .. } => ErrorCode::Disabled,
-            Self::InvalidArgument { .. } => ErrorCode::InvalidArgument,
-            Self::NoMatch => ErrorCode::NotFound,
+            Self::InvalidArgument { .. } | Self::UnplayableInput(_) => ErrorCode::InvalidArgument,
+            Self::NoMatch | Self::ScrollEnded => ErrorCode::NotFound,
             Self::Ambiguous { .. } => ErrorCode::Ambiguous,
             Self::NotSupported { .. } => ErrorCode::NotSupported,
             Self::Malformed
@@ -256,9 +295,13 @@ impl AgentError {
             | Self::TooManyWaits
             | Self::TooManySubscriptions
             | Self::TooManyRecordings
+            | Self::TooManyPerfSpans
             | Self::InputQueueFull
+            | Self::TooManyActs
+            | Self::InputTimedOut
             | Self::TreeBusy(_) => Retry::Soon,
-            Self::NoMatch => Retry::WhenAppears,
+            Self::NoMatch | Self::NotActionable { .. } => Retry::WhenAppears,
+            Self::InputFailed(answer) => answer.retry,
             _ => Retry::Never,
         }
     }
@@ -303,6 +346,10 @@ impl AgentError {
                     EffectUnit::Tick,
                 ));
             }
+            Self::InputFailed(answer) => return *answer,
+            Self::NotActionable { failed, covered_by } => {
+                ErrorObject::not_actionable(message, failed, covered_by)
+            }
             Self::Ambiguous { candidates, .. } => ErrorObject::ambiguous(message, candidates),
             Self::PresentationGone => {
                 ErrorObject::new(code, message).handle(HandleKind::Window, window.to_string())
@@ -345,9 +392,6 @@ impl AgentError {
     pub(super) fn from_locate(error: WireLocateError) -> Self {
         match error {
             WireLocateError::NoTree => Self::NoTreeYet,
-            // `locate_wire` lists matches and never answers `NotFound` or
-            // `Ambiguous`: resolving one element is `semantics.act`'s, over
-            // the matches it lists.
             _ => Self::Malformed,
         }
     }
@@ -590,6 +634,9 @@ pub(crate) struct DevAgentSlot {
     issued: Rc<RefCell<IssuedHandles>>,
     /// The input the window was delivered since the slot was made.
     pub(super) journal: super::agent_journal::InputJournal,
+    /// The frame samples a `perf.start` keeps until its starter's `perf.stop`, or until the
+    /// lease it was asked through is released ([`Self::take_released`]).
+    pub(super) perf: super::agent_perf::PerfSampling,
 }
 
 /// The development seam's port: a [`flui_view::dev_agent::AgentWindow`]
@@ -729,11 +776,16 @@ impl DevAgentSlot {
         self.port.released.lock().len()
     }
 
-    /// The first `count` leases let go, oldest first, taken to be released.
+    /// The first `count` leases let go, oldest first, taken to be released. A perf span one of
+    /// them started goes with it: its conversation has ended.
     pub(super) fn take_released(&self, count: usize) -> Vec<LeaseId> {
-        let mut released = self.port.released.lock();
-        let count = count.min(released.len());
-        released.drain(..count).collect()
+        let taken: Vec<LeaseId> = {
+            let mut released = self.port.released.lock();
+            let count = count.min(released.len());
+            released.drain(..count).collect()
+        };
+        self.perf.forget(&taken);
+        taken
     }
 }
 
@@ -846,20 +898,25 @@ pub(super) fn tree_before(
 pub(crate) struct PendingActRead {
     owed: ReadingOwed,
     reply: ReplySender<ActOutcome>,
+    /// On the presentation's clock, when the act that owes it promised an answer by: a turn
+    /// without a frame at or past it answers without the reading
+    /// ([`UiRuntime::expire_act_reads`]). `None` for `semantics.act`, which no act holds.
+    answer_by: Option<Instant>,
 }
 
 impl PendingActRead {
-    /// The window or the frame is gone before the reading could be taken: the
-    /// action still ran, and the outcome says the tree could not be read back.
+    /// The window or the frame is gone before the reading could be taken, or no
+    /// frame came by the act's promise: the action still ran, and the outcome
+    /// says the tree could not be read back when a reading was asked for.
     pub(crate) fn abandon(mut self) {
-        self.owed.outcome.readback_failed = true;
+        self.owed.outcome.readback_failed = self.owed.snapshot != Snapshot::None;
         let element = self.owed.outcome.element.map(|element| element.element);
         send_reply(&self.reply, element, Ok(self.owed.outcome));
     }
 }
 
 /// How `state` places its semantics on the wire: its device pixel ratio, and `window`.
-fn placement_of(state: &PresentationState, window: WindowId) -> Placement {
+pub(super) fn placement_of(state: &PresentationState, window: WindowId) -> Placement {
     state
         .pipeline()
         .with(|pipeline| Placement::new(pipeline.device_pixel_ratio(), window))
@@ -899,19 +956,58 @@ pub(super) fn locate(
     })
 }
 
+/// The one element `locator` matches in `state`'s committed tree now, as its pick says: a strict
+/// pick that matches several is `ambiguous`, counting every match and naming the first
+/// candidates ([`resolve_strict`]), never the first; none is `not_found`.
+pub(super) fn resolve(
+    state: &PresentationState,
+    window: WindowId,
+    locator: &Locator,
+) -> Result<ElementId, AgentError> {
+    let strict = locator.pick == Pick::Strict;
+    let mut params = LocateParams::new(locator.clone());
+    if strict {
+        params.max_matches = Some(STRICT_CANDIDATES);
+    }
+    let matches = locate(state, window, &params)?;
+    let found = if strict {
+        resolve_strict(matches.matches.iter(), matches.truncated).map_err(AgentError::from)?
+    } else {
+        matches.matches.first()
+    };
+    found
+        .map(|found| found.element.element)
+        .ok_or(AgentError::NoMatch)
+}
+
+impl From<Ambiguity> for AgentError {
+    fn from(ambiguity: Ambiguity) -> Self {
+        Self::Ambiguous {
+            matched: ambiguity.matched,
+            candidates: ambiguity.candidates,
+        }
+    }
+}
+
+/// Whether an answer of `state`'s agent reported `element`.
+pub(super) fn was_issued(state: &PresentationState, element: ElementId) -> bool {
+    issued_of(state).borrow().was_issued(element)
+}
+
 /// The owner half of `element.actionability`.
 ///
 /// Three steps, none inside another's borrow. The semantics owner says where the pointer would
 /// land; the render tree's hit-test runs there, outside every semantics borrow because render
 /// objects are user code; then the owner reads the facts against the path the hit-test found. A
 /// render object that panics in the hit-test leaves its payload in `hit_panic`, for the caller to
-/// answer and resume.
+/// answer and resume. Beside the facts the wire carries, the reading holds the part of the element
+/// the window shows, which a gesture in the application aims its extent at.
 pub(super) fn actionability(
     state: &PresentationState,
     window: WindowId,
     params: &ActionabilityParams,
     hit_panic: &mut FirstPanic,
-) -> Result<Actionability, AgentError> {
+) -> Result<ActionabilityRead, AgentError> {
     let placement = placement_of(state, window);
     let point = state.pipeline().with(|pipeline| {
         pipeline
@@ -954,17 +1050,30 @@ pub(super) fn actionability(
                 .map_err(AgentError::from_unscoped_read)
         })
     };
-    let facts = read(None)?;
+    let reading = read(None)?;
     let previous = state.agent_stability.borrow_mut().observe(
         params.element,
         state.tree_revision(),
         !state.has_pending_work_snapshot(),
-        facts.rect,
+        reading.facts.rect,
     );
-    match previous {
-        Some(_) => read(previous),
-        None => Ok(facts),
-    }
+    Ok(ActionabilityRead {
+        reading: match previous {
+            Some(_) => read(previous)?,
+            None => reading,
+        },
+        compared: previous.is_some(),
+    })
+}
+
+/// What [`actionability`] read of an element.
+pub(super) struct ActionabilityRead {
+    /// The facts, and the part of the element the window shows.
+    pub(super) reading: flui_semantics::ActionabilityReading,
+    /// Whether its bounds could be compared with an earlier read's (`AgentStability`): when not,
+    /// its `stable` is `false` because nothing says yet whether it holds still, not because it
+    /// moved.
+    pub(super) compared: bool,
 }
 
 /// The owner half of `semantics.act` once its target is an element: the tree the action starts
@@ -1054,6 +1163,7 @@ impl UiRuntime {
                     collecting: Weak::new(),
                     issued: Rc::default(),
                     journal: super::agent_journal::InputJournal::default(),
+                    perf: super::agent_perf::PerfSampling::default(),
                 }
             });
             let kept = slot.collecting.upgrade();
@@ -1078,22 +1188,78 @@ impl UiRuntime {
 
     /// Holds an action's reply until a frame has passed, and asks for one, so
     /// the reading comes even when the action dirtied nothing.
+    ///
+    /// An act's reading carries `act_ends`, the instant its act's promise runs
+    /// out on the presentation's clock (its deadline, and the time its input
+    /// takes to play past it): an owner turn without a frame a frame's time
+    /// past it ([`STEP`]) answers without the reading
+    /// ([`Self::expire_act_reads`]), unless a frame of the same wake follows
+    /// it in a window that draws, whose end takes the reading
+    /// ([`super::agent_held::Frameless`]); that instant wakes the owner
+    /// ([`Self::next_held_act_deadline`]).
+    ///
+    /// The reading is parked first: the reply is handed on, and the reading
+    /// answers it. The code this runs after (the answer of a reading it
+    /// displaces, the platform's wake) runs contained in `after`, whose first
+    /// panic the caller continues without answering the act again.
     pub(super) fn park_act_read(
         &self,
         state: &PresentationState,
         owed: ReadingOwed,
+        act_ends: Option<Instant>,
         reply: ReplySender<ActOutcome>,
+        after: &mut FirstPanic,
     ) {
-        let pending = PendingActRead { owed, reply };
+        let answer_by = act_ends.map(|ends| ends.checked_add(STEP).unwrap_or(ends));
+        let pending = PendingActRead {
+            owed,
+            reply,
+            answer_by,
+        };
         let displaced = {
             let mut parked = state.agent_reads.borrow_mut();
             parked.push(pending);
             (parked.len() > MAX_OWED_READINGS).then(|| parked.remove(0))
         };
         if let Some(oldest) = displaced {
-            oldest.abandon();
+            after.contain(|| oldest.abandon());
         }
-        self.request_redraw_for(state);
+        after.contain(|| self.request_agent_frame_for(state));
+    }
+
+    /// On an owner turn without a frame, in the windows `turn` answers (a window that draws takes
+    /// its readings at its next frame's end): answer every act's reading whose act's promise ran
+    /// out with no frame since ([`Self::park_act_read`]), each without its reading, contained,
+    /// after the readings are let go; the first panic continues once every window's are sent.
+    pub(super) fn expire_act_reads(&self, turn: super::agent_held::Frameless) {
+        let mut first = FirstPanic::new();
+        for state in self.presentations.iter() {
+            if !turn.answers(self, state) {
+                continue;
+            }
+            let now = state.clock().now();
+            let expired = {
+                let mut owed = state.agent_reads.borrow_mut();
+                let (expired, kept): (Vec<PendingActRead>, Vec<PendingActRead>) =
+                    std::mem::take(&mut *owed)
+                        .into_iter()
+                        .partition(|read| read.answer_by.is_some_and(|by| now >= by));
+                *owed = kept;
+                expired
+            };
+            first.absorb(super::deliver_each(expired, PendingActRead::abandon));
+        }
+        first.resume();
+    }
+
+    /// The earliest instant [`Self::expire_act_reads`] answers one of `state`'s readings at.
+    pub(super) fn next_act_read_deadline(state: &PresentationState) -> Option<Instant> {
+        state
+            .agent_reads
+            .borrow()
+            .iter()
+            .filter_map(|read| read.answer_by)
+            .min()
     }
 
     /// Takes the readings the presentation owes, now that a frame has passed
@@ -1110,7 +1276,7 @@ impl UiRuntime {
                 .semantics_owner()
                 .map(|owner| owner.snapshot_wire(placement))
         });
-        for PendingActRead { owed, reply } in owed {
+        for PendingActRead { owed, reply, .. } in owed {
             let ReadingOwed {
                 mut outcome,
                 snapshot,

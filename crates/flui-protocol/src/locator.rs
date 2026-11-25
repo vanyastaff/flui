@@ -507,6 +507,60 @@ impl Matches {
     }
 }
 
+/// How many candidates a strict locator that matches several elements names (ADR-0238 §3), and so
+/// the most matches a resolver needs reported ([`LocateParams::max_matches`]) to tell one match
+/// from several and name them: [`resolve_strict`] counts the rest from
+/// [`Matches::truncated`].
+pub const STRICT_CANDIDATES: u32 = 10;
+
+/// A strict locator matched more than one element: it is refused, never resolved to the first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Ambiguity {
+    /// How many elements it matched, those not reported included.
+    pub matched: usize,
+    /// The outline line of each of the first [`STRICT_CANDIDATES`] matches
+    /// ([`outline`](crate::tree::outline)), to tell them apart.
+    pub candidates: Vec<String>,
+}
+
+/// The one match a strict locator resolves to among `reported`, the matches reported in tree
+/// order, when `left_out` more matched and were not reported: `None` when nothing matched, the
+/// match when exactly one did, and the [`Ambiguity`] when more did, which counts every match and
+/// names the first [`STRICT_CANDIDATES`]. The one rule a strict pick follows, wherever it is
+/// resolved. `reported` holds a match whenever one matched: it is read with a `max_matches` of
+/// at least one.
+///
+/// # Errors
+///
+/// The [`Ambiguity`] when more than one element matched.
+pub fn resolve_strict<'m>(
+    mut reported: impl ExactSizeIterator<Item = &'m Match>,
+    left_out: u32,
+) -> Result<Option<&'m Match>, Ambiguity> {
+    let matched = reported
+        .len()
+        .saturating_add(usize::try_from(left_out).unwrap_or(usize::MAX));
+    if matched <= 1 {
+        return Ok(reported.next());
+    }
+    let shown = usize::try_from(STRICT_CANDIDATES).unwrap_or(usize::MAX);
+    let candidates = reported
+        .take(shown)
+        .map(|found| {
+            crate::tree::outline(std::slice::from_ref(&found.node))
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect::<Vec<String>>();
+    Err(Ambiguity {
+        matched,
+        candidates,
+    })
+}
+
 /// `text` folded for a case-insensitive comparison: upper-cased, then lower-cased, per
 /// character, which is Unicode's full case folding for the scripts that have case.
 fn fold_case(text: &str) -> String {

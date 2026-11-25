@@ -126,5 +126,5 @@ trait LifecycleContext {
 ## More information
 
 The deadlines a UI runtime already keeps (gesture arena, dropped-frame retry, haptics, text
-preparation) are listed in `UiRuntime::next_wake_excluding_agent_waits`; this adds the owner's
+preparation) are listed in `UiRuntime::visit_armed_deadlines`; this adds the owner's
 task deadlines beside them.

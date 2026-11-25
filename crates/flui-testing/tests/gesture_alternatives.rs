@@ -11,6 +11,7 @@ use flui_animation::{
     Animation, AnimationBehavior, AnimationController, AnimationStatus, DrivenController,
 };
 use flui_foundation::geometry::Offset;
+use flui_interaction::gesture::GestureSettings;
 use flui_painting::styling::Color;
 use flui_semantics::SemanticsAnchor;
 use flui_testing::gesture_alternatives::{
@@ -18,7 +19,7 @@ use flui_testing::gesture_alternatives::{
 };
 use flui_testing::replay::PointerScript;
 use flui_testing::widgets::tight;
-use flui_view::environment::VsyncScope;
+use flui_view::environment::{GestureArenaScope, VsyncScope};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
@@ -53,6 +54,16 @@ enum Subject {
     CompanionIgnoresPointers,
     /// A companion whose button is too small to hit.
     CompanionUnderTarget,
+    /// A companion whose button is tall enough and too narrow.
+    CompanionTooNarrow,
+    /// A companion whose button is wide enough and too short.
+    CompanionTooShort,
+    /// The menu of `SilentMenu` in a window whose touch minimum is 24 px, so
+    /// the control focus reveals is drawn narrower than the check's minimum.
+    SmallRevealedControl,
+    /// The menu of `SilentMenu` in a 30 px row of a window whose touch minimum
+    /// is 48 px, so the control focus reveals is wide enough and too short.
+    ShortRowRevealedControl,
     /// A companion registers a node that every pointer can press and
     /// assistive technology cannot click.
     CompanionIgnoresAssistiveTechnology,
@@ -75,8 +86,8 @@ struct RemoveButton {
     link: CompanionLink<Remove>,
     removed: Rc<Cell<u32>>,
     reach: Reach,
-    /// Its side, in logical pixels.
-    side: f64,
+    /// Its width and height, in logical pixels.
+    size: (f64, f64),
 }
 
 struct RemoveButtonState {
@@ -103,7 +114,7 @@ impl ViewState<RemoveButton> for RemoveButtonState {
         let semantics = Semantics::new()
             .label("Remove row")
             .anchor(self.anchor.clone());
-        let body = SizedBox::new(view.side, view.side);
+        let body = SizedBox::new(view.size.0, view.size.1);
         match view.reach {
             Reach::Everyone => RawButton::new(semantics.child(body))
                 .on_pressed(move |_ctx| removed.set(removed.get() + 1))
@@ -187,18 +198,43 @@ impl ViewState<AnimatedRemoval> for AnimatedRemovalState {
     }
 }
 
+/// `child` in a window whose every pointer, a finger included, needs a target
+/// of `min_target` px: the presentation's arena, scoped again with it.
+#[derive(Clone, StatelessView)]
+struct WindowMinimum {
+    child: BoxedView,
+    min_target: f64,
+}
+
+impl StatelessView for WindowMinimum {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let mut values = GestureSettings::default().values();
+        values.min_target = self.min_target;
+        let settings = GestureSettings::try_from_values(values).expect("a finite minimum target");
+        GestureArenaScope::new(GestureArenaScope::of(ctx), self.child.clone()).settings(settings)
+    }
+}
+
+impl std::fmt::Debug for WindowMinimum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("WindowMinimum")
+    }
+}
+
 fn mount(subject: Subject) -> AlternativesSubject<u32> {
     let removed = Rc::new(Cell::new(0));
     let command = GestureCommand::new("Remove row", Remove);
     let link = CompanionLink::<Remove>::new();
     let alternative = match subject {
-        Subject::SilentMenu => {
+        Subject::SilentMenu | Subject::SmallRevealedControl | Subject::ShortRowRevealedControl => {
             Alternative::ContextMenu(MenuSpec::new(command, |_ctx, _request| {}))
         }
         Subject::NoCompanion
         | Subject::Companioned
         | Subject::CompanionIgnoresPointers
         | Subject::CompanionUnderTarget
+        | Subject::CompanionTooNarrow
+        | Subject::CompanionTooShort
         | Subject::CompanionIgnoresAssistiveTechnology => {
             Alternative::Companion(CompanionSpec::new(command, &link))
         }
@@ -233,6 +269,8 @@ fn mount(subject: Subject) -> AlternativesSubject<u32> {
         Subject::Companioned
         | Subject::CompanionIgnoresPointers
         | Subject::CompanionUnderTarget
+        | Subject::CompanionTooNarrow
+        | Subject::CompanionTooShort
         | Subject::CompanionIgnoresAssistiveTechnology => Column::new(vec![
             view,
             RemoveButton {
@@ -243,14 +281,30 @@ fn mount(subject: Subject) -> AlternativesSubject<u32> {
                     Subject::CompanionIgnoresAssistiveTechnology => Reach::PointersOnly,
                     _ => Reach::Everyone,
                 },
-                side: if matches!(subject, Subject::CompanionUnderTarget) {
-                    10.0
-                } else {
-                    48.0
+                size: match subject {
+                    Subject::CompanionUnderTarget => (10.0, 10.0),
+                    Subject::CompanionTooNarrow => (10.0, 48.0),
+                    Subject::CompanionTooShort => (48.0, 10.0),
+                    _ => (48.0, 48.0),
                 },
             }
             .boxed(),
         ])
+        .boxed(),
+        Subject::SmallRevealedControl => WindowMinimum {
+            child: view,
+            min_target: 24.0,
+        }
+        .boxed(),
+        // The row sits 30 px down, so the control's edges are not at zero.
+        Subject::ShortRowRevealedControl => WindowMinimum {
+            child: Column::new(vec![
+                SizedBox::new(400.0, 30.0).boxed(),
+                SizedBox::new(400.0, 30.0).child(view).boxed(),
+            ])
+            .boxed(),
+            min_target: 48.0,
+        }
         .boxed(),
         _ => view,
     };
@@ -258,10 +312,15 @@ fn mount(subject: Subject) -> AlternativesSubject<u32> {
 }
 
 fn check(subject: Subject) -> GestureAlternativesCheck<u32> {
+    let (height, row_y) = if matches!(subject, Subject::ShortRowRevealedControl) {
+        (60.0, 45.0)
+    } else {
+        (100.0, 25.0)
+    };
     GestureAlternativesCheck::new(
         "row",
-        tight(400.0, 100.0),
-        PointerScript::swipe(Offset::new(250.0, 25.0), Offset::new(10.0, 25.0)),
+        tight(400.0, height),
+        PointerScript::swipe(Offset::new(250.0, row_y), Offset::new(10.0, row_y)),
         move || mount(subject),
     )
 }
@@ -287,6 +346,14 @@ fn the_check_passes_a_conforming_row_and_names_each_broken_path() {
         more.contains("by assistive technology: the model is 1, by gesture 11"),
         "a gesture with an effect of its own is caught:\n{more}"
     );
+    for device in ["Mouse", "Touch", "Virtual"] {
+        assert!(
+            more.contains(&format!(
+                "by its control, pressed with {device}: the model is 1, by gesture 11"
+            )),
+            "and each pointer's press of the visible control is compared:\n{more}"
+        );
+    }
 
     let unbound = failure(Subject::Unbound);
     assert!(
@@ -313,6 +380,22 @@ fn the_check_passes_a_conforming_row_and_names_each_broken_path() {
         silent.contains("its menu, opened by a secondary click, item chosen by assistive technology: the path could not be driven"),
         "a menu assistive technology cannot reach is caught:\n{silent}"
     );
+    assert!(
+        !silent.contains("the control focus reveals is"),
+        "the control focus reveals meets the minimum at the default settings:\n{silent}"
+    );
+    for (subject, size) in [
+        (Subject::SmallRevealedControl, "26×100"),
+        (Subject::ShortRowRevealedControl, "48×30"),
+    ] {
+        let small = failure(subject);
+        assert!(
+            small.contains(&format!(
+                "the control focus reveals is {size}, under the 44 minimum target"
+            )),
+            "a revealed control under the minimum on one axis is caught:\n{small}"
+        );
+    }
 
     assert_gesture_alternatives(&check(Subject::Companioned));
     let dead = failure(Subject::CompanionIgnoresPointers);
@@ -342,6 +425,16 @@ fn the_check_passes_a_conforming_row_and_names_each_broken_path() {
         tiny.contains("its companion's node is 10×10, under the"),
         "a companion too small to hit is caught:\n{tiny}"
     );
+    for (subject, size) in [
+        (Subject::CompanionTooNarrow, "10×48"),
+        (Subject::CompanionTooShort, "48×10"),
+    ] {
+        let short = failure(subject);
+        assert!(
+            short.contains(&format!("its companion's node is {size}, under the")),
+            "a companion under the minimum on one axis is caught:\n{short}"
+        );
+    }
 
     let companionless = failure(Subject::NoCompanion);
     assert!(

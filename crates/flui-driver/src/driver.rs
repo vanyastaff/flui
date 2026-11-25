@@ -441,12 +441,9 @@ impl Driver {
     /// Send `row`'s method to whoever serves it.
     fn dispatch_value(&mut self, row: &'static method::MethodRow, params: Value) -> Result<Value> {
         match row.served_by {
-            // A gesture the agent does not answer, or one asked for on the `os` path, the driver
-            // composes from the agent's methods and its lane.
-            ServedBy::Agent
-                if crate::compose::composes(row.name)
-                    && !crate::compose::agent_answers(self, row.name, &params) =>
-            {
+            // A gesture's path is the driver's to choose: it hands the gesture to the agent with
+            // that path as its `via`, or composes it from the agent's methods and its lane.
+            ServedBy::Agent if crate::compose::decides_path(row.name) => {
                 crate::compose::call(self, row.name, params)
             }
             ServedBy::Agent => {

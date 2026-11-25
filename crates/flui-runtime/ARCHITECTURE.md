@@ -1053,7 +1053,8 @@ the protocol's one method table (`flui_protocol::method::WindowMethod`, the rows
 enqueues it as one `UiCommand::Agent` on the UI runtime's bounded inbox and returns an
 `AgentAnswer` the owner fills at its next drain, a frame boundary. The owner opens the call by its
 method's type (`serve_window_call`, generated from the same table) and serves it through that
-method's `Serve` impl in `agent_serve.rs`, which answers now or parks the reply and answers later.
+method's `Serve` impl, in `agent_serve.rs` or a module beside it (`agent_audit.rs`, `agent_perf.rs`),
+which answers now or parks the reply and answers later.
 `run_window_method` does what every method shares: the presentation lookup, panic containment,
 the record of issued handles and the conversion of an `AgentError` to the protocol's
 `ErrorObject` with its handle. A row whose effect is `Annotates` (`build.report`) takes another
@@ -1092,11 +1093,19 @@ facts against the path found (`actionability_wire`). A hit-test the render tree 
 (`TreeBusy`) answers `RenderTreeBusy` (`busy`, retry `soon`); a render object that panics in it
 answers `HitTestPanicked` (`platform`, nothing ran) first and its panic then continues on the
 owner, as an action's does. `stable` needs bounds from an earlier call: `AgentStability`, on the
-presentation, keeps the bounds of the last 64 elements read, and a comparison counts once a
-terminal frame has run since (the presentation's tree revision moved) or while the presentation
-has no work pending that could still move the element. The first call for an element, and one
-made in the frame of the call before it with work pending, answer unstable. Pinned by
-`src/ui_runtime/tests/agent_locate.rs` and `agent_stability.rs`.
+presentation, is the one owner of what every reader (a held act, a poll) saw of an element, and a
+comparison counts once a terminal frame has run since (the presentation's tree revision moved) or
+while the presentation has no work pending that could still move the element. The first call for
+an element answers unstable; every later call at the same revision with work pending reads the same
+tree and answers what the comparison across the frame into that revision did, so two readers of one
+frame are told the same. A comparison made only because the presentation was idle is not replayed
+once work is pending: that work may move the element on the next frame, so no act passes on it.
+Unknown stability holds an act back, but its answer names a check the committed tree fails
+outright before `stable` (`ActionabilityRead::compared`). Pinned by
+`src/ui_runtime/tests/agent_locate.rs`, `agent_stability.rs` and
+`tests/contracts/agent_gestures.rs`
+(`a_last_attempt_on_a_turn_without_a_frame_names_the_check_that_failed`,
+`stability_answered_while_idle_does_not_pass_an_act_once_work_is_pending`).
 
 **Act and read.** `semantics.act` with a `snapshot` takes the committed tree
 as the before-snapshot (`SemanticsOwner::snapshot_wire`), serves the action as one without it, parks
@@ -1105,18 +1114,38 @@ completes in `drive_frame`, right after the frame the effect landed in (before t
 the new tree against the snapshot (`TreeSnapshot::delta_to`): appeared, gone and changed nodes
 (name, value, description, state, actions; bounds only when asked), a role change counting as
 appeared, capped at 256 entries with `truncated`. A presentation that closes first answers each
-owed reading `readback_failed` with the effect `ran`, since the action was delivered. Pinned by
-`src/ui_runtime/tests/agent_act_read.rs` and `crates/flui-semantics/tests/delta.rs`.
+owed reading with the effect `ran`, since the action was delivered, and `readback_failed` when a
+snapshot was asked for. A gesture's answer waits in the same place for the frame after its input
+or its semantics action, and carries the end of its act's promise (the deadline, and the time its
+input takes to play past it): an owner turn without a frame a frame's time past it answers it
+without the reading (`UiRuntime::expire_act_reads`), and that instant wakes the owner, so a window
+that stops drawing after the input played still answers by the deadline; in a window that draws,
+the drain that opens a host's wake leaves the reading to that wake's frame (`Frameless`, below).
+Pinned by
+`src/ui_runtime/tests/agent_act_read.rs`, `crates/flui-semantics/tests/delta.rs` and
+`tests/contracts/agent_gestures.rs`
+(`an_act_whose_window_stops_drawing_after_its_input_played_is_answered_by_its_deadline`).
 
 **Injected input.** `input.inject` and `input.release` reach the owner through an input lease
 (`AgentWindow::input_lease`; the call carries its `LeaseId`) and are refused `invalid_argument`
-without one (ADR-0288 §9). `agent_input.rs` turns the sequence into a plan of ticks before
-anything plays (`plan`, which refuses the whole sequence) and queues it on the presentation
-(`agent_input`, at most 64 jobs, then `InputQueueFull`). `drive_frame` advances the queue once per
-frame boundary, after the commit anchor: a tick's input goes in through `handle_input_from`, the
-path the platform's input takes (`handle_input_on`), marked as the agent's; each event is
-contained so one handler's panic does not keep the rest out, and the first panic continues once
-all went in. What a lease holds (contacts down, keys pressed) is kept per lease; a release
+without one (ADR-0288 §9). `agent_input.rs` plans the sequence once with
+`flui_protocol::input::plan`, the one planner the driver's OS lane plays too, whose bounds and
+refusals are the protocol's, and lowers the plan into the events this window takes (`lower`, which
+refuses the whole sequence, adding only what the window cannot deliver: a key that is no W3C name
+nor text, a composition caret outside its text, a trackpad gesture); it queues the lowered script
+on the presentation (`agent_input`, at most 64 jobs holding at most twice the plan's
+`MAX_INPUTS` planned inputs together, then `InputQueueFull`, `busy`). The frame that plays a
+job is asked for before the job is queued: the wake reaches the platform, user code, and one that
+panics leaves nothing queued, so the panic's answer is what happened. `drive_frame` advances
+the queue once per frame boundary, after the commit anchor, on the plan's timeline: a tick starts
+at a boundary, each input goes out at the first boundary at or past its offset in the tick,
+stamped with the instant the plan gives it, and the next tick starts at the first boundary at or past
+the tick's end unless the ending tick started or delivered an input there, so a boundary delivers the
+inputs of one tick and a release follows a move by a frame at least. An input goes in through
+`handle_input_from`, the path the platform's input takes (`handle_input_on`), marked as the
+agent's; each event is contained so one handler's panic does not keep the rest out, and the wake
+for the next tick and the parking of the answer run inside the same containment, after the
+input, so the first panic continues once all went in. What a lease holds (contacts down, keys pressed) is kept per lease; a release
 cancels the contacts and lifts the keys, the latest first. A lease the agent drops is recorded on
 the port (`DevAgentPort::release`, which wakes the owner) and released by the drain, which counts
 the dropped leases before it reads its commands and releases them after: a call asked through a
@@ -1126,6 +1155,97 @@ reading (`ReadingOwed`), so it is answered once a frame has passed since that in
 `observed`, the window's journal entries its ticks made. A failure part of the way answers
 `InputPartial`, the failure's code with a `partial` effect counting ticks. A window that closes
 answers its queued input `gone`. Pinned by `tests/contracts/agent_input.rs` and `agent_service.rs`.
+
+**Gestures.** The agent answers every `element.*` gesture on the synthetic and semantic paths
+(ADR-0400 §2; `agent_gesture.rs`, `agent_scroll.rs` for `scroll_until`), and refuses the `os`
+path, which the driver composes with its lane; every gesture asks `takes_semantic_path` before it
+is held, `scroll_into_view` (a semantics action alone) included, so a path a call requires and the
+gesture has no form on is refused `not_supported`. A gesture is a held act (`agent_held.rs`): the
+presentation's `HeldActs`, at most 64 (`TooManyActs`, `busy`, refused before anything of the act
+runs), is the one owner of every act it holds. An act is attempted when it is served, at each frame
+boundary before injected input goes on (`AgentSide::advance_held_acts`, so an act that passes
+injects its first tick at that boundary), and on an owner turn without a frame once its deadline
+passed: every held act's deadline wakes the owner (`AgentSide::next_act_deadline` in `next_wake`),
+so a window that draws nothing still answers it. A window that draws leaves what is overdue (a held
+act, the input it queued, the reading it owes) to its next frame, as the headless host's frames do:
+a native runner's wake drains its inbox (`UiRuntime::drain_owner_inbox`) before it frames, and
+that drain answers only a window that draws no frame (hidden or covered, or the runtime runs none;
+`agent_held::Frameless`), so a last attempt that passes plays on the wake's frame and the reading
+it owes is taken at that frame's end; `pump_background`, which runs no frame, answers every window.
+Pinned by `tests/contracts/agent_gestures.rs`
+(`a_last_attempt_that_passes_plays_on_a_host_that_drains_before_its_frame`,
+`a_reading_an_act_owes_is_taken_on_a_host_that_drains_before_its_frame`). While any act is held the
+window asks for frames,
+the frame asked for before the act is held or its input queued. An answer or a wake after an
+attempt runs inside the pass's `FirstPanic`, and `after_turn` evaluates the parked waits inside it
+too, so the first panic of a turn continues; a parked wait asks for the frames it counts before it
+is parked, and the answer pass contains each window's wake, so a wake that panics parks nothing and
+leaves the next windows' waits answered. The stability check remembers the two elements each
+held act reads and room for polls beside them (`AgentStability`), forgetting the element read
+longest ago.
+
+An act's deadline is a promise: every act is answered by it, the input it queued included. The
+input an act queues (a gesture's injection, `type_text` and `press_keys`, a scroll step) carries
+the act's deadline. At the first pass at or past it (an owner turn without a frame in a window
+that draws none, after the acts whose deadline passed are attempted; a frame boundary, after its
+input went on, so the input
+a last attempt queued on that frame starts on it) input none of whose ticks started is withdrawn
+and the act answers `timeout` (`InputTimedOut`, retry `soon`), nothing played; input under way
+then has its play time past the deadline (`Script::plays_within`, the bound the reply counts,
+ADR-0288 §4), and still running then, because its window stopped drawing, stops where it is and
+answers `timeout` with the ticks played. An act's input is a gesture whole: when it stops before its
+last tick, its deadline passed or a tick failed, what it pressed and still holds is let go at once
+as `input.release` lets go (the contacts it put down cancelled, its keys up, the latest first), a
+button it pressed on a contact the lease already held down released with the contact left down,
+and what the lease held before it started stays held, button by button (`Held::let_go_since`), so
+the lease's next gesture
+through the same source presses again. Until then the input's deadline is a wake of the agent
+(`next_act_deadline`), so a window that draws nothing answers its acts on time and nothing plays
+once it draws again. `input.inject` carries no deadline: its asker bounds its own reply, and what
+it leaves held, stopped or not, stays with its lease. Pinned by `tests/contracts/agent_gestures.rs`
+(`an_act_stopped_mid_play_lets_go_of_what_it_pressed`).
+An attempt resolves a locator again in the application (none holds on, several under a strict
+pick answer `ambiguous`, counting every match and naming the first ten, by
+`flui_protocol::locator::resolve_strict`, the rule `scroll_until` and the driver follow too),
+reads the element's actionability as `element.actionability` does (the
+same `actionability`, its stability included), and performs once every check passes, or only
+attached under `force`: the sequence `flui_protocol::input::gestures` composes from that frame's
+point and the part of the element the window shows (`flui_semantics::ActionabilityReading::shown`;
+the whole bounds only where none shows), with what the call leaves unnamed (a long press's hold, a
+stroke's speed and least length) taken from the window's own gesture settings by
+`window_defaults`, each rule stated there, a long press at most `Defaults::LONGEST_LONG_PRESS_MS`,
+which the reply bound counts (a long press the window would need longer for is refused, naming the duration
+to give). A tap, a double tap and a drag play with the window's primary pointer
+(`agent_gesture::primary_pointer`: a touch contact on Android, iOS and Fuchsia, a mouse elsewhere,
+`Defaults::pointer`), so on a touch platform a tap is a touch and a drag scrolls what a finger
+scrolls; a long press, a swipe, a fling and a pinch are touch gestures everywhere. The audit's
+`target_size` judges by the same pointer's minimum and names it. What the shared composer refuses
+it refuses for every composer: a drag no longer than the primary pointer's pan slop
+(`Defaults::min_drag`), a fling whose window-chosen stroke is over in fewer than the two moves a
+release velocity is measured from (naming the distance or velocity to give); the agent also refuses
+a pinch whose scale change does not pass the window's scale slop. A drag holds still before it
+lifts (`SWIPE_SETTLE_MS`), so it is dropped where it ends, not flung. The sequence is injected
+through the call's lease as `input.inject` is, or on the semantic path
+the semantics action that does the same (a primary tap invokes; a focus before text or keys
+focuses). The deadline is the act's own timeout on the presentation's clock; the attempt at or
+past it is the last, and answers the check that failed (`NotActionable` with `failed` and
+`covered_by`), `not_found` or `gone` when it does not perform. An act is dropped as it is answered,
+so nothing it would send goes out after its answer; an act nobody awaits is dropped unanswered; the
+lease an act injects through being let go answers it `gone`, as does the presentation closing; a
+panic in app code an attempt reaches (a hit-test, a semantics handler) answers the act once, with
+the step that failed, before it continues
+(`app_code_that_panics_in_a_held_acts_attempt_answers_the_act_once`). `scroll_until` turns the wheel at the scrollable's visible centre a viewport at a time,
+each step an injection whose answer the next attempt waits for, until the locator resolves under
+the scrollable to an element that shows, or the scrollable's descendants and their bounds are
+unchanged after a step (`ScrollEnded`, `not_found`), so a scrollable that does not move ends the
+search; a call that names no direction scrolls down, then right when the first step down moves
+nothing. At its deadline a step not played yet is withdrawn and the window is looked at once more,
+so no scroll goes out after the answer; a read of more than 4096 descendants or matches is
+refused, never taken for the whole. The conversation routes the window methods whose effect stays
+the connection's through its input lease (`LEASED` in `agent/dispatch.rs`: synthetic input and a
+perf span) and counts a gesture's act timeout and the time its input plays in the reply's deadline
+(`Addressed::holds_for`). Pinned by `tests/contracts/agent_gestures.rs` and
+`tests/contracts/agent_gesture_unwinding.rs`.
 
 **Input journal.** Once `dev_agent_window` has made the presentation's agent slot, every input
 routed to the presentation is journaled in the slot (`agent_journal.rs`): the platform's and the
@@ -1169,24 +1289,70 @@ stream, and that stream's next line, or the recording's end, is preceded by a `g
 flooding backend never costs the input a row. The rows reach the connection as `record_native`
 events, counted apart as `native_lost_rows`.
 
-**Waits.** `wait.until` parks a condition on the presentation
-(`agent_waits`) instead of polling it. The owner evaluates it when it arrives, so one that holds
+**Waits.** `wait.until`, `wait.settled` (`Condition::Settled`) and `wait.frames`
+(`Condition::Frames`) park a condition on the presentation (`agent_waits`) instead of polling it.
+A condition that holds without reading settledness is evaluated when it arrives, so one that holds
 already answers at the drain; after each frame `drive_frame` ran, which also counts that frame
-for `Frames`; and at every owner wake that ran none (`drain_owner_inbox`), so a deadline or a
-timer that ran out is seen. The tree part of a condition is a pure function of the committed tree
-(`SemanticsOwner::evaluate_wait`); `Settled` and the unsettled causes come from the runtime's own
-predicates (`needs_redraw`, a scheduled frame, pending work, the next timer),
-which `UiRuntime::unsettled_causes` reads without the agent's own waits, so a parked wait is never
-why the window is busy. A condition that counts frames asks for a redraw while it is parked,
+for `Frames`; and at every owner wake that ran none (`drain_owner_inbox`). The tree part of a
+condition is a pure function of the committed tree (`SemanticsOwner::evaluate_wait`). A condition
+that contains `Settled`, every wait's timeout and the idle end are answered only from the list of
+what keeps the application from being idle (ADR-0400 §3, below), so no host's answer can be made
+from a half it does not see. A condition that counts frames asks for a redraw while it is parked,
 because an idle window presents none. The deadline is on the presentation's clock (a manual clock
-expires it deterministically) and joins `next_wake`, so a window that draws nothing still times
-out; a timeout is an answer, ending `unsatisfied` with the last observation and the causes, and the
-window closing answers `gone`. A presentation holds 256 waits: the next is refused with
-`TooManyWaits` (`busy`, retry `soon`), never dropped and never in place of an older one. A
-condition on an event holds once the window emitted an event of that kind after the wait began
-(see Events). Image loads are not among the causes: the runtime sits below the layer that loads
-images. Pinned by `src/ui_runtime/tests/agent_wait.rs` and
-`crates/flui-semantics/tests/wait.rs`.
+expires it deterministically) and is a wake of the list (`Unsettled::wake_at`), so a window that
+draws nothing still times out; a timeout is an answer, ending `unsatisfied` with the last
+observation and the causes, and the window closing answers `gone`. A presentation holds 256
+waits: the next is refused with `TooManyWaits` (`busy`, retry `soon`), never dropped and never in
+place of an older one. A condition on an event holds once the window emitted an event of that kind
+after the wait began (see Events). Pinned by `src/ui_runtime/tests/agent_wait.rs`,
+`tests/contracts/settledness.rs` and `crates/flui-semantics/tests/wait.rs`.
+
+**Settledness** (ADR-0400 §3). The host that runs the runtime's turns owns one list
+(`flui_runtime::settledness::Unsettled`): after each turn and its own steps it gathers the
+runtime's half (`UiRuntime::unsettled`) and its own, its loop wakes at `Unsettled::wake`, a settle
+ends when the list names no cause, and, while an agent's wait is parked
+(`UiRuntime::awaits_settled_answer`), it hands the list to `UiRuntime::answer_settled`
+(`HostHalf::Complete`); a turn nobody waits on gathers nothing. A cause is added through the
+method of what discharges it (`next_frame`, `deadline` with its exact instant, `test`, `outside`),
+which writes `cleared_by` and the rounded `due_in_ms`; what the development agent asks for itself
+is a wake, never a cause: a parked wait's or held act's deadline (`wake_at`) and the frames it
+asks for (`wake_at_once`, from `UiRuntime::request_agent_frame_for`: a held act's boundaries, a
+frame-counting wait's frames, an owed reading), which drive a frame without marking a
+presentation's work. The runtime's half: a redraw, a scheduled frame, work a frame takes (tree
+work, due work, pointer motion) and each presentation's running animation (`Ticker`, painted or
+not) are the next turn's while frames are on, and not listed with frames off. A cause of a
+presentation whose dropped frame's retry is ahead is listed at that retry, and another
+presentation's retry holds nothing of it: `UiRuntime::list_for_next_turn` is that one rule, which
+the headless host's own causes follow too. A redraw, a scheduled frame, tree work and motion carry
+the window of each presentation whose work the next frame serves
+(`has_frame_work_for_next_frame`); a presentation that cannot be seen, whose sink is full or whose
+device was given up is named for none, and demand only such presentations hold is not listed, as
+with frames off; a scheduled frame no presentation's work asks for, and due work, carry no window.
+A task woken on the owner's driver is the application's, whatever any window holds: the next turn
+polls it, so it is a `FrameScheduled` of no window while frames are on and `PendingWork` of no
+window while a background turn polls it. Input an act queued is the application's work, a redraw
+of its window until it has played; a queued command or owner job is `PendingWork` of the
+application. Every deadline it wakes for is a `Timer` at its instant, read from the one
+enumeration `UiRuntime::next_wake` also reads (`visit_armed_deadlines`), a presentation's
+in-flight floor in both only where the host owes it (`RuntimeHostServices::with_floor_owed`, the
+one floor rule: the owner registry's wake, `OwnerStatus::next_wake`, reads each runtime's), so the
+two cannot disagree. A frame a covered window
+owes its surface is the host's half. Whether a host composes a half is fixed at construction
+(`RuntimeHostServices::composes_host_half`): a runtime whose host does not answers its settled
+waits itself from its own half (`HostHalf::Absent`), through the agent's owner side
+(`AgentSide::answer_from_runtime_half`, so a binary with no agent keeps none of it, ADR-0402),
+with `SettleScope::RuntimeOnly` and never idle, wherever its outermost turn ends: the end of an
+owner dispatch (`RuntimeWork::run`, which holds the turn open around a runner's every entry), a
+turn its host ran outside one (`finish_owner_activity`), and a frame's settlement outside any turn
+(`settle_frame`); while a turn is open it answers nothing, and each answer pass runs contained
+behind the failure of the work before it. On a complete half a false wait ends `idle` when every
+cause listed, in any window, is one only the test discharges, none at all included, unless it
+counts frames, which the agent's own frames change; `wait.settled` on a window counts that
+window's causes and the application's, not another window's. A wait answered 10 000 times at one
+instant (`TURNS_AT_ONE_INSTANT`) ends `unsatisfied`, naming the causes due then; a pass at a later
+instant counts from one again. Image loads are not among the runtime's causes: the runtime sits
+below the layer that loads images. A running ticker carries its window but no owner or site: the
+registry that knows it runs does not expose where its controller was made.
 
 **Events.** `AgentWindow::subscribe` (`UiCommand::AgentSubscribe`) registers a subscriber on the
 presentation (`agent_events`, an `EventHub`) and answers with an `EventStream`; dropping the
@@ -1226,6 +1392,44 @@ reference's text, `a_node_reference_prints_and_parses_as_one_text` in `flui-foun
 object or view that panics while the tree is read (`kind`, `inspect`) answers
 `InspectPanicked` (`platform`) first and then continues on the owner thread, as an action does;
 pinned by `a_render_object_that_panics_while_read_answers_platform_before_the_owner_resumes`.
+
+**Audit.** `audit.a11y` answers at the owner's turn (`agent_audit.rs`) and writes no rule of its
+own: `unnamed` and `target_size` are `flui-semantics`' `SemanticsOwner::audit_unnamed` and
+`audit_target_size` over the committed tree, `text_contrast` is `flui-rendering`'s
+`PipelineOwner::audit_text_contrast` over the version the presentation's scene last applied
+(`SceneSlot::current_version`; the scene keeps holding it, so the copy releases nothing when it
+drops). The target-size minimum is the presentation's gesture settings' `min_target` for the
+platform's primary pointer: touch on Android, iOS and Fuchsia, mouse elsewhere. An empty `rules`
+asks for every rule the protocol names, and a rule asked twice runs once; a rule that cannot run
+(one this agent does not run, a semantics rule before the first committed tree, `text_contrast`
+before the first applied frame) is listed in `not_checked` and the verdict is never `pass`, and
+`text_contrast` with any text it could not judge is listed there too, with how many and the
+first three quoted, beside the findings of the texts it judged. The text of a disabled control
+is not judged (WCAG 1.4.3 exempts it); which controls are disabled comes from one read of the
+committed tree, bounded (`INACTIVE_READ_NODES`), and a text below its contrast whose element
+that read did not reach is listed as not judged, never a finding. A window with no tree yet is
+answered this way, not with an error. A report carries at most `AuditReport::MAX_FINDINGS`
+findings and counts the rest in `truncated`, so it stays one bounded reply. The elements findings name
+are recorded as issued. Pinned by `src/ui_runtime/tests/agent_audit.rs`.
+
+**Performance spans.** `perf.start` and `perf.stop` (`agent_perf.rs`) keep spans on the
+presentation's agent slot, one per caller: the input lease the call was asked through (`LeaseId`,
+one connection's over the wire); a call through no lease is `invalid_argument`. After each frame
+`AgentSide::after_frame` takes, for each running span, the snapshots the frame clock recorded
+since the span's cursor; `perf.stop` takes the last ones and answers. Only presented frames count;
+a frame's time is its segment (build to the end of paint), without the submit, whose instant holds
+the vsync wait where the present blocks; raster work is not counted. Each frame is judged against
+the period of its display when taken: past one period it is dropped, and a dropped frame past
+`jank_multiplier` periods is janky too; both counts are `None` once a frame had no known period,
+and `refresh_period_ms` is the period every frame was judged against (`None` when it changed). The
+span keeps the times of its last 3600 frames and the 64 slowest at most, so its memory is fixed at
+its start; past the cap the percentiles describe the last frames and the counts the whole span.
+`perf.start` refuses a `jank_multiplier` that is not finite and at least 1, reports at most 64 of
+the `worst` frames asked for, refuses a second start by the same caller `invalid_argument` and a
+ninth span `busy`; `perf.stop` by a caller with no span is `invalid_argument` and touches no other
+span. A caller's span goes when the drain releases its lease (`DevAgentSlot::take_released`), and
+a closed window drops its spans with its slot. With no span running a frame pays one borrow per
+presentation. Pinned by `src/ui_runtime/tests/agent_perf.rs` and `tests/contracts/agent_perf.rs`.
 
 **Enablement.** Every window handle shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is

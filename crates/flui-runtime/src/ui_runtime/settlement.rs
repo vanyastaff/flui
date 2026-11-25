@@ -311,7 +311,13 @@ impl UiRuntime {
             held.contain(|| Self::abandon_pending_frame(producer, superseded));
         }
         let tail = self.settle_pending_frame(producer, frame, verdict, held);
-        self.finish_settlement(producer, tail);
+        // The settlement discharged the frame in flight, and no owner turn follows it: a wait
+        // that reads settledness is answered here on a host that composes no half of its own,
+        // behind the settlement's own tail and its failure.
+        let mut first = FirstPanic::new();
+        first.contain(|| self.finish_settlement(producer, tail));
+        first.contain(|| self.answer_settled_from_own_half());
+        first.resume();
         Settled::Applied
     }
 

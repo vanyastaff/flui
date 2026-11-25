@@ -921,7 +921,8 @@ fn malformed_unknown_and_unserved_requests() {
             driver_side["error"]["capability"], "session.launch",
             "{driver_side}"
         );
-        let not_yet = client.call("perf.start", json!({}));
+        // A capture is a renderer host's to take; this app's windows do not answer it.
+        let not_yet = client.call("capture.rendered", json!({}));
         assert_eq!(not_yet["error"]["code"], "not_supported", "{not_yet}");
         let malformed = client.call("semantics.read", json!({ "window": 3 }));
         assert_eq!(
@@ -1091,8 +1092,10 @@ fn a_wait_without_a_timeout_is_answered_by_the_window() {
     owner.drive(move |_| {
         let mut client = Client::hello(&at);
         let window = client.only_window();
-        let condition = serde_json::to_value(Condition::Appears(Locator::named("Missing")))
-            .expect("a condition serializes");
+        // A frame count it never reaches keeps the window drawing, so the headless host, which
+        // ends a false wait idle once nothing but the test can change the app, holds it out.
+        let condition =
+            serde_json::to_value(Condition::Frames(u32::MAX)).expect("a condition serializes");
         // No `timeout_ms`: the window's default, longer than the transport's own wait.
         let reply = client.call(
             "wait.until",

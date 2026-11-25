@@ -623,6 +623,17 @@ impl SceneSlot {
         })
     }
 
+    /// The version the scene last applied, for a reader of the frame the window shows. The
+    /// scene keeps holding it, so dropping the copy releases nothing. `Err` while a frame
+    /// holds the scene.
+    pub(crate) fn current_version(&self) -> Result<SceneVersion, SceneLent> {
+        self.scene
+            .borrow()
+            .as_ref()
+            .map(|scene| scene.owner.current().clone())
+            .ok_or(SceneLent)
+    }
+
     /// The scene's running totals; see [`crate::testing::SceneTotals`].
     /// `Err` while a frame holds it.
     #[cfg(any(test, feature = "testing"))]

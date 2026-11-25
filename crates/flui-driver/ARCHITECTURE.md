@@ -45,6 +45,23 @@ app's trees, frames and input, and this crate composes that with what only the O
   `Connection`'s `CallError::Unanswered`, which releases the input of the connection's
   window; a tool on the host that hung is the lane's failure, `CallError::Failed` with its
   message.
+- **A gesture the app's agent serves is the agent's, whole; its path is the driver's.** Every
+  entry to a gesture, the method table's dispatch and the `Window`, `Element` and `ElementLocator`
+  handles alike, asks `compose::choose_path` over the call's `via`, the session's policy, the
+  gesture's forms and the lane, and refuses there what the policy requires and the gesture or the
+  session lacks. When the agent's hello lists the gesture and the path chosen is not `os`, the
+  gesture goes to the agent with that path as its `via`, required when the policy requires it
+  (`compose::agent_via`): the agent knows nothing of the session's policy, and one that receives
+  no `via` takes the synthetic path. The agent then locates, holds for actionability and injects
+  in the application (ADR-0400 §2); a call that prefers `os` with no lane falls back as
+  `choose_path` says and is the agent's too. The driver composes a gesture only on the `os` path
+  or for an app that does not serve it, and the sequence it performs is
+  `flui_protocol::input::gestures`'s, the one the agent plays. `scroll_into_view` is a semantics
+  action alone and `scroll_until` the agent's synthetic input alone, so a call that requires
+  another path is refused by the same rule. A gesture composed here reads its
+  target over the wire, so it takes its extent from the element's whole bounds and what the call
+  leaves unnamed from `gestures::Defaults::WINDOWLESS`; the agent aims at the part the window shows
+  and takes the window's own gesture settings.
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
   `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device

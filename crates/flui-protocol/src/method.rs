@@ -9,10 +9,9 @@
 //!
 //! A gesture (`element.*` but the actionability read) is the agent's row on the synthetic and
 //! semantic paths, which a window serving it holds until its target is actionable or the act's
-//! timeout passes (ADR-0400 §2). No app's agent serves one yet: each answers `not_supported` and
-//! lists none in its hello, so the driver composes every gesture from the agent's methods, and on
-//! the `os` path from its lane (ADR-0238 §5). `element.scroll_until` is declared only: no side
-//! answers it yet.
+//! timeout passes (ADR-0400 §2), then plays as [`input::gestures`](crate::input::gestures)
+//! composes it. On the `os` path, and for an app whose agent does not list it in its hello, the
+//! driver composes it from the agent's methods and its lane (ADR-0238 §5).
 //!
 //! The rest of the design's table joins as its tasks land: the OS lanes (`os.*`,
 //! `input.os`, `capture.os`), pixel baselines, recording and traces, layout facts, the other
@@ -21,6 +20,7 @@
 use std::fmt;
 use std::time::Duration;
 
+use crate::input::gestures::PlayBound;
 use crate::locator::Target;
 use crate::tree::WindowId;
 
@@ -250,9 +250,10 @@ fn address_target(target: &mut Target, window: WindowId) {
     }
 }
 
-/// A gesture's act timeout, which the window may hold the act for (ADR-0400 §2).
-fn act_timeout(options: &crate::input::GestureOptions) -> Duration {
-    Duration::from_millis(options.effective_timeout_ms())
+/// How long a window may hold a gesture: its act timeout, which it may hold out for actionability
+/// (ADR-0400 §2), then the time its sequences take to play once the target is found.
+fn act_holds_for(options: &crate::input::GestureOptions, gesture: &impl PlayBound) -> Duration {
+    Duration::from_millis(options.effective_timeout_ms()).saturating_add(gesture.plays_within())
 }
 
 macro_rules! addressed_by_gesture_target {
@@ -266,9 +267,9 @@ macro_rules! addressed_by_gesture_target {
                 address_target(&mut self.target, window);
             }
 
-            /// The act holds out for actionability until its timeout.
+            /// The act holds out for actionability until its timeout, then plays.
             fn holds_for(&self) -> Duration {
-                act_timeout(&self.options)
+                act_holds_for(&self.options, self)
             }
         }
     )+};
@@ -276,6 +277,7 @@ macro_rules! addressed_by_gesture_target {
 
 addressed_by_gesture_target!(
     crate::input::DragParams,
+    crate::input::LongPressParams,
     crate::input::PinchParams,
     crate::input::ScrollIntoViewParams,
     crate::input::ScrollUntilParams,
@@ -283,23 +285,6 @@ addressed_by_gesture_target!(
     crate::input::TapParams,
     crate::input::TypeTextParams,
 );
-
-impl Addressed for crate::input::LongPressParams {
-    fn window(&self) -> Option<WindowId> {
-        target_window(&self.target)
-    }
-
-    fn address(&mut self, window: WindowId) {
-        address_target(&mut self.target, window);
-    }
-
-    /// The act holds out for actionability until its timeout, then holds the press as long as
-    /// it names.
-    fn holds_for(&self) -> Duration {
-        act_timeout(&self.options)
-            .saturating_add(Duration::from_millis(self.duration_ms.unwrap_or(0)))
-    }
-}
 
 impl Addressed for crate::input::PressKeysParams {
     /// The target's window, or the window named when there is no target.
@@ -317,7 +302,7 @@ impl Addressed for crate::input::PressKeysParams {
     }
 
     fn holds_for(&self) -> Duration {
-        act_timeout(&self.options)
+        act_holds_for(&self.options, self)
     }
 }
 

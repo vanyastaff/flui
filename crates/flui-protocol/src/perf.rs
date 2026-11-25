@@ -8,6 +8,12 @@ use crate::tree::WindowId;
 use crate::verdict::Verdict;
 
 /// `perf.start`: begin keeping frame samples for a window.
+///
+/// A span is its caller's, one per connection on a window: another connection's span never
+/// refuses this one's `perf.start` and never ends with this one's `perf.stop`. A `perf.start`
+/// while the caller's own span runs is refused `invalid_argument`, and so is a `perf.stop` with
+/// none running; a window that keeps as many spans as it admits answers `busy`. A span whose
+/// connection has gone is dropped.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
@@ -15,13 +21,15 @@ use crate::verdict::Verdict;
 pub struct PerfStartParams {
     /// The window.
     pub window: WindowId,
-    /// Work over this many refresh periods makes a frame janky; 2 when absent.
+    /// A dropped frame whose work exceeds this many refresh periods is janky too; 2 when
+    /// absent. Finite and at least 1: any other value is refused `invalid_argument`.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub jank_multiplier: Option<f64>,
-    /// How many of the worst frames to report; 5 when absent.
+    /// How many of the worst frames to report; 5 when absent, at most 64: a larger number
+    /// reports 64.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -144,9 +152,11 @@ impl PhaseTime {
 pub struct FrameSample {
     /// The frame's number in the window.
     pub frame: u64,
-    /// Its frame time, in milliseconds.
+    /// Its frame time, in milliseconds, as [`PerfReport::frame_time`] measures it.
     pub ms: f64,
-    /// Its phases.
+    /// Its phases. The `submit` phase runs from the end of paint to the submit's return, so
+    /// it includes the wait for the next vsync where the backend's present blocks, and is not
+    /// part of the frame time.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Vec::is_empty")
@@ -160,6 +170,26 @@ pub struct FrameSample {
     pub tags: Vec<String>,
 }
 
+impl FrameSample {
+    /// Frame `frame`, which took `ms`, with no phase and no tag.
+    #[must_use]
+    pub const fn new(frame: u64, ms: f64) -> Self {
+        Self {
+            frame,
+            ms,
+            phases: Vec::new(),
+            tags: Vec::new(),
+        }
+    }
+
+    /// With how long each of its phases took.
+    #[must_use]
+    pub fn phases(mut self, phases: Vec<PhaseTime>) -> Self {
+        self.phases = phases;
+        self
+    }
+}
+
 /// What `perf.stop` answers for the span since `perf.start`.
 #[derive(Debug, Clone, PartialEq, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -168,22 +198,32 @@ pub struct FrameSample {
 pub struct PerfReport {
     /// Frames presented.
     pub frames: u64,
-    /// Frame times.
+    /// Frame times: the work of each frame on the thread that builds, lays out and paints it,
+    /// from the start of build to the end of paint. The submit is not part of it: on a backend
+    /// whose present blocks, the submit's span holds the wait for the next vsync, and raster
+    /// work after the hand-off to a raster thread is not timed here at all.
     pub frame_time: Distribution,
-    /// The presentation's refresh period, in milliseconds, when known.
+    /// The refresh period every frame of the span was judged against, in milliseconds; for a
+    /// span with no frame, the period at `perf.stop`. `None` when a frame had no known period,
+    /// or when frames were judged against different ones (the window moved to a display with
+    /// another period).
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub refresh_period_ms: Option<f64>,
-    /// Frames that missed their present deadline; `None` without a refresh period.
+    /// Frames that missed their present deadline: whose frame time exceeded the refresh
+    /// period the frame was judged against, each against the period of the display the window
+    /// was on when it presented. A frame that missed the deadline only in its submit is not
+    /// counted, since the frame time does not hold the submit. `None` when a frame of the span
+    /// had no known period.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub dropped: Option<u32>,
-    /// Frames whose work exceeded the jank threshold, counted apart from dropped ones; `None`
-    /// without a refresh period.
+    /// The dropped frames whose frame time also exceeded `jank_multiplier` refresh periods:
+    /// the hitches among them, each counted in `dropped` too. `None` when `dropped` is.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -225,7 +265,8 @@ pub enum TimeLimit {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct PerfBudget {
-    /// Dropped frames at most.
+    /// Dropped frames at most. A janky frame is a dropped frame, so the limit holds the worst
+    /// hitch of the span too.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")

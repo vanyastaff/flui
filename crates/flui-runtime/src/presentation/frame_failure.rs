@@ -96,13 +96,37 @@ impl PresentationState {
             || self.owes_texture_frame()
     }
 
+    /// Whether the runtime's next frame serves this presentation's [frame work](Self::has_frame_work):
+    /// it has some, it can be seen, its sink holds fewer frames than it may, and its device
+    /// rebuild was not given up. Otherwise its work waits for something no frame of another
+    /// window does: an unseen presentation's for its window to be seen or for the frame that
+    /// window is asked for (ADR-0389, the host's half of ADR-0400 §3), a full sink's for the
+    /// settlement that frees a place (ADR-0305 §5), an abandoned device's for a new rebuild.
+    pub(crate) fn has_frame_work_for_next_frame(&self) -> bool {
+        !self.clock().is_hidden()
+            && !self.frames_in_flight().is_saturated()
+            && !self.device_abandoned()
+            && self.has_frame_work()
+    }
+
+    /// The instant a turn retries this presentation's dropped frame, if one waits and a turn
+    /// at it serves it: none while its sink holds as many frames as it may (the settlement that
+    /// frees a place wakes it, and the in-flight floor bounds the sleep until then, ADR-0305 §5)
+    /// or while it cannot be seen (it retries once seen, which wakes it). The deadline the
+    /// runtime wakes for, and the instant its own next-turn causes, and its host's for its
+    /// window, are served at while it is ahead (`UiRuntime::list_for_next_turn`).
+    pub(crate) fn retry_served_at(&self) -> Option<Instant> {
+        self.failure_retry_at()
+            .filter(|_| !self.frames_in_flight().is_saturated() && !self.clock().is_hidden())
+    }
+
     /// While this presentation has frames pending, the latest the owner sleeps until: the next
     /// multiple of [`IN_FLIGHT_FLOOR`](crate::ui_runtime::IN_FLIGHT_FLOOR) since the oldest
     /// pending frame was handed to its sink, so a lost settlement wake costs at most that interval, and a
     /// frame that never settles wakes the owner once per interval, not on every read
     /// (ADR-0305 §5). A host whose raster thread has settled every pending frame of this
-    /// presentation, and so already woke it, leaves the floor out
-    /// (`UiRuntime::next_wake_owing_floors`).
+    /// presentation, and so already woke it, leaves the floor out (the rule
+    /// `RuntimeHostServices::with_floor_owed` installs, which `UiRuntime::next_wake` reads).
     pub(crate) fn in_flight_floor(&self) -> Option<Instant> {
         let queued = self.pending_frames.borrow().front()?.submitted_at();
         let floor = crate::ui_runtime::IN_FLIGHT_FLOOR;

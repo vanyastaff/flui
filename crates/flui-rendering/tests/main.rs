@@ -36,6 +36,8 @@ mod layout_cycle_guard;
 mod layout_dirty_root;
 #[path = "subscriber_panics.rs"]
 mod subscriber_panics;
+#[path = "text_contrast.rs"]
+mod text_contrast;
 
 #[path = "frame_unwind.rs"]
 mod frame_unwind;

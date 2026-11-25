@@ -7,6 +7,7 @@ use std::time::Duration;
 use flui_driver::coordinates::DevicePoint;
 use flui_driver::lane;
 use flui_driver::os_input::OsDevice;
+use flui_driver::protocol::act::ActOutcome;
 use flui_driver::protocol::error::{ErrorCode, ErrorObject};
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
@@ -16,6 +17,7 @@ use flui_driver::protocol::input::{
 use flui_driver::protocol::locator::Target;
 use flui_driver::protocol::method::{self, Method};
 use flui_driver::protocol::report::Report;
+use flui_driver::protocol::tree::WindowId;
 use flui_driver::protocol::verdict::Verdict;
 use flui_driver::steps::OsEvent;
 use flui_driver::testing::{LaneLog, Reply, ScriptedAgent, ScriptedLane};
@@ -632,6 +634,274 @@ fn a_served_gesture_is_waited_for_as_long_as_its_act_may_hold() {
     assert_eq!(tapped.via, InputPath::Synthetic);
 }
 
+/// A gesture asked through the Rust handles, a locator's or a point's, goes to the app's agent
+/// whole on the synthetic path when the agent serves it: the driver neither locates, checks
+/// actionability nor injects.
+#[test]
+fn a_handles_gesture_on_the_synthetic_path_is_sent_to_the_agent_not_composed() {
+    let (agent, asked) = serving_taps(Duration::ZERO);
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let window = "w1".parse::<WindowId>().expect("a window handle");
+    let tapped = driver
+        .window(window)
+        .locate(Locator::identifier("increment"))
+        .via(InputPath::Synthetic)
+        .tap()
+        .expect("the agent answers the tap");
+    assert_eq!(tapped.via, InputPath::Synthetic);
+    driver
+        .window(window)
+        .tap_at(LogicalPoint::new(4.0, 4.0))
+        .expect("the agent answers a tap at a point");
+    let asked = asked.lock().expect("the log");
+    assert_eq!(
+        asked
+            .iter()
+            .filter(|name| name.as_str() == method::ElementTap::NAME)
+            .count(),
+        2,
+        "{asked:?}"
+    );
+    assert!(
+        asked.iter().all(|name| {
+            name.as_str() != method::SemanticsLocate::NAME
+                && name.as_str() != method::ElementActionability::NAME
+                && name.as_str() != method::InputInject::NAME
+        }),
+        "nothing of the composition was asked: {asked:?}"
+    );
+}
+
+/// A scripted agent whose hello serves every gesture, answering each that it ran, and the
+/// methods it was asked.
+fn serving_every_gesture() -> (ScriptedAgent, Arc<Mutex<Vec<String>>>) {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&asked);
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::ElementTap::NAME,
+            method::ElementDoubleTap::NAME,
+            method::ElementLongPress::NAME,
+            method::ElementDragTo::NAME,
+            method::ElementSwipe::NAME,
+            method::ElementFling::NAME,
+            method::ElementPinch::NAME,
+            method::ElementScrollIntoView::NAME,
+            method::ElementTypeText::NAME,
+            method::ElementPressKeys::NAME,
+        ],
+        Box::new(move |name, _| {
+            log.lock().expect("the log").push(name.to_owned());
+            match name {
+                "windows.list" => Reply::Result(json!({ "windows": ["w1"] })),
+                _ => Reply::Result(json!({ "via": "synthetic", "effect": { "kind": "ran" } })),
+            }
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    (agent, asked)
+}
+
+/// Each gesture of the driver's handles sends the agent that serves it its own method, whole: a
+/// swipe is `element.swipe` and a fling `element.fling`, and nothing of a composition (a locate,
+/// an actionability read, an injection) is asked.
+#[test]
+fn each_gesture_the_agent_serves_reaches_it_as_its_own_method() {
+    use flui_driver::protocol::input::Direction;
+
+    let (agent, asked) = serving_every_gesture();
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let window = "w1".parse::<WindowId>().expect("a window handle");
+    let mut window = driver.window(window);
+    let mut target = window
+        .locate(Locator::identifier("increment"))
+        .via(InputPath::Synthetic);
+    let calls: [(&str, Result<ActOutcome, Error>); 10] = [
+        (method::ElementTap::NAME, target.tap()),
+        (method::ElementDoubleTap::NAME, target.double_tap()),
+        (method::ElementLongPress::NAME, target.long_press(None)),
+        (
+            method::ElementDragTo::NAME,
+            target.drag_to(Target::Locator(Locator::identifier("increment"))),
+        ),
+        (method::ElementSwipe::NAME, target.swipe(Direction::Up)),
+        (method::ElementFling::NAME, target.fling(Direction::Up)),
+        (method::ElementPinch::NAME, target.pinch(2.0)),
+        (
+            method::ElementScrollIntoView::NAME,
+            target.scroll_into_view(),
+        ),
+        (method::ElementTypeText::NAME, target.type_text("a")),
+        (method::ElementPressKeys::NAME, target.press_keys(&["a"])),
+    ];
+    let asked = asked.lock().expect("the log");
+    let gestures: Vec<&str> = asked
+        .iter()
+        .map(String::as_str)
+        .filter(|name| *name != method::WindowsList::NAME)
+        .collect::<Vec<&str>>();
+    let sent: Vec<&str> = calls.iter().map(|(name, _)| *name).collect::<Vec<&str>>();
+    assert_eq!(
+        gestures, sent,
+        "each entry sent its own method, and only it"
+    );
+    for (name, answer) in calls {
+        let outcome = answer.unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(outcome.via, InputPath::Synthetic, "{name}");
+    }
+}
+
+/// `element.scroll_into_view` is a semantics action: composed by the driver, a call that
+/// requires another path is refused naming it, before the agent is asked anything.
+#[test]
+fn a_composed_scroll_into_view_refuses_a_path_it_has_no_form_on() {
+    let (agent, asked) = serving_taps(Duration::ZERO);
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    for path in [InputPath::Synthetic, InputPath::Os] {
+        let mut params: flui_driver::protocol::input::ScrollIntoViewParams =
+            serde_json::from_value(json!({ "target": { "locator": { "identifier": "row" } } }))
+                .expect("scroll into view reads");
+        params.options.via = Some(InputPolicy::require(path));
+        let refused = driver.call::<method::ElementScrollIntoView>(params);
+        assert!(
+            matches!(
+                &refused,
+                Err(Error::NotSupported { capability: Some(capability), .. })
+                    if *capability == format!("{}_input", path.name())
+            ),
+            "{path:?}: {refused:?}"
+        );
+    }
+    let asked = asked.lock().expect("the log");
+    assert!(
+        asked
+            .iter()
+            .all(|name| name.as_str() == method::WindowsList::NAME),
+        "nothing was located or acted on: {asked:?}"
+    );
+}
+
+/// One request the agent heard: its method and the `via` it carried.
+type Asked = (String, Option<InputPolicy>);
+
+/// A scripted agent whose hello serves `element.tap`, `element.long_press` and
+/// `element.scroll_until`, answering each that it ran synthetically, and each method it was asked
+/// with the `via` it was asked with.
+fn recording_via() -> (ScriptedAgent, Arc<Mutex<Vec<Asked>>>) {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&asked);
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::ElementTap::NAME,
+            method::ElementLongPress::NAME,
+            method::ElementScrollUntil::NAME,
+        ],
+        Box::new(move |name, params| {
+            let via = params
+                .get("via")
+                .map(|via| serde_json::from_value::<InputPolicy>(via.clone()).expect("a policy"));
+            log.lock().expect("the log").push((name.to_owned(), via));
+            match name {
+                "windows.list" => Reply::Result(json!({ "windows": ["w1"] })),
+                _ => Reply::Result(json!({ "via": "synthetic", "effect": { "kind": "ran" } })),
+            }
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    (agent, asked)
+}
+
+fn a_long_press() -> flui_driver::protocol::input::LongPressParams {
+    serde_json::from_value(json!({ "target": { "locator": { "identifier": "row" } } }))
+        .expect("a long press reads")
+}
+
+fn a_scroll_until() -> flui_driver::protocol::input::ScrollUntilParams {
+    serde_json::from_value(json!({
+        "target": { "locator": { "identifier": "list" } },
+        "until": { "identifier": "row" },
+    }))
+    .expect("a scroll until reads")
+}
+
+/// The method the agent was asked last, and its `via`.
+fn last_asked(asked: &Mutex<Vec<Asked>>) -> Option<Asked> {
+    asked.lock().expect("the log").last().cloned()
+}
+
+/// The driver chooses a served gesture's path, and the agent, which knows no session, receives it
+/// as the gesture's `via`: a session that requires the semantic path has it required in the app,
+/// and a gesture with no semantic form is refused before the agent hears of it, as the agent
+/// refuses it.
+#[test]
+fn a_session_that_requires_a_path_has_it_required_by_the_agent() {
+    let (agent, asked) = recording_via();
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let refused_semantic = |answer: &Result<ActOutcome, Error>| {
+        matches!(
+            answer,
+            Err(Error::NotSupported { capability: Some(capability), .. })
+                if capability == "semantic_input"
+        )
+    };
+
+    driver.set_input_policy(InputPolicy::require(InputPath::Semantic));
+    driver
+        .call::<method::ElementTap>(tap_increment())
+        .expect("the agent answers the tap");
+    assert_eq!(
+        last_asked(&asked),
+        Some((
+            method::ElementTap::NAME.to_owned(),
+            Some(InputPolicy::require(InputPath::Semantic))
+        )),
+        "a tap has a semantic form: the session's requirement reaches the agent"
+    );
+    let before = asked.lock().expect("the log").len();
+    let pressed = driver.call::<method::ElementLongPress>(a_long_press());
+    assert!(refused_semantic(&pressed), "{pressed:?}");
+    let scrolled = driver.call::<method::ElementScrollUntil>(a_scroll_until());
+    assert!(refused_semantic(&scrolled), "{scrolled:?}");
+    assert_eq!(
+        asked.lock().expect("the log").len(),
+        before,
+        "a gesture with no semantic form is refused before the agent is asked"
+    );
+}
+
+/// A session that prefers `os` with no lane falls back to synthetic, as `choose_path` says, and a
+/// gesture the agent serves is then the agent's, which composes it with the window's own settings
+/// rather than the driver's windowless defaults.
+#[test]
+fn a_session_that_prefers_os_with_no_lane_has_the_agent_play_its_gestures() {
+    let (agent, asked) = recording_via();
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let synthetic = Some(InputPolicy::prefer(InputPath::Synthetic));
+
+    driver.set_input_policy(InputPolicy::prefer(InputPath::Os));
+    driver
+        .call::<method::ElementLongPress>(a_long_press())
+        .expect("the agent answers the long press");
+    assert_eq!(
+        last_asked(&asked),
+        Some((method::ElementLongPress::NAME.to_owned(), synthetic)),
+    );
+    driver
+        .call::<method::ElementScrollUntil>(a_scroll_until())
+        .expect("the agent answers the scroll");
+    assert_eq!(
+        last_asked(&asked),
+        Some((method::ElementScrollUntil::NAME.to_owned(), synthetic))
+    );
+}
+
 /// A counter whose session sends every input by the OS path through a guarded scripted lane on
 /// the shared desktop, its lock at `dir`'s `os-input.lock`.
 fn on_the_os_path(probe: &Probe, dir: &tempfile::TempDir) -> (Driver, LaneLog) {
@@ -748,4 +1018,54 @@ fn a_session_takes_the_pointers_its_agent_says_it_delivers() {
             PointerDevice::Pen
         ]
     );
+}
+
+/// A strict locator the driver resolves for a gesture it composes asks the agent for no more
+/// matches than the candidates it names, and counts every element it matched, those the agent left
+/// out of its answer included, as the agent's own resolution does
+/// (`flui_protocol::locator::resolve_strict`): a locator matching 120 000 elements, whose every
+/// match reported would pass the longest line the driver reads (16 MiB), answers `ambiguous`
+/// with that count and the first ten.
+#[test]
+fn a_composed_gesture_refuses_a_strict_locator_with_its_true_count() {
+    const MATCHED: u64 = 120_000;
+    let agent = ScriptedAgent::start(
+        &[method::WindowsList::NAME, method::SemanticsLocate::NAME],
+        Box::new(move |name, params| match name {
+            "windows.list" => Reply::Result(json!({ "windows": ["w1"] })),
+            "semantics.locate" => {
+                // As the agent does: at most `max_matches` reported, the rest counted.
+                let reported = params
+                    .get("max_matches")
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or(MATCHED, |most| most.min(MATCHED));
+                let matches: Vec<serde_json::Value> = (1..=reported)
+                    .map(|n| {
+                        json!({ "element": format!("w1/e{n}"), "revision": 1, "node": {
+                            "id": format!("e{n}"), "role": "button", "native_role": "Button",
+                            "name": "a row whose name makes each reported match long enough",
+                        } })
+                    })
+                    .collect();
+                Reply::Result(json!({ "matches": matches, "truncated": MATCHED - reported }))
+            }
+            _ => Reply::Close,
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let tap = TapParams::new(Target::Locator(Locator::identifier("row")));
+    let refused = driver.call::<method::ElementTap>(tap);
+    match refused {
+        Err(Error::Ambiguous {
+            message,
+            candidates,
+            ..
+        }) => {
+            assert!(message.starts_with("120000 elements"), "{message}");
+            assert_eq!(candidates.len(), 10, "{candidates:?}");
+        }
+        other => panic!("a strict locator matching 120 000 elements is refused: {other:?}"),
+    }
 }

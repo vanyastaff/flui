@@ -159,9 +159,9 @@ fn an_injected_tap_reaches_the_app_one_tick_per_frame_and_answers_after_a_frame(
         ["down", "up"],
         "a contact moved, pressed and lifted"
     );
-    assert!(
-        frames >= 4,
-        "three ticks at three boundaries, then a frame before the answer: {frames}"
+    assert_eq!(
+        frames, 4,
+        "three ticks at three boundaries, then a frame before the answer"
     );
 }
 
@@ -180,9 +180,9 @@ fn a_pause_holds_the_injection_for_its_duration() {
     let (outcome, frames) = answered(&mut host, &mut press, 40);
     outcome.expect("the press plays");
     assert_eq!(*seen.lock(), ["down", "up"]);
-    assert!(
-        frames >= 10,
-        "the press is held 160 ms, ten 16 ms frames: {frames}"
+    assert_eq!(
+        frames, 14,
+        "a move and a press, the press held ten 16 ms frames, the lift, then a frame before the answer"
     );
 }
 
@@ -323,7 +323,15 @@ fn input_the_window_cannot_play_as_asked_is_refused_whole() {
         .expect_err("injected input is synthetic");
     assert_eq!(refused.code, ErrorCode::InvalidArgument, "{refused:?}");
 
-    let cases: [(&str, Vec<InputSource>, ErrorCode); 6] = [
+    let key_down = |key: &str| {
+        vec![InputSource::Keys {
+            id: "keyboard".to_owned(),
+            actions: vec![KeyAction::Down {
+                key: key.to_owned(),
+            }],
+        }]
+    };
+    let cases: [(&str, Vec<InputSource>, ErrorCode); 10] = [
         (
             "two sources of one name",
             vec![pointer(vec![to(1.0, 1.0)]), pointer(vec![to(2.0, 2.0)])],
@@ -331,12 +339,27 @@ fn input_the_window_cannot_play_as_asked_is_refused_whole() {
         ),
         (
             "a key that is neither a key name nor the text of one",
-            vec![InputSource::Keys {
-                id: "keyboard".to_owned(),
-                actions: vec![KeyAction::Down {
-                    key: "NoSuchKey".to_owned(),
-                }],
-            }],
+            key_down("NoSuchKey"),
+            ErrorCode::InvalidArgument,
+        ),
+        (
+            "a mistyped key name with a hyphen",
+            key_down("Ctrl-a"),
+            ErrorCode::InvalidArgument,
+        ),
+        (
+            "a mistyped modifier name with a hyphen",
+            key_down("Control-a"),
+            ErrorCode::InvalidArgument,
+        ),
+        (
+            "a key name with a space inside",
+            key_down("Arrow Down"),
+            ErrorCode::InvalidArgument,
+        ),
+        (
+            "a key name with an underscore",
+            key_down("Page_Down"),
             ErrorCode::InvalidArgument,
         ),
         (
@@ -377,6 +400,12 @@ fn input_the_window_cannot_play_as_asked_is_refused_whole() {
         let refused = answered(&mut host, &mut refused, 2).0.expect_err(case);
         assert_eq!(refused.code, code, "{case}: {refused:?}");
         assert_eq!(refused.effect, None, "{case} is refused whole: {refused:?}");
+        if case == "a trackpad gesture" {
+            assert_eq!(
+                refused.message, "this app's windows do not take injected trackpad gestures yet",
+                "{case}"
+            );
+        }
     }
     assert!(seen.lock().is_empty(), "nothing played: {:?}", seen.lock());
 }
@@ -590,4 +619,255 @@ fn the_journal_keeps_its_latest_entries_and_counts_the_ones_it_let_go() {
             "since {since:?}, at most {max_entries:?}"
         );
     }
+}
+
+/// A move of its own duration goes out a step per frame boundary and its tick ends with its last
+/// step, so the lift has a boundary of its own; a move to where the contact already is sends
+/// nothing; a cancel takes a pressed contact away. Each played as the window counts its frames.
+#[test]
+fn each_pointer_action_plays_as_planned_one_boundary_at_a_time() {
+    type Case = (
+        &'static str,
+        Vec<PointerAction>,
+        &'static [&'static str],
+        u32,
+    );
+    let cases: [Case; 5] = [
+        (
+            "a pause of no time",
+            vec![to(50.0, 50.0), down(), pause(0), up()],
+            &["down", "up"],
+            5,
+        ),
+        (
+            "a move lasting 20 ms",
+            vec![
+                to(50.0, 50.0),
+                down(),
+                PointerAction::Move {
+                    to: LogicalPoint::new(70.0, 50.0),
+                    duration_ms: 20,
+                    pressure: None,
+                },
+                up(),
+            ],
+            &["down", "move", "move", "up"],
+            6,
+        ),
+        (
+            "a move lasting three frames",
+            vec![
+                to(50.0, 50.0),
+                down(),
+                PointerAction::Move {
+                    to: LogicalPoint::new(98.0, 50.0),
+                    duration_ms: 48,
+                    pressure: None,
+                },
+                up(),
+            ],
+            &["down", "move", "move", "move", "up"],
+            7,
+        ),
+        (
+            "a move to where the contact is",
+            vec![to(50.0, 50.0), down(), to(50.0, 50.0), up()],
+            &["down", "up"],
+            5,
+        ),
+        (
+            "a cancel",
+            vec![to(50.0, 50.0), down(), PointerAction::Cancel],
+            &["down", "cancel"],
+            4,
+        ),
+    ];
+    for (case, actions, expected, expected_frames) in cases {
+        let (mut host, _agent, window, seen) = shown();
+        let lease = window
+            .input_lease()
+            .expect("an open window leases its input");
+        let mut played = inject(&lease, vec![pointer(actions)]);
+        let (outcome, frames) = answered(&mut host, &mut played, 20);
+        outcome.unwrap_or_else(|error| panic!("{case}: {error:?}"));
+        assert_eq!(*seen.lock(), expected, "{case}");
+        assert_eq!(
+            frames, expected_frames,
+            "{case}: the frame it was answered at"
+        );
+    }
+}
+
+/// Whether `host`'s list names a cause only a frame clears.
+fn owes_a_frame(host: &mut HeadlessHost) -> bool {
+    host.unsettled()
+        .causes()
+        .any(|cause| cause.cleared_by == flui_protocol::wait::ClearedBy::NextFrame)
+}
+
+/// A window at a slower cadence than the plan's step plays a timed move's steps due by each
+/// boundary at once, and the tick that ends at a boundary where it delivered keeps that boundary:
+/// the lift goes out at the next one. At 30 ms frames a 20 ms move's two steps go out at the
+/// boundary after it starts, which it ends at, and the lift at the one after.
+#[test]
+fn a_tick_that_delivers_at_its_last_boundary_keeps_it() {
+    let (mut host, _agent, window, seen) = shown();
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    let mut played = inject(
+        &lease,
+        vec![pointer(vec![
+            to(50.0, 50.0),
+            down(),
+            PointerAction::Move {
+                to: LogicalPoint::new(70.0, 50.0),
+                duration_ms: 20,
+                pressure: None,
+            },
+            up(),
+        ])],
+    );
+    let mut frames = 0;
+    let outcome = loop {
+        frames += 1;
+        assert!(frames <= 20, "answered within 20 frames");
+        let _ = host.pump(Duration::from_millis(30));
+        if let Some(answer) = played.try_take() {
+            break answer;
+        }
+    };
+    outcome.expect("the move plays");
+    assert_eq!(*seen.lock(), ["down", "move", "move", "up"]);
+    assert_eq!(frames, 6, "the frame it was answered at");
+}
+
+/// A window keeps at most 64 jobs of injected input: past them an injection and a release are
+/// refused `busy`, answered at once.
+#[test]
+fn a_full_input_queue_refuses_an_injection_and_a_release() {
+    let (mut host, _agent, window, _seen) = shown();
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    let _queued: Vec<AgentAnswer<ActOutcome>> = (0..64)
+        .map(|_| inject(&lease, vec![pointer(vec![pause(60_000)])]))
+        .collect();
+    let mut injection = inject(&lease, vec![pointer(vec![pause(1)])]);
+    let mut released = release(&lease);
+    let _ = host.pump(Duration::ZERO);
+    let refused = injection
+        .try_take()
+        .expect("answered at the drain")
+        .expect_err("the queue is full");
+    assert_eq!(refused.code, ErrorCode::Busy, "{refused:?}");
+    let refused = released
+        .try_take()
+        .expect("answered at the drain")
+        .expect_err("the queue is full");
+    assert_eq!(refused.code, ErrorCode::Busy, "{refused:?}");
+}
+
+/// A window keeps at most twice one plan's bound of planned inputs queued, a move's steps each
+/// counted: with two injections of `MAX_INPUTS` move steps each queued, one more input is refused
+/// `busy`, answered at once, however few jobs are queued.
+#[test]
+fn a_window_refuses_input_past_the_inputs_its_queue_holds() {
+    let (mut host, _agent, window, _seen) = shown();
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    // 32 moves of 1024 steps on each of two sources: `MAX_INPUTS` inputs, within the span.
+    let full = || {
+        ["a", "b"]
+            .iter()
+            .map(|id| InputSource::Pointer {
+                id: (*id).to_owned(),
+                device: PointerDevice::Mouse,
+                actions: vec![
+                    PointerAction::Move {
+                        to: LogicalPoint::new(10.0, 10.0),
+                        duration_ms: 16_384,
+                        pressure: None,
+                    };
+                    flui_protocol::input::MAX_INPUTS / 2 / 1024
+                ],
+            })
+            .collect::<Vec<InputSource>>()
+    };
+    let mut first = inject(&lease, full());
+    let mut second = inject(&lease, full());
+    let mut third = inject(&lease, vec![pointer(vec![to(5.0, 5.0)])]);
+    let _ = host.pump(Duration::ZERO);
+    assert!(first.try_take().is_none(), "the first plan is queued");
+    assert!(second.try_take().is_none(), "the second plan is queued");
+    let refused = third
+        .try_take()
+        .expect("answered at the drain")
+        .expect_err("the queue holds its inputs' bound");
+    assert_eq!(refused.code, ErrorCode::Busy, "{refused:?}");
+}
+
+/// The window asks for the frame its queued input needs: a release, played by the turn that
+/// queues it, and an
+/// injection between its ticks, until the answer comes.
+#[test]
+fn queued_input_asks_for_the_frames_it_needs() {
+    let (mut host, _agent, window, _seen) = shown();
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    for _ in 0..3 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    let mut released = release(&lease);
+    // The frame the release asks for is drawn by the turn that queues it.
+    let _ = host.pump(Duration::ZERO);
+    released
+        .try_take()
+        .expect("the release asked for the frame that plays it")
+        .expect("the release runs");
+    let mut press = inject(
+        &lease,
+        vec![pointer(vec![to(50.0, 50.0), down(), pause(100), up()])],
+    );
+    let _ = host.pump(Duration::ZERO);
+    for frame in 1..=20 {
+        if press.try_take().is_some() {
+            return;
+        }
+        assert!(
+            owes_a_frame(&mut host),
+            "frame {frame}: the injection asks for the next"
+        );
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    panic!("the press is answered within 20 frames");
+}
+
+/// A queued release asks for the frame that plays it: once served on a turn without a frame, the
+/// runtime owes its window a frame.
+#[test]
+fn a_queued_release_asks_for_the_frame_that_plays_it() {
+    let mut rig = crate::agent_rig::Rig::showing(&flui_widgets::Text::new("Still"));
+    let owes_a_frame = |rig: &crate::agent_rig::Rig| {
+        let now = flui_foundation::MonotonicClock::now(&rig.clock);
+        let mut unsettled = flui_runtime::settledness::Unsettled::new(now);
+        rig.runtime.unsettled(&mut unsettled);
+        unsettled
+            .causes()
+            .any(|cause| cause.cleared_by == flui_protocol::wait::ClearedBy::NextFrame)
+    };
+    assert!(!owes_a_frame(&rig), "a still window owes no frame");
+    let mut released = rig
+        .lease
+        .call::<InputRelease>(WindowParams::new(rig.window.id()))
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    assert!(owes_a_frame(&rig), "the queued release asks for its frame");
+    rig.frame();
+    released
+        .try_take()
+        .expect("played at the frame it asked for")
+        .expect("the release runs");
 }

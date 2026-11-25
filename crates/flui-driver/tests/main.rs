@@ -16,6 +16,7 @@ mod connection;
 mod coordinates;
 mod failure_matrix;
 mod fixtures;
+mod gesture_conformance;
 #[cfg(unix)]
 mod ios_simulator;
 #[cfg(unix)]

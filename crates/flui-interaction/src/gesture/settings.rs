@@ -951,6 +951,28 @@ impl GestureSettings {
         }
     }
 
+    /// The slowest and the fastest release of a `kind` pointer that flings, in
+    /// px/s: a slower release is no fling, a faster one is reported at the
+    /// fastest.
+    ///
+    /// A touch contact takes the range the host observed where it reports one;
+    /// every other kind, and a touch without it, the authored
+    /// [`Self::min_fling_velocity`] and [`Self::max_fling_velocity`].
+    #[must_use]
+    pub fn fling_velocity_range_for(&self, kind: PointerKind) -> (f64, f64) {
+        let authored = (
+            self.values.min_fling_velocity,
+            self.values.max_fling_velocity,
+        );
+        if kind == PointerKind::Touch {
+            self.native
+                .touch_fling
+                .map_or(authored, |speeds| (speeds.min(), speeds.max()))
+        } else {
+            authored
+        }
+    }
+
     pub(crate) fn double_tap_uses_down_time(&self, kind: PointerKind) -> bool {
         kind == PointerKind::Mouse && self.native.mouse_interval.is_some()
     }
@@ -960,20 +982,7 @@ impl GestureSettings {
         kind: PointerKind,
         velocity: crate::gesture::Velocity,
     ) -> crate::gesture::Velocity {
-        let (min, max) = if kind == PointerKind::Touch {
-            self.native.touch_fling.map_or(
-                (
-                    self.values.min_fling_velocity,
-                    self.values.max_fling_velocity,
-                ),
-                |speeds| (speeds.min(), speeds.max()),
-            )
-        } else {
-            (
-                self.values.min_fling_velocity,
-                self.values.max_fling_velocity,
-            )
-        };
+        let (min, max) = self.fling_velocity_range_for(kind);
         if velocity.magnitude() < min {
             crate::gesture::Velocity::ZERO
         } else {

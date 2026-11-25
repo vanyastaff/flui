@@ -1181,8 +1181,10 @@ Anything else is built per device — `TouchScript`, `MouseScript`, `PenScript`,
 down and never came up. A `frame()` step is a frame, so a script states which
 events share one. `HeadlessHost::run_script` delivers a script to a UI runtime,
 `HeadlessHost::find_center` finds its target by semantics role and label, and
-`HeadlessHost::pump_until_settled` runs frames until nothing is left to do,
-bounded by a frame limit.
+`HeadlessHost::pump_until_settled` runs frames until the host's list of what keeps the
+application from being idle (`HeadlessHost::unsettled`, ADR-0400 §3) names no cause, bounded by a
+frame limit; `time_to_next_frame` is that list's wake, and the agent's `wait.settled` is answered
+from the same list.
 
 ### Input recordings
 

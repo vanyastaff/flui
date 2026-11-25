@@ -4,11 +4,12 @@
 
 use std::fmt;
 use std::num::NonZeroU32;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use flui_foundation::generation::Generation;
-use flui_foundation::{PresentationId, UiRuntimeId};
+use flui_foundation::{PresentationAddress, PresentationId, UiRuntimeId};
 use flui_painting::{FontCollection, TextContext};
 use flui_platform::transfer::data::{DragTransport, NullDragTransport};
 use flui_platform::transfer::drag::ProcessNonce;
@@ -34,6 +35,8 @@ pub struct RuntimeHostServices<'a> {
     pub(crate) process_nonce: ProcessNonce,
     pub(crate) flush_registry: Option<FlushRegistry>,
     pub(crate) close_vetoes: Vec<CloseReason>,
+    pub(crate) composes_host_half: bool,
+    pub(crate) floor_owed: Option<Rc<dyn Fn(PresentationAddress) -> bool>>,
 }
 
 impl fmt::Debug for RuntimeHostServices<'_> {
@@ -77,6 +80,8 @@ impl<'a> RuntimeHostServices<'a> {
             process_nonce: ProcessNonce::mint(),
             flush_registry: None,
             close_vetoes: Vec::new(),
+            composes_host_half: false,
+            floor_owed: None,
         }
     }
 
@@ -128,6 +133,36 @@ impl<'a> RuntimeHostServices<'a> {
         self
     }
 
+    /// The host gathers its half of what keeps the application from being idle and hands the
+    /// whole list to [`UiRuntime::answer_settled`](crate::ui_runtime::UiRuntime::answer_settled)
+    /// after every turn (ADR-0400 §3): only that call answers a wait that reads settledness, a
+    /// wait's timeout and the idle end, and every answer counts both halves
+    /// (`SettleScope::Complete`). Without it the runtime answers them itself at the end of each
+    /// turn from its half alone, never idle (`SettleScope::RuntimeOnly`). Fixed for the
+    /// runtime's lifetime.
+    #[must_use]
+    pub fn composes_host_half(mut self) -> Self {
+        self.composes_host_half = true;
+        self
+    }
+
+    /// Whether the host owes the in-flight floor of a presentation, by its address (ADR-0305
+    /// §5): `false` where its raster side has settled every frame it holds of that window and
+    /// asked the window for the frame that drains them, which the window's own host delivers.
+    /// The runtime's wake ([`UiRuntime::next_wake`](crate::ui_runtime::UiRuntime::next_wake))
+    /// and its half of what keeps the application from being idle
+    /// ([`UiRuntime::unsettled`](crate::ui_runtime::UiRuntime::unsettled)) both read it, so the
+    /// two cannot disagree. Called on the owner thread, reading the host's own state only.
+    /// Without it every floor is owed.
+    #[must_use]
+    pub fn with_floor_owed(
+        mut self,
+        floor_owed: impl Fn(PresentationAddress) -> bool + 'static,
+    ) -> Self {
+        self.floor_owed = Some(Rc::new(floor_owed));
+        self
+    }
+
     /// Seed this runtime from the same host's latest accepted observation.
     /// First root construction observes this revision; queued older revisions
     /// cannot replace it after the runtime is installed.
@@ -173,6 +208,10 @@ pub(crate) struct RuntimeServices {
     pub(crate) process_nonce: ProcessNonce,
     /// What every presentation closes and persists through.
     pub(crate) close: CloseServices,
+    /// Whether the host answers settledness ([`RuntimeHostServices::composes_host_half`]).
+    pub(crate) composes_host_half: bool,
+    /// Which in-flight floors the host owes ([`RuntimeHostServices::with_floor_owed`]).
+    pub(crate) floor_owed: Option<Rc<dyn Fn(PresentationAddress) -> bool>>,
 }
 
 impl RuntimeServices {
@@ -195,6 +234,8 @@ impl RuntimeServices {
             process_nonce,
             flush_registry,
             close_vetoes,
+            composes_host_half,
+            floor_owed,
         } = host;
         let close = CloseServices::new(flush_registry, &close_vetoes, Arc::clone(&wake));
         // Frame times come from `clock`, so the scheduler measures frames on it.
@@ -214,6 +255,8 @@ impl RuntimeServices {
             data_transfer,
             process_nonce,
             close,
+            composes_host_half,
+            floor_owed,
         }
     }
 }

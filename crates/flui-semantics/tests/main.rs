@@ -11,6 +11,8 @@ mod actionability;
 mod announce;
 #[path = "assistive_focus.rs"]
 mod assistive_focus;
+#[path = "audit.rs"]
+mod audit;
 #[path = "delta.rs"]
 mod delta;
 #[path = "fixture.rs"]

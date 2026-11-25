@@ -400,6 +400,14 @@ pub(super) fn build_lending_ui_runtime(
         host = host.with_flush_registry(registry);
     }
     host = host.with_close_vetoes(&close_vetoes());
+    // The loop's rule for the in-flight floors it owes, which its wake reads
+    // (`AppRuntime::next_wake`): the runtime's half of what keeps the
+    // application from being idle reads the same one.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let raster_host = APP_RUNTIME.with(|slot| slot.borrow().raster_host.clone());
+        host = host.with_floor_owed(move |address| raster_host.floor_owed(address));
+    }
     if let Some(transfer) = APP_RUNTIME.with(|slot| slot.borrow().data_transfer()) {
         host = host
             .with_data_transfer(transfer.source)

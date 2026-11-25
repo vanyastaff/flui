@@ -1,6 +1,7 @@
 //! The UI runtime's frame transaction (ADR-0083 §1): the one entry a host drives a
 //! frame through, and the background wake that runs no frame.
 
+use super::agent_held::Frameless;
 use super::{DrainReport, UiRuntime};
 use crate::pump::{FrameClockSource, FrameOutcome};
 use crate::sink::FrameSink;
@@ -237,6 +238,11 @@ impl UiRuntime {
         paid.contain(|| {
             self.enter(UiRuntime::pay_owed_anchor);
         });
+        // The frames the development agent asked for are this one: what it still needs it asks
+        // again at this frame's boundary (`Self::request_agent_frame_for`).
+        for presentation in self.presentations.iter() {
+            presentation.agent_frame_asked.set(false);
+        }
         let sampled = clock.frame_time();
         let pending = self.pending_frame_request();
         let request = pending.map(|(request, _)| request);
@@ -327,7 +333,7 @@ impl UiRuntime {
                     .owner_frame
                     .pump_background(|| {
                         turn = Some(ui_runtime.begin_geometry_turn());
-                        ui_runtime.drain_owner_inbox();
+                        ui_runtime.drain_inbox(Frameless::NoFrame);
                     })
                     .expect("BUG: the runtime's live frame owner must admit its background turn");
             });
@@ -348,7 +354,16 @@ impl UiRuntime {
     /// seen by the very wake it produced — and before any early return the
     /// wake takes. Draining on every wake is what keeps the bounded inbox
     /// from filling; the coalesced redraw request is consumed here.
+    ///
+    /// The wake's frame, when a window draws, comes after this drain: the development agent's
+    /// overdue obligations in such a window are that frame's to answer, and this drain answers
+    /// only those of a window that draws no frame ([`Frameless::BeforeFrame`]).
     pub fn drain_owner_inbox(&self) -> bool {
+        self.drain_inbox(Frameless::BeforeFrame)
+    }
+
+    /// [`Self::drain_owner_inbox`], ahead of what `frameless` says follows it.
+    fn drain_inbox(&self, frameless: Frameless) -> bool {
         let turn = self.begin_geometry_turn();
         // The owed anchor first; the inbox drains even if it fails, so the
         // bounded inbox never fills behind a failing grant.
@@ -363,9 +378,9 @@ impl UiRuntime {
                 tracing::trace!(?report, "owner inbox drained");
             }
             self.service_gesture_geometry(&turn);
-            // A wake at an agent wait's deadline may run no frame: the wait still ends.
+            // A turn that runs no frame can still make a wait's condition hold.
             if let Some(agent) = self.agent_side.get() {
-                agent.after_turn(self);
+                agent.after_turn(self, frameless);
             }
             self.take_redraw_request()
         });
@@ -450,6 +465,11 @@ impl UiRuntime {
                 self.deliver_sampling_reports_if_unleased();
             });
         }
+        // A host that composes no half of its own has its settled waits answered where its
+        // outermost turn ends: here when this turn was it, otherwise where the enclosing turn
+        // or owner dispatch ends (ADR-0400 §3). An answer pass can unwind, behind the turn's
+        // own failure.
+        first.contain(|| self.answer_settled_from_own_half());
         if let Some(failure) = first.into_payload() {
             resume_unwind(failure);
         }

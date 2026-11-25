@@ -317,11 +317,12 @@ fn only_an_act_or_a_destructive_call_changes_the_app() {
 }
 
 /// A gesture is the agent's on the synthetic and semantic paths (ADR-0400 §2): every acting
-/// `element.*` row is a window method, and what the window may hold it for is its act timeout,
-/// which the conversation counts in the reply's deadline (ADR-0288 §4).
+/// `element.*` row is a window method, and what the window may hold it for is its act timeout and
+/// then the time its input takes to play, which the conversation counts in the reply's deadline
+/// (ADR-0288 §4).
 #[cfg(feature = "serde")]
 #[test]
-fn every_gesture_is_a_window_method_held_for_its_act_timeout() {
+fn every_gesture_is_a_window_method_held_for_its_act_timeout_and_its_play() {
     use std::time::Duration;
 
     use flui_protocol::{
@@ -381,16 +382,19 @@ fn every_gesture_is_a_window_method_held_for_its_act_timeout() {
     ));
     let mut tap = TapParams::new(element);
     assert_eq!(tap.window(), Some(window));
+    // The parameters of a tap are a double tap's too, whose input plays the longer: six ticks of
+    // a frame each, and the 60 ms gap between its taps.
+    let double_tap_plays = Duration::from_millis(6 * 16 + 60);
     assert_eq!(
         tap.holds_for(),
-        Duration::from_millis(GestureOptions::DEFAULT_TIMEOUT_MS),
-        "an act that names no timeout holds for the default"
+        Duration::from_millis(GestureOptions::DEFAULT_TIMEOUT_MS) + double_tap_plays,
+        "an act that names no timeout holds for the default, then plays"
     );
     tap.options.timeout_ms = Some(u64::MAX);
     assert_eq!(
         tap.holds_for(),
-        Duration::from_millis(GestureOptions::MAX_TIMEOUT_MS),
-        "an act holds for a day at most"
+        Duration::from_millis(GestureOptions::MAX_TIMEOUT_MS) + double_tap_plays,
+        "an act holds out for a day at most, then plays"
     );
     assert_eq!(
         tap.options.named_timeout_ms(),
@@ -417,8 +421,8 @@ fn every_gesture_is_a_window_method_held_for_its_act_timeout() {
     .expect("a long press reads");
     assert_eq!(
         long_press.holds_for(),
-        Duration::from_millis(1_800),
-        "a long press holds for its timeout and then its press"
+        Duration::from_millis(1_000 + 800 + 4 * 16),
+        "a long press holds for its timeout, then its press and a frame for each of its ticks"
     );
     let keys: PressKeysParams = serde_json::from_value(serde_json::json!({
         "window": "w3",
@@ -432,4 +436,215 @@ fn every_gesture_is_a_window_method_held_for_its_act_timeout() {
     }))
     .expect("a drag reads");
     assert_eq!(drag.window(), Some(window));
+}
+
+/// Each gesture's parameters hold the request for the act's timeout and then for what its input
+/// takes to play, from the parameters alone: a long press for the duration it names, a swipe
+/// that names no distance for the longest stroke, a swipe that names one for that stroke, a
+/// pinch, a drag, typing and keys after their focusing tap, a scroll step after its timeout, and
+/// a semantics action for its timeout alone.
+#[cfg(feature = "serde")]
+#[test]
+fn each_gesture_holds_for_its_timeout_and_the_input_its_parameters_play() {
+    use std::time::Duration;
+
+    use flui_protocol::geometry::LogicalPoint;
+    use flui_protocol::input::gestures::{self, Aim};
+    use flui_protocol::input::{
+        ActionSequence, Direction, DragParams, InputSource, LongPressParams, PinchParams,
+        PointerAction, PointerButton, PointerDevice, PressKeysParams, ScrollIntoViewParams,
+        ScrollUntilParams, SwipeParams, TypeTextParams,
+    };
+    use flui_protocol::method::Addressed;
+
+    /// How long parameters of `$params` read from `$json` hold the request.
+    macro_rules! holds {
+        ($params:ty, $json:expr) => {
+            serde_json::from_value::<$params>($json)
+                .expect("the parameters read")
+                .holds_for()
+        };
+    }
+    let origin = LogicalPoint::new(0.0, 0.0);
+    let timeout = Duration::from_millis(1_000);
+    let target = serde_json::json!({ "element": "w3/e9" });
+    // A swipe whose move lasts `stroke_ms`, with its stillness before it lifts.
+    let swipe = |stroke_ms: u64| {
+        ActionSequence::new(vec![InputSource::Pointer {
+            id: "s".to_owned(),
+            device: PointerDevice::Touch,
+            actions: vec![
+                PointerAction::Move {
+                    to: origin,
+                    duration_ms: 0,
+                    pressure: None,
+                },
+                PointerAction::Down {
+                    button: PointerButton::Primary,
+                    pressure: None,
+                },
+                PointerAction::Move {
+                    to: origin,
+                    duration_ms: stroke_ms,
+                    pressure: None,
+                },
+                PointerAction::Pause {
+                    duration_ms: gestures::SWIPE_SETTLE_MS,
+                },
+                PointerAction::Up {
+                    button: PointerButton::Primary,
+                },
+            ],
+        }])
+        .plays_within()
+    };
+    let tap = gestures::tap(
+        origin,
+        PointerButton::Primary,
+        &gestures::Defaults::WINDOWLESS,
+    )
+    .plays_within();
+    let rows: [(&str, Duration, Duration); 11] = [
+        (
+            "a long press naming no duration: the longest a window may choose",
+            holds!(
+                LongPressParams,
+                serde_json::json!({ "target": target, "timeout_ms": 1_000 })
+            ),
+            gestures::long_press(
+                origin,
+                Some(gestures::Defaults::LONGEST_LONG_PRESS_MS),
+                &gestures::Defaults::WINDOWLESS,
+            )
+            .plays_within(),
+        ),
+        (
+            "a long press of 5 s",
+            holds!(
+                LongPressParams,
+                serde_json::json!({
+                    "target": target, "duration_ms": 5_000, "timeout_ms": 1_000,
+                })
+            ),
+            gestures::long_press(origin, Some(5_000), &gestures::Defaults::WINDOWLESS)
+                .plays_within(),
+        ),
+        (
+            "a swipe that names no distance",
+            holds!(
+                SwipeParams,
+                serde_json::json!({
+                    "target": target, "direction": "up", "timeout_ms": 1_000,
+                })
+            ),
+            swipe(10_000),
+        ),
+        (
+            "a swipe of 500 px at 1000 px/s",
+            holds!(
+                SwipeParams,
+                serde_json::json!({
+                    "target": target, "direction": "up", "distance": 500.0, "velocity": 1_000.0,
+                    "timeout_ms": 1_000,
+                })
+            ),
+            swipe(500),
+        ),
+        (
+            "a swipe whose distance goes nowhere",
+            holds!(
+                SwipeParams,
+                serde_json::json!({
+                    "target": target, "direction": "up", "distance": -1.0, "velocity": 1_000.0,
+                    "timeout_ms": 1_000,
+                })
+            ),
+            swipe(0),
+        ),
+        (
+            "a pinch",
+            holds!(
+                PinchParams,
+                serde_json::json!({
+                    "target": target, "scale": 2.0, "timeout_ms": 1_000,
+                })
+            ),
+            gestures::pinch(Aim::new(origin, None), 2.0)
+                .expect("a pinch")
+                .plays_within(),
+        ),
+        (
+            "a drag",
+            holds!(
+                DragParams,
+                serde_json::json!({
+                    "target": target, "to": target, "timeout_ms": 1_000,
+                })
+            ),
+            gestures::drag(
+                origin,
+                flui_protocol::geometry::LogicalPoint::new(100.0, 0.0),
+                &gestures::Defaults::WINDOWLESS,
+            )
+            .expect("a drag past the slop")
+            .plays_within(),
+        ),
+        (
+            "typing",
+            holds!(
+                TypeTextParams,
+                serde_json::json!({
+                    "target": target, "text": "hello", "timeout_ms": 1_000,
+                })
+            ),
+            tap + gestures::text("hello").plays_within(),
+        ),
+        (
+            "keys on a target",
+            holds!(
+                PressKeysParams,
+                serde_json::json!({
+                    "target": target, "keys": ["Control+a", "Enter"], "timeout_ms": 1_000,
+                })
+            ),
+            tap + gestures::chords(&["Control+a".to_owned(), "Enter".to_owned()])
+                .expect("two chords")
+                .plays_within(),
+        ),
+        (
+            "a scroll into view",
+            holds!(
+                ScrollIntoViewParams,
+                serde_json::json!({
+                    "target": target, "timeout_ms": 1_000,
+                })
+            ),
+            Duration::ZERO,
+        ),
+        (
+            "a scroll until",
+            holds!(
+                ScrollUntilParams,
+                serde_json::json!({
+                    "target": target, "until": { "root": true }, "timeout_ms": 1_000,
+                })
+            ),
+            gestures::scroll(origin, Direction::Down, 1.0).plays_within(),
+        ),
+    ];
+    for (case, held, plays) in rows {
+        assert_eq!(held, timeout + plays, "{case}");
+    }
+    assert!(
+        rows[1].1 >= timeout + Duration::from_millis(5_000),
+        "a long press holds for the press it names"
+    );
+    assert!(
+        rows[2].1 >= timeout + Duration::from_millis(10_000 + gestures::SWIPE_SETTLE_MS),
+        "a swipe with no distance holds for the longest stroke"
+    );
+    assert!(
+        rows[0].1 >= timeout + Duration::from_millis(gestures::Defaults::LONGEST_LONG_PRESS_MS),
+        "a long press naming no duration holds for the longest press a window may choose"
+    );
 }

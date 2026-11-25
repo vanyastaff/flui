@@ -324,6 +324,8 @@ mod scenario;
 mod scripts;
 #[path = "self_rescheduling_local_post_frame.rs"]
 mod self_rescheduling_local_post_frame;
+#[path = "settledness.rs"]
+mod settledness;
 #[path = "tester.rs"]
 mod tester;
 #[path = "text_store_kit.rs"]

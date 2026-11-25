@@ -105,6 +105,7 @@ fn facts(
     f.owner
         .actionability_wire(target, point, previous, hit, placement())
         .expect("the tree reads")
+        .facts
 }
 
 fn ids(indices: &[u32]) -> Vec<RenderId> {

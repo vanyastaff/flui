@@ -324,8 +324,9 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 - **R37.** The driver measures performance from the app's frame events and input journal over a
   marked span (`perf.start` … `perf.stop`):
   - frame times: p50, p90, p95, p99 and the worst frame;
-  - **dropped** frames, a missed present deadline, kept separate from **janky** frames, whose work
-    exceeded a multiple of the refresh period (default 2×, JankStats' default, configurable);
+  - **dropped** frames, a missed present deadline, and **janky** frames, the dropped frames whose work
+    also exceeded a multiple of the refresh period (default 2×, JankStats' default, configurable),
+    reported in their own count and included in the dropped one;
   - input-to-present latency: from an input's journal timestamp to the presentation of the first
     frame that consumed it, split into input delay, processing and presentation delay (INP's three
     phases);
@@ -408,8 +409,8 @@ of guessing from pixels.
   - clipped, ellipsized or overflowing text;
   - content outside the window or the safe area;
   - text contrast below WCAG 2.2 AA: 4.5, or 3 for large text. Large text is 24 logical px, or
-    18.66 logical px bold (WCAG's 18 pt and 14 pt, with a logical px taken as a CSS px). A 0.01
-    ratio tolerance absorbs rounding, as in Flutter and ATF. Disabled controls are skipped and
+    18.66 logical px bold (WCAG's 18 pt and 14 pt, with a logical px taken as a CSS px). The
+    ratio is compared exactly, since the colours come from the scene. Disabled controls are skipped and
     listed under `not_checked`. Non-text contrast (WCAG 1.4.11, 3:1 for control boundaries and
     focus indicators) is an optional rule;
   - interactive targets below the minimum size, shared with R38;
@@ -417,8 +418,8 @@ of guessing from pixels.
 
   Each finding carries the node refs, the measured numbers, the rule and an **outcome**: `error`,
   `warning`, `needs_review` or `suppressed`, as in ATF's result types and axe's "incomplete".
-  `needs_review` is where judgement-dependent results land: a contrast whose background was
-  sampled from pixels, or a ratio within the tolerance band. A waived finding is reported as
+  `needs_review` is where judgement-dependent results land, such as a near-miss pair in a wrap
+  that reflows; a text whose background the scene does not determine is not checked. A waived finding is reported as
   `suppressed` with its reason, never dropped. The thresholds are configurable per app, and an app
   can waive a finding on a node by identifier and rule, with a reason.
 - **R41a.** **`audit.text_scale`** re-lays out a window at larger text scales (default 1.0, 1.5
@@ -708,7 +709,7 @@ corrected three draft errors:
 It also added, from shipped tools:
 - finding outcomes (`needs_review`, `suppressed`) and a text-scale audit (R41, R41a);
 - partial layout templates and Playwright's update modes (R22, R42);
-- dropped and janky frames kept separate, with INP's phases and iteration rules (R37, R37a);
+- dropped and janky frames reported apart, with INP's phases and iteration rules (R37, R37a);
 - token budgets and narrowing hints for agents (R15, R16, R28a);
 - Windows isolation candidates that must pass a spike (R14b);
 - the honest limit of the activity guard (R14a);

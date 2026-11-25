@@ -1,19 +1,21 @@
-//! An agent's waits (ADR-0238 §7, R18): conditions the owner holds out for, evaluated after
-//! frames and never polled.
+//! An agent's waits (ADR-0238 §7, ADR-0400 §3): conditions the owner holds out for, evaluated
+//! after frames and never polled.
 //!
-//! A wait is parked on its presentation. It is evaluated when it arrives (a condition that
-//! already holds answers at once), after each frame the owner presents, and when its deadline
-//! passes. The deadline is on the presentation's own clock, so a manual clock expires it
-//! deterministically, and it joins [`UiRuntime::next_wake`] so a window that draws nothing still
-//! times out. A timeout is an answer (`unsatisfied`, with the last observation and why the
-//! window had not settled), not an error.
+//! A wait is parked on its presentation. One whose condition holds without reading settledness
+//! is evaluated when it arrives (a condition that already holds answers at once) and after each
+//! frame and owner turn. Everything that reads what keeps the application from being idle is
+//! answered from the host's list after its turn ([`UiRuntime::answer_settled`]): a condition
+//! containing `Settled`, every wait's timeout and the idle end. The deadline is on the
+//! presentation's own clock, so a manual clock expires it deterministically, and it is a wake of
+//! the list ([`Unsettled::wake_at`]) so a window that draws nothing still times out. A timeout is
+//! an answer (`unsatisfied`, with the last observation and why the window had not settled), not
+//! an error.
 
-use std::panic::resume_unwind;
 use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
-    tree::WindowId, wait::ClearedBy, wait::Condition, wait::UnsettledCause, wait::UnsettledReason,
+    tree::WindowId, wait::ClearedBy, wait::Condition, wait::SettleScope, wait::UnsettledCause,
     wait::WaitEnd, wait::WaitOutcome, wait::WaitParams,
 };
 use flui_semantics::{EventSet, Placement, WaitFacts, counts_frames};
@@ -21,7 +23,9 @@ use web_time::Instant;
 
 use super::UiRuntime;
 use super::agent::{AgentError, ReplySender, send_reply};
+use super::agent_serve::PanicAnswer;
 use crate::presentation::PresentationState;
+use crate::settledness::{TURNS_AT_ONE_INSTANT, Unsettled};
 
 /// The most waits one presentation holds at once. A wait past it is refused with
 /// [`AgentError::TooManyWaits`], never dropped silently or in place of an older one.
@@ -31,12 +35,17 @@ pub(crate) const MAX_PARKED_WAITS: usize = 256;
 /// Owner thread only.
 pub(crate) struct PendingWait {
     condition: Condition,
+    /// Whether the answer reads settledness: the condition contains `Settled`.
+    reads_settled: bool,
     /// Frames the owner presented since the wait began.
     frames: u64,
     /// The kinds of event the window emitted since the wait began.
     events: EventSet,
     /// On the presentation's clock.
     deadline: Instant,
+    /// The instant of the last answer pass that saw this wait, and how many passes saw it at that
+    /// instant.
+    turns: Option<(Instant, u32)>,
     reply: ReplySender<WaitOutcome>,
 }
 
@@ -60,28 +69,65 @@ impl PendingWait {
     pub(crate) fn deadline(&self) -> Instant {
         self.deadline
     }
+
+    /// Counts an answer pass at `now`; whether the wait has now been seen
+    /// [`TURNS_AT_ONE_INSTANT`] times at one instant.
+    fn count_turn(&mut self, now: Instant) -> bool {
+        let seen = match self.turns {
+            Some((at, seen)) if at == now => seen.saturating_add(1),
+            _ => 1,
+        };
+        self.turns = Some((now, seen));
+        seen >= TURNS_AT_ONE_INSTANT
+    }
+}
+
+/// What an evaluation of a parked wait may answer.
+#[derive(Clone, Copy)]
+enum Answering<'a> {
+    /// A frame's or a turn's end: only a condition that holds without reading settledness ends
+    /// the wait, and only by holding.
+    Holds,
+    /// The host's list after its turn: any wait may end, by holding, idle, by its deadline or by
+    /// the turn bound.
+    Settled {
+        unsettled: &'a Unsettled,
+        scope: SettleScope,
+        /// Every cause listed, in any window, is one only the test discharges, and the host's
+        /// half is counted.
+        idle: bool,
+    },
 }
 
 impl UiRuntime {
-    /// The owner half of `wait.until`: evaluates the condition against what the window has
-    /// committed, and parks the wait when it does not hold yet.
+    /// The owner half of `wait.until`, `wait.settled` and `wait.frames`: evaluates a condition
+    /// that does not read settledness against what the window has committed, and parks the wait
+    /// when it does not hold yet. A condition that reads settledness is parked for the host's list.
+    ///
+    /// The frames a wait counts are asked for before it is parked: the wake reaches the platform,
+    /// user code, and one that panics has parked nothing, so the serving turn answers `if_panics`
+    /// and nothing answers the wait again.
     pub(super) fn park_agent_wait(
         &self,
         state: &PresentationState,
         params: WaitParams,
         reply: ReplySender<WaitOutcome>,
+        if_panics: &PanicAnswer,
     ) {
         let timeout = Duration::from_millis(params.effective_timeout_ms());
         let now = state.clock().now();
+        let reads_settled = reads_settled(&params.condition);
         let pending = PendingWait {
             condition: params.condition,
+            reads_settled,
             frames: 0,
             events: EventSet::EMPTY,
             deadline: now.checked_add(timeout).unwrap_or(now),
+            turns: None,
             reply,
         };
         // A condition that holds already, or a tree that cannot be read, answers here.
-        let Some(pending) = self.settle_wait(state, pending, now) else {
+        let Some(pending) = self.settle_wait(state, pending, now, Answering::Holds) else {
             return;
         };
         // Waits nobody takes any more hold no place against the limit.
@@ -94,18 +140,39 @@ impl UiRuntime {
             send_reply(&pending.reply, None, Err(AgentError::TooManyWaits));
             return;
         }
-        let keeps_frames_coming = counts_frames(&pending.condition);
-        state.agent_waits.borrow_mut().push(pending);
-        if keeps_frames_coming {
-            self.request_redraw_for(state);
+        if counts_frames(&pending.condition) {
+            if_panics.set(AgentError::Panicked);
+            self.request_agent_frame_for(state);
         }
+        state.agent_waits.borrow_mut().push(pending);
     }
 
-    /// Evaluates every parked wait: after the owner presented a frame (`frame`, which also counts
-    /// that frame for `Frames`), and at each owner wake that ran none, so a deadline or a timer
-    /// that ran out is seen. A condition that is pure code and panics answers its own wait
+    /// Evaluates every parked wait whose condition holds without reading settledness: after the
+    /// owner presented a frame (`frame`, which also counts that frame for every wait), and at each
+    /// owner wake that ran none. A condition that is pure code and panics answers its own wait
     /// `platform`, and the panic continues once the rest are put back.
     pub(crate) fn evaluate_agent_waits(&self, frame: bool) {
+        self.evaluate_parked_waits(frame, Answering::Holds);
+    }
+
+    /// Answers every parked wait from the host's list (ADR-0400 §3), each at its presentation's
+    /// clock reading: see [`UiRuntime::answer_settled`].
+    pub(crate) fn answer_settled_agent_waits(&self, unsettled: &Unsettled, scope: SettleScope) {
+        let idle = scope == SettleScope::Complete
+            && unsettled
+                .causes()
+                .all(|cause| cause.cleared_by == ClearedBy::Test);
+        self.evaluate_parked_waits(
+            false,
+            Answering::Settled {
+                unsettled,
+                scope,
+                idle,
+            },
+        );
+    }
+
+    fn evaluate_parked_waits(&self, frame: bool, answering: Answering<'_>) {
         let mut first_panic = FirstPanic::new();
         for state in self.presentations.iter() {
             if state.agent_waits.borrow().is_empty() {
@@ -127,14 +194,16 @@ impl UiRuntime {
                 // A wait's settle runs contained so the reply is still sent; its
                 // panic joins `first_panic` after that.
                 let mut settle_failure = FirstPanic::new();
-                match settle_failure.contain(|| self.settle_wait(state, wait, now)) {
+                match settle_failure.contain(|| self.settle_wait(state, wait, now, answering)) {
                     Some(Some(wait)) => keep.push(wait),
                     Some(None) => {}
                     None => {
                         // The evaluation consumed the wait; the sender kept apart still
-                        // answers it, and the panic continues once the rest are put back.
-                        send_reply(&reply, None, Err(AgentError::Malformed));
+                        // answers it, behind the evaluation's panic, and the panic continues
+                        // once the rest are put back.
                         first_panic.absorb(settle_failure);
+                        first_panic
+                            .contain(|| send_reply(&reply, None, Err(AgentError::Malformed)));
                         keep.extend(waits);
                         break;
                     }
@@ -146,29 +215,38 @@ impl UiRuntime {
             *parked = keep;
             let keeps_frames_coming = parked.iter().any(|wait| counts_frames(&wait.condition));
             drop(parked);
+            // The wake is the platform's, user code: contained, so a wake that panics for one
+            // window leaves the next windows' waits answered and the first panic first.
             if keeps_frames_coming {
-                self.request_redraw_for(state);
+                first_panic.contain(|| self.request_agent_frame_for(state));
             }
         }
-        if let Some(payload) = first_panic.into_payload() {
-            resume_unwind(payload);
-        }
+        first_panic.resume();
     }
 
-    /// Evaluates `wait` and answers it when its condition holds, its deadline has passed
-    /// (`expire`) or its tree cannot be read; hands it back to stay parked otherwise.
+    /// Evaluates `wait` as `answering` allows and answers it when it ends (its condition holds,
+    /// the application is idle, its deadline has passed, the turn bound is reached, or its tree
+    /// cannot be read); hands it back to stay parked otherwise.
     fn settle_wait(
         &self,
         state: &PresentationState,
-        wait: PendingWait,
+        mut wait: PendingWait,
         now: Instant,
+        answering: Answering<'_>,
     ) -> Option<PendingWait> {
+        if wait.reads_settled && matches!(answering, Answering::Holds) {
+            return Some(wait);
+        }
         let window = WindowId::from_u64(state.id().as_u64())
             .expect("BUG: a presentation id packs a non-zero generation");
-        let causes = self.unsettled_causes(now);
+        let in_window = |cause: &&UnsettledCause| cause.window.is_none_or(|named| named == window);
+        let settled = match answering {
+            Answering::Holds => false,
+            Answering::Settled { unsettled, .. } => !unsettled.causes().any(|c| in_window(&c)),
+        };
         let facts = WaitFacts {
             frames: wait.frames,
-            settled: causes.is_empty(),
+            settled,
             events: wait.events,
         };
         let evaluation = state.pipeline().with(|pipeline| {
@@ -178,7 +256,7 @@ impl UiRuntime {
             })
         });
         let evaluation = match evaluation {
-            // Before the first tree the tree conditions do not hold; only frames and
+            // Before the first tree the tree conditions do not hold; only frames, events and
             // settledness can.
             None => None,
             Some(Ok(evaluation)) => Some(evaluation),
@@ -191,64 +269,53 @@ impl UiRuntime {
             || holds_without_a_tree(&wait.condition, facts, window),
             |evaluation| evaluation.holds,
         );
-        let due = now >= wait.deadline;
-        if !holds && !due {
-            return Some(wait);
-        }
         let mut outcome = WaitOutcome::default();
-        outcome.end = if holds {
-            WaitEnd::Satisfied
-        } else {
-            WaitEnd::Unsatisfied
-        };
         outcome.frames = wait.frames;
+        if holds {
+            outcome.end = WaitEnd::Satisfied;
+            outcome.scope = match answering {
+                Answering::Holds => self.settle_scope(),
+                Answering::Settled { scope, .. } => scope,
+            };
+        } else {
+            let Answering::Settled {
+                unsettled,
+                scope,
+                idle,
+            } = answering
+            else {
+                return Some(wait);
+            };
+            let stalled = wait.count_turn(now);
+            let (end, causes): (WaitEnd, Vec<UnsettledCause>) = if stalled {
+                (
+                    WaitEnd::Unsatisfied,
+                    unsettled.due_by(now).filter(in_window).cloned().collect(),
+                )
+            // A wait that counts frames is changed by the frames the agent asks for it, which
+            // keep nothing else unsettled: it is never idle.
+            } else if idle && !counts_frames(&wait.condition) {
+                (
+                    WaitEnd::Idle,
+                    unsettled.causes().filter(in_window).cloned().collect(),
+                )
+            } else if now >= wait.deadline {
+                (
+                    WaitEnd::Unsatisfied,
+                    unsettled.causes().filter(in_window).cloned().collect(),
+                )
+            } else {
+                return Some(wait);
+            };
+            outcome.end = end;
+            outcome.unsettled = causes;
+            outcome.scope = scope;
+        }
         if let Some(evaluation) = evaluation {
             outcome.observation = evaluation.observation;
         }
-        if !holds {
-            outcome.unsettled = causes;
-        }
         send_reply(&wait.reply, None, Ok(outcome));
         None
-    }
-
-    /// Why the owner is not idle, from the runtime's own predicates: what
-    /// `HeadlessHost::pump_until_settled` reads. Agent waits are left out, so a wait never keeps
-    /// the window from settling for another.
-    ///
-    /// Each cause is of the whole runtime (no window, owner or site: the runtime records none
-    /// yet) and names what discharges it as these predicates see it: the next turn serves a
-    /// redraw, a scheduled frame and queued work, a turn at its deadline a timer. A redraw held
-    /// behind an armed frame retry is still listed as the next turn's, which ADR-0400 §3 moves to
-    /// the retry's deadline when the runtime derives the list from its own state.
-    pub(crate) fn unsettled_causes(&self, now: Instant) -> Vec<UnsettledCause> {
-        let mut causes = Vec::new();
-        if self.needs_redraw() {
-            causes.push(UnsettledCause::new(
-                UnsettledReason::NeedsRedraw,
-                ClearedBy::NextFrame,
-            ));
-        }
-        if self.scheduler().is_frame_scheduled() {
-            causes.push(UnsettledCause::new(
-                UnsettledReason::FrameScheduled,
-                ClearedBy::NextFrame,
-            ));
-        }
-        if self.has_pending_work() {
-            causes.push(UnsettledCause::new(
-                UnsettledReason::PendingWork,
-                ClearedBy::NextFrame,
-            ));
-        }
-        if let Some(due) = self.next_wake_excluding_agent_waits() {
-            let remaining = due.saturating_duration_since(now);
-            causes.push(
-                UnsettledCause::new(UnsettledReason::Timer, ClearedBy::Deadline)
-                    .due_in_ms(u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)),
-            );
-        }
-        causes
     }
 
     /// The earliest deadline among the parked waits, on the presentations' clocks.
@@ -268,7 +335,16 @@ impl UiRuntime {
     }
 }
 
-/// Whether `condition` holds with no tree published: only frames and settledness can.
+/// Whether `condition` reads settledness anywhere in it.
+fn reads_settled(condition: &Condition) -> bool {
+    match condition {
+        Condition::Settled => true,
+        Condition::All(parts) | Condition::Any(parts) => parts.iter().any(reads_settled),
+        _ => false,
+    }
+}
+
+/// Whether `condition` holds with no tree published: only frames, events and settledness can.
 fn holds_without_a_tree(condition: &Condition, facts: WaitFacts, window: WindowId) -> bool {
     match condition {
         Condition::Settled => facts.settled,

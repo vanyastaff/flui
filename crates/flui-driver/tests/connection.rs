@@ -12,7 +12,8 @@ use flui_driver::protocol::client::{CallError, Connection, EndChecks};
 use flui_driver::protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
-    ActionSequence, InputPath, InputSource, PointerAction, PointerButton, PointerDevice,
+    ActionSequence, InputKind, InputParams, InputPath, InputSource, JournalParams, LongPressParams,
+    PointerAction, PointerButton, PointerDevice, gestures,
 };
 use flui_driver::protocol::locator::{Locator, Target, TextMatch};
 use flui_driver::protocol::method::{
@@ -74,7 +75,11 @@ fn a_wait_answers_on_the_connection_s_window() {
         .wait(&count, Duration::from_secs(5))
         .expect("the wait is answered");
     assert_eq!(outcome.end, WaitEnd::Satisfied, "{outcome:?}");
-    assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
+    assert_eq!(
+        outcome.scope,
+        SettleScope::Complete,
+        "the headless host composes its half of the list"
+    );
 }
 
 #[test]
@@ -145,13 +150,30 @@ fn an_answer_that_did_not_arrive_releases_the_window_s_input() {
     let probe = Probe::default();
     // The agent answers `timeout` for whatever its window has not answered within a millisecond
     // of virtual time past what the request plays at 60 Hz: a window presenting at 30 Hz plays a
-    // tap's ticks a frame each, twice as long.
+    // tap's ticks a frame each, twice as long. The tap is injected input: a served `element.tap`
+    // may hold for its act timeout, which leaves a 30 Hz window time to play it.
     let launch = counter(&probe)
         .reply_timeout(Duration::from_millis(1))
         .frame_period(Duration::from_millis(33))
         .expect("a headless launch");
     let mut driver = Driver::launch(launch).expect("the headless app starts");
-    let unanswered = Connection::call::<ElementTap>(&mut driver, TapParams::new(increment()));
+    let window = driver.windows().expect("the windows")[0];
+    let at = driver
+        .window(window)
+        .locate(Locator::identifier("increment"))
+        .resolve()
+        .expect("the button")
+        .actionability()
+        .expect("its facts")
+        .point
+        .expect("a point to tap");
+    let unanswered = Connection::call::<method::InputInject>(
+        &mut driver,
+        InputParams::new(
+            window,
+            gestures::tap(at, PointerButton::Primary, &gestures::Defaults::WINDOWLESS),
+        ),
+    );
     assert_eq!(
         unanswered,
         Err(CallError::Unanswered {
@@ -159,6 +181,56 @@ fn an_answer_that_did_not_arrive_releases_the_window_s_input() {
             released: true,
         }),
         "an accepted tap may have run, and the release is a read-sized answer"
+    );
+}
+
+/// A gesture the app's agent serves, accepted and playing when its reply deadline passes, is
+/// unanswered the same way: it may have run, its release is answered, and nothing it pressed
+/// stays down. A long press on the hold surface of a window presenting at 30 Hz plays its ticks
+/// a frame each, past the bound its parameters give at 60 Hz; `force` takes it at its first
+/// attempt, so its timeout adds nothing.
+#[test]
+fn a_served_gesture_that_outlives_its_reply_deadline_releases_what_it_pressed() {
+    let probe = Probe::default();
+    let launch = counter(&probe)
+        .reply_timeout(Duration::from_millis(1))
+        .frame_period(Duration::from_millis(33))
+        .expect("a headless launch");
+    let mut driver = Driver::launch(launch).expect("the headless app starts");
+    let press: LongPressParams = serde_json::from_value(json!({
+        "target": { "locator": { "identifier": "hold" } },
+        "duration_ms": 800,
+        "timeout_ms": 1,
+        "force": true,
+    }))
+    .expect("a long press reads");
+    let unanswered = Connection::call::<method::ElementLongPress>(&mut driver, press);
+    assert_eq!(
+        unanswered,
+        Err(CallError::Unanswered {
+            may_have_run: true,
+            released: true,
+        }),
+        "an accepted press may have run, and the release is answered"
+    );
+    assert_eq!(probe.downs(), 1, "the press went down");
+    let window = driver.windows().expect("the windows")[0];
+    let journal = Connection::call::<method::InputJournal>(&mut driver, JournalParams::new(window))
+        .expect("the journal is read");
+    let last = journal
+        .entries
+        .iter()
+        .rev()
+        .find(|entry| {
+            matches!(
+                entry.kind,
+                InputKind::PointerDown | InputKind::PointerUp | InputKind::PointerCancel
+            )
+        })
+        .map(|entry| entry.kind);
+    assert!(
+        matches!(last, Some(InputKind::PointerUp | InputKind::PointerCancel)),
+        "nothing the press pressed stays down: {last:?}"
     );
 }
 
@@ -445,8 +517,10 @@ fn a_host_tool_that_hangs_is_a_failed_call_with_its_message() {
     assert!(log.releases() > 0, "the lane released what it pressed");
 }
 
+/// A condition an idle application cannot make true ends idle as soon as the headless host,
+/// which composes its half of the list, sees nothing but the test can change it (ADR-0400 §3).
 #[test]
-fn a_wait_that_never_holds_ends_unsatisfied() {
+fn a_wait_that_never_holds_on_an_idle_app_ends_idle() {
     let probe = Probe::default();
     let mut driver = Driver::launch(counter(&probe)).expect("the headless app starts");
     let never = Condition::Matches {
@@ -456,7 +530,8 @@ fn a_wait_that_never_holds_ends_unsatisfied() {
     let outcome = driver
         .wait(&never, Duration::from_millis(200))
         .expect("the wait is answered");
-    assert_eq!(outcome.end, WaitEnd::Unsatisfied, "{outcome:?}");
+    assert_eq!(outcome.end, WaitEnd::Idle, "{outcome:?}");
+    assert!(outcome.unsettled.is_empty(), "{outcome:?}");
     assert_eq!(probe.presses(), 0);
 }
 

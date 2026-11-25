@@ -23,12 +23,15 @@ use flui_foundation::panic::FirstPanic;
 use flui_platform::PlatformInput;
 use flui_protocol::events::EventFilter;
 use flui_protocol::record::RecordParams;
+use flui_protocol::wait::SettleScope;
 use flui_view::__runtime::{Reply, WindowCall};
 use flui_view::dev_agent::{AgentEvents, AgentRecording};
 
+use super::agent_held::{Frameless, Pass};
 use super::agent_inspect::StagedLayerRead;
 use super::{DrainReport, UiRuntime};
 use crate::presentation::PresentationState;
+use crate::settledness::Unsettled;
 
 /// What the UI runtime asks of the development agent at each point its own paths reach it.
 ///
@@ -76,17 +79,41 @@ pub(crate) trait AgentSide {
     );
 
     /// A frame has passed: the readings agents' actions owe, the events the frame produced and
-    /// the waits agents parked.
+    /// the waits agents parked, counted for that frame, those that hold without reading
+    /// settledness evaluated.
+    ///
+    /// A running perf span takes the frames presented since its last pull.
     fn after_frame(&self, ui_runtime: &UiRuntime);
 
-    /// An owner turn ended without a frame: the waits agents parked see the window as it is.
-    fn after_turn(&self, ui_runtime: &UiRuntime);
+    /// An owner turn ended without a frame: the acts, their queued input and the readings they owe
+    /// whose deadline passed are answered in the windows `turn` answers ([`Frameless`]), and the
+    /// waits agents parked that hold without reading settledness see the window as it is.
+    fn after_turn(&self, ui_runtime: &UiRuntime, turn: Frameless);
 
     /// The frame boundary: input agents injected goes on, one tick.
     fn advance_input(&self, ui_runtime: &UiRuntime, now: Instant);
 
+    /// The frame boundary, before injected input goes on: the acts agents hold are attempted
+    /// against the frame just committed, and one whose target passed queues its input.
+    fn advance_held_acts(&self, ui_runtime: &UiRuntime);
+
+    /// The earliest deadline of an act an agent holds, of the input an act queued, or of the
+    /// reading an act owes, on a window that is not closing.
+    fn next_act_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant>;
+
     /// The earliest deadline of a wait an agent parked on a window that is not closing.
     fn next_wait_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant>;
+
+    /// The host's list after its turn, counting `scope`'s halves: the waits agents parked whose
+    /// answer reads settledness are answered from it (ADR-0400 §3).
+    fn answer_settled(&self, ui_runtime: &UiRuntime, unsettled: &Unsettled, scope: SettleScope);
+
+    /// Whether a wait an agent parked is still unanswered, on any window.
+    fn awaits_settled_answer(&self, ui_runtime: &UiRuntime) -> bool;
+
+    /// A host that composes no half: the waits agents parked whose answer reads settledness are
+    /// answered from the runtime's half at `now` alone (`SettleScope::RuntimeOnly`).
+    fn answer_from_runtime_half(&self, ui_runtime: &UiRuntime, now: Instant);
 
     /// Platform input reached `presentation`: its agent's journal records it.
     fn journal_input(
@@ -184,6 +211,8 @@ impl AgentSide for AgentOwnerSide {
     }
 
     fn after_frame(&self, ui_runtime: &UiRuntime) {
+        // No user code runs in sampling: it goes before the replies below, whose wakers do.
+        ui_runtime.sample_agent_perf();
         for presentation in ui_runtime.presentations.iter() {
             UiRuntime::complete_agent_reads(presentation);
         }
@@ -191,16 +220,49 @@ impl AgentSide for AgentOwnerSide {
         ui_runtime.evaluate_agent_waits(true);
     }
 
-    fn after_turn(&self, ui_runtime: &UiRuntime) {
-        ui_runtime.evaluate_agent_waits(false);
+    fn after_turn(&self, ui_runtime: &UiRuntime, turn: Frameless) {
+        // A held act whose deadline passed is answered on a turn without a frame too, and so are
+        // the input an act queued that no frame started by its deadline and the reading an act
+        // owes that no frame came for, in a window no frame of this wake serves. The waits are
+        // evaluated whichever panics, and the first panic continues after all four.
+        let pass = Pass::Expired(turn);
+        let mut first = FirstPanic::new();
+        first.contain(|| ui_runtime.advance_held_acts(pass));
+        first.contain(|| ui_runtime.expire_act_input(pass));
+        first.contain(|| ui_runtime.expire_act_reads(turn));
+        first.contain(|| ui_runtime.evaluate_agent_waits(false));
+        first.resume();
     }
 
     fn advance_input(&self, ui_runtime: &UiRuntime, now: Instant) {
         ui_runtime.advance_agent_input(now);
     }
 
+    fn advance_held_acts(&self, ui_runtime: &UiRuntime) {
+        ui_runtime.advance_held_acts(Pass::Boundary);
+    }
+
+    fn next_act_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant> {
+        ui_runtime.next_held_act_deadline()
+    }
+
     fn next_wait_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant> {
         ui_runtime.next_agent_wait_deadline()
+    }
+
+    fn answer_settled(&self, ui_runtime: &UiRuntime, unsettled: &Unsettled, scope: SettleScope) {
+        ui_runtime.answer_settled_agent_waits(unsettled, scope);
+    }
+
+    fn awaits_settled_answer(&self, ui_runtime: &UiRuntime) -> bool {
+        ui_runtime
+            .presentations
+            .iter()
+            .any(|presentation| !presentation.agent_waits.borrow().is_empty())
+    }
+
+    fn answer_from_runtime_half(&self, ui_runtime: &UiRuntime, now: Instant) {
+        ui_runtime.answer_settled_agent_waits_from_own_half(now);
     }
 
     fn journal_input(

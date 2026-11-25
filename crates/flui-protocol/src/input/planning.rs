@@ -1,7 +1,7 @@
 //! [`plan`]: an action sequence planned once into timed input (ADR-0400 §2), which the driver's
-//! OS lane turns into the events it sends. The runtime's agent still plans `input.inject` with a
-//! planner of its own, whose bounds and refusals are its own, until it plays this plan as
-//! ADR-0400 §2 decides (`docs/gaps.md` keeps that gap). The timeline's rules are [`plan`]'s.
+//! OS lane turns into the events it sends and the runtime's agent plays at its frame boundaries,
+//! for `input.inject` and for every gesture it answers. The timeline's rules, bounds and refusals
+//! are [`plan`]'s.
 
 use std::fmt;
 use std::time::Duration;
@@ -24,6 +24,10 @@ pub const MAX_SOURCES: usize = 32;
 
 /// The most ticks one sequence plays.
 pub const MAX_TICKS: usize = 4096;
+
+/// The most inputs one plan holds, a move's steps each counted: a sequence that would plan more is
+/// refused before any of them is laid. Sixty-four moves split into [`MAX_STEPS`] steps each.
+pub const MAX_INPUTS: usize = 65_536;
 
 /// The longest one sequence lasts: a longer one is refused rather than holding a window's input
 /// for it.
@@ -135,6 +139,8 @@ pub struct TimedInput {
 pub struct Plan {
     sources: Vec<PlannedSource>,
     inputs: Vec<TimedInput>,
+    /// When each tick ends.
+    ends: Vec<Duration>,
     span: Duration,
 }
 
@@ -150,6 +156,14 @@ impl Plan {
     #[must_use]
     pub fn inputs(&self) -> &[TimedInput] {
         &self.inputs
+    }
+
+    /// When each tick ends, from the sequence's start, one per tick in order: tick `n` starts
+    /// where tick `n - 1` ends (the first at zero), and its inputs are at or after its start. A
+    /// player that holds each tick until its end plays the plan's timeline.
+    #[must_use]
+    pub fn tick_ends(&self) -> &[Duration] {
+        &self.ends
     }
 
     /// How long playing the plan takes: the end of its last tick.
@@ -172,6 +186,11 @@ pub enum PlanError {
     TooManyTicks {
         /// How many it plays.
         ticks: usize,
+    },
+    /// It plans more than [`MAX_INPUTS`] inputs.
+    TooManyInputs {
+        /// How many it would plan, saturated.
+        inputs: usize,
     },
     /// It lasts longer than [`MAX_SPAN`].
     TooLong {
@@ -207,6 +226,11 @@ impl fmt::Display for PlanError {
                 f,
                 "an action sequence plays at most {MAX_TICKS} ticks, not {ticks}"
             ),
+            Self::TooManyInputs { inputs } => write!(
+                f,
+                "an action sequence plans at most {MAX_INPUTS} inputs, a move's steps each \
+                 counted, not {inputs}"
+            ),
             Self::TooLong { span } => write!(
                 f,
                 "an action sequence lasts at most {} s, not {} ms",
@@ -232,7 +256,7 @@ impl fmt::Display for PlanError {
 
 impl std::error::Error for PlanError {}
 
-/// `sequence` as timed input: checked against its bounds (sources, ticks, span, ranges) and
+/// `sequence` as timed input: checked against its bounds (sources, ticks, inputs, span, ranges) and
 /// laid, tick by tick, on one timeline.
 ///
 /// Tick `n` holds the `n`th action of every source and starts where tick `n - 1` ended. Within a
@@ -258,11 +282,16 @@ pub fn plan(sequence: &ActionSequence) -> Result<Plan, PlanError> {
     }
     // The sequence's own span counts the durations it names and never exceeds the plan's, which
     // adds a step for each move that names none: a sequence already past the bound is refused
-    // before its steps are laid, which bounds how many there are. The bound holds the span that
-    // is played, checked once the ticks are laid.
+    // before its steps are laid. The bound holds the span that is played, checked once the ticks
+    // are laid. How many inputs there are is bounded apart, counted from the actions before any is
+    // laid: the span bounds a move's steps, not how many moves share it.
     let span = sequence.span();
     if span > MAX_SPAN {
         return Err(PlanError::TooLong { span });
+    }
+    let inputs = planned_inputs(sequence);
+    if inputs > MAX_INPUTS {
+        return Err(PlanError::TooManyInputs { inputs });
     }
     let mut sources = Vec::with_capacity(sequence.sources.len());
     for source in &sequence.sources {
@@ -277,7 +306,8 @@ pub fn plan(sequence: &ActionSequence) -> Result<Plan, PlanError> {
         sources.push(planned);
     }
     let mut positions: Vec<Option<LogicalPoint>> = vec![None; sequence.sources.len()];
-    let mut inputs = Vec::new();
+    let mut inputs = Vec::with_capacity(inputs);
+    let mut ends = Vec::with_capacity(ticks);
     let mut start = Duration::ZERO;
     for tick in 0..ticks {
         let mut lasts = Duration::ZERO;
@@ -389,6 +419,7 @@ pub fn plan(sequence: &ActionSequence) -> Result<Plan, PlanError> {
             }
         }
         let end = lay_strokes(&strokes, start, tick, lasts, &mut inputs);
+        ends.push(end);
         start = end;
     }
     if start > MAX_SPAN {
@@ -397,8 +428,47 @@ pub fn plan(sequence: &ActionSequence) -> Result<Plan, PlanError> {
     Ok(Plan {
         sources,
         inputs,
+        ends,
         span: start,
     })
+}
+
+/// How many inputs [`plan`] lays for `sequence`, saturated, counted from its actions alone: one for
+/// each press, release, cancel, scroll, key, text, composition step and trackpad phase, and
+/// [`split`] for each move.
+fn planned_inputs(sequence: &ActionSequence) -> usize {
+    let mut inputs = 0_usize;
+    for source in &sequence.sources {
+        let count = match source {
+            InputSource::Pointer { actions, .. } => actions
+                .iter()
+                .map(|action| match action {
+                    PointerAction::Move { duration_ms, .. } => {
+                        usize::try_from(split(Duration::from_millis(*duration_ms)))
+                            .unwrap_or(usize::MAX)
+                    }
+                    PointerAction::Pause { .. } => 0,
+                    _ => 1,
+                })
+                .fold(0_usize, usize::saturating_add),
+            InputSource::Wheel { actions, .. } => actions
+                .iter()
+                .filter(|action| !matches!(action, WheelAction::Pause { .. }))
+                .count(),
+            InputSource::Keys { actions, .. } => actions
+                .iter()
+                .filter(|action| !matches!(action, KeyAction::Pause { .. }))
+                .count(),
+            InputSource::Text { .. } => 1,
+            InputSource::Ime { actions } => actions.len(),
+            InputSource::Trackpad { actions, .. } => actions
+                .iter()
+                .filter(|action| !matches!(action, TrackpadAction::Pause { .. }))
+                .count(),
+        };
+        inputs = inputs.saturating_add(count);
+    }
+    inputs
 }
 
 /// A move one source makes in a tick, before it is split into steps.

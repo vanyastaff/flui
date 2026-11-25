@@ -244,7 +244,7 @@ graph LR
       `a_match_carries_the_node_and_the_revision_it_was_read_on`,
       `resolving_a_strict_locator_with_several_matches_is_ambiguous`,
       `ambiguity_lists_at_most_ten_candidates`, `a_choice_made_with_pick_resolves`,
-      `a_miss_lists_the_nearest_elements`, `a_handle_is_not_rebound_when_a_slot_is_reused`;
+      `a_handle_is_not_rebound_when_a_slot_is_reused`;
     - `actionability::the_first_failed_check_names_why_an_element_cannot_be_acted_on`, one table
       of not in the tree, outside the window, no size, hidden, no earlier reading, moved, a disabled
       ancestor, covered and nothing hit; `what_covers_the_point_is_named_by_its_outline`,
@@ -259,11 +259,11 @@ graph LR
     `pick last`, the ancestor rule for disabled, the stable comparison, the self-or-under rule, the
     window intersection, the path walk and the visible centre in turn, and each broke a row.
   - As built:
-    - `SemanticsOwner::locate_wire` lists matches and `resolve_wire_locator` answers the one element
-      or `WireLocateError::{NotFound, Ambiguous}` with outline lines; the agent turns those into the
-      protocol's errors (FD5). Strictness is applied by `resolve_wire_locator` only: a strict
-      `element.locate` lists every match, so a caller can see what is ambiguous (`LocateParams`
-      said otherwise and is reworded; the schema golden holds no prose).
+    - `SemanticsOwner::locate_wire` lists matches; one element is resolved by
+      `flui_protocol::locator::resolve_strict` over a list read with `max_matches` of
+      `STRICT_CANDIDATES`, in the agent and in the driver alike. A strict `element.locate` lists
+      every match, so a caller can see what is ambiguous (`LocateParams` said otherwise and is
+      reworded; the schema golden holds no prose).
     - The actionability check is two pure calls, `actionability_point` and `actionability_wire`,
       with the render hit-test in between run by the caller, so no hit-test (user code) runs under
       a semantics borrow. There is no separate render-to-semantics index: a published node's id is
@@ -1767,7 +1767,7 @@ graph LR
   - a headless table over a known animation checks frame counts and phase work;
   - on W and A a scroll budget passes over 5 iterations (median of p95), and a build with an
     injected busy frame fails it;
-  - dropped and janky frames are counted apart, and latency splits into its three phases with
+  - dropped and janky frames are reported apart, and latency splits into its three phases with
     tagged states;
   - an unknown refresh period reports that jank cannot be judged.
 
@@ -1805,13 +1805,16 @@ graph LR
 
 ### FD23. Layout facts, assertions and lint
 
+- **Status:** WCAG text contrast (`flui-rendering::audit`, the background read from the scene's
+  paints) was built with docs/plans/specs/testing-platform/tasks.md TP2 (ADR-0400 §5); the rest of
+  this task stays open here.
 - **Changes:**
   - `flui-rendering::inspect` gains geometry facts: window-logical box after transforms, clip,
     parent layout kind and alignment;
   - `RenderParagraph` exposes ink bounds, line boxes, baselines, resolved style, alignment,
     ellipsis and line overflow, and painted colour as data;
-  - the background colour beneath text comes from the layer tree's opaque paints, sampled from a
-    `rendered` capture only when it cannot be determined, and marked so;
+  - the background colour beneath text comes from the scene's paints, and a text whose background
+    they do not determine is not checked (ADR-0400 §5);
   - `flui-rendering::audit` holds the geometry rules: off centre, near-miss alignment, uneven gap,
     overlap, clipped and truncated text, outside window or safe area, WCAG contrast;
   - `layout.facts`, `layout.expect` (the CLI and MCP method; the Rust handle `expect(..)` is
@@ -1820,7 +1823,7 @@ graph LR
   - `audit.screen`, and `checked` and `not_checked` in `Report` with the verdict clause;
   - finding outcomes (`error`, `warning`, `needs_review`, `suppressed`);
   - the per-platform target-size profiles with the ATF exemptions;
-  - contrast at the WCAG large-text thresholds (24 px, 18.66 px bold) with a 0.01 tolerance;
+  - contrast at the WCAG large-text thresholds (24 px, 18.66 px bold), the ratio compared exactly;
   - `hit_region`, `duplicate_bounds`, `duplicate_name`, optional `non_text_contrast`;
   - `audit.text_scale` through the preferences override;
   - `benches/layout_defects/` with `cargo xtask layout-benchmark`.

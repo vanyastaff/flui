@@ -244,6 +244,13 @@ impl ShapedParagraph {
             .collect::<Vec<String>>()
     }
 
+    /// The CSS weight (100 to 900, 400 regular, 700 bold) each span was shaped
+    /// with, in the order of the text; an ellipsis is a span with the weight
+    /// of the span whose style it takes.
+    pub fn span_weights(&self) -> impl ExactSizeIterator<Item = f32> + '_ {
+        self.spans.iter().map(|span| span.weight)
+    }
+
     /// The glyph runs, line by line, in visual order within each line.
     pub fn runs(&self) -> impl ExactSizeIterator<Item = ShapedRun<'_>> + '_ {
         self.runs.iter().map(move |data| ShapedRun {
@@ -286,6 +293,20 @@ impl<'a> ShapedRun<'a> {
     pub fn coords(&self) -> &'a [i16] {
         let range = self.data.coords.start as usize..self.data.coords.end as usize;
         &self.paragraph.coords[range]
+    }
+
+    /// The size the run's glyphs are set at, in logical pixels.
+    #[must_use]
+    pub fn font_size(&self) -> f32 {
+        self.data.font_size
+    }
+
+    /// The run's colour where it is not the paragraph command's: a span
+    /// coloured apart from the paragraph's root colour. `None` paints in the
+    /// command's colour.
+    #[must_use]
+    pub fn color(&self) -> Option<Color> {
+        self.data.color
     }
 
     /// The run's glyphs, in visual order.

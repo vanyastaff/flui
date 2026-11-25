@@ -187,7 +187,8 @@ vocabulary! {
         Timer => "timer",
         /// A ticker is running: an animation asks for every frame.
         Ticker => "ticker",
-        /// Background work is held or running, which the host's executor owns.
+        /// Background work the host's executor owns: held, runnable, or a future parked until
+        /// something outside the application wakes it.
         Background => "background",
         /// The host owes a turn for a close or a quit it was asked for.
         OwedTurn => "owed_turn",
@@ -200,7 +201,8 @@ vocabulary! {
         ScenarioStep => "scenario_step",
         /// A covered window owes its surface a frame.
         SurfaceFrame => "surface_frame",
-        /// A reply the platform owes is in flight.
+        /// A reply the platform owes is in flight. Named by the vocabulary for a host that tracks
+        /// its platform's replies; no host lists it yet.
         PlatformReply => "platform_reply",
     }
 }
@@ -221,7 +223,10 @@ vocabulary! {
         Deadline => "deadline",
         /// Only the test discharges it: held background work.
         Test => "test",
-        /// Something outside the application answers it: a platform reply in flight.
+        /// Something outside the application answers it. The one cause a host lists so today is
+        /// the headless host's `Background` for a parked future, which only something outside
+        /// the application wakes; a platform reply in flight (`PlatformReply`) would be one, and
+        /// no host lists it yet. A wait never ends idle on such a cause.
         Outside => "outside",
     }
 }
@@ -264,8 +269,8 @@ vocabulary! {
         Unsatisfied => "unsatisfied",
         /// The condition was false and nothing but the test can change that: the host's half is
         /// counted (`SettleScope::Complete`) and every remaining cause is cleared by the test.
-        /// No runtime answers it yet: an answer counts its runtime's half alone, so today's waits
-        /// end `satisfied` or `unsatisfied`.
+        /// A host that composes no half of its own never answers it: its answers count the
+        /// runtime's half alone (`SettleScope::RuntimeOnly`).
         Idle => "idle",
     }
 }

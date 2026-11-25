@@ -1,7 +1,7 @@
 //! What an OS lane sends: an action sequence's plan ([`flui_protocol::input::plan`]) turned into
 //! device-pixel events, one at a time, with every pointer move a single step to its destination
-//! followed by an explicit pause (ADR-0238 §11, ADR-0400 §2). Only the OS lane plays that plan so
-//! far: the runtime's agent lowers `input.inject` with a planner of its own.
+//! followed by an explicit pause (ADR-0238 §11, ADR-0400 §2). The runtime's agent plays the same
+//! plan for `input.inject` and the gestures it answers, lowered into the events its window takes.
 //!
 //! A lane never interpolates, and the OS or browser is never left to: Chrome interpolates a
 //! multi-step move, which made recordings differ between runs. The plan splits a move that lasts

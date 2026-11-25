@@ -300,8 +300,15 @@ fn an_expectation_does_not_fire_a_timer_due_within_a_frame() {
     assert!(done.get(), "the test reaches it with pump_for");
 }
 
+/// A drag ends below the fling velocity: a list dragged 100 px over 200 ms
+/// (500 px/s while it moves) scrolls by the drag's distance, less at most the
+/// touch slop the recognizer takes before it accepts, and stays there.
+///
+/// Fails against a drag released while the contact still moves: the list
+/// flings on past the distance, and "Item 1" leaves the window.
 #[test]
-fn a_drag_scrolls_a_default_scroll_view() {
+fn a_drag_scrolls_a_default_scroll_view_by_its_distance_and_no_further() {
+    use flui_interaction::gesture::DEFAULT_TOUCH_SLOP;
     use flui_widgets::ListView;
 
     let items: Vec<_> = (0..40)
@@ -317,7 +324,18 @@ fn a_drag_scrolls_a_default_scroll_view() {
     );
     t.pump_and_settle();
     let after = t.rect(&find::text("Item 1"));
-    assert!(after.y < before.y - 50.0, "{before:?} -> {after:?}");
+    let scrolled = before.y - after.y;
+    assert!(
+        (100.0 - DEFAULT_TOUCH_SLOP..=100.0).contains(&scrolled),
+        "the list scrolled by the drag's distance: {before:?} -> {after:?}"
+    );
+
+    t.pump_for(Duration::from_secs(1));
+    assert_eq!(
+        t.rect(&find::text("Item 1")),
+        after,
+        "nothing moved the list after the contact lifted"
+    );
 }
 
 #[test]
@@ -465,14 +483,55 @@ fn a_chord_naming_a_held_key_leaves_it_held() {
     );
 }
 
+/// A chord is read as the protocol reads it: one that does not read (a `+` with no key after it,
+/// a key after a `+` key with no `+` between, a key name with space around it, no key at all) is
+/// refused `invalid_argument`, and nothing of the call is pressed, the chords before it included.
 #[test]
-fn a_chord_with_an_unnamed_key_presses_nothing() {
-    let (mut t, log) = key_log();
-    let error = t
-        .try_press_keys(&["Enter", "Control+"])
-        .expect_err("an empty key is refused");
-    assert!(matches!(error, TestError::Agent(_)), "{error:?}");
-    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+fn a_chord_that_does_not_read_presses_nothing() {
+    for chord in ["Control+", "Shift+", "+a", "a++b", "Control + a", ""] {
+        let (mut t, log) = key_log();
+        let error = t
+            .try_press_keys(&["Enter", chord])
+            .expect_err("a chord that does not read is refused");
+        let TestError::Agent(refused) = &error else {
+            panic!("{chord:?}: {error:?}");
+        };
+        assert_eq!(
+            refused.code,
+            flui_protocol::error::ErrorCode::InvalidArgument,
+            "{chord:?}: {error:?}"
+        );
+        assert!(log.borrow().is_empty(), "{chord:?}: {:?}", log.borrow());
+    }
+}
+
+/// A `+` where a key stands is the plus key, alone or after modifiers; a space is the space key.
+#[test]
+fn the_plus_key_and_the_space_key_are_pressed_as_keys() {
+    let cases: [(&str, &[&str]); 4] = [
+        ("+", &["down +", "up +"]),
+        (
+            "Control++",
+            &["down Control^", "down +^", "up +^", "up Control"],
+        ),
+        (
+            "Shift+Control++",
+            &[
+                "down Shift^",
+                "down Control^^",
+                "down +^^",
+                "up +^^",
+                "up Control^",
+                "up Shift",
+            ],
+        ),
+        (" ", &["down  ", "up  "]),
+    ];
+    for (chord, heard) in cases {
+        let (mut t, log) = key_log();
+        t.press_keys(&[chord]);
+        assert_eq!(*log.borrow(), heard, "{chord:?}");
+    }
 }
 
 /// A field holding `Trip `, focused by a tap.

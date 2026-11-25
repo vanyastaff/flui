@@ -36,13 +36,12 @@
 
 use std::cell::RefCell;
 use std::num::NonZeroU32;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-
 use std::time::Duration;
 
+use flui_foundation::panic::FirstPanic;
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform::capability::scripted::{AlreadyDriven, Scenario};
 use flui_platform::text::store::TextStoreHost;
@@ -402,7 +401,9 @@ impl HeadlessHost {
             window_system,
             Some(session_end_support_of(window_system)),
         );
-        host = host.with_close_vetoes(&close_vetoes);
+        // The host gathers its half of what keeps the application from being
+        // idle and answers the agent's settled waits after every turn.
+        host = host.with_close_vetoes(&close_vetoes).composes_host_half();
         let ui_runtime = UiRuntime::try_new(
             PresentationWindow::new(
                 Rc::clone(&window) as Rc<dyn PlatformWindow>,
@@ -671,21 +672,22 @@ impl HeadlessHost {
         else {
             unreachable!("BUG: a host that is not retired holds its UI runtime");
         };
-        #[expect(
-            clippy::disallowed_methods,
-            reason = "ADR-0287: the kit keeps a pump's panic to settle failures before resuming"
-        )]
+        // The pump's own steps and the answers after them unwind into one
+        // fold, in the order they ran, so the failures settle before the
+        // first is resumed; a dropped-frame report the runtime contained is
+        // raised ahead of both.
+        let mut first_panic = FirstPanic::new();
         // As a runner's wake gate: a runtime whose frames are off (no window
         // seen) takes a background turn, unless a covered window owes its
         // surface a frame.
-        let attempt = catch_unwind(AssertUnwindSafe(|| {
+        let outcome = first_panic.contain(|| {
             if ui_runtime.runs_frames() {
                 ui_runtime.pump(&mut frame_clock, sink)
             } else {
                 ui_runtime.pump_background();
                 FrameOutcome::default()
             }
-        }));
+        });
         // A frame whose lineage the pump renewed (a hot reload) takes its
         // presentation's texture updates now, from the registry its new
         // lineage names.
@@ -702,32 +704,36 @@ impl HeadlessHost {
         // each covered window is asked for the frame it owes.
         self.serve_text_sizing();
         self.ask_owed_frames();
+        // Once the turn's own steps are done, the list they leave answers the
+        // agent's settled waits, on every outcome. A reply's waker is
+        // contained by the reply itself; the rest of an answer pass can still
+        // unwind (the wake it asks for frames a parked wait counts, a
+        // subscriber of its events), and that panic stays behind the frame's
+        // own failure.
+        first_panic.contain(|| self.answer_settled());
         // Taken on every outcome: a failed frame's findings are its own, and
         // the failure that is raised already fails the test.
         let semantics_findings = self.take_semantics_findings();
-        match (attempt, first_failure) {
-            (Ok(outcome), None) => {
-                assert!(
-                    semantics_findings.is_empty(),
-                    "the frame's semantics publication found author errors, by presentation: \
-                     {semantics_findings:?}"
-                );
-                outcome
-            }
-            (Ok(_), Some(failure)) => panic!("{failure}"),
-            (Err(payload), None) => resume_unwind(payload),
-            (Err(payload), Some(failure)) => {
+        if let Some(failure) = first_failure {
+            if let Some(payload) = first_panic.into_payload() {
                 tracing::error!(
                     first_failure = %failure,
-                    "a panic unwound out of the pump after a contained frame failure; the \
-                     contained failure is raised and the later panic is discarded"
+                    "a panic unwound out of the pump or its answers after a contained frame \
+                     failure; the contained failure is raised and the later panic is discarded"
                 );
-                // The contained failure is raised; the later payload is
-                // destroyed under containment (ADR-0281).
+                // Destroyed under containment (ADR-0281).
                 flui_foundation::panic::discard_payload(payload);
-                panic!("{failure}")
             }
+            panic!("{failure}");
         }
+        first_panic.resume();
+        let outcome = outcome.expect("BUG: a pump that unwound nothing returned its outcome");
+        assert!(
+            semantics_findings.is_empty(),
+            "the frame's semantics publication found author errors, by presentation: \
+             {semantics_findings:?}"
+        );
+        outcome
     }
 
     /// Takes every open window's semantics findings from the frame that just

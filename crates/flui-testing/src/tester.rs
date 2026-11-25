@@ -1009,7 +1009,7 @@ impl Tester {
     }
 
     /// Press on the one element `locator` names and move by `dx`, `dy`
-    /// logical pixels over `duration`, then release.
+    /// logical pixels over `duration`, then release as [`Self::try_drag_from`] does.
     ///
     /// # Errors
     ///
@@ -1026,7 +1026,7 @@ impl Tester {
     }
 
     /// Press on the one element `locator` names and move by `dx`, `dy`
-    /// logical pixels over `duration`, then release.
+    /// logical pixels over `duration`, then release as [`Self::try_drag_from`] does.
     ///
     /// # Panics
     ///
@@ -1037,8 +1037,11 @@ impl Tester {
             .unwrap_or_else(|error| panic!("{error}"));
     }
 
-    /// Press at `start`, a point in the window's logical pixels, and move by
-    /// `dx`, `dy` over `duration`, then release.
+    /// Press at `start`, a point in the window's logical pixels, move by `dx`,
+    /// `dy` over `duration`, hold still for the protocol's swipe settle
+    /// ([`SWIPE_SETTLE_MS`](flui_protocol::input::gestures::SWIPE_SETTLE_MS))
+    /// and release: a drag ends below the fling velocity, so what it scrolled
+    /// stays where the contact left it.
     ///
     /// This is for a gesture that starts at a place rather than on an
     /// element, such as an edge swipe. A drag that starts on an element is
@@ -1067,13 +1070,17 @@ impl Tester {
                 duration_ms,
                 pressure: None,
             },
+            PointerAction::Pause {
+                duration_ms: flui_protocol::input::gestures::SWIPE_SETTLE_MS,
+            },
             PointerAction::Up {
                 button: PointerButton::Primary,
             },
         ])])
     }
 
-    /// Press at `start` and move by `dx`, `dy` over `duration`, then release.
+    /// Press at `start` and move by `dx`, `dy` over `duration`, then release
+    /// as [`Self::try_drag_from`] does.
     ///
     /// # Panics
     ///
@@ -1111,21 +1118,30 @@ impl Tester {
     /// Press `chords` in turn, as `element.press_keys` does, to the window's
     /// focused element.
     ///
-    /// A chord is `+`-joined keys, each a W3C key name (`"Enter"`, `"Tab"`,
-    /// `"ArrowDown"`, `"Control"`) or the text the key types (`"a"`, `"+"`):
-    /// `"Control+a"`, `"Shift+Tab"`, `"Shift++"`. A chord presses its keys left
-    /// to right and releases them right to left. A key held with
-    /// [`Self::key_down`] stays held, so it modifies every chord pressed
-    /// meanwhile; a chord that names it neither presses nor releases it.
+    /// A chord is read as the protocol reads it
+    /// ([`chord_keys`](flui_protocol::input::gestures::chord_keys)): `+`-joined
+    /// keys, each a W3C key name (`"Enter"`, `"Tab"`, `"ArrowDown"`,
+    /// `"Control"`) or the text the key types (`"a"`), and a `+` where a key
+    /// stands is the plus key: `"Control+a"`, `"Shift+Tab"`, `"Shift++"`. A
+    /// chord presses its keys left to right and releases them right to left.
+    /// A key held with [`Self::key_down`] stays held, so it modifies every
+    /// chord pressed meanwhile; a chord that names it neither presses nor
+    /// releases it.
     ///
     /// # Errors
     ///
-    /// [`TestError::Agent`] when a key is neither a key name nor the text of
-    /// one, as in `"Control+"`; nothing is pressed then.
+    /// [`TestError::Agent`] (`invalid_argument`) for a chord that does not
+    /// read, as in `"Control+"` or `"+a"`, and when a key is neither a key name
+    /// nor the text of one; nothing is pressed then.
     pub fn try_press_keys(&mut self, chords: &[&str]) -> Result<(), TestError> {
         let mut actions = Vec::new();
         for chord in chords {
-            let mut keys = chord_keys(chord);
+            let mut keys = flui_protocol::input::gestures::chord_keys(chord).map_err(|error| {
+                TestError::Agent(Box::new(ErrorObject::new(
+                    flui_protocol::error::ErrorCode::InvalidArgument,
+                    error.to_string(),
+                )))
+            })?;
             keys.retain(|key| !self.held_keys.iter().any(|held| held == key));
             actions.extend(keys.iter().map(|key| KeyAction::Down {
                 key: (*key).to_owned(),
@@ -2024,18 +2040,6 @@ fn keyboard(actions: Vec<KeyAction>) -> InputSource {
     InputSource::Keys {
         id: "tester".to_owned(),
         actions,
-    }
-}
-
-/// The keys of `chord`, `+`-joined; a `+` key is the last one, as in
-/// `"Shift++"`, or the whole chord.
-fn chord_keys(chord: &str) -> Vec<&str> {
-    if chord == "+" {
-        return vec!["+"];
-    }
-    match chord.strip_suffix("++") {
-        Some(held) if !held.is_empty() => held.split('+').chain(["+"]).collect(),
-        _ => chord.split('+').collect(),
     }
 }
 

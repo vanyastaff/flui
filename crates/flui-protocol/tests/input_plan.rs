@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use flui_protocol::geometry::LogicalPoint;
 use flui_protocol::input::{
-    ActionSequence, ImeAction, InputSource, KeyAction, MAX_COORDINATE, MAX_SOURCES, MAX_SPAN,
-    MAX_STEPS, MAX_TICKS, PlanError, PlannedInput, PointerAction, PointerButton, PointerDevice,
-    STEP, ScrollUnit, SourceKind, TimedInput, TrackpadAction, WheelAction, plan,
+    ActionSequence, ImeAction, InputSource, KeyAction, MAX_COORDINATE, MAX_INPUTS, MAX_SOURCES,
+    MAX_SPAN, MAX_STEPS, MAX_TICKS, PlanError, PlannedInput, PointerAction, PointerButton,
+    PointerDevice, STEP, ScrollUnit, SourceKind, TimedInput, TrackpadAction, WheelAction, plan,
 };
 
 fn ms(ms: u64) -> Duration {
@@ -375,6 +375,52 @@ fn a_plan_names_its_sources_in_order() {
     );
 }
 
+/// A plan says where each tick ends, so a player can hold each until then: a move a step at
+/// least, a pause its duration, presses and releases nothing; the last end is the plan's span.
+#[test]
+fn a_plan_says_where_each_tick_ends() {
+    let cases: [(&str, ActionSequence, &[u64]); 3] = [
+        ("nothing", ActionSequence::default(), &[]),
+        (
+            "a press held",
+            ActionSequence::new(vec![pointer(
+                "p",
+                PointerDevice::Touch,
+                vec![move_to(1.0, 1.0, 0), down(), pause(100), up()],
+            )]),
+            &[16, 16, 116, 116],
+        ),
+        (
+            "two sources, the longer action of a tick setting its end",
+            ActionSequence::new(vec![
+                pointer(
+                    "p",
+                    PointerDevice::Mouse,
+                    vec![pause(0), move_to(5.0, 5.0, 40)],
+                ),
+                InputSource::Keys {
+                    id: "k".to_owned(),
+                    actions: vec![
+                        KeyAction::Pause { duration_ms: 30 },
+                        KeyAction::Pause { duration_ms: 70 },
+                    ],
+                },
+            ]),
+            &[30, 100],
+        ),
+    ];
+    for (case, sequence, ends) in cases {
+        let planned = plan(&sequence).expect("plans");
+        let planned_ends: Vec<u64> = planned.tick_ends().iter().copied().map(millis).collect();
+        assert_eq!(planned_ends, ends, "{case}");
+        assert_eq!(
+            ends.last().copied().unwrap_or(0),
+            millis(planned.span()),
+            "{case}"
+        );
+    }
+}
+
 #[test]
 fn a_long_move_takes_at_most_the_step_bound() {
     let long = millis(STEP) * u64::from(MAX_STEPS) * 4;
@@ -447,6 +493,23 @@ fn a_sequence_no_path_plays_is_refused_whole() {
             )]),
             PlanError::TooManyTicks {
                 ticks: MAX_TICKS + 1,
+            },
+        ),
+        (
+            "more inputs than the bound, within the span: 32 sources of 36 moves of 1024 steps",
+            ActionSequence::new(
+                (0..MAX_SOURCES)
+                    .map(|index| {
+                        pointer(
+                            &format!("p{index}"),
+                            PointerDevice::Mouse,
+                            vec![move_to(1.0, 1.0, 16_384); 36],
+                        )
+                    })
+                    .collect(),
+            ),
+            PlanError::TooManyInputs {
+                inputs: MAX_SOURCES * 36 * 1024,
             },
         ),
         (
@@ -639,6 +702,22 @@ fn every_bound_is_inclusive() {
         ),
         ("a pressure of zero", pressed(0.0), Duration::ZERO),
         ("a pressure of one", pressed(1.0), Duration::ZERO),
+        (
+            "as many inputs as the bound: two sources of 32 moves split into the most steps",
+            ActionSequence::new(
+                ["a", "b"]
+                    .iter()
+                    .map(|id| {
+                        pointer(
+                            id,
+                            PointerDevice::Mouse,
+                            vec![move_to(1.0, 1.0, 16_384); MAX_INPUTS / 2 / 1024],
+                        )
+                    })
+                    .collect(),
+            ),
+            ms(16_384 * 32),
+        ),
     ];
     for (case, sequence, span) in table {
         let planned = plan(&sequence).unwrap_or_else(|error| panic!("{case}: {error}"));

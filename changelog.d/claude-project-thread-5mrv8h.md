@@ -13,7 +13,7 @@
   with `CheckFailure` for any error a check's attempt fails with, `Report::run`, `UnpassedCheck`
   (a check that failed or could not be made) and the report's JSON form as its `Serialize`.
 - `flui_protocol::input::plan`, an action sequence planned into timed input (`TimedInput`), which
-  the driver's OS lane plays; the runtime's agent still lowers `input.inject` with its own planner.
+  the driver's OS lane and the app's agent play.
 - `ActionSequence::plays_within`: a sequence's span and a frame (`input::STEP`) for each tick,
   what an injection's reply is bounded by past the agent's own timeout.
 - `GestureOptions::named_timeout_ms`, an act's named timeout bounded at a day.
@@ -27,12 +27,11 @@
   `UnsettledCause` names its `window`, `owner`, `site` and what clears it (`ClearedBy`, a required
   field), with the reasons `ticker`, `background`, `owed_turn`, `window_observation`,
   `frame_request`, `scenario_step`, `surface_frame` and `platform_reply`; a `WaitOutcome` says how
-  it ended (`end`: `WaitEnd::{Satisfied, Unsatisfied, Idle}`, of which no runtime answers `Idle`
-  yet) and carries its `scope` (`SettleScope`); a `Placement` names its `platform` and
+  it ended (`end`: `WaitEnd::{Satisfied, Unsatisfied, Idle}`) and carries its `scope`
+  (`SettleScope`); a `Placement` names its `platform` and
   `safe_area`; the `virtual` pointer device, which an agent's hello lists among the
   `capabilities.pointers` its injection delivers; `AuditRule::TextContrast`;
-  `LogicalRect::approx_eq`. The method `element.scroll_until` is declared only: no app and no
-  driver answers it yet.
+  `LogicalRect::approx_eq`; the method `element.scroll_until`.
 - `Driver::run_scenario(&mut report, name, scenario)`.
 
 ### Changed
@@ -41,10 +40,9 @@
   required, `WaitOutcome.satisfied` is removed): an app speaking 0.32 refuses older clients, an
   older `flui-driver` or CLI among them, with `version`.
 - Every gesture method (`element.tap`, `element.drag_to`, … `element.type_text`) is a window
-  method of the agent's in the method table. No app's agent serves one yet: each answers
-  `not_supported`, and the driver composes every gesture, from the agent's methods and, on the
-  `os` path, its lane. A gesture an agent lists in its hello goes to that agent, unless the call
-  or the session asks for the `os` path.
+  method of the agent's in the method table. A gesture an agent lists in its hello goes to that
+  agent, unless the call or the session asks for the `os` path; the driver composes the others,
+  from the agent's methods and, on the `os` path, its lane.
 - A composed gesture's act timeout is bounded at a day, as the window's hold is.
 - An injection's reply is bounded by `ActionSequence::plays_within`, a frame a tick on top of
   its span, so a long run of ticks that name no duration is no longer answered `timeout` while it

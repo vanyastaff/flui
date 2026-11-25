@@ -8,11 +8,12 @@
 
 use std::time::Duration;
 
+pub mod gestures;
 mod planning;
 
 pub use planning::{
-    MAX_COORDINATE, MAX_SOURCES, MAX_SPAN, MAX_STEPS, MAX_TICKS, Plan, PlanError, PlannedInput,
-    PlannedSource, STEP, SourceKind, TimedInput, plan,
+    MAX_COORDINATE, MAX_INPUTS, MAX_SOURCES, MAX_SPAN, MAX_STEPS, MAX_TICKS, Plan, PlanError,
+    PlannedInput, PlannedSource, STEP, SourceKind, TimedInput, plan,
 };
 
 use crate::act::JournalSpan;
@@ -587,7 +588,12 @@ impl InputParams {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct GestureOptions {
-    /// Which input path; the session's when absent.
+    /// Which input path. A caller of the driver names it, or leaves it to the session's policy;
+    /// the driver chooses the path from both, and what it hands the app's agent carries that
+    /// path, required when the call or the session requires it. The agent knows no session: it
+    /// plays the path this names, falls back to the gesture's other path unless this requires
+    /// one, refuses `os`, which the driver composes with its lane, and takes synthetic input when
+    /// it is absent.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -600,9 +606,9 @@ pub struct GestureOptions {
     )]
     pub force: bool,
     /// How long locating and actionability may take, in milliseconds; 5000 when absent and at
-    /// most 24 hours ([`Self::named_timeout_ms`]). A window that serves the gesture may hold the
-    /// act this long, which the conversation counts in the reply's deadline (ADR-0288 §4). No
-    /// app's agent serves a gesture yet: the driver composes each one, locating and checking
+    /// most 24 hours ([`Self::named_timeout_ms`]). A window that serves the gesture holds the act
+    /// this long at most, then plays it, and the conversation counts both in the reply's deadline
+    /// (ADR-0288 §4); the driver composing a gesture on the `os` path locates and checks
     /// actionability for this long.
     #[cfg_attr(
         feature = "serde",
@@ -794,7 +800,10 @@ pub struct ScrollUntilParams {
     pub target: Target,
     /// What to scroll to: the element it names must resolve, strictly, under the scrollable.
     pub until: Locator,
-    /// Which way to scroll; towards the end of the scrollable's axis when absent.
+    /// Which way to scroll. When absent the agent reads no axis: it scrolls down, and turns
+    /// right, once, when its first step down moves nothing, so a horizontal scrollable, or a
+    /// vertical one already at its end, is searched rightwards; a search that has moved and then
+    /// stops ends there.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -833,7 +842,10 @@ pub struct TypeTextParams {
     pub options: GestureOptions,
 }
 
-/// `element.press_keys`: press chords in turn, each `+`-joined (`"Control+a"`, `"Enter"`).
+/// `element.press_keys`: press chords in turn. A chord is its keys joined by `+`, each a W3C key
+/// name or the text the key types (`"Control+a"`, `"Enter"`); a `+` where a key stands is the plus
+/// key (`"+"`, `"Control++"`), and a key name has no space around it (`" "` is the space key).
+/// [`gestures::chord_keys`] is the one reading.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

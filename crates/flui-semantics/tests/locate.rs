@@ -1,12 +1,13 @@
 //! Locators resolved over a published tree (ADR-0238 §4, R6, R7, R9), through
 //! the public API: every criterion, scoping, strictness, `pick`, Unicode case
-//! folding, and what a failed resolution lists.
+//! folding, and what an ambiguous strict locator lists.
 
 use flui_protocol::{
-    locator::LocateParams, locator::Locator, locator::Pick, locator::StateFilter,
-    locator::TextMatch, tree::ElementRef, wire::Checked, wire::Role,
+    locator::Ambiguity, locator::LocateParams, locator::Locator, locator::Match, locator::Pick,
+    locator::STRICT_CANDIDATES, locator::StateFilter, locator::TextMatch, locator::resolve_strict,
+    tree::ElementRef, wire::Checked, wire::Role,
 };
-use flui_semantics::{SemanticsRole, Toggled, WireLocateError};
+use flui_semantics::{SemanticsRole, Toggled};
 
 use crate::fixture::{Fixture, element, placement, window};
 
@@ -399,13 +400,21 @@ fn max_matches_keeps_the_first_and_counts_the_rest() {
     assert_eq!(matches.truncated, 2);
 }
 
+/// The one element a strict `locator` resolves to, read as a resolver reads it (no more matches
+/// than the candidates it names) and resolved by the protocol's one strict-locator rule.
+fn resolved(f: &Fixture, locator: Locator) -> Result<Option<Match>, Ambiguity> {
+    let mut params = LocateParams::new(locator);
+    params.max_matches = Some(STRICT_CANDIDATES);
+    let matches = f.owner.locate_wire(&params, placement()).expect("reads");
+    resolve_strict(matches.matches.iter(), matches.truncated).map(Option::<&Match>::cloned)
+}
+
 #[test]
 fn a_match_carries_the_node_and_the_revision_it_was_read_on() {
     let mut f = mail();
-    let found = f
-        .owner
-        .resolve_wire_locator(&Locator::identifier("save"), placement())
-        .expect("one match");
+    let found = resolved(&f, Locator::identifier("save"))
+        .expect("one match")
+        .expect("found");
     assert_eq!(found.element, element(2));
     assert_eq!(found.node.name.as_deref(), Some("Save"));
     assert_eq!(found.node.role, Role::Button);
@@ -425,10 +434,9 @@ fn a_match_carries_the_node_and_the_revision_it_was_read_on() {
         f.owner.revision() > first,
         "a publication that changed the tree"
     );
-    let found = f
-        .owner
-        .resolve_wire_locator(&Locator::identifier("save"), placement())
-        .expect("one match");
+    let found = resolved(&f, Locator::identifier("save"))
+        .expect("one match")
+        .expect("found");
     assert_eq!(found.node.name.as_deref(), Some("Store"));
     assert_eq!(found.revision, f.owner.revision());
 }
@@ -436,24 +444,22 @@ fn a_match_carries_the_node_and_the_revision_it_was_read_on() {
 #[test]
 fn resolving_a_strict_locator_with_several_matches_is_ambiguous() {
     let f = mail();
-    let error = f
-        .owner
-        .resolve_wire_locator(&Locator::identifier("delete"), placement())
-        .expect_err("two buttons carry the identifier");
-    let WireLocateError::Ambiguous { count, candidates } = error else {
-        panic!("expected ambiguous, got {error:?}");
-    };
-    assert_eq!(count, 2);
-    assert_eq!(candidates.len(), 2);
+    let ambiguity =
+        resolved(&f, Locator::identifier("delete")).expect_err("two buttons carry the identifier");
+    assert_eq!(ambiguity.matched, 2);
+    assert_eq!(ambiguity.candidates.len(), 2);
     assert!(
-        candidates
+        ambiguity
+            .candidates
             .iter()
             .all(|line| line.starts_with("- button \"Delete\"")),
-        "{candidates:?}"
+        "{:?}",
+        ambiguity.candidates
     );
     assert!(
-        candidates[0].contains(&element(9).element.to_string()),
-        "{candidates:?}"
+        ambiguity.candidates[0].contains(&element(9).element.to_string()),
+        "{:?}",
+        ambiguity.candidates
     );
 }
 
@@ -468,70 +474,30 @@ fn ambiguity_lists_at_most_ten_candidates() {
         });
     }
     f.flush();
-    let error = f
-        .owner
-        .resolve_wire_locator(&Locator::named("Row"), placement())
-        .expect_err("thirteen rows");
-    let WireLocateError::Ambiguous { count, candidates } = error else {
-        panic!("expected ambiguous, got {error:?}");
-    };
-    assert_eq!((count, candidates.len()), (13, 10));
+    let ambiguity = resolved(&f, Locator::named("Row")).expect_err("thirteen rows");
+    assert_eq!((ambiguity.matched, ambiguity.candidates.len()), (13, 10));
 }
 
 #[test]
 fn a_choice_made_with_pick_resolves() {
     let f = mail();
-    let resolve = |pick| {
-        f.owner
-            .resolve_wire_locator(&Locator::identifier("delete").pick(pick), placement())
-            .map(|found| found.element)
+    let picked = |pick| {
+        located(&f, Locator::identifier("delete").pick(pick))
+            .first()
+            .copied()
     };
-    assert_eq!(resolve(Pick::First), Ok(element(9)));
-    assert_eq!(resolve(Pick::Last), Ok(element(12)));
-    assert_eq!(resolve(Pick::Nth(1)), Ok(element(12)));
-    assert!(matches!(
-        resolve(Pick::Nth(2)),
-        Err(WireLocateError::NotFound { .. })
-    ));
-}
-
-/// A miss names what was nearly meant, never one of them for the caller: the
-/// closest candidates by role, name distance and identifier.
-#[test]
-fn a_miss_lists_the_nearest_elements() {
-    let f = mail();
-    let not_found = |locator: Locator| match f.owner.resolve_wire_locator(&locator, placement()) {
-        Err(WireLocateError::NotFound { nearest }) => nearest,
-        other => panic!("expected not found, got {other:?}"),
-    };
-
-    // A typo in the name of a button: that button first, then the other
-    // buttons it shares the role with.
-    let nearest = not_found(Locator::role(Role::Button).name("Savee"));
-    assert!(nearest[0].starts_with("- button \"Save\""), "{nearest:?}");
-    assert!(nearest.len() <= 10);
-
-    // The right element in the wrong scope: both holders of every criterion
-    // come before anything that only looks similar.
-    let nearest = not_found(Locator::named("Save").within(Locator::named("Archive")));
-    assert!(nearest[0].starts_with("- button \"Save\""), "{nearest:?}");
-    assert!(nearest[1].starts_with("- link \"Save\""), "{nearest:?}");
-
-    // An identifier that is not there lists nothing: no criterion holds for
-    // anyone, and no name was given to compare.
-    assert_eq!(
-        not_found(Locator::identifier("remove")),
-        Vec::<String>::new()
-    );
+    assert_eq!(picked(Pick::First), Some(9));
+    assert_eq!(picked(Pick::Last), Some(12));
+    assert_eq!(picked(Pick::Nth(1)), Some(12));
+    assert_eq!(picked(Pick::Nth(2)), None, "past the last match");
 }
 
 #[test]
 fn a_handle_is_not_rebound_when_a_slot_is_reused() {
     let mut f = mail();
-    let old: ElementRef = f
-        .owner
-        .resolve_wire_locator(&Locator::identifier("save"), placement())
+    let old: ElementRef = resolved(&f, Locator::identifier("save"))
         .expect("one match")
+        .expect("found")
         .element;
     assert_eq!(old, element(2));
 
@@ -544,10 +510,9 @@ fn a_handle_is_not_rebound_when_a_slot_is_reused() {
         c.set_identifier("save");
     });
     f.flush();
-    let new = f
-        .owner
-        .resolve_wire_locator(&Locator::identifier("save"), placement())
+    let new = resolved(&f, Locator::identifier("save"))
         .expect("one match")
+        .expect("found")
         .element;
     assert_ne!(new, old, "the replacement is a different element");
     assert_eq!(

@@ -53,6 +53,7 @@ mod announce;
 mod applicability;
 mod assistive_focus;
 mod attributes;
+mod audit;
 mod collection;
 mod configuration;
 mod document_selection;
@@ -79,12 +80,13 @@ pub use action::{
     SemanticsAction, SemanticsActionHandler, SemanticsActionRequest, TextSelection, UnroutedAction,
 };
 pub use agent::{
-    Evaluation, EventSet, Placement, TreeSnapshot, WaitFacts, WireActionError, WireLocateError,
-    WireReadError, counts_frames,
+    ActionabilityReading, Evaluation, EventSet, Placement, TreeSnapshot, WaitFacts,
+    WireActionError, WireLocateError, WireReadError, counts_frames, element_id_of,
 };
 pub use announce::{AnnounceError, Announcements, Announcer};
 pub use applicability::RoleAttribute;
 pub use assistive_focus::{AssistiveFocus, AssistiveFocusChange};
+pub use audit::MinimumTarget;
 pub use collection::{
     CellPosition, SemanticsCollection, SemanticsCollectionKind, SemanticsCollectionOrigin,
     SemanticsIndexOrigin, SetSize, SortDirection, TableShape,

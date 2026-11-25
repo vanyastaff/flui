@@ -431,12 +431,12 @@ fn wire_actions(node: &NodeRef<'_>) -> Vec<ActionName> {
 /// announcer nodes: they carry what assistive technology speaks, not an
 /// element of the interface, so an agent neither reads nor acts on them.
 #[derive(Clone, Copy)]
-struct AgentFilter {
+pub(crate) struct AgentFilter {
     announcers: Option<[NodeId; 2]>,
 }
 
 impl AgentFilter {
-    fn of(owner: &SemanticsOwner) -> Self {
+    pub(crate) fn of(owner: &SemanticsOwner) -> Self {
         Self {
             announcers: owner
                 .announcer_node_ids()
@@ -444,7 +444,7 @@ impl AgentFilter {
         }
     }
 
-    fn apply(self, node: &NodeRef<'_>) -> FilterResult {
+    pub(crate) fn apply(self, node: &NodeRef<'_>) -> FilterResult {
         // A field's text runs carry its text for assistive technology; an
         // agent reads the text as the field's value.
         if node.role() == accesskit::Role::TextRun
@@ -512,7 +512,7 @@ struct Walk<'q> {
 /// `node`'s bounds in the window's logical pixels. The published root's
 /// transform scales by the owner's ratio, so AccessKit's box is in its
 /// physical pixels; this takes it back.
-fn logical_bounds(node: &NodeRef<'_>, published_ratio: f64) -> Option<LogicalRect> {
+pub(crate) fn logical_bounds(node: &NodeRef<'_>, published_ratio: f64) -> Option<LogicalRect> {
     let bounds = node.bounding_box()?;
     let unscale = published_ratio.recip();
     Some(LogicalRect::from_ltrb(
@@ -700,8 +700,22 @@ pub(crate) fn identifier_clashes(
 }
 
 /// The wire handle of a published node: its generational accessibility id.
-fn element_id(node: &NodeRef<'_>) -> Option<ElementId> {
-    ElementId::from_u64(node.locate().0.0)
+pub(crate) fn element_id(node: &NodeRef<'_>) -> Option<ElementId> {
+    AccessibilityNodeId::from_u64(node.locate().0.0).and_then(wire_element_id)
+}
+
+/// The wire handle of the element `render` contributes to the published tree: the accessibility
+/// id of its node, the id a published node carries. The one mapping from a render
+/// object to the handle an agent's answers name.
+#[must_use]
+pub fn element_id_of(render: flui_foundation::RenderId) -> ElementId {
+    wire_element_id(AccessibilityNodeId::from(render))
+        .expect("BUG: an accessibility id derived from a render id is non-zero")
+}
+
+/// The wire handle of the node with accessibility id `id`; `None` for the zero id no node has.
+fn wire_element_id(id: AccessibilityNodeId) -> Option<ElementId> {
+    ElementId::from_u64(id.as_u64())
 }
 
 /// Whether UI Automation exposes `node` through the `Value` pattern, which
@@ -712,7 +726,7 @@ fn has_text_value(node: &NodeRef<'_>) -> bool {
 }
 
 /// `node`'s own fields, without children or bounds.
-fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node {
+pub(crate) fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node {
     let ak_role = node.role();
     let mut out = Node::new(id, wire_role(ak_role), format!("{ak_role:?}"));
     // UI Automation's `Name`: a static text is named by its value.
@@ -761,7 +775,7 @@ fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node
 impl SemanticsOwner {
     /// Builds the AccessKit tree the adapter would be handed and runs `read`
     /// over it, with whether the root really claims focus.
-    fn with_published<R>(
+    pub(crate) fn with_published<R>(
         &self,
         read: impl FnOnce(&accesskit_consumer::TreeState, bool) -> R,
     ) -> Result<R, Published> {
@@ -945,7 +959,7 @@ impl SemanticsOwner {
 }
 
 /// Why no published tree could be read.
-enum Published {
+pub(crate) enum Published {
     NoTree,
     Malformed,
 }
@@ -955,6 +969,8 @@ mod delta;
 mod locate;
 mod wait;
 
+pub use actionability::ActionabilityReading;
+pub(crate) use actionability::shown_bounds;
 pub use delta::TreeSnapshot;
 pub use locate::WireLocateError;
 pub use wait::{Evaluation, EventSet, WaitFacts, counts_frames};
