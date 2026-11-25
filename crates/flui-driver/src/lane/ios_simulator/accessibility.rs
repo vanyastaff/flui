@@ -23,7 +23,6 @@ mod mac;
 
 use std::time::Duration;
 
-use flui_protocol::act::{Effect, EffectKind};
 use flui_protocol::error::{ErrorCode, HandleKind, Retry};
 use flui_protocol::geometry::LogicalSize;
 
@@ -31,6 +30,7 @@ use flui_protocol::geometry::LogicalSize;
 pub use self::mac::MacAccessibility;
 use super::device::{Simulator, Udid};
 use crate::error::{Error, Result};
+use crate::lane::ax;
 use crate::lane::walk::{MAX_DEPTH, MAX_NODES, ProviderError};
 
 /// A rectangle in the Mac's global points: an element's `AXPosition` and `AXSize`.
@@ -318,15 +318,47 @@ pub fn untrusted() -> Error {
     )
 }
 
-/// The deadline a call ran under, for people: `deadline`, the one the read gave the element the
-/// call was asked of, or, as `None`, the timeout that element kept when it refused the read's.
-fn within(deadline: Option<Duration>) -> String {
-    match deadline {
-        Some(deadline) => format!("within {} ms", deadline.as_millis()),
-        None => {
-            "within the timeout the element kept when it refused the read's deadline".to_owned()
-        }
+/// The most UTF-16 units of a window's `AXIdentifier` or `AXDocument` the window's identity
+/// reads, each read whole ([`window_identity`] must see all of it to know which UUIDs it
+/// names): far past any document path or identifier, and far past the outline's cut. A longer
+/// one is refused ([`identity_too_long`]), never read in part.
+pub const IDENTITY_TEXT_LIMIT: usize = 64 * 1024;
+
+/// What a read answers when a window of the device's title answers its `attribute` with `units`
+/// UTF-16 units, past [`IDENTITY_TEXT_LIMIT`]: the lane cannot tell whose window it is without
+/// reading all of it, and does not take a window on a text it read in part.
+#[must_use]
+pub fn identity_too_long(attribute: &str, units: usize) -> Error {
+    Error::Platform {
+        effect: None,
+        message: format!(
+            "a window titled for the device answers its {attribute} with {units} UTF-16 units, \
+             past the {IDENTITY_TEXT_LIMIT} the lane reads whole to tell whose window it is; the \
+             lane takes no window on a text it read in part"
+        ),
+        retry: Retry::Never,
     }
+}
+
+/// Whether the screen stayed where the read placed its elements: `before`, the screen's frame
+/// the search read, and `after`, the same group's frame read once the walk is done. Every
+/// element's frame is placed on the app's window from `before`, so a screen moved or resized in
+/// between, or one with no frame left, would place them all off by the move.
+///
+/// # Errors
+///
+/// [`Error::Busy`] when `after` is not `before`: read again.
+pub fn screen_steady(before: PointFrame, after: Option<PointFrame>) -> Result<()> {
+    if after == Some(before) {
+        return Ok(());
+    }
+    Err(Error::Busy {
+        message: format!(
+            "the device's screen moved or was resized while it was read (from {before:?} to \
+             {after:?}), so its elements cannot be placed on the app's window: read again"
+        ),
+        retry: ErrorCode::Busy.default_retry(),
+    })
 }
 
 /// What a call of a read that failed with `error` answers. A failure while the process is no
@@ -346,7 +378,7 @@ pub fn read_failure(error: ProviderError, trusted: bool, deadline: Option<Durati
             effect: None,
             message: format!(
                 "the Simulator's window did not answer a call of the read {}",
-                within(deadline)
+                ax::within(deadline)
             ),
             retry: ErrorCode::Timeout.default_retry(),
         },
@@ -364,16 +396,12 @@ pub fn read_failure(error: ProviderError, trusted: bool, deadline: Option<Durati
     }
 }
 
-/// What pressing the element `label` answered: `offered`, whether it offers `AXPress`, and then
-/// `perform`, the press, made only when it does. `trusted` is asked after a failure.
-///
-/// Before the press is sent, a failure while the process is no trusted accessibility client is
-/// [`untrusted`], whatever the call said. Once it is sent, the failure decides: a press not
-/// answered, or whose element went away during it, may have run and says so (`may_have_run`)
-/// whatever the trust, the permission taken back named in its message, so it is never sent again
-/// as if it had not; only a press that failed otherwise is [`untrusted`] when trust is gone. A
-/// call that did not answer names `deadline`, the one the read gave this element, or, as `None`,
-/// says it refused that deadline and kept its own.
+/// What pressing the element `label` of the Simulator's window answered: `offered`, whether it
+/// offers `AXPress`, and then `perform`, the press, made only when it does, with `deadline` the
+/// one the read gave this element (`None`: it refused it) and `trusted` asked after a failure.
+/// The answer is the one every `AXPress` gives (`lane::ax::pressed`, the macOS lane's too), the
+/// refusal for a process no longer trusted being [`untrusted`]: a press already sent and not
+/// answered, or whose element went away, keeps `may_have_run` whatever the trust.
 ///
 /// # Errors
 ///
@@ -388,86 +416,7 @@ pub fn pressed(
     deadline: Option<Duration>,
     trusted: impl Fn() -> bool,
 ) -> Result<()> {
-    let may_have_run = || Some(Effect::new(EffectKind::MayHaveRun));
-    let offers = match offered {
-        Ok(offers) => offers,
-        Err(_) if !trusted() => return Err(untrusted()),
-        Err(ProviderError::Timeout) => {
-            return Err(Error::Timeout {
-                awaited: crate::error::Awaited::Host,
-                effect: None,
-                message: format!(
-                    "the Simulator's window did not answer whether {label:?} offers a press {}",
-                    within(deadline)
-                ),
-                retry: ErrorCode::Timeout.default_retry(),
-            });
-        }
-        Err(ProviderError::Gone) => {
-            return Err(pressed_gone(
-                label,
-                "before it was asked for its press",
-                None,
-            ));
-        }
-        Err(ProviderError::Failed(why)) => {
-            return Err(Error::Platform {
-                effect: None,
-                message: format!("whether {label:?} offers a press could not be read: {why}"),
-                retry: Retry::Never,
-            });
-        }
-    };
-    if !offers {
-        return Err(Error::ActionUnsupported {
-            message: format!("the element {label:?} offers no AXPress"),
-            retry: ErrorCode::ActionUnsupported.default_retry(),
-        });
-    }
-    let Err(failure) = perform() else {
-        return Ok(());
-    };
-    let permission = if trusted() {
-        ""
-    } else {
-        "; the process has lost the Accessibility permission since, so grant it again under \
-         System Settings > Privacy & Security > Accessibility before the next call"
-    };
-    match failure {
-        ProviderError::Timeout => Err(Error::Timeout {
-            awaited: crate::error::Awaited::Host,
-            effect: may_have_run(),
-            message: format!(
-                "the Simulator's window did not answer the press of {label:?} {}: read the tree \
-                 for its effect{permission}",
-                within(deadline)
-            ),
-            retry: ErrorCode::Timeout.default_retry(),
-        }),
-        ProviderError::Gone => Err(pressed_gone(
-            label,
-            &format!("while it was pressed, which may have run first{permission}"),
-            may_have_run(),
-        )),
-        ProviderError::Failed(_) if !permission.is_empty() => Err(untrusted()),
-        ProviderError::Failed(why) => Err(Error::Platform {
-            effect: None,
-            message: format!("pressing {label:?} failed: {why}"),
-            retry: Retry::Never,
-        }),
-    }
-}
-
-/// The element `label` gone `when`, with what reached it.
-fn pressed_gone(label: &str, when: &str, effect: Option<Effect>) -> Error {
-    Error::Gone {
-        kind: Some(HandleKind::Element),
-        handle: None,
-        exit: None,
-        effect,
-        message: format!("the element {label:?} went away {when}"),
-        retry: ErrorCode::Gone.default_retry(),
-    }
+    ax::pressed(offered, perform, label, deadline, trusted, untrusted)
 }
 
 /// The elements of a device's screen as [`walk_screen`] reads them: the Mac's accessibility API,
@@ -692,7 +641,10 @@ pub trait HostAccessibility: Send {
     /// shares its title with another listed simulator ([`super::tree::choose_window`]), or two
     /// screens fit ([`super::tree::find_screen`]); [`Error::NotSupported`] naming
     /// `macos_permission_accessibility` when the process is no trusted accessibility client
-    /// ([`untrusted`]); [`Error::Timeout`] when the Simulator did not answer.
+    /// ([`untrusted`]); [`Error::Timeout`] when the Simulator did not answer; [`Error::Busy`]
+    /// when the screen moved or was resized during the read ([`screen_steady`]);
+    /// [`Error::Platform`] when a window of the title answers an identity text past
+    /// [`IDENTITY_TEXT_LIMIT`] ([`identity_too_long`]).
     fn read(&mut self, screen: &ScreenRequest) -> Result<HostScreen>;
 
     /// Press, through `AXPress`, the one element of `screen` that reads as `wanted` (an element a
@@ -701,7 +653,8 @@ pub trait HostAccessibility: Send {
     /// # Errors
     ///
     /// As [`Self::read`]; [`Error::NotFound`] when no element reads as `wanted` now, and
-    /// [`Error::Ambiguous`] when more than one does ([`super::tree::locate`]);
+    /// [`Error::Ambiguous`] when more than one does, or when one does but the read stopped short,
+    /// so a second may sit in the part not read ([`super::tree::locate`]);
     /// [`Error::ActionUnsupported`] when it offers no press; [`Error::Timeout`] with
     /// `may_have_run` when the press was not answered.
     fn press(&mut self, screen: &ScreenRequest, wanted: &ScreenElement) -> Result<()>;
