@@ -31,6 +31,7 @@ and names no upstream type in its API
 |---------|------|
 | `serde` | `Serialize`/`Deserialize` for the wire vocabulary and schema, in ADR-0080's spelling |
 | `schemars` | `JsonSchema` for the wire vocabulary and schema (implies `serde`) |
+| `testing` | `testing::ScriptedPipe`, a local endpoint's stream that answers from a script, for tests of what reads and writes one ([ADR-0243](../../docs/adr/ADR-0243-one-testing-kit-per-layer.md)) |
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace.
 

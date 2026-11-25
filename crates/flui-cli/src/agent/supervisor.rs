@@ -14,7 +14,7 @@
 //! run; only the answer is lost.
 
 use std::collections::BTreeMap;
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Read as _};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
@@ -34,7 +34,7 @@ use interprocess::local_socket::traits::Listener as _;
 use interprocess::local_socket::{Listener, Stream};
 use serde_json::Value;
 
-use super::listener::{bind, polled};
+use super::listener::{Unwritten, bind, polled};
 use crate::error::{CliResult, ResultExt as _};
 
 /// The longest pause between two turns of the endpoint.
@@ -168,7 +168,7 @@ struct Admission {
 struct Client {
     stream: PolledStream<Stream>,
     reader: LineReader,
-    unwritten: Vec<u8>,
+    unwritten: Unwritten,
     phase: Phase,
     /// The reload the client waits for, and the id that answers it.
     waiting: Option<(RequestId, Receiver<ReloadReport>)>,
@@ -236,7 +236,7 @@ impl Turns {
                 Client {
                     stream,
                     reader: LineReader::new(MAX_LINE),
-                    unwritten: Vec::new(),
+                    unwritten: Unwritten::default(),
                     phase: Phase::Greeting {
                         since: Instant::now(),
                     },
@@ -450,18 +450,7 @@ impl Client {
 
     /// Writes what it can; `true` once all of it is written.
     fn write(&mut self) -> io::Result<bool> {
-        while !self.unwritten.is_empty() {
-            match (&self.stream).write(&self.unwritten) {
-                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
-                Ok(written) => {
-                    self.unwritten.drain(..written);
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(true)
+        self.unwritten.write_to(&self.stream)
     }
 }
 
