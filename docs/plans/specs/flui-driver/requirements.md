@@ -316,8 +316,9 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 - **R37.** The driver measures performance from the app's frame events and input journal over a
   marked span (`perf.start` … `perf.stop`):
   - frame times: p50, p90, p95, p99 and the worst frame;
-  - **dropped** frames, a missed present deadline, kept separate from **janky** frames, whose work
-    exceeded a multiple of the refresh period (default 2×, JankStats' default, configurable);
+  - **dropped** frames, a missed present deadline, and **janky** frames, the dropped frames whose work
+    also exceeded a multiple of the refresh period (default 2×, JankStats' default, configurable),
+    reported in their own count and included in the dropped one;
   - input-to-present latency: from an input's journal timestamp to the presentation of the first
     frame that consumed it, split into input delay, processing and presentation delay (INP's three
     phases);
@@ -700,7 +701,7 @@ corrected three draft errors:
 It also added, from shipped tools:
 - finding outcomes (`needs_review`, `suppressed`) and a text-scale audit (R41, R41a);
 - partial layout templates and Playwright's update modes (R22, R42);
-- dropped and janky frames kept separate, with INP's phases and iteration rules (R37, R37a);
+- dropped and janky frames reported apart, with INP's phases and iteration rules (R37, R37a);
 - token budgets and narrowing hints for agents (R15, R16, R28a);
 - Windows isolation candidates that must pass a spike (R14b);
 - the honest limit of the activity guard (R14a);

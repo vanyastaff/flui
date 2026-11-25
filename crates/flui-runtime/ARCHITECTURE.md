@@ -1279,32 +1279,45 @@ after the wait began (see Events). Pinned by `src/ui_runtime/tests/agent_wait.rs
 **Settledness** (ADR-0400 §3). The host that runs the runtime's turns owns one list
 (`flui_runtime::settledness::Unsettled`): after each turn and its own steps it gathers the
 runtime's half (`UiRuntime::unsettled`) and its own, its loop wakes at `Unsettled::wake`, a settle
-ends when the list names no cause, and it hands the list to `UiRuntime::answer_settled`
-(`HostHalf::Complete`). A cause is added through the method of what discharges it (`next_frame`,
-`deadline` with its exact instant, `test`, `outside`), which writes `cleared_by` and the rounded
-`due_in_ms`; a parked wait's deadline is a wake alone, never a cause. The runtime's half: a redraw,
-a scheduled frame, work a frame takes (tree work, due work, pointer motion) and each
-presentation's running animation (`Ticker`, painted or not) are the next turn's while frames are
-on, listed at a dropped frame's retry while one is armed and not due, and not listed with frames
-off (a runtime that sees no window runs no frame for them). A redraw, a scheduled frame, tree work
-and motion carry the window of each presentation with work for a frame, and no window when none
-has any; due work carries none. Every deadline it wakes for is a `Timer` at its instant, read
-from the one enumeration `next_wake_owing_floors` also reads (`visit_armed_deadlines`), so the two
-cannot disagree. A frame a covered window owes its surface is the host's half. Whether a host
-composes a half is fixed at construction (`RuntimeHostServices::composes_host_half`): a runtime
-whose host does not answers its settled waits itself from its own half (`HostHalf::Absent`), with
-`SettleScope::RuntimeOnly` and never idle, wherever its outermost turn ends: the end of an owner
-dispatch (`RuntimeWork::run`, which holds the turn open around a runner's every entry), a turn its
-host ran outside one (`finish_owner_activity`), and a frame's settlement outside any turn
+ends when the list names no cause, and, while an agent's wait is parked
+(`UiRuntime::awaits_settled_answer`), it hands the list to `UiRuntime::answer_settled`
+(`HostHalf::Complete`); a turn nobody waits on gathers nothing. A cause is added through the
+method of what discharges it (`next_frame`, `deadline` with its exact instant, `test`, `outside`),
+which writes `cleared_by` and the rounded `due_in_ms`; what the development agent asks for itself
+is a wake, never a cause: a parked wait's or held act's deadline (`wake_at`) and the frames it
+asks for (`wake_at_once`, from `UiRuntime::request_agent_frame_for`: a held act's boundaries, a
+frame-counting wait's frames, an owed reading), which drive a frame without marking a
+presentation's work. The runtime's half: a redraw, a scheduled frame, work a frame takes (tree
+work, due work, pointer motion) and each presentation's running animation (`Ticker`, painted or
+not) are the next turn's while frames are on, and not listed with frames off. A cause of a
+presentation whose dropped frame's retry is ahead is listed at that retry, and another
+presentation's retry holds nothing of it: `UiRuntime::list_for_next_turn` is that one rule, which
+the headless host's own causes follow too. A redraw, a scheduled frame, tree work and motion carry
+the window of each presentation whose work the next frame serves
+(`has_frame_work_for_next_frame`); a presentation that cannot be seen, whose sink is full or whose
+device was given up is named for none, and demand only such presentations hold is not listed, as
+with frames off; a scheduled frame no presentation's work asks for, and due work, carry no window.
+Input an act queued is the application's work, a redraw of its window until it has played; a
+queued command or owner job is `PendingWork` of the application. Every deadline it wakes for is a
+`Timer` at its instant, read from the one enumeration `UiRuntime::next_wake` also reads
+(`visit_armed_deadlines`), a presentation's in-flight floor in both only where the host owes it
+(`RuntimeHostServices::with_floor_owed`), so the two cannot disagree. A frame a covered window
+owes its surface is the host's half. Whether a host composes a half is fixed at construction
+(`RuntimeHostServices::composes_host_half`): a runtime whose host does not answers its settled
+waits itself from its own half (`HostHalf::Absent`), through the agent's owner side
+(`AgentSide::answer_from_runtime_half`, so a binary with no agent keeps none of it, ADR-0402),
+with `SettleScope::RuntimeOnly` and never idle, wherever its outermost turn ends: the end of an
+owner dispatch (`RuntimeWork::run`, which holds the turn open around a runner's every entry), a
+turn its host ran outside one (`finish_owner_activity`), and a frame's settlement outside any turn
 (`settle_frame`); while a turn is open it answers nothing, and each answer pass runs contained
 behind the failure of the work before it. On a complete half a false wait ends `idle` when every
-cause listed, in any window, is one only the test discharges, none at all included; `wait.settled`
-on a window counts that window's causes and the application's, not another window's. A wait
-answered 10 000 times at one instant (`TURNS_AT_ONE_INSTANT`) ends `unsatisfied`, naming the
-causes due then; a pass at a later instant counts from one again. Image loads are
-not among the runtime's causes: the runtime sits below the layer that loads images. A running
-ticker carries its window but no owner or site: the registry that knows it runs does not expose
-where its controller was made.
+cause listed, in any window, is one only the test discharges, none at all included, unless it
+counts frames, which the agent's own frames change; `wait.settled` on a window counts that
+window's causes and the application's, not another window's. A wait answered 10 000 times at one
+instant (`TURNS_AT_ONE_INSTANT`) ends `unsatisfied`, naming the causes due then; a pass at a later
+instant counts from one again. Image loads are not among the runtime's causes: the runtime sits
+below the layer that loads images. A running ticker carries its window but no owner or site: the
+registry that knows it runs does not expose where its controller was made.
 
 **Events.** `AgentWindow::subscribe` (`UiCommand::AgentSubscribe`) registers a subscriber on the
 presentation (`agent_events`, an `EventHub`) and answers with an `EventStream`; dropping the
@@ -1360,23 +1373,24 @@ first three quoted, beside the findings of the texts it judged. A window with no
 answered this way, not with an error. The elements findings name are recorded as issued. Pinned
 by `src/ui_runtime/tests/agent_audit.rs`.
 
-**Performance spans.** `perf.start` and `perf.stop` (`agent_perf.rs`) keep a span on the
-presentation's agent slot. After each frame `AgentSide::after_frame` takes, for a running span,
-the snapshots the frame clock recorded since the span's cursor; `perf.stop` takes the last ones
-and answers. Only presented frames count; a frame's time is its work, segment start to submit
-return; past one refresh period it is dropped, past `jank_multiplier` periods janky instead, and
-both counts are `None` once any frame of the span had no known period. The span keeps the times
-of its last 3600 frames and the 64 slowest at most, so its memory is fixed at its start; past the
-cap the percentiles describe the last frames and the counts the whole span. `perf.start` refuses
-a `jank_multiplier` that is not finite and at least 1, and reports at most 64 of the `worst`
-frames asked for. A span is its starter's: the input lease the call was asked through (one
-conversation's), or the window handles a call through no lease shares. A second `perf.start`, a
-`perf.stop` with no span and one by another caller are `invalid_argument`; a lease's span goes
-when the drain releases the lease (`DevAgentSlot::take_released`), so a conversation that ends
-without `perf.stop` blocks no other; a span asked through no lease is let go at the next frame or
-call once the window handles are all dropped, and a closed window drops its span with its slot.
-With no span running a frame pays one borrow per presentation. Pinned by
-`src/ui_runtime/tests/agent_perf.rs`.
+**Performance spans.** `perf.start` and `perf.stop` (`agent_perf.rs`) keep spans on the
+presentation's agent slot, one per caller: the input lease the call was asked through (`LeaseId`,
+one connection's over the wire); a call through no lease is `invalid_argument`. After each frame
+`AgentSide::after_frame` takes, for each running span, the snapshots the frame clock recorded
+since the span's cursor; `perf.stop` takes the last ones and answers. Only presented frames count;
+a frame's time is its segment (build to the end of paint), without the submit, whose instant holds
+the vsync wait where the present blocks; raster work is not counted. Each frame is judged against
+the period of its display when taken: past one period it is dropped, and a dropped frame past
+`jank_multiplier` periods is janky too; both counts are `None` once a frame had no known period,
+and `refresh_period_ms` is the period every frame was judged against (`None` when it changed). The
+span keeps the times of its last 3600 frames and the 64 slowest at most, so its memory is fixed at
+its start; past the cap the percentiles describe the last frames and the counts the whole span.
+`perf.start` refuses a `jank_multiplier` that is not finite and at least 1, reports at most 64 of
+the `worst` frames asked for, refuses a second start by the same caller `invalid_argument` and a
+ninth span `busy`; `perf.stop` by a caller with no span is `invalid_argument` and touches no other
+span. A caller's span goes when the drain releases its lease (`DevAgentSlot::take_released`), and
+a closed window drops its spans with its slot. With no span running a frame pays one borrow per
+presentation. Pinned by `src/ui_runtime/tests/agent_perf.rs` and `tests/contracts/agent_perf.rs`.
 
 **Enablement.** Every window handle shares one `SemanticsHandle`, so semantics are
 collected while any clone lives, whatever assistive technology does; the tree an agent reads is

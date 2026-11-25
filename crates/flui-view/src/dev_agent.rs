@@ -409,7 +409,8 @@ impl AgentWindow {
     /// gesture that plays input (every gesture on the synthetic path, and
     /// `element.type_text` and `element.press_keys` on the semantic path too,
     /// which focus by an action and then inject) asked here answer
-    /// `invalid_argument`.
+    /// `invalid_argument`, and so do `perf.start` and `perf.stop`, since a perf
+    /// span is the caller's lease's.
     ///
     /// # Errors
     ///
@@ -532,7 +533,8 @@ impl AgentWindow {
 /// window asks `input.inject`, `input.release` and a gesture that plays
 /// input through a lease only: [`AgentWindow::call`] answers them
 /// `invalid_argument`. A gesture a lease holds out for is answered `gone`
-/// when the lease is let go.
+/// when the lease is let go. A perf span started through the lease is its
+/// holder's and ends with it.
 ///
 /// Not `Clone`: one holder, one release.
 pub struct InputLease {

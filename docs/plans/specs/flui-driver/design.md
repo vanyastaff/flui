@@ -372,8 +372,8 @@ Between `perf.start` and `perf.stop` the agent keeps, per presented frame, its `
 - dropped frames: a present deadline missed against the presentation's refresh period, from
   ADR-0236's snapshot (an unknown period answers `None`, and the budget then cannot judge jank and
   says so);
-- janky frames: work over `jank_multiplier` × the period (default 2, JankStats' default), counted
-  apart from dropped ones;
+- janky frames: dropped frames whose work also exceeds `jank_multiplier` × the period (default 2,
+  JankStats' default), reported in their own count and included in `dropped`;
 - input-to-present latency: journal timestamp to present time of the consuming frame, split into
   input delay (journal to the frame that dispatched it), processing (that frame's build, layout
   and paint) and presentation delay (submit to present), INP's three phases;

@@ -1671,7 +1671,7 @@ graph LR
   - a headless table over a known animation checks frame counts and phase work;
   - on W and A a scroll budget passes over 5 iterations (median of p95), and a build with an
     injected busy frame fails it;
-  - dropped and janky frames are counted apart, and latency splits into its three phases with
+  - dropped and janky frames are reported apart, and latency splits into its three phases with
     tagged states;
   - an unknown refresh period reports that jank cannot be judged.
 
