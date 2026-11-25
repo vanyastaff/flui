@@ -14,7 +14,9 @@
 //! answer in time is owed to the page rather than to a client, and is kept apart
 //! ([`Abandons`]).
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+mod abandons;
+
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, Read as _};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,11 +28,14 @@ use flui_protocol::framing::{LineReader, MAX_LINE};
 use interprocess::local_socket::traits::Listener as _;
 use interprocess::local_socket::{Listener, Stream};
 
+#[cfg(test)]
+pub(super) use self::abandons::ABANDON_TRIES;
+use self::abandons::Abandons;
 use super::super::listener::{bind, polled};
 use super::super::unwritten::Unwritten;
 use super::{
-    ABANDON_FUNCTION, BrowserLink, CLOSE_FUNCTION, LinkError, LinkEvent, Remote, SEND_FUNCTION,
-    connect_function, read_report,
+    ABANDON_FUNCTION, BrowserLink, CLOSE_FUNCTION, COMMAND_TIMEOUT, HOUSEKEEPING_TIMEOUT,
+    LinkError, LinkEvent, Remote, SEND_FUNCTION, connect_function, read_report,
 };
 
 /// The longest pause between two turns of the relay.
@@ -49,12 +54,8 @@ const MAX_QUEUED: usize = 16;
 /// closed at once, its page connection with it.
 pub(super) const MAX_UNWRITTEN: usize = 64 << 20;
 
-/// The pause before the second try of an abandon the page did not answer; it doubles with each
-/// try after.
+/// The pause after the first unanswered try of an abandon; it doubles with each try after.
 const ABANDON_BACKOFF: Duration = Duration::from_millis(100);
-
-/// How many times the relay tries the abandons it owes before it gives them up.
-pub(super) const ABANDON_TRIES: u32 = 5;
 
 /// The relay's thread: dropping the handle stops it, ending every connection.
 pub(crate) struct Relay {
@@ -180,73 +181,6 @@ enum Connection {
     Ended,
 }
 
-/// The abandons the relay owes the page ([`ABANDON_FUNCTION`]): the IDs of connect calls the
-/// page did not answer in time. An unanswered call is not one that opened nothing: the page
-/// may run it late and open a connection nobody holds. The abandon is owed to the page, not to
-/// the client, which is closed at once. Every ID owed is abandoned in one call, tried at most
-/// [`ABANDON_TRIES`] times on a doubling backoff and then given up; a reload drops them, since
-/// the document the late calls could open a connection in is gone.
-struct Abandons {
-    ids: BTreeSet<u64>,
-    /// The pause before the second try.
-    backoff: Duration,
-    /// The tries made for what is owed.
-    tries: u32,
-    /// When the next try is due.
-    next_try: Instant,
-}
-
-impl Abandons {
-    fn new(backoff: Duration) -> Self {
-        Self {
-            ids: BTreeSet::new(),
-            backoff,
-            tries: 0,
-            next_try: Instant::now(),
-        }
-    }
-
-    /// Owes the abandon of `id`: tried at the next turn when nothing else is owed, and with
-    /// what is owed already otherwise, every ID given its full count of tries.
-    fn owe(&mut self, id: u64, now: Instant) {
-        if self.ids.is_empty() {
-            self.next_try = now;
-        }
-        self.ids.insert(id);
-        self.tries = 0;
-    }
-
-    /// The argument of the abandon to make now, if one is due.
-    fn due(&self, now: Instant) -> Option<String> {
-        (!self.ids.is_empty() && now >= self.next_try).then(|| self.argument())
-    }
-
-    /// Every ID owed, as [`ABANDON_FUNCTION`] takes them.
-    fn argument(&self) -> String {
-        serde_json::Value::from(self.ids.iter().map(u64::to_string).collect::<Vec<String>>())
-            .to_string()
-    }
-
-    /// The page did not answer the try that ended at `now`: tried again after a pause twice the
-    /// last, or given up after the last try.
-    fn unanswered(&mut self, now: Instant) {
-        self.tries = self.tries.saturating_add(1);
-        if self.tries >= ABANDON_TRIES {
-            crate::ui::debug("the page answered none of the relay's abandons; given up");
-            self.clear();
-            return;
-        }
-        let doublings = self.tries.saturating_sub(1).min(16);
-        self.next_try = now + self.backoff.saturating_mul(1_u32 << doublings);
-    }
-
-    /// Nothing is owed any more: the page answered, or the document went.
-    fn clear(&mut self) {
-        self.ids.clear();
-        self.tries = 0;
-    }
-}
-
 /// What a client's turn decided.
 enum Outcome {
     Keep,
@@ -329,7 +263,11 @@ impl Turns {
         if let Page::Waiting { since, retry } = client.page
             && now >= retry
         {
-            match self.link.call(&self.connect, &[&self.export, &connection]) {
+            match self.link.call(
+                &self.connect,
+                &[&self.export, &connection],
+                now + COMMAND_TIMEOUT,
+            ) {
                 Ok(Some(remote)) => {
                     client.page = Page::Connected {
                         remote,
@@ -377,11 +315,8 @@ impl Turns {
                 }
             }
         }
-        // A client that went takes no more: what its connection still holds in the page is let
-        // go of now. One the page ended keeps writing it until the write fails.
-        if !read && *state != Connection::Ended {
-            return Ok(Outcome::Leave);
-        }
+        // Resolved before the client's own state is looked at: what the page sent before it
+        // broke is owed to a client that has stopped sending as much as to one that has not.
         if let Connection::Refused { drain } = *state
             && self.drains > drain
         {
@@ -395,19 +330,32 @@ impl Turns {
                 Ok(false) => Outcome::Keep,
             });
         }
+        if !read {
+            return Ok(Outcome::Leave);
+        }
         Ok(match client.write() {
             Ok(_) => Outcome::Keep,
             Err(_) => Outcome::Leave,
         })
     }
 
-    /// Makes the abandon owed, if one is due: one call for every ID owed, whatever their count.
+    /// Makes the abandon owed, if one is due: one call for every ID owed, whatever their count,
+    /// waiting no longer than [`HOUSEKEEPING_TIMEOUT`] for the page. An answer, an error the page
+    /// threw included, settles every ID ([`ABANDON_FUNCTION`]).
     fn abandon(&mut self) -> Result<(), LinkError> {
-        let Some(ids) = self.abandons.due(Instant::now()) else {
+        let now = Instant::now();
+        let Some(ids) = self.abandons.due(now) else {
             return Ok(());
         };
-        match self.link.call(ABANDON_FUNCTION, &[&ids]) {
-            Err(LinkError::Gone(why)) => return Err(LinkError::Gone(why)),
+        match self
+            .link
+            .call(ABANDON_FUNCTION, &[&ids], now + HOUSEKEEPING_TIMEOUT)
+        {
+            // The link is unusable: the stop has no try left to make.
+            Err(LinkError::Gone(why)) => {
+                self.abandons.clear();
+                return Err(LinkError::Gone(why));
+            }
             Err(LinkError::Timeout) => self.abandons.unanswered(Instant::now()),
             answered => {
                 if let Err(error) = answered {
@@ -454,9 +402,12 @@ impl Turns {
             // The document goes, and every connection open in it, so their clients are closed.
             // Each is closed in the page all the same, and released: one opened while the event
             // was on its way belongs to the next document, and would hold its place in the
-            // app's agent. A connection the page ended is left to finish writing its client, a
-            // client still waiting for the export connects to the next document, and the
-            // abandons owed go with the document their late calls could open a connection in.
+            // app's agent. A connection the page ended is left to finish writing its client, and
+            // a client still waiting for the export connects to the next document. The abandons
+            // owed are dropped: each ID was tried in the iteration it was owed in, before this
+            // delivery, so a try naming it is on the link behind its connect call, and the page
+            // runs the two in order, in whichever document the late call lands. What the drop
+            // ends is only the tries after it.
             LinkEvent::Navigated => {
                 self.abandons.clear();
                 let open = self
@@ -498,16 +449,19 @@ impl Turns {
     }
 
     /// Ends every connection: the relay stops, and what it owes its clients is dropped. The
-    /// abandons owed get one try in all, the last the relay can make.
+    /// abandons owed get one try in all, the last the relay can make, waiting no longer than
+    /// [`HOUSEKEEPING_TIMEOUT`].
     fn end(&mut self) {
         let ids = self.clients.keys().copied().collect::<Vec<u64>>();
         for id in ids {
             self.leave(id);
         }
-        if !self.abandons.ids.is_empty() {
-            let _ = self
-                .link
-                .call(ABANDON_FUNCTION, &[&self.abandons.argument()]);
+        if !self.abandons.is_empty() {
+            let _ = self.link.call(
+                ABANDON_FUNCTION,
+                &[&self.abandons.argument()],
+                Instant::now() + HOUSEKEEPING_TIMEOUT,
+            );
             self.abandons.clear();
         }
     }

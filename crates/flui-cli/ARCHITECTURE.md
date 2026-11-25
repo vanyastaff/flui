@@ -427,9 +427,13 @@ the contract crate `flui-protocol`: the launch variables and the shortest token
   stderr) and drives one tab through a `BrowserLink`, the five things the relay
   asks of a tab: install a preload and load a URL, call a function that gets a
   report function last and keep what it returns, call a function on what was
-  kept, release what was kept, and read the tab's events. A command's answer
-  that comes after the command gave up waiting is kept by the socket, and the
-  link releases what it holds in the page. Each browser is spoken to in the protocol it
+  kept, release what was kept, and read the tab's events. A call waits for its
+  answer until the deadline the relay gives it: a command's timeout for a
+  connect call, a few hundred milliseconds for the relay's upkeep, since the
+  relay's one thread serves no client while it waits. A command's answer that
+  comes after the command gave up waiting is kept by the socket (a bounded
+  number), and the link releases what it holds in the page before it reads the
+  tab's next event, as far as that read's deadline allows. Each browser is spoken to in the protocol it
   has without a driver: WebDriver BiDi in Firefox (`bidi`, the report function
   is a channel), the DevTools protocol in the Chromium family (`cdp`, a
   binding); the session and the relay never see which. Both report a
@@ -446,10 +450,14 @@ the contract crate `flui-protocol`: the launch variables and the shortest token
   ended is released once its client has been written what the page sent before
   the end, a reload included. A connect call the page did not answer in time
   closes its client at once and leaves an abandon owed to the page
-  (`relay::Abandons`): every ID owed is abandoned in one call, which closes a
-  connection the page opened late and refuses a call it has not run yet; it is
-  tried a bounded number of times on a doubling backoff, dropped by a reload,
-  and tried once more when the relay stops. A reload closes the clients whose
+  (`relay::Abandons`): every ID owed is abandoned in one call, which marks each
+  abandoned first, so a call the page has not run yet opens nothing, and then
+  closes each connection the page opened late, one close that throws skipping
+  none of the others. A newly owed ID is tried at once; each ID keeps its own
+  count of tries and is given up after a bounded number, on a backoff that
+  doubles; the IDs owed are bounded, the oldest going first; a reload drops
+  them, each having had a try sent before it; and the relay tries them once more
+  when it stops. A reload closes the clients whose
   connections went with the document, and closes those connections in the page
   all the same, in case one belongs to the next document. A line the page
   refuses leaves its connection ended when the page's end follows in the same
