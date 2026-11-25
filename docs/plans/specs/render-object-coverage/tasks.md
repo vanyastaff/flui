@@ -14,7 +14,7 @@
   owns stops and says so here.
 - **Shared one-line files.** A task that adds a render object or a widget adds one line to
   each of: `crates/flui-objects/src/lib.rs` and the family's `mod.rs`; the `RENDER_OBJECT_TYPES`
-  list and, for a new family, the two mount lines, the `FAMILY_FILES` entry and the
+  list and, for a new family, the two mount lines, its name in `family_files![..]` and the
   `family_*` test in `crates/flui-objects/tests/render_object_harness.rs`; the `mod` line of
   `crates/flui-view/src/element/mod.rs` for a new lazy sliver's file;
   `crates/flui-widgets/src/lib.rs`, the family's `mod.rs` and
@@ -72,7 +72,7 @@
 
 | Task | Content | Req. | Crates | Depends on | Gated | Status |
 |------|---------|------|--------|------------|:-----:|--------|
-| RC0 | Harness reads family modules; the guard counts `pub` rows, whole names and mounted files; `docs/testing.md` drops the copied count | R1 | `flui-objects` (tests), docs | — | | not started |
+| RC0 | Harness reads family modules; the guard counts `pub` rows, whole names and mounted files; `docs/testing.md` drops the copied count | R1 | `flui-objects` (tests), docs | — | | done |
 | RC1 | The `shown` module with `OverflowClip`, the shared row and its guard; six overflow objects move onto it; the gap entry leaves | R2 | `flui-objects`, docs | RC0 | | not started |
 | RC43 | `ShownChildren` and the sliver frame; the carousel, the list, the fixed-extent list and the grid move onto it; `PinnedChildren` returns its slots and keeps none | R2 | `flui-objects`, docs | RC1 | | not started |
 | RC2 | Sliver pass-through base; six proxies move to it | R3, R4 | `flui-objects` | RC0 | | not started |
@@ -163,21 +163,32 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 ### RC0. The harness reads its families from more than one file
 
 - **What:** W1. The guard's matching moves into one function, `rows_naming`, with W1's three
-  rules: a row is a column-0 `fn harness_` under any visibility; a type counts only as a whole
-  identifier; a family file counts only when it is listed in `FAMILY_FILES` and mounted from
-  the root at column 0. `family_files_are_mounted_and_listed` reads `tests/harness/` and
+  rules: a row is a column-0 `fn harness_` under any visibility with no attribute over it and
+  no block comment opened above it, and ends at its closing column-0 `}` (W1, rule 1); a type
+  counts only as a whole identifier; a family file counts only when its name is in
+  `family_files![..]` and it is mounted (W1, rule 3). `family_files_are_mounted_and_listed` reads `tests/harness/` and
   takes a directory that does not exist as the empty set, which is what this task leaves. A
   type
   the substring match covered only through a longer name gets its own row here. No existing
   row moves. `docs/testing.md` links `RENDER_OBJECT_TYPES` instead of saying "81".
 - **Owns:** `crates/flui-objects/tests/render_object_harness.rs` (the guards and the module
-  list), the harness paragraph of `docs/testing.md`. It creates no directory:
+  list), the harness paragraph of `docs/testing.md`, `crates/flui-objects/README.md` (its
+  copied counts and its Families table), the family list of `crates/flui-objects/src/lib.rs`
+  (its module docs), the `tempfile` dev-dependency in `crates/flui-objects/Cargo.toml` and its
+  line in `Cargo.lock`, and the header coverage map of the harness (a new render type adds its
+  row there: `coverage_map_lists_every_render_object_type` requires it). It creates no directory:
   `crates/flui-objects/tests/harness/` appears with RC1's first family file.
 - **Tests:** `the_guard_counts_a_pub_row_of_a_family_file`,
+  `the_guard_ends_a_row_at_its_own_end`,
+  `the_guard_skips_a_row_the_compiler_does_not_build`,
   `the_guard_refuses_a_name_inside_a_longer_one`,
   `the_guard_refuses_a_family_file_that_is_not_mounted`,
-  `the_mount_check_takes_a_missing_directory_as_no_files`, each over literal sources or a
+  `the_mount_check_takes_a_missing_directory_as_no_files`,
+  `the_mount_check_sorts_the_stems`,
+  `the_mount_check_refuses_a_directory_it_cannot_list`, each over literal sources or a
   temporary directory and each failing with the matcher reverted;
+  `a_family_entry_is_the_file_its_name_mounts` over the expansion of `family_files!`;
+  `the_family_macro_reads_the_family_directory`; `coverage_map_lists_every_render_object_type`;
   `family_files_are_mounted_and_listed`; the two existing guards pass.
 - **Checks:** clippy and nextest for `flui-objects`; the `checks` job's document steps (typos,
   lychee, unmounted-tests).
@@ -1066,3 +1077,11 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 
 Empty until a task lands. Each task records here the final names of its tests, the commands it
 ran with their results, and the pull request.
+
+### RC0
+
+`cargo test --locked -p flui-objects --test render_object_harness`: 37 passed.
+`cargo test --locked --release -p flui-objects --test render_object_harness catalog`: 1 passed.
+`cargo clippy --locked -p flui-objects --all-targets -- -D warnings` and `cargo fmt --all --check`:
+clean. The guard's tests are listed in design-parity.md W1; each was seen failing with its fix
+taken out by hand. The mutation run and typos were not run on the branch. Pull request: #3185.

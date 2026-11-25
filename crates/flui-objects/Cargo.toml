@@ -48,6 +48,7 @@ flui-objects = { path = ".", features = ["testing"] }
 flui-painting = { workspace = true }
 insta = { workspace = true }
 static_assertions = { workspace = true }
+tempfile = { workspace = true }
 flui-interaction = { workspace = true, features = ["testing"] }
 
 [[test]]

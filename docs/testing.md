@@ -1066,7 +1066,7 @@ is the one-node snapshot.
 A `Probe::dump()` is what a failing assertion should print to show *why*.
 
 ```bash
-cargo test -p flui-rendering --test render_object_harness
+cargo test -p flui-objects --test render_object_harness
 ```
 
 ### Render-object harness catalog
@@ -1075,11 +1075,21 @@ cargo test -p flui-rendering --test render_object_harness
 catalog: every concrete `RenderBox` / `RenderSliver` type is mounted
 through `RenderTester`, laid out (or painted when hit-test / layer
 structure matters), and asserted via `Probe` + structured diagnostics
-queries. The file header lists a per-type coverage map; `RENDER_OBJECT_TYPES`
-is the manifest of all 81 exported render types (count it yourself —
-`RENDER_OBJECT_TYPES` in that file — if this drifts again); and
-`catalog_covers_every_render_object_name` fails CI if any type is missing
-from the harness file, and `render_object_types_match_exports` fails CI if
+queries. The file header lists a per-type coverage map, which
+`coverage_map_lists_every_render_object_type` holds to `RENDER_OBJECT_TYPES`, the
+[manifest of the exported render types](../crates/flui-objects/tests/render_object_harness.rs);
+`catalog_covers_every_render_object_name` fails CI if any type is not named, as a
+whole identifier in code (a comment does not count, a string does), in a row (a
+column-0 `fn harness_*` under any visibility, with no attribute over it and no
+block comment opened above it) of that file or of a family file under
+`tests/harness/` that its `FAMILY_FILES` lists and that it mounts. The guard reads
+text, and those files keep to its limits: a row or mount line written at column 0
+inside a multi-line string literal is indistinguishable from code, so literal guard
+input is written on one line with `\n` escapes; and strings are not told apart
+from code, so no string in a code line holds a `/*` its line does not close (it is
+spelled through `BLOCK_COMMENT_OPENER`), and none holds `//` followed later on its
+line by a block comment. `family_files_are_mounted_and_listed` fails CI if those three
+disagree; and `render_object_types_match_exports` fails CI if
 the catalog and this crate's `pub use` exports diverge. Add a harness test
 when landing a new render object so layout, hit-test, and config/runtime
 diagnostics stay pinned without visual inspection.

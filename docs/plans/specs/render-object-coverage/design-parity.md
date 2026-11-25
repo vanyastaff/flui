@@ -12,53 +12,103 @@ answer", "the offset index" and "the sliver transform seam" are the seams of tha
 
 ## W1. The harness reads its families from more than one file
 
-`crates/flui-objects/tests/render_object_harness.rs` is one test target of 15,905 lines
-(`autotests = false`). Its guard `catalog_covers_every_render_object_name` reads the file with
-`include_str!("render_object_harness.rs")` and counts a name only inside the body of a
-`fn harness_*` (the text up to the first `\n}\n`). Most tasks of this spec add rows; with one
-file they all own it.
+`crates/flui-objects/tests/render_object_harness.rs` is one test target (`autotests = false`).
+Its guard `catalog_covers_every_render_object_name` reads the root with
+`include_str!("render_object_harness.rs")` and the family files through `FAMILY_FILES`, and
+counts a name only inside a row. Most tasks of this spec add rows; with one file they would all
+own it.
 
-- **Shape.** Family modules under `crates/flui-objects/tests/harness/` *(proposed)*, mounted
-  from the root at column 0 with `#[path = "harness/<family>.rs"]` and `mod <family>;`, as
-  `harness_snapshot.rs` is mounted today. One `const FAMILY_FILES` beside the `mod` lines
-  lists `(name, include_str!(..))` pairs. Existing rows stay where they are; only new families
-  use files of their own.
+- **Shape.** Family modules under `crates/flui-objects/tests/harness/`, each mounted from the
+  root by two consecutive column-0 lines, `#[path = "harness/<family>.rs"]` and `mod <family>;`,
+  as `harness_snapshot.rs` is. `FAMILY_FILES` is `family_files![a, b]`: the macro takes the names
+  alone and expands each to `(stringify!(name), include_str!("harness/<name>.rs"))`, so the text
+  the guard counts is the file the name mounts. The expansion also imports the module
+  (`use self::<name> as _`): a compile-time backstop, held by the compiler, for a mount the text
+  check reads as present but the compiler does not build at the top level (a pair written at
+  column 0 inside a multi-line string, a macro invocation's body or a `#[rustfmt::skip]` item;
+  rule 3). A row has no such backstop. No test reaches the import: a case that must not compile
+  needs a compile-fail suite, which `flui-objects` does not have, and a trybuild target for one
+  macro defined inside a test file would need the macro moved out of it. Existing rows stay
+  where they are; only new families use files of their own.
 - **What a row looks like in a family file.** The root's `family_*` table calls it, so it is
   `pub(super) fn harness_*`; the function the root calls in `harness_snapshot.rs` is `pub fn`
   for the same reason. A row nothing calls is dead code under `-D warnings`.
-- **The guard, as three rules in one function** `rows_naming(sources, type_name)` that the
-  guard tests call with the real sources:
-  1. *A row* starts at a line at column 0 that matches `fn harness_` after an optional
-     visibility (`pub`, `pub(crate)`, `pub(super)`) and ends at the first `\n}\n`. The
-     present split on `"\nfn harness_"` sees no `pub` row.
-  2. *A name* counts only as a whole identifier: not preceded or followed by a letter, a
-     digit or an underscore. A row that names `RenderSliverFloatingHeaderBase` then does not
-     cover `RenderSliverFloatingHeader`. A type the present substring match covered only
-     through a longer name gets its row in this change.
-  3. *A file* counts only when it is mounted. `family_files_are_mounted_and_listed` reads the
-     directory (`CARGO_MANIFEST_DIR/tests/harness`), and fails for a file that is not in
-     `FAMILY_FILES`, for a listed file whose `#[path]` and `mod` lines are missing from the
-     root at column 0, and for a listed name with no file. A directory that does not exist
-     is the empty set: git stores no empty directory, and this change adds no family file. CI's unmounted-tests step globs
+- **The guard** is `rows_naming(root, families, type_name)`, which the tests call with the real
+  sources and with literal text:
+  1. *A row* starts at a column-0 line that opens `fn harness_` under any visibility (`pub`,
+     `pub(crate)`, `pub(super)`) and that the compiler builds (`compiled_at_top_level`, the
+     rule a mount pair also meets, rule 3). A line's code (`code_of`) is its text before the
+     first `//`, without the block comments that open and close on it. A row whose opening
+     line's code ends with `}` (a one-line row such as `fn harness_x() {} // to come` or
+     `fn harness_x() {} /* to come */`) is that line alone; any other row is its opening line
+     and the lines after it up to, not including, the first that starts at column 0 with `}`.
+     When a signature leaves no room for its `{`, rustfmt puts the brace on the next line, at
+     column 0 when the signature fits its line and after one space when the signature itself
+     is longer; either line belongs to the row. Line ends are read without `\r`, so a CRLF
+     source ends its rows where an LF source does.
+  2. *A name* counts only as a whole identifier (`names_whole_identifier`) in the code of a
+     row's lines: not preceded or followed by a letter, a digit or an underscore, and not in a
+     comment (a row's lines below a block comment left open are not read). A row that names
+     `RenderSliverFloatingHeaderBase` then does not cover `RenderSliverFloatingHeader`, and
+     `// RenderX is covered elsewhere` covers nothing. A name inside a string literal counts:
+     by convention a row that names a type in a string, such as an assertion message,
+     exercises it.
+  3. *A file* counts only when it is mounted (`is_mounted`): its two mount lines are consecutive
+     at column 0 and the first is compiled (`compiled_at_top_level`). The rule, shared with
+     rows, refuses an item whose nearest code above (blank lines skipped) does not end an item
+     (`;` or `}`) or is an attribute (starts with `#[`, a one-line `#[attr] item;` included),
+     and every item below the first line that opens a block comment which does not close on
+     that line (`first_block_comment`; an opener with another inside it before its closer is
+     read as open, since block comments nest); the catalog's failure names that line. An item
+     on the opener's own line counts, read up to the opener; mount lines are matched whole, so
+     a mount line never carries one.
+     *Limits of a text guard*, which the root and the family files keep to. Column 0 is read
+     as the top level of the file: rustfmt, which CI's format check holds, indents the items
+     inside an item, but not the contents of a string literal, a macro invocation's body or a
+     `#[rustfmt::skip]` item, so a row or mount line written at column 0 inside one of those is
+     indistinguishable from code; literal guard input is written on one line with `\n`
+     escapes. Strings are not told apart from code: a `/*` inside a string that its line does
+     not close reads as an opener (every row below stops counting, and the catalog names the
+     line), so a string spells it through `BLOCK_COMMENT_OPENER`; a `//` inside a string reads
+     as a line comment, which refuses the item right below and hides a block comment opened
+     after it on the line. The rule that keeps both out: no string in a code line of the root or
+     a family file holds a `/*` its line does not close, and none holds `//` followed later on
+     its line by a block comment.
+     The directory is `FAMILY_DIRECTORY`, which `mount_lines` and `family_directory()` read
+     and the default arm of `family_files!` spells as a literal for `include_str!`
+     (`the_family_macro_reads_the_family_directory` holds the two equal).
+     `family_files_are_mounted_and_listed` reads the directory (`family_directory()`: the
+     run's `CARGO_MANIFEST_DIR` first, so a relocated nextest archive finds the sources, the
+     compile-time path as the fallback) and fails for a file not in `FAMILY_FILES`, a listed
+     name with no file, and a listed file that is not mounted. A directory that does not exist
+     is the empty set (git stores no empty directory); one that cannot be listed for another
+     reason fails with its path; the stems are sorted. CI's unmounted-tests step globs
      `tests/*.rs` only, so this test is the rung for the subdirectory (ADR-0303: a test of the
      owning crate).
-- **The guard is tested on text.** Three tests call `rows_naming` and the mount check on
-  literal sources: `the_guard_counts_a_pub_row_of_a_family_file`,
-  `the_guard_refuses_a_name_inside_a_longer_one`,
-  `the_guard_refuses_a_family_file_that_is_not_mounted`. Each fails with the present matcher,
-  so the change has a test that fails without it, before any family file exists.
+- **The guard is tested on text**, so the change has tests that fail without it before any
+  family file exists: `the_guard_counts_a_pub_row_of_a_family_file` (visibilities, CRLF),
+  `the_guard_ends_a_row_at_its_own_end` (one-line rows, with and without a line or block
+  comment after them, a closing `}` with a comment or trailing whitespace, both of rustfmt's
+  brace lines below a wrapped signature, a name only in a comment against a name in a string),
+  `the_guard_skips_a_row_the_compiler_does_not_build` (an attribute over it, a block comment
+  opened at a line's start, after code or nested, against one closed on its line and a row on
+  the opener's own line), `the_guard_refuses_a_name_inside_a_longer_one`,
+  `the_guard_refuses_a_family_file_that_is_not_mounted` (every refused placement, the block
+  comments among them, and each message of `mount_problems`),
+  `the_mount_check_takes_a_missing_directory_as_no_files`,
+  `the_mount_check_refuses_a_directory_it_cannot_list` (their scratch directories are
+  `tempfile::tempdir()`, removed with their contents on drop), `the_mount_check_sorts_the_stems`
+  (over an unsorted list, through `rs_stems`), `a_family_entry_is_the_file_its_name_mounts`
+  (the pair the macro expands to; the import is the compiler's, above),
+  `the_family_macro_reads_the_family_directory` and
+  `coverage_map_lists_every_render_object_type` (the header's coverage map names each type of
+  `RENDER_OBJECT_TYPES` once, so the map is checked against the list instead of copied).
 - **What each later task still edits in the root.** One line in `RENDER_OBJECT_TYPES`, and the
-  first task of a family adds its two mount lines, its `FAMILY_FILES` entry and its
+  first task of a family adds its two mount lines, its name in `family_files![..]` and its
   `family_*` test. These are one-line, order-insensitive edits; a rebase resolves them
   mechanically.
-- **Document.** `docs/testing.md` says the manifest holds "all 81 exported render types"; the
-  list has 106 entries. The sentence links the list and drops the number (AGENTS.md, "One
-  source per fact").
-- **Alternative: one test target per family.** Each target links the whole crate and its GPU
-  test support again; `flui-widgets` moved the other way for that reason (its `Cargo.toml`
-  comment on `autotests`). Rejected.
-- **Alternative: leave one file.** Every task then lists the same file as owned, which "One
-  writer per file set" forbids. Rejected.
+- **Document.** `docs/testing.md` and the crate README link `RENDER_OBJECT_TYPES` and carry no
+  count of it (AGENTS.md, "One source per fact").
 
 ## W2. The shown answer, starting with the overflow clip
 

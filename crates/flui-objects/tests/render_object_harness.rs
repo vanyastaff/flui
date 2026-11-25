@@ -17,6 +17,7 @@
 //! | `RenderPadding` | `harness_padding_*` | yes | yes | — | yes | queries |
 //! | `RenderCustomSingleChildLayoutBox` | `harness_custom_single_child_layout_*` | yes | yes | yes | yes | queries, baseline |
 //! | `RenderCustomMultiChildLayoutBox` | `harness_custom_multi_child_layout_*` | yes | yes | yes | yes | queries |
+//! | `RenderAlign` | `harness_align_*`, `harness_nested_extreme_alignments_*`, `harness_aligning_boxes_*` | yes | — | yes | — | dry baseline, finite semantics |
 //! | `RenderCenter` | `harness_center_*` | yes | — | — | yes | — |
 //! | `RenderAspectRatio` | `harness_aspect_ratio_*` | yes | — | — | yes | — |
 //! | `RenderBaseline` | `harness_baseline_*` | yes | — | — | yes | queries |
@@ -112,8 +113,18 @@
 //! | `RenderSliverFloatingPersistentHeader` | `harness_sliver_persistent_header_floating_*` | yes | — | — | — | state machine |
 //! | `RenderSliverFloatingPinnedPersistentHeader` | `harness_sliver_persistent_header_floating_pinned_*` | yes | — | — | — | state machine |
 //!
-//! [`catalog_covers_every_render_object_name`] guards the table: every row's
-//! type string must appear in this file so a missing harness test fails CI.
+//! [`catalog_covers_every_render_object_name`] guards the catalog: every type
+//! of `RENDER_OBJECT_TYPES` must appear, as a whole identifier in code (not in
+//! a comment), inside a row (a column-0 `fn harness_*` under any visibility,
+//! with no attribute over it and no block comment opened above it, up to its
+//! closing column-0 `}`) of this file or of a family file under
+//! `tests/harness/` that `FAMILY_FILES` lists and this file mounts, so a type
+//! with no row fails CI; [`coverage_map_lists_every_render_object_type`] holds
+//! the table above to the same list. `rows_naming` gives the whole rule, and
+//! `compiled_at_top_level` the limits of a guard that reads text, which these
+//! files keep to: literal guard input is written on one line with `\n`
+//! escapes, and no string holds a `/*` its line does not close (one is spelled
+//! through `BLOCK_COMMENT_OPENER`) or a `//` followed by a block comment.
 
 #![allow(
     clippy::disallowed_methods,
@@ -13643,26 +13654,738 @@ fn harness_layout_builder_without_a_child_takes_its_smallest_size() {
 }
 
 // ============================================================================
-// Catalog guard — every exported render type must be exercised above
+// Catalog guard — every exported render type must be exercised in a row
 // ============================================================================
+
+/// The directory of the family files beside this file. `include_str!` takes a
+/// literal only, so the default arm of `family_files!` spells it out, and
+/// `the_family_macro_reads_the_family_directory` holds the two equal.
+const FAMILY_DIRECTORY: &str = "harness";
+
+/// The `(name, source)` pairs of the family files, built from the names alone:
+/// `family_files![a, b]`. The source is `include_str!` of `harness/<name>.rs`,
+/// a path the compiler resolves beside this file, so the text the guard counts
+/// is always the file the name mounts. The expansion also imports the module
+/// `<name>`: a compile-time backstop, held by the compiler, for a mount that
+/// `is_mounted` reads as present but the compiler does not build at the top
+/// level, such as a pair written at column 0 inside a multi-line string, a
+/// macro invocation's body or a `#[rustfmt::skip]` item
+/// (`compiled_at_top_level` says why the text cannot tell). A row has no
+/// such backstop. No test
+/// reaches the import: a case that must not compile needs a compile-fail
+/// suite, which this crate does not have. The `@in` arm takes another
+/// directory, for the macro's own test.
+macro_rules! family_files {
+    (@in $directory:literal, $($name:ident),* $(,)?) => {
+        &[$({
+            #[expect(
+                unused_imports,
+                reason = "the import only proves that the family's module is compiled"
+            )]
+            use self::$name as _;
+            (
+                stringify!($name),
+                include_str!(concat!($directory, "/", stringify!($name), ".rs")),
+            )
+        }),*]
+    };
+    ($($name:ident),* $(,)?) => {
+        family_files!(@in "harness", $($name),*)
+    };
+}
+
+/// Family modules of rows, each mounted from this root with
+/// `#[path = "harness/<name>.rs"]` and `mod <name>;` (`is_mounted` says where
+/// the two lines may stand). A file counts toward the catalog only when it is
+/// listed here and mounted (`family_files_are_mounted_and_listed`).
+const FAMILY_FILES: &[(&str, &str)] = family_files![];
+
+/// The directory of the family files. The run's `CARGO_MANIFEST_DIR` comes
+/// first: cargo and nextest set it for the test process, and a nextest archive
+/// run with a workspace remap sets it to where the sources are on the machine
+/// that runs the binary, which the path compiled into it need not be. The
+/// compile-time path is the fallback for a binary started by hand.
+fn family_directory() -> std::path::PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(
+            || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            std::path::PathBuf::from,
+        )
+        .join("tests")
+        .join(FAMILY_DIRECTORY)
+}
+
+fn is_identifier_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Whether `text` holds `name` as a whole identifier: neither neighbour is a
+/// letter, a digit or an underscore.
+fn names_whole_identifier(text: &str, name: &str) -> bool {
+    text.match_indices(name).any(|(start, _)| {
+        let before = text[..start].chars().next_back();
+        let after = text[start + name.len()..].chars().next();
+        !before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char)
+    })
+}
+
+/// Whether `line` opens a row: `fn harness_` at column 0 under any visibility.
+fn opens_row(line: &str) -> bool {
+    let rest = match line.strip_prefix("pub") {
+        Some(after_pub) if after_pub.starts_with('(') => after_pub
+            .split_once(") ")
+            .map_or(line, |(_, after_restriction)| after_restriction),
+        Some(after_pub) => after_pub.strip_prefix(' ').unwrap_or(line),
+        None => line,
+    };
+    rest.starts_with("fn harness_")
+}
+
+/// The mount lines the root must hold, at column 0, for the family file `name`.
+fn mount_lines(name: &str) -> [String; 2] {
+    [
+        format!("#[path = \"{FAMILY_DIRECTORY}/{name}.rs\"]"),
+        format!("mod {name};"),
+    ]
+}
+
+/// The code of `line`, trimmed: the text before its first `//`, without the
+/// block comments that open and close on the line. An opener whose comment
+/// does not close on the line, or holds another opener before its first
+/// closer (block comments nest), is kept with the rest of the line, so
+/// `first_block_comment` sees it. Strings are not told apart from code
+/// (`compiled_at_top_level` states what that costs).
+fn code_of(line: &str) -> String {
+    let mut rest = line.split_once("//").map_or(line, |(code, _)| code);
+    let mut code = String::new();
+    while let Some(open) = rest.find(BLOCK_COMMENT_OPENER) {
+        let inside = &rest[open + BLOCK_COMMENT_OPENER.len()..];
+        let Some(close) = inside.find("*/") else {
+            break;
+        };
+        if inside[..close].contains(BLOCK_COMMENT_OPENER) {
+            break;
+        }
+        code.push_str(&rest[..open]);
+        code.push(' ');
+        rest = &inside[close + "*/".len()..];
+    }
+    code.push_str(rest);
+    code.trim().to_owned()
+}
+
+/// The two characters that open a block comment, spelled in two pieces so that
+/// this file, which the guard reads, holds no opener in its code.
+const BLOCK_COMMENT_OPENER: &str = concat!("/", "*");
+
+/// The index of the first line whose code (`code_of`) still holds a
+/// block-comment opener: one whose comment does not close on that line. The
+/// line itself is read as code up to the opener; the lines below it are not.
+fn first_block_comment(lines: &[&str]) -> Option<usize> {
+    lines
+        .iter()
+        .position(|line| code_of(line).contains(BLOCK_COMMENT_OPENER))
+}
+
+/// For each line of a source, whether an item that starts there at column 0
+/// is one the compiler builds, as far as the guard can tell from the text.
+/// `is_mounted` and `rows_naming` both read this, so a mount pair and a row
+/// are seen as compiled by one rule. An item is refused when
+/// - the nearest code above it (`code_of` each line, blank ones skipped) is an
+///   attribute (starts with `#[`) or does not end an item (with `;` or `}`): a
+///   `#[cfg(..)]` or any other attribute over the item, on one line or over
+///   several, refuses it, and so does a one-line `#[attr] item;` right above
+///   it; an item right below an inner attribute is refused too;
+/// - it stands below the first line that opens a block comment which does not
+///   close on that line (`first_block_comment`). An item on the opener's own
+///   line counts; a comment that opens and closes on one line hides nothing.
+///
+/// The guard reads text, and these are its limits, which the root and the
+/// family files keep to:
+/// - Column 0 is read as the top level of the file. rustfmt, which CI's format
+///   check holds, indents the items inside an item, but not the contents of a
+///   string literal, a macro invocation's body or a `#[rustfmt::skip]` item:
+///   a row or mount line written at column 0 inside one of those is
+///   indistinguishable from code. Guard input written as a string literal
+///   goes on one line with `\n` escapes, as this file's tests write it.
+/// - Strings are not told apart from code. A `/*` inside a string that its
+///   line does not close reads as an opener, so every row below it stops
+///   counting (the catalog's failure names the line); a string spells it
+///   through `BLOCK_COMMENT_OPENER`. A `//`
+///   inside a string reads as a line comment, which refuses the item right
+///   below it and hides a block comment opened after it on the line, so the
+///   rows inside that comment would count: no line holds a string with `//`
+///   and then a block comment.
+fn compiled_at_top_level(lines: &[&str]) -> Vec<bool> {
+    let block_comment = first_block_comment(lines);
+    let mut compiled = Vec::with_capacity(lines.len());
+    let mut below_an_item_end = true;
+    for (at, line) in lines.iter().enumerate() {
+        let below_a_block_comment = block_comment.is_some_and(|opener| opener < at);
+        compiled.push(!below_a_block_comment && below_an_item_end);
+        let code = code_of(line);
+        if !code.is_empty() {
+            below_an_item_end = !code.starts_with("#[") && code.ends_with([';', '}']);
+        }
+    }
+    compiled
+}
+
+/// Whether the root mounts the family file `name`: its two `mount_lines` stand
+/// as consecutive lines at column 0, and the first is an item the compiler
+/// builds at the top level (`compiled_at_top_level`).
+fn is_mounted(root: &str, name: &str) -> bool {
+    let [path_line, mod_line] = mount_lines(name);
+    let lines: Vec<&str> = root.lines().collect();
+    let compiled = compiled_at_top_level(&lines);
+    lines
+        .windows(2)
+        .zip(compiled)
+        .any(|(pair, compiled)| compiled && pair[0] == path_line && pair[1] == mod_line)
+}
+
+/// How many rows of the root and of the mounted family files name `type_name`.
+/// A row starts at a column-0 `fn harness_` under any visibility that the
+/// compiler builds (`compiled_at_top_level`: no attribute over it, no block
+/// comment opened above it). A row whose opening line's code (`code_of`) ends
+/// with `}` (a one-line row such as `fn harness_x() {} // to come`) is that
+/// line alone; any other row is its opening line and the lines after it up
+/// to, not including, its closing line, the first that starts at column 0
+/// with `}`. When a signature does not leave room for its `{`, rustfmt puts
+/// the brace on the next line: at column 0 when the signature fits its line,
+/// after one space when the signature itself is longer; either line belongs
+/// to the row. Lines are read without a `\r` before their `\n`, so a source
+/// saved with CRLF ends its rows where an LF source does.
+///
+/// The name is searched in the code of each line (`code_of`, cut again at a
+/// block comment left open), so a comment that names a type does not cover
+/// it, and a row's lines below an unclosed opener are not read. A string
+/// that names it does: by convention a row that names a type in a string,
+/// such as an assertion message, exercises it.
+fn rows_naming(root: &str, families: &[(&str, &str)], type_name: &str) -> usize {
+    let mounted = families
+        .iter()
+        .filter(|(name, _)| is_mounted(root, name))
+        .map(|&(_, source)| source);
+    std::iter::once(root)
+        .chain(mounted)
+        .map(|source| {
+            let lines: Vec<&str> = source.lines().collect();
+            let compiled = compiled_at_top_level(&lines);
+            let read_to = first_block_comment(&lines).map_or(lines.len(), |opener| opener + 1);
+            (0..lines.len())
+                .filter(|&start| compiled[start] && opens_row(lines[start]))
+                .filter(|&start| {
+                    let end = if code_of(lines[start]).ends_with('}') {
+                        start + 1
+                    } else {
+                        lines[start + 1..]
+                            .iter()
+                            .position(|line| line.starts_with('}'))
+                            .map_or(lines.len(), |length| start + 1 + length)
+                    };
+                    lines[start..end.min(read_to)].iter().any(|line| {
+                        let code = code_of(line);
+                        let code = code
+                            .split_once(BLOCK_COMMENT_OPENER)
+                            .map_or(code.as_str(), |(before, _)| before);
+                        names_whole_identifier(code, type_name)
+                    })
+                })
+                .count()
+        })
+        .sum()
+}
+
+/// The stems of the `.rs` files in `directory`, sorted (`rs_stems`). A
+/// directory that does not exist holds none (git stores no empty directory);
+/// any other failure to list it, such as a path that is a file, panics with
+/// the path.
+fn family_file_stems(directory: &std::path::Path) -> Vec<String> {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => panic!(
+            "{}: cannot read the family directory: {error}",
+            directory.display()
+        ),
+    };
+    rs_stems(entries.map(|entry| {
+        entry
+            .expect("the family directory lists its entries")
+            .path()
+    }))
+}
+
+/// The stems of the paths that end in `.rs`, sorted, whatever order the
+/// paths come in.
+fn rs_stems(paths: impl IntoIterator<Item = std::path::PathBuf>) -> Vec<String> {
+    let mut stems: Vec<String> = paths
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
+        .filter_map(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .collect();
+    stems.sort_unstable();
+    stems
+}
+
+/// What is wrong between the files on disk, `FAMILY_FILES`' names and the
+/// root's mount lines; empty when all three agree.
+fn mount_problems(root: &str, listed: &[&str], on_disk: &[String]) -> Vec<String> {
+    let mut problems = Vec::new();
+    for stem in on_disk {
+        if !listed.contains(&stem.as_str()) {
+            problems.push(format!("{stem}.rs is not listed in FAMILY_FILES"));
+        }
+    }
+    for &name in listed {
+        if !on_disk.iter().any(|stem| stem == name) {
+            problems.push(format!("FAMILY_FILES lists {name}, which has no file"));
+        }
+        if !is_mounted(root, name) {
+            let [path_line, mod_line] = mount_lines(name);
+            problems.push(format!(
+                "{name} is not mounted: the root needs `{path_line}` and `{mod_line}` as \
+                 consecutive column-0 lines below a complete item, with no attribute over \
+                 them and no block comment above them",
+            ));
+        }
+    }
+    problems
+}
 
 #[test]
 fn catalog_covers_every_render_object_name() {
-    let source = include_str!("render_object_harness.rs").replace('\r', "");
+    let root = include_str!("render_object_harness.rs");
+    // Where a block comment opens, every row below it stops counting, so the
+    // failure names those lines.
+    let block_comments: Vec<String> = std::iter::once(("render_object_harness", root))
+        .chain(FAMILY_FILES.iter().copied())
+        .filter_map(|(name, source)| {
+            let lines: Vec<&str> = source.lines().collect();
+            first_block_comment(&lines).map(|at| format!("{name}.rs:{}", at + 1))
+        })
+        .collect();
     for &type_name in RENDER_OBJECT_TYPES {
-        // A row body ends at the first closing brace in column 0; the family
-        // tables and these guards sit after the last row and must not count.
-        let covered = source.split("\nfn harness_").skip(1).any(|chunk| {
-            chunk
-                .split("\n}\n")
-                .next()
-                .is_some_and(|body| body.contains(type_name))
-        });
         assert!(
-            covered,
-            "{type_name} must appear in at least one `fn harness_*` family-table row",
+            rows_naming(root, FAMILY_FILES, type_name) > 0,
+            "{type_name} must appear as a whole identifier in at least one `fn harness_*` row; \
+             a row under an attribute or below the first block comment of its file does not \
+             count (block comments open at {block_comments:?})",
         );
     }
+}
+
+#[test]
+fn family_files_are_mounted_and_listed() {
+    let root = include_str!("render_object_harness.rs");
+    let listed: Vec<&str> = FAMILY_FILES.iter().map(|&(name, _)| name).collect();
+    let directory = family_directory();
+    let on_disk = family_file_stems(&directory);
+    let problems = mount_problems(root, &listed, &on_disk);
+    assert!(
+        problems.is_empty(),
+        "{}: {problems:#?}",
+        directory.display()
+    );
+}
+
+#[test]
+fn a_family_entry_is_the_file_its_name_mounts() {
+    // `harness_snapshot` is mounted beside this file, so the `@in "."` arm
+    // expands as it does for a family under `harness/`, without a family file
+    // on disk. The pair is asserted; the import it also expands to compiles
+    // here because the module is mounted, and no test sees it removed.
+    let families: &[(&str, &str)] = family_files!(@in ".", harness_snapshot);
+    assert_eq!(
+        families,
+        [("harness_snapshot", include_str!("harness_snapshot.rs"))]
+    );
+}
+
+#[test]
+fn the_guard_counts_a_pub_row_of_a_family_file() {
+    let root = "#[path = \"harness/shown.rs\"]\nmod shown;\n";
+    let family = "pub(super) fn harness_a() {\n    RenderShown::new();\n}\n\npub fn harness_b() {\n    RenderShown::new();\n}\n\npub(crate) fn harness_c() {\n    RenderOther::new();\n}\n\nfn helper() {\n    RenderShown::new();\n}\n";
+    // A file saved with CRLF ends its rows at the same lines.
+    for line_end in ["\n", "\r\n"] {
+        let root = root.replace('\n', line_end);
+        let family = family.replace('\n', line_end);
+        let families = [("shown", family.as_str())];
+        assert_eq!(
+            rows_naming(&root, &families, "RenderShown"),
+            2,
+            "{line_end:?}"
+        );
+        assert_eq!(
+            rows_naming(&root, &families, "RenderOther"),
+            1,
+            "{line_end:?}"
+        );
+    }
+}
+
+#[test]
+fn the_guard_ends_a_row_at_its_own_end() {
+    let root = "#[path = \"harness/shown.rs\"]\nmod shown;\n";
+    // Each row names nothing; the helper after it names `RenderShown`, so a
+    // body that runs past the row's own end credits the row with it.
+    let rows_naming_nothing = [
+        (
+            "a one-line row",
+            "pub(super) fn harness_a() {}\n\nfn shown_node() {\n    RenderShown::new();\n}\n",
+        ),
+        (
+            "a one-line row with a comment after it",
+            "pub(super) fn harness_a() {} // the row to come\n\nfn shown_node() {\n    RenderShown::new();\n}\n",
+        ),
+        (
+            "a one-line row with a block comment after it",
+            "pub(super) fn harness_a() {} /* the row to come */\n\nfn shown_node() {\n    RenderShown::new();\n}\n",
+        ),
+        (
+            "a one-line row whose comment names the type",
+            "pub(super) fn harness_a() {} // RenderShown to come\n",
+        ),
+        (
+            "a row that names the type only in a comment",
+            "pub(super) fn harness_a() {\n    // RenderShown is covered elsewhere\n    other(); /* RenderShown */\n}\n",
+        ),
+        (
+            "a row closed with a comment",
+            "pub(super) fn harness_a() {\n    other();\n} // RenderShown\n\nfn shown_node() {\n    RenderShown::new();\n}\n",
+        ),
+        (
+            "a row closed with trailing whitespace",
+            "pub(super) fn harness_a() {\n    other();\n}  \nfn shown_node() {\n    RenderShown::new();\n}\n",
+        ),
+    ];
+    for (form, family) in rows_naming_nothing {
+        let families = [("shown", family)];
+        assert_eq!(rows_naming(root, &families, "RenderShown"), 0, "{form}");
+        assert_eq!(rows_naming(family, &[], "RenderShown"), 0, "{form}");
+    }
+    // A one-line row counts what it names, and a signature that leaves no
+    // room for its `{` keeps its body below the brace, which rustfmt puts at
+    // column 0 when the signature fits its line and after one space when the
+    // signature is longer than the line.
+    let rows_naming_it = [
+        (
+            "a one-line row",
+            "pub(super) fn harness_a() { RenderShown::new(); }\n",
+        ),
+        (
+            "a signature that fits its line, the brace at column 0",
+            "pub(super) fn harness_a_with_a_name_too_long_for_its_line()\n{\n    RenderShown::new();\n}\n",
+        ),
+        (
+            "a signature longer than its line, the brace after one space",
+            "pub(super) fn harness_a_with_a_name_longer_than_the_line()\n {\n    RenderShown::new();\n}\n",
+        ),
+        (
+            "a row that names the type in a string",
+            "pub(super) fn harness_a() {\n    check(\"RenderShown lays out\");\n}\n",
+        ),
+    ];
+    for (form, family) in rows_naming_it {
+        let families = [("shown", family)];
+        assert_eq!(rows_naming(root, &families, "RenderShown"), 1, "{form}");
+        assert_eq!(rows_naming(family, &[], "RenderShown"), 1, "{form}");
+    }
+}
+
+#[test]
+fn the_guard_skips_a_row_the_compiler_does_not_build() {
+    let root = "#[path = \"harness/shown.rs\"]\nmod shown;\n";
+    let row = "pub(super) fn harness_a() {\n    RenderShown::new();\n}\n";
+    let skipped = [
+        ("cfg-gated", format!("#[cfg(any())]\n{row}")),
+        (
+            "cfg-gated over several lines",
+            format!("#[cfg(\n    any()\n)]\n{row}"),
+        ),
+        (
+            "under an attribute and a doc comment",
+            format!("#[cfg(any())]\n/// Row.\n{row}"),
+        ),
+        (
+            "inside a block comment",
+            format!("{BLOCK_COMMENT_OPENER}\n{row}*/\n"),
+        ),
+        (
+            "inside a nested block comment closed once on its line",
+            format!(
+                "{BLOCK_COMMENT_OPENER} a {BLOCK_COMMENT_OPENER} b */\nconst A: u8 = 0;\n{row}*/\n"
+            ),
+        ),
+        (
+            "inside a block comment opened after code, below a row",
+            format!(
+                "const A: u8 = 0; {BLOCK_COMMENT_OPENER}\npub(super) fn harness_b() {{}}\n{row}*/\n"
+            ),
+        ),
+    ];
+    for (form, family) in &skipped {
+        let families = [("shown", family.as_str())];
+        assert_eq!(rows_naming(root, &families, "RenderShown"), 0, "{form}");
+        assert_eq!(rows_naming(family, &[], "RenderShown"), 0, "{form}");
+    }
+    let counted = [
+        ("at the top", row.to_owned()),
+        (
+            "below an item and a doc comment",
+            format!("const A: u8 = 0;\n\n/// Row.\n{row}"),
+        ),
+        (
+            "below a closed item",
+            format!("mod outer {{\n    fn f() {{}}\n}}\n{row}"),
+        ),
+        (
+            "below a block comment closed on its line",
+            format!("{BLOCK_COMMENT_OPENER} rows */\nconst A: u8 = 0;\n{row}"),
+        ),
+        // The opener's own line is code up to the opener: the row there
+        // counts what it names before it, and nothing below it is read.
+        (
+            "on the line that opens a block comment",
+            format!(
+                "pub(super) fn harness_a() {{ RenderShown::new(); {BLOCK_COMMENT_OPENER} a note\n    RenderOther::new(); */\n}}\n"
+            ),
+        ),
+    ];
+    for (form, family) in &counted {
+        let families = [("shown", family.as_str())];
+        assert_eq!(rows_naming(root, &families, "RenderShown"), 1, "{form}");
+        assert_eq!(rows_naming(family, &[], "RenderShown"), 1, "{form}");
+    }
+    let (_, on_the_opener_line) = counted.last().expect("the table has cases");
+    assert_eq!(rows_naming(on_the_opener_line, &[], "RenderOther"), 0);
+}
+
+#[test]
+fn the_guard_refuses_a_name_inside_a_longer_one() {
+    let root = "fn harness_a() {\n    RenderSliverFloatingHeaderBase::new();\n    my_RenderFloat();\n    RenderFloat2::new();\n}\n";
+    assert_eq!(rows_naming(root, &[], "RenderSliverFloatingHeader"), 0);
+    assert_eq!(rows_naming(root, &[], "RenderFloat"), 0);
+    assert_eq!(rows_naming(root, &[], "RenderSliverFloatingHeaderBase"), 1);
+}
+
+#[test]
+fn the_guard_refuses_a_family_file_that_is_not_mounted() {
+    let family = "pub fn harness_a() {\n    RenderShown::new();\n}\n";
+    let families = [("shown", family)];
+    let mounted = "#[path = \"harness/shown.rs\"]\nmod shown;\n";
+    let refused = [
+        ("empty", ""),
+        ("only the path line", "#[path = \"harness/shown.rs\"]\n"),
+        ("only the mod line", "mod shown;\n"),
+        (
+            "indented",
+            "    #[path = \"harness/shown.rs\"]\n    mod shown;\n",
+        ),
+        (
+            "separated by an item",
+            "#[path = \"harness/shown.rs\"]\nfn other() {}\nmod shown;\n",
+        ),
+        (
+            "in the wrong order",
+            "mod shown;\n#[path = \"harness/shown.rs\"]\n",
+        ),
+        (
+            "cfg-gated",
+            "#[cfg(any())]\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "under another attribute",
+            "#[allow(dead_code)]\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "cfg-gated over several lines",
+            "#[cfg(\n    any()\n)]\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "cfg-gated with a trailing comment",
+            "#[cfg(any())] // gated;\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "cfg-gated over several lines with a trailing comment",
+            "#[cfg(\n    any()\n)] // gated;\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "cfg-gated across a blank line and a comment",
+            "#[cfg(any())]\n\n// rows\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "line comments",
+            "// #[path = \"harness/shown.rs\"]\n// mod shown;\n",
+        ),
+        (
+            "right below a line that does not end an item",
+            "mod outer {\n#[path = \"harness/shown.rs\"]\nmod shown;\n}\n",
+        ),
+        (
+            "cfg-gated, the attribute's string holding `;//`",
+            "#[cfg(feature = \"a;//b\")]\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "below a one-line attribute and item",
+            "#[cfg(any())] const A: u8 = 0;\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+    ];
+    // The opener is spliced in: this file is guard input, and an opener in its
+    // code would stop every row below it from counting.
+    let pair = "#[path = \"harness/shown.rs\"]\nmod shown;\n";
+    let refused_below_a_block_comment = [
+        (
+            "inside a block comment",
+            format!("{BLOCK_COMMENT_OPENER}\n{pair}*/\n"),
+        ),
+        (
+            "inside a block comment, below an item",
+            format!("{BLOCK_COMMENT_OPENER}\nconst A: u8 = 0;\n{pair}*/\n"),
+        ),
+        (
+            "inside an indented block comment, below an item",
+            format!("    {BLOCK_COMMENT_OPENER}\nconst A: u8 = 0;\n{pair}*/\n"),
+        ),
+        (
+            "inside a nested block comment closed once on its line",
+            format!(
+                "{BLOCK_COMMENT_OPENER} a {BLOCK_COMMENT_OPENER} b */\nconst A: u8 = 0;\n{pair}*/\n"
+            ),
+        ),
+        (
+            "inside a block comment opened after code, below an item",
+            format!("const A: u8 = 0; {BLOCK_COMMENT_OPENER}\nconst B: u8 = 0;\n{pair}*/\n"),
+        ),
+    ];
+    let refused = refused
+        .map(|(form, root)| (form, root.to_owned()))
+        .into_iter()
+        .chain(refused_below_a_block_comment);
+    for (form, root) in refused {
+        assert_eq!(rows_naming(&root, &families, "RenderShown"), 0, "{form}");
+        let problems = mount_problems(&root, &["shown"], &["shown".to_owned()]);
+        assert_eq!(problems.len(), 1, "{form}: {problems:?}");
+    }
+    let accepted = [
+        ("at the top", mounted),
+        (
+            "below another mount",
+            "#[path = \"harness_snapshot.rs\"]\nmod harness_snapshot;\n\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "below an item and a doc comment",
+            "const A: u8 = 0;\n\n/// Rows.\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "with CRLF line ends",
+            "fn other() {}\r\n#[path = \"harness/shown.rs\"]\r\nmod shown;\r\n",
+        ),
+        (
+            "below a block comment closed on its line",
+            "/* rows */\nconst A: u8 = 0;\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+    ];
+    for (form, root) in accepted {
+        assert_eq!(rows_naming(root, &families, "RenderShown"), 1, "{form}");
+        assert_eq!(
+            mount_problems(root, &["shown"], &["shown".to_owned()]),
+            Vec::<String>::new(),
+            "{form}"
+        );
+    }
+    assert_eq!(
+        mount_problems(
+            mounted,
+            &["shown"],
+            &["shown".to_owned(), "extra".to_owned()]
+        ),
+        ["extra.rs is not listed in FAMILY_FILES"],
+    );
+    assert_eq!(
+        mount_problems(mounted, &["shown"], &[]),
+        ["FAMILY_FILES lists shown, which has no file"],
+    );
+}
+
+#[test]
+fn the_family_macro_reads_the_family_directory() {
+    // `include_str!` takes a literal, so the default arm of `family_files!`
+    // cannot name `FAMILY_DIRECTORY`; its one line is read from this source.
+    let root = include_str!("render_object_harness.rs");
+    let default_arms: Vec<&str> = root
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("family_files!(@in \"") && line.ends_with(", $($name),*)"))
+        .collect();
+    assert_eq!(
+        default_arms,
+        [format!(
+            "family_files!(@in \"{FAMILY_DIRECTORY}\", $($name),*)"
+        )],
+    );
+}
+
+#[test]
+fn the_mount_check_takes_a_missing_directory_as_no_files() {
+    let scratch = scratch_directory();
+    let missing = scratch.path().join(FAMILY_DIRECTORY);
+    assert_eq!(family_file_stems(&missing), Vec::<String>::new());
+    assert_eq!(
+        mount_problems("", &[], &family_file_stems(&missing)),
+        Vec::<String>::new()
+    );
+
+    std::fs::create_dir(&missing).expect("the scratch directory is writable");
+    std::fs::write(missing.join("shown.rs"), "").expect("the scratch directory is writable");
+    std::fs::write(missing.join("notes.txt"), "").expect("the scratch directory is writable");
+    assert_eq!(family_file_stems(&missing), ["shown"]);
+
+    // Dropping the scratch directory removes it with the files it holds.
+    let path = scratch.path().to_owned();
+    drop(scratch);
+    assert!(!path.exists(), "{}", path.display());
+}
+
+#[test]
+fn the_mount_check_sorts_the_stems() {
+    let paths = ["c.rs", "a.rs", "notes.txt", "d.rs", "b.rs"].map(std::path::PathBuf::from);
+    assert_eq!(rs_stems(paths), ["a", "b", "c", "d"]);
+}
+
+#[test]
+#[should_panic(expected = "cannot read the family directory")]
+fn the_mount_check_refuses_a_directory_it_cannot_list() {
+    let scratch = scratch_directory();
+    let file = scratch.path().join(FAMILY_DIRECTORY);
+    std::fs::write(&file, "").expect("the scratch directory is writable");
+    let stems = family_file_stems(&file);
+    unreachable!("a file listed as a directory gave {stems:?}");
+}
+
+/// A directory of the test's own under the system temporary directory,
+/// removed with its contents when dropped, after a failed assertion too.
+fn scratch_directory() -> tempfile::TempDir {
+    tempfile::tempdir().unwrap_or_else(|error| panic!("cannot create a scratch directory: {error}"))
+}
+
+#[test]
+fn coverage_map_lists_every_render_object_type() {
+    // The header's table rows are `//! | `RenderX` | …`; each type once.
+    let root = include_str!("render_object_harness.rs");
+    let mut mapped: Vec<&str> = root
+        .lines()
+        .filter_map(|line| line.strip_prefix("//! | `"))
+        .filter_map(|rest| rest.split_once('`').map(|(name, _)| name))
+        .collect();
+    mapped.sort_unstable();
+    let mut types = RENDER_OBJECT_TYPES.to_vec();
+    types.sort_unstable();
+    assert_eq!(mapped, types);
 }
 
 #[test]
