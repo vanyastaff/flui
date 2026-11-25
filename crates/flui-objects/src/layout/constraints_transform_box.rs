@@ -31,9 +31,10 @@
 //! plain queryable flag instead, matching the precedent already established
 //! by [`super::fitted_box::RenderFittedBox::has_visual_overflow`].
 
+use crate::shown::OverflowClip;
 use flui_foundation::Single;
 use flui_foundation::geometry::Axis;
-use flui_foundation::geometry::{Point, Rect, Size};
+use flui_foundation::geometry::{Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 
@@ -63,9 +64,9 @@ pub struct RenderConstraintsTransformBox {
     constrained_axis: Option<Axis>,
     /// How to clip the child when it overflows this box's own size.
     clip_behavior: Clip,
-    /// True when the child's laid-out size exceeded this box's own size on
-    /// either axis at the last layout. Reset on every layout.
-    has_visual_overflow: bool,
+    /// Whether the aligned child left this box at the last layout, written
+    /// by `perform_layout` alone (`crate::shown`).
+    overflow: OverflowClip,
     /// Handles child alignment and hit-testing.
     inner: AligningShiftedBox,
 }
@@ -76,7 +77,7 @@ impl RenderConstraintsTransformBox {
         Self {
             constrained_axis,
             clip_behavior,
-            has_visual_overflow: false,
+            overflow: OverflowClip::new(),
             inner: AligningShiftedBox::new(alignment),
         }
     }
@@ -99,11 +100,13 @@ impl RenderConstraintsTransformBox {
         self.clip_behavior
     }
 
-    /// Returns whether the child's laid-out size exceeded this box's own
-    /// size at the last layout. Reset on every layout.
+    /// Returns whether the aligned child left this box's own size at the
+    /// last layout. `true` before the first layout and after a layout that
+    /// failed: the box then clips to the size it keeps.
+    /// A layout in which a descendant failed counts as one that failed.
     #[inline]
     pub fn has_visual_overflow(&self) -> bool {
-        self.has_visual_overflow
+        self.overflow.clips()
     }
 
     /// Replaces the child alignment and reports layout when changed.
@@ -159,6 +162,34 @@ impl RenderConstraintsTransformBox {
     }
 }
 
+impl RenderConstraintsTransformBox {
+    /// Lays the child out and returns this box's size with whether the
+    /// aligned child leaves it.
+    fn lay_out(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<(Size, bool)> {
+        let constraints = *ctx.constraints();
+
+        if ctx.child_count() == 0 {
+            self.inner.clear_child_baselines();
+            return Ok((constraints.smallest(), false));
+        }
+
+        let child_constraints = self.transform_constraints(constraints);
+        let child_size = ctx.layout_child(0, child_constraints)?;
+        let our_size = constraints.constrain(child_size);
+
+        self.inner.align_child(ctx, our_size, child_size);
+        // Overflow is the ALIGNED child rect leaving the box rect —
+        // not a size-only comparison: an out-of-range alignment can push a
+        // smaller-than-box child outside the box.
+        let overflows = OverflowClip::leaves(our_size, self.inner.child_offset(), child_size);
+        self.inner.record_child_baselines(ctx)?;
+        Ok((our_size, overflows))
+    }
+}
+
 impl flui_foundation::inspect::Inspect for RenderConstraintsTransformBox {
     fn kind(&self) -> &'static str {
         "RenderConstraintsTransformBox"
@@ -180,29 +211,9 @@ impl RenderBox for RenderConstraintsTransformBox {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
     ) -> flui_rendering::RenderResult<Size> {
-        let constraints = *ctx.constraints();
-
-        if ctx.child_count() == 0 {
-            self.inner.clear_child_baselines();
-            self.has_visual_overflow = false;
-            return Ok(constraints.smallest());
-        }
-
-        let child_constraints = self.transform_constraints(constraints);
-        let child_size = ctx.layout_child(0, child_constraints)?;
-        let our_size = constraints.constrain(child_size);
-
-        self.inner.align_child(ctx, our_size, child_size);
-        // Overflow is the ALIGNED child rect leaving the box rect —
-        // not a size-only comparison: an out-of-range alignment can push a
-        // smaller-than-box child outside the box.
-        let child_offset = self.inner.child_offset();
-        self.has_visual_overflow = child_offset.dx < 0.0
-            || child_offset.dy < 0.0
-            || child_offset.dx + child_size.width > our_size.width
-            || child_offset.dy + child_size.height > our_size.height;
-        self.inner.record_child_baselines(ctx)?;
-        Ok(our_size)
+        self.overflow.begin();
+        let laid_out = self.lay_out(ctx);
+        self.overflow.commit(ctx, laid_out)
     }
 
     /// Serves the live baseline recorded at the last layout, shifted by the
@@ -224,13 +235,16 @@ impl RenderBox for RenderConstraintsTransformBox {
     /// overflowed at the last layout and `clip_behavior` is not `Clip::None`.
     /// There is no debug overflow indicator otherwise (see module doc).
     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
-        if self.has_visual_overflow && self.clip_behavior != Clip::None {
-            let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
+        if let Some(bounds) = self.overflow.clip(self.clip_behavior, ctx.size()) {
             let clip_behavior = self.clip_behavior;
             ctx.with_clip_rect(bounds, clip_behavior, PaintContext::paint_children_in_order);
         } else {
             ctx.paint_children_in_order();
         }
+    }
+
+    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect> {
+        self.overflow.clip(self.clip_behavior, size)
     }
 
     // ---- intrinsic dimensions -----------------------------------------------

@@ -47,6 +47,7 @@ mod layout;
 mod opacity_sample;
 mod proxy;
 mod shimmer;
+mod shown;
 mod sliver;
 mod subscription;
 mod text;
