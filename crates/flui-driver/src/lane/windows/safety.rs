@@ -128,13 +128,14 @@ impl Refusal {
                 retry: flui_protocol::error::ErrorCode::NotForeground.default_retry(),
             },
             Self::Covered { point, covered_by } => Error::outside_target(format!(
-                "({}, {}) does not reach the app's window{}; nothing was sent there",
+                "({}, {}) does not reach the app's window{}: the event is not sent there",
                 point.x,
                 point.y,
                 covered_by.map_or_default(|window| format!(": {window} is there"))
             )),
             Self::InputHeld { what } => Error::InputHeld {
                 message: format!("{what}; the lane sends nothing that would join it"),
+                effect: None,
                 retry: flui_protocol::error::ErrorCode::InputHeld.default_retry(),
             },
             Self::ShellHotkey { handler } => Error::not_supported(

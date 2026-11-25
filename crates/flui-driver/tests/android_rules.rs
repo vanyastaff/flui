@@ -328,7 +328,8 @@ fn a_release_that_fails_after_the_run_did_keeps_the_runs_effect_and_verdict() {
         interrupted.missing_capability().as_deref(),
         Some("uninterrupted_os_input")
     );
-    assert!(!interrupted.may_have_run());
+    // The press went down before the touch was seen, so the run may have run.
+    assert!(interrupted.may_have_run(), "{interrupted}");
     // A release that fails on its own carries no first failure.
     let adb = scripted(true, true).reply_once(
         "shell input touchscreen motionevent CANCEL",

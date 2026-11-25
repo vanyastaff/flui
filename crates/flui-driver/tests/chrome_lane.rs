@@ -329,6 +329,18 @@ fn window() -> WindowId {
     WINDOW.parse().expect("a window handle")
 }
 
+/// The release that failed after every event of a run went out, inside the partly sent call that
+/// says the run may have run (`lane::send_guarded`).
+fn release_failure<T>(refused: &Result<T, Error>) -> Option<&Error> {
+    match refused {
+        Err(Error::PartlySent { effect, first, .. }) => {
+            assert_eq!(effect.sent, effect.total, "every event went out first");
+            Some(&**first)
+        }
+        _ => None,
+    }
+}
+
 fn press(at: LogicalPoint) -> ActionSequence {
     ActionSequence::new(vec![InputSource::Pointer {
         id: "scenario.mouse".into(),
@@ -526,7 +538,7 @@ fn held_input_is_released_and_a_refused_release_names_what_stays_held() {
     let mut driver = attach(&refusing);
     let refused = driver.window(window()).perform(held_keys());
     assert!(
-        matches!(&refused, Err(Error::ReleaseFailed { lane, held, message, .. }) if lane == "chrome" && held == &["Control".to_owned()] && message.contains("the tab is busy")),
+        matches!(release_failure(&refused), Some(Error::ReleaseFailed { lane, held, message, .. }) if lane == "chrome" && held == &["Control".to_owned()] && message.contains("the tab is busy")),
         "{refused:?}"
     );
 }
@@ -584,7 +596,7 @@ fn an_open_composition_is_cancelled_by_the_release() {
     let mut driver = attach(&refusing);
     let refused = driver.window(window()).perform(open());
     assert!(
-        matches!(&refused, Err(Error::ReleaseFailed { held, .. }) if held == &["an input-method composition".to_owned()]),
+        matches!(release_failure(&refused), Some(Error::ReleaseFailed { held, .. }) if held == &["an input-method composition".to_owned()]),
         "{refused:?}"
     );
 }
@@ -932,8 +944,8 @@ fn a_refused_release_names_the_buttons_and_keys_still_down() {
         },
     ]);
     let refused = driver.window(window()).perform(sequence);
-    match &refused {
-        Err(Error::ReleaseFailed { held, .. }) => assert_eq!(
+    match release_failure(&refused) {
+        Some(Error::ReleaseFailed { held, .. }) => assert_eq!(
             held,
             &["Shift".to_owned(), "scenario.mouse secondary".to_owned()]
         ),

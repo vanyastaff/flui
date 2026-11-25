@@ -32,14 +32,60 @@ pub fn dump_path(session: &str) -> String {
     format!("/data/local/tmp/flui-driver-{session}.xml")
 }
 
-/// The line that dumps the active window to `path` and prints the dump: the file is removed
-/// whatever the dump's outcome.
+/// The line that dumps the active window to `path` and prints the dump, or, where the dump wrote
+/// no file, what it said on its error stream ([`DumpFailure`]): both files are removed whatever
+/// the dump's outcome.
 ///
 /// The dump connects to accessibility as `UiAutomation` does, which suspends the accessibility
 /// services running (TalkBack among them) until it ends.
 #[must_use]
 pub fn dump_line(path: &str) -> String {
-    format!("uiautomator dump {path} >/dev/null 2>&1 && cat {path}; rm -f {path}")
+    format!(
+        "uiautomator dump {path} >/dev/null 2>{path}.err; cat {path} 2>/dev/null || cat {path}.err; \
+         rm -f {path} {path}.err"
+    )
+}
+
+/// Why a `uiautomator dump` wrote no file, where it says so: each a state of the device that
+/// passes, so the read is busy rather than failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DumpFailure {
+    /// The window never went idle within the dump's wait (AOSP `DumpCommand`'s
+    /// `waitForIdle(1000, 10000)`, which prints `ERROR: could not get idle state.`): the app
+    /// changes its tree all the time.
+    NotIdle,
+    /// Another `UiAutomation` client holds accessibility (`UiAutomationService … already
+    /// registered!`), as a test runner or a second dump does.
+    AnotherClient,
+}
+
+impl DumpFailure {
+    /// The failure the dump's error text `printed` names, if any.
+    pub(crate) fn of(printed: &str) -> Option<Self> {
+        if printed.contains("could not get idle state") {
+            Some(Self::NotIdle)
+        } else if printed.contains("already registered") {
+            Some(Self::AnotherClient)
+        } else {
+            None
+        }
+    }
+}
+
+impl std::fmt::Display for DumpFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotIdle => {
+                "`uiautomator dump` wrote no window: the window never went idle within its \
+                 wait, as an app that changes its tree on every frame keeps it; read again once \
+                 it settles"
+            }
+            Self::AnotherClient => {
+                "`uiautomator dump` wrote no window: another `UiAutomation` client holds the \
+                 device's accessibility; read again once it lets go"
+            }
+        })
+    }
 }
 
 /// A rectangle in display pixels.

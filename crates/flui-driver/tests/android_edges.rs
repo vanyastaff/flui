@@ -1186,7 +1186,9 @@ fn a_late_answer_to_an_earlier_sync_does_not_answer_the_next() {
     let failed = lane
         .send(&tap(PointerDevice::Pen, AT)[0])
         .expect_err("no answer to the second sync");
-    assert!(matches!(failed, Error::Lane { .. }), "{failed}");
+    // The pen's report was written and never confirmed: it may have been injected.
+    assert!(matches!(failed, Error::Timeout { .. }), "{failed}");
+    assert!(failed.may_have_run(), "{failed}");
 }
 
 #[test]

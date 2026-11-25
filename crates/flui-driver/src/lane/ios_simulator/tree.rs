@@ -208,6 +208,7 @@ impl TreeError {
                     reach.where_read()
                 ),
                 candidates: groups,
+                effect: None,
                 retry: reach.retry(),
             },
             Self::SearchCut { title, reach } => Error::NotFound {
@@ -224,6 +225,7 @@ impl TreeError {
                     }
                 ),
                 candidates: Vec::new(),
+                effect: None,
                 retry: reach.retry(),
             },
             Self::NoAppTree => Error::NotFound {
@@ -231,6 +233,7 @@ impl TreeError {
                           elements against"
                     .to_owned(),
                 candidates: Vec::new(),
+                effect: None,
                 retry: ErrorCode::NotFound.default_retry(),
             },
             Self::Ambiguous { node, candidates } => Error::Ambiguous {

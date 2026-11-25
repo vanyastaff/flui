@@ -678,23 +678,33 @@ const LAST_ANR: &str = "WINDOW MANAGER LAST ANR (dumpsys window lastanr)\n  \
      Window #9 Window{5b3c2d u0 dev.flui.scenario/android.app.NativeActivity}:\n    \
      mDisplayId=0\n";
 
+/// The reply `reply` with `LAST ANR`'s saved state in its `LAST ANR` part, as after an ANR.
+fn with_anr(reply: &str) -> String {
+    let empty = "WINDOW MANAGER LAST ANR (dumpsys window lastanr)\n";
+    assert!(
+        reply.contains(empty),
+        "the reply prints its `LAST ANR` part"
+    );
+    reply.replacen(empty, LAST_ANR, 1)
+}
+
 /// The reply is read from its live parts: the displays' part and the windows' part the window
 /// manager prints once each after `LAST ANR`. `LAST ANR` (the windows and a displays' part of an
-/// ANR's moment), the policy's part, a second displays' or windows' part and a header a window's
-/// title forges are not read, whatever focus, rotation or windows they print. The default
-/// display's first focus line wins, a `null` one included, and its first rotation.
+/// ANR's moment) and the policy's part are not read, whatever focus, rotation or windows they
+/// print, and a reply a window's title forged a header into is refused. The default display's
+/// first focus line wins, a `null` one included, and its first rotation.
 #[test]
 fn the_windows_are_read_from_the_live_parts_of_the_reply() {
     let live = device::parse_windows(WINDOWS).expect("the fixture lists windows");
     // Android 10 and later: the stale displays' part, the policy's rotation, display header and
     // window are not the live ones.
-    let after_anr = format!("{LAST_ANR}{WINDOWS}");
+    let after_anr = with_anr(WINDOWS);
     let windows = device::parse_windows(&after_anr).expect("windows after an ANR");
     assert_eq!(windows, live);
     // The shade in front now, the app at the ANR: the focus is the shade.
     let app_focus = "mCurrentFocus=Window{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}";
     let shade_focus = "mCurrentFocus=Window{77aa u0 NotificationShade}";
-    let shade_now = format!("{LAST_ANR}{}", WINDOWS.replace(app_focus, shade_focus));
+    let shade_now = with_anr(&WINDOWS.replace(app_focus, shade_focus));
     assert_eq!(
         device::parse_windows(&shade_now)
             .expect("windows")
@@ -706,13 +716,10 @@ fn the_windows_are_read_from_the_live_parts_of_the_reply() {
     // Before Android 10 no display's section prints a focus: the windows' part's is the focus,
     // never the ANR's, and with none there no window holds it.
     let without_display_focus = WINDOWS.replace(&format!("    {app_focus}\n"), "");
-    let shade_in_windows = format!(
-        "{LAST_ANR}{}",
-        without_display_focus.replace(
-            "\n  mRotation=0\n",
-            &format!("\n  mRotation=0\n  {shade_focus}\n")
-        )
-    );
+    let shade_in_windows = with_anr(&without_display_focus.replace(
+        "\n  mRotation=0\n",
+        &format!("\n  mRotation=0\n  {shade_focus}\n"),
+    ));
     assert_eq!(
         device::parse_windows(&shade_in_windows)
             .expect("windows")
@@ -722,10 +729,9 @@ fn the_windows_are_read_from_the_live_parts_of_the_reply() {
         Some("NotificationShade")
     );
     // Nor is a focus a part printed after the windows' part.
-    let no_focus = format!(
-        "{LAST_ANR}{without_display_focus}WINDOW MANAGER LOGGING (dumpsys window logging)\n  \
-         {app_focus}\n"
-    );
+    let no_focus = with_anr(&format!(
+        "{without_display_focus}WINDOW MANAGER LOGGING (dumpsys window logging)\n  {app_focus}\n"
+    ));
     assert_eq!(
         device::parse_windows(&no_focus).expect("windows").focus,
         None
@@ -742,9 +748,8 @@ fn the_windows_are_read_from_the_live_parts_of_the_reply() {
         None
     );
     // The ANR's displays' part, never read, may print a rotation no `Surface` has.
-    let unreadable_at_anr =
-        format!("{LAST_ANR}{WINDOWS}").replacen("mRotation=1", "mRotation=4", 1);
-    assert_ne!(unreadable_at_anr, format!("{LAST_ANR}{WINDOWS}"));
+    let unreadable_at_anr = with_anr(WINDOWS).replacen("mRotation=1", "mRotation=4", 1);
+    assert_ne!(unreadable_at_anr, with_anr(WINDOWS));
     assert_eq!(
         device::parse_windows(&unreadable_at_anr)
             .expect("the live part is read")
@@ -760,58 +765,75 @@ fn the_windows_are_read_from_the_live_parts_of_the_reply() {
     );
     assert_ne!(twice, WINDOWS);
     assert_eq!(device::parse_windows(&twice).expect("windows"), live);
-    // A second windows' part, printed after the live one, is not read.
-    let second_windows = format!(
-        "{WINDOWS}WINDOW MANAGER WINDOWS (dumpsys window windows)\n  \
-         Window #0 Window{{4f2a1b u0 dev.flui.scenario/android.app.NativeActivity}}:\n    \
-         mDisplayId=0 rootTaskId=13\n    \
-         Frames: parent=[0,0][540,1200] frame=[0,0][540,1200]\n"
-    );
-    assert_eq!(
-        device::parse_windows(&second_windows).expect("windows"),
-        live
-    );
     // A window titled with a part's header and the lines after it (a title may hold line breaks)
-    // forges no displays' part: from the first column, it is a header past the live displays'
-    // part, which ends the reading of the windows rather than replacing the focus and rotation;
-    // indented, it is no header at all.
-    let forged = "  Window #5 Window{66cc u0 x\n\
-                  WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)\n  \
-                  Display: mDisplayId=0\n    \
-                  mCurrentFocus=Window{66cc u0 NotificationShade}\n    \
-                  mRotation=2\n\
-                  WINDOW MANAGER WINDOWS (dumpsys window windows)\n  \
-                  Window #6 Window{66cc u0 NotificationShade}:\n    \
-                  mDisplayId=0\n    \
-                  Frames: frame=[0,60][1080,2400]}:\n";
-    let forging = WINDOWS.replace("\n  mRotation=0\n", &format!("\n{forged}  mRotation=0\n"));
-    assert_ne!(forging, WINDOWS);
-    let windows = device::parse_windows(&forging).expect("windows");
-    assert!(
-        windows
-            .windows
-            .iter()
-            .all(|window| window.name.title != "NotificationShade"),
-        "{windows:?}"
-    );
-    assert_eq!(
-        (windows.rotation, windows.focus),
-        (live.rotation, live.focus.clone())
-    );
-    // Before Android 10, where the live displays' part prints no focus, a displays' part a title
-    // forges after it gives none either: the focus stays the windows' part's.
-    let pre_android_10 = WINDOWS.replace(&format!("    {app_focus}\n"), "").replace(
-        "\n  mRotation=0\n",
-        &format!("\n  {app_focus}\n{forged}  mRotation=0\n"),
-    );
-    assert_eq!(
-        device::parse_windows(&pre_android_10)
-            .expect("windows")
-            .focus
-            .map(|focus| focus.title)
-            .as_deref(),
-        Some("dev.flui.scenario/android.app.NativeActivity")
-    );
+    // prints a header the window manager prints once a second time, before or after the live
+    // part: the reply is refused rather than read, whichever one is live.
+    let forged = |header: &str| {
+        format!(
+            "  Window #5 Window{{66cc u0 x\n{header}\n  \
+             Display: mDisplayId=0\n    \
+             mCurrentFocus=Window{{66cc u0 NotificationShade}}\n    \
+             mRotation=2\n  \
+             Window #6 Window{{66cc u0 NotificationShade}}:\n    \
+             mDisplayId=0\n    \
+             Frames: frame=[0,60][1080,2400]}}:\n"
+        )
+    };
+    let displays_header = "WINDOW MANAGER DISPLAY CONTENTS (dumpsys window displays)";
+    let windows_header = "WINDOW MANAGER WINDOWS (dumpsys window windows)";
+    let last_anr_header = "WINDOW MANAGER LAST ANR (dumpsys window lastanr)";
+    for (case, reply) in [
+        (
+            "a windows' header in the displays' part, before the live one",
+            WINDOWS.replace(
+                "    mRotation=0 mDeferredRotationPauseCount=0\n",
+                &format!(
+                    "    mRotation=0 mDeferredRotationPauseCount=0\n{}",
+                    forged(windows_header)
+                ),
+            ),
+        ),
+        (
+            "a displays' header in the ANR's windows, before the live one",
+            with_anr(WINDOWS).replacen(
+                "  Window #0 Window{4f2a1b",
+                &format!("{}  Window #0 Window{{4f2a1b", forged(displays_header)),
+                1,
+            ),
+        ),
+        (
+            "a displays' header in the policy's part, with no ANR",
+            WINDOWS.replace(
+                "WINDOW MANAGER POLICY STATE (dumpsys window policy)\n",
+                &format!(
+                    "WINDOW MANAGER POLICY STATE (dumpsys window policy)\n{}",
+                    forged(displays_header)
+                ),
+            ),
+        ),
+        (
+            "a displays' and a windows' header after the live windows",
+            WINDOWS.replace(
+                "\n  mRotation=0\n",
+                &format!(
+                    "\n{}{}  mRotation=0\n",
+                    forged(displays_header),
+                    forged(windows_header)
+                ),
+            ),
+        ),
+        (
+            "a second `LAST ANR` header",
+            WINDOWS.replace(
+                "\n  mRotation=0\n",
+                &format!("\n{}  mRotation=0\n", forged(last_anr_header)),
+            ),
+        ),
+    ] {
+        assert_ne!(reply, WINDOWS, "{case}");
+        let refused = device::parse_windows(&reply).expect_err(case);
+        assert!(refused.contains("forged"), "{case}: {refused}");
+    }
     // A part's header is the window manager's whole line: indented, or without its
     // `(dumpsys window …)`, a title's line heads no part, so a window list it forges inside the
     // displays' part is no window list, and the live windows' part is read.
@@ -1599,11 +1621,7 @@ fn a_release_failure_names_the_contact_still_held() {
         lane.send(event).expect("the press goes down");
     }
     let refused = lane.send(&events[3]).expect_err("the lift was refused");
-    // The press went out before it: the lift's failure says the call may have run.
-    assert!(
-        matches!(&refused, Error::PartlySent { first, .. } if matches!(**first, Error::Lane { .. })),
-        "{refused}"
-    );
+    assert!(matches!(refused, Error::Lane { .. }), "{refused}");
     match lane.release_all() {
         Err(Error::ReleaseFailed {
             lane: name,
@@ -1691,13 +1709,18 @@ fn foreign_input_on_a_device_ends_the_run_and_releases_its_contact() {
         &tap(PointerDevice::Touch, DevicePoint::new(300, 600)),
     )
     .expect_err("someone touched the screen");
+    // The press went down before the touch was seen: the interruption says so.
     match &interrupted {
-        Error::InterruptedByUser { lane, event } => {
-            assert_eq!(lane, "android");
-            assert!(event.contains("event5"), "{event}");
-        }
+        Error::PartlySent { first, .. } => match &**first {
+            Error::InterruptedByUser { lane, event } => {
+                assert_eq!(lane, "android");
+                assert!(event.contains("event5"), "{event}");
+            }
+            other => panic!("{other}"),
+        },
         other => panic!("{other}"),
     }
+    assert!(interrupted.may_have_run(), "{interrupted}");
     assert!(interrupted.is_cannot_verify());
     assert_eq!(
         adb.commands("shell input touchscreen motionevent UP"),
@@ -1784,11 +1807,9 @@ fn a_pen_whose_device_stopped_answering_is_released_with_it() {
     lane.send(&events[1]).expect("the pen presses");
     adb.end_stream("shell uinput -");
     let failed = lane.send(&events[3]).expect_err("the device is gone");
-    // The pen's press went out before it: the failure says the call may have run.
-    assert!(
-        matches!(&failed, Error::PartlySent { first, .. } if matches!(**first, Error::Lane { .. })),
-        "{failed}"
-    );
+    // Sent on its own, outside a sequence, the failure is the lane's own: what went out of a
+    // sequence is the sequence's to say (`lane::send_guarded`).
+    assert!(matches!(failed, Error::Lane { .. }), "{failed}");
     // The kernel took the pen's contact away with its device: nothing stays held.
     lane.release_all().expect("nothing is held");
 }
@@ -1898,6 +1919,55 @@ fn a_device_whose_focus_is_on_another_display_is_refused() {
         "{refused:?}"
     );
     assert!(inputs(&adb).is_empty(), "nothing was sent");
+    // From Android 10 the reply must name the display holding the focus: one that names none
+    // is refused rather than taken for the default display.
+    let unnamed = WINDOWS.replace("  mTopFocusedDisplayId=0\n", "");
+    assert_ne!(unnamed, WINDOWS);
+    let adb =
+        scripted(true, true).reply_once("shell dumpsys window -a |", AdbReply::new(0, unnamed));
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    let refused = lane
+        .locate_window(&placement())
+        .expect_err("no display named as holding the focus");
+    assert!(
+        refused.to_string().contains("named no display holding"),
+        "{refused}"
+    );
+}
+
+/// The display holding the device's focus is read from its own line only, the first one: the
+/// same words in a window's title, or a later line, name nothing.
+#[test]
+fn the_focused_display_is_read_from_its_own_line() {
+    let in_title = WINDOWS.replace(
+        "  Window #4 Window{1a2b3c4 u0 com.android.launcher3",
+        "  Window #4 Window{1a2b3c4 u0 x mTopFocusedDisplayId=2 com.android.launcher3",
+    );
+    assert_ne!(in_title, WINDOWS);
+    assert_eq!(
+        device::parse_windows(&in_title)
+            .expect("windows")
+            .focused_display,
+        Some(device::DEFAULT_DISPLAY)
+    );
+    let later = WINDOWS.replace(
+        "  mTopFocusedDisplayId=0\n",
+        "  mTopFocusedDisplayId=0\n  mTopFocusedDisplayId=2\n",
+    );
+    assert_ne!(later, WINDOWS);
+    assert_eq!(
+        device::parse_windows(&later)
+            .expect("windows")
+            .focused_display,
+        Some(device::DEFAULT_DISPLAY)
+    );
+    let unnamed = WINDOWS.replace("  mTopFocusedDisplayId=0\n", "");
+    assert_eq!(
+        device::parse_windows(&unnamed)
+            .expect("windows")
+            .focused_display,
+        None
+    );
 }
 
 /// The app's focused window on a display named by no number (`mDisplayId=-1`) is on no display
@@ -2048,6 +2118,97 @@ fn a_press_after_the_window_moved_or_turned_is_busy() {
     }
 }
 
+/// The app's window moved to another display since the lane located it: the press is refused as
+/// the locate would be, naming `android_default_display`, not as a window that moved.
+#[test]
+fn a_press_after_the_window_moved_to_another_display_is_refused_as_the_locate_is() {
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    let elsewhere = WINDOWS.replace(
+        "    mDisplayId=0 rootTaskId=13",
+        "    mDisplayId=2 rootTaskId=13",
+    );
+    assert_ne!(elsewhere, WINDOWS);
+    let _moved_away = adb
+        .clone()
+        .reply_once("shell dumpsys window -a |", AdbReply::new(0, elsewhere));
+    let refused = lane::send_guarded(
+        &mut lane,
+        &tap(PointerDevice::Touch, DevicePoint::new(300, 600)),
+    )
+    .expect_err("the window is on display 2");
+    assert_eq!(
+        refused.missing_capability().as_deref(),
+        Some("android_default_display"),
+        "{refused:?}"
+    );
+    assert!(inputs(&adb).is_empty(), "nothing was sent");
+}
+
+/// A press whose device binding unwinds may have gone down: the release after it cancels the
+/// contact.
+#[test]
+fn a_press_that_unwinds_is_cancelled_by_the_release() {
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    let _unwinds = adb
+        .clone()
+        .unwind_once("shell input touchscreen motionevent DOWN");
+    let events = tap(PointerDevice::Touch, DevicePoint::new(300, 600));
+    lane.check(&events).expect("a tap");
+    lane.send(&events[0]).expect("placed");
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test catches the device's unwind to release after it"
+    )]
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| lane.send(&events[1])));
+    flui_foundation::panic::discard_payload(unwound.expect_err("the device unwound"));
+    let _released = lane.release_all();
+    assert_eq!(
+        adb.commands("shell input touchscreen motionevent CANCEL"),
+        vec!["shell input touchscreen motionevent CANCEL 300 600"]
+    );
+}
+
+/// A read of the windows that times out sent no input: its timeout says nothing may have run.
+#[test]
+fn a_windows_read_that_times_out_says_nothing_ran() {
+    let adb = scripted(true, true).timeout_once("shell dumpsys window -a");
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    let refused = lane
+        .locate_window(&placement())
+        .expect_err("the read timed out");
+    assert!(matches!(refused, Error::Timeout { .. }), "{refused:?}");
+    assert!(!refused.may_have_run(), "{refused:?}");
+}
+
+/// A command that times out after part of a sequence went out names its own effect, that it may
+/// have run, and invites no retry: the run answers it as it is.
+#[test]
+fn a_command_that_times_out_mid_sequence_keeps_its_own_effect() {
+    let adb = scripted(true, true).timeout_once("shell input mouse scroll");
+    let mut lane = connected(&adb);
+    let refused = lane::send_guarded(
+        &mut lane,
+        &[
+            OsEvent::KeyDown("a".to_owned()),
+            OsEvent::KeyUp("a".to_owned()),
+            OsEvent::Scroll {
+                at: DevicePoint::new(300, 600),
+                delta_x: 0,
+                delta_y: 40,
+            },
+        ],
+    )
+    .expect_err("the scroll timed out");
+    assert!(matches!(refused, Error::Timeout { .. }), "{refused:?}");
+    assert_eq!(
+        refused.effect().map(|effect| effect.kind),
+        Some(flui_driver::protocol::act::EffectKind::MayHaveRun)
+    );
+    assert_eq!(refused.retry(), flui_driver::protocol::error::Retry::Never);
+}
+
 /// A window that moves between two commands of one sequence stops the sequence there: what went
 /// out before stays sent, the refusal says the call may have run, and it invites no retry, which
 /// would send that part again.
@@ -2077,7 +2238,7 @@ fn a_window_that_moves_within_a_sequence_stops_it_after_what_went_out() {
     );
     assert!(matches!(refused, Error::PartlySent { .. }), "{refused:?}");
     assert_eq!(inputs(&adb), vec!["shell input keyevent KEYCODE_A"]);
-    assert_partly_sent(&refused, 1);
+    assert_partly_sent(&refused, 2, 3);
     // The next sequence starts with nothing sent: its own refusal invites the call again.
     let _moved_again = adb.reply_once(
         "shell dumpsys window -a |",
@@ -2091,19 +2252,21 @@ fn a_window_that_moves_within_a_sequence_stops_it_after_what_went_out() {
     assert!(!refused.may_have_run(), "{refused:?}");
 }
 
-/// What went out of a sequence before it failed is `count` commands, which may have run: no
-/// retry is invited, and the wire says so.
-fn assert_partly_sent(refused: &Error, count: usize) {
+/// What went out of a sequence before it failed is `sent` of its `total` events, in the effect's
+/// typed fields, which may have run: no retry is invited, and the wire says so.
+fn assert_partly_sent(refused: &Error, sent: u32, total: u32) {
     let effect = refused.effect().expect("the call names its effect");
     assert_eq!(
-        effect.kind,
-        flui_driver::protocol::act::EffectKind::MayHaveRun,
+        (effect.kind, effect.sent, effect.total, effect.unit),
+        (
+            flui_driver::protocol::act::EffectKind::Partial,
+            Some(sent),
+            Some(total),
+            Some(flui_driver::protocol::act::EffectUnit::Event)
+        ),
         "{refused:?}"
     );
-    assert_eq!(
-        effect.detail.as_deref(),
-        Some(format!("{count} commands of the sequence went out before it failed").as_str())
-    );
+    assert!(refused.may_have_run(), "{refused:?}");
     assert_eq!(refused.retry(), flui_driver::protocol::error::Retry::Never);
     let wire = refused.to_wire();
     assert_eq!(wire.effect.as_ref(), Some(effect));
@@ -2140,7 +2303,7 @@ fn any_failure_after_part_of_a_sequence_went_out_says_it_may_have_run() {
         Some(flui_driver::protocol::error::ErrorCode::NotForeground),
         "{refused:?}"
     );
-    assert_partly_sent(&refused, 1);
+    assert_partly_sent(&refused, 2, 3);
     // The windows unreadable after the key.
     let adb = scripted(true, true);
     let mut lane = connected(&adb);
@@ -2155,7 +2318,7 @@ fn any_failure_after_part_of_a_sequence_went_out_says_it_may_have_run() {
         matches!(&refused, Error::PartlySent { first, .. } if matches!(**first, Error::Lane { .. })),
         "{refused:?}"
     );
-    assert_partly_sent(&refused, 1);
+    assert_partly_sent(&refused, 2, 3);
     // The scroll's command refused by the device after the key went out.
     let adb = scripted(true, true);
     let mut lane = connected(&adb);
@@ -2164,12 +2327,17 @@ fn any_failure_after_part_of_a_sequence_went_out_says_it_may_have_run() {
         AdbReply::new(1, "").stderr("Error: no mouse"),
     );
     let refused = lane::send_guarded(&mut lane, &key_then_scroll).expect_err("the scroll failed");
-    assert_partly_sent(&refused, 1);
-    // A failure before anything went out says nothing ran.
+    assert_partly_sent(&refused, 2, 3);
+    // A failure before anything that acts went out (a tap refused at its press, after its move)
+    // says nothing ran.
     let adb = scripted(true, true);
     let mut lane = connected(&adb);
     let _shade_first = adb.reply_once("shell dumpsys window -a |", AdbReply::new(0, shade));
-    let refused = lane::send_guarded(&mut lane, &key_then_scroll).expect_err("the shade");
+    let refused = lane::send_guarded(
+        &mut lane,
+        &tap(PointerDevice::Touch, DevicePoint::new(300, 600)),
+    )
+    .expect_err("the shade");
     assert!(
         matches!(refused, Error::NotForeground { .. }),
         "{refused:?}"

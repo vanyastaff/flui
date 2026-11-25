@@ -811,7 +811,23 @@ fn a_window_that_moves_or_turns_during_the_dump_is_busy() {
     assert_ne!(replaced, windows_edge_to_edge(1080, 2400));
     let turned = CONTROLS.replace("rotation=\"0\"", "rotation=\"1\"");
     assert_ne!(turned, CONTROLS);
+    // A quarter turn after the window was located: its frame no longer has the placement's size,
+    // and the read is busy rather than a window the lane cannot find.
+    let quarter_turn = windows_edge_to_edge(2400, 1080).replace(
+        "    mRotation=0 mDeferredRotationPauseCount=0",
+        "    mRotation=1 mDeferredRotationPauseCount=0",
+    );
+    assert_ne!(quarter_turn, windows_edge_to_edge(2400, 1080));
     for (case, adb) in [
+        (
+            "quarter turn",
+            emulator_showing(CONTROLS)
+                .reply_once(
+                    "shell dumpsys window -a |",
+                    AdbReply::new(0, windows_edge_to_edge(1080, 2400)),
+                )
+                .reply_once("shell dumpsys window -a |", AdbReply::new(0, quarter_turn)),
+        ),
         (
             "moved",
             emulator_showing(CONTROLS)
@@ -834,6 +850,49 @@ fn a_window_that_moves_or_turns_during_the_dump_is_busy() {
         assert!(matches!(refused, Error::Busy { .. }), "{case}: {refused:?}");
         assert_eq!(adb.commands("shell dumpsys window -a |").len(), 2, "{case}");
     }
+}
+
+/// A dump that wrote no window because the window never went idle (an app that changes its tree
+/// all the time), or because another `UiAutomation` client holds accessibility, is busy: a state
+/// that passes, said as such, not a lane that failed.
+#[test]
+fn a_dump_that_never_went_idle_or_found_another_client_is_busy() {
+    for (case, said) in [
+        ("never idle", "ERROR: could not get idle state.\n"),
+        (
+            "another client",
+            "Error: java.lang.IllegalStateException: UiAutomationService \
+             android.accessibilityservice.IAccessibilityServiceClient$Stub$Proxy@1a2b already \
+             registered!\n",
+        ),
+    ] {
+        let adb =
+            emulator_showing(CONTROLS).reply_once("exec-out uiautomator", AdbReply::new(0, said));
+        let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
+        let refused = lane
+            .read_tree(&placement(), &controls())
+            .expect_err("no window was dumped");
+        assert!(matches!(refused, Error::Busy { .. }), "{case}: {refused:?}");
+        assert_eq!(
+            refused.retry(),
+            flui_driver::protocol::error::Retry::Soon,
+            "{case}"
+        );
+        // The line prints the dump's error stream where the dump wrote no file.
+        let line = adb.commands("exec-out uiautomator dump").join("\n");
+        assert!(
+            line.contains("2>") && line.contains("|| cat"),
+            "{case}: {line}"
+        );
+    }
+    // Anything else the dump says is the lane's failure.
+    let adb =
+        emulator_showing(CONTROLS).reply_once("exec-out uiautomator", AdbReply::new(0, "Killed\n"));
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
+    let refused = lane
+        .read_tree(&placement(), &controls())
+        .expect_err("no window was dumped");
+    assert!(matches!(refused, Error::Lane { .. }), "{refused:?}");
 }
 
 /// An activation through the OS accessibility API is refused with its reason, before the device
@@ -1343,8 +1402,8 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
         .and_then(|mut window| window.os_tree())
         .expect_err("the tree never held still");
     assert!(matches!(moving, Error::Busy { .. }), "{moving:?}");
-    // The driver has read again for the whole bound: the same call is no surer to succeed.
-    assert_eq!(moving.retry(), flui_driver::protocol::error::Retry::Never);
+    // The busy code's own advice: the app kept changing, and the call holds once it settles.
+    assert_eq!(moving.retry(), flui_driver::protocol::error::Retry::Soon);
     assert!(
         adb.commands("exec-out uiautomator dump").len() > 3,
         "read again past any count of three"
@@ -1429,6 +1488,75 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
         "{busy:?}"
     );
     assert_eq!(adb.commands("exec-out uiautomator dump").len(), 1);
+}
+
+/// A lane that matches nothing against the app's tree (UI Automation's, by identifier) answers
+/// its own `NotFound` after one reading, however the app's tree moves: only a lane that matches
+/// the app's tree can fail to match one the app no longer shows.
+#[test]
+fn a_lane_that_matches_nothing_answers_its_not_found_at_once() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use flui_driver::Driver;
+    use flui_driver::protocol::error::Retry;
+    use flui_driver::protocol::method::{self, Method as _};
+    use flui_driver::protocol::session::Isolation;
+    use flui_driver::testing::{Reply, ScriptedAgent, ScriptedLane};
+
+    let reads = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&reads);
+    let placement = serde_json::to_value(placement()).expect("a placement serializes");
+    let tree = serde_json::to_value(controls()).expect("a tree serializes");
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::WindowPlacement::NAME,
+            method::SemanticsRead::NAME,
+        ],
+        Box::new(move |name, _| match name {
+            "window.placement" => Reply::Result(placement.clone()),
+            "semantics.read" => {
+                // A tree that moves on every read.
+                let read = counted.fetch_add(1, Ordering::SeqCst);
+                let mut tree = tree.clone();
+                tree["revision"] = serde_json::json!(read + 1);
+                Reply::Result(tree)
+            }
+            _ => Reply::Result(serde_json::json!({ "windows": ["w1"] })),
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let os_reads = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&os_reads);
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let lane = lane.reading_tree(
+        AccessibilityApi::UiAutomation,
+        Box::new(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            Err(Error::NotFound {
+                message: "process 7 shows no window of 1080 x 2340".to_owned(),
+                candidates: Vec::new(),
+                effect: None,
+                retry: Retry::WhenAppears,
+            })
+        }),
+    );
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches")
+        .with_lane(lane)
+        .expect("the lane starts");
+    let refused = driver
+        .main_window()
+        .and_then(|mut window| window.compare_projection())
+        .expect_err("the lane found no window");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. } if message.contains("process 7")),
+        "{refused:?}"
+    );
+    assert_eq!(os_reads.load(Ordering::SeqCst), 1, "read once");
+    drop(agent);
 }
 
 /// `xml` without the app's view, as a dump taken before the app serves its tree shows it.
