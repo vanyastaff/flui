@@ -2,6 +2,7 @@
 //! a parked wait from the list its host hands it after a turn, and from its own half alone, never
 //! idle, where its host composes none.
 
+use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use flui_foundation::panic::payload_text;
-use flui_foundation::testing::panicking_waker;
+use flui_foundation::testing::{CountingWaker, panicking_waker};
 use flui_foundation::{ManualClock, MonotonicClock};
 use flui_platform::PlatformWindow;
 use flui_protocol::method::{WaitFrames, WaitSettled, WaitUntil};
@@ -267,14 +268,15 @@ fn only_a_complete_half_of_test_causes_ends_a_wait_idle() {
 }
 
 /// A runtime whose host composes no half answers its settled waits itself at the end of each
-/// turn, from its own half: never idle, and saying so.
+/// turn, from its own half: never idle, and saying so, as does a wait answered at the frame
+/// that makes it hold.
 ///
 /// Fails against a runtime that answers nothing where its host composes no half (the wait is
-/// never answered), or that answers it with the host's scope.
+/// never answered), or that answers it, or a wait that holds at a frame, with the host's scope.
 #[test]
 fn a_runtime_whose_host_composes_no_half_answers_runtime_only_and_never_idle() {
     let clock = ManualClock::new();
-    let (runtime, _agent, window) = idle_runtime(&clock, false);
+    let (mut runtime, _agent, window) = idle_runtime(&clock, false);
     let mut settled = window
         .call::<WaitSettled>(settled_params(window.id(), 1_000))
         .expect("the inbox has room");
@@ -300,10 +302,25 @@ fn a_runtime_whose_host_composes_no_half_answers_runtime_only_and_never_idle() {
         .expect("an answer");
     assert_eq!(outcome.end, WaitEnd::Unsatisfied);
     assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
+
+    // A wait that holds at a frame, without reading settledness, says so too.
+    let mut frames = window
+        .call::<WaitFrames>(frames_params(window.id(), 1, 1_000))
+        .expect("the inbox has room");
+    let _ = runtime.drain_owner_inbox();
+    clock.advance(Duration::from_millis(16));
+    let _ = runtime.pump(&mut SampledClock(clock.now()), &mut Shown);
+    let outcome = frames
+        .try_take()
+        .expect("the frame it counted answered it")
+        .expect("an answer");
+    assert_eq!(outcome.end, WaitEnd::Satisfied);
+    assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
 }
 
 /// A timer the host lists as due at the instant it is served, after every turn, keeps the clock
-/// from moving: the wait ends unsatisfied after the turn bound, naming the timer. The bound
+/// from moving: the wait ends unsatisfied after the turn bound, naming the causes a turn then
+/// serves (the timer and the next turn's redraw, not a later step or held work). The bound
 /// counts passes at one instant: a pass at a later instant counts from one again, so passes
 /// spread over time never end a wait.
 ///
@@ -316,7 +333,8 @@ fn a_timer_that_re_arms_at_the_same_instant_ends_the_wait_after_the_turn_bound()
         /// Whether the clock moves before the pass that would reach the bound.
         moves: bool,
     }
-    // The timer is due at `now`; the scenario's step is not.
+    // The timer is due at `now` and the redraw is the next turn's; the scenario's step is not
+    // due, and held work is no turn's.
     let listed_at = |now| {
         let mut listed = Unsettled::new(now);
         listed.deadline(UnsettledReason::Timer, None, now);
@@ -325,6 +343,8 @@ fn a_timer_that_re_arms_at_the_same_instant_ends_the_wait_after_the_turn_bound()
             None,
             now + Duration::from_secs(1),
         );
+        listed.next_frame(UnsettledReason::NeedsRedraw, None);
+        listed.test(UnsettledReason::Background, None);
         listed
     };
     let rows = [
@@ -376,8 +396,11 @@ fn a_timer_that_re_arms_at_the_same_instant_ends_the_wait_after_the_turn_bound()
             .collect();
         assert_eq!(
             named,
-            [(UnsettledReason::Timer, ClearedBy::Deadline)],
-            "{}: the cause due at that instant, not the later step",
+            [
+                (UnsettledReason::Timer, ClearedBy::Deadline),
+                (UnsettledReason::NeedsRedraw, ClearedBy::NextFrame)
+            ],
+            "{}: the causes a turn at that instant serves, not the later step or held work",
             row.name
         );
     }
@@ -505,6 +528,111 @@ fn a_queued_frame_s_settlement_answers_a_settled_wait_with_no_turn_after_it() {
         .expect("a settled window is an answer");
     assert_eq!(outcome.end, WaitEnd::Satisfied);
     assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
+}
+
+/// The runtime's half at the clock's reading, each cause with what discharges it and its window.
+fn listed(
+    runtime: &UiRuntime,
+    clock: &ManualClock,
+) -> Vec<(UnsettledReason, ClearedBy, Option<WindowId>)> {
+    let mut half = Unsettled::new(clock.now());
+    runtime.unsettled(clock.now(), &mut half);
+    half.causes()
+        .map(|cause| (cause.reason, cause.cleared_by, cause.window))
+        .collect()
+}
+
+/// Whether `listed` names a cause a frame serves: a redraw, a scheduled frame or pending work.
+fn names_a_frame(listed: &[(UnsettledReason, ClearedBy, Option<WindowId>)]) -> bool {
+    listed.iter().any(|(reason, _, _)| {
+        matches!(
+            reason,
+            UnsettledReason::NeedsRedraw
+                | UnsettledReason::FrameScheduled
+                | UnsettledReason::PendingWork
+        )
+    })
+}
+
+/// A presentation whose sink holds as many frames as it may is named for no frame: no frame
+/// serves its work until the settlement that frees a place, so a redraw asked of it is not the
+/// next frame's, and what is listed is the frame in flight's floor, a `Timer` of its window.
+///
+/// Fails against a list that names each presentation with work for a frame (the redraw is
+/// listed as the next frame's, which no frame runs), or that names no window for a
+/// presentation's deadline.
+#[test]
+fn a_presentation_whose_sink_is_full_is_named_for_no_frame() {
+    let clock = ManualClock::new();
+    let (mut runtime, _held, window) = mounted_runtime(&clock, true);
+    let mut sink = Queueing::default();
+    clock.advance(Duration::from_millis(16));
+    let _ = runtime.pump(&mut SampledClock(clock.now()), &mut sink);
+    assert_eq!(sink.0.len(), 1, "the frame is in flight");
+    runtime.request_redraw();
+
+    let named = listed(&runtime, &clock);
+    assert!(
+        !names_a_frame(&named),
+        "no frame's cause while the sink is full: {named:?}"
+    );
+    assert!(
+        named.contains(&(
+            UnsettledReason::Timer,
+            ClearedBy::Deadline,
+            Some(window.id())
+        )),
+        "the in-flight floor, of its window: {named:?}"
+    );
+}
+
+/// A presentation whose device rebuild was given up is named for no frame: a redraw asked of it
+/// waits for a new rebuild. Pointer motion it receives is still the next frame's, named for its
+/// window: every frame flushes every presentation's motion, whatever its device.
+///
+/// Fails against a list that names each presentation with work for a frame (the redraw is
+/// listed as the next frame's, which no frame draws), or that counts motion only where the
+/// presentation's frame work is served (the motion is not listed).
+#[test]
+fn a_presentation_whose_device_was_given_up_is_named_for_no_frame_but_its_motion() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::events::{PointerKind, make_move_event};
+    use flui_interaction::ids::InputSurface;
+    use flui_platform::PlatformInput;
+    use flui_runtime::frame_failure::DeviceRecovery;
+
+    let clock = ManualClock::new();
+    let (runtime, _held, window) = run_until_idle(&clock, mounted_runtime(&clock, true));
+    runtime.note_primary_device_recovery(Some(DeviceRecovery::Abandoned { attempts: 3 }));
+    runtime.request_redraw();
+    let named = listed(&runtime, &clock);
+    assert!(
+        !names_a_frame(&named),
+        "no frame's cause while the device is given up: {named:?}"
+    );
+
+    let _ = runtime.handle_input_on(
+        runtime.presentation_id(),
+        InputSurface::Window,
+        PlatformInput::Pointer(
+            make_move_event(Offset::new(5.0, 5.0), PointerKind::Mouse).expect("move"),
+        ),
+    );
+    let named = listed(&runtime, &clock);
+    assert!(
+        named.contains(&(
+            UnsettledReason::PendingWork,
+            ClearedBy::NextFrame,
+            Some(window.id())
+        )),
+        "the motion, of its window: {named:?}"
+    );
+    assert!(
+        !named
+            .iter()
+            .any(|(reason, _, _)| *reason == UnsettledReason::NeedsRedraw),
+        "the redraw the motion asked for waits for a rebuild: {named:?}"
+    );
 }
 
 /// The payload an agent's waker panics with.
@@ -724,8 +852,13 @@ fn a_settlement_answers_settled_waits_behind_its_own_first_failure() {
 }
 
 /// A runner's owner: a frame it delivers pumps the runtime at the clock's reading into a sink
-/// that shows every frame; it installs nothing and retires nothing.
-struct OwnerFrames(ManualClock);
+/// that shows every frame; it installs nothing and retires nothing. At the end of each frame,
+/// still inside the dispatch, it notes whether `answered` was woken.
+struct OwnerFrames {
+    clock: ManualClock,
+    answered: Arc<CountingWaker>,
+    answered_inside_a_dispatch: Cell<bool>,
+}
 
 impl OwnerEffects for OwnerFrames {
     fn runtime_lifecycle(
@@ -760,7 +893,10 @@ impl OwnerEffects for OwnerFrames {
     ) {
     }
     fn frame(&self, _: flui_foundation::PresentationAddress, runtime: &mut UiRuntime) {
-        let _ = runtime.pump(&mut SampledClock(self.0.now()), &mut Shown);
+        let _ = runtime.pump(&mut SampledClock(self.clock.now()), &mut Shown);
+        if self.answered.was_woken() {
+            self.answered_inside_a_dispatch.set(true);
+        }
     }
     fn retire_presentation(
         &self,
@@ -778,10 +914,12 @@ impl OwnerEffects for OwnerFrames {
 /// around its work, so no turn the runtime runs inside it is the outermost: a runtime whose host
 /// composes no half answers its settled waits where the dispatch ends. A settled wait is answered
 /// once the frames a dispatch delivered leave nothing listed, and a wait that never holds is
-/// answered at its deadline by the background turn delivered then.
+/// answered at its deadline by the background turn delivered then. No wait is answered while the
+/// dispatch still holds the turn open: the pump inside it ends a turn that is not the outermost.
 ///
-/// Fails against a runtime that answers only where a turn it ran by itself ends: inside a
-/// dispatch neither wait is ever answered.
+/// Fails against a runtime that answers only where a turn it ran by itself ends (inside a
+/// dispatch neither wait is ever answered), or against one that answers where the pump inside
+/// the dispatch ends (the settled wait's waker runs inside the frame).
 #[test]
 fn an_owner_dispatch_answers_the_settled_waits_of_a_host_without_a_half() {
     let clock = ManualClock::new();
@@ -791,8 +929,13 @@ fn an_owner_dispatch_answers_the_settled_waits_of_a_host_without_a_half() {
         .publication(owner.prepare_runtime(runtime))
         .expect("the runtime publishes")
         .commit();
-    let effects = OwnerFrames(clock.clone());
+    let effects = OwnerFrames {
+        clock: clock.clone(),
+        answered: CountingWaker::new().shared(),
+        answered_inside_a_dispatch: Cell::new(false),
+    };
     let mut settled = wait_until(&window, Condition::Settled, 5_000);
+    settled.register(&effects.answered.waker());
     let mut never = wait_until(&window, missing(), 200);
 
     let frames = owner.frame_dispatcher(address).expect("frame authority");
@@ -812,6 +955,10 @@ fn an_owner_dispatch_answers_the_settled_waits_of_a_host_without_a_half() {
         .expect("an answer");
     assert_eq!(outcome.end, WaitEnd::Satisfied);
     assert_eq!(outcome.scope, SettleScope::RuntimeOnly);
+    assert!(
+        !effects.answered_inside_a_dispatch.get(),
+        "answered where the dispatch ended, not inside its frame"
+    );
     assert!(never.try_take().is_none(), "before its deadline");
 
     clock.advance(Duration::from_millis(200));

@@ -24,8 +24,10 @@ impl HeadlessHost {
     /// ([`UiRuntime::unsettled`]) and the host's own, gathered into one list
     /// (ADR-0400 §3). [`time_to_next_frame`](Self::time_to_next_frame) is its
     /// [wake](Unsettled::wake), [`pump_until_settled`](Self::pump_until_settled)
-    /// settles when it is empty, and each [`pump`](Self::pump) hands it to the
-    /// runtime's agent waits once the pump's own steps are done.
+    /// settles when it is empty, and a [`pump`](Self::pump) that ends while an
+    /// agent's wait is parked ([`UiRuntime::awaits_settled_answer`]) gathers it
+    /// once the pump's own steps are done and hands it to the runtime, which
+    /// answers that wait from it.
     ///
     /// Not a pure read: it first asks each covered window for the frame it
     /// owes, as a runner's owner delivery does after the work item that left

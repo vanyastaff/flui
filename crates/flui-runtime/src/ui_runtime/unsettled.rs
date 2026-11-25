@@ -18,8 +18,13 @@ impl UiRuntime {
     ///   window runs no frame for them, and lists none. While a dropped frame's retry is armed and
     ///   not yet due they are served at the retry instead, and listed at it. A redraw, a
     ///   scheduled frame and tree work or motion are listed with the window of each presentation
-    ///   that has work for a frame (or motion), and with none when no presentation has any; due
-    ///   work is listed with none;
+    ///   whose work the next frame serves (or that has motion, which every frame flushes), and
+    ///   with none when no presentation has frame work at all; due work is listed with none. A
+    ///   presentation whose work no frame serves (one that cannot be seen, whose sink is full or
+    ///   whose device was given up) is named for none of them, whether or not another window's
+    ///   frames run, and demand it alone holds is not listed, as with frames off: what serves its
+    ///   work is its window being seen, the frame its window is asked for (the host's half), the
+    ///   settlement the in-flight floor bounds (a `Timer`) or a rebuild;
     /// - every deadline the runtime wakes for (a gesture's, its geometry's, text preparation's, a
     ///   haptic delivery's, a frame-rate hold's, a dropped frame's retry, the in-flight floor, a
     ///   task's sleep, a drag's spring loading) is a `Timer` served at its exact instant, with the
@@ -34,26 +39,31 @@ impl UiRuntime {
             Some(retry) => into.deadline(reason, window, retry),
             None => into.next_frame(reason, window),
         };
-        // The runtime-wide demand for a frame changes only the presentations with work for it:
-        // it is listed once with the window of each, or with none when no presentation has any,
-        // so a `wait.settled` on a window another window's demand does not touch is not held by
-        // it (ADR-0400 §3).
+        // The runtime-wide demand for a frame changes only the presentations whose work the next
+        // frame serves: it is listed once with the window of each, so a `wait.settled` on a
+        // window another window's demand does not touch is not held by it (ADR-0400 §3). Where
+        // only presentations no frame serves hold frame work, that work waits for what serves
+        // it and the demand is not listed, as with frames off; where no presentation holds any,
+        // the demand is the runtime's own, which the next frame clears, listed with no window.
         let for_frame_work =
             |into: &mut Unsettled,
              reason,
              also: &dyn Fn(&crate::presentation::PresentationState) -> bool| {
                 let mut named = false;
+                let mut held = false;
                 for presentation in self.presentations.iter() {
-                    if presentation.has_frame_work() || also(presentation) {
+                    if presentation.has_frame_work_for_next_frame() || also(presentation) {
                         next_turn(
                             into,
                             reason,
                             Some(super::agent::window_of(presentation.id())),
                         );
                         named = true;
+                    } else if presentation.has_frame_work() {
+                        held = true;
                     }
                 }
-                if !named {
+                if !named && !held {
                     next_turn(into, reason, None);
                 }
             };

@@ -221,5 +221,13 @@ mod tests {
         assert_eq!(unsettled.wake(), Some(due));
         assert_eq!(unsettled.due_by(at).count(), 0, "not due at the gather");
         assert_eq!(unsettled.due_by(due).count(), 1, "due at its instant");
+
+        // A deadline further than the report's milliseconds can count reports the most.
+        let beyond = at + Duration::from_secs(u64::MAX / 1_000 + 1);
+        let mut far = Unsettled::new(at);
+        far.deadline(UnsettledReason::Timer, None, beyond);
+        let timer = far.causes().next().expect("the timer is listed");
+        assert_eq!(timer.due_in_ms, Some(u64::MAX));
+        assert_eq!(far.wake(), Some(beyond));
     }
 }

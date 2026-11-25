@@ -96,6 +96,19 @@ impl PresentationState {
             || self.owes_texture_frame()
     }
 
+    /// Whether the runtime's next frame serves this presentation's [frame work](Self::has_frame_work):
+    /// it has some, it can be seen, its sink holds fewer frames than it may, and its device
+    /// rebuild was not given up. Otherwise its work waits for something no frame of another
+    /// window does: an unseen presentation's for its window to be seen or for the frame that
+    /// window is asked for (ADR-0389, the host's half of ADR-0400 §3), a full sink's for the
+    /// settlement that frees a place (ADR-0305 §5), an abandoned device's for a new rebuild.
+    pub(crate) fn has_frame_work_for_next_frame(&self) -> bool {
+        !self.clock().is_hidden()
+            && !self.frames_in_flight().is_saturated()
+            && !self.device_abandoned()
+            && self.has_frame_work()
+    }
+
     /// While this presentation has frames pending, the latest the owner sleeps until: the next
     /// multiple of [`IN_FLIGHT_FLOOR`](crate::ui_runtime::IN_FLIGHT_FLOOR) since the oldest
     /// pending frame was handed to its sink, so a lost settlement wake costs at most that interval, and a
