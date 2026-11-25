@@ -1396,8 +1396,16 @@ graph LR
     `each_trait_reads_as_the_bridges_role_and_folds_back`,
     `the_role_table_covers_the_vocabulary_once`,
     `the_window_is_titled_by_the_device_and_its_runtime`,
-    `a_title_two_simulators_share_is_refused`,
-    `a_window_naming_another_simulator_is_not_the_devices`,
+    `every_simulator_sharing_the_title_counts`, `each_read_lists_the_simulators_again`,
+    `the_window_is_chosen_by_what_each_window_names`,
+    `a_target_renamed_or_removed_since_connecting_is_refused`,
+    `a_window_naming_any_other_uuid_is_not_the_devices`,
+    `a_level_read_short_is_marked_whatever_stopped_it`,
+    `the_walk_reads_its_depth_and_marks_what_lies_past_it`,
+    `the_walk_reads_its_budget_and_leaves_out_a_gone_element`,
+    `a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone`,
+    `the_search_keeps_to_its_budget_and_depth`,
+    `a_group_gone_mid_search_cuts_the_search_short`,
     `the_search_reaches_devicehubs_screen_seven_levels_down`,
     `the_search_reaches_a_screen_inside_simulator_apps_bezel`,
     `the_search_refuses_two_windows_and_finds_none_in_none`,
@@ -1408,7 +1416,7 @@ graph LR
     `an_app_node_is_matched_once`, `an_app_past_the_budget_projects_as_truncated`,
     `an_element_fits_only_the_node_whose_facts_it_shows`, `an_ambiguous_match_is_refused`,
     `a_press_refuses_an_element_it_cannot_tell_apart`,
-    `a_permission_taken_back_mid_read_is_named`,
+    `a_permission_taken_back_mid_read_is_named`, `a_press_names_its_own_elements_deadline`,
     `the_lane_reads_and_presses_through_the_simulators_window`,
     `the_lane_presses_nothing_it_cannot_match`,
     `the_lane_refuses_a_window_it_cannot_see_and_a_read_it_was_not_handed`,
@@ -1417,8 +1425,9 @@ graph LR
     rules, `scenarios::the_ios_roles_scenario_passes_through_the_lane_on_the_headless_app`,
     `scenarios::an_ios_role_row_fails_when_the_bridge_serves_another_role` and
     `scenarios::the_ios_accessibility_scenario_passes_through_the_lane_but_the_activations_effect`
-    (the press reaches the scripted window, not the headless app); each fix of the review's round
-    taken out by hand fails one of them. The Mac's half
+    (the press reaches the scripted window, not the headless app); and the shared walk's level
+    cut by an element gone, `windows_lane::an_element_gone_mid_walk_cuts_its_level_short`. Each
+    fix of the review's rounds taken out by hand fails one of them. The Mac's half
     (`accessibility::MacAccessibility`, the shared client `lane::ax`) type-checks for
     aarch64-apple-darwin (WSL, nightly `cargo check --lib`); its clippy is CI's cross-typecheck.
   - The scenarios on the headless target (CI): `scenarios::the_ios_input_scenario_passes_on_the_headless_target`,
@@ -1466,10 +1475,15 @@ graph LR
     `tree` and `roles`. The read hands back the elements as served; naming, placing and matching
     them is pure code the scripted window goes through too. The Simulator's process is not looked
     up by name (AppKit reports DeviceHub's pid as -1): every owner of a window on screen is asked
-    within a second for its windows titled `<device> – <runtime>`; two such windows, or a title
-    another listed simulator shares, are refused. The screen is found by walking every group of
+    within a second for its windows titled `<device> – <runtime>`, taken by an allow-list every
+    host goes through (`tree::choose_window`: the one naming the device's UDID, whatever the
+    others name; else the one naming no UUID, only while no other listed simulator shares the
+    title; any other UUID never; two naming the UDID, or two naming none, refused), and the
+    device looked up by its UDID in the listing read before each read, renamed or removed
+    refused. The screen is found by walking every group of
     the window within ten levels: an `iOSContentGroup` (DeviceHub) when there is one, else the
-    shallowest group of the app's window's shape (Simulator.app, inside its bezel or not).
+    shallowest group of the app's window's shape (Simulator.app, inside its bezel or not), which a
+    search left partial by a group gone or its budget does not take.
     `accesskit_ios` serves the elements VoiceOver reads, so an element is matched among the
     descendants of the node its nearest matched ancestor fits. The client is shared with the macOS
     lane as `lane::ax`, and `Lane::invoke` is handed the app's tree as `read_tree` is.

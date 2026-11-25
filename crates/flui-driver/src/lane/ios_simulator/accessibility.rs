@@ -14,13 +14,16 @@
 //! [`HostAccessibility`] is that read, kept apart so the lane is held against a scripted Simulator
 //! (`testing::ScriptedSimulatorScreen`) on every host; `MacAccessibility` is the Mac's, on macOS.
 //! Both hand back the screen's elements as the API serves them ([`ScreenElement`]), before any
-//! projection: [`super::tree`] projects and matches them, the same code for both.
+//! projection: [`super::tree`] projects and matches them, the same code for both. The walk over
+//! the screen's elements is pure too ([`walk_screen`] over a [`ScreenSource`]), so what it marks
+//! as unread is the same for the Mac's API and a test's source.
 
 #[cfg(target_os = "macos")]
 mod mac;
 
 use std::time::Duration;
 
+use flui_protocol::act::{Effect, EffectKind};
 use flui_protocol::error::{ErrorCode, HandleKind, Retry};
 use flui_protocol::geometry::LogicalSize;
 
@@ -28,7 +31,7 @@ use flui_protocol::geometry::LogicalSize;
 pub use self::mac::MacAccessibility;
 use super::device::{Simulator, Udid};
 use crate::error::{Error, Result};
-use crate::lane::walk::ProviderError;
+use crate::lane::walk::{MAX_DEPTH, MAX_NODES, ProviderError};
 
 /// A rectangle in the Mac's global points: an element's `AXPosition` and `AXSize`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,7 +98,8 @@ pub struct ScreenElement {
     pub frame: Option<PointFrame>,
     /// Its children, in the API's order.
     pub children: Vec<ScreenElement>,
-    /// Whether the read's budget left children of it unread.
+    /// Whether the read stopped before it had seen all its children: the walk's budget or depth
+    /// ran out, or the element went away mid-read ([`walk_screen`]).
     pub children_unread: bool,
 }
 
@@ -118,7 +122,10 @@ pub struct HostScreen {
     pub frame: PointFrame,
     /// The group's children.
     pub elements: Vec<ScreenElement>,
-    /// Whether the read's budget cut it short.
+    /// Whether the read stopped before it had seen all the group's own children, as
+    /// [`ScreenElement::children_unread`] says of an element's.
+    pub children_unread: bool,
+    /// Whether the read stopped short anywhere: a budget, the depth, or an element gone mid-read.
     pub truncated: bool,
 }
 
@@ -129,6 +136,7 @@ impl HostScreen {
         Self {
             frame,
             elements,
+            children_unread: false,
             truncated: false,
         }
     }
@@ -142,8 +150,15 @@ impl HostScreen {
 pub struct ScreenRequest {
     /// The title of the Simulator's window that shows the device ([`window_title`]).
     pub title: String,
-    /// The simulator shown, which a window naming another is not ([`window_identity`]).
+    /// The simulator shown: a window that names any other UUID is not its window
+    /// ([`window_identity`]).
     pub udid: Udid,
+    /// How many other listed simulators share [`Self::title`], whatever their state: while one
+    /// does, a window that names no UUID could be its, and is not taken ([`screen_title`]). Only
+    /// the default device set is listed (`xcrun simctl list devices`): a simulator of another set
+    /// (`simctl --set`, Xcode's previews) is not counted, so its window, when it names no UUID,
+    /// is not told apart from the device's.
+    pub others_titled: usize,
     /// The app's window in points: a UIKit window fills its screen.
     pub size: LogicalSize,
     /// The window's scale.
@@ -151,13 +166,20 @@ pub struct ScreenRequest {
 }
 
 impl ScreenRequest {
-    /// The screen of simulator `udid`'s window titled `title`, showing an app window of `size`
-    /// at `scale`.
+    /// The screen of simulator `udid`'s window titled `title`, which `others_titled` other listed
+    /// simulators share ([`screen_title`] gives both), showing an app window of `size` at `scale`.
     #[must_use]
-    pub fn new(title: impl Into<String>, udid: Udid, size: LogicalSize, scale: f64) -> Self {
+    pub fn new(
+        title: impl Into<String>,
+        udid: Udid,
+        others_titled: usize,
+        size: LogicalSize,
+        scale: f64,
+    ) -> Self {
         Self {
             title: title.into(),
             udid,
+            others_titled,
             size,
             scale,
         }
@@ -172,34 +194,41 @@ pub fn window_title(simulator: &Simulator) -> String {
     format!("{} \u{2013} {}", simulator.name, simulator.runtime_name())
 }
 
-/// Refuse a title that names more than one listed simulator: the window is found by its title, and
-/// no attribute a run has confirmed carries its simulator's UDID, so a title that `simulators`
-/// gives two of (any state: DeviceHub keeps a window titled for a simulator that shut down) could
-/// show another simulator's app.
+/// The title of `target`'s window as `listing`, read now, gives it, and how many other listed
+/// simulators share it in any state (DeviceHub keeps a window titled for a simulator that shut
+/// down, and one whose runtime went keeps the window it had). `target` is found in `listing` by
+/// its UDID, never by the name it had when the lane connected.
 ///
 /// # Errors
 ///
-/// [`Error::Ambiguous`] naming the simulators that share `target`'s title.
-pub fn check_title_names_one(simulators: &[Simulator], target: &Simulator) -> Result<()> {
-    let title = window_title(target);
-    let sharing: Vec<String> = simulators
+/// [`Error::NotFound`] when `listing` no longer lists `target`; [`Error::InvalidArgument`] when it
+/// lists it under another title than `target`'s, renamed since the lane connected, since the lane
+/// would look for a window titled for another device.
+pub fn screen_title(listing: &[Simulator], target: &Simulator) -> Result<(String, usize)> {
+    let Some(listed) = listing
         .iter()
-        .filter(|simulator| window_title(simulator) == title)
-        .map(|simulator| format!("{} ({})", simulator.udid, simulator.state))
-        .collect();
-    if sharing.len() <= 1 {
-        return Ok(());
-    }
-    Err(Error::Ambiguous {
-        message: format!(
-            "{} simulators are titled {title:?}, and the lane finds a device's window by its \
-             title: rename all but {} (`xcrun simctl rename`)",
-            sharing.len(),
+        .find(|simulator| simulator.udid == target.udid)
+    else {
+        return Err(Error::not_found(format!(
+            "simulator {} is no longer listed by `xcrun simctl list devices`: it was deleted \
+             since the lane connected",
             target.udid
-        ),
-        candidates: sharing,
-        retry: ErrorCode::Ambiguous.default_retry(),
-    })
+        )));
+    };
+    let title = window_title(listed);
+    let connected = window_title(target);
+    if title != connected {
+        return Err(Error::invalid_argument(format!(
+            "simulator {} is titled {title:?} now, not {connected:?} as when the lane connected: \
+             start a session again",
+            target.udid
+        )));
+    }
+    let others = listing
+        .iter()
+        .filter(|simulator| simulator.udid != target.udid && window_title(simulator) == title)
+        .count();
+    Ok((title, others))
 }
 
 /// What a window's attributes say of the simulator it shows.
@@ -208,35 +237,59 @@ pub fn check_title_names_one(simulators: &[Simulator], target: &Simulator) -> Re
 pub enum WindowIdentity {
     /// An attribute names the simulator asked for.
     Named,
-    /// An attribute names another simulator's UDID.
+    /// An attribute names a UUID that is not the simulator asked for.
     Other,
-    /// No attribute names a UDID.
+    /// No attribute names a UUID.
     Unknown,
 }
 
 /// What `attributes`, the texts a window answers with (its `AXIdentifier` and `AXDocument`), say
-/// of whether it shows simulator `udid`: a UDID among them is the window's simulator's. No run has
-/// shown which attribute, if any, carries one, so a window naming none is `Unknown`, and the
-/// title's uniqueness ([`check_title_names_one`]) stands for it.
+/// of whether it shows simulator `udid`, by an allow-list: a window that names `udid` is its; one
+/// that names any other UUID is not, whatever the UUID is (another simulator's, from any device
+/// set, a document's), so a window is never taken on a UUID nobody checked; one that names none is
+/// `Unknown`, taken only while no other listed simulator shares its title
+/// ([`ScreenRequest::others_titled`]). Every run of characters in a UUID's 8-4-4-4-12 form is
+/// read as a UUID, whatever stands beside it, a hexadecimal digit included: `udid` found
+/// anywhere makes the window `Named`; any other run of the form, and no `udid`, makes it `Other`,
+/// so a run glued to the text around it (`SimDevice<UUID>`, `<UUID>abc`) never reads as naming
+/// none. No run has shown which attribute, if any, carries a UDID, or in what form.
 #[must_use]
 pub fn window_identity(udid: &Udid, attributes: &[Option<String>]) -> WindowIdentity {
-    let mut named_other = false;
+    let mut names_other = false;
     for text in attributes.iter().flatten() {
-        for word in text.split(|c: char| !(c.is_ascii_hexdigit() || c == '-')) {
-            let Ok(found) = Udid::try_new(word) else {
-                continue;
-            };
-            if found == *udid {
+        for run in uuid_runs(text) {
+            if run.eq_ignore_ascii_case(udid.as_str()) {
                 return WindowIdentity::Named;
             }
-            named_other = true;
+            names_other = true;
         }
     }
-    if named_other {
+    if names_other {
         WindowIdentity::Other
     } else {
         WindowIdentity::Unknown
     }
+}
+
+/// The length of a UUID's 8-4-4-4-12 form.
+const UUID_LEN: usize = 36;
+
+/// Every run of [`UUID_LEN`] characters in `text` in a UUID's 8-4-4-4-12 form, whatever stands
+/// beside it, overlapping runs included.
+fn uuid_runs(text: &str) -> impl Iterator<Item = &str> + '_ {
+    (0..=text.len().saturating_sub(UUID_LEN)).filter_map(move |start| {
+        let run = text.get(start..start + UUID_LEN)?;
+        run.bytes()
+            .enumerate()
+            .all(|(at, byte)| {
+                if matches!(at, 8 | 13 | 18 | 23) {
+                    byte == b'-'
+                } else {
+                    byte.is_ascii_hexdigit()
+                }
+            })
+            .then_some(run)
+    })
 }
 
 /// What a read answers when no window has the title: the device is not on screen, since the
@@ -265,13 +318,25 @@ pub fn untrusted() -> Error {
     )
 }
 
+/// The deadline a call ran under, for people: `deadline`, the one the read gave the element the
+/// call was asked of, or, as `None`, the timeout that element kept when it refused the read's.
+fn within(deadline: Option<Duration>) -> String {
+    match deadline {
+        Some(deadline) => format!("within {} ms", deadline.as_millis()),
+        None => {
+            "within the timeout the element kept when it refused the read's deadline".to_owned()
+        }
+    }
+}
+
 /// What a call of a read that failed with `error` answers. A failure while the process is no
 /// trusted accessibility client (`trusted` asked after the failure) is the permission taken back,
 /// [`untrusted`], whatever the call said, since `kAXErrorAPIDisabled` is one failure among the
-/// API's others; a call that did not answer is a timeout naming `deadline`, the deadline each call
-/// of the read ran under; an element gone is the window gone; any other failure is the platform's.
+/// API's others; a call that did not answer is a timeout naming `deadline`, the one the read gave
+/// the element the call was asked of, or, as `None`, saying that element refused it and kept its
+/// own; an element gone is the window gone; any other failure is the platform's.
 #[must_use]
-pub fn read_failure(error: ProviderError, trusted: bool, deadline: Duration) -> Error {
+pub fn read_failure(error: ProviderError, trusted: bool, deadline: Option<Duration>) -> Error {
     if !trusted {
         return untrusted();
     }
@@ -280,8 +345,8 @@ pub fn read_failure(error: ProviderError, trusted: bool, deadline: Duration) -> 
             awaited: crate::error::Awaited::Host,
             effect: None,
             message: format!(
-                "the Simulator's window did not answer a call of the read within {} ms",
-                deadline.as_millis()
+                "the Simulator's window did not answer a call of the read {}",
+                within(deadline)
             ),
             retry: ErrorCode::Timeout.default_retry(),
         },
@@ -299,16 +364,333 @@ pub fn read_failure(error: ProviderError, trusted: bool, deadline: Duration) -> 
     }
 }
 
-/// The Mac's accessibility API on the Simulator's window: see the [module docs](self).
-pub trait HostAccessibility: Send {
-    /// The device's screen in the window `screen` names: the screen's frame and the iOS app's
-    /// elements, read as [`ScreenElement`]s within `lane::walk`'s budgets.
+/// What pressing the element `label` answered: `offered`, whether it offers `AXPress`, and then
+/// `perform`, the press, made only when it does. `trusted` is asked after a failure.
+///
+/// Before the press is sent, a failure while the process is no trusted accessibility client is
+/// [`untrusted`], whatever the call said. Once it is sent, the failure decides: a press not
+/// answered, or whose element went away during it, may have run and says so (`may_have_run`)
+/// whatever the trust, the permission taken back named in its message, so it is never sent again
+/// as if it had not; only a press that failed otherwise is [`untrusted`] when trust is gone. A
+/// call that did not answer names `deadline`, the one the read gave this element, or, as `None`,
+/// says it refused that deadline and kept its own.
+///
+/// # Errors
+///
+/// [`Error::NotSupported`] as [`untrusted`]; [`Error::ActionUnsupported`] when it offers no
+/// press; [`Error::Timeout`] when a call was not answered and [`Error::Gone`] when the element
+/// went away, each with `may_have_run` once the press was sent; [`Error::Platform`] when a call
+/// failed otherwise.
+pub fn pressed(
+    offered: std::result::Result<bool, ProviderError>,
+    perform: impl FnOnce() -> std::result::Result<(), ProviderError>,
+    label: &str,
+    deadline: Option<Duration>,
+    trusted: impl Fn() -> bool,
+) -> Result<()> {
+    let may_have_run = || Some(Effect::new(EffectKind::MayHaveRun));
+    let offers = match offered {
+        Ok(offers) => offers,
+        Err(_) if !trusted() => return Err(untrusted()),
+        Err(ProviderError::Timeout) => {
+            return Err(Error::Timeout {
+                awaited: crate::error::Awaited::Host,
+                effect: None,
+                message: format!(
+                    "the Simulator's window did not answer whether {label:?} offers a press {}",
+                    within(deadline)
+                ),
+                retry: ErrorCode::Timeout.default_retry(),
+            });
+        }
+        Err(ProviderError::Gone) => {
+            return Err(pressed_gone(
+                label,
+                "before it was asked for its press",
+                None,
+            ));
+        }
+        Err(ProviderError::Failed(why)) => {
+            return Err(Error::Platform {
+                effect: None,
+                message: format!("whether {label:?} offers a press could not be read: {why}"),
+                retry: Retry::Never,
+            });
+        }
+    };
+    if !offers {
+        return Err(Error::ActionUnsupported {
+            message: format!("the element {label:?} offers no AXPress"),
+            retry: ErrorCode::ActionUnsupported.default_retry(),
+        });
+    }
+    let Err(failure) = perform() else {
+        return Ok(());
+    };
+    let permission = if trusted() {
+        ""
+    } else {
+        "; the process has lost the Accessibility permission since, so grant it again under \
+         System Settings > Privacy & Security > Accessibility before the next call"
+    };
+    match failure {
+        ProviderError::Timeout => Err(Error::Timeout {
+            awaited: crate::error::Awaited::Host,
+            effect: may_have_run(),
+            message: format!(
+                "the Simulator's window did not answer the press of {label:?} {}: read the tree \
+                 for its effect{permission}",
+                within(deadline)
+            ),
+            retry: ErrorCode::Timeout.default_retry(),
+        }),
+        ProviderError::Gone => Err(pressed_gone(
+            label,
+            &format!("while it was pressed, which may have run first{permission}"),
+            may_have_run(),
+        )),
+        ProviderError::Failed(_) if !permission.is_empty() => Err(untrusted()),
+        ProviderError::Failed(why) => Err(Error::Platform {
+            effect: None,
+            message: format!("pressing {label:?} failed: {why}"),
+            retry: Retry::Never,
+        }),
+    }
+}
+
+/// The element `label` gone `when`, with what reached it.
+fn pressed_gone(label: &str, when: &str, effect: Option<Effect>) -> Error {
+    Error::Gone {
+        kind: Some(HandleKind::Element),
+        handle: None,
+        exit: None,
+        effect,
+        message: format!("the element {label:?} went away {when}"),
+        retry: ErrorCode::Gone.default_retry(),
+    }
+}
+
+/// The elements of a device's screen as [`walk_screen`] reads them: the Mac's accessibility API,
+/// or a test's tree.
+pub trait ScreenSource {
+    /// One element, with what it takes to read and press it again within the read.
+    type Element;
+
+    /// The child of `parent` at `index`; `None` past the last.
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when no window has the title or it shows no screen of the app's
-    /// window's shape; [`Error::Ambiguous`] when two windows have the title or two screens fit
-    /// ([`super::tree::find_screen`]); [`Error::NotSupported`] naming
+    /// [`ProviderError::Gone`] when `parent` went away, which cuts its children short; any other
+    /// failure fails the walk.
+    fn child_at(
+        &mut self,
+        parent: &Self::Element,
+        index: usize,
+    ) -> std::result::Result<Option<Self::Element>, ProviderError>;
+
+    /// `element`'s attributes as they are served.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Gone`] when the element went away, which leaves it out; any other failure
+    /// fails the walk.
+    fn element(
+        &mut self,
+        element: &Self::Element,
+    ) -> std::result::Result<ScreenElement, ProviderError>;
+}
+
+/// An element a walk read, with its source's handle and its children.
+#[derive(Debug)]
+pub struct Walked<E> {
+    /// What it read, its children left out ([`Self::detached`] puts them in).
+    pub element: ScreenElement,
+    /// The source's element, to press it within the same read.
+    pub handle: E,
+    /// Its children, read.
+    pub children: Vec<Walked<E>>,
+}
+
+impl<E> Walked<E> {
+    /// The element with its children, without the handles.
+    #[must_use]
+    pub fn detached(&self) -> ScreenElement {
+        let mut element = self.element.clone();
+        element.children = self
+            .children
+            .iter()
+            .map(Self::detached)
+            .collect::<Vec<ScreenElement>>();
+        element
+    }
+}
+
+/// What a walk of a screen read: its elements, and what it left unread.
+#[derive(Debug)]
+pub struct ScreenWalk<E> {
+    /// The screen's elements.
+    pub elements: Vec<Walked<E>>,
+    /// Whether the screen's own children were left unread.
+    pub children_unread: bool,
+    /// Whether the walk stopped short anywhere.
+    pub truncated: bool,
+}
+
+impl<E> ScreenWalk<E> {
+    /// The walk as a read of the screen at `frame`, without the handles.
+    #[must_use]
+    pub fn screen(&self, frame: PointFrame) -> HostScreen {
+        let mut screen = HostScreen::new(
+            frame,
+            self.elements
+                .iter()
+                .map(Walked::detached)
+                .collect::<Vec<ScreenElement>>(),
+        );
+        screen.children_unread = self.children_unread;
+        screen.truncated = self.truncated;
+        screen
+    }
+}
+
+/// A parent's children as [`list_children`] lists them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildList<E> {
+    /// The children listed, in the API's order.
+    pub children: Vec<E>,
+    /// Whether the list is short of the parent's children: the parent went away before they were
+    /// all listed, or one is there past the bound.
+    pub cut: bool,
+}
+
+/// The children of a parent, `child_at` asked for each index in turn, at most `bound` of them:
+/// the list ends whole when `child_at` answers `None`, and is cut when the parent is gone
+/// ([`ProviderError::Gone`]) or a child is there at index `bound`, which is asked before the list
+/// is called cut, so a parent of exactly `bound` children is listed whole. A `bound` of zero asks
+/// only whether a first child is there. Both the screen's walk ([`walk_screen`]) and the window's
+/// search (`tree::find_screen`) list through it.
+///
+/// # Errors
+///
+/// Any other failure of `child_at`, as it answered.
+pub fn list_children<E>(
+    mut child_at: impl FnMut(usize) -> std::result::Result<Option<E>, ProviderError>,
+    bound: usize,
+) -> std::result::Result<ChildList<E>, ProviderError> {
+    let mut children = Vec::new();
+    loop {
+        let index = children.len();
+        let cut = match child_at(index) {
+            Ok(Some(child)) if index < bound => {
+                children.push(child);
+                continue;
+            }
+            Ok(Some(_)) | Err(ProviderError::Gone) => true,
+            Ok(None) => false,
+            Err(error) => return Err(error),
+        };
+        return Ok(ChildList { children, cut });
+    }
+}
+
+/// The elements under `screen`, read from `source` within [`MAX_NODES`] elements and
+/// [`MAX_DEPTH`] levels, each level listed by [`list_children`] within what is left of the
+/// budget, then each child read in turn. A level stops short the same way whatever stops it, the
+/// node budget or its parent gone mid-read: the parent's children are marked unread and the walk
+/// truncated, never a shorter list read as whole; an element on the deepest level read has its
+/// children marked unread when it has a child or went away before it said. An element that went
+/// away while its own attributes were read is left out.
+///
+/// # Errors
+///
+/// The first failure of `source` that is neither of those, as it answered.
+pub fn walk_screen<S: ScreenSource>(
+    source: &mut S,
+    screen: &S::Element,
+) -> std::result::Result<ScreenWalk<S::Element>, ProviderError> {
+    let mut walk = ScreenWalker {
+        visited: 0,
+        truncated: false,
+    };
+    let level = walk.children_of(source, screen, 0)?;
+    Ok(ScreenWalk {
+        elements: level.children,
+        children_unread: level.unread,
+        truncated: walk.truncated,
+    })
+}
+
+/// A walk's count of elements and whether it stopped short anywhere.
+struct ScreenWalker {
+    visited: usize,
+    truncated: bool,
+}
+
+/// One parent's children as a walk read them, and whether some were left unread.
+struct Level<E> {
+    children: Vec<Walked<E>>,
+    unread: bool,
+}
+
+impl ScreenWalker {
+    /// The children of `parent`, `depth` levels under the screen, each with its own.
+    fn children_of<S: ScreenSource>(
+        &mut self,
+        source: &mut S,
+        parent: &S::Element,
+        depth: usize,
+    ) -> std::result::Result<Level<S::Element>, ProviderError> {
+        let listed = list_children(
+            |index| source.child_at(parent, index),
+            MAX_NODES.saturating_sub(self.visited),
+        )?;
+        self.visited += listed.children.len();
+        self.truncated |= listed.cut;
+        let mut children = Vec::with_capacity(listed.children.len());
+        for handle in listed.children {
+            let mut element = match source.element(&handle) {
+                Ok(element) => element,
+                // An element that went away while it was read is left out.
+                Err(ProviderError::Gone) => continue,
+                Err(error) => return Err(error),
+            };
+            let grandchildren = if depth + 1 >= MAX_DEPTH {
+                // Past the depth only whether a child is there is asked: one there, or the
+                // element gone before it said, leaves its children unread.
+                let probe = list_children(|index| source.child_at(&handle, index), 0)?;
+                element.children_unread = probe.cut;
+                self.truncated |= probe.cut;
+                Vec::new()
+            } else {
+                let level = self.children_of(source, &handle, depth + 1)?;
+                element.children_unread = level.unread;
+                level.children
+            };
+            children.push(Walked {
+                element,
+                handle,
+                children: grandchildren,
+            });
+        }
+        Ok(Level {
+            children,
+            unread: listed.cut,
+        })
+    }
+}
+
+/// The Mac's accessibility API on the Simulator's window: see the [module docs](self).
+pub trait HostAccessibility: Send {
+    /// The device's screen in the window `screen` names: the screen's frame and the iOS app's
+    /// elements, read as [`ScreenElement`]s by [`walk_screen`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when no window has the title, every window of it names another UUID,
+    /// or it shows no screen of the app's window's shape; [`Error::Ambiguous`] when two windows
+    /// name the simulator, or none does and two name no UUID, or the one that names no UUID
+    /// shares its title with another listed simulator ([`super::tree::choose_window`]), or two
+    /// screens fit ([`super::tree::find_screen`]); [`Error::NotSupported`] naming
     /// `macos_permission_accessibility` when the process is no trusted accessibility client
     /// ([`untrusted`]); [`Error::Timeout`] when the Simulator did not answer.
     fn read(&mut self, screen: &ScreenRequest) -> Result<HostScreen>;

@@ -1,13 +1,18 @@
 //! The Mac's half of [`HostAccessibility`]: the device's window found among the windows on
 //! screen by its title, its screen group by the search of `tree::find_screen`, and the group's
-//! elements read through the shared accessibility client (`lane::ax`) as they are served.
+//! elements read through the shared accessibility client (`lane::ax`) by the pure walk
+//! (`accessibility::walk_screen`).
 //!
 //! The Simulator's process is not looked up by name: Simulator.app hosts the device's window
 //! before Xcode 27 and DeviceHub from it, and AppKit reports DeviceHub's process id as -1. The
 //! window server lists the owner of every window on screen with its real process id, so each owner
-//! is asked, within [`PROBE_TIMEOUT_SECONDS`], for its windows of the device's title. A failure
-//! while the process is no longer trusted is the permission taken back, wherever it comes
-//! (`accessibility::read_failure`).
+//! is asked, within [`PROBE_TIMEOUT_SECONDS`], for its windows of the device's title. Every
+//! element the read then asks is given the client's deadline (`ax::MESSAGING_TIMEOUT_SECONDS`) of
+//! its own, since whether an element takes its application's timeout is not documented, and
+//! carries what it was given ([`Asked`]): a timeout names the deadline of the element its call was
+//! asked of, or says that element refused it. A failure while the process is no longer trusted is
+//! the permission taken back, wherever it comes (`accessibility::read_failure`), and a parent that
+//! went away mid-read leaves its children unread (`ax::child_at` answers `ProviderError::Gone`).
 #![expect(
     unsafe_code,
     reason = "the window list's C call and its constant keys, read as CGWindow.h types them"
@@ -16,20 +21,22 @@
 use std::time::Duration;
 
 use objc2_application_services::AXUIElement;
-use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
+use objc2_core_foundation::{
+    CFArray, CFDictionary, CFIndex, CFNumber, CFRetained, CFString, CFType,
+};
 use objc2_core_graphics::{
     CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowLayer,
     kCGWindowOwnerPID,
 };
 
 use super::{
-    HostAccessibility, HostScreen, PointFrame, ScreenElement, ScreenRequest, read_failure,
-    untrusted,
+    HostAccessibility, HostScreen, PointFrame, ScreenElement, ScreenRequest, ScreenSource,
+    ScreenWalk, pressed, read_failure, untrusted, walk_screen,
 };
 use crate::error::{Error, Result};
 use crate::lane::ax;
 use crate::lane::ios_simulator::tree::{self, WindowFacts, WindowTree};
-use crate::lane::walk::{MAX_DEPTH, MAX_NODES, ProviderError};
+use crate::lane::walk::ProviderError;
 
 /// How long an owner of a window on screen may take to list its windows, in seconds: the probe
 /// asks every one, and a hung app must not hold the read for the client's whole timeout.
@@ -55,21 +62,55 @@ impl MacAccessibility {
     }
 }
 
-/// What a failed call answers: [`read_failure`] with the process's trust asked now and the
-/// client's per-call deadline.
-fn failure(error: ProviderError) -> Error {
-    read_failure(
-        error,
-        ax::trusted(),
-        Duration::from_secs_f32(ax::MESSAGING_TIMEOUT_SECONDS),
-    )
+/// An element the read holds for its own length, with the deadline its calls run under: the
+/// client's, or `None` when it refused that one and kept its own.
+#[derive(Debug, Clone)]
+struct Asked {
+    element: CFRetained<AXUIElement>,
+    deadline: Option<Duration>,
 }
 
-/// An element read with its handle, which lives for the call that read it.
-struct Read {
-    element: ScreenElement,
-    handle: CFRetained<AXUIElement>,
-    children: Vec<Read>,
+impl Asked {
+    /// `element`, given the client's deadline of its own.
+    fn new(element: CFRetained<AXUIElement>) -> Self {
+        let deadline =
+            ax::set_messaging_timeout(&element, ax::MESSAGING_TIMEOUT_SECONDS).then(ax::timeout);
+        Self { element, deadline }
+    }
+}
+
+/// One read's use of the API: the deadline of the element its latest call was asked of, which a
+/// failure of that call names. Calls run one at a time and a failure is answered before the next,
+/// so it is always the failed call's.
+#[derive(Debug, Default)]
+struct Ax {
+    asking: Option<Duration>,
+}
+
+impl Ax {
+    /// `element`, about to be asked a call: its deadline is the one a failure names.
+    fn ask<'a>(&mut self, element: &'a Asked) -> &'a AXUIElement {
+        self.asking = element.deadline;
+        &element.element
+    }
+
+    /// What a failed call answers: [`read_failure`] with the process's trust asked now and the
+    /// deadline of the element the call was asked of.
+    fn failed(&self, error: ProviderError) -> Error {
+        read_failure(error, ax::trusted(), self.asking)
+    }
+
+    /// The child of `parent` at `index`, given the read's deadline.
+    fn child(
+        &mut self,
+        parent: &Asked,
+        index: usize,
+    ) -> std::result::Result<Option<Asked>, ProviderError> {
+        let Ok(index) = CFIndex::try_from(index) else {
+            return Ok(None);
+        };
+        Ok(ax::child_at(self.ask(parent), index)?.map(Asked::new))
+    }
 }
 
 impl HostAccessibility for MacAccessibility {
@@ -79,9 +120,9 @@ impl HostAccessibility for MacAccessibility {
     }
 
     fn press(&mut self, screen: &ScreenRequest, wanted: &ScreenElement) -> Result<()> {
-        let (read, handles) = read_screen(screen)?;
+        let (read, walk) = read_screen(screen)?;
         let path = tree::locate(&read, wanted)?;
-        let mut level = &handles;
+        let mut level = &walk.elements;
         let mut found = None;
         for index in &path {
             let Some(next) = level.get(*index) else {
@@ -98,169 +139,115 @@ impl HostAccessibility for MacAccessibility {
             .clone()
             .or_else(|| wanted.title.clone())
             .unwrap_or_else(|| wanted.role.clone());
-        let deadline = Duration::from_secs_f32(ax::MESSAGING_TIMEOUT_SECONDS);
-        let offered = ax::actions(&found.handle)
-            .map(|names| names.iter().any(|action| action == "AXPress").then_some(()));
-        if offered.is_err() && !ax::trusted() {
-            return Err(untrusted());
-        }
-        crate::lane::walk::pattern(offered, &label, "AXPress", deadline)?;
-        let pressed = ax::perform(&found.handle, "AXPress");
-        if pressed.is_err() && !ax::trusted() {
-            return Err(untrusted());
-        }
-        crate::lane::walk::invoked(pressed, &label, deadline)
+        let handle = &found.handle;
+        pressed(
+            ax::actions(&handle.element)
+                .map(|names| names.iter().any(|action| action == "AXPress")),
+            || ax::perform(&handle.element, "AXPress"),
+            &label,
+            handle.deadline,
+            ax::trusted,
+        )
     }
 }
 
-/// The screen `screen` names, read, and the handles of its elements in the same shape.
-fn read_screen(screen: &ScreenRequest) -> Result<(HostScreen, Vec<Read>)> {
+/// The screen `screen` names, read, and the walk with its elements' handles in the same shape.
+fn read_screen(screen: &ScreenRequest) -> Result<(HostScreen, ScreenWalk<Asked>)> {
     if !ax::trusted() {
         return Err(untrusted());
     }
-    let windows = titled_windows(&screen.title)?;
-    let (group, frame) = tree::find_screen(&mut Windows, screen, windows)?;
-    let mut budget = Budget {
-        visited: 0,
-        truncated: false,
-    };
-    let handles = budget.children_of(&group, 0)?;
-    let mut read = HostScreen::new(
-        frame,
-        handles.iter().map(Read::detached).collect::<Vec<_>>(),
-    );
-    read.truncated = budget.truncated;
-    Ok((read, handles))
+    let mut ax = Ax::default();
+    let windows = titled_windows(&screen.title)?
+        .into_iter()
+        .map(Asked::new)
+        .collect::<Vec<Asked>>();
+    let (group, frame) = tree::find_screen(&mut ax, screen, windows)?;
+    let walk = walk_screen(&mut ax, &group).map_err(|error| ax.failed(error))?;
+    Ok((walk.screen(frame), walk))
 }
 
-impl Read {
-    /// The element with its children, without the handles.
-    fn detached(&self) -> ScreenElement {
-        let mut element = self.element.clone();
-        element.children = self.children.iter().map(Self::detached).collect();
-        element
-    }
-}
+impl ScreenSource for Ax {
+    type Element = Asked;
 
-/// A walk's count of elements and whether a budget cut it short.
-struct Budget {
-    visited: usize,
-    truncated: bool,
-}
-
-impl Budget {
-    /// The children of `parent`, `depth` levels under the screen, each read with its own, within
-    /// [`MAX_NODES`] elements and [`MAX_DEPTH`] levels.
-    fn children_of(&mut self, parent: &AXUIElement, depth: usize) -> Result<Vec<Read>> {
-        let mut children = Vec::new();
-        let mut index = 0;
-        loop {
-            let child = match ax::child_at(parent, index) {
-                Ok(Some(child)) => child,
-                Ok(None) | Err(ProviderError::Gone) => break,
-                Err(error) => return Err(failure(error)),
-            };
-            index += 1;
-            if self.visited >= MAX_NODES {
-                self.truncated = true;
-                break;
-            }
-            self.visited += 1;
-            let mut element = match element(&child) {
-                Ok(element) => element,
-                // An element that went away while it was read is left out.
-                Err(ProviderError::Gone) => continue,
-                Err(error) => return Err(failure(error)),
-            };
-            let grandchildren = if depth + 1 >= MAX_DEPTH {
-                let more = ax::child_at(&child, 0).map_err(failure)?.is_some();
-                element.children_unread = more;
-                self.truncated |= more;
-                Vec::new()
-            } else {
-                self.children_of(&child, depth + 1)?
-            };
-            children.push(Read {
-                element,
-                handle: child,
-                children: grandchildren,
-            });
-        }
-        Ok(children)
-    }
-}
-
-/// `element`'s attributes as they are served.
-fn element(element: &AXUIElement) -> std::result::Result<ScreenElement, ProviderError> {
-    let text = |name: &'static str| -> std::result::Result<Option<String>, ProviderError> {
-        Ok(ax::attribute(element, name)?
-            .as_deref()
-            .and_then(ax::string))
-    };
-    let flag = |name: &'static str| -> std::result::Result<Option<bool>, ProviderError> {
-        Ok(ax::attribute(element, name)?
-            .as_deref()
-            .and_then(ax::boolean))
-    };
-    let mut read = ScreenElement::new(text("AXRole")?.unwrap_or_default());
-    read.subrole = text("AXSubrole")?;
-    read.description = text("AXDescription")?;
-    read.title = text("AXTitle")?;
-    read.value = ax::attribute(element, "AXValue")?
-        .as_deref()
-        .and_then(|value| ax::string(value).or_else(|| ax::number_text(value)));
-    read.help = text("AXHelp")?;
-    read.identifier = text("AXIdentifier")?;
-    read.enabled = flag("AXEnabled")?;
-    read.focused = flag("AXFocused")?.unwrap_or(false);
-    read.selected = flag("AXSelected")?;
-    read.frame =
-        ax::frame(element)?.map(|(x, y, width, height)| PointFrame::new(x, y, width, height));
-    Ok(read)
-}
-
-/// The windows on screen as `tree::find_screen` walks them.
-struct Windows;
-
-impl WindowTree for Windows {
-    type Element = CFRetained<AXUIElement>;
-
-    fn children(&mut self, element: &Self::Element) -> Result<Vec<Self::Element>> {
-        let mut children = Vec::new();
-        let mut index = 0;
-        while children.len() < MAX_NODES {
-            match ax::child_at(element, index) {
-                Ok(Some(child)) => children.push(child),
-                Ok(None) | Err(ProviderError::Gone) => break,
-                Err(error) => return Err(failure(error)),
-            }
-            index += 1;
-        }
-        Ok(children)
+    fn child_at(
+        &mut self,
+        parent: &Asked,
+        index: usize,
+    ) -> std::result::Result<Option<Asked>, ProviderError> {
+        self.child(parent, index)
     }
 
-    fn facts(&mut self, element: &Self::Element) -> Result<WindowFacts> {
-        let text = |name: &'static str| -> Result<Option<String>> {
-            Ok(ax::attribute(element, name)
-                .map_err(failure)?
+    fn element(&mut self, element: &Asked) -> std::result::Result<ScreenElement, ProviderError> {
+        let element = self.ask(element);
+        let text = |name: &'static str| -> std::result::Result<Option<String>, ProviderError> {
+            Ok(ax::attribute(element, name)?
                 .as_deref()
                 .and_then(ax::string))
         };
+        let flag = |name: &'static str| -> std::result::Result<Option<bool>, ProviderError> {
+            Ok(ax::attribute(element, name)?
+                .as_deref()
+                .and_then(ax::boolean))
+        };
+        let mut read = ScreenElement::new(text("AXRole")?.unwrap_or_default());
+        read.subrole = text("AXSubrole")?;
+        read.description = text("AXDescription")?;
+        read.title = text("AXTitle")?;
+        read.value = ax::attribute(element, "AXValue")?
+            .as_deref()
+            .and_then(|value| ax::string(value).or_else(|| ax::number_text(value)));
+        read.help = text("AXHelp")?;
+        read.identifier = text("AXIdentifier")?;
+        read.enabled = flag("AXEnabled")?;
+        read.focused = flag("AXFocused")?.unwrap_or(false);
+        read.selected = flag("AXSelected")?;
+        read.frame =
+            ax::frame(element)?.map(|(x, y, width, height)| PointFrame::new(x, y, width, height));
+        Ok(read)
+    }
+}
+
+impl WindowTree for Ax {
+    type Element = Asked;
+
+    fn child_at(
+        &mut self,
+        element: &Asked,
+        index: usize,
+    ) -> std::result::Result<Option<Asked>, ProviderError> {
+        self.child(element, index)
+    }
+
+    fn failure(&mut self, error: ProviderError) -> Error {
+        self.failed(error)
+    }
+
+    fn facts(&mut self, element: &Asked) -> Result<WindowFacts> {
+        let element = self.ask(element);
+        let text = |name: &'static str| -> Result<Option<String>> {
+            Ok(ax::attribute(element, name)
+                .map_err(|error| self.failed(error))?
+                .as_deref()
+                .and_then(ax::string))
+        };
+        let role = text("AXRole")?.unwrap_or_default();
+        let subrole = text("AXSubrole")?;
         Ok(WindowFacts {
-            role: text("AXRole")?.unwrap_or_default(),
-            subrole: text("AXSubrole")?,
+            role,
+            subrole,
             frame: ax::frame(element)
-                .map_err(failure)?
+                .map_err(|error| self.failed(error))?
                 .map(|(x, y, width, height)| PointFrame::new(x, y, width, height)),
         })
     }
 
-    fn identity(&mut self, window: &Self::Element) -> Result<Vec<Option<String>>> {
+    fn identity(&mut self, window: &Asked) -> Result<Vec<Option<String>>> {
+        let window = self.ask(window);
         let mut texts = Vec::new();
         for name in ["AXIdentifier", "AXDocument"] {
             texts.push(
                 ax::attribute(window, name)
-                    .map_err(failure)?
+                    .map_err(|error| self.failed(error))?
                     .as_deref()
                     .and_then(ax::string),
             );
@@ -310,8 +297,9 @@ fn window_owners() -> Result<Vec<i32>> {
     Ok(owners)
 }
 
-/// The windows on screen titled `title`. An owner that does not answer, or fails, shows no
-/// device and the probe asks the next, unless the failure is the permission taken back.
+/// The windows on screen titled `title`, asked within the probe's second. An owner that does not
+/// answer, or fails, shows no device and the probe asks the next, unless the failure is the
+/// permission taken back.
 fn titled_windows(title: &str) -> Result<Vec<CFRetained<AXUIElement>>> {
     let mut found = Vec::new();
     for pid in window_owners()? {
