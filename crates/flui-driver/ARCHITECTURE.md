@@ -77,7 +77,8 @@ app's trees, frames and input, and this crate composes that with what only the O
   be read from it. A release that then fails does not turn that into a failure of the app, which
   did nothing wrong; nor may it go unsaid, since input stays down on the person's desktop.
   `send_guarded` answers `Error::ReleaseFailed` with the keys, buttons and contacts still held in
-  `held` and the interruption as `first`, from which `Error::is_cannot_verify` and
+  `held` and the interruption as `first` (inside `PartlySent` once the device took a command of
+  the run), from which `Error::is_cannot_verify` and
   `Error::effect` answer: the report says cannot-verify, and the error says what to release by
   hand. The same holds for any first failure: a timed-out act stays `may_have_run`.
 - **What a lane cannot send is refused before anything is sent.** `lane::send_guarded` asks
