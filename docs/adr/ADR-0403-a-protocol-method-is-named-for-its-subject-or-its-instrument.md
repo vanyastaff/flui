@@ -531,10 +531,18 @@ pub struct EventFilter {
 - An item of a stream is the bare noun (`frame`, `row`, `gap`), as BiDi's `script.message`
   (`index.bs:13999`).
 
-Which events an app emits, and what a filter that names one sent unasked selects, are as they
-were: a subscription that names `recording.row` selects nothing (ADR-0288 §11), and
-`window.announcement_added` is accepted and not yet emitted. Whether such a filter should be
-refused is a question of delivery, left to the record named in "Context".
+Which events an app emits is as it was; the names do not change it:
+
+| Name | Today |
+|------|-------|
+| `window.frame`, `window.snapshot_changed`, `window.closed`, `input.entry_added` | emitted to a subscription that selects it |
+| `events.gap`, `recording.row`, `recording.native_line` | sent unasked; a filter that names one selects nothing (ADR-0288 §11) |
+| `window.opened`, `window.announcement_added` | named and accepted by a filter, emitted by nothing: a wait on one ends at its timeout. `window.opened` is the half of the old `window` event that no code sends (`crates/flui-runtime/src/ui_runtime/agent_events.rs:351` sends the close alone) |
+
+The two names nothing emits are in the vocabulary now because a name added later is a value
+added to a closed union, a break (ADR-0342). Whether a filter for an event that is sent unasked
+or not emitted should be refused is a question of delivery, left to the record named in
+"Context".
 
 ### §6. Reads of the application's state
 
@@ -544,35 +552,39 @@ same fact, the read uses it.
 
 ```rust
 // flui_protocol::window
-/// What the runtime installs above a window's root, as the root holds it. A field with no
-/// `Option` answers the root's default where the host observed nothing: it is not evidence
-/// that the user chose it.
+/// What the runtime installs above a window's root: what the host observed of the user's
+/// preferences, and what the root makes of it.
 #[non_exhaustive]
 pub struct Environment {
     pub window: WindowId,
     pub platform: Option<Platform>,                 // `session::Platform`
-    pub brightness: Brightness,
-    pub high_contrast: bool,
-    pub motion: MotionPolicy,
-    pub text_sizing: TextSizing,
-    pub font_weight_adjustment: i32,
-    /// BCP 47 tags, preferred first, at most 32; none when the host observed none.
+    /// The window's light or dark appearance, as its state holds it.
+    pub brightness: Brightness,                     // `input_recording::Brightness`
+
+    // What the host observed. A field is absent where it observed nothing, as in
+    // `native_recording::preferences::Preferences`, whose fields and types these are.
+    pub high_contrast: Option<bool>,
+    pub motion_preference: Option<Motion>,          // `preferences::Motion`
+    pub text_scale: Option<f64>,
+    pub text_weight: Option<TextWeight>,            // `preferences::TextWeight`
+    /// BCP 47 tags, preferred first, at most 32.
     pub locales: Option<Vec<String>>,
-    /// Whether `locales` was cut.
-    pub truncated: bool,
-    pub regional: Option<Regional>,                 // `native_recording::preferences::Regional`
-    pub accent_color: Option<[f32; 4]>,             // as `preferences::Preferences` spells it
+    /// How many tags past the 32 were left out.
+    pub omitted_locales: u32,
+    pub regional: Option<Regional>,                 // `preferences::Regional`
+    pub accent_color: Option<[f32; 4]>,
     pub scroll_bar_visibility: Option<ScrollBarVisibility>,  // `preferences::`
     pub scroll_track_click: Option<ScrollTrackClick>,        // `preferences::`
+
+    // What the root holds where it is more than the observation: the application's override
+    // and policy applied. These are what widgets read, whatever the host observed.
+    pub motion: MotionPolicy,
+    pub text_sizing: TextSizing,
+
     pub view_insets: LogicalInsets,
     pub system_gesture_insets: LogicalInsets,
 }
 
-vocabulary! {
-    /// The platform's light or dark preference (`MediaQueryData::platform_brightness`). Not
-    /// `native_recording::window::Appearance`, which is what a window's frame was given.
-    pub enum Brightness { Light => "light", Dark => "dark" }
-}
 vocabulary! {
     /// The motion policy widgets read (`flui_animation::MotionPolicy`). Not
     /// `preferences::Motion`, which is the host's preference before the app's override.
@@ -592,7 +604,7 @@ pub enum TextSizing {
 // flui_protocol::session — the hello's description, which `app.build` answers
 #[non_exhaustive]
 pub struct AppDescription {
-    pub name: String,                    // the application's identity, not a window's title
+    pub name: String,                    // as the hello says it today
     pub pid: Option<u32>,
     pub target: String,
     pub id: Option<String>,              // the application identifier, where it declares one
@@ -642,22 +654,34 @@ impl Service {
 }
 ```
 
-- **`window.environment`** is a window method, served in the agent's window dispatch from the
-  presentation's root media query and its platform convention, the values `window.placement`
-  reads its size from. It answers each value as the root holds it, whatever set it: the
-  runtime keeps one merged value for each field and no record of which were overridden or
-  which the host observed, so the read has neither. `Placement` loses `platform` in the same
-  version; the size, scale and safe area stay there. `text_sizing` needs a public read of the
-  policy's kind on `flui_painting::TextSizing`, whose policy is private today
-  (`crates/flui-painting/src/text_painter/sizing.rs:47`, `:67`).
+- **`window.environment`** is a window method, served in the agent's window dispatch from two
+  values the runtime holds. The observed fields come from the host's snapshot of the system's
+  preferences, whose fields are `Option` (`UiRuntime::preferences`,
+  `crates/flui-runtime/src/ui_runtime/mod.rs:187`; `SystemPreferences`,
+  `crates/flui-platform/src/preferences.rs`): a host that delivered no snapshot, or observed
+  nothing for a field, answers that field absent, never the default the root fills in for it.
+  `motion` and `text_sizing` come from the presentation's root media query, which holds what
+  the application's override and policy made of the observation, and `brightness` from the
+  window's state. The read has no record of which value a development override set: the root
+  keeps one merged value for each. `Placement` loses `platform` in the same version; the size,
+  scale and safe area stay there.
+- **Two things the read needs.** A public read of the policy's kind on
+  `flui_painting::TextSizing`, whose policy is private today
+  (`crates/flui-painting/src/text_painter/sizing.rs:47`, `:67`). And the mapping from
+  `SystemPreferences` to the wire's preference types: it exists once, in `flui-native`'s
+  journal codec (`crates/flui-native/src/journal/codec/preferences.rs:47`), which
+  `flui-runtime` cannot reach, so the read's is a second mapping of the same fields, and
+  `flui-app`, which links both, holds them equal with a test.
 - **`app.build`** answers the hello's `AppDescription`: one type and one source, the value every
   service is made with. The service has one place that stores a description, and both
   `Service::new` and `Service::describe` store through it: it fills `flui` with the service's
   own crate's version and cuts each string to 256 bytes. So every host that serves the agent,
   `flui-app`, the headless kit and a test's own service alike, answers a bounded description
-  with no rule of its own, after a `describe` as before it. `flui-app` passes the application's
-  identity as `name`, where it passes the window title today. `version` is absent until
-  `AppIdentity` can carry one.
+  with no rule of its own, after a `describe` as before it. Every field this record adds is
+  optional, so the hello stays additive. `name` keeps the value the hello gives it today, the
+  title the application was configured with: `AppIdentity`'s name is a placeholder where an
+  application declares none, so it is not put in its place, and `id` carries the identifier
+  where one was declared. `version` is absent until `AppIdentity` can carry one.
 - **`app.config`** is answered where a host handed a reading and refused `not_supported`,
   naming `app.config`, where it handed none; the hello then does not list the method. Only a
   host that composed an `AppConfig` has one to hand: `flui-app`. The headless kit's and a
@@ -669,11 +693,13 @@ impl Service {
   or says why it is left out. Left out today, for want of a wire type: `position`,
   `os_options`, `frame_latency`, `input_latency`, `pointer_resampling`, `surface_color`,
   `frame_failure_detail`, `executors`, `services` and `memory_reclaimers`.
-- **When the readings change.** They are replaced whole each time the application is composed:
-  at launch, and at a Restart reload, which keeps the process and composes the application
-  again from its entry (ADR-0393). Launch is the only composition built today. A value the app
-  changes while it runs (`set_motion_override`, `set_performance_overlay`) is read where it
-  lives, and `app.config` keeps what was configured.
+- **When the readings change.** They are replaced whole each time the application is composed.
+  Launch is the only composition built today. A Restart reload composes the application again
+  (ADR-0393) and is not built: which service outlives it, where in a composition the reading
+  is taken, and what a connected client is told when a description changes under it are
+  decided with that work, and tracked in the driver spec. A value the app changes while it
+  runs is not in `app.config`, which keeps what was configured: a motion override shows in
+  `window.environment`'s `motion`, and the performance overlay's live state has no read yet.
 - **Text.** `title` and `name` are fields the trace writer already redacts by name
   (`TEXT_FIELDS`, `crates/flui-driver/src/trace/redact.rs:21`); each new string field is put on
   one side by `every_text_field_of_the_wire_is_redacted_or_named_as_kept`.
@@ -727,8 +753,10 @@ shipped server have it until the record named in "Context" decides it.
 - Bad, because `element.perform_action` and `input.perform_actions` differ by a letter and a
   group. They are in different tiers, and each description opens with the difference.
 - Bad, because the theme, the resolved locale and the text direction stay unread until
-  `inspect.inherited` is built, and `window.environment` cannot say which values the host
-  observed.
+  `inspect.inherited` is built, the performance overlay's live state has no read, and
+  `window.environment` maps the host's preferences a second time beside `flui-native`'s codec.
+- Bad, because two event names are published that nothing emits, so a wait on one is accepted
+  and ends at its timeout.
 - Bad, because the test of the kit's verbs sees the verbs its table lists: a verb added to
   `Tester` and left out of the table is not seen by it.
 - Neutral, because `flui run --json` keeps its own event names (`run.reload`, `build.phase`):
@@ -749,13 +777,15 @@ protocol 0.33, and `app.build` and `app.config` in that version or a later addit
 | The schema is 0.33's golden, and differs from 0.32's only by what `BREAKING` lists | `the_wire_schema_is_the_one_its_version_published`, `every_published_schema_is_additive_to_the_next` |
 | What a break lists as removed or respelled is gone from its version's schema | `nothing_a_break_removed_is_in_its_schema`, over every entry of `BREAKING` and its golden: a listed path or old name still present fails, so a field left in place is not passed by the entry that permits its removal |
 | Every wire name is lower snake case | `every_wire_name_is_lower_snake_case`, over the schema's property names and enumerated strings; `every_vocabulary_enum_is_spelled_as_it_is_named` |
-| A duration or a time names its unit | `a_duration_or_a_time_names_its_unit`, over the schema: a numeric property named for a time word ends `_ms`, `_us` or `_ns`, but for `t` and `arrival`. It sees a field by its name, so a time under another word is not seen |
+| A duration or a time names its unit | `a_duration_or_a_time_names_its_unit`, over the schema: a numeric property named for a time word ends `_s`, `_ms`, `_us` or `_ns`. The fields §4 names (`ms`, `t`, `arrival`, `at`) are not named for a time word and stay as they are. The test renames nothing: a shipped field it flags joins the exceptions §4 names, with its unit, in the change that adds the test. It sees a field by its name, so a time under another word is not seen |
 | A read states its bound | the compiler: a trait in the test file, `BoundedRead`, implemented for each read-only marker by setting its typed `max_…` field or declaring it fixed-size; `every_read_names_its_bound_or_is_fixed_size` walks `for_each_method!` and does not build for a read without the impl or an impl that names a field its parameters lack |
 | A journal is read by `since` and answers `entries` and `dropped` | `every_journal_is_read_since_a_sequence_number`, over `input.journal` and `window.announcements` |
 | Every event name is `group.name` with a group of `GROUPS` | `every_event_is_named_for_a_group_of_the_table` |
 | The core set and its bound | `the_core_set_is_the_thirteen_tools_mcp_lists_by_default`, with the new names |
 | A method verb of `Tester` is named for its row, and every window method has its verb or the reason it has none | `flui-testing`'s `every_method_verb_is_its_methods_member`: a table made by a macro from each verb's own call, over a connection that records the methods sent. It fails a listed verb that sends another row or carries another name, and a window method with no entry |
-| `window.environment` answers the root's values, and `text_sizing` its policy | `flui-runtime`'s `a_windows_environment_is_what_its_root_media_query_holds`, with a fixed, a linear and an exact policy |
+| `window.environment` answers a preference the host did not observe as absent, and `motion` and `text_sizing` as the root holds them | `flui-runtime`'s `an_unobserved_preference_is_absent_from_a_windows_environment`, on a host with no snapshot and on one with some fields observed; `a_windows_environment_answers_the_roots_motion_and_sizing`, with a fixed, a linear and an exact policy |
+| The read and the native journal spell one preference alike | `flui-app`'s `the_environment_and_the_native_journal_spell_a_preference_alike`, over every field the two share |
+| An event of §5's table that is emitted reaches a subscription under its new name, and the two nothing emits are accepted | `flui-runtime`'s `each_emitted_event_arrives_under_its_name`; `a_filter_for_an_event_nothing_emits_is_accepted_and_selects_nothing` |
 | Every service answers `app.build` bounded and with FLUI's version, after a `describe` as after `new`; one handed no reading refuses `app.config` and does not list it | `flui-runtime`'s `a_description_is_bounded_and_versioned_however_it_was_stored`, `a_service_refuses_a_configuration_it_was_not_given`; `flui-testing`'s `the_headless_service_claims_no_configuration` |
 | `app.config` states every field of `AppConfig` or leaves it out by name, sends no path, and a hook as its name alone | the compiler, over the reading's builder in `flui-app` (no `..`, no `_` arm); the types `StorageDir` and `InstalledHook`; `flui-app`'s `a_configured_storage_directory_is_answered_as_custom` |
 | A new string field is redacted in a trace or named as kept | `flui-driver`'s `every_text_field_of_the_wire_is_redacted_or_named_as_kept` |
