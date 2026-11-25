@@ -71,7 +71,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   (`lane::OsInput`), so a move, a pen's hover and a lane's housekeeping, the X11 keymap change
   and its settle, are never said; a send that put part of its input out, a `SendInput` that
   inserted some of its events, a macOS text run posted without its release, says that part
-  (`lane::SendFailure`), and the held record keeps what that part left down for the release. By
+  (`lane::SendFailure`), and the held record keeps what that part left down for the release (a
+  Windows packet's unit, released with that packet's own key-up; a macOS run's key), until a
+  release or a later stroke that lets it up (a whole packet, a whole run) clears it. By
   default an event sent whole is one input where it acts; the held parts of Windows, X11 and
   macOS say each keystroke, button and click of the wheel, and Android each command, an `input`
   line or a pen report, taken or unanswered, by the same type rule), the
@@ -156,8 +158,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   session holds is refused and another picked) and removed by that port at its end once `adb`
   made it or may have (its answer lost). Each step of the lane's end, and the destructors of its
   device and streams (the binding's code), runs under one `FirstPanic`; a destructor has no
-  caller to raise to, so the first panic is logged and destroyed, and the lane worker retires the
-  lane under its own containment and destroys any payload its thread's join still carries.
+  caller to raise to, so the first panic is logged and destroyed. The lane worker runs every job,
+  drops every job it skips and every answer nobody receives, and retires the lane, each under
+  containment, so no destructor's panic ends it before its release; its join destroys a payload
+  that ever escaped that.
 - **The Android lane finds the app's nodes by matching, never by guessing.** `accesskit_android`
   sets no `viewIdResourceName`, so `Lane::read_tree` is handed the app's own tree and
   `lane::android::tree` matches the dump to it: the root is the child of the decor view that fits

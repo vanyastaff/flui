@@ -9,11 +9,12 @@ use flui_driver::lane::pacing;
 use flui_driver::lane::walk::{self, Properties, Provider, ProviderError};
 use flui_driver::lane::windows::activity::{self, LANE_TAG, MouseMotion, Observed};
 use flui_driver::lane::windows::contacts::{Contacts, Frame, Phase, PointerKind};
-use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke, MASK, PACKET};
+use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke, MASK};
 use flui_driver::lane::windows::keys::{self, KeyName, Modifier, TextStroke, VirtualKey};
 use flui_driver::lane::windows::roles::{self, ControlType, ROLES, RoleFlags};
 use flui_driver::lane::windows::safety::{self, Desk, Held, Landing, Refusal, check_event};
 use flui_driver::lane::windows::screen;
+use flui_driver::lane::windows::send_input::KeyboardEvent;
 use flui_driver::lane::{ActingInput, Delivered, SendFailure, release_outcome, windows};
 use flui_driver::projection::{Projection, ProjectionDifference};
 use flui_driver::protocol::error::ErrorCode;
@@ -801,7 +802,8 @@ fn every_input_windows_took_is_said_to_the_run() {
 /// A `SendInput` call that inserted only some of its events (a character's press without its
 /// release, a wheel's vertical turn without its horizontal one) fails as partly sent, and the run
 /// says it went out; one that inserted none says nothing went out. A character Windows took in
-/// part leaves `VK_PACKET` down, which the release of everything lets go of.
+/// part holds its unit's packet, which the release of everything lets go of with that packet's own
+/// release, or a later whole packet's release does.
 #[test]
 fn a_send_windows_took_in_part_is_partly_sent() {
     assert!(windows::send_input::outcome(2, 2, "a character").is_ok());
@@ -827,9 +829,38 @@ fn a_send_windows_took_in_part_is_partly_sent() {
     );
     assert!(failed.is_err());
     assert!(delivered.effect(1).is_some());
-    assert_eq!(keys.held(), [PACKET.code], "the packet's press is down");
-    assert_eq!(release_recorded(&mut keys), [Keystroke::Release(PACKET)]);
-    assert_eq!(keys.held(), [] as [u16; 0], "nothing stays held");
+    let unit = u16::from(b'a');
+    assert_eq!(keys.packets(), [unit], "the packet's press is down");
+    // The release of everything sends that packet's own release: the unit, as a Unicode
+    // packet's key-up.
+    assert_eq!(release_recorded(&mut keys), [Keystroke::UnitUp(unit)]);
+    assert_eq!(
+        windows::send_input::packet_events(Keystroke::UnitUp(unit)),
+        [KeyboardEvent {
+            virtual_key: 0,
+            scan: unit,
+            unicode: true,
+            up: true,
+        }]
+    );
+    assert_eq!(keys.packets(), [] as [u16; 0], "nothing stays held");
+    // A packet left down, then a whole one, whose release lets `VK_PACKET` up: nothing stays held.
+    let mut keys = HeldKeys::new();
+    let _ = keys.deliver(
+        Keystroke::Unit(unit),
+        &mut Delivered::default(),
+        || windows::send_input::outcome(1, 2, "a character"),
+        || Ok(()),
+    );
+    keys.deliver(
+        Keystroke::Unit(u16::from(b'b')),
+        &mut Delivered::default(),
+        || Ok(()),
+        || Ok(()),
+    )
+    .expect("the whole packet went out");
+    assert_eq!(keys.packets(), [] as [u16; 0]);
+    assert_eq!(release_recorded(&mut keys), Vec::<Keystroke>::new());
     // A character Windows refused whole leaves nothing down.
     let mut keys = HeldKeys::new();
     let refused = keys.deliver(

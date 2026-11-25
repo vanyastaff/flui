@@ -30,10 +30,12 @@
   later dump's) and with all of the session's by the lane's end; every shell line holds the
   directory and the session as one quoted word. The steps of the Android lane's end, and the
   destructors of its device and streams, each run contained, so a panic in one leaves the others
-  to run and is logged, not raised.
+  to run and is logged, not raised. `lane::LaneWorker` drops a job it skips and an answer nobody
+  receives under containment too, so a destructor's panic never ends it before its release.
 - **`flui-driver`**: the Android lane refuses a reply naming no focused display where the API
   level is unread, refuses a focused display printed on two lines, and reads none printed before
   the window list ends.
-- **`flui-driver`**: `testing::ScriptedAdb::not_started_once` and
-  `ScriptedAdb::device_unwinding_on_drop`, and `testing::ScriptedLane::losing_focus_after_keystrokes`,
-  which types text one keystroke per character and cuts it part way.
+- **`flui-driver`**: `testing::ScriptedAdb::not_started_once`, `ScriptedAdb::device_unwinding_on_drop`
+  and `ScriptedAdb::unwind_streams_on_drop`, and `testing::ScriptedLane::losing_focus_after_keystrokes`,
+  which types text one keystroke per character and cuts it part way, and
+  `ScriptedLane::panicking_on_drop`.

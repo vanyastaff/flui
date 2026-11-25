@@ -108,7 +108,7 @@ mod lane {
     use super::keys::{self, KeyName, VirtualKey};
     use super::safety::{self, Desk, Held, Landing, Refusal};
     use super::win32::{self, DeviceUnits, Hwnd, PointerDevice as SyntheticDevice};
-    use super::{capture, screen, uia};
+    use super::{capture, screen, send_input, uia};
     use crate::coordinates::{DevicePoint, WindowGeometry};
     use crate::error::{Error, Result};
     use crate::lane::pacing::{ECHO_WITHIN, slices};
@@ -492,7 +492,9 @@ mod lane {
             Keystroke::Release(key) => win32::key(key, false),
             Keystroke::ShiftFor(_) => win32::key(keys::SHIFT, true),
             Keystroke::UnshiftFor(_) => win32::key(keys::SHIFT, false),
-            Keystroke::Unit(unit) => win32::unicode(unit),
+            Keystroke::Unit(_) | Keystroke::UnitUp(_) => {
+                win32::keyboard(&send_input::packet_events(stroke), "a character")
+            }
         }
     }
 

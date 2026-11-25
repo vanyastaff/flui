@@ -146,6 +146,8 @@ pub struct ScriptedLane {
     keystrokes_before_focus_lost: Option<usize>,
     /// Whether its releases panic, as a lane's code or a log subscriber can.
     panicking_releases: bool,
+    /// Whether it panics as it is dropped, with a payload whose own destructor panics too.
+    panicking_drop: bool,
     /// What its captures show; it captures nothing without one.
     screen: Option<Screen>,
     /// The API it reads the OS tree through, and how it answers each read; it reads none
@@ -155,6 +157,26 @@ pub struct ScriptedLane {
 
 /// How a [`ScriptedLane`] answers a read of the OS tree, from the app's tree it is handed.
 pub type TreeRead = Box<dyn FnMut(&Tree) -> Result<Tree> + Send>;
+
+impl Drop for ScriptedLane {
+    fn drop(&mut self) {
+        if self.panicking_drop {
+            std::panic::panic_any(UnwindingPayload);
+        }
+    }
+}
+
+/// The payload a [`ScriptedLane`] that panics as it is dropped unwinds with: its own destructor
+/// panics too, as a payload the driver does not own may.
+struct UnwindingPayload;
+
+impl Drop for UnwindingPayload {
+    fn drop(&mut self) {
+        std::panic::resume_unwind(Box::new(
+            "the scripted lane's panic payload panics as it drops",
+        ));
+    }
+}
 
 impl std::fmt::Debug for ScriptedLane {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -181,6 +203,7 @@ impl ScriptedLane {
                 refuses: None,
                 failing_releases: 0,
                 panicking_releases: false,
+                panicking_drop: false,
                 hanging_sends: false,
                 keystrokes_before_focus_lost: None,
                 screen: None,
@@ -204,6 +227,14 @@ impl ScriptedLane {
     #[must_use]
     pub fn panicking_releases(mut self) -> Self {
         self.panicking_releases = true;
+        self
+    }
+
+    /// Which panics as it is dropped, as a lane's code can, with a payload whose own destructor
+    /// panics too: what a lane's owner must destroy under containment.
+    #[must_use]
+    pub fn panicking_on_drop(mut self) -> Self {
+        self.panicking_drop = true;
         self
     }
 
@@ -360,30 +391,34 @@ impl Lane for ScriptedLane {
     }
 
     fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
-        let (OsEvent::Text(text), Some(mut left)) = (event, self.keystrokes_before_focus_lost)
-        else {
-            return delivered
-                .send(event, || self.send(event))
-                .map_err(Error::from);
-        };
-        self.answers(event)?;
-        for _ in text.chars() {
-            let typed = delivered.send(&ActingInput, || {
-                if left == 0 {
-                    return Err(Error::NotForeground {
-                        message: "the scripted window lost the focus: the input is not sent there"
-                            .into(),
-                        retry: flui_protocol::error::ErrorCode::NotForeground.default_retry(),
-                    });
-                }
-                left -= 1;
-                Ok(())
-            });
-            self.keystrokes_before_focus_lost = Some(left);
-            typed?;
+        // Typed one keystroke per character: the OS answers before any keystroke, and one budget
+        // across the lane's events is spent where it is held.
+        if matches!(event, OsEvent::Text(_)) && self.keystrokes_before_focus_lost.is_some() {
+            self.answers(event)?;
         }
-        self.log_sent(event);
-        Ok(())
+        if let (OsEvent::Text(text), Some(left)) =
+            (event, self.keystrokes_before_focus_lost.as_mut())
+        {
+            for _ in text.chars() {
+                delivered.send(&ActingInput, || {
+                    if *left == 0 {
+                        return Err(Error::NotForeground {
+                            message: "the scripted window lost the focus: the input is not sent \
+                                      there"
+                                .into(),
+                            retry: flui_protocol::error::ErrorCode::NotForeground.default_retry(),
+                        });
+                    }
+                    *left -= 1;
+                    Ok(())
+                })?;
+            }
+            self.log_sent(event);
+            return Ok(());
+        }
+        delivered
+            .send(event, || self.send(event))
+            .map_err(Error::from)
     }
 
     fn capture_window(&mut self, placement: &Placement) -> Result<Image> {

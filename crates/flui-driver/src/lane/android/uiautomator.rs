@@ -54,12 +54,6 @@ impl DumpFiles {
         }
     }
 
-    /// The file of dump number `dump`, as it is on the device.
-    #[must_use]
-    pub fn path(&self, dump: u64) -> String {
-        format!("{}{dump}.xml", self.stem)
-    }
-
     /// The stem as one word of the device's shell.
     fn quoted_stem(&self) -> String {
         super::adb::quote(&self.stem)

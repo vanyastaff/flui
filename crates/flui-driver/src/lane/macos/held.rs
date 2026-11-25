@@ -91,6 +91,9 @@ pub struct HeldKeys {
     held: Vec<u16>,
     /// The keys pressed with a Shift the lane added for them.
     shifted: Vec<u16>,
+    /// Whether [`TEXT_KEY`] is held because a text run was posted only in part, which the next
+    /// run's release lets up.
+    text_key_part: bool,
     /// The system's tap shortcuts as the lane's keys have fed them.
     taps: ModifierTaps,
 }
@@ -177,8 +180,14 @@ impl HeldKeys {
                     taken
                 }
                 KeyEdge::Up(key) => {
-                    if !matches!(stroke, Keystroke::Text(_)) {
+                    // A text run leaves held what was held before it; but the key a run posted
+                    // only in part left down goes with the next run's release, as the OS has it.
+                    let releases = !matches!(stroke, Keystroke::Text(_)) || self.text_key_part;
+                    if releases {
                         self.held.retain(|code| *code != key.0);
+                    }
+                    if key == TEXT_KEY {
+                        self.text_key_part = false;
                     }
                     self.taps.release(key)
                 }
@@ -226,8 +235,9 @@ impl HeldKeys {
     /// release leaves [`TEXT_KEY`] down, which the release of everything lets go of. Every other
     /// stroke is one event, all or nothing.
     fn record_part(&mut self, stroke: Keystroke) {
-        if matches!(stroke, Keystroke::Text(_)) {
+        if matches!(stroke, Keystroke::Text(_)) && !self.held.contains(&TEXT_KEY.0) {
             let _ = self.apply(Keystroke::Press(TEXT_KEY, None));
+            self.text_key_part = true;
         }
     }
 
