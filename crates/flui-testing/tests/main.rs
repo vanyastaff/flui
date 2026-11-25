@@ -147,6 +147,16 @@ fn capability_seam() {
                     as fn(),
             ),
             (
+                "capability_seam::the_primary_selections_held_reads_share_the_scripts_count",
+                capability_seam::the_primary_selections_held_reads_share_the_scripts_count
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_double_torn_down_with_its_reads_held_answers_none_of_them",
+                capability_seam::a_double_torn_down_with_its_reads_held_answers_none_of_them
+                    as fn(),
+            ),
+            (
                 "capability_seam::a_concealed_write_reaches_the_host_marked",
                 capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
             ),

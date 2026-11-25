@@ -3,9 +3,11 @@
 //! [`MAX_NODES`] elements and [`MAX_DEPTH`] levels.
 //!
 //! A provider that does not answer in time fails the walk at once with a typed timeout: a hung app
-//! never reads as a tree of empty defaults. An element that went away while it was read is left
-//! out, and a property its provider does not offer reads as the field's default, which is the
-//! provider's own answer.
+//! never reads as a tree of empty defaults. An element that went away while its properties were
+//! read is left out; a step to a next child that finds an element gone (the parent a child is
+//! asked of, or the sibling the next one is asked from) leaves the parent's children marked
+//! unread and the read cut short, never a shorter list read as whole; and a property its provider
+//! does not offer reads as the field's default, which is the provider's own answer.
 
 use std::time::Duration;
 
@@ -27,7 +29,8 @@ pub const MAX_DEPTH: usize = 64;
 pub enum ProviderError {
     /// It did not answer within the client's timeout.
     Timeout,
-    /// The element went away.
+    /// The element went away: the one whose properties were read, or the one a step to a child or
+    /// a sibling was asked of, whose list the walk then marks cut short.
     Gone,
     /// Anything else, for people.
     Failed(String),
@@ -263,7 +266,7 @@ impl Walk {
             Err(ProviderError::Gone) => return Ok(None),
             Err(error) => return Err(provider_error(error, self.timeout)),
         };
-        let first = self.answer(provider.first_child(element))?;
+        let first = self.step(provider.first_child(element), &mut node)?;
         if depth >= MAX_DEPTH {
             if first.is_some() {
                 node.children_unread = true;
@@ -281,16 +284,26 @@ impl Walk {
             if let Some(read) = self.visit(provider, &current, depth + 1)? {
                 node.children.push(read);
             }
-            child = self.answer(provider.next_sibling(&current))?;
+            child = self.step(provider.next_sibling(&current), &mut node)?;
         }
         Ok(Some(node))
     }
 
-    /// A step of the walk: a gone element ends its level, a timeout or a failure the walk.
-    fn answer<E>(&self, step: Result<Option<E>, ProviderError>) -> Result<Option<E>> {
+    /// A step to `parent`'s next child: an element gone (`parent` itself, or the sibling the step
+    /// was asked from) ends the level cut, `parent`'s children marked unread and the read cut
+    /// short, since no provider can say what followed; a timeout or a failure ends the walk.
+    fn step<E>(
+        &mut self,
+        step: Result<Option<E>, ProviderError>,
+        parent: &mut Node,
+    ) -> Result<Option<E>> {
         match step {
             Ok(next) => Ok(next),
-            Err(ProviderError::Gone) => Ok(None),
+            Err(ProviderError::Gone) => {
+                parent.children_unread = true;
+                self.truncated = true;
+                Ok(None)
+            }
             Err(error) => Err(provider_error(error, self.timeout)),
         }
     }
@@ -300,8 +313,7 @@ impl Walk {
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] when no element within the walk's budgets has it, saying whether the
-/// budget cut the search short; [`Error::Timeout`] and [`Error::Platform`] as [`read`].
+/// As [`find_by`].
 pub fn find<P: Provider>(
     provider: &mut P,
     root: P::Element,
@@ -323,7 +335,8 @@ pub fn find<P: Provider>(
 /// # Errors
 ///
 /// [`Error::NotFound`] when no element within the walk's budgets is accepted, saying whether the
-/// budget cut the search short; [`Error::Timeout`] and [`Error::Platform`] as [`read`].
+/// search was cut short: by its budgets, or by an element that went away before all its
+/// children were searched; [`Error::Timeout`] and [`Error::Platform`] as [`read`].
 pub fn find_by<P: Provider>(
     provider: &mut P,
     root: P::Element,
@@ -331,13 +344,10 @@ pub fn find_by<P: Provider>(
     wanted: &str,
     timeout: Duration,
 ) -> Result<P::Element> {
-    let walk = Walk {
-        next_id: 1,
-        truncated: false,
-        timeout,
-    };
     let mut visited = 0_usize;
     let mut cut_short = false;
+    // Whether a step found an element gone (a parent or a sibling), which cut a level short.
+    let mut met_gone = false;
     // Depth first, children before siblings: each level holds the next element to visit there.
     // The root's own siblings (the other windows) are not the app's.
     let mut levels: Vec<Option<P::Element>> = vec![Some(root)];
@@ -366,25 +376,47 @@ pub fn find_by<P: Provider>(
             return Ok(element);
         }
         if depth > 1 {
-            *slot = walk.answer(provider.next_sibling(&element))?;
+            *slot = search_step(provider.next_sibling(&element), &mut met_gone, timeout)?;
         }
         if depth > MAX_DEPTH {
-            if walk.answer(provider.first_child(&element))?.is_some() {
+            if search_step(provider.first_child(&element), &mut met_gone, timeout)?.is_some() {
                 cut_short = true;
             }
             continue;
         }
-        let child = walk.answer(provider.first_child(&element))?;
+        let child = search_step(provider.first_child(&element), &mut met_gone, timeout)?;
         if child.is_some() {
             levels.push(child);
         }
     }
     Err(Error::not_found(format!(
-        "the OS accessibility tree shows no element {wanted}{}",
+        "the OS accessibility tree shows no element {wanted}{}{}",
         if cut_short {
             format!(" within its first {MAX_NODES} elements and {MAX_DEPTH} levels")
         } else {
             String::new()
+        },
+        if met_gone {
+            ", and an element went away before all its children were searched"
+        } else {
+            ""
         }
     )))
+}
+
+/// A step of a search: as [`Walk::step`], an element gone (a parent or a sibling) recorded in
+/// `met_gone`, which the search's failure names.
+fn search_step<E>(
+    step: Result<Option<E>, ProviderError>,
+    met_gone: &mut bool,
+    timeout: Duration,
+) -> Result<Option<E>> {
+    match step {
+        Ok(next) => Ok(next),
+        Err(ProviderError::Gone) => {
+            *met_gone = true;
+            Ok(None)
+        }
+        Err(error) => Err(provider_error(error, timeout)),
+    }
 }

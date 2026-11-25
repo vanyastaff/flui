@@ -1592,6 +1592,13 @@ struct FakeTree {
     hung: Option<usize>,
     /// The element that went away.
     gone: Option<usize>,
+    /// The element a step to its next sibling finds gone: UI Automation's answer to
+    /// `GetNextSiblingElement` of an element that went away, and the macOS accessibility API's to
+    /// a child read asked of a parent gone.
+    sibling_gone: Option<usize>,
+    /// The element a read of its first child finds gone: UI Automation's answer to
+    /// `GetFirstChildElement`, and AT-SPI's to `GetChildren`, of an element that went away.
+    children_gone: Option<usize>,
     /// The elements whose properties were read, in order.
     read: Vec<usize>,
 }
@@ -1602,6 +1609,8 @@ impl FakeTree {
             nodes,
             hung: None,
             gone: None,
+            sibling_gone: None,
+            children_gone: None,
             read: Vec::new(),
         }
     }
@@ -1617,10 +1626,16 @@ impl Provider for FakeTree {
     type Element = usize;
 
     fn first_child(&mut self, element: &usize) -> Result<Option<usize>, ProviderError> {
+        if self.children_gone == Some(*element) {
+            return Err(ProviderError::Gone);
+        }
         Ok(self.nodes[*element].1.first().copied())
     }
 
     fn next_sibling(&mut self, element: &usize) -> Result<Option<usize>, ProviderError> {
+        if self.sibling_gone == Some(*element) {
+            return Err(ProviderError::Gone);
+        }
         let Some(parent) = self.parent_of(*element) else {
             // A root's sibling is another window: present, and not the app's.
             return Ok(Some(self.nodes.len() - 1));
@@ -1684,6 +1699,49 @@ fn the_walk_reads_the_window_and_leaves_a_gone_element_out() {
         !tree.read.contains(&6),
         "the window beside the app's is not read"
     );
+}
+
+/// A step to a next child that finds an element gone leaves the level's children marked unread
+/// and the read cut short, never a shorter list read as whole, whichever element it finds gone
+/// (the sibling the step is asked from, as UI Automation answers, or the parent, as AT-SPI's
+/// children and the macOS API's child reads answer); a search that meets one says so.
+#[test]
+fn an_element_gone_mid_walk_cuts_its_level_short() {
+    let mut tree = fake_window();
+    tree.sibling_gone = Some(3);
+    let read = walk::read(&mut tree, &0, UIA_TIMEOUT).expect("the window reads");
+    assert!(read.truncated);
+    let items = &read.roots[0].children[1];
+    assert_eq!(items.children.len(), 1, "{items:?}");
+    assert!(
+        items.children_unread,
+        "the first item went away before its next sibling was asked"
+    );
+    assert!(!read.roots[0].children_unread);
+
+    let mut tree = fake_window();
+    tree.children_gone = Some(2);
+    let read = walk::read(&mut tree, &0, UIA_TIMEOUT).expect("the window reads");
+    assert!(read.truncated);
+    let items = &read.roots[0].children[1];
+    assert!(items.children.is_empty(), "{items:?}");
+    assert!(
+        items.children_unread,
+        "the list went away before its first item was asked"
+    );
+
+    for (sibling_gone, children_gone) in [(Some(3), None), (None, Some(2))] {
+        let mut tree = fake_window();
+        tree.sibling_gone = sibling_gone;
+        tree.children_gone = children_gone;
+        let missing = walk::find(&mut tree, 0, "third", UIA_TIMEOUT).expect_err("cut short");
+        assert!(
+            missing
+                .to_string()
+                .contains("went away before all its children were searched"),
+            "{missing}"
+        );
+    }
 }
 
 /// A provider that does not answer fails the read with a timeout at once, never a node of
@@ -1819,4 +1877,15 @@ fn the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart() {
     assert!(cut.to_string().contains("levels"), "{cut}");
     let read = walk::read(&mut tree, &0, UIA_TIMEOUT).expect("a read");
     assert!(read.truncated, "a read cut by depth says so");
+
+    // The first element past the depth is only asked whether it has a child: found gone there,
+    // the search says an element went away, not that the depth cut it.
+    tree.children_gone = Some(walk::MAX_DEPTH);
+    let gone = walk::find(&mut tree, 0, "deep", UIA_TIMEOUT).expect_err("gone past the depth");
+    assert!(
+        gone.to_string()
+            .contains("went away before all its children were searched")
+            && !gone.to_string().contains("levels"),
+        "{gone}"
+    );
 }
