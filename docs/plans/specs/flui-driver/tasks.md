@@ -1419,6 +1419,8 @@ graph LR
     `the_screen_is_chosen_in_every_shape_its_group_can_take`,
     `a_facts_read_that_fails_fails_the_search`,
     `a_screen_moved_or_gone_during_the_read_is_read_again`,
+    `an_element_gone_while_untrusted_is_the_permission_taken_back`,
+    `a_press_refuses_a_lone_match_beside_an_element_gone_in_the_walk`,
     `a_screen_holds_still_only_with_the_frame_it_was_found_at`,
     `a_group_gone_mid_search_cuts_the_search_short`,
     `the_search_reaches_devicehubs_screen_seven_levels_down`,

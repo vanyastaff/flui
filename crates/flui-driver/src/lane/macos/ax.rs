@@ -182,7 +182,7 @@ pub(super) fn press(pid: i32, frame: PointRect, scale: f64, identifier: &str) ->
         describe(element, id, scale, reads)
     });
     let found = walk::find(&mut walker, root, identifier, timeout())?;
-    press::answer(
+    press::pressed(
         ax::actions(&found.element).map(|names| names.iter().any(|action| action == "AXPress")),
         || ax::perform(&found.element, "AXPress"),
         identifier,

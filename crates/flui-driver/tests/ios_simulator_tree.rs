@@ -840,7 +840,8 @@ fn the_walk_reads_its_depth_and_marks_what_lies_past_it() {
 }
 
 /// The walk reads at most [`MAX_NODES`] elements, every one of a screen that has that many, and
-/// leaves out an element that went away while it was read, reading its siblings on.
+/// leaves out an element that went away while it was read, reading its siblings on and marking
+/// their level read short, since the gone element could have been the twin of one read.
 #[test]
 fn the_walk_reads_its_budget_and_leaves_out_a_gone_element() {
     let flat = |count: usize| {
@@ -894,7 +895,7 @@ fn the_walk_reads_its_budget_and_leaves_out_a_gone_element() {
             .collect::<Vec<usize>>(),
         gone.nodes[list].children[1..]
     );
-    assert!(!items.element.children_unread && !walked.truncated);
+    assert!(items.element.children_unread && walked.truncated && walked.met_gone);
 }
 
 /// The walk marks a level read short the same way whatever stopped it: a parent gone mid-read
@@ -1592,9 +1593,9 @@ fn a_facts_read_that_fails_fails_the_search() {
 }
 
 /// The read is the search, the walk of the screen's elements and the screen's frame read again
-/// after it, the Mac's and this test tree's: a screen moved, resized or gone meanwhile answers
-/// busy, to be read again, never the window gone; gone while the process is no longer trusted,
-/// it is the permission taken back.
+/// after it, the Mac's and this test tree's, the process trusted: a screen moved, resized or
+/// gone meanwhile answers busy, to be read again, never the window gone; a frame read again that
+/// does not answer, or fails, fails the read with what it answered.
 #[test]
 fn a_screen_moved_or_gone_during_the_read_is_read_again() {
     let simulator_app = || {
@@ -1653,6 +1654,39 @@ fn a_screen_moved_or_gone_during_the_read_is_read_again() {
     }
 }
 
+/// An element gone in the walk could have been the twin of one read: of two buttons that read
+/// alike, one gone while the walk reads it, the press refuses the one left rather than take it
+/// as the only one, the process trusted.
+#[test]
+fn a_press_refuses_a_lone_match_beside_an_element_gone_in_the_walk() {
+    let mut windows = Windows::new();
+    let window = windows.add(None, "AXWindow", None, Some((231.0, 142.0, 456.0, 972.0)));
+    let screen = windows.add(
+        Some(window),
+        "AXGroup",
+        None,
+        Some((258.0, 222.0, 393.0, 852.0)),
+    );
+    let twins = [0, 1].map(|_| {
+        windows.add(
+            Some(screen),
+            "AXButton",
+            None,
+            Some((258.0, 239.0, 60.0, 33.0)),
+        )
+    });
+    windows.nodes[twins[1]].gone_in_walk = true;
+    let (read, _) = tree::read_screen(&mut windows, &request(), vec![window]).expect("read");
+    let [left] = read.elements.as_slice() else {
+        panic!("one element left: {read:?}");
+    };
+    let refused = tree::locate(&read, left).expect_err("a twin may have gone");
+    assert!(
+        matches!(&refused, Error::Ambiguous { message, .. } if message.contains("stopped short")),
+        "{refused:?}"
+    );
+}
+
 /// Within one read every element gone goes through one trust check: gone in the search, in the
 /// walk, or as the screen read again, it is a cut, a short read or a busy screen while the
 /// process is trusted, and the permission taken back once it is not, which no read again serves.
@@ -1704,7 +1738,7 @@ fn an_element_gone_while_untrusted_is_the_permission_taken_back() {
     );
     refused(gone_beside(true));
 
-    // Gone in the walk: left out of a whole read while trusted.
+    // Gone in the walk: left out of a read marked short while trusted.
     let gone_in_walk = |untrusted: bool| {
         let (mut windows, window, _, button) = simulator_app();
         windows.nodes[button].gone_in_walk = true;
@@ -1713,7 +1747,60 @@ fn an_element_gone_while_untrusted_is_the_permission_taken_back() {
     };
     let (read, _) = gone_in_walk(false).expect("left out");
     assert_eq!(read.elements, Vec::<ScreenElement>::new());
+    assert!(read.truncated && read.children_unread, "{read:?}");
     refused(gone_in_walk(true));
+
+    // A marked screen, which the search does not go into, whose list ends gone in the walk.
+    let marked_list_gone = |untrusted: bool| {
+        let mut windows = Windows::new();
+        let window = windows.add(None, "AXWindow", None, Some((231.0, 142.0, 456.0, 972.0)));
+        let screen = windows.add(
+            Some(window),
+            "AXGroup",
+            Some(SCREEN_SUBROLE),
+            Some((258.0, 222.0, 393.0, 852.0)),
+        );
+        for _ in 0..2 {
+            windows.add(
+                Some(screen),
+                "AXButton",
+                None,
+                Some((258.0, 239.0, 60.0, 33.0)),
+            );
+        }
+        windows.nodes[screen].gone_after = Some(1);
+        windows.untrusted = untrusted;
+        tree::read_screen(&mut windows, &request(), vec![window])
+    };
+    let (read, _) = marked_list_gone(false).expect("read short");
+    assert!(read.truncated && read.children_unread, "{read:?}");
+    refused(marked_list_gone(true));
+
+    // The deepest element the walk reads, gone when it is asked whether it has a child.
+    let deepest_gone = |untrusted: bool| {
+        let mut windows = Windows::new();
+        let window = windows.add(None, "AXWindow", None, Some((231.0, 142.0, 456.0, 972.0)));
+        let mut parent = windows.add(
+            Some(window),
+            "AXGroup",
+            Some(SCREEN_SUBROLE),
+            Some((258.0, 222.0, 393.0, 852.0)),
+        );
+        for _ in 0..MAX_DEPTH {
+            parent = windows.add(
+                Some(parent),
+                "AXGroup",
+                None,
+                Some((258.0, 222.0, 10.0, 10.0)),
+            );
+        }
+        windows.nodes[parent].gone_after = Some(0);
+        windows.untrusted = untrusted;
+        tree::read_screen(&mut windows, &request(), vec![window])
+    };
+    let (read, _) = deepest_gone(false).expect("read short");
+    assert!(read.truncated, "{read:?}");
+    refused(deepest_gone(true));
 
     // The screen gone when its frame is read again: busy while trusted.
     let screen_gone = |untrusted: bool| {

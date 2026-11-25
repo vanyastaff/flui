@@ -473,11 +473,12 @@ pub struct ScreenWalk<E> {
     pub elements: Vec<Walked<E>>,
     /// Whether the screen's own children were left unread.
     pub children_unread: bool,
-    /// Whether the walk stopped short anywhere.
+    /// Whether the walk stopped short anywhere: by its budget or depth, or by an element gone.
     pub truncated: bool,
-    /// Whether an element went away during the walk (a parent while its children were listed,
-    /// an element while its attributes were read, or one past the depth before it said whether
-    /// it has a child): what a source that answers a gone element as a refusal is asked about.
+    /// Whether one of the cuts behind `truncated` was an element gone (a parent while its
+    /// children were listed, an element while its attributes were read, or one past the depth
+    /// before it said whether it has a child): what a source that answers a gone element as a
+    /// refusal is asked about.
     pub met_gone: bool,
 }
 
@@ -559,10 +560,13 @@ pub fn list_children<E>(
 /// The elements under `screen`, read from `source` within [`MAX_NODES`] elements and
 /// [`MAX_DEPTH`] levels, each level listed by [`list_children`] within what is left of the
 /// budget, then each child read in turn. A level stops short the same way whatever stops it, the
-/// node budget or its parent gone mid-read: the parent's children are marked unread and the walk
-/// truncated, never a shorter list read as whole; an element on the deepest level read has its
-/// children marked unread when it has a child or went away before it said. An element that went
-/// away while its own attributes were read is left out.
+/// node budget, its parent gone mid-read, or one of its elements gone while read: the parent's
+/// children are marked unread and the walk truncated, never a shorter list read as whole, since
+/// an element that went away could have been the twin of one read; an element on the deepest
+/// level read has its children marked unread when it has a child or went away before it said.
+/// An element that went away while its own attributes were read is left out, its level marked
+/// so. Every cut is recorded once, with its cause, and what the walk reports (`truncated`,
+/// `met_gone`) is read from those records.
 ///
 /// # Errors
 ///
@@ -573,24 +577,42 @@ pub fn walk_screen<S: ScreenSource>(
 ) -> std::result::Result<ScreenWalk<S::Element>, ProviderError> {
     let mut walk = ScreenWalker {
         visited: 0,
-        truncated: false,
-        met_gone: false,
+        cut_by_bound: false,
+        cut_by_gone: false,
     };
     let level = walk.children_of(source, screen, 0)?;
     Ok(ScreenWalk {
         elements: level.children,
         children_unread: level.unread,
-        truncated: walk.truncated,
-        met_gone: walk.met_gone,
+        truncated: walk.cut_by_bound || walk.cut_by_gone,
+        met_gone: walk.cut_by_gone,
     })
 }
 
-/// A walk's count of elements, whether it stopped short anywhere, and whether an element went
-/// away.
+/// What cut a level of a walk short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WalkCut {
+    /// The budget, or the depth: a read again cuts it the same way.
+    Bound,
+    /// An element went away: the parent while its children were listed, an element while it was
+    /// read, or one past the depth before it said whether it has a child.
+    Gone,
+}
+
+impl From<ListCut> for WalkCut {
+    fn from(cut: ListCut) -> Self {
+        match cut {
+            ListCut::ParentGone => Self::Gone,
+            ListCut::Bound => Self::Bound,
+        }
+    }
+}
+
+/// A walk's count of elements and the cuts it met, each recorded once by [`Self::cut`].
 struct ScreenWalker {
     visited: usize,
-    truncated: bool,
-    met_gone: bool,
+    cut_by_bound: bool,
+    cut_by_gone: bool,
 }
 
 /// One parent's children as a walk read them, and whether some were left unread.
@@ -600,6 +622,15 @@ struct Level<E> {
 }
 
 impl ScreenWalker {
+    /// Record that a level was cut short by `cause`: the one record the walk's `truncated` and
+    /// `met_gone` are read from.
+    fn cut(&mut self, cause: WalkCut) {
+        match cause {
+            WalkCut::Bound => self.cut_by_bound = true,
+            WalkCut::Gone => self.cut_by_gone = true,
+        }
+    }
+
     /// The children of `parent`, `depth` levels under the screen, each with its own.
     fn children_of<S: ScreenSource>(
         &mut self,
@@ -612,16 +643,20 @@ impl ScreenWalker {
             MAX_NODES.saturating_sub(self.visited),
         )?;
         self.visited += listed.children.len();
-        let unread = listed.is_cut();
-        self.truncated |= unread;
-        self.met_gone |= listed.cut == Some(ListCut::ParentGone);
+        let mut unread = false;
+        if let Some(cut) = listed.cut {
+            unread = true;
+            self.cut(cut.into());
+        }
         let mut children = Vec::with_capacity(listed.children.len());
         for handle in listed.children {
             let mut element = match source.element(&handle) {
                 Ok(element) => element,
-                // An element that went away while it was read is left out.
+                // An element that went away while it was read is left out, and its level read
+                // short: it could have been the twin of one read.
                 Err(ProviderError::Gone) => {
-                    self.met_gone = true;
+                    unread = true;
+                    self.cut(WalkCut::Gone);
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -630,9 +665,10 @@ impl ScreenWalker {
                 // Past the depth only whether a child is there is asked: one there, or the
                 // element gone before it said, leaves its children unread.
                 let probe = list_children(|index| source.child_at(&handle, index), 0)?;
-                element.children_unread = probe.is_cut();
-                self.truncated |= probe.is_cut();
-                self.met_gone |= probe.cut == Some(ListCut::ParentGone);
+                if let Some(cut) = probe.cut {
+                    element.children_unread = true;
+                    self.cut(cut.into());
+                }
                 Vec::new()
             } else {
                 let level = self.children_of(source, &handle, depth + 1)?;
