@@ -2625,3 +2625,188 @@ fn every_windows_acts_are_attempted_and_wake_the_owner() {
         wake.saturating_duration_since(served_at)
     );
 }
+
+/// "Flip", which takes "Leaving" (a button with no handler, so disabled) away.
+#[derive(Clone, StatefulView)]
+struct Leaving;
+
+struct LeavingState {
+    shown: Signal<bool>,
+}
+
+impl StatefulView for Leaving {
+    type State = LeavingState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        LeavingState {
+            shown: ctx.signal(true),
+        }
+    }
+}
+
+impl ViewState<Leaving> for LeavingState {
+    fn build(&self, _view: &Leaving, ctx: &dyn BuildContext) -> impl IntoView {
+        let shown = self.shown;
+        let mut children = vec![
+            RawButton::new(Text::new("Flip"))
+                .on_pressed(move |ctx| shown.update(ctx, |on| *on = false))
+                .into_view()
+                .boxed(),
+        ];
+        if shown.get(ctx) {
+            children.push(RawButton::new(Text::new("Leaving")).into_view().boxed());
+        }
+        Column::new(children)
+    }
+}
+
+/// A window stops asking for frames for its acts once the last is answered: a held tap whose
+/// element leaves the tree is answered `gone` at the frame boundary that sees it, and asks for no
+/// frame after it.
+#[test]
+fn a_window_asks_for_no_frame_once_its_last_act_is_answered() {
+    let (mut host, _agent, window) = serving(&Leaving, 400);
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    let leaving = element(&mut host, &window, "Leaving");
+    let mut tap = TapParams::new(Target::Element(leaving));
+    tap.options = timeout(tap.options, 60_000);
+    let mut tap = ask::<method::ElementTap>(&lease, tap);
+    for _ in 0..3 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert!(tap.try_take().is_none(), "held while disabled");
+    let _flipped = window
+        .call::<method::SemanticsAct>(ActParams::new(named("Flip"), ActionName::Invoke))
+        .expect("the inbox has room");
+    // Read right after the frame that answered it, before another frame could clear a request.
+    let gone = answered(&mut host, &mut tap, 10)
+        .0
+        .expect_err("its element left");
+    assert_eq!(gone.code, ErrorCode::Gone, "{gone:?}");
+    let owes = host
+        .unsettled()
+        .causes()
+        .any(|cause| cause.cleared_by == ClearedBy::NextFrame);
+    assert!(!owes, "no act is held, so no frame is asked for");
+}
+
+/// `scroll_until` that finds its element at once, with no reading asked for, answers in the turn
+/// that serves it, with no frame.
+#[test]
+fn scroll_until_finding_its_element_at_once_answers_with_no_frame() {
+    let mut rig = crate::agent_rig::Rig::showing(&Board {
+        presses: Presses::default(),
+    });
+    let mut until = rig
+        .lease
+        .call::<method::ElementScrollUntil>(ScrollUntilParams::new(
+            named("Items"),
+            Locator::named("Item 1"),
+        ))
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    let found = until
+        .try_take()
+        .expect("answered in the turn that served it")
+        .expect("Item 1 shows");
+    assert!(found.element.is_some(), "{found:?}");
+}
+
+/// "Busy", whose press marks the view for a rebuild, and "Row 0" to "Row 199".
+#[derive(Clone, StatefulView)]
+struct Many;
+
+struct ManyState {
+    presses: Signal<u32>,
+}
+
+impl StatefulView for Many {
+    type State = ManyState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        ManyState {
+            presses: ctx.signal(0),
+        }
+    }
+}
+
+impl ViewState<Many> for ManyState {
+    fn build(&self, _view: &Many, ctx: &dyn BuildContext) -> impl IntoView {
+        let presses = self.presses;
+        let mut children = vec![
+            RawButton::new(Text::new(format!("Busy {}", presses.get(ctx))))
+                .on_pressed(move |ctx| presses.update(ctx, |count| *count += 1))
+                .into_view()
+                .boxed(),
+        ];
+        children.extend((0..200).map(|row| Text::new(format!("Row {row}")).into_view().boxed()));
+        Column::new(children)
+    }
+}
+
+/// The stability check forgets the element read longest ago, and a read again within the frame
+/// counts as a read: an element read, then 191 others, then read again before one more, is still
+/// remembered after the frame and found stable.
+#[test]
+fn the_stability_check_forgets_the_element_read_longest_ago() {
+    let mut rig = crate::agent_rig::Rig::showing(&Many);
+    let mut located =
+        LocateParams::new(Locator::default().name_matching(TextMatch::prefix("Row ")));
+    located.max_matches = Some(300);
+    let mut located = rig
+        .window
+        .call::<method::SemanticsLocate>(located)
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    let rows: Vec<ElementRef> = located
+        .try_take()
+        .expect("located at the drain")
+        .expect("located")
+        .matches
+        .iter()
+        .map(|found| found.element)
+        .collect::<Vec<ElementRef>>();
+    assert_eq!(rows.len(), 200, "every row is published");
+    let read = |rig: &mut crate::agent_rig::Rig, batch: &[ElementRef]| -> Vec<bool> {
+        let mut asked: Vec<AgentAnswer<Actionability>> = batch
+            .iter()
+            .map(|row| {
+                rig.window
+                    .call::<method::ElementActionability>(ActionabilityParams::new(*row))
+                    .expect("the inbox has room")
+            })
+            .collect::<Vec<AgentAnswer<Actionability>>>();
+        rig.runtime.pump_background();
+        asked
+            .iter_mut()
+            .map(|answer| {
+                answer
+                    .try_take()
+                    .expect("answered at the drain")
+                    .expect("its facts")
+                    .stable
+            })
+            .collect::<Vec<bool>>()
+    };
+    // Work stays pending through the reads below, so none of them compares within the frame.
+    let mut busy = rig
+        .window
+        .call::<method::SemanticsAct>(ActParams::new(named("Busy 0"), ActionName::Invoke))
+        .expect("the inbox has room");
+    let _ = read(&mut rig, &rows[..1]);
+    busy.try_take()
+        .expect("pressed at the drain")
+        .expect("pressed");
+    for batch in rows[1..192].chunks(32) {
+        let _ = read(&mut rig, batch);
+    }
+    let _ = read(&mut rig, &[rows[0], rows[192]]);
+    rig.frame();
+    assert_eq!(
+        read(&mut rig, &rows[..1]),
+        [true],
+        "the element read again is remembered across the frame"
+    );
+}
