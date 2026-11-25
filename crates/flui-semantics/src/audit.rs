@@ -38,6 +38,23 @@
 //! (`shown_bounds`): a pointer cannot reach what a viewport hides now, while a
 //! target's size is what it offers once shown. An element the window does not
 //! show at all is not judged.
+//!
+//! Two kinds of target are not judged, from what the tree publishes:
+//!
+//! - an inline link: a `link` beside text in the same parent (the regions a
+//!   paragraph publishes for its spans), whose height the line sets. WCAG 2.5.8
+//!   exempts a target in a sentence or constrained by the line-height of
+//!   non-target text; a link alone in its parent is judged.
+//! - a target inside an interactive ancestor whose own hit region meets the
+//!   minimum: a pointer that misses the small target lands on that ancestor.
+//!   Android's Accessibility Test Framework reports this case as a warning
+//!   ("clickable ancestor"); a finding here has no severity, and the flui-driver
+//!   rule it serves exempts it.
+//!
+//! A target an ancestor's fixed clip cuts stays judged by what the clip leaves,
+//! and its finding names the bounds it was cut from: a pointer reaches only the
+//! part shown, and nothing else catches the miss. That is the framework's
+//! "clipped by ancestor" case, which it also reports, as a warning.
 
 use accesskit_consumer::{NodeRef, TreeState};
 use flui_protocol::{
@@ -167,7 +184,10 @@ impl SemanticsOwner {
                 let Some((width, height)) = target_extent(state, &node, published_ratio) else {
                     continue;
                 };
-                if minimum.admits(width, height) {
+                if minimum.admits(width, height)
+                    || is_inline_link(&node, wire.role, filter)
+                    || has_admitted_interactive_ancestor(state, &node, minimum, published_ratio)
+                {
                     continue;
                 }
                 let bounds = crate::agent::logical_bounds(&node, published_ratio);
@@ -293,6 +313,43 @@ impl AxisExtent {
     fn extent(&self) -> f64 {
         self.cap.min(self.length())
     }
+}
+
+/// Whether `node`, of `role`, is a link set inline in text (module docs): a
+/// `link` with a sibling the agent reads that has a name and operates nothing.
+fn is_inline_link(node: &NodeRef<'_>, role: Role, filter: AgentFilter) -> bool {
+    if role != Role::Link {
+        return false;
+    }
+    let Some(parent) = node.parent() else {
+        return false;
+    };
+    parent
+        .filtered_children(|child| filter.apply(child))
+        .filter(|sibling| sibling.id() != node.id())
+        .any(|sibling| {
+            element_id(&sibling).is_some_and(|id| {
+                let wire = wire_node(&sibling, id, false);
+                wire.name.is_some() && !is_interactive(&wire.actions)
+            })
+        })
+}
+
+/// Whether an ancestor of `node` operates a control and its own hit region
+/// meets `minimum` (module docs).
+fn has_admitted_interactive_ancestor(
+    state: &TreeState,
+    node: &NodeRef<'_>,
+    minimum: MinimumTarget,
+    published_ratio: f64,
+) -> bool {
+    std::iter::successors(node.parent(), NodeRef::parent).any(|ancestor| {
+        let interactive = element_id(&ancestor)
+            .is_some_and(|id| is_interactive(&wire_node(&ancestor, id, false).actions));
+        interactive
+            && target_extent(state, &ancestor, published_ratio)
+                .is_some_and(|(width, height)| minimum.admits(width, height))
+    })
 }
 
 /// Whether `actions` include one that operates the control (module docs).

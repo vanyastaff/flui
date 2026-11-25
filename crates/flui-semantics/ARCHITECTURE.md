@@ -928,9 +928,23 @@ children (`clips_children`) and publishes a scroll position or extent along an a
 `scroll_y` and their minimum and maximum). Along the axis it scrolls, its clip does not shrink a
 target: the target counts its whole extent there, up to what the scrollable itself shows. Across
 that axis its clip stays put and cuts like any other. An element the window does not show at all
-is not judged.
+is not judged, nor is a `link` beside a named sibling that operates nothing (a link inline in the
+regions a paragraph publishes), nor a target inside an interactive ancestor whose own hit region
+meets the minimum. A target a fixed clip cuts is judged by what the clip leaves, and its finding
+names the bounds it was cut from.
 
-**Why.** The rules live with the tree they read (ADR-0400 §5); the development agent's
+**Why.** WCAG 2.5.8 exempts a target set in a sentence or held to the line-height of the text
+around it, which is what a paragraph's link region is: no change to the link fixes a height the
+line sets. A pointer that misses a small target inside a larger interactive ancestor lands on
+that ancestor, which Android's Accessibility Test Framework reports only as a warning; a finding
+carries no severity, and the flui-driver `small_target` rule this one serves lists the case as
+exempt. The framework's two other exemptions are built above or kept: the scrollable edge is the
+revealed extent, and a target clipped by an ancestor, which the framework also reports as a
+warning naming the unclipped size, stays a finding naming its bounds, because only the part shown
+can be reached. WCAG's spacing exception (an undersized target whose 24 px circle meets no other
+target) applies to its 24 px minimum alone and is not built.
+
+The rules live with the tree they read (ADR-0400 §5); the development agent's
 `audit.a11y` is their caller. Scrolling reveals the rest of a row a viewport cuts, so the part it
 shows now says nothing about the target's size: judging it is the defect Flutter's tracker
 records for `MinimumTapTargetGuideline`, which fails a row partly scrolled under a pinned app bar

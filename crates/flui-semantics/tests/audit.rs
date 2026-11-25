@@ -312,6 +312,85 @@ fn a_revealed_target_is_judged_by_what_its_scrollables_show() {
     assert_eq!(found, wanted);
 }
 
+/// A link that does something when clicked.
+fn link(c: &mut SemanticsConfiguration, label: &'static str) {
+    c.set_role(SemanticsRole::Link);
+    c.set_label(label);
+    c.add_action(SemanticsAction::Click, Rc::new(|_| {}));
+}
+
+/// A 400 × 300 window. Index → what it is:
+///
+/// ```text
+///  1 window
+///   2 paragraph (10,10 300×18) →
+///     3 text "Read the " (10,10 60×18)
+///     4 link "terms" (70,10 40×18): inline, the line sets its height
+///     5 text " first." (110,10 40×18)
+///   6 paragraph (10,40 300×18) →
+///     7 link "Terms" (10,40 40×18): alone in its paragraph
+///   8 button "Card" (10,80 200×60) →
+///     9 button "Star" (20,90 20×20): inside a card a pointer reaches
+///  10 frame "Group" (10,160 200×60), not interactive →
+///    11 button "Pin" (20,170 20×20)
+///  12 button "Chip" (250,80 30×30) →
+///    13 button "Close" (255,85 20×20): its ancestor is under the minimum too
+/// ```
+fn exemptions() -> Fixture {
+    let mut f = Fixture::new();
+    f.add(None, 1, (0.0, 0.0, 400.0, 300.0), |c| {
+        c.set_label("Window");
+    });
+    f.add(Some(1), 2, (10.0, 10.0, 300.0, 18.0), |_| {});
+    f.add(Some(2), 3, (10.0, 10.0, 60.0, 18.0), |c| {
+        c.set_label("Read the ");
+    });
+    f.add(Some(2), 4, (70.0, 10.0, 40.0, 18.0), |c| link(c, "terms"));
+    f.add(Some(2), 5, (110.0, 10.0, 40.0, 18.0), |c| {
+        c.set_label(" first.");
+    });
+    f.add(Some(1), 6, (10.0, 40.0, 300.0, 18.0), |_| {});
+    f.add(Some(6), 7, (10.0, 40.0, 40.0, 18.0), |c| link(c, "Terms"));
+    f.add(Some(1), 8, (10.0, 80.0, 200.0, 60.0), |c| {
+        button(c, Some("Card"));
+    });
+    f.add(Some(8), 9, (20.0, 90.0, 20.0, 20.0), |c| {
+        button(c, Some("Star"));
+    });
+    f.add(Some(1), 10, (10.0, 160.0, 200.0, 60.0), |c| {
+        c.set_label("Group");
+    });
+    f.add(Some(10), 11, (20.0, 170.0, 20.0, 20.0), |c| {
+        button(c, Some("Pin"));
+    });
+    f.add(Some(1), 12, (250.0, 80.0, 30.0, 30.0), |c| {
+        button(c, Some("Chip"));
+    });
+    f.add(Some(12), 13, (255.0, 85.0, 20.0, 20.0), |c| {
+        button(c, Some("Close"));
+    });
+    f.flush();
+    f
+}
+
+/// The target-size rule does not judge a link set in a run of text, whose
+/// height the line sets (WCAG 2.5.8's inline exception), nor a target inside an
+/// interactive ancestor whose own hit region meets the minimum. A link alone in
+/// its paragraph, a target in a container that operates nothing, and a target
+/// whose interactive ancestor is under the minimum too are judged.
+#[test]
+fn an_inline_link_and_a_target_inside_a_larger_control_are_not_judged() {
+    let f = exemptions();
+    let minimum = MinimumTarget::try_new(44.0).expect("44 px is a minimum");
+    let findings = f
+        .owner
+        .audit_target_size(minimum, placement())
+        .expect("the published tree reads");
+    let nodes: Vec<_> = findings.iter().map(|finding| finding.node).collect();
+    let wanted: Vec<_> = [7, 11, 12, 13].into_iter().map(element).collect();
+    assert_eq!(nodes, wanted, "{findings:#?}");
+}
+
 /// An element is interactive by any action that operates it, not only
 /// `invoke`: an unnamed control that advertises only `toggle`, `set_value`,
 /// `select`, `expand` or `collapse` is reported, and one that only takes focus
