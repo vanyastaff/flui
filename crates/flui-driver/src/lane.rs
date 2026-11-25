@@ -29,11 +29,12 @@ pub mod atspi;
 pub(crate) mod ax;
 #[cfg(feature = "chrome")]
 pub mod chrome;
+mod delivered;
 pub mod ios_simulator;
 pub mod macos;
 pub mod pacing;
 pub mod screen;
-mod tool;
+pub(crate) mod tool;
 pub mod walk;
 pub mod wayland;
 pub mod windows;
@@ -46,7 +47,6 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use flui_foundation::panic::{FirstPanic, discard_payload};
-use flui_protocol::act::{Effect, EffectUnit};
 use flui_protocol::input::PointerDevice;
 use flui_protocol::session::{Isolation, Placement};
 use flui_protocol::tree::Tree;
@@ -55,6 +55,8 @@ use crate::coordinates::WindowGeometry;
 use crate::error::{Error, Result};
 use crate::pixels::Image;
 use crate::steps::OsEvent;
+
+pub use self::delivered::{ActingInput, Delivered, OsInput, SendFailure};
 
 /// Which positions a lane reproduces exactly: what replay and golden holds compare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -242,12 +244,29 @@ pub trait Lane: Send {
         Ok(())
     }
 
-    /// Send one event; a pause waits.
+    /// Send one event; a pause waits. Said on its own, a failure is the lane's: what of a run went
+    /// out before it is the run's to say ([`send_guarded`], through [`Self::send_counted`]).
     ///
     /// # Errors
     ///
     /// When the OS refused it.
     fn send(&mut self, event: &OsEvent) -> Result<()>;
+
+    /// Send `event` as [`Self::send`] does, saying in `delivered` each input of it that reached
+    /// the device: what [`send_guarded`] says of a run that fails part way. The default sends the
+    /// event as one input, said where it acts, which holds for a lane that sends each event as
+    /// one; a lane that sends an event as none or several (typed keystrokes, Android's commands)
+    /// says each input itself ([`Delivered::send`], [`Delivered::took_command`]), so an event cut
+    /// part way is partly sent.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::send`].
+    fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
+        delivered
+            .send(event, || self.send(event))
+            .map_err(Error::from)
+    }
 
     /// The OS accessibility tree of the window `placement` describes, projected onto the wire's
     /// nodes (ADR-0095 §4): what a screen reader reads of the app. `app` is the window's tree as
@@ -395,20 +414,25 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
 /// pressed is released on every exit, a failed send included. When the release leaves input
-/// held, the run answers [`Error::ReleaseFailed`], so what stays down is always named; the
-/// failure that ended the run is its `first`, and the run's effect and verdict are that failure's
-/// ([`Error::effect`], [`Error::is_cannot_verify`]).
+/// held, the run names it in [`Error::ReleaseFailed`]: the failure that ended the run is its
+/// `first`, and the run's effect and verdict are that failure's ([`Error::effect`],
+/// [`Error::is_cannot_verify`]).
 ///
-/// Whatever ends the run once the lane took an event that acts ([`OsEvent::acts`]: not a move or
-/// a pause), a refusal, an interruption, a failed command or a release that fails after the last
-/// event, comes as [`Error::PartlySent`] around it, with the count of events taken
-/// (`Effect::partial`, in events) and no retry, which would send them again; a failure that
-/// names an effect of its own and invites no retry (a command that timed out) stays as it is.
+/// Whatever ends the run once an input of it reached the device ([`Lane::send_counted`]), a
+/// refusal, an interruption, a failed command or a release that fails after the last event, the
+/// run answers as [`Error::PartlySent`] around it, and no retry, which would send that input
+/// again. Its effect counts in events ([`Delivered`]): every event the lane took whole, a pause
+/// waited out and a move included, and the failing event where part of it reached the device;
+/// a lane that counts its commands names them in the effect's detail. A failure that names an
+/// effect of its own and invites no retry (a command that timed out) stays as it is. A release
+/// that fails after a run that ended for its own reason is that `ReleaseFailed`, the run's
+/// failure, partly sent or not, its `first`.
 ///
 /// # Errors
 ///
 /// As [`admit`] and [`Lane::check`], before any event, and [`Error::NotSupported`] naming
 /// `os_ime_composition` for a composition a lane that does not compose was handed;
+/// [`Error::PartlySent`] around what ended a run some of which went out;
 /// [`Error::ReleaseFailed`] naming what stays held, with the run's own failure as its `first`
 /// when there was one; [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
@@ -426,22 +450,14 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     if let Some(guard) = lane.guard() {
         guard.arm()?;
     }
-    let (taken, sent) = send_each(lane, &name, events);
+    let (delivered, sent) = send_each(lane, &name, events);
     if let Some(guard) = lane.guard() {
         guard.disarm();
     }
-    // Once the lane took an event that acts, whatever ends the run says how many it took.
-    let acted = events.iter().take(taken).any(OsEvent::acts);
-    let partly = |failure: Error| {
-        if !acted {
-            return failure;
-        }
-        let count = |events: usize| u32::try_from(events).unwrap_or(u32::MAX);
-        failure.after_partly_sent(Effect::partial(
-            count(taken),
-            count(events.len()),
-            EffectUnit::Event,
-        ))
+    // Once an input of the run reached the device, whatever ends it says how much went out.
+    let partly = |failure: Error| match delivered.effect(events.len()) {
+        Some(effect) => failure.after_partly_sent(effect),
+        None => failure,
     };
     let sent = sent.map_err(partly);
     let released = lane.release_all();
@@ -477,9 +493,9 @@ pub(crate) fn no_composition(lane: &str) -> Error {
     )
 }
 
-/// Send `events` one at a time, asking the guard before each and after the last: how many the
-/// lane took, and what ended the run.
-fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> (usize, Result<()>) {
+/// Send `events` one at a time, asking the guard before each and after the last: what the
+/// device took of them, and what ended the run.
+fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> (Delivered, Result<()>) {
     let interrupted = |lane: &mut dyn Lane| {
         lane.guard()
             .and_then(ActivityGuard::foreign_input)
@@ -488,19 +504,23 @@ fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> (usize, Res
                 event: foreign.description,
             })
     };
-    for (taken, event) in events.iter().enumerate() {
+    let mut delivered = Delivered::default();
+    for event in events {
         if let Some(interruption) = interrupted(lane) {
-            return (taken, Err(interruption));
+            return (delivered, Err(interruption));
         }
-        if let Err(failure) = lane.send(event) {
-            return (taken, Err(failure));
+        delivered.begin_event();
+        let sent = lane.send_counted(event, &mut delivered);
+        delivered.end_event(sent.is_ok());
+        if let Err(failure) = sent {
+            return (delivered, Err(failure));
         }
     }
     // Input that came during the last event still ends the run: it may have changed what the
     // last event did.
     match interrupted(lane) {
-        Some(interruption) => (events.len(), Err(interruption)),
-        None => (events.len(), Ok(())),
+        Some(interruption) => (delivered, Err(interruption)),
+        None => (delivered, Ok(())),
     }
 }
 
@@ -551,18 +571,27 @@ impl LaneWorker {
             .spawn(move || {
                 let mut lane = lane;
                 while let Ok((state, job)) = inbox.recv() {
-                    if state
+                    let runs = state
                         .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                    {
-                        job(&mut lane);
+                        .is_ok();
+                    // A job and what it holds are code the driver does not own: run, or dropped
+                    // when it was cancelled, it is under containment, its answer nobody receives
+                    // included, so a destructor's panic never ends the worker before the release
+                    // at its end. Nobody waits for that panic: it is destroyed here.
+                    let mut served = FirstPanic::new();
+                    if runs {
+                        served.contain(|| job(&mut lane));
+                    } else {
+                        served.retire(job);
                     }
+                    drop(served);
                 }
-                // The worker is ending: nothing may stay pressed. A panic of the lane or of a log
-                // subscriber here has no one left to be raised to, so it is destroyed under
-                // containment as the collector drops.
+                // The worker is ending: nothing may stay pressed. A panic of the lane, its
+                // destructor or a log subscriber here has no one left to be raised to, so it is
+                // destroyed under containment as the collector drops.
                 let mut ending = FirstPanic::new();
                 ending.contain(|| release_at_end(&mut lane));
+                ending.retire(lane);
                 drop(ending);
             })?;
         Ok(Self {
@@ -654,8 +683,11 @@ impl LaneWorker {
 impl Drop for LaneWorker {
     fn drop(&mut self) {
         drop(self.jobs.take());
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        // No payload reaches the join while the thread contains every job, every job it drops
+        // and its own end (`ending.retire(lane)`); this arm is kept so a panic that ever escapes
+        // that containment is destroyed here, never raised from a destructor (ADR-0281).
+        if let Some(Err(payload)) = self.thread.take().map(JoinHandle::join) {
+            discard_payload(payload);
         }
     }
 }

@@ -22,7 +22,7 @@ mod ios_simulator;
 mod ios_simulator_host;
 mod ios_simulator_lane;
 mod ios_simulator_tree;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod launch;
 #[cfg(target_os = "macos")]
 mod macos_desktop;

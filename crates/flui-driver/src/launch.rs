@@ -26,6 +26,14 @@ use crate::error::{Error, Result};
 /// How long a launched app may take to bind its endpoint.
 const CONNECT_WAIT: Duration = Duration::from_secs(30);
 
+/// How long [`Launch::cargo_example`]'s build may take: a cold build of the workspace on a loaded
+/// host fits, and a build stuck behind another cargo's lock does not wait forever.
+const BUILD_WAIT: Duration = Duration::from_mins(20);
+
+/// The most bytes of `cargo build`'s JSON messages read: one example's build reports every crate
+/// it compiles in a line or two each.
+const MAX_BUILD_MESSAGES: usize = 64 << 20;
+
 /// How long a process whose connection broke is given to report its exit code.
 const EXIT_WAIT: Duration = Duration::from_secs(2);
 
@@ -62,6 +70,7 @@ pub(crate) enum Target {
     CargoExample {
         example: String,
         package: Option<String>,
+        build_wait: Duration,
     },
     #[cfg(feature = "headless")]
     Headless(Box<HeadlessLaunch>),
@@ -89,12 +98,13 @@ impl Launch {
 
     /// Build the example `example` of the workspace the current directory belongs to with
     /// `cargo build` for this host, in its debug profile, which carries the agent (ADR-0239), and start
-    /// what it built.
+    /// what it built. The build is bounded by [`build_wait`](Self::build_wait).
     pub fn cargo_example(example: impl Into<String>) -> Self {
         Self {
             target: Target::CargoExample {
                 example: example.into(),
                 package: None,
+                build_wait: BUILD_WAIT,
             },
             ..Self::artifact(Artifact::Executable(PathBuf::new()))
         }
@@ -104,6 +114,16 @@ impl Launch {
     pub fn package(mut self, package: impl Into<String>) -> Self {
         if let Target::CargoExample { package: named, .. } = &mut self.target {
             *named = Some(package.into());
+        }
+        self
+    }
+
+    /// Give an example's `cargo build` `wait` to finish; 20 minutes when not named. A build still
+    /// running then is ended, and the launch fails with [`Error::Timeout`] awaiting
+    /// [`Awaited::Host`](crate::Awaited::Host). Only an example is built.
+    pub fn build_wait(mut self, wait: Duration) -> Self {
+        if let Target::CargoExample { build_wait, .. } = &mut self.target {
+            *build_wait = wait;
         }
         self
     }
@@ -169,7 +189,11 @@ impl Launch {
                     bundle.display()
                 ),
             )),
-            Target::CargoExample { example, package } => build_example(example, package.as_deref()),
+            Target::CargoExample {
+                example,
+                package,
+                build_wait,
+            } => build_example(example, package.as_deref(), *build_wait),
             #[cfg(feature = "headless")]
             Target::Headless(_) => Err(Error::invalid_argument(
                 "a headless launch starts no executable",
@@ -232,8 +256,12 @@ impl fmt::Debug for Launch {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let target = match &self.target {
             Target::Artifact(artifact) => format!("{artifact:?}"),
-            Target::CargoExample { example, package } => {
-                format!("cargo example {example} of {package:?}")
+            Target::CargoExample {
+                example,
+                package,
+                build_wait,
+            } => {
+                format!("cargo example {example} of {package:?}, built within {build_wait:?}")
             }
             #[cfg(feature = "headless")]
             Target::Headless(headless) => format!("headless {}", headless.name),
@@ -461,8 +489,12 @@ pub(crate) fn random_hex(bytes: usize) -> Result<String> {
         }))
 }
 
-/// Builds `example` with cargo and answers the executable it built.
-fn build_example(example: &str, package: Option<&str>) -> Result<PathBuf> {
+/// Builds `example` with cargo within `wait` and answers the executable it built. A build still
+/// running at `wait` (one queued behind another cargo's lock on the package cache or the build
+/// directory among them) is ended and answers [`Error::Timeout`] awaiting the host.
+fn build_example(example: &str, package: Option<&str>, wait: Duration) -> Result<PathBuf> {
+    use crate::lane::tool::{self, Failure};
+
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let mut command = Command::new(cargo);
     command.args([
@@ -474,14 +506,34 @@ fn build_example(example: &str, package: Option<&str>) -> Result<PathBuf> {
     if let Some(package) = package {
         command.args(["--package", package]);
     }
-    let output = command.stderr(Stdio::inherit()).output()?;
-    if !output.status.success() {
+    let what = format!("`cargo build --example {example}`");
+    let finished =
+        tool::run(command, MAX_BUILD_MESSAGES, wait, "cargo").map_err(|failure| match failure {
+            Failure::Start(error) | Failure::Io(error) => Error::Io(error),
+            Failure::Timeout => Error::Timeout {
+                awaited: crate::Awaited::Host,
+                effect: None,
+                message: format!(
+                    "{what} did not finish within {} s and was ended",
+                    wait.as_secs()
+                ),
+                retry: flui_protocol::error::Retry::Soon,
+            },
+            Failure::OverLimit => Error::Io(io::Error::other(format!(
+                "{what} printed more than {MAX_BUILD_MESSAGES} bytes of messages and was ended"
+            ))),
+            Failure::OutputLeftOpen => Error::Io(io::Error::other(format!(
+                "{what} ended and left its output open"
+            ))),
+        })?;
+    if finished.exit != Some(0) {
         return Err(Error::Io(io::Error::other(format!(
-            "`cargo build --example {example}` failed ({})",
-            output.status
+            "{what} failed (exit {:?}): {}",
+            finished.exit,
+            finished.stderr.trim()
         ))));
     }
-    String::from_utf8_lossy(&output.stdout)
+    String::from_utf8_lossy(&finished.stdout)
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .filter(|message| {

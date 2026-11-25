@@ -14,6 +14,7 @@
 use crate::error::{Error, Result};
 use crate::lane::macos::keys::{self, KeyCode, Modifier, SHIFT, TextChunk, TextStroke};
 use crate::lane::macos::safety::{KeyEdge, LANE, ModifierTaps, Refusal};
+use crate::lane::{Delivered, OsInput, SendFailure};
 
 /// A key event, its key resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +56,13 @@ pub enum Keystroke {
     Text(TextChunk),
 }
 
+impl OsInput for Keystroke {
+    /// Every stroke is a key event the app may see.
+    fn acts(&self) -> bool {
+        true
+    }
+}
+
 /// The key code a text event carries: `0`. An app takes typed text from the event's text, not
 /// from its key, and no shortcut of the system's takes key `0` with any modifiers; not the space
 /// bar, which activates a focused button whatever text the event carries.
@@ -83,6 +91,9 @@ pub struct HeldKeys {
     held: Vec<u16>,
     /// The keys pressed with a Shift the lane added for them.
     shifted: Vec<u16>,
+    /// Whether [`TEXT_KEY`] is held because a text run was posted only in part, which the next
+    /// run's release lets up.
+    text_key_part: bool,
     /// The system's tap shortcuts as the lane's keys have fed them.
     taps: ModifierTaps,
 }
@@ -169,8 +180,14 @@ impl HeldKeys {
                     taken
                 }
                 KeyEdge::Up(key) => {
-                    if !matches!(stroke, Keystroke::Text(_)) {
+                    // A text run leaves held what was held before it; but the key a run posted
+                    // only in part left down goes with the next run's release, as the OS has it.
+                    let releases = !matches!(stroke, Keystroke::Text(_)) || self.text_key_part;
+                    if releases {
                         self.held.retain(|code| *code != key.0);
+                    }
+                    if key == TEXT_KEY {
+                        self.text_key_part = false;
                     }
                     self.taps.release(key)
                 }
@@ -190,20 +207,38 @@ impl HeldKeys {
         completed
     }
 
-    /// Post `stroke` through `post`, which takes the flags the event carries, and record it once
-    /// `post` says it went out.
+    /// Post `stroke` through `post`, which takes the flags the event carries, and record it and
+    /// say it in `delivered` once `post` says it went out. A stroke posted in part (a text run's
+    /// press without its release) is said, and what its part left down recorded ([`TEXT_KEY`]).
     ///
     /// # Errors
     ///
-    /// `post`'s failure, with nothing recorded.
+    /// `post`'s failure, with only what a part it posted left down recorded.
     pub fn deliver(
         &mut self,
         stroke: Keystroke,
-        post: impl FnOnce(Keystroke, u64) -> Result<()>,
+        delivered: &mut Delivered,
+        post: impl FnOnce(Keystroke, u64) -> std::result::Result<(), SendFailure>,
     ) -> Result<()> {
-        post(stroke, self.flags_after(stroke))?;
+        let flags = self.flags_after(stroke);
+        if let Err(failure) = delivered.send(&stroke, || post(stroke, flags)) {
+            if failure.is_partly_sent() {
+                self.record_part(stroke);
+            }
+            return Err(Error::from(failure));
+        }
         let _ = self.apply(stroke);
         Ok(())
+    }
+
+    /// Record what the part of `stroke` that went out left down: a text run's press without its
+    /// release leaves [`TEXT_KEY`] down, which the release of everything lets go of. Every other
+    /// stroke is one event, all or nothing.
+    fn record_part(&mut self, stroke: Keystroke) {
+        if matches!(stroke, Keystroke::Text(_)) && !self.held.contains(&TEXT_KEY.0) {
+            let _ = self.apply(Keystroke::Press(TEXT_KEY, None));
+            self.text_key_part = true;
+        }
     }
 
     /// What of the system's `inputs`, sent from this state, would take: see

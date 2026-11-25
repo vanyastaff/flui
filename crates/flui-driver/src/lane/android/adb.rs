@@ -1,8 +1,9 @@
 //! The lane's one door to the device: `adb`, every command run with a deadline and a bound on what
 //! it may answer, and every argument from outside the lane quoted for the device's shell.
 //!
-//! - **Commands** ([`AdbCommand`]) run to completion through [`Adb::run`]: a command that outlives
-//!   its deadline is killed and answers [`Error::Timeout`] with a `may_have_run` effect, since the
+//! - **Commands** ([`AdbCommand`]) run to completion through [`Adb::run`], whose failure says
+//!   whether the command reached the device ([`RunFailure`]): a command that outlives its
+//!   deadline is killed and answers [`Error::Timeout`] with a `may_have_run` effect, since the
 //!   device may have done it; one that prints more than its bound is killed and fails, and nothing
 //!   past the bound is kept.
 //! - **Streams** ([`Adb::open`]) are the long-lived commands, `getevent` and `uinput`: what they
@@ -159,7 +160,9 @@ pub enum Printed {
     /// A status a Java command or `am` writes, where a failure is written too (`input`, `am`,
     /// `install`, `forward`).
     Status,
-    /// Data that may hold any text: a window dump, an image, a property, a window title.
+    /// Data that may hold any text: a window dump, an image, a property, a window title. A command
+    /// that prints data reads, and sends nothing that acts on the app: its timeout says nothing
+    /// may have run.
     Data,
 }
 
@@ -201,15 +204,49 @@ pub trait AdbStream: Send {
     fn next_record(&mut self, wait: Duration) -> Result<Option<String>>;
 }
 
+/// Why [`Adb::run`] has no reply, by whether the command reached the device: a command that
+/// never did changed nothing there, where one whose answer was lost may have run.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RunFailure {
+    /// `adb` never started, so nothing reached the device: [`Error::Lane`], unavailable.
+    NotStarted(Error),
+    /// `adb` started and its answer was lost, so the device may have done the command: past the
+    /// deadline ([`Error::Timeout`] with a `may_have_run` effect), past the bound on its output,
+    /// its output left open or its pipes failing.
+    Unanswered(Error),
+}
+
+impl RunFailure {
+    /// The failure as the lane's error.
+    #[must_use]
+    pub fn into_error(self) -> Error {
+        match self {
+            Self::NotStarted(error) | Self::Unanswered(error) => error,
+        }
+    }
+}
+
+impl From<RunFailure> for Error {
+    fn from(failure: RunFailure) -> Self {
+        failure.into_error()
+    }
+}
+
 /// The device, through `adb`: see the [module docs](self).
 pub trait Adb: Send {
     /// Run `command` to its end within `timeout`, keeping at most `limit` bytes of its output.
     ///
     /// # Errors
     ///
-    /// [`Error::Timeout`] with a `may_have_run` effect past `timeout`; [`Error::Lane`] when `adb`
-    /// cannot be started (unavailable), or the output passes `limit`.
-    fn run(&mut self, command: &AdbCommand, limit: usize, timeout: Duration) -> Result<AdbReply>;
+    /// [`RunFailure::NotStarted`] when `adb` cannot be started; [`RunFailure::Unanswered`] past
+    /// `timeout`, past `limit`, or when its output cannot be read to its end.
+    fn run(
+        &mut self,
+        command: &AdbCommand,
+        limit: usize,
+        timeout: Duration,
+    ) -> std::result::Result<AdbReply, RunFailure>;
 
     /// Start `command` as a stream whose output is cut as `framing` says. Dropping the stream ends
     /// the command.
@@ -374,16 +411,21 @@ pub(crate) fn over_limit(command: &AdbCommand, limit: usize) -> Error {
 }
 
 impl Adb for HostAdb {
-    fn run(&mut self, command: &AdbCommand, limit: usize, timeout: Duration) -> Result<AdbReply> {
+    fn run(
+        &mut self,
+        command: &AdbCommand,
+        limit: usize,
+        timeout: Duration,
+    ) -> std::result::Result<AdbReply, RunFailure> {
         let finished = tool::run(self.command(command), limit, timeout, "adb").map_err(
             |failure| match failure {
-                tool::Failure::Start(error) => self.started(&error),
-                tool::Failure::Io(error) => Error::Io(error),
-                tool::Failure::Timeout => timed_out(command, timeout),
-                tool::Failure::OverLimit => over_limit(command, limit),
-                tool::Failure::OutputLeftOpen => {
-                    lane_error(format!("`adb {command}` left its output open"))
-                }
+                tool::Failure::Start(error) => RunFailure::NotStarted(self.started(&error)),
+                tool::Failure::Io(error) => RunFailure::Unanswered(Error::Io(error)),
+                tool::Failure::Timeout => RunFailure::Unanswered(timed_out(command, timeout)),
+                tool::Failure::OverLimit => RunFailure::Unanswered(over_limit(command, limit)),
+                tool::Failure::OutputLeftOpen => RunFailure::Unanswered(lane_error(format!(
+                    "`adb {command}` left its output open"
+                ))),
             },
         )?;
         Ok(AdbReply {

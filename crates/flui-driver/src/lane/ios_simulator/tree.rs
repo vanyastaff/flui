@@ -36,8 +36,8 @@
 //!   its nearest matched ancestor fits, not among that node's children alone, and an app node
 //!   matched once is matched to nothing else. When the screen's one child is an unnamed group
 //!   (the app's root as a container), its children are read as the screen's, and FLUI's
-//!   announcers, which the app's read leaves out, are left out of the projection
-//!   ([`ANNOUNCERS`]).
+//!   announcers, which the app's read leaves out, are left out of the projection when that root
+//!   list was read whole ([`ANNOUNCERS`]).
 //! - **What fits.** An element fits an app node when its native role is the one
 //!   [`roles::native_for`] gives the app node's AccessKit role and toggled state, its label is the
 //!   app node's name, its enabled and checked states are the app node's, an identifier it carries
@@ -65,13 +65,13 @@ use flui_protocol::tree::{ElementId, Node, Rect, Tree};
 use flui_protocol::wire::{Checked, Role};
 
 use super::accessibility::{
-    HostScreen, ListCut, PointFrame, ScreenElement, ScreenRequest, ScreenSource, ScreenWalk,
-    WindowIdentity, list_children, no_window, screen_steady, walk_screen, window_identity,
+    HostScreen, PointFrame, ScreenElement, ScreenRequest, ScreenSource, ScreenWalk, WindowIdentity,
+    list_children, no_window, screen_steady, walk_screen, window_identity,
 };
 use super::roles::{self, SCREEN_SUBROLE};
 use crate::error::{Error, Result};
 use crate::lane::ax;
-use crate::lane::walk::{MAX_DEPTH, MAX_NODES, ProviderError};
+use crate::lane::walk::{Cut, MAX_DEPTH, MAX_NODES, ProviderError};
 
 /// How far, in the window's points, an edge of an element's frame may sit from the same edge of
 /// the app node it fits: the bridge places an iOS frame in the Mac's points and the window draws
@@ -359,6 +359,24 @@ struct Search<E> {
     groups: Vec<(E, ScreenCandidate)>,
     visited: usize,
     size: LogicalSize,
+    /// Whether any element went away during the search, in the chrome or in a candidate:
+    /// what [`gone_or_refused`] is asked once before the search answers.
+    met_gone: bool,
+}
+
+/// What an element gone during a read means for `tree`: an element gone, which the read takes
+/// as a cut or a busy screen, unless the source answers it as the permission refused (the Mac's
+/// `read_failure` while the process is no longer trusted), which no read again serves. The one
+/// place a read decides it, asked once for the search and once for the walk and the frame.
+///
+/// # Errors
+///
+/// The source's refusal ([`Error::NotSupported`]).
+fn gone_or_refused<T: WindowTree>(tree: &mut T) -> Result<()> {
+    match tree.failure(ProviderError::Gone) {
+        refused @ Error::NotSupported { .. } => Err(refused),
+        _ => Ok(()),
+    }
 }
 
 impl<E: Clone> Search<E> {
@@ -379,8 +397,8 @@ impl<E: Clone> Search<E> {
         let mut read = Children {
             chrome: Vec::new(),
             plain: Vec::new(),
-            gone: listed.cut == Some(ListCut::ParentGone),
-            spent: listed.cut == Some(ListCut::Bound),
+            gone: listed.cut == Some(Cut::ListGone),
+            spent: listed.cut == Some(Cut::Bound),
         };
         for child in listed.children {
             let facts = match tree.facts(&child) {
@@ -411,6 +429,7 @@ impl<E: Clone> Search<E> {
                 SearchRole::Chrome => read.chrome.push(child),
             }
         }
+        self.met_gone |= read.gone;
         Ok(read)
     }
 }
@@ -517,7 +536,9 @@ fn the_window<T: WindowTree>(
 ///
 /// # Errors
 ///
-/// As [`choose_window`]; as [`choose_screen`] (`TreeError::into_error`); the API's failure.
+/// As [`choose_window`]; as [`choose_screen`] (`TreeError::into_error`); the API's failure; the
+/// refusal the source answers an element gone as, when it does ([`WindowTree::failure`]: the
+/// permission taken back), asked once when any element went away during the search.
 pub fn find_screen<T: WindowTree>(
     tree: &mut T,
     screen: &ScreenRequest,
@@ -528,6 +549,7 @@ pub fn find_screen<T: WindowTree>(
         groups: Vec::new(),
         visited: 0,
         size: screen.size,
+        met_gone: false,
     };
     let mut reach = SearchReach::Whole;
     let mut inside: Vec<(T::Element, usize)> = Vec::new();
@@ -580,6 +602,9 @@ pub fn find_screen<T: WindowTree>(
         .iter()
         .map(|(_, candidate)| candidate.clone())
         .collect();
+    if search.met_gone {
+        gone_or_refused(tree)?;
+    }
     let index = choose_screen(&screen.title, &candidates, screen.size, reach)
         .map_err(TreeError::into_error)?;
     let (group, candidate) = search.groups.swap_remove(index);
@@ -599,8 +624,9 @@ pub fn find_screen<T: WindowTree>(
 ///
 /// As [`find_screen`]; [`Error::Busy`] when the screen moved, was resized or went away during
 /// the read; a failure of the walk or of the frame's read, as `source` answers it
-/// ([`WindowTree::failure`]), the gone screen included when `source` answers it as a refusal
-/// (the permission taken back).
+/// ([`WindowTree::failure`]); and, for an element gone anywhere in the read (the search, the
+/// walk, the frame read again), the refusal `source` answers it as, when it does (the permission
+/// taken back).
 pub fn read_screen<E, S>(
     source: &mut S,
     screen: &ScreenRequest,
@@ -612,16 +638,16 @@ where
 {
     let (group, frame) = find_screen(source, screen, windows)?;
     let walk = walk_screen(source, &group).map_err(|error| WindowTree::failure(source, error))?;
-    let after = match WindowTree::frame(source, &group) {
-        Ok(after) => after,
-        // A screen gone is one to read again, unless the source answers it as the permission
-        // refused, which no read again serves.
-        Err(ProviderError::Gone) => match WindowTree::failure(source, ProviderError::Gone) {
-            refused @ Error::NotSupported { .. } => return Err(refused),
-            _ => None,
-        },
+    let (after, frame_gone) = match WindowTree::frame(source, &group) {
+        Ok(after) => (after, false),
+        Err(ProviderError::Gone) => (None, true),
         Err(error) => return Err(WindowTree::failure(source, error)),
     };
+    // An element gone in the walk, or the screen gone since, is a short or busy read, unless the
+    // source answers it as the permission refused, which no read again serves.
+    if walk.met_gone || frame_gone {
+        gone_or_refused(source)?;
+    }
     screen_steady(frame, after)?;
     Ok((walk.screen(frame), walk))
 }
@@ -873,10 +899,11 @@ pub fn element_at<'s>(elements: &'s [ScreenElement], path: &[usize]) -> Option<&
 /// label attributes, identifier and frame, the facts a read gave and a press finds an element by
 /// again.
 ///
-/// A read that stopped short (`HostScreen::truncated`) cannot show that one element is the only
-/// one: a second that reads the same may sit in the part not read. An identifier is no proof
-/// either, since nothing makes an author's identifier unique. So a press refuses one match on
-/// such a read, as it refuses two.
+/// A read that stopped short (`HostScreen::cut`) cannot show that one element is the only one: a
+/// second that reads the same may sit in the part not read. An identifier is no proof either,
+/// since nothing makes an author's identifier unique. So a press refuses one match on such a
+/// read, as it refuses two, with a retry when the cut is one a read again may heal (an element
+/// gone) and none when it repeats (a bound).
 ///
 /// # Errors
 ///
@@ -909,22 +936,13 @@ pub fn locate(screen: &HostScreen, wanted: &ScreenElement) -> Result<Vec<usize>>
             .or(wanted.title.as_deref())
             .unwrap_or_default()
     );
-    match found.len() {
-        1 if screen.truncated => Err(Error::Ambiguous {
-            message: format!(
-                "the read of the Simulator's window stopped short (its budget of {MAX_NODES} \
-                 elements or {MAX_DEPTH} levels, or an element gone mid-read), so the one element \
-                 that reads as {what} cannot be shown to be the only one; the lane presses none: \
-                 read again, and press through the app's own path when the read stays short"
-            ),
-            candidates: Vec::new(),
-            retry: ErrorCode::Ambiguous.default_retry(),
-        }),
-        1 => Ok(found.swap_remove(0)),
-        0 => Err(Error::not_found(format!(
+    match (found.len(), screen.cut) {
+        (1, Some(cut)) => Err(short_read_refusal(&what, cut)),
+        (1, None) => Ok(found.swap_remove(0)),
+        (0, _) => Err(Error::not_found(format!(
             "the Simulator's window shows no element that reads as {what} now"
         ))),
-        count => Err(Error::Ambiguous {
+        (count, _) => Err(Error::Ambiguous {
             message: format!(
                 "{count} elements of the Simulator's window read as {what}; the lane presses \
                  none of them"
@@ -932,6 +950,33 @@ pub fn locate(screen: &HostScreen, wanted: &ScreenElement) -> Result<Vec<usize>>
             candidates: Vec::new(),
             retry: ErrorCode::Ambiguous.default_retry(),
         }),
+    }
+}
+
+/// What a press answers when the one element that reads as `what` was found on a read that `cut`
+/// stopped short: ambiguous, since a second may sit in the part not read, with a retry when a
+/// read again may see that part ([`Cut::repeats`] says it cannot).
+fn short_read_refusal(what: &str, cut: Cut) -> Error {
+    let (why, retry, remedy) = if cut.repeats() {
+        (
+            format!("its budget of {MAX_NODES} elements or {MAX_DEPTH} levels ran out"),
+            Retry::Never,
+            "press through the app's own path",
+        )
+    } else {
+        (
+            "an element went away while it was read".to_owned(),
+            Retry::Soon,
+            "read again",
+        )
+    };
+    Error::Ambiguous {
+        message: format!(
+            "the read of the Simulator's window stopped short ({why}), so the one element that \
+             reads as {what} cannot be shown to be the only one; the lane presses none: {remedy}"
+        ),
+        candidates: Vec::new(),
+        retry,
     }
 }
 
@@ -975,23 +1020,28 @@ fn project(
         placing,
         tolerance: bounds_tolerance(placing.scale),
         next_id: 1,
-        truncated: screen.truncated,
+        truncated: screen.cut.is_some(),
         used: BTreeSet::new(),
         matched: Vec::new(),
     };
-    let (elements, mut path, unread) = lifted(screen);
+    let (elements, mut path, list_cut) = lifted(screen);
     let mut root = Node::new(walk.next(), app_root.role, "AXGroup".to_owned());
     root.rect = window_rect(placing.screen, placing.screen, placing.size, placing.scale);
     root.identifier.clone_from(&app_root.identifier);
     root.window = app_root.window;
     let scope = walk.scope(app_root);
     root.children = walk.children(elements, &mut path, &scope)?;
-    root.children_unread = screen.children_unread || unread;
+    // The root's children went unread when the list they come from was cut, or the screen's own
+    // list around a lifted container.
+    root.children_unread = list_cut.is_some() || screen.children_unread.is_some();
     // The announcers the app's read leaves out: the root's last children of their shape that no
-    // app node fits. A list read short ends where the read stopped, not at the announcers, so
-    // its last children are kept.
+    // app node fits, taken only from the list that holds them (the lifted container's, else the
+    // screen's) read whole. A list that ended early ends where the read stopped, not at the
+    // announcers; a list with a gap (`Cut::ElementGone`) may have lost an announcer to it, so its
+    // last two of that shape need not both be announcers. Either way its last children are kept,
+    // and the read is already marked short.
     let mut left_out = 0;
-    while !root.children_unread
+    while list_cut.is_none()
         && left_out < ANNOUNCERS
         && root
             .children
@@ -1026,10 +1076,10 @@ fn bounds_tolerance(scale: f64) -> i64 {
     pixels
 }
 
-/// The screen's elements, the path they sit at, and whether some went unread: its elements, or
-/// its one element's children when that element is the app's root read as a container (an
-/// unnamed group without an identifier).
-fn lifted(screen: &HostScreen) -> (&[ScreenElement], Vec<usize>, bool) {
+/// The elements the app's root holds, the path they sit at, and why that list was cut, if it
+/// was: the screen's elements, or its one element's children when that element is the app's
+/// root read as a container (an unnamed group without an identifier).
+fn lifted(screen: &HostScreen) -> (&[ScreenElement], Vec<usize>, Option<Cut>) {
     if let [only] = screen.elements.as_slice()
         && only.role == "AXGroup"
         && only.subrole.is_none()
@@ -1039,7 +1089,7 @@ fn lifted(screen: &HostScreen) -> (&[ScreenElement], Vec<usize>, bool) {
     {
         return (&only.children, vec![0], only.children_unread);
     }
-    (&screen.elements, Vec::new(), false)
+    (&screen.elements, Vec::new(), screen.children_unread)
 }
 
 /// Whether the element `os` fits the app node of `candidate`: see the [module docs](self).
@@ -1187,7 +1237,7 @@ impl Walk {
             elements.iter().zip(described).zip(matched).enumerate()
         {
             node.id = self.next();
-            node.children_unread = element.children_unread;
+            node.children_unread = element.children_unread.is_some();
             path.push(index);
             if let Some(app) = app {
                 self.matched.push((app.id, path.clone()));

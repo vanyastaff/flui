@@ -581,9 +581,9 @@ graph LR
   - a send that panics skips `disarm`, so the guard watches until the next `arm` or the lane's
     drop, and its pending `foreign_input` survives; the worker's panicked-job path, which already
     releases, is where it would be disarmed;
-  - after a send that went through, `Error::ReleaseFailed` has no `first`, so it carries no
-    effect and reads as not run (`may_have_run` false) although the input went out, and its doc
-    says a retry does not cure it while the next sequence's release retries what stays held.
+  - after a send that went through, a release that fails comes inside `Error::PartlySent`
+    (may have run, no retry); what stays open is that `ReleaseFailed`'s doc says a retry does
+    not cure it while the next sequence's release retries what stays held.
 - **Evidence (2026-11-19):**
   - `flui-driver`'s `driver_it`:
     - `failure_matrix::every_failure_row_holds_on_every_fixture`: every failure scenario on the
@@ -1198,8 +1198,9 @@ graph LR
     read raw; the driver's own PNG reader (`pixels::codec`) decodes the PNG within its bounds, and the capture is a `pixels::Image`; `roxmltree` reads the dump.
   - The lane never picks a device: `adb::HostAdb` cannot be built without a serial, and
     `lane::android::host_device` takes the one `FLUI_ANDROID_SERIAL` names and asks `adb` nothing
-    without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
-    and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
+    without it; AVD lifecycle stays with FD26. Each window dump of a session goes to a path of its
+    own, and the session's dump files are removed by every dump that runs to its end and by the
+    lane's end; its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
     port tried when one is taken, is removed by that port once `adb` made it or may have.
   - `uiautomator dump` suspends every accessibility service running while it dumps, so only the
     read of the tree takes one, and on a device or an emulator it is refused while any service is
@@ -1415,6 +1416,7 @@ graph LR
     `a_target_renamed_or_removed_since_connecting_is_refused`,
     `a_window_naming_any_other_uuid_is_not_the_devices`,
     `a_level_read_short_is_marked_whatever_stopped_it`,
+    `a_gap_that_took_an_announcer_leaves_the_text_before_it`,
     `the_walk_reads_its_depth_and_marks_what_lies_past_it`,
     `the_walk_reads_its_budget_and_leaves_out_a_gone_element`,
     `a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone`,
@@ -1423,6 +1425,8 @@ graph LR
     `the_screen_is_chosen_in_every_shape_its_group_can_take`,
     `a_facts_read_that_fails_fails_the_search`,
     `a_screen_moved_or_gone_during_the_read_is_read_again`,
+    `an_element_gone_while_untrusted_is_the_permission_taken_back`,
+    `a_press_refuses_a_lone_match_beside_an_element_gone_in_the_walk`,
     `a_screen_holds_still_only_with_the_frame_it_was_found_at`,
     `a_group_gone_mid_search_cuts_the_search_short`,
     `the_search_reaches_devicehubs_screen_seven_levels_down`,

@@ -64,7 +64,9 @@ mod lane {
     use crate::lane::atspi::client::{A11yBus, WindowTarget};
     use crate::lane::pacing;
     use crate::lane::screen;
-    use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
+    use crate::lane::{
+        AccessibilityApi, ActivityGuard, Delivered, Lane, LaneCapabilities, PositionFidelity,
+    };
     use crate::steps::OsEvent;
 
     /// How far a window's device size may be from the app's logical size times its scale: the
@@ -259,8 +261,9 @@ mod lane {
         }
 
         /// Send the keystrokes of `input` one by one, the server read again before each press,
-        /// each recorded as soon as the server took it and then confirmed through the guard.
-        fn type_keys(&mut self, input: &KeyInput) -> Result<()> {
+        /// each recorded and said in `delivered` as soon as the server took it, and then
+        /// confirmed through the guard.
+        fn type_keys(&mut self, input: &KeyInput, delivered: &mut Delivered) -> Result<()> {
             let keymap = self.keymap()?;
             let strokes = self
                 .keys
@@ -270,12 +273,17 @@ mod lane {
                 if let Keystroke::Press(_) = stroke {
                     self.checked(None)?;
                 }
-                self.stroke(stroke, &keymap)?;
+                self.stroke(stroke, &keymap, delivered)?;
             }
             Ok(())
         }
 
-        fn stroke(&mut self, stroke: Keystroke, keymap: &Keymap) -> Result<()> {
+        fn stroke(
+            &mut self,
+            stroke: Keystroke,
+            keymap: &Keymap,
+            delivered: &mut Delivered,
+        ) -> Result<()> {
             if matches!(stroke, Keystroke::Press(_) | Keystroke::Release(_)) {
                 self.guard.will_send();
             }
@@ -288,12 +296,19 @@ mod lane {
             self.keys.deliver(
                 stroke,
                 keymap,
+                delivered,
                 || send_stroke(server, stroke, per_keycode),
                 || guard.await_echo(),
             )
         }
 
-        fn mouse_button(&mut self, button: PointerButton, pressed: bool) -> Result<()> {
+        /// Press or release `button`, said in `delivered` as soon as the server took it.
+        fn mouse_button(
+            &mut self,
+            button: PointerButton,
+            pressed: bool,
+            delivered: &mut Delivered,
+        ) -> Result<()> {
             let core = match button {
                 PointerButton::Primary => 1,
                 PointerButton::Middle => 2,
@@ -316,6 +331,7 @@ mod lane {
             self.buttons.deliver(
                 core,
                 pressed,
+                delivered,
                 || {
                     server.fake(if pressed {
                         Fake::ButtonPress(core)
@@ -328,8 +344,15 @@ mod lane {
         }
 
         /// Move to `at` and turn the wheel, each click's press and release held by
-        /// [`HeldButtons`] as a button's are, so a click left down is released with the rest.
-        fn scroll(&mut self, at: DevicePoint, delta_x: i32, delta_y: i32) -> Result<()> {
+        /// [`HeldButtons`] as a button's are, so a click left down is released with the rest;
+        /// each the server took is said in `delivered`, so a turn cut part way is partly sent.
+        fn scroll(
+            &mut self,
+            at: DevicePoint,
+            delta_x: i32,
+            delta_y: i32,
+            delivered: &mut Delivered,
+        ) -> Result<()> {
             self.fake(Fake::Motion(at))?;
             let server = self
                 .server
@@ -341,6 +364,7 @@ mod lane {
             self.buttons.scroll(
                 delta_x,
                 delta_y,
+                delivered,
                 |button, pressed| {
                     guard.borrow_mut().will_send();
                     server.fake(if pressed {
@@ -450,6 +474,13 @@ mod lane {
         }
 
         fn send(&mut self, event: &OsEvent) -> Result<()> {
+            self.send_counted(event, &mut Delivered::default())
+        }
+
+        /// A key event or text is a keystroke or several, a button one input and a turn of the
+        /// wheel a click or several, each said once the server took it, so an event cut part way
+        /// is partly sent.
+        fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
             // `send_guarded` refuses it first; a caller that sends directly hears the same.
             if matches!(event, OsEvent::Composition(_)) {
                 return Err(crate::lane::no_composition(self.name()));
@@ -458,7 +489,7 @@ mod lane {
                 return self.pause(*duration);
             }
             if let Some(input) = Self::key_input(event)? {
-                return self.type_keys(&input);
+                return self.type_keys(&input, delivered);
             }
             match event {
                 OsEvent::PointerMove { to, .. } => {
@@ -467,11 +498,11 @@ mod lane {
                 }
                 OsEvent::PointerDown { button, .. } => {
                     self.checked(None)?;
-                    self.mouse_button(*button, true)
+                    self.mouse_button(*button, true, delivered)
                 }
                 OsEvent::PointerUp { button, .. } => {
                     self.checked(None)?;
-                    self.mouse_button(*button, false)
+                    self.mouse_button(*button, false, delivered)
                 }
                 OsEvent::Scroll {
                     at,
@@ -479,7 +510,7 @@ mod lane {
                     delta_y,
                 } => {
                     self.checked(Some(*at))?;
-                    self.scroll(*at, *delta_x, *delta_y)
+                    self.scroll(*at, *delta_x, *delta_y, delivered)
                 }
                 _ => Ok(()),
             }

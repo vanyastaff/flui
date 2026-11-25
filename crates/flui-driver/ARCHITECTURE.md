@@ -49,10 +49,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
   `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device
   without a guard, before the run is announced and again at every `lane::send_guarded`, which
-  asks the guard before every event and releases everything on every exit, answering
-  `ReleaseFailed` when the release leaves input held, whatever ended the run: the run's own
+  asks the guard before every event and releases everything on every exit, naming what the
+  release leaves held in `ReleaseFailed`: after a run that ended for its own reason, that
   failure is its `first`, whose effect and verdict it answers with (`Error::effect`,
-  `Error::is_cannot_verify`); an input-method composition reaches only a lane whose capabilities
+  `Error::is_cannot_verify`); after a run that went out whole, it comes inside `PartlySent`, as
+  below; an input-method composition reaches only a lane whose capabilities
   say it composes (`LaneCapabilities::compositions`, the Chrome lane alone), refused before the
   desktop is locked or the run announced, at `send_guarded`, and by every other lane's own `send`;
   `OsInputLock` holds one session per user's desktop (a headless browser, the session's own,
@@ -62,18 +63,32 @@ app's trees, frames and input, and this crate composes that with what only the O
   handle holds the OS file lock (a lock file this user may only read is opened for reading, one
   it cannot open is `Error::Io`, never retried); the first OS
   event of a session is announced once; once OS input went out, a failed read of what it did is
-  `may_have_run`, never not run. Whatever ends a run once the lane took an event that acts
-  (`OsEvent::acts`), a refusal, the guard's interruption, a failed command, a release that fails
-  after the last event, `send_guarded` answers as `Error::PartlySent` around it, on every lane:
-  the events taken as `Effect::partial` and no retry, which would send them again; a failure
-  with an effect of its own that invites no retry (a timed-out command) stays as it is.
+  `may_have_run`, never not run. Whatever ends a run once an input of it reached the device, a
+  refusal, the guard's interruption, a failed command, a release that fails after the last
+  event, `send_guarded` answers as `Error::PartlySent` around it, on every lane, read from one
+  record (`lane::Delivered`): the lane says each input of an event that reached the device
+  (`Lane::send_counted`, through `Delivered::send`, whose input's type says whether it acts
+  (`lane::OsInput`), so a move, a pen's hover and a lane's housekeeping, the X11 keymap change
+  and its settle, are never said; a send that put part of its input out, a `SendInput` that
+  inserted some of its events, a macOS text run posted without its release, says that part
+  (`lane::SendFailure`), and the held record keeps what that part left down for the release (a
+  Windows packet's unit, released with that packet's own key-up; a macOS run's key), until a
+  release or a later stroke that lets it up (a whole packet, a whole run) clears it. By
+  default an event sent whole is one input where it acts; the held parts of Windows, X11 and
+  macOS say each keystroke, button and click of the wheel, and Android each command, an `input`
+  line or a pen report, taken or unanswered, by the same type rule), the
+  run counts every event taken whole, a pause and a move included, and the failing event where
+  part of it went out (`Effect::partial`, in events; Android's commands taken and unanswered in
+  its detail), and no retry is invited, which would send them again; a failure with an effect of
+  its own that invites no retry (a timed-out command) stays as it is.
 - **A person's interruption followed by a failed release is cannot-verify, the held input
   named.** When the guard sees the person's input, the run stops and is cannot-verify: the input
   that reached the app is no longer the scenario's, so neither a pass nor a failure of the app can
   be read from it. A release that then fails does not turn that into a failure of the app, which
   did nothing wrong; nor may it go unsaid, since input stays down on the person's desktop.
   `send_guarded` answers `Error::ReleaseFailed` with the keys, buttons and contacts still held in
-  `held` and the interruption as `first`, from which `Error::is_cannot_verify` and
+  `held` and the interruption as `first` (inside `PartlySent` once an input of the run reached
+  the device), from which `Error::is_cannot_verify` and
   `Error::effect` answer: the report says cannot-verify, and the error says what to release by
   hand. The same holds for any first failure: a timed-out act stays `may_have_run`.
 - **What a lane cannot send is refused before anything is sent.** `lane::send_guarded` asks
@@ -105,8 +120,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   keys, actions, input-method steps and screenshot decoding are pure tables, and what reaches a
   browser goes through its session.
 - **The Android lane reaches the device through one door.** Every `adb` command runs through
-  `lane::android::adb::Adb` with a deadline and a bound on its output, a timed-out command being
-  `timeout` with `may_have_run`; a stream (`getevent`, `uinput`) hands over bounded records, at
+  `lane::android::adb::Adb` with a deadline and a bound on its output, and its failure says
+  whether the command reached the device (`adb::RunFailure`: never started, or its answer lost).
+  A timed-out command that acts is `timeout` with `may_have_run`, and one that reads
+  (`Printed::Data`: the windows, the settings, a dump, a capture) keeps no effect, since it sends
+  nothing that acts on the app; a stream (`getevent`, `uinput`) hands over bounded records, at
   most a fixed number waiting; a value from outside the lane enters a device shell line only
   through `adb::quote`. What the device prints is read as untrusted input: sizes checked before
   decoding (`screencap`, `uiautomator dump`), node, depth and device counts bounded.
@@ -114,8 +132,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   between commands, so `lane::android::held::HeldInput` sends a key at its release (alone, or as
   one `keycombination` with the modifiers held) and holds only the one `motionevent` contact and
   the pen's range and touch, each recorded when its command returned (the pen's when its `uinput`
-  device answered a sync); a timed-out press is held and cancelled at the release, and a key a
-  timed-out command may have left down is named in `Error::ReleaseFailed`, never pressed again.
+  device answered a sync); a press whose answer was lost (a timeout, a bound, a pipe) is held and
+  cancelled at the release, and a key a command whose answer was lost may have left down is
+  named in `Error::ReleaseFailed`, never pressed again; a command whose `adb` never started holds
+  nothing.
   It refuses a second contact, a sequence that ends with a key down (which would never be sent),
   the keys and chords that leave the app or change the device (the fallbacks of AOSP's
   `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
@@ -128,13 +148,20 @@ app's trees, frames and input, and this crate composes that with what only the O
   change on the device waits for, once a locate and once before each such command; `-a` is what
   prints the frames. A window that takes no focus over the press point is not checked
   (`docs/gaps.md`). A contact going down is recorded before its command goes out, so a send that
-  times out or unwinds leaves it for the release to cancel.
+  times out, loses its answer or unwinds leaves it for the release to cancel.
 - **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
-  its own: a window dump at a path of the session's, and a forward from a loopback port the lane
-  picked, asked for with `--no-rebind` (a port another session holds is refused and another
-  picked) and removed by that port at its end once `adb` made it or may have.
+  its own: each window dump at a path of its own, removed with the earlier ones by every dump that
+  runs to its end (never a later dump's) and with all of the session's by the lane's end, and a
+  forward from a loopback port the lane picked, asked for with `--no-rebind` (a port another
+  session holds is refused and another picked) and removed by that port at its end once `adb`
+  made it or may have (its answer lost). Each step of the lane's end, and the destructors of its
+  device and streams (the binding's code), runs under one `FirstPanic`; a destructor has no
+  caller to raise to, so the first panic is logged and destroyed. The lane worker runs every job,
+  drops every job it skips and every answer nobody receives, and retires the lane, each under
+  containment, so no destructor's panic ends it before its release; its join destroys a payload
+  that ever escaped that.
 - **The Android lane finds the app's nodes by matching, never by guessing.** `accesskit_android`
   sets no `viewIdResourceName`, so `Lane::read_tree` is handed the app's own tree and
   `lane::android::tree` matches the dump to it: the root is the child of the decor view that fits
@@ -183,9 +210,17 @@ app's trees, frames and input, and this crate composes that with what only the O
   UDID, or two naming none when none names it, are refused. A device renamed or removed since
   the lane connected is refused (`accessibility::screen_title`). The screen's elements are read
   by a pure walk over a source (`accessibility::walk_screen`): a level the node budget or a
-  vanished element cuts is marked unread on its parent, the screen included. Every walk over an OS tree takes a step that finds an
-  element gone as its level cut, never ended (`lane::walk`); `ax::child_at` answers
-  `kAXErrorInvalidUIElement`, the parent gone, as that. Every element the read asks is given the
+  vanished element cuts is marked unread on its parent, the screen included. Both reads of a
+  tree, `lane::walk::read` and this walk, hold one rule with its cause (`lane::walk::Cut`): a
+  bound, the list gone (a step to a next child that finds an element gone; `ax::child_at`
+  answers `kAXErrorInvalidUIElement`, the parent gone, as that), or one element gone while read,
+  left out of a list read on to its end. Each marks its level unread and the read truncated, and
+  a press refuses a lone match on a short read with a retry unless a bound cut it
+  (`Cut::repeats`). The projection leaves FLUI's announcers out only of the list that holds
+  them (a lifted container's, else the screen's) read whole, since a gap may have taken one of
+  them. The searches (`walk::find_by`, the screen search) keep
+  their own record of a cut, the screen search's retry by the same two causes
+  (`tree::SearchReach`). Every element the read asks is given the
   client's deadline and carries it, so a timeout, a press's included, names the deadline of the
   element its call was asked of, or says that element refused it. A window's identity texts are
   read whole up to `accessibility::IDENTITY_TEXT_LIMIT` by the pure `window_identity`, every
@@ -202,7 +237,12 @@ app's trees, frames and input, and this crate composes that with what only the O
   group, refused when the chrome was cut, with no retry offered when the budget cut it. The read
   as a whole is `tree::read_screen`, the Mac's and the tests' over their own trees: the search,
   the walk, and the screen's frame alone read again after it, a screen moved or gone meanwhile
-  answering `Error::Busy` (the permission refused when the source says so). The scripted window
+  answering `Error::Busy`. An element gone anywhere in the read (the search, the walk, the
+  frame) goes through one trust check, the source's failure asked twice at most: once before
+  the search answers, and once for the walk and the frame read again together. While the
+  process is no longer trusted it is the permission refused, never a cut, a short read or a busy
+  screen; while it is trusted, an element gone in the walk leaves its level unread and the read
+  truncated, so a press does not take a lone match it could have been the twin of. The scripted window
   (`testing::ScriptedSimulatorScreen`) serves a screen already read and shares only
   `tree::choose_window` and `tree::locate`.
   `Lane::read_tree` and `Lane::invoke` are handed

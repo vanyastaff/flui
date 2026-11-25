@@ -46,10 +46,12 @@ use windows::core::BOOL;
 
 use crate::coordinates::DevicePoint;
 use crate::error::{Error, Result};
+use crate::lane::SendFailure;
 use crate::lane::windows::activity::LANE_TAG;
 use crate::lane::windows::contacts::{Frame, Phase, PointerKind};
 use crate::lane::windows::keys::{Modifier, VirtualKey};
 use crate::lane::windows::safety::LANE;
+use crate::lane::windows::send_input;
 
 /// A window, by the value of its `HWND`: a value that names a window, kept as an integer so the
 /// lane that holds it stays `Send`.
@@ -311,18 +313,13 @@ pub(super) fn cursor() -> Option<DevicePoint> {
     Some(DevicePoint::new(point.x, point.y))
 }
 
-fn send(inputs: &[INPUT], what: &str) -> Result<()> {
+/// Insert `inputs` in one `SendInput` call: one that Windows inserted in part fails as partly
+/// sent, since the events it did insert reached the desktop.
+fn send(inputs: &[INPUT], what: &str) -> std::result::Result<(), SendFailure> {
     let size = i32::try_from(size_of::<INPUT>()).expect("BUG: an INPUT is a few dozen bytes");
     // SAFETY: fully initialized `INPUT`s and the size of one.
     let sent = unsafe { SendInput(inputs, size) };
-    if usize::try_from(sent).ok() == Some(inputs.len()) {
-        return Ok(());
-    }
-    Err(lane_error(format!(
-        "Windows took {sent} of the {} events of {what} (blocked: the app may run elevated, or \
-         the desktop changed)",
-        inputs.len()
-    )))
+    send_input::outcome(sent, inputs.len(), what)
 }
 
 fn mouse(dx: i32, dy: i32, data: u32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
@@ -386,7 +383,7 @@ pub(super) fn move_pointer(point: DevicePoint) -> Result<()> {
 }
 
 /// A physical mouse button: 0 left, 1 right, 2 middle, 3 and 4 the extra buttons.
-pub(super) fn mouse_button(button: u8, pressed: bool) -> Result<()> {
+pub(super) fn mouse_button(button: u8, pressed: bool) -> std::result::Result<(), SendFailure> {
     let (flags, data) = match (button, pressed) {
         (0, true) => (MOUSEEVENTF_LEFTDOWN, 0),
         (0, false) => (MOUSEEVENTF_LEFTUP, 0),
@@ -403,7 +400,7 @@ pub(super) fn mouse_button(button: u8, pressed: bool) -> Result<()> {
 }
 
 /// Turn the wheel by `delta_x` rightwards and `delta_y` downwards, in wheel units.
-pub(super) fn wheel(delta_x: i32, delta_y: i32) -> Result<()> {
+pub(super) fn wheel(delta_x: i32, delta_y: i32) -> std::result::Result<(), SendFailure> {
     let mut inputs = Vec::new();
     if delta_y != 0 {
         // Windows' wheel turns up for a positive delta.
@@ -439,7 +436,7 @@ fn key_input(vk: u16, scan: u16, flags: KEYBD_EVENT_FLAGS) -> INPUT {
 }
 
 /// Press or release `key`, with its scan code, as a keyboard sends it.
-pub(super) fn key(key: VirtualKey, pressed: bool) -> Result<()> {
+pub(super) fn key(key: VirtualKey, pressed: bool) -> std::result::Result<(), SendFailure> {
     // SAFETY: a pure table lookup.
     let scan = unsafe { MapVirtualKeyW(u32::from(key.code), MAPVK_VK_TO_VSC) };
     let mut flags = KEYBD_EVENT_FLAGS(0);
@@ -455,15 +452,25 @@ pub(super) fn key(key: VirtualKey, pressed: bool) -> Result<()> {
     )
 }
 
-/// Press and release the UTF-16 unit `unit` as a Unicode packet.
-pub(super) fn unicode(unit: u16) -> Result<()> {
-    send(
-        &[
-            key_input(0, unit, KEYEVENTF_UNICODE),
-            key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
-        ],
-        "a character",
-    )
+/// Send `events`, the keyboard events of one stroke ([`send_input::packet_events`]), in one call.
+pub(super) fn keyboard(
+    events: &[send_input::KeyboardEvent],
+    what: &str,
+) -> std::result::Result<(), SendFailure> {
+    let inputs: Vec<INPUT> = events
+        .iter()
+        .map(|event| {
+            let mut flags = KEYBD_EVENT_FLAGS(0);
+            if event.unicode {
+                flags |= KEYEVENTF_UNICODE;
+            }
+            if event.up {
+                flags |= KEYEVENTF_KEYUP;
+            }
+            key_input(event.virtual_key, event.scan, flags)
+        })
+        .collect();
+    send(&inputs, what)
 }
 
 /// The key that types `c` on the keyboard layout of `window`'s thread, and whether it needs

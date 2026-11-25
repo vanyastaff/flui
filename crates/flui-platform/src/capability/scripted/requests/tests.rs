@@ -4,7 +4,7 @@
 //! counts, how the test's panics are kept) are pinned by the scenario tests
 //! `crates/flui-platform/ARCHITECTURE.md` names.
 
-use super::{Effect, Event, Unanswered, Waits};
+use super::{Effect, Event, Pending, Waits};
 
 /// What a row's request waits for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,7 +34,7 @@ fn state(requests: &[(u32, WaitsFor)], holds: usize, draining: bool) -> Requests
 
 /// The requests a row runs on: a request's payload is its key, and a clock's
 /// answer is `()`.
-type RowRequests = Unanswered<u32, u32, ()>;
+type RowRequests = Pending<u32, u32, ()>;
 
 fn waits(waits_for: WaitsFor) -> Waits<()> {
     match waits_for {
@@ -103,11 +103,11 @@ fn transition(
 }
 
 #[test]
-fn every_event_moves_the_unanswered_requests_as_the_rules_say() {
+fn every_event_moves_the_pending_requests_as_the_rules_say() {
     use WaitsFor::{Answering, Clock, Hold, Test};
     let transitions = vec![
         transition(
-            "a request with no hold and no drain is answered, unanswered meanwhile",
+            "a request with no hold and no drain is answered, pending meanwhile",
             state(&[(1, Test)], 0, false),
             Event::Arrived(5, 5),
             state(&[(1, Test), (5, Answering)], 0, false),
@@ -156,7 +156,7 @@ fn every_event_moves_the_unanswered_requests_as_the_rules_say() {
             Effect::Orphaned(4, ()),
         ),
         transition(
-            "a request whose answer is made leaves the unanswered requests to be answered",
+            "a request whose answer is made leaves the pending requests to be answered",
             state(&[(4, Answering), (5, Hold)], 1, false),
             Event::Answered(4),
             state(&[(5, Hold)], 1, false),

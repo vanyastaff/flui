@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
 
-use super::requests::{Effect, Event, Unanswered, Waits};
+use super::requests::{Effect, Event, Pending, Waits};
 use super::{Audit, Debt, Scenario, ScenarioFailure, TimelineKey, describe};
 use crate::capability::Resolver;
 
@@ -159,8 +159,9 @@ impl<R, A> fmt::Debug for Answer<R, A> {
 /// 1. nothing yet, while it is [held](#held-requests);
 /// 2. the earliest step ([`expect`](Self::expect),
 ///    [`expect_held`](Self::expect_held)) whose [`Expect`] accepts it, which
-///    it uses up; a step that accepts nothing stays and is
-///    [`Unconsumed`](ScenarioFailure::Unconsumed) at the end;
+///    it uses up when it is still asked for once that matcher returns
+///    ([held requests](#held-requests)); a step that accepts nothing stays
+///    and is [`Unconsumed`](ScenarioFailure::Unconsumed) at the end;
 /// 3. the standing answer ([`otherwise`](Self::otherwise)), if one is set;
 /// 4. otherwise it is [`Unexpected`](ScenarioFailure::Unexpected): the
 ///    scenario records it and the caller's completion ends
@@ -209,7 +210,15 @@ impl<R, A> fmt::Debug for Answer<R, A> {
 ///   keeps its place ahead of the requests that came after it.
 /// - **A ticket** ([`receive_with_ticket`](Self::receive_with_ticket))
 ///   withdraws its request in any of these states, while its answer is
-///   made, or while its answer is scheduled.
+///   made, or while its answer is scheduled. No more of an answer is made
+///   for a withdrawn request: no step is tried after the one that ran, no
+///   standing answer runs, nothing is recorded as unexpected and nothing
+///   is scheduled.
+/// - **Which step a withdrawn request uses up.** A step is used up when its
+///   matcher accepted a request that is still asked for once the matcher
+///   returns. A ticket dropped from then on (by the used step's own drop,
+///   say) leaves the step used and its answer unmade; one dropped by the
+///   matcher itself leaves the step for a later request.
 /// - **Counts.** [`ScriptHold::release`] and [`release_held`](Self::release_held)
 ///   count the requests they answered then: a request a step holds or
 ///   answers later, one that ends unanswered or whose answer panicked, one
@@ -244,8 +253,8 @@ struct Due<R, A> {
     scheduled: TimelineKey,
 }
 
-/// The one owner of what the script holds (see [`Unanswered`]).
-type Requests<R, A> = Unanswered<EntryId, Held<R, A>, Due<R, A>>;
+/// The one owner of what the script holds (see [`Pending`]).
+type Requests<R, A> = Pending<EntryId, Held<R, A>, Due<R, A>>;
 type RequestEvent<R, A> = Event<EntryId, Held<R, A>, Due<R, A>>;
 type RequestEffect<R, A> = Effect<EntryId, Held<R, A>, Due<R, A>>;
 
@@ -586,7 +595,7 @@ where
             .requests
             .payload(id)
             .map(|held| Rc::clone(&held.request))
-            .expect("BUG: a request marked answering is in the unanswered requests");
+            .expect("BUG: a request marked answering is in the pending requests");
         Some((id, request))
     }
 
@@ -609,7 +618,7 @@ where
     }
 
     /// The last hold went: send the kept requests on, one at a time, until
-    /// the unanswered requests say the drain is over. Returns how many were
+    /// the pending requests say the drain is over. Returns how many were
     /// answered.
     fn drain(&self, first: &mut FirstPanic) -> usize {
         let mut answered = 0;
@@ -691,29 +700,31 @@ where
         let mut candidates = candidates.into_iter();
         while let Some((step_id, matches)) = candidates.next() {
             let accepted = self.while_answering(id, first, || matches(request));
-            if !self.drop_while_answering(id, first, matches) {
-                let _ = self.drop_while_answering(id, first, candidates);
-                return false;
-            }
-            match accepted {
-                Ran::Withdrawn => {
+            let still_asked = self.drop_while_answering(id, first, matches);
+            match (still_asked, accepted) {
+                // Withdrawn by the matcher or by its clone's drop: the
+                // matcher's step is not used up.
+                (false, _) | (_, Ran::Withdrawn) => {
                     let _ = self.drop_while_answering(id, first, candidates);
                     return false;
                 }
-                Ran::Done(false) => {}
-                Ran::Done(true) => {
+                (true, Ran::Done(false)) => {}
+                (true, Ran::Done(true)) => {
                     let step = {
                         let mut state = self.cell.state.borrow_mut();
                         let position = state.steps.iter().position(|step| step.id == step_id);
                         position.and_then(|position| state.steps.remove(position))
                     };
                     if let Some(Step { expect, answer, .. }) = step {
-                        // The other matchers and the used step are let go
-                        // before the answer is given, so none of the test's
-                        // values is still held while its answer runs.
-                        if !self.drop_while_answering(id, first, candidates)
-                            || !self.drop_while_answering(id, first, expect)
-                        {
+                        // Each of the test's values (the other matchers, the
+                        // used step) is let go in its own `while_answering`
+                        // before the answer is given, whether or not an
+                        // earlier drop withdrew the request.
+                        let candidates_left_it_asked =
+                            self.drop_while_answering(id, first, candidates);
+                        let still_asked = self.drop_while_answering(id, first, expect)
+                            && candidates_left_it_asked;
+                        if !still_asked {
                             let _ = self.drop_while_answering(id, first, answer);
                             return false;
                         }
@@ -724,7 +735,7 @@ where
                         return self.answer(id, request, answer, first);
                     }
                 }
-                Ran::Panicked => {
+                (true, Ran::Panicked) => {
                     if self.drop_while_answering(id, first, candidates) {
                         self.keep_for_test(id);
                     }
@@ -735,17 +746,18 @@ where
         let otherwise = self.cell.state.borrow().otherwise.clone();
         if let Some(otherwise) = otherwise {
             let value = self.while_answering(id, first, || otherwise(request));
-            if !self.drop_while_answering(id, first, otherwise) {
-                let _ = self.drop_while_answering(id, first, value);
-                return false;
-            }
-            return match value {
-                Ran::Done(value) => self.finish(id, value, first),
-                Ran::Panicked => {
+            let still_asked = self.drop_while_answering(id, first, otherwise);
+            return match (still_asked, value) {
+                (true, Ran::Done(value)) => self.finish(id, value, first),
+                (true, Ran::Panicked) => {
                     self.keep_for_test(id);
                     false
                 }
-                Ran::Withdrawn => false,
+                // Withdrawn by the standing answer or by its clone's drop.
+                (false, value) | (_, value @ Ran::Withdrawn) => {
+                    let _ = self.drop_while_answering(id, first, value);
+                    false
+                }
             };
         }
         // The request's `Debug` is the test's code too: one that panics is
@@ -862,7 +874,7 @@ where
                 .requests
                 .payload(id)
                 .map(|held| Rc::clone(&held.request))
-                .expect("BUG: a request marked answering is in the unanswered requests");
+                .expect("BUG: a request marked answering is in the pending requests");
             (request, due)
         };
         let mut first = FirstPanic::new();

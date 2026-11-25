@@ -7,6 +7,7 @@
 use crate::error::{Error, Result};
 use crate::lane::windows::keys::{self, Modifier, SHIFT, TextStroke, VirtualKey};
 use crate::lane::windows::safety::{KeyEdge, LANE, Refusal, ShellShortcuts};
+use crate::lane::{ActingInput, Delivered, OsInput, SendFailure};
 
 /// `VK_PACKET`, the key a Unicode packet arrives as.
 pub const PACKET: VirtualKey = VirtualKey {
@@ -58,6 +59,15 @@ pub enum Keystroke {
     UnshiftFor(u16),
     /// A UTF-16 unit, pressed and released as a Unicode packet.
     Unit(u16),
+    /// The release of the Unicode packet carrying a UTF-16 unit whose press went out alone.
+    UnitUp(u16),
+}
+
+impl OsInput for Keystroke {
+    /// Every stroke is a key event the app may see, the mask's included.
+    fn acts(&self) -> bool {
+        true
+    }
 }
 
 impl Keystroke {
@@ -70,6 +80,7 @@ impl Keystroke {
             Self::ShiftFor(_) => vec![KeyEdge::Down(SHIFT)],
             Self::UnshiftFor(_) => vec![KeyEdge::Up(SHIFT)],
             Self::Unit(_) => vec![KeyEdge::Down(PACKET), KeyEdge::Up(PACKET)],
+            Self::UnitUp(_) => vec![KeyEdge::Up(PACKET)],
         }
     }
 }
@@ -83,6 +94,9 @@ pub struct HeldKeys {
     held: Vec<u16>,
     /// The keys pressed with a Shift the lane added for them.
     shifted: Vec<u16>,
+    /// The UTF-16 units of the Unicode packets whose press went out without their release, which
+    /// leave [`PACKET`] down until a packet's release.
+    packets: Vec<u16>,
     /// The shell's shortcuts as the OS has seen the lane's keys.
     shortcuts: ShellShortcuts,
 }
@@ -98,6 +112,12 @@ impl HeldKeys {
     #[must_use]
     pub fn held(&self) -> &[u16] {
         &self.held
+    }
+
+    /// The UTF-16 units of the Unicode packets whose press went out without their release.
+    #[must_use]
+    pub fn packets(&self) -> &[u16] {
+        &self.packets
     }
 
     /// The strokes `input` takes from this state. A key event whose strokes would complete a
@@ -166,6 +186,10 @@ impl HeldKeys {
                 }
                 KeyEdge::Up(key) => {
                     self.held.retain(|code| *code != key.code);
+                    // Any packet's release lets `VK_PACKET` up, whatever unit it carries.
+                    if key == PACKET {
+                        self.packets.clear();
+                    }
                     self.shortcuts.release(key, &self.held)
                 }
             };
@@ -184,22 +208,43 @@ impl HeldKeys {
         completed
     }
 
-    /// Send `stroke` through `send` and record it as soon as `send` says Windows took it; only
-    /// then `confirm` (that the guard saw it come back), whose failure is reported with the
-    /// stroke already recorded, so a release of everything releases it.
+    /// Send `stroke` through `send` and record it, and say it in `delivered`, as soon as `send`
+    /// says Windows took it; only then `confirm` (that the guard saw it come back), whose failure
+    /// is reported with the stroke already recorded and said, so a release of everything releases
+    /// it and the run says it went out. A stroke Windows took in part (a character's press
+    /// without its release) is said, and its unit recorded as a packet left down.
     ///
     /// # Errors
     ///
-    /// `send`'s failure, with nothing recorded; `confirm`'s, with the stroke recorded.
+    /// `send`'s failure, with only what a part it sent left down recorded; `confirm`'s, with the
+    /// stroke recorded.
     pub fn deliver(
         &mut self,
         stroke: Keystroke,
-        send: impl FnOnce() -> Result<()>,
+        delivered: &mut Delivered,
+        send: impl FnOnce() -> std::result::Result<(), SendFailure>,
         confirm: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        send()?;
+        if let Err(failure) = delivered.send(&stroke, send) {
+            if failure.is_partly_sent() {
+                self.record_part(stroke);
+            }
+            return Err(Error::from(failure));
+        }
         let _ = self.apply(stroke);
         confirm()
+    }
+
+    /// Record what the part of `stroke` that went out left down: a Unicode packet's press without
+    /// its release leaves its unit's packet down, which the release of everything lets go of with
+    /// that packet's own release ([`Keystroke::UnitUp`]). Every other stroke is one event, all or
+    /// nothing.
+    fn record_part(&mut self, stroke: Keystroke) {
+        if let Keystroke::Unit(unit) = stroke
+            && !self.packets.contains(&unit)
+        {
+            self.packets.push(unit);
+        }
     }
 
     /// What of the shell's `inputs`, sent from this state, would take: a press the shell takes
@@ -256,15 +301,27 @@ impl HeldKeys {
                 first.get_or_insert(error);
             }
         }
+        // A packet left down goes up with its own release, the unit it carried in it; one release
+        // lets `VK_PACKET` up for every packet recorded.
+        if let Some(&unit) = self.packets.first()
+            && let Err(error) = self.send_unless_shortcut(Keystroke::UnitUp(unit), &mut send)
+        {
+            first.get_or_insert(error);
+        }
         match first {
             None => Ok(()),
-            Some(first) if self.held.is_empty() => Err(first),
+            Some(first) if self.held.is_empty() && self.packets.is_empty() => Err(first),
             Some(first) => Err(Error::ReleaseFailed {
                 lane: LANE.to_owned(),
                 held: self
                     .held
                     .iter()
                     .map(|&code| keys::name_of(code))
+                    .chain(
+                        self.packets
+                            .iter()
+                            .map(|unit| format!("the Unicode packet of U+{unit:04X}")),
+                    )
                     .collect::<Vec<String>>(),
                 message: first.to_string(),
                 first: None,
@@ -310,8 +367,9 @@ impl HeldButtons {
         }
     }
 
-    /// Send a press (`pressed`) or release of `button` through `send`, record it as soon as
-    /// `send` says Windows took it, and only then `confirm`, as [`HeldKeys::deliver`] does.
+    /// Send a press (`pressed`) or release of `button` through `send`, record it and say it in
+    /// `delivered` as soon as `send` says Windows took it, and only then `confirm`, as
+    /// [`HeldKeys::deliver`] does.
     ///
     /// # Errors
     ///
@@ -320,10 +378,11 @@ impl HeldButtons {
         &mut self,
         button: u8,
         pressed: bool,
-        send: impl FnOnce() -> Result<()>,
+        delivered: &mut Delivered,
+        send: impl FnOnce() -> std::result::Result<(), SendFailure>,
         confirm: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
-        send()?;
+        delivered.send(&ActingInput, send)?;
         self.apply(button, pressed);
         confirm()
     }

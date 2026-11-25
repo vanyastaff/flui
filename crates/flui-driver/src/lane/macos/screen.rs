@@ -119,8 +119,8 @@ pub fn points_of(device: DevicePoint, scale: f64, content: PointRect) -> Result<
     ) {
         (Some(x), Some(y)) => Ok(Point::new(x, y)),
         _ => Err(Error::outside_target(format!(
-            "device pixel ({}, {}) at scale {scale} is outside the window's content; nothing was \
-             sent there",
+            "device pixel ({}, {}) at scale {scale} is outside the window's content: the event is \
+             not sent there",
             device.x, device.y
         ))),
     }

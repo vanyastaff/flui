@@ -350,11 +350,12 @@ impl Io {
         }
     }
 
-    /// Write `line` whole, as the stream takes it ([`write_whole`]).
+    /// Write `line` whole, as the stream takes it, giving up after [`WRITE_TIMEOUT`] without
+    /// progress ([`write_whole`]).
     fn write_line(&self, line: &[u8]) -> std::result::Result<(), String> {
         match self {
-            Self::Local(stream) => write_whole(stream, line),
-            Self::Tcp(stream) => write_whole(stream, line),
+            Self::Local(stream) => write_whole(stream, line, WRITE_TIMEOUT),
+            Self::Tcp(stream) => write_whole(stream, line, WRITE_TIMEOUT),
         }
     }
 
@@ -367,13 +368,17 @@ impl Io {
     }
 }
 
-/// Write `line` whole to `stream`, a non-blocking stream, giving up after [`WRITE_TIMEOUT`]
-/// without progress.
+/// Write `line` whole to `stream`, a non-blocking stream, giving up once `stall_limit` passes
+/// without progress: each write that takes a byte starts the span again.
 ///
 /// No room is `WouldBlock` on both kinds of stream the driver writes (a [`PolledStream`] maps a
 /// pipe's write that took nothing to it), so a write of something that takes nothing is a
 /// stream that will take no more: an error, not a wait.
-fn write_whole(mut stream: impl Write, line: &[u8]) -> std::result::Result<(), String> {
+fn write_whole(
+    mut stream: impl Write,
+    line: &[u8],
+    stall_limit: Duration,
+) -> std::result::Result<(), String> {
     let mut progress = Instant::now();
     let mut written = 0;
     while written < line.len() {
@@ -391,7 +396,7 @@ fn write_whole(mut stream: impl Write, line: &[u8]) -> std::result::Result<(), S
                 ) => {}
             Err(error) => return Err(format!("could not write to the app: {error}")),
         }
-        if progress.elapsed() >= WRITE_TIMEOUT {
+        if progress.elapsed() >= stall_limit {
             return Err("the app stopped reading what the driver sends".to_owned());
         }
         thread::sleep(Duration::from_millis(1));
@@ -568,9 +573,14 @@ pub(crate) fn local_name(address: &str) -> io::Result<interprocess::local_socket
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
     use flui_protocol::testing::{PipeAnswer, ScriptedPipe};
 
-    use super::write_whole;
+    use super::{WRITE_TIMEOUT, write_whole};
+
+    /// How long the tests of a stalled write let it make no progress.
+    const STALL: Duration = Duration::from_millis(250);
 
     /// A line goes whole across partial and interrupted writes and a write that found no room; a
     /// write of something that takes nothing, or that fails, ends it at once. Fails if a write
@@ -580,7 +590,7 @@ mod tests {
         let line = b"{\"id\":1}\n";
         let written = |answers: Vec<PipeAnswer>| {
             let pipe = ScriptedPipe::new([], answers);
-            let outcome = write_whole(&pipe, line);
+            let outcome = write_whole(&pipe, line, WRITE_TIMEOUT);
             assert!(pipe.is_spent(), "every scripted write is made");
             outcome
         };
@@ -607,5 +617,51 @@ mod tests {
                 .is_err_and(|why| why.contains("could not write")),
             "{failed:?}"
         );
+    }
+
+    /// A stream that never has room is called broken once the stall limit passes, not before.
+    /// Fails if a write that finds no room is waited on without end, or given up on early.
+    #[test]
+    fn a_write_that_never_finds_room_gives_up_after_the_stall_limit() {
+        // More tries than the limit leaves time for: each one sleeps at least a millisecond.
+        let pipe = ScriptedPipe::new([], [PipeAnswer::WouldBlock; 1000]);
+        let started = Instant::now();
+        let outcome = write_whole(&pipe, b"{\"id\":1}\n", STALL);
+        assert!(
+            started.elapsed() >= STALL,
+            "gave up after {:?}",
+            started.elapsed()
+        );
+        assert!(
+            outcome
+                .as_ref()
+                .is_err_and(|why| why.contains("stopped reading")),
+            "{outcome:?}"
+        );
+    }
+
+    /// A stream that takes a byte at a time, with no room between, is written to for longer
+    /// than the stall limit and the line still goes whole. Fails if the span is measured from
+    /// the first write rather than from the last progress.
+    #[test]
+    fn a_write_that_keeps_making_progress_outlasts_the_stall_limit() {
+        // Each byte waits for one try that finds no room, which sleeps at least a millisecond,
+        // so the line takes longer than the limit.
+        let line = vec![b'x'; 300];
+        let answers = line
+            .iter()
+            .flat_map(|_| [PipeAnswer::WouldBlock, PipeAnswer::Bytes(1)])
+            .collect::<Vec<PipeAnswer>>();
+        let pipe = ScriptedPipe::new([], answers);
+        let started = Instant::now();
+        let outcome = write_whole(&pipe, &line, STALL);
+        assert!(
+            started.elapsed() > STALL,
+            "the write took only {:?}",
+            started.elapsed()
+        );
+        assert_eq!(outcome, Ok(()));
+        assert!(pipe.is_spent(), "every scripted write is made");
+        assert_eq!(pipe.written(), line, "written whole");
     }
 }

@@ -179,7 +179,7 @@ impl Refusal {
             ),
             Self::NotForeground { foreground } => Error::NotForeground {
                 message: format!(
-                    "the app's window is not in front{}; no input was sent",
+                    "the app's window is not in front{}: the input is not sent there",
                     foreground.map_or_default(|window| format!(" ({window} is)"))
                 ),
                 retry: flui_protocol::error::ErrorCode::NotForeground.default_retry(),

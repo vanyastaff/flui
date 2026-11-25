@@ -1,4 +1,5 @@
-//! What the lane's `AXPress` answers ([`pressed`]): the answer every `AXPress` gives
+//! What the lane's `AXPress` answers ([`pressed`], the name the iOS Simulator lane's
+//! `accessibility::pressed` shares): the answer every `AXPress` gives
 //! (`lane::ax::pressed`, the iOS Simulator lane's too), with the lane's own refusal for a process
 //! no longer trusted. It builds on every host, so its answers are pinned on Linux CI; the press
 //! itself is `cfg(target_os = "macos")`.

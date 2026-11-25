@@ -3,7 +3,7 @@
 //! on virtual time, a service turned off, injected errors, an event stream
 //! and its end, and the typed failures of a run that left the script.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -1417,37 +1417,49 @@ fn every_value_a_step_lets_go_of_drops_contained_before_the_answer() {
     scenario.verify().expect("the request was answered");
 }
 
-/// The answer's drop is contained inside the delivery itself: when the
-/// request's last handle is the one the answering code holds (a request past
-/// `MAX_RECORDED_REQUESTS`), that handle drops after the delivery returned,
-/// never while the answer's panic unwinds, and the answer's panic, the
-/// earlier, is the one resumed.
+/// The answer's drop is contained inside the delivery itself, whether the
+/// answer is given at once or by the clock: when the request's last handle
+/// is the one the answering code holds (a request past
+/// `MAX_RECORDED_REQUESTS`), that handle is let go inside the containment
+/// after the delivery returned, never while the answer's panic unwinds, and
+/// the answer's panic, the earlier, is the one resumed.
 #[test]
 fn an_answers_drop_is_contained_before_the_request_lets_go() {
-    let scenario = Scenario::new();
-    let (_host, _camera, handle) = camera_on(&scenario);
-    let script: Script<LoudRequest, LoudAnswer> = scenario.script("loud");
-    script.otherwise(|request| LoudAnswer {
-        armed: request.0 == LOUD_REQUEST,
-    });
-    for filler in 0..u32::try_from(MAX_RECORDED_REQUESTS).expect("small") {
-        let (answered, resolver) = handle.completions.pending::<LoudAnswer>();
-        drop(answered);
-        script.receive(LoudRequest(filler), resolver);
+    for delayed in [false, true] {
+        let scenario = Scenario::new();
+        let (mut host, _camera, handle) = camera_on(&scenario);
+        let script: Script<LoudRequest, LoudAnswer> = scenario.script("loud");
+        script.otherwise(|request| LoudAnswer {
+            armed: request.0 == LOUD_REQUEST,
+        });
+        for filler in 0..u32::try_from(MAX_RECORDED_REQUESTS).expect("small") {
+            let (answered, resolver) = handle.completions.pending::<LoudAnswer>();
+            drop(answered);
+            script.receive(LoudRequest(filler), resolver);
+        }
+        if delayed {
+            script.answer_next(
+                Answer::computed(|request: &LoudRequest| LoudAnswer {
+                    armed: request.0 == LOUD_REQUEST,
+                })
+                .after(Duration::from_millis(10)),
+            );
+        }
+        let (gone, resolver) = handle.completions.pending::<LoudAnswer>();
+        drop(gone);
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            script.receive(LoudRequest(LOUD_REQUEST), resolver);
+            let _ = host.pump(Duration::from_millis(10));
+        }))
+        .expect_err("the answer's panic reaches the caller");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"an answer panicked as it dropped"),
+            "delayed: {delayed}: the answer's drop came before the request's"
+        );
+        assert_eq!(script.received(), MAX_RECORDED_REQUESTS + 1);
+        scenario.verify().expect("every request was answered");
     }
-    let (gone, resolver) = handle.completions.pending::<LoudAnswer>();
-    drop(gone);
-    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        script.receive(LoudRequest(LOUD_REQUEST), resolver);
-    }))
-    .expect_err("the answer's panic reaches the caller");
-    assert_eq!(
-        failure.downcast_ref::<&str>(),
-        Some(&"an answer panicked as it dropped"),
-        "the answer's drop came before the request's"
-    );
-    assert_eq!(script.received(), MAX_RECORDED_REQUESTS + 1);
-    scenario.verify().expect("every request was answered");
 }
 
 /// A request stays in the script while its answer is made: a ticket the
@@ -1478,14 +1490,14 @@ fn a_request_being_answered_stays_in_the_script() {
     assert_eq!(taken(&held), Some(Err(Abandoned::ProviderDropped)));
     let failures = scenario
         .verify()
-        .expect_err("the step stays for a request still asked");
+        .expect_err("the matcher withdrew its request before it returned");
     assert_eq!(
         failures.failures(),
         [ScenarioFailure::Unconsumed {
             script: "camera captures",
             step: "drops its own ticket".into(),
         }],
-        "a withdrawn request is not owed, and uses no step up"
+        "a withdrawn request is not owed, and the step its matcher withdrew it from is not used up"
     );
 
     // Kept for the test where it is, ahead of the request its matcher sent.
@@ -1631,55 +1643,67 @@ fn the_last_handles_send_on_lets_go_drop_before_the_answer() {
     scenario.verify().expect("the request was answered");
 }
 
+/// A request's ticket, shared with the test's code that drops it.
+type SharedTicket = Rc<RefCell<Option<RequestTicket>>>;
+
+/// Drops the ticket it shares when it drops, as test code may.
+struct DropsTheTicket(SharedTicket);
+
+impl Drop for DropsTheTicket {
+    fn drop(&mut self) {
+        drop(self.0.borrow_mut().take());
+    }
+}
+
+fn withdraw(ticket: &SharedTicket) {
+    drop(ticket.borrow_mut().take());
+}
+
+/// Where a capture's outcome lands.
+type CaptureSlot = Slot<Result<Vec<u8>, CaptureError>>;
+
+/// A hold over a capture of width 1, received with its ticket in `ticket`,
+/// and a capture of width 2: what the withdrawal tests drain.
+fn first_withdrawable_then_second(
+    camera: &SimulatedCamera,
+    handle: &CameraHandle,
+    ticket: &SharedTicket,
+) -> (ScriptHold, CaptureSlot, CaptureSlot) {
+    let hold = camera.captures.hold();
+    let (withdrawn, kept) = handle.capture_until_dropped(1);
+    let withdrawn = land(withdrawn);
+    ticket.replace(Some(kept));
+    let other = land(handle.capture(2));
+    (hold, withdrawn, other)
+}
+
 /// A ticket the code making a request's answer drops stops that answer
-/// where it is: no later step is used up, no standing answer runs, nothing
-/// is recorded as unexpected and nothing is scheduled. The request counts
-/// as withdrawn and the release counts only the other request it answered.
+/// where it is: no step is tried after the one that ran, nothing is
+/// recorded as unexpected and nothing is scheduled. The step whose matcher
+/// withdrew the request stays for a later request; the step whose own drop
+/// withdrew it after its matcher returned is used up. The request counts as
+/// withdrawn and the release counts only the other request it answered.
 #[test]
 fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
-    type Ticket = Rc<RefCell<Option<RequestTicket>>>;
-    /// Drops the ticket it shares when it drops, as test code may.
-    struct DropsTheTicket(Ticket);
-    impl Drop for DropsTheTicket {
-        fn drop(&mut self) {
-            drop(self.0.borrow_mut().take());
-        }
-    }
-    fn withdraw(ticket: &Ticket) {
-        drop(ticket.borrow_mut().take());
-    }
     #[derive(Clone, Copy, Debug)]
     enum Withdrawer {
         /// A matcher that declines the request.
         Matcher,
         /// The used step's capture, dropped before its delayed answer.
         UsedStepCapture,
-        /// A computed answer.
-        Computed,
-        /// The standing answer.
-        Standing,
         /// The matcher of a step that abandons.
         AbandonMatcher,
-        /// A computed answer given later, by the clock.
-        Delayed,
     }
     for withdrawer in [
         Withdrawer::Matcher,
         Withdrawer::UsedStepCapture,
-        Withdrawer::Computed,
-        Withdrawer::Standing,
         Withdrawer::AbandonMatcher,
-        Withdrawer::Delayed,
     ] {
         let scenario = Scenario::new();
         let (mut host, camera, handle) = camera_on(&scenario);
         let first = CameraRequest::Capture { width: 1 };
-        let ticket = Ticket::default();
-        let hold = camera.captures.hold();
-        let (withdrawn, kept) = handle.capture_until_dropped(1);
-        let withdrawn = land(withdrawn);
-        ticket.replace(Some(kept));
-        let other = land(handle.capture(2));
+        let ticket = SharedTicket::default();
+        let (hold, withdrawn, other) = first_withdrawable_then_second(&camera, &handle, &ticket);
         let mut unused = Vec::new();
         match withdrawer {
             Withdrawer::Matcher => {
@@ -1693,16 +1717,11 @@ fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
                     }),
                     Answer::value(Ok(vec![9])),
                 );
-                camera
-                    .captures
-                    .expect(Expect::any(), Answer::value(Ok(vec![2])));
-                camera
-                    .captures
-                    .expect(Expect::any(), Answer::value(Ok(vec![8])));
                 unused.push("withdraws the first");
-                unused.push("any request");
             }
             Withdrawer::UsedStepCapture => {
+                // Its matcher returns with the request still asked for: the
+                // step is used up, and its drop withdraws the request.
                 let capture = DropsTheTicket(Rc::clone(&ticket));
                 camera.captures.expect(
                     Expect::when("the first", move |request| {
@@ -1711,27 +1730,6 @@ fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
                     }),
                     Answer::value(Ok(vec![1])).after(Duration::from_millis(500)),
                 );
-                camera.captures.otherwise(|_| Ok(vec![2]));
-            }
-            Withdrawer::Computed => {
-                let shared = Rc::clone(&ticket);
-                camera.captures.expect(
-                    Expect::exactly(first),
-                    Answer::computed(move |_| {
-                        withdraw(&shared);
-                        Ok(vec![1])
-                    }),
-                );
-                camera.captures.otherwise(|_| Ok(vec![2]));
-            }
-            Withdrawer::Standing => {
-                let shared = Rc::clone(&ticket);
-                camera.captures.otherwise(move |request| {
-                    if *request == first {
-                        withdraw(&shared);
-                    }
-                    Ok(vec![2])
-                });
             }
             Withdrawer::AbandonMatcher => {
                 let shared = Rc::clone(&ticket);
@@ -1745,22 +1743,35 @@ fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
                     }),
                     Answer::abandon(),
                 );
-                camera.captures.otherwise(|_| Ok(vec![2]));
                 unused.push("abandons the first");
             }
-            Withdrawer::Delayed => {
-                let shared = Rc::clone(&ticket);
-                camera.captures.expect(
-                    Expect::exactly(first),
-                    Answer::computed(move |_| {
-                        withdraw(&shared);
-                        Ok(vec![1])
-                    })
-                    .after(Duration::from_millis(10)),
-                );
-                camera.captures.otherwise(|_| Ok(vec![2]));
-            }
         }
+        // A later step and the standing answer that count how often they
+        // run for the withdrawn request: they must not run at all.
+        let later_calls = Rc::new(Cell::new(0_u32));
+        camera.captures.expect(
+            Expect::when("a later step", {
+                let later_calls = Rc::clone(&later_calls);
+                move |request: &CameraRequest| {
+                    if *request == (CameraRequest::Capture { width: 1 }) {
+                        later_calls.set(later_calls.get() + 1);
+                    }
+                    false
+                }
+            }),
+            Answer::value(Ok(vec![8])),
+        );
+        unused.push("a later step");
+        let standing_calls = Rc::new(Cell::new(0_u32));
+        camera.captures.otherwise({
+            let standing_calls = Rc::clone(&standing_calls);
+            move |request| {
+                if *request == (CameraRequest::Capture { width: 1 }) {
+                    standing_calls.set(standing_calls.get() + 1);
+                }
+                Ok(vec![2])
+            }
+        });
         assert_eq!(
             hold.release(),
             1,
@@ -1768,6 +1779,16 @@ fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
         );
         let _ = host.pump(Duration::from_millis(10));
         assert_eq!(camera.captures.withdrawn(), 1, "{withdrawer:?}");
+        assert_eq!(
+            later_calls.get(),
+            0,
+            "{withdrawer:?}: no step is tried after the one that ran"
+        );
+        assert_eq!(
+            standing_calls.get(),
+            0,
+            "{withdrawer:?}: the standing answer does not run"
+        );
         assert_eq!(
             taken(&withdrawn),
             Some(Err(Abandoned::ProviderDropped)),
@@ -1787,9 +1808,156 @@ fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
             })
             .collect::<Vec<ScenarioFailure>>();
         match scenario.verify() {
-            Ok(()) => assert!(expected.is_empty(), "{withdrawer:?}: {expected:?}"),
+            Ok(()) => assert!(
+                expected.is_empty(),
+                "{withdrawer:?}: these steps should stay unused: {expected:?}"
+            ),
             Err(failures) => assert_eq!(failures.failures(), expected, "{withdrawer:?}"),
         }
+    }
+}
+
+/// A used step whose own drop withdraws its request runs none of its
+/// answer: its computed answer is never called.
+#[test]
+fn a_used_step_withdrawn_by_its_own_drop_runs_none_of_its_answer() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    let ticket = SharedTicket::default();
+    let (hold, withdrawn, other) = first_withdrawable_then_second(&camera, &handle, &ticket);
+    let computed = Rc::new(Cell::new(0_u32));
+    let capture = DropsTheTicket(Rc::clone(&ticket));
+    camera.captures.expect(
+        Expect::when("the first", move |request: &CameraRequest| {
+            let _ = &capture;
+            *request == CameraRequest::Capture { width: 1 }
+        }),
+        Answer::computed({
+            let computed = Rc::clone(&computed);
+            move |_| {
+                computed.set(computed.get() + 1);
+                Ok(vec![1])
+            }
+        }),
+    );
+    camera.captures.otherwise(|_| Ok(vec![2]));
+    assert_eq!(hold.release(), 1);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        computed.get(),
+        0,
+        "the withdrawn request's answer is not computed"
+    );
+    assert_eq!(camera.captures.withdrawn(), 1);
+    assert_eq!(taken(&withdrawn), Some(Err(Abandoned::ProviderDropped)));
+    assert_eq!(taken(&other), Some(Ok(Ok(vec![2]))));
+    scenario.verify().expect("the step was used up");
+}
+
+/// A used step whose own drop withdraws its request schedules none of a
+/// delayed answer: the request is never described for the timeline.
+#[test]
+fn a_used_step_withdrawn_by_its_own_drop_schedules_none_of_its_answer() {
+    /// A request that counts how often it is described.
+    struct Counted(Rc<Cell<u32>>);
+    impl std::fmt::Debug for Counted {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.set(self.0.get() + 1);
+            f.write_str("Counted")
+        }
+    }
+    let scenario = Scenario::new();
+    let (mut host, _camera, handle) = camera_on(&scenario);
+    let script: Script<Counted, u32> = scenario.script("counted");
+    let ticket = SharedTicket::default();
+    let capture = DropsTheTicket(Rc::clone(&ticket));
+    script.expect(
+        Expect::when("the request", move |_| {
+            let _ = &capture;
+            true
+        }),
+        Answer::value(1).after(Duration::from_millis(10)),
+    );
+    let hold = script.hold();
+    let described = Rc::new(Cell::new(0_u32));
+    let (answer, resolver) = handle.completions.pending::<u32>();
+    let answer = land(answer);
+    ticket.replace(Some(
+        script.receive_with_ticket(Counted(Rc::clone(&described)), resolver),
+    ));
+    assert_eq!(hold.release(), 0);
+    assert_eq!(described.get(), 0, "the withdrawn request is not described");
+    assert_eq!(scenario.next_due(), None, "nothing is scheduled");
+    let _ = host.pump(Duration::from_millis(10));
+    assert_eq!(script.withdrawn(), 1);
+    assert_eq!(taken(&answer), Some(Err(Abandoned::ProviderDropped)));
+    scenario.verify().expect("the step was used up");
+}
+
+/// A request its own answer withdraws (a computed answer, the standing
+/// answer, a computed answer the clock gives) is neither answered nor
+/// counted: the release counts only the other request.
+#[test]
+fn a_request_its_own_answer_withdraws_is_not_answered_or_counted() {
+    #[derive(Clone, Copy, Debug)]
+    enum Withdrawer {
+        Computed,
+        Standing,
+        Delayed,
+    }
+    for withdrawer in [
+        Withdrawer::Computed,
+        Withdrawer::Standing,
+        Withdrawer::Delayed,
+    ] {
+        let scenario = Scenario::new();
+        let (mut host, camera, handle) = camera_on(&scenario);
+        let first = CameraRequest::Capture { width: 1 };
+        let ticket = SharedTicket::default();
+        let (hold, withdrawn, other) = first_withdrawable_then_second(&camera, &handle, &ticket);
+        let shared = Rc::clone(&ticket);
+        let withdrawing = move |_: &CameraRequest| {
+            withdraw(&shared);
+            Ok(vec![1])
+        };
+        match withdrawer {
+            Withdrawer::Computed => {
+                camera
+                    .captures
+                    .expect(Expect::exactly(first), Answer::computed(withdrawing));
+                camera.captures.otherwise(|_| Ok(vec![2]));
+            }
+            Withdrawer::Standing => {
+                camera.captures.otherwise(move |request| {
+                    if *request == first {
+                        withdrawing(request)
+                    } else {
+                        Ok(vec![2])
+                    }
+                });
+            }
+            Withdrawer::Delayed => {
+                camera.captures.expect(
+                    Expect::exactly(first),
+                    Answer::computed(withdrawing).after(Duration::from_millis(10)),
+                );
+                camera.captures.otherwise(|_| Ok(vec![2]));
+            }
+        }
+        assert_eq!(
+            hold.release(),
+            1,
+            "{withdrawer:?}: only the other request is counted"
+        );
+        let _ = host.pump(Duration::from_millis(10));
+        assert_eq!(camera.captures.withdrawn(), 1, "{withdrawer:?}");
+        assert_eq!(
+            taken(&withdrawn),
+            Some(Err(Abandoned::ProviderDropped)),
+            "{withdrawer:?}"
+        );
+        assert_eq!(taken(&other), Some(Ok(Ok(vec![2]))), "{withdrawer:?}");
+        scenario.verify().expect("every step was used");
     }
 }
 

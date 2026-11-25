@@ -62,7 +62,7 @@ use flui_protocol::session::{Isolation, Placement};
 use flui_protocol::tree::Tree;
 
 use self::adb::{
-    Adb, AdbCommand, AdbReply, AdbStream, Framing, Printed, command_failed, lane_error,
+    Adb, AdbCommand, AdbReply, AdbStream, Framing, Printed, RunFailure, command_failed, lane_error,
 };
 use self::device::{DeviceFacts, WindowHash};
 use self::guard::GeteventGuard;
@@ -71,7 +71,9 @@ use self::safety::{Display, Refusal};
 use self::uiautomator::{Bounds, UiDump};
 use crate::coordinates::{DevicePoint, WindowGeometry};
 use crate::error::{Error, Result};
-use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
+use crate::lane::{
+    AccessibilityApi, ActivityGuard, Delivered, Lane, LaneCapabilities, PositionFidelity,
+};
 use crate::pixels::Image;
 use crate::steps::OsEvent;
 
@@ -100,26 +102,6 @@ const SYNC_WITHIN: Duration = Duration::from_secs(5);
 /// The API level from which the window manager keeps a focus per display and prints the one
 /// holding the device's focus (`mTopFocusedDisplayId=`): Android 10.
 const MULTI_DISPLAY_FOCUS_SDK: u32 = 29;
-
-/// What a command that only reads answers when it fails: a timeout keeps no effect, since a read
-/// sends nothing that acts on the app (`adb::timed_out` says the device may have done it, which
-/// holds for input).
-fn read_failed(error: Error) -> Error {
-    match error {
-        Error::Timeout {
-            awaited,
-            message,
-            retry,
-            ..
-        } => Error::Timeout {
-            awaited,
-            effect: None,
-            message,
-            retry,
-        },
-        other => other,
-    }
-}
 
 /// How far the app's surface may be from its logical size times its scale, in pixels on each
 /// side: a view is laid out in whole pixels.
@@ -203,6 +185,55 @@ struct PenDevice {
     next_token: u64,
 }
 
+/// What became of one command the lane sent, by whether it reached the device: the one answer
+/// the held record and the run's count are both read from.
+#[derive(Debug)]
+enum CommandOutcome {
+    /// The device took it.
+    Taken,
+    /// It changed nothing on the device: `adb` never started, the device answered by refusing
+    /// it, or the pen's device no longer read its report.
+    Unsent(Error),
+    /// It reached the device and its answer was lost (a deadline, a bound, a pipe, a report not
+    /// confirmed): the device may have done it.
+    Unanswered(Error),
+}
+
+impl CommandOutcome {
+    /// Say the command in the run's record: taken, or unanswered and so may have run; one that
+    /// never reached the device is not said.
+    fn say(&self, command: &Command, delivered: &mut Delivered) {
+        match self {
+            Self::Taken => delivered.took_command(command),
+            Self::Unanswered(_) => delivered.unanswered_command(command),
+            Self::Unsent(_) => {}
+        }
+    }
+
+    /// The outcome as the lane's answer.
+    fn into_result(self) -> Result<()> {
+        match self {
+            Self::Taken => Ok(()),
+            Self::Unsent(error) | Self::Unanswered(error) => Err(error),
+        }
+    }
+}
+
+/// The pen's device ended while a report of it goes out, unless the report is confirmed: on a
+/// failure and on an unwind alike, the record of what the pen held goes with the device.
+struct PenDeviceGone<'a> {
+    held: &'a mut HeldInput,
+    confirmed: bool,
+}
+
+impl Drop for PenDeviceGone<'_> {
+    fn drop(&mut self) {
+        if !self.confirmed {
+            self.held.pen_device_gone();
+        }
+    }
+}
+
 /// The Android lane for one app on one device: see the [module docs](self).
 pub struct AndroidLane {
     adb: Box<dyn Adb>,
@@ -217,8 +248,9 @@ pub struct AndroidLane {
     app_started: bool,
     /// The loopback port the lane forwarded to the app, which it removes at its end.
     forwarded: Option<u16>,
-    /// Where this session's window dumps are written on the device.
-    dump_path: String,
+    /// Where this session's dumps are written on the device, and how many it took.
+    dump_files: uiautomator::DumpFiles,
+    dumps: u64,
 }
 
 impl AndroidLane {
@@ -258,7 +290,7 @@ impl AndroidLane {
             None
         };
         let uinput = probe_uinput(adb.as_mut());
-        let dump_path = uiautomator::dump_path(&crate::launch::launch_token()?[..16]);
+        let dump_files = uiautomator::DumpFiles::of_session(&crate::launch::launch_token()?[..16]);
         Ok(Self {
             adb,
             package,
@@ -275,7 +307,8 @@ impl AndroidLane {
             screen: None,
             app_started: false,
             forwarded: None,
-            dump_path,
+            dump_files,
+            dumps: 0,
         })
     }
 
@@ -345,7 +378,8 @@ impl AndroidLane {
     /// lane's end. The lane picks the port (one the OS just handed out and let go of) and asks
     /// with `--no-rebind`, so it never takes over another session's rule: a port someone took in
     /// between is refused by `adb` and another is picked, at most [`FORWARD_ATTEMPTS`] times. A
-    /// rule is recorded once `adb` made it, or may have (a timeout), and only then removed.
+    /// rule is recorded once `adb` made it, or may have (its answer lost: a timeout, a bound, an
+    /// output left open, a pipe), and only then removed; one whose `adb` never started is not.
     #[cfg(any(unix, windows))]
     fn forward(&mut self, name: &str) -> Result<u16> {
         let mut refusals = Vec::new();
@@ -361,11 +395,12 @@ impl AndroidLane {
             ]);
             let reply = match self.adb.run(&forward, STATUS.limit, STATUS.timeout) {
                 Ok(reply) => reply,
-                Err(error @ Error::Timeout { .. }) => {
+                // A forward whose answer was lost may be in place: it is removed with the lane.
+                Err(RunFailure::Unanswered(error)) => {
                     self.forwarded = Some(port);
                     return Err(error);
                 }
-                Err(error) => return Err(error),
+                Err(RunFailure::NotStarted(error)) => return Err(error),
             };
             let Some(failure) = reply.failure(Printed::Status) else {
                 self.forwarded = Some(port);
@@ -420,18 +455,16 @@ impl AndroidLane {
             limit: device::MAX_ACCESSIBILITY_SETTINGS,
             ..DATA
         };
-        let printed = run_shell(self.adb.as_mut(), device::ACCESSIBILITY_SETTINGS, settings)
-            .map_err(read_failed)?;
+        let printed = run_shell(self.adb.as_mut(), device::ACCESSIBILITY_SETTINGS, settings)?;
         safety::check_dump(&printed.text()).map_err(Refusal::into_error)?;
-        let command = AdbCommand::ExecOut(uiautomator::dump_line(&self.dump_path));
+        self.dumps = self.dumps.saturating_add(1);
+        let command = AdbCommand::ExecOut(self.dump_files.dump_line(self.dumps));
         let run = Run {
             printed: Printed::Data,
             limit: uiautomator::MAX_DUMP,
             timeout: LONG,
         };
-        let reply = checked(self.adb.as_mut(), &command, run)
-            .map_err(read_failed)?
-            .text();
+        let reply = checked(self.adb.as_mut(), &command, run)?.text();
         UiDump::parse(&reply).map_err(|why| match uiautomator::DumpFailure::of(&reply) {
             Some(failure) => Error::busy(failure.to_string()),
             None => lane_error(format!("`uiautomator dump` answered no window: {why}")),
@@ -475,16 +508,15 @@ impl AndroidLane {
     /// Keys and text go to the display holding the device's focus, and `input`, `screencap` and
     /// the rotation are the default display's: another display holding the device's focus, or
     /// the app's focused window on another display or on one named by no number, is refused as
-    /// `android_default_display`. From Android 10 the reply must name the display holding the
-    /// device's focus; one that names none is refused rather than taken for the default one.
+    /// `android_default_display`. From Android 10, and where the API level is unread, the reply
+    /// must name the display holding the device's focus; one that names none is refused rather
+    /// than taken for the default one.
     fn read_windows(&mut self) -> Result<device::Windows> {
         let run = Run {
             limit: device::MAX_WINDOWS_REPLY,
             ..DATA
         };
-        let printed = run_shell(self.adb.as_mut(), device::WINDOWS, run)
-            .map_err(read_failed)?
-            .text();
+        let printed = run_shell(self.adb.as_mut(), device::WINDOWS, run)?.text();
         let windows = device::parse_windows(&printed)
             .map_err(|why| lane_error(format!("`dumpsys window` answered no windows: {why}")))?;
         let elsewhere = |what: String| {
@@ -502,10 +534,15 @@ impl AndroidLane {
                     "display {display} holds the device's input focus"
                 )));
             }
-            None if self.facts.sdk >= MULTI_DISPLAY_FOCUS_SDK => {
+            None if self.facts.sdk == 0 || self.facts.sdk >= MULTI_DISPLAY_FOCUS_SDK => {
                 return Err(lane_error(format!(
                     "`dumpsys window` named no display holding the device's input focus, which \
-                     Android {MULTI_DISPLAY_FOCUS_SDK} and later print"
+                     API level {MULTI_DISPLAY_FOCUS_SDK} and later print, on a device of API level \
+                     {}",
+                    match self.facts.sdk {
+                        0 => "unread".to_owned(),
+                        sdk => sdk.to_string(),
+                    }
                 )));
             }
             Some(_) | None => {}
@@ -545,7 +582,7 @@ impl AndroidLane {
     /// as it is started again, split screen) is another window, so the app is not in front; the
     /// same window moved, resized or turned would take the command at another place than the
     /// lane computed it for, so it is busy until the lane locates it again. What went out of the
-    /// sequence before any of these refusals is said by [`Lane::send`].
+    /// sequence before any of these refusals is said by the run ([`crate::lane::send_guarded`]).
     fn check_focus(&mut self) -> Result<()> {
         let windows = self.read_windows()?;
         let (Some(located), Some(focus)) = (&self.screen, &windows.focus) else {
@@ -572,34 +609,91 @@ impl AndroidLane {
     }
 
     /// Send `command`, recording what the device took. A contact going down is recorded as held
-    /// before it goes out, so a send that times out or unwinds leaves it for the release to
-    /// cancel, and is forgotten only when the device answers by refusing it; any other command is
-    /// recorded once the device took it, or as unsure when it timed out.
-    fn deliver(&mut self, command: &Command) -> Result<()> {
+    /// before it goes out, so a send whose answer is lost or that unwinds leaves it for the
+    /// release to cancel, and is forgotten only when the command never reached the device or the
+    /// device answered by refusing it; any other command is recorded once the device took it, or
+    /// as unsure when its answer was lost. What the run counts of it is read from the same
+    /// [`CommandOutcome`], so the count and the record agree.
+    fn deliver(&mut self, command: &Command) -> CommandOutcome {
         let holds = command.puts_contact_down();
         if holds {
             self.held.unsure(command);
         }
         let line = command.line();
         let through_input = line.is_some();
-        let sent = match line {
-            Some(line) => run_shell(self.adb.as_mut(), &line, STATUS).map(drop),
+        let outcome = match line {
+            Some(line) => {
+                let shell = AdbCommand::Shell(line);
+                match self.adb.run(&shell, STATUS.limit, STATUS.timeout) {
+                    Ok(reply) => match reply.failure(STATUS.printed) {
+                        Some(failure) => {
+                            CommandOutcome::Unsent(command_failed(&shell, &reply, &failure))
+                        }
+                        None => CommandOutcome::Taken,
+                    },
+                    Err(RunFailure::NotStarted(error)) => CommandOutcome::Unsent(error),
+                    Err(RunFailure::Unanswered(error)) => CommandOutcome::Unanswered(error),
+                }
+            }
             None => self.pen_report(command),
         };
-        match &sent {
-            Ok(()) if !holds => self.held.took(command),
+        match &outcome {
+            CommandOutcome::Taken if !holds => self.held.took(command),
             // The pen's report that went unconfirmed took its device, and its contacts, with it.
-            Err(Error::Timeout { .. }) if !holds && through_input => self.held.unsure(command),
-            Err(Error::Timeout { .. }) => {}
-            // A press the device answered by refusing it is not down.
-            Err(_) if holds => self.held.refused(command),
-            Ok(()) | Err(_) => {}
+            CommandOutcome::Unanswered(_) if !holds && through_input => self.held.unsure(command),
+            CommandOutcome::Unsent(_) if holds => self.held.refused(command),
+            CommandOutcome::Taken | CommandOutcome::Unsent(_) | CommandOutcome::Unanswered(_) => {}
         }
-        sent
+        outcome
     }
 
-    /// Send the pen's report `command` through its device, registering it first.
-    fn pen_report(&mut self, command: &Command) -> Result<()> {
+    /// Send the pen's report `command` through its device, registering it first: unsent when it
+    /// was never written to the device, unanswered when the device did not confirm it.
+    fn pen_report(&mut self, command: &Command) -> CommandOutcome {
+        let events = match self.pen_events(command) {
+            Ok(events) => events,
+            Err(error) => return CommandOutcome::Unsent(error),
+        };
+        // The device is out of the lane while its report goes out, and goes back only once the
+        // report is confirmed: a report that fails or unwinds ends the device's command, which
+        // removes the device and the contacts it held, and the record of them goes with it.
+        let mut device = self
+            .pen
+            .take()
+            .expect("BUG: the pen's device was registered by `pen_events`");
+        let mut gone = PenDeviceGone {
+            held: &mut self.held,
+            confirmed: false,
+        };
+        let id = uinput::STYLUS_ID;
+        let outcome = match device.stream.send_line(&uinput::inject(id, &events)) {
+            // The command no longer reads its input: the report never reached the device.
+            Err(error) => CommandOutcome::Unsent(error),
+            // A report written and never confirmed may have been injected: it says so.
+            Ok(()) => match device.sync(id) {
+                Ok(()) => CommandOutcome::Taken,
+                Err(unconfirmed) => CommandOutcome::Unanswered(Error::Timeout {
+                    awaited: crate::error::Awaited::Host,
+                    effect: Some(Effect::new(EffectKind::MayHaveRun).detail(
+                        "the pen's report was written to its `uinput` device, which did not \
+                         confirm it",
+                    )),
+                    message: unconfirmed.to_string(),
+                    retry: flui_protocol::error::Retry::Never,
+                }),
+            },
+        };
+        let confirmed = matches!(outcome, CommandOutcome::Taken);
+        gone.confirmed = confirmed;
+        drop(gone);
+        if confirmed {
+            self.pen = Some(device);
+        }
+        outcome
+    }
+
+    /// The `uinput` events of the pen's report `command`, its device registered first.
+    fn pen_events(&mut self, command: &Command) -> Result<Vec<(&'static str, &'static str, i32)>> {
         let Command::Pen { change, at } = command else {
             return Err(lane_error("only the pen's reports go to its device"));
         };
@@ -642,33 +736,7 @@ impl AndroidLane {
             device.sync(registration.id)?;
             self.pen = Some(device);
         }
-        let device = self
-            .pen
-            .as_mut()
-            .expect("BUG: the pen's device was registered just above");
-        let id = uinput::STYLUS_ID;
-        // A report written and never confirmed may have been injected: it says so.
-        let sent = device
-            .stream
-            .send_line(&uinput::inject(id, &events))
-            .and_then(|()| {
-                device.sync(id).map_err(|unconfirmed| Error::Timeout {
-                    awaited: crate::error::Awaited::Host,
-                    effect: Some(Effect::new(EffectKind::MayHaveRun).detail(
-                        "the pen's report was written to its `uinput` device, which did not \
-                         confirm it",
-                    )),
-                    message: unconfirmed.to_string(),
-                    retry: flui_protocol::error::Retry::Never,
-                })
-            });
-        if sent.is_err() {
-            // The device's command is gone or stuck: ending it removes the device, and the kernel
-            // the contacts it held.
-            self.pen = None;
-            self.held.pen_device_gone();
-        }
-        sent
+        Ok(events)
     }
 
     /// Release what `part` holds: every command of its release tried, and what it still holds
@@ -676,7 +744,7 @@ impl AndroidLane {
     fn release_part(&mut self, part: Part) -> Result<()> {
         let mut first = None;
         for command in self.held.release_plan_of(part) {
-            if let Err(error) = self.deliver(&command) {
+            if let Err(error) = self.deliver(&command).into_result() {
                 first.get_or_insert(error);
             }
         }
@@ -792,7 +860,28 @@ const DATA: Run = Run {
 
 /// Run `command` as `run` says, failing on the device's failure.
 fn checked(adb: &mut dyn Adb, command: &AdbCommand, run: Run) -> Result<AdbReply> {
-    let reply = adb.run(command, run.limit, run.timeout)?;
+    let reply = adb.run(command, run.limit, run.timeout).map_err(|failed| {
+        // A command that prints data reads (the windows, the settings, a dump, a capture): its
+        // timeout keeps no effect, since it sends nothing that acts on the app, where
+        // `adb::timed_out` says the device may have done it, which holds for a command that acts.
+        match (run.printed, failed.into_error()) {
+            (
+                Printed::Data,
+                Error::Timeout {
+                    awaited,
+                    message,
+                    retry,
+                    ..
+                },
+            ) => Error::Timeout {
+                awaited,
+                effect: None,
+                message,
+                retry,
+            },
+            (_, other) => other,
+        }
+    })?;
     match reply.failure(run.printed) {
         Some(failure) => Err(command_failed(command, &reply, &failure)),
         None => Ok(reply),
@@ -861,6 +950,14 @@ impl Lane for AndroidLane {
     }
 
     fn send(&mut self, event: &OsEvent) -> Result<()> {
+        self.send_counted(event, &mut Delivered::default())
+    }
+
+    /// One event is none, one or several commands, each an `input` line or a pen report (a key
+    /// down is held for its release, text with a line break is typed around an Enter): each that
+    /// reached the device is counted, one whose answer was lost included, as the lane's own record
+    /// keeps it.
+    fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
         if let OsEvent::Pause(duration) = event {
             return self.pause(*duration);
         }
@@ -873,7 +970,9 @@ impl Lane for AndroidLane {
             if command.needs_focus() {
                 self.check_focus()?;
             }
-            self.deliver(&command)?;
+            let outcome = self.deliver(&command);
+            outcome.say(&command, delivered);
+            outcome.into_result()?;
         }
         Ok(())
     }
@@ -986,24 +1085,78 @@ impl Drop for AndroidLane {
     fn drop(&mut self) {
         // The app also exits on its own once its driver's connection closes
         // (`flui.agent.exit_on_disconnect`): a failure here leaves nothing running past that.
+        // Each step runs whatever the one before it came to, a panic of the `Adb` (a binding the
+        // driver does not own) included.
+        let mut panicked = flui_foundation::panic::FirstPanic::new();
+        let device = self.adb.as_mut();
         if self.app_started {
-            let _ = run_shell(
-                self.adb.as_mut(),
-                &adb::shell_line(&["am", "force-stop", &self.package]),
-                STATUS,
-            );
+            panicked.contain(|| {
+                run_shell(
+                    &mut *device,
+                    &adb::shell_line(&["am", "force-stop", &self.package]),
+                    STATUS,
+                )
+            });
+        }
+        // A dump the host ended at its deadline may have left its files; the session's go with
+        // it.
+        if self.dumps > 0 {
+            panicked.contain(|| run_shell(&mut *device, &self.dump_files.removal(), STATUS));
         }
         if let Some(port) = self.forwarded {
-            let _ = self.adb.run(
-                &AdbCommand::Host(vec![
-                    "forward".to_owned(),
-                    "--remove".to_owned(),
-                    format!("tcp:{port}"),
-                ]),
-                SMALL,
-                SHORT,
-            );
+            panicked.contain(|| {
+                device.run(
+                    &AdbCommand::Host(vec![
+                        "forward".to_owned(),
+                        "--remove".to_owned(),
+                        format!("tcp:{port}"),
+                    ]),
+                    SMALL,
+                    SHORT,
+                )
+            });
         }
+        // The guard's and the pen's streams, then the device, are the binding's code too: each is
+        // dropped under the same containment, so a destructor that panics after a step did is a
+        // competing failure, not a panic during an unwind.
+        panicked.retire(self.guard.take());
+        panicked.retire(self.pen.take());
+        panicked.retire(std::mem::replace(&mut self.adb, Box::new(EndedAdb)));
+        // A destructor has no caller to raise to: the first panic is logged and destroyed under
+        // containment, the log's own subscriber included.
+        if let Some(payload) = panicked.into_payload() {
+            let mut logging = flui_foundation::panic::FirstPanic::new();
+            logging.contain(|| {
+                tracing::error!(
+                    lane = LANE,
+                    "a step of the lane's end panicked; the steps after it ran"
+                );
+            });
+            flui_foundation::panic::discard_payload(payload);
+        }
+    }
+}
+
+/// The device of a lane that has ended, left in its place while the lane's own device is dropped:
+/// it runs nothing.
+struct EndedAdb;
+
+impl Adb for EndedAdb {
+    fn run(
+        &mut self,
+        command: &AdbCommand,
+        _limit: usize,
+        _timeout: Duration,
+    ) -> std::result::Result<AdbReply, RunFailure> {
+        Err(RunFailure::NotStarted(lane_error(format!(
+            "the lane has ended: `adb {command}` is not run"
+        ))))
+    }
+
+    fn open(&mut self, command: &AdbCommand, _framing: Framing) -> Result<Box<dyn AdbStream>> {
+        Err(lane_error(format!(
+            "the lane has ended: `adb {command}` is not opened"
+        )))
     }
 }
 

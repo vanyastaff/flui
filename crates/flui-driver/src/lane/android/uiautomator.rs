@@ -24,26 +24,83 @@ pub const MAX_NODES: u32 = 100_000;
 /// The deepest a node of a dump may sit.
 pub const MAX_DEPTH: usize = 256;
 
-/// Where a session has its dumps written on the device: a directory the shell may write, a file
-/// named for the session (`session` is lowercase hex), so two sessions on one device never read
-/// each other's dump.
-#[must_use]
-pub fn dump_path(session: &str) -> String {
-    format!("/data/local/tmp/flui-driver-{session}.xml")
+/// The directory the lane's dumps go to on the device: one the shell may write.
+pub const DUMP_DIRECTORY: &str = "/data/local/tmp";
+
+/// Where a session's window dumps live: one file per dump, `<directory>/flui-driver-<session>-<n>.xml`,
+/// numbered from 1, with what the dump said on its error stream beside it at `.err`. Two sessions
+/// on one device never read each other's dumps, and no dump reads a file an earlier one left.
+/// Every shell line it makes holds the directory and the session as one quoted word
+/// ([`super::adb::quote`]), whatever they hold, with only the dump's number and the globs outside
+/// the quotes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DumpFiles {
+    /// The part of every path before the dump's number, as it is on the device.
+    stem: String,
 }
 
-/// The line that dumps the active window to `path` and prints the dump, or, where the dump wrote
-/// no file, what it said on its error stream ([`DumpFailure`]): both files are removed whatever
-/// the dump's outcome.
-///
-/// The dump connects to accessibility as `UiAutomation` does, which suspends the accessibility
-/// services running (TalkBack among them) until it ends.
-#[must_use]
-pub fn dump_line(path: &str) -> String {
-    format!(
-        "uiautomator dump {path} >/dev/null 2>{path}.err; cat {path} 2>/dev/null || cat {path}.err; \
-         rm -f {path} {path}.err"
-    )
+impl DumpFiles {
+    /// The dumps of the session `session` (lowercase hex) in [`DUMP_DIRECTORY`].
+    #[must_use]
+    pub fn of_session(session: &str) -> Self {
+        Self::in_directory(DUMP_DIRECTORY, session)
+    }
+
+    /// The dumps of the session `session` in `directory`.
+    #[must_use]
+    pub fn in_directory(directory: &str, session: &str) -> Self {
+        Self {
+            stem: format!("{directory}/flui-driver-{session}-"),
+        }
+    }
+
+    /// The stem as one word of the device's shell.
+    fn quoted_stem(&self) -> String {
+        super::adb::quote(&self.stem)
+    }
+
+    /// The file of dump number `dump` as words of the device's shell.
+    fn quoted_path(&self, dump: u64) -> String {
+        format!("{}{dump}.xml", self.quoted_stem())
+    }
+
+    /// The shell line that removes the files of dump number `dump` and of every earlier dump of
+    /// the session, never a later one's: a dump the host ended at its deadline whose line still
+    /// runs on the device removes nothing a newer dump wrote.
+    #[must_use]
+    pub fn removal_through(&self, dump: u64) -> String {
+        let stem = self.quoted_stem();
+        format!(
+            "for f in {stem}*.xml {stem}*.xml.err; do n=${{f#{stem}}}; n=${{n%%.*}}; case $n in \
+             ''|*[!0-9]*) ;; *) if [ \"$n\" -le {dump} ]; then rm -f \"$f\"; fi ;; esac; done"
+        )
+    }
+
+    /// The shell line that removes every file of the session's dumps, as the lane's end does.
+    #[must_use]
+    pub fn removal(&self) -> String {
+        let stem = self.quoted_stem();
+        format!("rm -f {stem}*.xml {stem}*.xml.err")
+    }
+
+    /// The line that dumps the active window to dump number `dump` and prints it, or, where the
+    /// dump wrote no file, what it said on its error stream ([`DumpFailure`]). Each dump has a path
+    /// of its own, so a file an earlier dump left (one whose command the host ended at its
+    /// deadline, before its removal ran) is never printed as this dump's; and the line ends by
+    /// removing its own files and the earlier dumps' ([`Self::removal_through`]), so what dumps
+    /// the host ended left goes with the next that runs to its end.
+    ///
+    /// The dump connects to accessibility as `UiAutomation` does, which suspends the
+    /// accessibility services running (TalkBack among them) until it ends.
+    #[must_use]
+    pub fn dump_line(&self, dump: u64) -> String {
+        let path = self.quoted_path(dump);
+        format!(
+            "uiautomator dump {path} >/dev/null 2>{path}.err; cat {path} 2>/dev/null || cat \
+             {path}.err; {}",
+            self.removal_through(dump)
+        )
+    }
 }
 
 /// Why a `uiautomator dump` wrote no file, where it says so: each a state of the device that
