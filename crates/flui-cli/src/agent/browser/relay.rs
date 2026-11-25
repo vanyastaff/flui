@@ -363,13 +363,6 @@ impl Turns {
         let Page::Connected { remote, state } = &mut client.page else {
             return Ok(if read { Outcome::Keep } else { Outcome::Leave });
         };
-        if let Connection::Refused { drain } = *state
-            && self.drains > drain
-        {
-            // The drain after the refusal brought no end: the connection broke in the page.
-            let _ = self.link.call_on(remote, CLOSE_FUNCTION, &[&connection]);
-            *state = Connection::Ended;
-        }
         if *state == Connection::Open {
             while let Some(line) = client.queued.pop_front() {
                 match self.link.call_on(remote, SEND_FUNCTION, &[&line]) {
@@ -384,14 +377,23 @@ impl Turns {
                 }
             }
         }
+        // A client that went takes no more: what its connection still holds in the page is let
+        // go of now. One the page ended keeps writing it until the write fails.
+        if !read && *state != Connection::Ended {
+            return Ok(Outcome::Leave);
+        }
+        if let Connection::Refused { drain } = *state
+            && self.drains > drain
+        {
+            // The drain after the refusal brought no end: the connection broke in the page.
+            let _ = self.link.call_on(remote, CLOSE_FUNCTION, &[&connection]);
+            *state = Connection::Ended;
+        }
         if *state == Connection::Ended {
             return Ok(match client.write() {
                 Ok(true) | Err(_) => Outcome::Leave,
                 Ok(false) => Outcome::Keep,
             });
-        }
-        if !read {
-            return Ok(Outcome::Leave);
         }
         Ok(match client.write() {
             Ok(_) => Outcome::Keep,
