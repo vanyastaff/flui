@@ -17,7 +17,12 @@
   §8's `headless` feature and its edge to `flui-testing` (§1), §9's Rust front end, `Driver`,
   `Window`, `Element` and `expect` (§1), and §10's sentence on where the audit rules live: each
   lives with its facts, target size in `flui-semantics` and contrast in `flui-rendering::audit`
-  (§5).
+  (§5); and
+  [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md) for §1's
+  form of a wire name (`group.verb`) and of a tool name (`group_verb`), §9's tier name `session`
+  and the names its core set spells (the set and its bound of 13 stand), and the method names
+  §10 and the Consequences spell only: a name is `group.member`, its group a subject or an
+  instrument of a closed table, and the tier is `control`.
 - **Settles:** the still-Proposed items of [ADR-0095](ADR-0095-agent-protocol-schema-crate.md)
   §1 (finder criteria, handle kinds, `effect` as a schema type, event shapes), §3 (`flui mcp` and
   the handle table across windows) and §5 (one finder shared by tests and agents). §4's projection

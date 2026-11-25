@@ -246,18 +246,26 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   server. All three expose the same operations, with the same names, parameters, results and
   errors, generated from one method table. None can do what the others cannot.
 - **R28a.** MCP lists a **core tool set** by default, 13 tools enough to launch, read,
-  locate, act, type, wait, capture and audit a screen. The other methods are grouped into capability sets the client
-  enables with `--caps <group>`: `session` (attach, capabilities, window placement, frame and settle waits, the animation clock), `input`, `inspect`, `pixels`, `record`, `perf`, `audit`,
-  `explore`, `vision`, `layout`. Every method stays reachable from MCP; tiering only changes what is listed by
+  locate, act, type, wait, take a screenshot and audit a screen. The other methods are grouped
+  into capability sets the client enables with `--caps <group>`: `control` (attach,
+  capabilities, reload, window placement, frame and settle waits, the animation clock, the
+  build status), `input`, `inspect`, `pixels`, `record`, `perf`, `audit`, `explore`, `vision`,
+  `layout`. Every method stays reachable from MCP; tiering only changes what is listed by
   default, so a model does not choose among 50 tools. `--tools` and `--exclude-tools` filter by
   name. A test measures the token size of the listed schemas, since context cost is the point of
   tiering. Reads take `format: concise | detailed`.
-- **R29.** The MCP server follows MCP revision 2026-07-28. Each tool has an input and output
-  schema and honest `readOnlyHint`/`destructiveHint`, and tool failures come back as `isError`
-  results with ADR-0080's error object. Handles are explicit and expiring, never session state
-  inside the MCP connection. Tools are listed in a deterministic order. The adapter implements
-  the revision's per-request versioning and discovery, checked against the revision's spec text
-  when the adapter is built, and refuses an older revision with its version.
+- **R29.** The MCP server follows MCP revision 2026-07-28. Each tool is named for its method
+  (ADR-0403 §7), has an input and output schema and honest `readOnlyHint`/`destructiveHint`,
+  and tool failures come back as `isError` results with ADR-0080's error object. Handles are
+  explicit and expiring, never session state inside the MCP connection. Tools are listed in a
+  deterministic order. The adapter implements the revision's per-request versioning and
+  discovery, checked against the revision's spec text when the adapter is built, and refuses
+  an older revision with its version.
+- **R29a.** R28, R28a and R29 are the requirements; the adapter's design that meets them is
+  open. Nothing yet says what a front end does with state a call leaves on a connection that
+  ends before that state does, what a model may cause by default, or which revisions a client
+  in use needs. The record that decides those is written with the CLI and MCP task (tasks.md,
+  "Open design"), and may change these three requirements.
 - **R30.** The CLI works across invocations without a daemon. `launch` writes a session file that
   later commands read; handles stay valid across commands because the app owns them.
 - **R31.** The inspector is a FLUI desktop app built on `flui-driver`. It shows the live trees, a
@@ -333,7 +341,7 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 
 ### Accessibility audit
 
-- **R38.** `audit.a11y` is a driver method and a standard scenario. It checks:
+- **R38.** `audit.accessibility` is a driver method and a standard scenario. It checks:
   - every interactive node has a name; siblings do not share a name or identical bounds unless the
     app waives it (ATF's duplicate-text and duplicate-clickable-bounds checks);
   - focus order visits every focusable node once, in reading order (direction-aware), with no
