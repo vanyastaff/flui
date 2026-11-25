@@ -32,19 +32,30 @@ pub fn dump_path(session: &str, dump: u64) -> String {
     format!("/data/local/tmp/flui-driver-{session}-{dump}.xml")
 }
 
-/// The line that dumps the active window to `path` and prints the dump, or, where the dump wrote
-/// no file, what it said on its error stream ([`DumpFailure`]): both files are removed whatever
-/// the dump's outcome. Each dump has a path of its own ([`dump_path`]), so a file an earlier
-/// dump left (one whose command the host ended at its deadline, before its removal ran) is never
-/// printed as this dump's.
+/// Every file a session's dumps write, as words of the device's shell: the dumps and their error
+/// streams, whatever their number.
+#[must_use]
+pub fn session_dumps(session: &str) -> String {
+    let every = dump_path(session, 0).replace("-0.xml", "-*.xml");
+    format!("{every} {every}.err")
+}
+
+/// The line that dumps the active window to the session's dump numbered `dump` and prints it, or,
+/// where the dump wrote no file, what it said on its error stream ([`DumpFailure`]). Each dump has
+/// a path of its own ([`dump_path`]), so a file an earlier dump left (one whose command the host
+/// ended at its deadline, before its removal ran) is never printed as this dump's; and the line
+/// ends by removing every file of the session's dumps ([`session_dumps`]), so what dumps the host
+/// ended left goes with the next that runs to its end.
 ///
 /// The dump connects to accessibility as `UiAutomation` does, which suspends the accessibility
 /// services running (TalkBack among them) until it ends.
 #[must_use]
-pub fn dump_line(path: &str) -> String {
+pub fn dump_line(session: &str, dump: u64) -> String {
+    let path = dump_path(session, dump);
     format!(
         "uiautomator dump {path} >/dev/null 2>{path}.err; cat {path} 2>/dev/null || cat \
-         {path}.err; rm -f {path} {path}.err"
+         {path}.err; rm -f {}",
+        session_dumps(session)
     )
 }
 

@@ -111,7 +111,9 @@ mod lane {
     use crate::coordinates::{DevicePoint, WindowGeometry};
     use crate::error::{Error, Result};
     use crate::lane::pacing::{ECHO_WITHIN, slices};
-    use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
+    use crate::lane::{
+        AccessibilityApi, ActivityGuard, Delivered, Lane, LaneCapabilities, PositionFidelity,
+    };
     use crate::steps::OsEvent;
 
     /// The Windows lane for the app whose process is `pid`: see the
@@ -332,19 +334,43 @@ mod lane {
         }
 
         /// Send the keystrokes of `input` one by one, the desktop read again before each, each
-        /// recorded as soon as Windows took it and then confirmed through the guard's echo.
-        fn type_keys(&mut self, window: Hwnd, input: &KeyInput) -> Result<()> {
+        /// recorded and said in `delivered` as soon as Windows took it, and then confirmed through
+        /// the guard's echo.
+        fn type_keys(
+            &mut self,
+            window: Hwnd,
+            input: &KeyInput,
+            delivered: &mut Delivered,
+        ) -> Result<()> {
             for stroke in self.keys.plan(input) {
                 self.checked(window, None)?;
                 let before = self.guard.echoes();
                 let guard = &self.guard;
-                self.keys
-                    .deliver(stroke, || send_stroke(stroke), || echo_since(guard, before))?;
+                let mut taken = false;
+                let sent = self.keys.deliver(
+                    stroke,
+                    || {
+                        send_stroke(stroke)?;
+                        taken = true;
+                        Ok(())
+                    },
+                    || echo_since(guard, before),
+                );
+                if taken {
+                    delivered.input();
+                }
+                sent?;
             }
             Ok(())
         }
 
-        fn mouse_button(&mut self, button: PointerButton, pressed: bool) -> Result<()> {
+        /// Press or release `button`, said in `delivered` as soon as Windows took it.
+        fn mouse_button(
+            &mut self,
+            button: PointerButton,
+            pressed: bool,
+            delivered: &mut Delivered,
+        ) -> Result<()> {
             let swapped = win32::buttons_swapped();
             let physical = match button {
                 PointerButton::Primary => u8::from(swapped),
@@ -361,15 +387,24 @@ mod lane {
             };
             let before = self.guard.echoes();
             let guard = &self.guard;
-            self.buttons.deliver(
+            let mut taken = false;
+            let sent = self.buttons.deliver(
                 physical,
                 pressed,
-                || win32::mouse_button(physical, pressed),
+                || {
+                    win32::mouse_button(physical, pressed)?;
+                    taken = true;
+                    Ok(())
+                },
                 || echo_since(guard, before),
-            )
+            );
+            if taken {
+                delivered.input();
+            }
+            sent
         }
 
-        fn pointer(&mut self, event: &OsEvent) -> Result<()> {
+        fn pointer(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
             match event {
                 OsEvent::PointerMove {
                     pointer,
@@ -387,9 +422,13 @@ mod lane {
                     Some(kind) => {
                         let (contacts, slot) = self.contacts_and(kind);
                         let device = device(slot, kind)?;
-                        contacts.down(pointer, kind, |frame| device.inject(frame))
+                        contacts.down(pointer, kind, |frame| {
+                            device.inject(frame)?;
+                            delivered.input();
+                            Ok(())
+                        })
                     }
-                    None => self.mouse_button(*button, true),
+                    None => self.mouse_button(*button, true, delivered),
                 },
                 OsEvent::PointerUp {
                     pointer,
@@ -399,9 +438,13 @@ mod lane {
                     Some(kind) => {
                         let (contacts, slot) = self.contacts_and(kind);
                         let device = device(slot, kind)?;
-                        contacts.up(pointer, kind, |frame| device.inject(frame))
+                        contacts.up(pointer, kind, |frame| {
+                            device.inject(frame)?;
+                            delivered.input();
+                            Ok(())
+                        })
                     }
-                    None => self.mouse_button(*button, false),
+                    None => self.mouse_button(*button, false, delivered),
                 },
                 OsEvent::Scroll {
                     at,
@@ -415,6 +458,7 @@ mod lane {
                     }
                     let before = self.guard.echoes();
                     win32::wheel(*delta_x, *delta_y)?;
+                    delivered.input();
                     echo_since(&self.guard, before)
                 }
                 _ => Ok(()),
@@ -533,6 +577,13 @@ mod lane {
         }
 
         fn send(&mut self, event: &OsEvent) -> Result<()> {
+            self.send_counted(event, &mut Delivered::default())
+        }
+
+        /// A key event or text is a keystroke or several, a button, a contact's press or release
+        /// and a turn of the wheel one input each, each said once Windows took it, so text cut
+        /// part way is partly sent.
+        fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
             // `send_guarded` refuses it first; a caller that sends directly hears the same.
             if matches!(event, OsEvent::Composition(_)) {
                 return Err(crate::lane::no_composition(self.name()));
@@ -543,10 +594,10 @@ mod lane {
             let _units = DeviceUnits::enter();
             let window = self.target()?;
             if let Some(input) = self.key_input(event)? {
-                return self.type_keys(window, &input);
+                return self.type_keys(window, &input, delivered);
             }
             self.checked(window, self.landing_of(event))?;
-            self.pointer(event)
+            self.pointer(event, delivered)
         }
 
         fn release_all(&mut self) -> Result<()> {
