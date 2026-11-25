@@ -12,7 +12,8 @@
 - **`flui-interaction`** (`testing`, re-exported by `flui_testing::host`):
   `ScriptedClipboard::writes`, the script that answers writes (each a
   `ClipboardWriteRequest`), with `fail_writes_with`, `stop_failing_writes` and `hold_writes`, whose
-  `ClipboardWriteHold` holds writes while any hold lives; reads and writes keep one order,
+  `ClipboardWriteHold` is one hold of the write script, so writes stay held while it or any other
+  hold of that script lives, a test's own included; reads and writes keep one order,
   whatever answers a write `Ok` or `ApplicationOnly` lands its text, and a write's completion
   settles only once its text has landed.
 - **`flui-native`**: `testing::clipboard::SettlingOwner`, `write_unobserved` and `read_within`, for

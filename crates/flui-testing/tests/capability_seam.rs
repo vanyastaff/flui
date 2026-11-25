@@ -14,7 +14,7 @@ use flui_interaction::text_input::{
     ClipboardBackend, ClipboardCapability, ClipboardHandle, PrimaryClaim,
     PrimarySelectionCapability, PrimarySelectionHandle,
 };
-use flui_platform::capability::scripted::{Answer, ScenarioFailure};
+use flui_platform::capability::scripted::{Answer, Expect, ScenarioFailure};
 use flui_platform::capability::{
     Abandoned, Capability, CapabilityProvider, CapabilityRegistrar, Completion, InvalidResultKey,
     Plugin, ProviderContext, Resolver,
@@ -401,6 +401,108 @@ pub(crate) fn a_tests_script_hold_and_the_clipboards_hold_share_one_count() {
     assert_eq!(script_hold.release(), 1);
     let _ = host.pump(Duration::ZERO);
     assert_eq!(*read.borrow(), Some(Ok(Ok(Some(answered("pasted"))))));
+}
+
+/// The primary selection's `hold_reads` is one hold of its read script: a
+/// test's own hold keeps reads held past `answer_held_reads`; a held read
+/// asks for the selection's text only as it is answered, so it answers the
+/// claim current then; and a read a step holds is left to the test and not
+/// counted.
+pub(crate) fn the_primary_selections_held_reads_share_the_scripts_count() {
+    let mut host = HeadlessHost::new(linux_window());
+    let scripted = host.primary_selection();
+    let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
+        .expect("the headless host provides a primary selection");
+    let asked = Rc::new(Cell::new(0_u32));
+    let count = |text: &'static str| {
+        let asked = Rc::clone(&asked);
+        move || {
+            asked.set(asked.get() + 1);
+            Some(text.to_owned())
+        }
+    };
+    let _held_claim = selection.claim(count("when held"));
+
+    let script_hold = scripted.reads().hold();
+    scripted.hold_reads();
+    let read = settle_into(selection.read_text());
+    assert_eq!(
+        scripted.answer_held_reads(),
+        0,
+        "the test's hold still holds the read"
+    );
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*read.borrow(), None);
+    assert_eq!(asked.get(), 0, "a held read asks the claim nothing");
+    let _answered_claim = selection.claim(count("when answered"));
+    assert_eq!(script_hold.release(), 1);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        *read.borrow(),
+        Some(Ok(Ok(Some(answered("when answered"))))),
+        "the text is asked as the read is answered"
+    );
+    assert_eq!(asked.get(), 1, "and asked once");
+
+    scripted.hold_reads();
+    scripted.reads().expect_held(Expect::any());
+    let stepped = settle_into(selection.read_text());
+    assert_eq!(
+        scripted.answer_held_reads(),
+        0,
+        "the step holds the read it takes"
+    );
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*stepped.borrow(), None);
+    assert_eq!(scripted.reads().held(), 1, "left to the test");
+    assert!(
+        scripted
+            .reads()
+            .release_oldest(Ok(Some(answered("released"))))
+    );
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*stepped.borrow(), Some(Ok(Ok(Some(answered("released"))))));
+}
+
+/// A read a double's `hold_reads` kept to the end stays held when the
+/// double is torn down before its read script, whatever standing answer
+/// the test left: the run reports it unanswered instead of the teardown
+/// answering it.
+pub(crate) fn a_double_torn_down_with_its_reads_held_answers_none_of_them() {
+    let mut host = HeadlessHost::new(window());
+    let scenario = host.scenario().clone();
+    let scripted = host.clipboard();
+    scripted.hold_reads();
+    scripted.reads().otherwise(|_| Ok(None));
+    let clipboard = acquire(&mut host).expect("provided");
+    let _read = settle_into(clipboard.read_text());
+    drop((scripted, clipboard));
+    drop(host);
+    let owed = scenario
+        .verify()
+        .expect_err("the clipboard's read was held");
+    assert!(
+        matches!(owed.failures(), [ScenarioFailure::Unanswered { .. }]),
+        "{owed}"
+    );
+
+    let mut host = HeadlessHost::new(linux_window());
+    let scenario = host.scenario().clone();
+    let scripted = host.primary_selection();
+    scripted.hold_reads();
+    scripted.reads().otherwise(|_| Ok(None));
+    let selection = acquire_capability::<PrimarySelectionCapability>(&mut host)
+        .expect("the headless host provides a primary selection");
+    let _read = settle_into(selection.read_text());
+    drop((scripted, selection));
+    drop(host);
+    let owed = scenario
+        .verify()
+        .expect_err("the primary selection's read was held");
+    assert!(
+        matches!(owed.failures(), [ScenarioFailure::Unanswered { .. }]),
+        "{owed}"
+    );
 }
 
 /// A concealed write reaches the host marked, pastes like any other, and an

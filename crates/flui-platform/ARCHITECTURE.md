@@ -517,8 +517,14 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   script holds every request that reaches it while any lives, whoever took it (a test, or a
   double such as the scripted clipboard's `hold_writes`). Nobody lets go of another's hold: the
   last one dropped or `release`d sends the requests the holds kept, oldest first, on to the steps
-  and the standing answer, as if they arrived then. A request a step held is not one of them.
-  `release_oldest`, `release_held` and `abandon_held` answer any held request.
+  and the standing answer, as if they arrived then, and counts the ones answered. A request a
+  step held is not one of them. The lift, like `release_oldest`, `release_held` and
+  `abandon_held` (which answer any held request), takes each request out only as it answers it:
+  the code that runs meanwhile finds the rest in the script, where a ticket withdraws one, a new
+  request queues behind them, and a hold taken stops the lift with the rest kept in order. A
+  double that keeps a hold in its own state lets go of it with `leave_held` when that state is
+  torn down, so the kept requests stay held for the run to report rather than being answered by
+  whatever standing answer the test left.
 - **Reports from other threads are bounded.** A `FailureReport` keeps `MAX_REPORTS` and counts
   the rest as one `ReportsDropped`; once the scenario has ended, `report` answers `false` and
   nothing accumulates. A script keeps its first `MAX_RECORDED_REQUESTS` requests and counts
@@ -564,6 +570,12 @@ is no request it could find unexpected.
 `a_scenario_dropped_unverified_with_debts_fails_the_test`,
 `a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest`,
 `a_scripts_last_hold_sends_on_only_what_the_holds_kept`,
+`a_request_sent_during_a_lift_queues_behind_the_kept_ones`,
+`a_ticket_dropped_during_a_lift_withdraws_its_request`,
+`a_release_leaves_the_rest_in_the_script_while_it_answers_one`,
+`a_panic_during_a_lift_is_kept_until_the_rest_are_answered`,
+`a_hold_taken_during_a_lift_keeps_the_rest_in_order`,
+`a_hold_outliving_its_script_answers_nothing`,
 `a_scenario_drives_one_host_at_a_time`,
 `the_host_waits_for_a_scheduled_change_as_for_any_deadline`
 (`crates/flui-testing/tests/scenario.rs`);
