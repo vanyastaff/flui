@@ -106,7 +106,7 @@ graph LR
 | FD14 | macOS lane: CGEvent, AX, ScreenCaptureKit, event-tap guard; `macos-*` scenarios; `tools/device-checks` macOS scripts deleted | R14a, R17, R32, R33, R35 | FD9 | [P] | L (types), M | 5 | — |
 | FD15 | iOS Simulator lane: HID spike with go/no-go, then the lane, `simctl` capture and process, `ios-*` scenarios | R32, R33, R35 | FD9 | — | L (types), S | 6 | — |
 | FD16 | Linux lanes: X11 (XTEST, AT-SPI, capture, XInput2 guard) and Wayland (libei, portals, isolated compositor only); `live-smoke` migrated | R14a, R14b, R17, R32, R32a, R33, R35 | FD9 | — | L, X, WL | 5 | — |
-| FD17 | Front ends as ADR-0403 §7 decides them: `flui drive` CLI with session file, announcement and `call`; `flui mcp` adapter (MCP 2026-07-28 and the handshake revisions) with the core tool set, `--caps` tiers and the ledger | R28–R30, R28a | FD9, FD10 | — | L | 5 | — |
+| FD17 | Front ends: `flui drive` CLI with session file, announcement and `call`; `flui mcp` adapter (MCP 2026-07-28) with the core tool set and `--caps` groups; preceded by the decision record its card asks for | R28–R30, R28a | FD9, FD10 | — | L | 5 | — |
 | FD18 | Inspector app (`tools/flui-inspector`) and `flui inspect`; its own scenario suite; baseline Review view; documented CLI fallback | R25, R31 | FD17, FD26 | — | L, W | 7 | — |
 | FD19 | `interaction_gallery` scenario suite on every target; delete desktop-mcp, xtask drivers, probes, device-check scripts; documentation | R35, R36, R36a, R45 | FD11–FD17, FD20–FD30 | — | all | 4 | IC |
 | FD20 | (Runtime part in testing-platform TP2, ADR-0400.) Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9, FD29 | [P] | L, W, A | 5 | — |
@@ -144,8 +144,7 @@ graph LR
     recording and traces, layout, the other audits, reports, devices and exploration.
   - Every tier but `core` is a `--caps` group. `session` was added for session control beyond
     the core (attach, capabilities, window placement, frame and settle waits, the animation
-    clock). ADR-0403 §3 renames that tier `control` and moves launch and attach to a new tier,
-    `launch`; R28a and the front-end list name those.
+    clock). ADR-0403 §3 renames that tier `control`; R28a and the front-end list name it so.
   - The table reaches consumers through `for_each_method!` with concrete types, so no serde or
     schemars bound sits in a signature (ADR-0089 §2).
   - The ADR-0095 endpoint in `flui-devtools` still answers `windows`, `read`, `act` and `motion`
@@ -1632,32 +1631,73 @@ graph LR
 ### FD17. CLI and MCP
 
 - **Changes:**
-  - `flui-cli`: `flui drive <group> <member>` with typed flags and `flui drive call`; a command
-    of a row that takes a hold keeps its connection for the hold's life, and a sequence that
-    leaves input held is refused (ADR-0403 §7);
+  - `flui-cli`: `flui drive <group> <member>` with typed flags and `flui drive call`;
   - the session file plus a `0600` token file;
   - human and `--json` output, exit codes 0, 1 and 2;
   - `flui drive trace replay|codegen|pack`;
   - the OS-input announcement with its grace period and `--yes`;
-  - `flui mcp` over the `flui-driver` `mcp` feature (`rmcp`), as ADR-0403 §7 decides it: MCP
-    2026-07-28 and the handshake revisions; the 13-tool core set listed by default and
-    `--caps control,launch,input,inspect,pixels,record,perf,audit,explore,layout,vision`; no
-    row that reaches the host in the default list; `--role observer`; the ledger of what the
-    server's connection holds; a recording written to a file under a number of the server's;
-    resource updates on a `subscriptions/listen` stream; `isError` errors, snapshot deltas
-    after acts and image content for screenshots;
+  - `flui mcp` over the `flui-driver` `mcp` feature (`rmcp`), with the 13-tool core set listed by
+    default and `--caps control,input,inspect,pixels,record,perf,audit,explore,layout,vision`,
+    each tool named for its method (ADR-0403 §7), `isError` errors, snapshot deltas after acts
+    and image content for screenshots;
   - the seven hand-written `flui_*` tools are deleted.
 - **Done when:**
-  - coverage tests show every method has a typed subcommand, a row that releases a hold
-    excepted, and is an MCP tool under some tier, the rows ADR-0403 §7 keeps off MCP excepted;
-  - `tools/list` without `--caps` lists only the core set, and no row that reaches the host;
-  - the adapter's tests ADR-0403's Confirmation names pass (the revisions, the ledger, the
-    recording's file, the one update for a burst);
-  - an MCP stdio round trip (the client moved from desktop-mcp's `tests/support`) attaches to a
+  - the record "Open design" below asks for is accepted, and this card states what it decided;
+  - coverage tests show every method has a typed subcommand and is reachable as an MCP tool under
+    some tier;
+  - `tools/list` without `--caps` lists only the core set;
+  - an MCP stdio round trip (the client moved from desktop-mcp's `tests/support`) launches a
     headless-capable example, locates, taps and asserts;
   - `rg` finds no `flui_windows`, `flui_read`, `flui_locate`, `flui_act`, `flui_wait`,
     `flui_motion` or `flui_reload` outside `docs/adr/`;
   - CLI calls across invocations reuse handles.
+- **Open design.** ADR-0403 names the methods and does not say how a front end whose connection
+  can end before its caller's next call serves them. That is one decision record, written
+  before this card's adapter and its `flui drive` are built, and read as a design. Two designs
+  of it were read with ADR-0403 and did not hold; the questions they leave, with the findings
+  of those reads each comes from (first read 1 to 19, second read 1 to 28, in the pull request
+  that added ADR-0403):
+  1. **Who owns what a call leaves.** Held input goes with its connection (ADR-0288 §9); the
+     clock's rate and the build banner stay in the window. Should everything a development
+     client sets end with it, and through what: the connection's lease, a holder the state
+     itself names, a session process the CLI keeps? What orders a release against a call
+     queued through the same lease, and two holders whose lives overlap? (first read 7, 8;
+     second read 1, 2, 3, 15, 20)
+  2. **What a row says of it.** A column for what a call leaves, or a split of the rows that
+     leave it only for some parameters (`clock.set` with a rate, a step or neither)? Which
+     timeouts are retried and which calls sent again on a new connection, as one rule over the
+     runtime, the driver and the CLI, with ADR-0238 §5, ADR-0288 §4 and ADR-0395 §4 restated
+     whole? (first read 5; second read 5, 6, 9)
+  3. **A front end that redials.** `flui mcp` dials again inside a call
+     (`crates/flui-cli/src/agent/mcp.rs`). What does it say when the connection that held
+     state is gone, from what record of live holds, and how does it keep a reference minted by
+     a process that was replaced from naming something else in the next? (first read 1;
+     second read 4, 10, 14)
+  4. **A front end that connects for each command.** What does `flui drive` do with a row that
+     takes or releases state, with `flui drive call` for such a row, and with the one driver's
+     seat a holding command occupies? (first read 1; second read 12, 13)
+  5. **Events and recordings over MCP.** Rows arrive with no reader and queue without a bound
+     (`crates/flui-cli/src/agent/client.rs`). Which medium delivers them: a file the server
+     writes, the revision's `subscriptions/listen`, polled journals? What marks a listened
+     resource after a redial or an `events.gap`? Should the app refuse a filter for an event it
+     sends unasked or never emits? Are resources and prompts wanted at all before a client
+     opens such a stream? (first read 2; second read 11, 16, 27)
+  6. **What a model may cause.** Which rows start a process, open another endpoint or send
+     input through the operating system, given that the OS path is a parameter (`via`) of core
+     rows and that `app.reload` runs a build? Which of them a server lists with no flag, and
+     under which tier? Does `recording.start` keep text for a model? (first read 6; second
+     read 7, 8)
+  7. **Hints.** From which facts of a row each MCP hint follows, and that all four are always
+     written, since an omitted one reads as true. (first read 5; second read 19)
+  8. **Revisions.** The shipped server speaks the handshake revisions; R29 asks for
+     2026-07-28. Which does the adapter serve, and what does a client of the other get?
+     (first read 13)
+  9. **Observers.** How many recordings observers may hold beside the driver, and who counts
+     them: the runtime, which owns the bound, or the service, which knows the role? (first
+     read 5; second read 26)
+  10. **The schema.** Whatever the record adds to a closed union of the wire (a handle kind, a
+      kind of held state) is a break (ADR-0342): it is weighed there, with ADR-0403's 0.33 if
+      it can be, or as a second break if not. (second read 17)
 
 ### FD18. Inspector
 
