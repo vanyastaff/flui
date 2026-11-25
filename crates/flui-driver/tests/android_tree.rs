@@ -1490,6 +1490,88 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
     assert_eq!(adb.commands("exec-out uiautomator dump").len(), 1);
 }
 
+/// The reads a read of the tree takes, the accessibility settings and the dump, send nothing that
+/// acts on the app: one that times out says nothing may have run.
+#[test]
+fn a_tree_read_that_times_out_says_nothing_ran() {
+    for prefix in ["shell settings get secure", "exec-out uiautomator"] {
+        let adb = emulator_showing(CONTROLS).timeout_once(prefix);
+        let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("the lane connects");
+        let refused = lane
+            .read_tree(&placement(), &controls())
+            .expect_err("the read timed out");
+        assert!(
+            matches!(refused, Error::Timeout { .. }),
+            "{prefix}: {refused:?}"
+        );
+        assert!(!refused.may_have_run(), "{prefix}: {refused:?}");
+    }
+}
+
+/// A tree that keeps moving while a lane that matches against it keeps failing to match is busy,
+/// and the busy says what the lane answered last.
+#[test]
+fn a_moving_tree_busy_names_the_lanes_last_answer() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use flui_driver::Driver;
+    use flui_driver::protocol::error::Retry;
+    use flui_driver::protocol::method::{self, Method as _};
+    use flui_driver::protocol::session::Isolation;
+    use flui_driver::testing::{Reply, ScriptedAgent, ScriptedLane};
+
+    let reads = std::sync::Arc::new(AtomicUsize::new(0));
+    let counted = std::sync::Arc::clone(&reads);
+    let placement = serde_json::to_value(placement()).expect("a placement serializes");
+    let tree = serde_json::to_value(controls()).expect("a tree serializes");
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::WindowPlacement::NAME,
+            method::SemanticsRead::NAME,
+        ],
+        Box::new(move |name, _| match name {
+            "window.placement" => Reply::Result(placement.clone()),
+            "semantics.read" => {
+                let read = counted.fetch_add(1, Ordering::SeqCst);
+                let mut tree = tree.clone();
+                tree["revision"] = serde_json::json!(read + 1);
+                Reply::Result(tree)
+            }
+            _ => Reply::Result(serde_json::json!({ "windows": ["w1"] })),
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let lane = lane.reading_tree(
+        AccessibilityApi::UiAutomator,
+        Box::new(|_| {
+            Err(Error::NotFound {
+                message: "the dump shows no window of the app".to_owned(),
+                candidates: Vec::new(),
+                effect: None,
+                retry: Retry::WhenAppears,
+            })
+        }),
+    );
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches")
+        .with_lane(lane)
+        .expect("the lane starts");
+    let busy = driver
+        .main_window()
+        .and_then(|mut window| window.compare_projection())
+        .expect_err("the tree never held still");
+    assert!(
+        matches!(&busy, Error::Busy { message, .. }
+            if message.contains("the lane's last answer")
+                && message.contains("the dump shows no window of the app")),
+        "{busy:?}"
+    );
+    drop(agent);
+}
+
 /// A lane that matches nothing against the app's tree (UI Automation's, by identifier) answers
 /// its own `NotFound` after one reading, however the app's tree moves: only a lane that matches
 /// the app's tree can fail to match one the app no longer shows.

@@ -24,25 +24,27 @@ pub const MAX_NODES: u32 = 100_000;
 /// The deepest a node of a dump may sit.
 pub const MAX_DEPTH: usize = 256;
 
-/// Where a session has its dumps written on the device: a directory the shell may write, a file
-/// named for the session (`session` is lowercase hex), so two sessions on one device never read
-/// each other's dump.
+/// Where a session has its dump numbered `dump` written on the device: a directory the shell may
+/// write, a file named for the session (`session` is lowercase hex) and the dump, so two sessions
+/// on one device never read each other's dump, and no dump reads a file an earlier one left.
 #[must_use]
-pub fn dump_path(session: &str) -> String {
-    format!("/data/local/tmp/flui-driver-{session}.xml")
+pub fn dump_path(session: &str, dump: u64) -> String {
+    format!("/data/local/tmp/flui-driver-{session}-{dump}.xml")
 }
 
 /// The line that dumps the active window to `path` and prints the dump, or, where the dump wrote
 /// no file, what it said on its error stream ([`DumpFailure`]): both files are removed whatever
-/// the dump's outcome.
+/// the dump's outcome. Each dump has a path of its own ([`dump_path`]), so a file an earlier
+/// dump left (one whose command the host ended at its deadline, before its removal ran) is never
+/// printed as this dump's.
 ///
 /// The dump connects to accessibility as `UiAutomation` does, which suspends the accessibility
 /// services running (TalkBack among them) until it ends.
 #[must_use]
 pub fn dump_line(path: &str) -> String {
     format!(
-        "uiautomator dump {path} >/dev/null 2>{path}.err; cat {path} 2>/dev/null || cat {path}.err; \
-         rm -f {path} {path}.err"
+        "uiautomator dump {path} >/dev/null 2>{path}.err; cat {path} 2>/dev/null || cat \
+         {path}.err; rm -f {path} {path}.err"
     )
 }
 

@@ -242,12 +242,30 @@ pub trait Lane: Send {
         Ok(())
     }
 
-    /// Send one event; a pause waits.
+    /// Send one event; a pause waits. Said on its own, a failure is the lane's: what of a run went
+    /// out before it is the run's to say ([`send_guarded`], through [`Self::send_counted`]).
     ///
     /// # Errors
     ///
     /// When the OS refused it.
     fn send(&mut self, event: &OsEvent) -> Result<()>;
+
+    /// Send `event` as [`Self::send`] does, counting in `delivered` each command of it the device
+    /// took, a failing event's own included: what [`send_guarded`] says of a run that fails part
+    /// way. The default counts an event that acts ([`OsEvent::acts`]) and was sent as one command,
+    /// which holds for a lane that sends each event as one; a lane that sends an event as none or
+    /// several (Android's `input` lines) counts its commands itself.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::send`].
+    fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
+        let sent = self.send(event);
+        if sent.is_ok() && event.acts() {
+            delivered.command();
+        }
+        sent
+    }
 
     /// The OS accessibility tree of the window `placement` describes, projected onto the wire's
     /// nodes (ADR-0095 §4): what a screen reader reads of the app. `app` is the window's tree as
@@ -395,20 +413,24 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
 /// pressed is released on every exit, a failed send included. When the release leaves input
-/// held, the run answers [`Error::ReleaseFailed`], so what stays down is always named; the
-/// failure that ended the run is its `first`, and the run's effect and verdict are that failure's
-/// ([`Error::effect`], [`Error::is_cannot_verify`]).
+/// held, the run names it in [`Error::ReleaseFailed`]: the failure that ended the run is its
+/// `first`, and the run's effect and verdict are that failure's ([`Error::effect`],
+/// [`Error::is_cannot_verify`]).
 ///
-/// Whatever ends the run once the lane took an event that acts ([`OsEvent::acts`]: not a move or
-/// a pause), a refusal, an interruption, a failed command or a release that fails after the last
-/// event, comes as [`Error::PartlySent`] around it, with the count of events taken
-/// (`Effect::partial`, in events) and no retry, which would send them again; a failure that
-/// names an effect of its own and invites no retry (a command that timed out) stays as it is.
+/// Whatever ends the run once the device took a command of it ([`Lane::send_counted`]), a
+/// refusal, an interruption, a failed command or a release that fails after the last event, the
+/// run answers as [`Error::PartlySent`] around it, and no retry, which would send those commands
+/// again: its effect counts the events the device took any command of, a failing event's part
+/// included (`Effect::partial`, in events), and names the commands in its detail. A failure that
+/// names an effect of its own and invites no retry (a command that timed out) stays as it is. A
+/// release that fails after a run that ended for its own reason is that `ReleaseFailed`, the
+/// run's failure, partly sent or not, its `first`.
 ///
 /// # Errors
 ///
 /// As [`admit`] and [`Lane::check`], before any event, and [`Error::NotSupported`] naming
 /// `os_ime_composition` for a composition a lane that does not compose was handed;
+/// [`Error::PartlySent`] around what ended a run some of which went out;
 /// [`Error::ReleaseFailed`] naming what stays held, with the run's own failure as its `first`
 /// when there was one; [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
@@ -426,22 +448,14 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     if let Some(guard) = lane.guard() {
         guard.arm()?;
     }
-    let (taken, sent) = send_each(lane, &name, events);
+    let (delivered, sent) = send_each(lane, &name, events);
     if let Some(guard) = lane.guard() {
         guard.disarm();
     }
-    // Once the lane took an event that acts, whatever ends the run says how many it took.
-    let acted = events.iter().take(taken).any(OsEvent::acts);
-    let partly = |failure: Error| {
-        if !acted {
-            return failure;
-        }
-        let count = |events: usize| u32::try_from(events).unwrap_or(u32::MAX);
-        failure.after_partly_sent(Effect::partial(
-            count(taken),
-            count(events.len()),
-            EffectUnit::Event,
-        ))
+    // Once the device took a command of the run, whatever ends it says how much went out.
+    let partly = |failure: Error| match delivered.effect(events.len()) {
+        Some(effect) => failure.after_partly_sent(effect),
+        None => failure,
     };
     let sent = sent.map_err(partly);
     let released = lane.release_all();
@@ -477,9 +491,41 @@ pub(crate) fn no_composition(lane: &str) -> Error {
     )
 }
 
-/// Send `events` one at a time, asking the guard before each and after the last: how many the
-/// lane took, and what ended the run.
-fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> (usize, Result<()>) {
+/// What a run put on the device: the commands the device took, and how many events they belong
+/// to. A lane counts each command in [`Lane::send_counted`]; [`send_guarded`] counts the events.
+#[derive(Debug, Default)]
+pub struct Delivered {
+    commands: u32,
+    events: u32,
+}
+
+impl Delivered {
+    /// The device took one more command of the event being sent.
+    pub fn command(&mut self) {
+        self.commands = self.commands.saturating_add(1);
+    }
+
+    /// What went out of a run of `total` events, when anything did: the events the device took
+    /// any command of, a failing event's part included, of `total`, with the commands in its
+    /// detail.
+    fn effect(&self, total: usize) -> Option<Effect> {
+        (self.commands > 0).then(|| {
+            Effect::partial(
+                self.events,
+                u32::try_from(total).unwrap_or(u32::MAX),
+                EffectUnit::Event,
+            )
+            .detail(format!(
+                "the device took {} command(s) of the run",
+                self.commands
+            ))
+        })
+    }
+}
+
+/// Send `events` one at a time, asking the guard before each and after the last: what the
+/// device took of them, and what ended the run.
+fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> (Delivered, Result<()>) {
     let interrupted = |lane: &mut dyn Lane| {
         lane.guard()
             .and_then(ActivityGuard::foreign_input)
@@ -488,19 +534,25 @@ fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> (usize, Res
                 event: foreign.description,
             })
     };
-    for (taken, event) in events.iter().enumerate() {
+    let mut delivered = Delivered::default();
+    for event in events {
         if let Some(interruption) = interrupted(lane) {
-            return (taken, Err(interruption));
+            return (delivered, Err(interruption));
         }
-        if let Err(failure) = lane.send(event) {
-            return (taken, Err(failure));
+        let before = delivered.commands;
+        let sent = lane.send_counted(event, &mut delivered);
+        if delivered.commands > before {
+            delivered.events = delivered.events.saturating_add(1);
+        }
+        if let Err(failure) = sent {
+            return (delivered, Err(failure));
         }
     }
     // Input that came during the last event still ends the run: it may have changed what the
     // last event did.
     match interrupted(lane) {
-        Some(interruption) => (events.len(), Err(interruption)),
-        None => (events.len(), Ok(())),
+        Some(interruption) => (delivered, Err(interruption)),
+        None => (delivered, Ok(())),
     }
 }
 

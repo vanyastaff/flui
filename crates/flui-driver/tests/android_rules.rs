@@ -282,6 +282,19 @@ fn each_session_dumps_to_a_file_of_its_own() {
     );
     let line = &first.commands("exec-out uiautomator dump")[0];
     assert!(line.contains(&format!("rm -f {one}")), "{line}");
+    // Each dump of a session has a path of its own: a file an earlier dump left is never read.
+    let mut lane = connected(&first);
+    let empty = flui_driver::protocol::tree::Tree::new(Vec::new(), false);
+    let _ = lane.read_tree(&placement(), &empty);
+    let _ = lane.read_tree(&placement(), &empty);
+    let paths: Vec<String> = first
+        .commands("exec-out uiautomator dump")
+        .iter()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().nth(3).map(str::to_owned))
+        .collect();
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert_ne!(paths[0], paths[1]);
 }
 
 #[test]

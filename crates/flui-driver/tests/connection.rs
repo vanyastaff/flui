@@ -504,6 +504,50 @@ fn an_error_is_stated_on_the_wire_as_it_was_read() {
         let read = Error::from_wire(answer.clone());
         assert_eq!(read.to_wire(), answer, "{read:?}");
     }
+    // The other codes whose variant holds an effect keep it on the variant, not partly sent.
+    let held = |code: ErrorCode, retry: Retry| {
+        Error::from_wire(
+            ErrorObject::new(code, "part of an input played")
+                .effect(Effect::partial(1, 4, EffectUnit::Tick))
+                .retry(retry),
+        )
+    };
+    let not_found = held(ErrorCode::NotFound, Retry::WhenAppears);
+    assert!(
+        matches!(
+            not_found,
+            Error::NotFound {
+                effect: Some(_),
+                ..
+            }
+        ),
+        "{not_found:?}"
+    );
+    let input_held = held(ErrorCode::InputHeld, Retry::Soon);
+    assert!(
+        matches!(
+            input_held,
+            Error::InputHeld {
+                effect: Some(_),
+                ..
+            }
+        ),
+        "{input_held:?}"
+    );
+    let not_actionable = held(ErrorCode::NotActionable, Retry::WhenAppears);
+    assert!(
+        matches!(
+            not_actionable,
+            Error::NotActionable {
+                effect: Some(_),
+                ..
+            }
+        ),
+        "{not_actionable:?}"
+    );
+    for read in [not_found, input_held, not_actionable] {
+        assert!(read.may_have_run(), "{read:?}");
+    }
     // A busy that holds the effect stays a busy; a code whose variant holds none is partly sent,
     // its code and retry as the app said.
     let busy = Error::from_wire(

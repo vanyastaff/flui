@@ -49,10 +49,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
   `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device
   without a guard, before the run is announced and again at every `lane::send_guarded`, which
-  asks the guard before every event and releases everything on every exit, answering
-  `ReleaseFailed` when the release leaves input held, whatever ended the run: the run's own
+  asks the guard before every event and releases everything on every exit, naming what the
+  release leaves held in `ReleaseFailed`: after a run that ended for its own reason, that
   failure is its `first`, whose effect and verdict it answers with (`Error::effect`,
-  `Error::is_cannot_verify`); an input-method composition reaches only a lane whose capabilities
+  `Error::is_cannot_verify`); after a run that went out whole, it comes inside `PartlySent`, as
+  below; an input-method composition reaches only a lane whose capabilities
   say it composes (`LaneCapabilities::compositions`, the Chrome lane alone), refused before the
   desktop is locked or the run announced, at `send_guarded`, and by every other lane's own `send`;
   `OsInputLock` holds one session per user's desktop (a headless browser, the session's own,
@@ -62,18 +63,22 @@ app's trees, frames and input, and this crate composes that with what only the O
   handle holds the OS file lock (a lock file this user may only read is opened for reading, one
   it cannot open is `Error::Io`, never retried); the first OS
   event of a session is announced once; once OS input went out, a failed read of what it did is
-  `may_have_run`, never not run. Whatever ends a run once the lane took an event that acts
-  (`OsEvent::acts`), a refusal, the guard's interruption, a failed command, a release that fails
-  after the last event, `send_guarded` answers as `Error::PartlySent` around it, on every lane:
-  the events taken as `Effect::partial` and no retry, which would send them again; a failure
-  with an effect of its own that invites no retry (a timed-out command) stays as it is.
+  `may_have_run`, never not run. Whatever ends a run once the device took a command of it, a
+  refusal, the guard's interruption, a failed command, a release that fails after the last
+  event, `send_guarded` answers as `Error::PartlySent` around it, on every lane: the lane counts
+  each command the device took (`Lane::send_counted`, a failing event's own included; one per
+  acting event by default, each `input` line on Android), the effect counts the events any of
+  them belong to (`Effect::partial`, in events, the commands in its detail), and no retry is
+  invited, which would send them again; a failure with an effect of its own that invites no
+  retry (a timed-out command) stays as it is.
 - **A person's interruption followed by a failed release is cannot-verify, the held input
   named.** When the guard sees the person's input, the run stops and is cannot-verify: the input
   that reached the app is no longer the scenario's, so neither a pass nor a failure of the app can
   be read from it. A release that then fails does not turn that into a failure of the app, which
   did nothing wrong; nor may it go unsaid, since input stays down on the person's desktop.
   `send_guarded` answers `Error::ReleaseFailed` with the keys, buttons and contacts still held in
-  `held` and the interruption as `first`, from which `Error::is_cannot_verify` and
+  `held` and the interruption as `first` (inside `PartlySent` once the device took a command of
+  the run), from which `Error::is_cannot_verify` and
   `Error::effect` answer: the report says cannot-verify, and the error says what to release by
   hand. The same holds for any first failure: a timed-out act stays `may_have_run`.
 - **What a lane cannot send is refused before anything is sent.** `lane::send_guarded` asks
