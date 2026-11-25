@@ -72,7 +72,7 @@
 
 | Task | Content | Req. | Crates | Depends on | Gated | Status |
 |------|---------|------|--------|------------|:-----:|--------|
-| RC0 | Harness reads family modules; the guard counts `pub` rows, whole names and mounted files; `docs/testing.md` drops the copied count | R1 | `flui-objects` (tests), docs | — | | in review |
+| RC0 | Harness reads family modules; the guard counts `pub` rows, whole names and mounted files; `docs/testing.md` drops the copied count | R1 | `flui-objects` (tests), docs | — | | done |
 | RC1 | The `shown` module with `OverflowClip`, the shared row and its guard; six overflow objects move onto it; the gap entry leaves | R2 | `flui-objects`, docs | RC0 | | not started |
 | RC43 | `ShownChildren` and the sliver frame; the carousel, the list, the fixed-extent list and the grid move onto it; `PinnedChildren` returns its slots and keeps none | R2 | `flui-objects`, docs | RC1 | | not started |
 | RC2 | Sliver pass-through base; six proxies move to it | R3, R4 | `flui-objects` | RC0 | | not started |
@@ -1075,3 +1075,11 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 
 Empty until a task lands. Each task records here the final names of its tests, the commands it
 ran with their results, and the pull request.
+
+### RC0
+
+`cargo test --locked -p flui-objects --test render_object_harness`: 37 passed.
+`cargo test --locked --release -p flui-objects --test render_object_harness catalog`: 1 passed.
+`cargo clippy --locked -p flui-objects --all-targets -- -D warnings` and `cargo fmt --all --check`:
+clean. The guard's tests are listed in design-parity.md W1; each was seen failing with its fix
+taken out by hand. The mutation run and typos were not run on the branch. Pull request: #3185.
