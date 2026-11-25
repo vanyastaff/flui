@@ -74,12 +74,29 @@ impl MinimumTarget {
     }
 
     /// Whether a region `width` × `height` logical pixels meets the minimum on
-    /// both axes. A non-finite extent, infinite or NaN, does not.
+    /// both axes, to within half a hundredth of a logical pixel, which absorbs
+    /// the round-off of the logical-to-device round trip a published extent
+    /// takes. A non-finite extent, infinite or NaN, does not.
     #[must_use]
     pub fn admits(self, width: f64, height: f64) -> bool {
-        width.is_finite() && height.is_finite() && width >= self.0 && height >= self.0
+        let meets = |extent: f64| extent.is_finite() && extent + ADMIT_TOLERANCE >= self.0;
+        meets(width) && meets(height)
     }
 }
+
+/// How far, in logical pixels, an extent may fall short of a
+/// [`MinimumTarget`] and still meet it.
+///
+/// A published extent is a logical rect scaled to device pixels and back, and
+/// at a ratio that is not a power of two the round trip leaves an extent laid
+/// out at exactly the minimum a few ulps under it (`45 × 1.3 / 1.3 - 1.3 / 1.3`
+/// is `43.999999999999993`). Flutter's `MinimumTapTargetGuideline` allows
+/// `1e-10`, which the round-off of edges past about 10⁵ px exceeds. Half a
+/// hundredth of a pixel is far above any round-off, and a fiftieth of the
+/// smallest device pixel a platform draws (at a ratio of 4), so no target a
+/// device draws smaller passes; and a target that fails prints, at a finding's
+/// two decimals, under the minimum it fails.
+const ADMIT_TOLERANCE: f64 = 0.005;
 
 impl SemanticsOwner {
     /// Every interactive element of the published tree with no accessible
@@ -307,14 +324,10 @@ fn agent_nodes(state: &TreeState, filter: AgentFilter) -> impl Iterator<Item = N
     })
 }
 
-/// How a finding names a role, for people.
+/// How a finding names a role, for people: its wire name in words. Every role
+/// has a wire name, `unknown` included.
 fn role_name(role: Role) -> String {
-    let name = role.name();
-    if name.is_empty() {
-        "element".to_owned()
-    } else {
-        name.replace('_', " ")
-    }
+    role.name().replace('_', " ")
 }
 
 /// `value` logical pixels as a finding prints them: at most two decimals.

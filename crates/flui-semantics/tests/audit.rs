@@ -218,6 +218,100 @@ fn a_target_size_finding_names_the_hit_region_inside_the_clip() {
     }
 }
 
+/// A vertical scrollable at `rect`, clipping its children.
+fn vertical_list(f: &mut Fixture, parent: u32, index: u32, rect: (f64, f64, f64, f64)) {
+    f.add(Some(parent), index, rect, |c| {
+        c.set_role(SemanticsRole::ScrollView);
+        c.set_label("List");
+        c.set_scroll_position(0.0);
+    });
+    clipping(f, index);
+}
+
+/// An 800 × 600 window. Index → what it is:
+///
+/// ```text
+///  1 window
+///   2 vertical list (10,10 200×30) →
+///     3 button "Tall" (10,10 100×200): longer than the 30 px the list shows
+///   4 vertical list (300,10 200×30) →
+///     5 vertical list (300,10 200×300) →
+///       6 button "Nested" (300,10 100×100): the outer list shows 30 px of it
+///   7 frame (550,0 200×30), clipping its children, not scrolling →
+///     8 vertical list (550,0 200×300) →
+///       9 button "Framed" (550,20 100×100): the frame leaves 30 px of the list
+///  10 button "Edge" (770,100 60×60): the window's right edge cuts it to 30 px
+///  11 button "Bottom" (100,570 60×60): the window's bottom edge cuts it to 30 px
+/// ```
+fn revealed() -> Fixture {
+    let mut f = Fixture::new();
+    f.add(None, 1, (0.0, 0.0, 800.0, 600.0), |c| {
+        c.set_label("Window");
+    });
+    vertical_list(&mut f, 1, 2, (10.0, 10.0, 200.0, 30.0));
+    f.add(Some(2), 3, (10.0, 10.0, 100.0, 200.0), |c| {
+        button(c, Some("Tall"));
+    });
+    vertical_list(&mut f, 1, 4, (300.0, 10.0, 200.0, 30.0));
+    vertical_list(&mut f, 4, 5, (300.0, 10.0, 200.0, 300.0));
+    f.add(Some(5), 6, (300.0, 10.0, 100.0, 100.0), |c| {
+        button(c, Some("Nested"));
+    });
+    f.add(Some(1), 7, (550.0, 0.0, 200.0, 30.0), |c| {
+        c.set_label("Frame");
+    });
+    clipping(&mut f, 7);
+    vertical_list(&mut f, 7, 8, (550.0, 0.0, 200.0, 300.0));
+    f.add(Some(8), 9, (550.0, 20.0, 100.0, 100.0), |c| {
+        button(c, Some("Framed"));
+    });
+    f.add(Some(1), 10, (770.0, 100.0, 60.0, 60.0), |c| {
+        button(c, Some("Edge"));
+    });
+    f.add(Some(1), 11, (100.0, 570.0, 60.0, 60.0), |c| {
+        button(c, Some("Bottom"));
+    });
+    f.flush();
+    f
+}
+
+/// Along the axis a scrollable scrolls, a target is judged by the extent it
+/// has once revealed, which is at most what that scrollable shows: a target
+/// longer than its list, one inside a list inside a shorter list, and one in a
+/// list a fixed clip cuts are each judged by the span the outermost of those
+/// leaves, not by their own length. The window's edge cuts like a fixed clip.
+#[test]
+fn a_revealed_target_is_judged_by_what_its_scrollables_show() {
+    let f = revealed();
+    let minimum = MinimumTarget::try_new(44.0).expect("44 px is a minimum");
+    let findings = f
+        .owner
+        .audit_target_size(minimum, placement())
+        .expect("the published tree reads");
+    let under = "under the platform's 44 px minimum target";
+    let expected = [
+        (3, "100 × 30 logical px, clipped from its 100 × 200 bounds"),
+        (6, "100 × 30 logical px, clipped from its 100 × 100 bounds"),
+        (9, "100 × 30 logical px, clipped from its 100 × 100 bounds"),
+        (10, "30 × 60 logical px, clipped from its 60 × 60 bounds"),
+        (11, "60 × 30 logical px, clipped from its 60 × 60 bounds"),
+    ];
+    let found: Vec<_> = findings
+        .iter()
+        .map(|finding| (finding.node, finding.detail.clone()))
+        .collect();
+    let wanted: Vec<_> = expected
+        .iter()
+        .map(|&(index, region)| {
+            (
+                element(index),
+                format!("this button's hit region is {region}, {under}"),
+            )
+        })
+        .collect();
+    assert_eq!(found, wanted);
+}
+
 /// An element is interactive by any action that operates it, not only
 /// `invoke`: an unnamed control that advertises only `toggle`, `set_value`,
 /// `select`, `expand` or `collapse` is reported, and one that only takes focus
@@ -264,10 +358,76 @@ fn each_action_that_operates_a_control_makes_it_interactive() {
     let nodes: Vec<_> = findings.iter().map(|finding| finding.node).collect();
     let wanted: Vec<_> = [2, 3, 4, 5, 6].into_iter().map(element).collect();
     assert_eq!(nodes, wanted, "{findings:#?}");
+    // A finding names the role in words: `check_box` reads as "check box".
+    assert!(
+        findings[0]
+            .detail
+            .starts_with("this check box has no accessible name"),
+        "{}",
+        findings[0].detail
+    );
 }
 
-/// A minimum that is not a finite positive extent is refused, and one exactly
-/// met admits the region, and a region with a non-finite extent is not.
+/// The nodes of a 3000 × 3000 window at `ratio` holding one named button per
+/// `(left, top, width, height)`, numbered from 2 in order.
+fn buttons_at(ratio: f64, rects: &[(f64, f64, f64, f64)]) -> Fixture {
+    let mut f = Fixture::new();
+    f.add(None, 1, (0.0, 0.0, 3000.0, 3000.0), |c| {
+        c.set_label("Window");
+    });
+    for (index, &rect) in (2..).zip(rects) {
+        f.add(Some(1), index, rect, |c| button(c, Some("Target")));
+    }
+    f.owner.set_device_pixel_ratio(ratio);
+    f.flush();
+    f
+}
+
+/// A target laid out at exactly the minimum meets it at every device ratio,
+/// though the published tree scales its edges to device pixels and the audit
+/// scales them back: at a ratio that is not a power of two the round trip
+/// leaves the extent a few ulps under the minimum at some offsets. A target
+/// clearly under the minimum is still reported at each of those ratios.
+#[test]
+fn a_target_at_the_minimum_meets_it_at_every_device_ratio() {
+    let offsets = (0_u32..48).map(|step| {
+        let step = f64::from(step);
+        (1.0 + step * 61.0, 3.0 + step * 59.0)
+    });
+    for ratio in [1.1, 1.2, 1.25, 1.3, 1.4, 1.5, 1.6, 1.75, 2.625] {
+        for size in [24.0, 44.0, 48.0] {
+            let minimum = MinimumTarget::try_new(size).expect("a minimum");
+            let at_minimum: Vec<_> = offsets
+                .clone()
+                .map(|(left, top)| (left, top, size, size))
+                .collect();
+            let met = buttons_at(ratio, &at_minimum)
+                .owner
+                .audit_target_size(minimum, placement())
+                .expect("the published tree reads");
+            assert!(met.is_empty(), "{size} px at {ratio}: {met:#?}");
+
+            let under: Vec<_> = offsets
+                .clone()
+                .map(|(left, top)| (left, top, size - 0.1, size))
+                .collect();
+            let reported = buttons_at(ratio, &under)
+                .owner
+                .audit_target_size(minimum, placement())
+                .expect("the published tree reads");
+            assert_eq!(
+                reported.len(),
+                under.len(),
+                "{} px of {size} at {ratio} is under the minimum: {reported:#?}",
+                size - 0.1
+            );
+        }
+    }
+}
+
+/// A minimum that is not a finite positive extent is refused, one met to
+/// within half a hundredth of a pixel admits the region, and a region with a
+/// non-finite extent is not.
 #[test]
 fn a_minimum_target_is_a_finite_positive_extent() {
     for refused in [0.0, -1.0, f64::NAN, f64::INFINITY] {
@@ -276,6 +436,11 @@ fn a_minimum_target_is_a_finite_positive_extent() {
     let minimum = MinimumTarget::try_new(24.0).expect("24 px is a minimum");
     assert!(minimum.admits(24.0, 24.0));
     assert!(!minimum.admits(23.9, 24.0));
+    // Within half a hundredth of the minimum is the minimum: round-off, never
+    // a smaller target a device draws.
+    assert!(minimum.admits(23.996, 23.996));
+    assert!(!minimum.admits(23.994, 24.0));
+    assert!(!minimum.admits(24.0, 23.994));
     for (width, height) in [
         (24.0, f64::NAN),
         (f64::NAN, 24.0),

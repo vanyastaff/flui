@@ -944,7 +944,11 @@ presentation's gesture settings in `flui-interaction`, a crate above this one, s
 parameter, finite and positive by construction, and the caller picks the pointer it judges for:
 the agent the platform's primary pointer, the testing kit's gesture-alternatives check a finger
 (its own minimum, judged by the same `MinimumTarget::admits`). `admits` refuses a non-finite
-extent.
+extent, and meets the minimum to within half a hundredth of a logical pixel: a published extent
+is scaled to device pixels and back, and at a ratio that is not a power of two (1.1, 1.3, 1.4)
+the round trip leaves a target laid out at exactly the minimum a few ulps under it. The
+tolerance is far above that round-off and a fiftieth of the smallest device pixel a platform
+draws, and a target that fails prints, at a finding's two decimals, under its minimum.
 
 **Test.** `audit.rs` in `tests/`.
 
