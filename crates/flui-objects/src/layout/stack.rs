@@ -31,9 +31,10 @@
 //!   painting.
 
 pub use super::stack_fit::StackFit;
+use crate::shown::OverflowClip;
 use flui_foundation::TextDirection;
 use flui_foundation::Variable;
-use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 
@@ -213,8 +214,9 @@ struct StackSizes {
 ///
 /// After layout, [`has_visual_overflow`](Self::has_visual_overflow)
 /// reports whether any positioned child fell outside the stack
-/// box — driving [`paint`](RenderBox::paint) to apply
-/// [`clip_behavior`](Self::clip_behavior) when needed.
+/// box. While it does and [`clip_behavior`](Self::clip_behavior) is not
+/// `Clip::None`, paint clips the children to the box and the box reports the
+/// same clip to the semantics and input-region walks.
 #[derive(Debug, Clone)]
 pub struct RenderStack {
     fit: StackFit,
@@ -223,9 +225,9 @@ pub struct RenderStack {
     /// into physical `left`/`right`.
     text_direction: TextDirection,
     clip_behavior: Clip,
-    /// Computed during layout — read by
-    /// [`RenderStack::has_visual_overflow`].
-    has_visual_overflow: bool,
+    /// Whether a positioned child lies outside the box, written by
+    /// `perform_layout` alone (`crate::shown`).
+    overflow: OverflowClip,
     /// Child count snapshot for hit-testing.
     child_count: usize,
     /// Highest positioned natural line from the last successful layout.
@@ -241,7 +243,7 @@ impl RenderStack {
             alignment: Alignment::TOP_LEFT,
             text_direction: TextDirection::Ltr,
             clip_behavior: Clip::HardEdge,
-            has_visual_overflow: false,
+            overflow: OverflowClip::new(),
             child_count: 0,
             reported_baselines: [None; 2],
         }
@@ -296,10 +298,11 @@ impl RenderStack {
     }
 
     /// Returns whether the last layout produced positioned children
-    /// that fell outside the stack box. Reset on every layout.
+    /// that fell outside the stack box. `true` before the first layout and
+    /// after a layout that failed: the box then clips to the size it keeps.
     #[inline]
     pub fn has_visual_overflow(&self) -> bool {
-        self.has_visual_overflow
+        self.overflow.clips()
     }
 
     /// Updates the fit and reports layout when changed.
@@ -351,8 +354,8 @@ impl RenderStack {
         }
     }
 
-    /// Returns whether the offset+size lie inside `stack_size` (used
-    /// to compute `has_visual_overflow`).
+    /// Returns whether the offset+size leave `stack_size` (the overflow
+    /// answer `lay_out` returns).
     fn child_overflows(stack_size: Size, offset: Offset, child_size: Size) -> bool {
         offset.dx < 0.0
             || offset.dy < 0.0
@@ -460,6 +463,67 @@ impl RenderStack {
         }
         Ok(max)
     }
+
+    /// Lays the children out and returns the stack's size with whether a
+    /// positioned child lies outside it.
+    fn lay_out(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>,
+    ) -> flui_rendering::RenderResult<(Size, bool)> {
+        let incoming = *ctx.constraints();
+        let child_count = ctx.child_count();
+        self.child_count = child_count;
+
+        // Build the per-child PositionedSpec snapshot so both the sizing
+        // pass and Pass 2 can branch on positioned vs non-positioned without
+        // re-reading parent_data. PositionedSpec is Copy so no reference to
+        // ctx is retained after this loop.
+        let mut specs: Vec<Option<PositionedSpec>> = Vec::with_capacity(child_count);
+        for i in 0..child_count {
+            specs.push(
+                ctx.child_parent_data(i)
+                    .and_then(|pd| PositionedSpec::from_parent_data(pd, self.text_direction)),
+            );
+        }
+
+        // -----------------------------------------------------------------
+        // Sizing pass: measure NON-positioned
+        // children, resolve the stack's own size. Delegates to compute_size
+        // so dry layout can reuse identical logic.
+        // -----------------------------------------------------------------
+        let sized = self.compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c))?;
+        let size = sized.size;
+        let mut child_sizes = sized.child_sizes;
+
+        // -----------------------------------------------------------------
+        // Pass 2 — position non-positioned children (align inside size)
+        // and lay out + position the positioned ones.
+        // -----------------------------------------------------------------
+        let mut overflows = false;
+        let mut baselines: [Option<f64>; 2] = [None; 2];
+        for i in 0..child_count {
+            if let Some(spec) = specs[i] {
+                child_sizes[i] = ctx.layout_child(i, spec.child_constraints(size))?;
+            }
+            let offset = self.child_offset(specs[i], size, child_sizes[i]);
+            if specs[i].is_some() && Self::child_overflows(size, offset, child_sizes[i]) {
+                overflows = true;
+            }
+            ctx.position_child(i, offset);
+            for kind in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
+                if let Some(value) = ctx
+                    .child_distance_to_actual_baseline(i, kind)?
+                    .map(|value| value + offset.dy)
+                    .filter(|value| value.is_finite())
+                {
+                    let slot = baseline_kind_index(kind);
+                    baselines[slot] = Some(baselines[slot].map_or(value, |old| old.min(value)));
+                }
+            }
+        }
+        self.reported_baselines = baselines;
+        Ok((size, overflows))
+    }
 }
 
 impl Default for RenderStack {
@@ -489,59 +553,9 @@ impl RenderBox for RenderStack {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>,
     ) -> flui_rendering::RenderResult<Size> {
-        let incoming = *ctx.constraints();
-        let child_count = ctx.child_count();
-        self.child_count = child_count;
-        self.has_visual_overflow = false;
-
-        // Build the per-child PositionedSpec snapshot so both the sizing
-        // pass and Pass 2 can branch on positioned vs non-positioned without
-        // re-reading parent_data. PositionedSpec is Copy so no reference to
-        // ctx is retained after this loop.
-        let mut specs: Vec<Option<PositionedSpec>> = Vec::with_capacity(child_count);
-        for i in 0..child_count {
-            specs.push(
-                ctx.child_parent_data(i)
-                    .and_then(|pd| PositionedSpec::from_parent_data(pd, self.text_direction)),
-            );
-        }
-
-        // -----------------------------------------------------------------
-        // Sizing pass: measure NON-positioned
-        // children, resolve the stack's own size. Delegates to compute_size
-        // so dry layout can reuse identical logic.
-        // -----------------------------------------------------------------
-        let sized = self.compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c))?;
-        let size = sized.size;
-        let mut child_sizes = sized.child_sizes;
-
-        // -----------------------------------------------------------------
-        // Pass 2 — position non-positioned children (align inside size)
-        // and lay out + position the positioned ones.
-        // -----------------------------------------------------------------
-        let mut baselines: [Option<f64>; 2] = [None; 2];
-        for i in 0..child_count {
-            if let Some(spec) = specs[i] {
-                child_sizes[i] = ctx.layout_child(i, spec.child_constraints(size))?;
-            }
-            let offset = self.child_offset(specs[i], size, child_sizes[i]);
-            if specs[i].is_some() && Self::child_overflows(size, offset, child_sizes[i]) {
-                self.has_visual_overflow = true;
-            }
-            ctx.position_child(i, offset);
-            for kind in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
-                if let Some(value) = ctx
-                    .child_distance_to_actual_baseline(i, kind)?
-                    .map(|value| value + offset.dy)
-                    .filter(|value| value.is_finite())
-                {
-                    let slot = baseline_kind_index(kind);
-                    baselines[slot] = Some(baselines[slot].map_or(value, |old| old.min(value)));
-                }
-            }
-        }
-        self.reported_baselines = baselines;
-        Ok(size)
+        self.overflow.begin();
+        let laid_out = self.lay_out(ctx);
+        self.overflow.commit(laid_out)
     }
 
     fn compute_dry_layout(
@@ -648,12 +662,10 @@ impl RenderBox for RenderStack {
     }
 
     fn paint(&self, ctx: &mut flui_rendering::context::PaintContext<'_, Variable>) {
-        // Clip when overflow happens AND the user asked for clipping.
         // The clip must cover the CHILDREN, so it goes through a clip
         // layer scope (canvas clips are run-local and never extend
         // across child markers).
-        if self.has_visual_overflow && self.clip_behavior != Clip::None {
-            let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
+        if let Some(bounds) = self.overflow.clip(self.clip_behavior, ctx.size()) {
             ctx.with_clip_rect(bounds, self.clip_behavior, |ctx| {
                 // Paint all children in order (bottom-up = first to last).
                 ctx.paint_children();
@@ -661,6 +673,10 @@ impl RenderBox for RenderStack {
         } else {
             ctx.paint_children();
         }
+    }
+
+    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect> {
+        self.overflow.clip(self.clip_behavior, size)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, StackParentData>) -> bool {
@@ -733,7 +749,7 @@ impl RenderIndexedStack {
         self
     }
 
-    /// Builder: set the clip behavior used when any child geometry overflows.
+    /// Builder: set the clip behavior used when the displayed child overflows.
     #[must_use]
     pub const fn with_clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.stack.clip_behavior = clip_behavior;
@@ -773,7 +789,9 @@ impl RenderIndexedStack {
         self.stack.clip_behavior()
     }
 
-    /// Whether the last layout produced direct-child geometry overflow.
+    /// Whether the displayed child lay outside the box at the last layout.
+    /// `true` before the first layout and after a layout that failed: the box
+    /// then clips to the size it keeps.
     #[inline]
     pub fn has_visual_overflow(&self) -> bool {
         self.stack.has_visual_overflow()
@@ -855,6 +873,51 @@ impl RenderIndexedStack {
         }
         specs
     }
+
+    /// Lays every child out, as a stack does, and returns the size with
+    /// whether the displayed child lies outside it. A hidden child is neither
+    /// painted, hit nor published, so where it lies does not make the box
+    /// clip; with no child displayed nothing does.
+    fn lay_out(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>,
+    ) -> flui_rendering::RenderResult<(Size, bool)> {
+        let incoming = *ctx.constraints();
+        let child_count = ctx.child_count();
+        self.stack.child_count = child_count;
+        self.reported_baselines = [None; 2];
+        let displayed_index = self.displayed_index(child_count);
+
+        let specs = self.build_specs_from_layout_ctx(ctx);
+        let sized = self
+            .stack
+            .compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c))?;
+        let size = sized.size;
+        let mut child_sizes = sized.child_sizes;
+
+        let mut overflows = false;
+        for i in 0..child_count {
+            if let Some(spec) = specs[i] {
+                child_sizes[i] = ctx.layout_child(i, spec.child_constraints(size))?;
+            }
+            let offset = self.stack.child_offset(specs[i], size, child_sizes[i]);
+            ctx.position_child(i, offset);
+
+            if displayed_index == Some(i) {
+                overflows = specs[i].is_some()
+                    && RenderStack::child_overflows(size, offset, child_sizes[i]);
+                for kind in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
+                    let slot = baseline_kind_index(kind);
+                    self.reported_baselines[slot] = ctx
+                        .child_distance_to_actual_baseline(i, kind)?
+                        .map(|baseline| baseline + offset.dy)
+                        .filter(|value| value.is_finite());
+                }
+            }
+        }
+
+        Ok((size, overflows))
+    }
 }
 
 impl Default for RenderIndexedStack {
@@ -882,58 +945,9 @@ impl RenderBox for RenderIndexedStack {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, StackParentData>,
     ) -> flui_rendering::RenderResult<Size> {
-        let incoming = *ctx.constraints();
-        let child_count = ctx.child_count();
-        self.stack.child_count = child_count;
-        self.stack.has_visual_overflow = false;
-        self.reported_baselines = [None; 2];
-        let displayed_index = self.displayed_index(child_count);
-
-        let specs = self.build_specs_from_layout_ctx(ctx);
-        let sized = self
-            .stack
-            .compute_size(incoming, &specs, |i, c| ctx.layout_child(i, c))?;
-        let size = sized.size;
-        let mut child_sizes = sized.child_sizes;
-
-        for i in 0..child_count {
-            let offset = match specs[i] {
-                None => {
-                    let child_size = child_sizes[i];
-                    Offset::new(
-                        alignment_along_axis(self.stack.alignment.x, size.width - child_size.width),
-                        alignment_along_axis(
-                            self.stack.alignment.y,
-                            size.height - child_size.height,
-                        ),
-                    )
-                }
-                Some(spec) => {
-                    let cc = spec.child_constraints(size);
-                    let child_size = ctx.layout_child(i, cc)?;
-                    child_sizes[i] = child_size;
-                    let offset = spec.child_offset(size, child_size, self.stack.alignment);
-                    if RenderStack::child_overflows(size, offset, child_size) {
-                        self.stack.has_visual_overflow = true;
-                    }
-                    offset
-                }
-            };
-
-            ctx.position_child(i, offset);
-
-            if displayed_index == Some(i) {
-                for kind in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
-                    let slot = baseline_kind_index(kind);
-                    self.reported_baselines[slot] = ctx
-                        .child_distance_to_actual_baseline(i, kind)?
-                        .map(|baseline| baseline + offset.dy)
-                        .filter(|value| value.is_finite());
-                }
-            }
-        }
-
-        Ok(size)
+        self.stack.overflow.begin();
+        let laid_out = self.lay_out(ctx);
+        self.stack.overflow.commit(laid_out)
     }
 
     fn compute_dry_layout(
@@ -1040,12 +1054,19 @@ impl RenderBox for RenderIndexedStack {
                 ctx.paint_child(index);
             };
 
-        if self.stack.has_visual_overflow && self.stack.clip_behavior != Clip::None {
-            let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
+        if let Some(bounds) = self
+            .stack
+            .overflow
+            .clip(self.stack.clip_behavior, ctx.size())
+        {
             ctx.with_clip_rect(bounds, self.stack.clip_behavior, paint_displayed_child);
         } else {
             paint_displayed_child(ctx);
         }
+    }
+
+    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect> {
+        self.stack.overflow.clip(self.stack.clip_behavior, size)
     }
 
     /// Only the displayed child is in the semantics tree; the others are laid out but

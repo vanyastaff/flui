@@ -19,10 +19,11 @@
 //! behaviour every caller predating this had.
 
 use crate::VerticalDirection;
+use crate::shown::OverflowClip;
 use flui_foundation::TextDirection;
 use flui_foundation::Variable;
 use flui_foundation::geometry::Axis;
-use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_foundation::geometry::{Offset, Rect, Size};
 use flui_painting::paint::Clip;
 
 use flui_rendering::{
@@ -186,8 +187,9 @@ pub struct RenderWrap {
     /// for a clip layer they do not need.
     clip_behavior: Clip,
     /// Whether the last accepted layout produced content larger than the box
-    /// it was constrained to. Set by `perform_layout`, read by `paint`.
-    has_visual_overflow: bool,
+    /// it was constrained to, written by `perform_layout` alone
+    /// (`crate::shown`).
+    overflow: OverflowClip,
     reported_baselines: [Option<f64>; 2],
 }
 
@@ -202,7 +204,7 @@ impl Default for RenderWrap {
             cross_axis_alignment: WrapCrossAlignment::Start,
             child_count: 0,
             clip_behavior: Clip::None,
-            has_visual_overflow: false,
+            overflow: OverflowClip::new(),
             reported_baselines: [None; 2],
             // Unflipped by default, which is what every caller predating the
             // axis-flip port observed.
@@ -378,12 +380,14 @@ impl RenderWrap {
     }
 
     /// Sets how overflowing content is clipped. `Clip::None` clips nothing.
+    /// Reports paint and semantics, since the clip also bounds the children's
+    /// accessible geometry.
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        flui_rendering::RenderUpdateImpact::PAINT
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Builder form of [`set_clip_behavior`](Self::set_clip_behavior).
@@ -393,10 +397,12 @@ impl RenderWrap {
         self
     }
 
-    /// Whether the last accepted layout overflowed its constraints.
+    /// Whether the last accepted layout overflowed its constraints. `true`
+    /// before the first layout and after a layout that failed: the wrap then
+    /// clips to the size it keeps.
     #[must_use]
     pub const fn has_visual_overflow(&self) -> bool {
-        self.has_visual_overflow
+        self.overflow.clips()
     }
 
     /// Maximum main-axis extent allowed by the incoming constraints.
@@ -692,17 +698,13 @@ impl flui_foundation::inspect::Inspect for RenderWrap {
         out.field("vertical_direction", &self.vertical_direction)
             .default(&VerticalDirection::Down);
         out.field("clip_behavior", &self.clip_behavior);
-        out.field("has_visual_overflow", &self.has_visual_overflow);
+        out.field("has_visual_overflow", &self.overflow.clips());
     }
 }
 
-// ── RenderBox impl ────────────────────────────────────────────────────────────
-
-impl RenderBox for RenderWrap {
-    type Arity = Variable;
-    type ParentData = BoxParentData;
-
-    /// Three-phase layout.
+impl RenderWrap {
+    /// Three-phase layout, returning the container's size with whether the
+    /// content overflows it.
     ///
     /// **Phases 1-2** are delegated to the private `compute_runs` so that
     /// `compute_dry_layout` can reuse identical sizing logic.
@@ -711,27 +713,22 @@ impl RenderBox for RenderWrap {
     /// free cross-axis space among runs via `run_alignment`, then distribute
     /// free main-axis space within each run via `alignment`, then place each
     /// child with its `cross_axis_alignment` offset within the run.
-    fn perform_layout(
+    fn lay_out(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
-    ) -> flui_rendering::RenderResult<Size> {
+    ) -> flui_rendering::RenderResult<(Size, bool)> {
         let constraints = *ctx.constraints();
         let child_count = ctx.child_count();
         self.child_count = child_count;
 
         let sized = self.compute_runs(constraints, child_count, |i, c| ctx.layout_child(i, c))?;
 
-        // Zero-child fast path: compute_runs already returns constraints.smallest().
-        //
-        // The flag is cleared BEFORE returning, not left over from the last
-        // non-empty pass. Nothing can overflow a wrap with no children, and a
-        // stale `true` here would keep clipping a subtree that no longer
-        // exists — `perform_layout` is the only writer, so an early return
-        // that skips it is an early return that lies.
+        // Zero-child fast path: compute_runs already returns
+        // constraints.smallest(), and nothing can overflow a wrap with no
+        // children.
         if child_count == 0 {
-            self.has_visual_overflow = false;
             self.reported_baselines = [None; 2];
-            return Ok(sized.container);
+            return Ok((sized.container, false));
         }
 
         let container = sized.container;
@@ -749,7 +746,7 @@ impl RenderBox for RenderWrap {
             .fold(0.0_f64, f64::max);
         let content_cross: f64 = runs.iter().map(|run| run.cross_axis_extent).sum::<f64>()
             + self.run_spacing * runs.len().saturating_sub(1) as f64;
-        self.has_visual_overflow = content_main - container_main > PRECISION_TOLERANCE
+        let overflows = content_main - container_main > PRECISION_TOLERANCE
             || content_cross - container_cross > PRECISION_TOLERANCE;
 
         let mut baselines: [Option<f64>; 2] = [None; 2];
@@ -771,7 +768,23 @@ impl RenderBox for RenderWrap {
         })?;
         self.reported_baselines = baselines;
 
-        Ok(container)
+        Ok((container, overflows))
+    }
+}
+
+// ── RenderBox impl ────────────────────────────────────────────────────────────
+
+impl RenderBox for RenderWrap {
+    type Arity = Variable;
+    type ParentData = BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Variable, BoxParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        self.overflow.begin();
+        let laid_out = self.lay_out(ctx);
+        self.overflow.commit(laid_out)
     }
 
     fn compute_dry_layout(
@@ -902,12 +915,15 @@ impl RenderBox for RenderWrap {
         // opposite default from a viewport, and deliberately so: a viewport
         // exists to show a window onto larger content, while a wrap overflows
         // only when its constraints could not hold what it was given.
-        if self.has_visual_overflow && self.clip_behavior != Clip::None {
-            let clip_rect = Rect::from_origin_size(Point::ZERO, ctx.size());
+        if let Some(clip_rect) = self.overflow.clip(self.clip_behavior, ctx.size()) {
             ctx.with_clip_rect(clip_rect, self.clip_behavior, PaintContext::paint_children);
         } else {
             ctx.paint_children();
         }
+    }
+
+    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect> {
+        self.overflow.clip(self.clip_behavior, size)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Variable, BoxParentData>) -> bool {

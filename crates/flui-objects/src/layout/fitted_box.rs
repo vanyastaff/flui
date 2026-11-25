@@ -26,8 +26,11 @@
 //!
 //! # Clipping
 //!
-//! `paint` clips to this box when the fit cropped the source and
-//! `clip_behavior` is not `Clip::None`. The machinery
+//! `paint` clips to this box when the last layout's fit cropped the source
+//! and `clip_behavior` is not `Clip::None`, and
+//! `describe_approximate_paint_clip` reports the same clip to the semantics
+//! and input-region walks (`crate::shown`). The crop is decided in layout
+//! alone, so a fit change relayouts. The machinery
 //! (`PaintContext::with_clip_rect`) is shared with the rest of
 //! the overflow-gated family that clips from `paint` rather than
 //! `paint_effects` — `RenderViewport`, `RenderConstraintsTransformBox`,
@@ -46,8 +49,9 @@
 //! `paint` puts them the right way round; `apply_paint_transform` then keeps
 //! coordinate mapping working without re-emitting the layer.
 
+use crate::shown::OverflowClip;
 use flui_foundation::Single;
-use flui_foundation::geometry::{Matrix4, Offset, Point, Rect, Size};
+use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 use flui_painting::paint::Clip;
 use flui_painting::{Alignment, BoxFit, FittedSizes};
 
@@ -82,8 +86,9 @@ pub struct RenderFittedBox {
     /// child (`Cover`/`FitWidth`/`FitHeight`/an overflowing `None`) under an
     /// off-center `alignment`. See [`Self::effective_transform`].
     source_offset: Offset,
-    /// True iff the scaled child exceeds `size` on either axis.
-    has_visual_overflow: bool,
+    /// Whether the fit cropped the child at the last layout, written by
+    /// `perform_layout` alone (`crate::shown`).
+    overflow: OverflowClip,
     /// True iff the child laid out to a zero-area size.
     ///
     /// Tracked separately from `has_child` because a degenerate child is still
@@ -108,7 +113,7 @@ impl RenderFittedBox {
             scale_y: 1.0,
             align_offset: Offset::ZERO,
             source_offset: Offset::ZERO,
-            has_visual_overflow: false,
+            overflow: OverflowClip::new(),
             child_is_empty: false,
             last_layout_sizes: None,
         }
@@ -133,10 +138,11 @@ impl RenderFittedBox {
     }
 
     /// Returns whether the scaled child overflowed the box at the last
-    /// layout. Reset on every layout.
+    /// layout. `true` before the first layout and after a layout that failed:
+    /// the box then clips to the size it keeps.
     #[inline]
     pub fn has_visual_overflow(&self) -> bool {
-        self.has_visual_overflow
+        self.overflow.clips()
     }
 
     /// Returns the cached scale factors `(sx, sy)` from the last layout.
@@ -207,27 +213,19 @@ impl RenderFittedBox {
         self
     }
 
-    /// Updates the fit and reports layout, or, when only the fitted transform
-    /// moves, paint and the re-placing of the child's semantics.
+    /// Updates the fit and reports layout when changed: the fit decides
+    /// whether the child is cropped, which only layout writes.
     pub fn set_fit(&mut self, fit: BoxFit) -> flui_rendering::RenderUpdateImpact {
         if self.fit == fit {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        let fit_affected_layout = self.fit == BoxFit::ScaleDown || fit == BoxFit::ScaleDown;
         self.fit = fit;
-        if fit_affected_layout {
-            flui_rendering::RenderUpdateImpact::LAYOUT
-        } else {
-            if let Some((size, child_size)) = self.last_layout_sizes {
-                self.update_paint_data(size, child_size);
-            }
-            flui_rendering::RenderUpdateImpact::PAINT
-                | flui_rendering::RenderUpdateImpact::SEMANTICS_GEOMETRY
-        }
+        flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
     /// Updates the alignment and, when it changed, reports paint and the
     /// re-placing of the child's semantics, which the fitted transform moves.
+    /// The alignment moves the child but does not change what is cropped.
     pub fn set_alignment(&mut self, alignment: Alignment) -> flui_rendering::RenderUpdateImpact {
         if self.alignment == alignment {
             return flui_rendering::RenderUpdateImpact::NONE;
@@ -262,13 +260,20 @@ impl RenderFittedBox {
         self.scale_y = 1.0;
         self.align_offset = Offset::ZERO;
         self.source_offset = Offset::ZERO;
-        self.has_visual_overflow = false;
         self.last_layout_sizes = None;
     }
 
-    /// Recomputes the fit transform and overflow state from the most recent
-    /// layout sizes. It is computed eagerly (not lazily at paint time) so paint, hit testing, and coordinate mapping share
-    /// one current cache even when only paint was invalidated.
+    /// Whether the fit crops a child of `child_size` in a box of `size`: the
+    /// source region it shows is smaller than the child on either axis.
+    fn crops(&self, size: Size, child_size: Size) -> bool {
+        let source = self.fit.apply(child_size, size).source;
+        source.width < child_size.width || source.height < child_size.height
+    }
+
+    /// Recomputes the fit transform from the most recent layout sizes. It is
+    /// computed eagerly (not lazily at paint time) so paint, hit testing, and
+    /// coordinate mapping share one current cache even when only paint was
+    /// invalidated.
     fn update_paint_data(&mut self, size: Size, child_size: Size) {
         let FittedSizes {
             source,
@@ -301,9 +306,6 @@ impl RenderFittedBox {
             Self::align_axis(self.alignment.x, source_free_width),
             Self::align_axis(self.alignment.y, source_free_height),
         );
-
-        self.has_visual_overflow =
-            source_width < child_size.width || source_height < child_size.height;
         self.last_layout_sizes = Some((size, child_size));
     }
 
@@ -329,6 +331,51 @@ impl RenderFittedBox {
                 constraints.constrain_size_and_attempt_to_preserve_aspect_ratio(child_size)
             }
         }
+    }
+}
+
+impl RenderFittedBox {
+    /// Lays the child out and returns the box's size with whether the fit
+    /// crops the child.
+    fn lay_out(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<(Size, bool)> {
+        let incoming = *ctx.constraints();
+
+        // (1) No child → smallest size, identity transform.
+        if ctx.child_count() == 0 {
+            self.has_child = false;
+            self.reset_transform_cache();
+            return Ok((incoming.smallest(), false));
+        }
+
+        // (2) Lay out the child unconstrained so it picks its intrinsic size.
+        self.has_child = true;
+        let child_size = ctx.layout_child(0, BoxConstraints::UNCONSTRAINED)?;
+        ctx.position_child(0, Offset::ZERO);
+
+        // (3) Degenerate child → smallest size, identity transform. It paints
+        //     nothing, so nothing of it is cropped.
+        if child_size.width <= 0.0 || child_size.height <= 0.0 {
+            self.reset_transform_cache();
+            self.child_is_empty = true;
+            return Ok((incoming.smallest(), false));
+        }
+        self.child_is_empty = false;
+
+        // (4) Our size honours the parent constraints while preserving the
+        //     child's aspect ratio (not a plain constrain). Shared with
+        //     compute_dry_layout via `fitted_size` so the wet and dry sizes
+        //     agree.
+        let size = self.fitted_size(incoming, child_size);
+
+        // (5) Resolve the transform. The retained size pair also lets the
+        //     paint-only alignment setter refresh this cache without forcing
+        //     layout.
+        self.update_paint_data(size, child_size);
+
+        Ok((size, self.crops(size, child_size)))
     }
 }
 
@@ -365,40 +412,9 @@ impl RenderBox for RenderFittedBox {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
     ) -> flui_rendering::RenderResult<Size> {
-        let incoming = *ctx.constraints();
-
-        // (1) No child → smallest size, identity transform.
-        if ctx.child_count() == 0 {
-            self.has_child = false;
-            self.reset_transform_cache();
-            return Ok(incoming.smallest());
-        }
-
-        // (2) Lay out the child unconstrained so it picks its intrinsic size.
-        self.has_child = true;
-        let child_size = ctx.layout_child(0, BoxConstraints::UNCONSTRAINED)?;
-        ctx.position_child(0, Offset::ZERO);
-
-        // (3) Degenerate child → smallest size, identity transform.
-        if child_size.width <= 0.0 || child_size.height <= 0.0 {
-            self.reset_transform_cache();
-            self.child_is_empty = true;
-            return Ok(incoming.smallest());
-        }
-        self.child_is_empty = false;
-
-        // (4) Our size honours the parent constraints while preserving the
-        //     child's aspect ratio (not a plain constrain). Shared with
-        //     compute_dry_layout via `fitted_size` so the wet and dry sizes
-        //     agree.
-        let size = self.fitted_size(incoming, child_size);
-
-        // (5) Resolve transform and overflow paint data. The retained size
-        // pair also lets paint-only fit/alignment setters refresh this cache
-        // without forcing layout.
-        self.update_paint_data(size, child_size);
-
-        Ok(size)
+        self.overflow.begin();
+        let laid_out = self.lay_out(ctx);
+        self.overflow.commit(laid_out)
     }
 
     flui_rendering::forward_single_child_intrinsics!();
@@ -473,8 +489,8 @@ impl RenderBox for RenderFittedBox {
     /// Paints the child through the fit transform, clipped to this box when
     /// the fit cropped the source.
     ///
-    /// The transformed child paint is wrapped in a clip when
-    /// `has_visual_overflow && clip_behavior != Clip::None`, so the composited
+    /// The transformed child paint is wrapped in a clip when the overflow
+    /// record clips and `clip_behavior != Clip::None`, so the composited
     /// chain reads clip-outside-transform
     /// (`[…, ClipRectLayer, TransformLayer, …]`).
     ///
@@ -532,12 +548,15 @@ impl RenderBox for RenderFittedBox {
             }
         };
 
-        if self.has_visual_overflow && self.clip_behavior != Clip::None {
-            let bounds = Rect::from_origin_size(Point::ZERO, size);
+        if let Some(bounds) = self.overflow.clip(self.clip_behavior, size) {
             ctx.with_clip_rect(bounds, self.clip_behavior, paint_transformed_child);
         } else {
             paint_transformed_child(ctx);
         }
+    }
+
+    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect> {
+        self.overflow.clip(self.clip_behavior, size)
     }
 
     /// Folds the fit transform into a child-to-parent coordinate mapping.

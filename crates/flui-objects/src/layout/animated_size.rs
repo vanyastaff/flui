@@ -39,10 +39,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::Single;
-use flui_foundation::geometry::{Point, Rect, Size};
+use flui_foundation::geometry::{Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 
+use crate::shown::OverflowClip;
 use crate::subscription::RenderSubscription;
 use flui_animation::{
     AnimatedValue, AnimatedValueView, Animation, AnimationRunFuture, MotionSpec, Vsync,
@@ -443,7 +444,9 @@ pub struct RenderAnimatedSize {
     /// Last frame's already-`constrain()`-ed committed size. Read only by
     /// [`dry_size_for`](Self::dry_size_for)'s `Stable` branch.
     current_size: Size,
-    has_visual_overflow: bool,
+    /// Whether the shown size is smaller than the target, written by
+    /// `perform_layout` alone (`crate::shown`).
+    overflow: OverflowClip,
     clip_behavior: Clip,
     /// Value subscription, cancelled on detach or owner release.
     listener_id: Option<RenderSubscription>,
@@ -460,7 +463,7 @@ impl RenderAnimatedSize {
             target: Size::ZERO,
             state: AnimatedSizeState::Start,
             current_size: Size::ZERO,
-            has_visual_overflow: false,
+            overflow: OverflowClip::new(),
             clip_behavior,
             listener_id: None,
         }
@@ -475,13 +478,14 @@ impl RenderAnimatedSize {
         }
     }
 
-    /// Updates the clip behavior and reports paint when changed.
+    /// Updates the clip behavior and reports paint and semantics when
+    /// changed, since the clip also bounds the child's accessible geometry.
     pub fn set_clip_behavior(&mut self, clip_behavior: Clip) -> flui_rendering::RenderUpdateImpact {
         if self.clip_behavior == clip_behavior {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        flui_rendering::RenderUpdateImpact::PAINT
+        flui_rendering::RenderUpdateImpact::PAINT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Reports layout when the owner has asked for a motion that layout has
@@ -509,10 +513,12 @@ impl RenderAnimatedSize {
         self.state
     }
 
-    /// Whether the last layout produced a size smaller than the target
-    /// (driving [`paint`](RenderBox::paint) to clip).
+    /// Whether the last layout produced a size smaller than the target, so
+    /// paint, semantics and input regions clip to the box. `true` before the
+    /// first layout and after a layout that failed: the box then clips to the
+    /// size it keeps.
     pub fn has_visual_overflow(&self) -> bool {
-        self.has_visual_overflow
+        self.overflow.clips()
     }
 
     // ------------------------------------------------------------------
@@ -601,13 +607,58 @@ impl RenderAnimatedSize {
     }
 }
 
+impl RenderAnimatedSize {
+    /// Lays the child out and returns the shown size with whether it is
+    /// smaller than the target.
+    fn lay_out(
+        &mut self,
+        ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
+    ) -> flui_rendering::RenderResult<(Size, bool)> {
+        let constraints = *ctx.constraints();
+
+        // Fast path: no child, or the parent gave us no freedom to animate
+        // into. The child is still laid out (so its own subtree stays
+        // consistent) but `align_child` is deliberately NOT called — the
+        // child keeps whatever offset it had, possibly stale. The shown size
+        // is the target, so nothing is clipped.
+        if ctx.child_count() == 0 || constraints.is_tight() {
+            if ctx.child_count() > 0 {
+                ctx.layout_single_child()?;
+            }
+            let snapped = constraints.smallest();
+            self.track(snapped);
+            self.size.apply_pending_motion();
+            self.state = AnimatedSizeState::Start;
+            self.current_size = snapped;
+            return Ok((snapped, false));
+        }
+
+        // Full, un-loosened constraints — matching the parent's own.
+        let child_size = ctx.layout_single_child()?;
+        match self.state {
+            AnimatedSizeState::Start => self.layout_start(child_size),
+            AnimatedSizeState::Stable => self.layout_stable(child_size),
+            AnimatedSizeState::Changed => self.layout_changed(child_size),
+            AnimatedSizeState::Unstable => self.layout_unstable(child_size),
+        }
+        self.size.apply_pending_motion();
+
+        let size = constraints.constrain(self.size.value());
+        self.current_size = size;
+        self.inner.align_child(ctx, size, child_size);
+        self.inner.record_child_baselines(ctx)?;
+        let overflows = size.width < self.target.width || size.height < self.target.height;
+        Ok((size, overflows))
+    }
+}
+
 impl std::fmt::Debug for RenderAnimatedSize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderAnimatedSize")
             .field("state", &self.state)
             .field("target", &self.target)
             .field("current_size", &self.current_size)
-            .field("has_visual_overflow", &self.has_visual_overflow)
+            .field("overflow", &self.overflow)
             .field("clip_behavior", &self.clip_behavior)
             .finish_non_exhaustive()
     }
@@ -634,42 +685,9 @@ impl RenderBox for RenderAnimatedSize {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
     ) -> flui_rendering::RenderResult<Size> {
-        self.has_visual_overflow = false;
-        let constraints = *ctx.constraints();
-
-        // Fast path: no child, or the parent gave us no freedom to animate
-        // into. The child is still laid out (so its own subtree stays
-        // consistent) but `align_child` is deliberately NOT called — the
-        // child keeps whatever offset it had, possibly stale.
-        if ctx.child_count() == 0 || constraints.is_tight() {
-            if ctx.child_count() > 0 {
-                ctx.layout_single_child()?;
-            }
-            let snapped = constraints.smallest();
-            self.track(snapped);
-            self.size.apply_pending_motion();
-            self.state = AnimatedSizeState::Start;
-            self.current_size = snapped;
-            return Ok(snapped);
-        }
-
-        // Full, un-loosened constraints — matching the parent's own.
-        let child_size = ctx.layout_single_child()?;
-        match self.state {
-            AnimatedSizeState::Start => self.layout_start(child_size),
-            AnimatedSizeState::Stable => self.layout_stable(child_size),
-            AnimatedSizeState::Changed => self.layout_changed(child_size),
-            AnimatedSizeState::Unstable => self.layout_unstable(child_size),
-        }
-        self.size.apply_pending_motion();
-
-        let size = constraints.constrain(self.size.value());
-        self.current_size = size;
-        self.inner.align_child(ctx, size, child_size);
-        self.inner.record_child_baselines(ctx)?;
-        self.has_visual_overflow =
-            size.width < self.target.width || size.height < self.target.height;
-        Ok(size)
+        self.overflow.begin();
+        let laid_out = self.lay_out(ctx);
+        self.overflow.commit(laid_out)
     }
 
     fn compute_distance_to_actual_baseline(
@@ -768,12 +786,15 @@ impl RenderBox for RenderAnimatedSize {
         reason = "paint_child` is ambiguous as a method path across `PaintContext` arities (E0034), so the lint's rewrite does not compile"
     )]
     fn paint(&self, ctx: &mut PaintContext<'_, Single>) {
-        if self.has_visual_overflow && self.clip_behavior != Clip::None {
-            let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
+        if let Some(bounds) = self.overflow.clip(self.clip_behavior, ctx.size()) {
             ctx.with_clip_rect(bounds, self.clip_behavior, |ctx| ctx.paint_child());
         } else {
             ctx.paint_child();
         }
+    }
+
+    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect> {
+        self.overflow.clip(self.clip_behavior, size)
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

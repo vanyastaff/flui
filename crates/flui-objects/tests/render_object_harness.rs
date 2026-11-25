@@ -37,7 +37,7 @@
 //! | `RenderSkeleton` | `harness_skeleton_*` | yes | — | yes | — | tick repaint, shared band |
 //! | `RenderShimmerMask` | `harness_shimmer_mask_*` | yes | yes | yes | — | mask only mid-sweep |
 //! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | paint transform |
-//! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | paint transform |
+//! | `RenderFittedBox` | `harness_fitted_box_*` | yes | yes | yes | yes | paint transform, shown clip |
 //! | `RenderFractionallySizedBox` | `harness_fractionally_sized_box_*` | yes | — | — | yes | — |
 //! | `RenderFractionalTranslation` | `harness_fractional_translation_*` | yes | — | — | yes | paint transform |
 //! | `RenderDecoratedBox` | `harness_decorated_box_*` | yes | — | yes | yes | — |
@@ -64,8 +64,8 @@
 //! | `RenderExcludeSemantics` | `harness_exclude_semantics_*` | yes | — | — | yes | semantics |
 //! | `RenderMetaData` | `harness_metadata_*` | yes | — | — | yes | — |
 //! | `RenderFlex` | `harness_flex_*` | yes | — | — | yes | queries, baseline |
-//! | `RenderStack` | `harness_stack_*` | yes | yes | — | yes | queries |
-//! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline |
+//! | `RenderStack` | `harness_stack_*` | yes | yes | yes | yes | queries, shown clip |
+//! | `RenderIndexedStack` | `harness_indexed_stack_*` | yes | yes | yes | yes | baseline, shown clip |
 //! | `RenderTheater` | `harness_theater_*` | yes | yes | yes | yes | skip_count, semantics_blocked_count |
 //! | `RenderListBody` | `harness_list_body_*` | yes | yes | — | yes | dry baseline |
 //! | `RenderToolbarItems` | `harness_toolbar_items_*` | yes | yes | yes | yes | split, semantics |
@@ -100,14 +100,14 @@
 //! | `RenderSliverAnimatedOpacity` | `harness_sliver_animated_opacity_*` | yes | yes | yes | yes | tick dirty-marking |
 //! | `RenderViewport` | `harness_viewport_*` | yes | — | — | yes | — |
 //! | `RenderShrinkWrappingViewport` | `harness_shrink_wrapping_viewport_*` | yes | — | — | yes | — |
-//! | `RenderWrap` | `harness_render_wrap_*` | yes | yes | — | yes | — |
+//! | `RenderWrap` | `harness_render_wrap_*`, `harness_wrap_*` | yes | yes | yes | yes | shown clip |
 //! | `RenderIntrinsicWidth` | `harness_intrinsic_width_*` | yes | — | — | yes | queries |
 //! | `RenderIntrinsicHeight` | `harness_intrinsic_height_*` | yes | — | — | yes | queries |
 //! | `RenderConstrainedOverflowBox` | `harness_constrained_overflow_box_*` | yes | — | — | yes | — |
 //! | `RenderSizedOverflowBox` | `harness_sized_overflow_box_*` | yes | — | — | yes | — |
-//! | `RenderConstraintsTransformBox` | `harness_constraints_transform_box_*` | yes | — | yes | yes | intrinsics |
+//! | `RenderConstraintsTransformBox` | `harness_constraints_transform_box_*` | yes | yes | yes | yes | intrinsics, shown clip |
 //! | `RenderRotatedBox` | `harness_rotated_box_*` | yes | yes | — | yes | paint transform |
-//! | `RenderAnimatedSize` | `harness_render_animated_size_*` | yes | — | yes | yes | state machine |
+//! | `RenderAnimatedSize` | `harness_render_animated_size_*`, `harness_animated_size_*` | yes | yes | yes | yes | state machine, shown clip |
 //! | `RenderSliverScrollingPersistentHeader` | `harness_sliver_persistent_header_scrolling_*` | yes | — | — | — | stretch trigger |
 //! | `RenderSliverPinnedPersistentHeader` | `harness_sliver_persistent_header_pinned_*` | yes | — | — | — | viewport wiring |
 //! | `RenderSliverFloatingPersistentHeader` | `harness_sliver_persistent_header_floating_*` | yes | — | — | — | state machine |
@@ -143,6 +143,10 @@
 // prefixed `render_object_harness__harness_snapshot__` accordingly.
 #[path = "harness_snapshot.rs"]
 mod harness_snapshot;
+
+// Family files of rows, listed in `FAMILY_FILES`.
+#[path = "harness/shown.rs"]
+mod shown;
 
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
@@ -13698,7 +13702,7 @@ macro_rules! family_files {
 /// `#[path = "harness/<name>.rs"]` and `mod <name>;` (`is_mounted` says where
 /// the two lines may stand). A file counts toward the catalog only when it is
 /// listed here and mounted (`family_files_are_mounted_and_listed`).
-const FAMILY_FILES: &[(&str, &str)] = family_files![];
+const FAMILY_FILES: &[(&str, &str)] = family_files![shown];
 
 /// The directory of the family files. The run's `CARGO_MANIFEST_DIR` comes
 /// first: cargo and nextest set it for the test process, and a nextest archive
@@ -16183,6 +16187,83 @@ fn family_multi_child() {
             (
                 "toolbar_items_keep_every_command_reachable",
                 harness_toolbar_items_keep_every_command_reachable,
+            ),
+        ],
+    );
+}
+
+#[test]
+fn family_shown() {
+    run_family(
+        "shown",
+        &[
+            (
+                "stack_hits_and_publishes_a_child_only_where_it_paints",
+                shown::harness_stack_hits_and_publishes_a_child_only_where_it_paints,
+            ),
+            (
+                "indexed_stack_hits_and_publishes_a_child_only_where_it_paints",
+                shown::harness_indexed_stack_hits_and_publishes_a_child_only_where_it_paints,
+            ),
+            (
+                "wrap_hits_and_publishes_a_child_only_where_it_paints",
+                shown::harness_wrap_hits_and_publishes_a_child_only_where_it_paints,
+            ),
+            (
+                "fitted_box_hits_and_publishes_a_child_only_where_it_paints",
+                shown::harness_fitted_box_hits_and_publishes_a_child_only_where_it_paints,
+            ),
+            (
+                "animated_size_hits_and_publishes_a_child_only_where_it_paints",
+                shown::harness_animated_size_hits_and_publishes_a_child_only_where_it_paints,
+            ),
+            (
+                "constraints_transform_box_hits_and_publishes_a_child_only_where_it_paints",
+                shown::harness_constraints_transform_box_hits_and_publishes_a_child_only_where_it_paints,
+            ),
+            (
+                "stack_cuts_semantics_and_regions_at_its_overflow_clip",
+                shown::harness_stack_cuts_semantics_and_regions_at_its_overflow_clip,
+            ),
+            (
+                "indexed_stack_cuts_semantics_and_regions_at_its_overflow_clip",
+                shown::harness_indexed_stack_cuts_semantics_and_regions_at_its_overflow_clip,
+            ),
+            (
+                "wrap_cuts_semantics_and_regions_at_its_overflow_clip",
+                shown::harness_wrap_cuts_semantics_and_regions_at_its_overflow_clip,
+            ),
+            (
+                "fitted_box_cuts_semantics_and_regions_at_its_overflow_clip",
+                shown::harness_fitted_box_cuts_semantics_and_regions_at_its_overflow_clip,
+            ),
+            (
+                "animated_size_cuts_semantics_and_regions_at_its_overflow_clip",
+                shown::harness_animated_size_cuts_semantics_and_regions_at_its_overflow_clip,
+            ),
+            (
+                "constraints_transform_box_cuts_semantics_and_regions_at_its_overflow_clip",
+                shown::harness_constraints_transform_box_cuts_semantics_and_regions_at_its_overflow_clip,
+            ),
+            (
+                "overflow_clip_publishes_what_a_clip_rect_publishes",
+                shown::harness_overflow_clip_publishes_what_a_clip_rect_publishes,
+            ),
+            (
+                "an_overflow_box_clips_after_a_layout_that_fails",
+                shown::harness_an_overflow_box_clips_after_a_layout_that_fails,
+            ),
+            (
+                "an_overflow_answer_is_cleared_by_a_layout_that_returns_early",
+                shown::harness_an_overflow_answer_is_cleared_by_a_layout_that_returns_early,
+            ),
+            (
+                "no_overflow_reports_no_clip",
+                shown::harness_no_overflow_reports_no_clip,
+            ),
+            (
+                "an_unclipped_overflow_is_painted_and_published_but_hit_only_inside_the_box",
+                shown::harness_an_unclipped_overflow_is_painted_and_published_but_hit_only_inside_the_box,
             ),
         ],
     );
