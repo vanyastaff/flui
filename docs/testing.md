@@ -1470,8 +1470,9 @@ Vulkan and once on GL, and locally on the host's adapter with the same two
 `cargo nextest run` lines and `FLUI_REQUIRE_GPU=1`.
 
 A scheduled `weekly.yml` workflow (Mondays, or manually via
-`workflow_dispatch`) builds and tests against a fresh `cargo update` — early
-warning for upstream semver breakage. It is not a merge gate. New RustSec
+`workflow_dispatch`) builds and tests against a fresh `cargo update`, which
+moves every dependency to its newest compatible version at least 7 days old
+(`.cargo/config.toml`) — early warning for upstream semver breakage. It is not a merge gate. New RustSec
 advisories have a daily workflow of their own, `advisories.yml`: it runs the
 `deps` job's advisories step against main and keeps the "RustSec advisory on
 main" issue open while a finding stands. `fuzz.yml` runs the fuzz targets every
