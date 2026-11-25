@@ -353,7 +353,7 @@ buffer is read asynchronously off the frame path and answered with the frame id.
 surface lacks `COPY_SRC`, the engine renders that frame's layer tree a second time into an
 offscreen target of the surface's size and format, and the answer says `source: rendered`, never
 `presented`. An occluded or minimized window that presents nothing answers `timeout` with the
-reason. `capture.rendered` re-renders the last committed layer tree offscreen on request; it is
+reason. With `source: rendered` the method re-renders the last committed layer tree offscreen; that is
 the headless source too (`HeadlessRenderer`). No capture blocks a frame: one pending request per
 window, and a second one gets `busy`.
 
@@ -453,7 +453,7 @@ increments(&mut t);
 ```
 
 The headless `#[test]` that `scenarios!` makes mounts the view with `Tester::mount` over
-`flui_testing::Headless`; `flui-driver` is not involved. Captures and baselines (`capture_presented`,
+`flui_testing::Headless`; `flui-driver` is not involved. Captures and baselines (`screenshot`,
 `expect_baseline`) join with the pixels task (FD10). The handle-chaining front end this spec first
 described (`Driver`, `Window`, `Element`, `ElementLocator`, `expect`, `expect_soft`,
 `Launch::headless`) is replaced by this shape, and task TP18 of
@@ -890,30 +890,48 @@ becomes a cannot-verify check, never a failure.
   real target, and over `flui_testing::Headless` for a headless run. A crate's `device` test target
   takes `flui-driver` as a dev-dependency; the facade has no `device` feature and re-exports
   nothing of the driver.
-- **CLI:** `flui drive <group> <verb>`, mirroring the method table (`flui drive semantics locate
-  --role button --name Increment`, `flui drive element tap …`, `flui drive capture presented -o
-  shot.png`, `flui drive wait until --appears …`). Every method is also reachable as `flui drive call
-  <method> --params <json>`, which keeps R28 true by construction, with ergonomic flags on top. A
-  coverage test checks each method has its typed subcommand. `flui drive launch` writes
-  `.flui/drive/session.json` (endpoint, token file path, target, pid). The token itself lives in a
-  `0600` file beside it, never in the JSON or argv. Later commands read it (R30). Output follows
-  flui-cli's policy (`--json`, `--quiet`, documented exit codes 0/1/2 for checks).
-- **MCP:** `flui mcp` runs the `flui-driver` `mcp` adapter over stdio, `rmcp` at MCP 2026-07-28. Each
-  method in `METHODS` has a `tier`: `Core`, or one of the capability groups. Tools are listed in
-  `METHODS` order, name `group_member`, input and output schemas from `schemars`, annotations from
-  `EFFECT` (ADR-0080's widened error branch stays).
-  - **Core (13, listed by default):** `app_launch`, `session_close`, `window_list`,
-    `window_snapshot`, `element_locate`, `element_perform_action`, `element_tap`, `element_type_text`,
-    `element_press_keys`, `element_scroll_into_view`, `wait_until`, `capture_presented`, `audit_screen`. Acting
-    tools answer a snapshot delta by default.
-  - **Groups (`--caps a,b`):** `session` (`session_attach`, `session_capabilities`, `window_placement`, `wait_frames`, `wait_settled`, `clock_set`), `input` (`input_perform_actions`, `input_inject`, `os_perform_actions`, the other
-    gestures), `inspect`, `pixels`, `record` (with `trace_*`), `perf`, `audit`, `explore`, and
-    `layout` (assertions, snapshots, annotated captures), `vision` (coordinate targets and `os.screenshot`, as Playwright MCP gates coordinate tools).
+- **CLI:** `flui drive <group> <member>`, mirroring the method table with `_` spelled `-`
+  (`flui drive element locate --role button --name Increment`, `flui drive element tap …`,
+  `flui drive window screenshot -o shot.png`, `flui drive wait until --appears …`). Every method
+  is also reachable as `flui drive call <method> --params <json>`, with ergonomic flags on top. A
+  coverage test checks each method has its typed subcommand, a row that releases a hold
+  excepted. Each command makes its own connection, so a command of a row that takes a hold
+  keeps that connection for the hold's life (ADR-0403 §7): `recording start` and
+  `events subscribe` run until they are interrupted, `perf start --for <ms>` stops and prints
+  its report, a clock rate lasts as long as its command, and an input sequence that leaves
+  something held is refused. `flui drive launch` writes `.flui/drive/session.json` (endpoint,
+  token file path, target, pid). The token itself lives in a `0600` file beside it, never in
+  the JSON or argv. Later commands read it (R30). Output follows flui-cli's policy (`--json`,
+  `--quiet`, documented exit codes 0/1/2 for checks).
+- **MCP:** `flui mcp` runs the `flui-driver` `mcp` adapter over stdio (ADR-0403 §7). It serves
+  MCP 2026-07-28 to a request that carries the revision's metadata and the handshake revisions
+  to a client that opens with `initialize`. Each row of `METHODS` is a tool named
+  `group_member`, in `METHODS` order, with input and output schemas from `schemars` and hints
+  from the row's effect, hold and reach (ADR-0080's widened error branch stays).
+  - **Core (13, listed by default):** `app_reload`, `audit_screen`, `element_locate`,
+    `element_perform_action`, `element_press_keys`, `element_scroll_into_view`, `element_tap`,
+    `element_type_text`, `session_close`, `wait_until`, `window_list`, `window_screenshot`,
+    `window_snapshot`. Acting tools answer a snapshot delta by default.
+  - **Tiers (`--caps a,b`):** `control` (`session_capabilities`, `app_build`, `app_config`,
+    `window_placement`, `window_environment`, `wait_frames`, `wait_settled`, `clock_set`),
+    `launch` (`app_launch`, `session_attach`: the two that start a process or move the server
+    to another app, never listed unless the person asks), `input` (`input_perform_actions`,
+    `input_inject`, the other gestures), `inspect`, `pixels`, `record` (`recording_*`,
+    `window_announcements`, `trace_*`), `perf`, `audit`, `explore`, `layout` (assertions,
+    snapshots, annotated screenshots) and `vision` (coordinate targets and the `os_*` tools, as
+    Playwright MCP gates coordinate tools).
+  - **Not tools:** `events_subscribe` and `events_unsubscribe` (a resource's change reaches a
+    client on the `subscriptions/listen` stream it opened), `input_release_actions` (a sequence
+    must release what it presses) and `overlay_show_build_status` (the status is its builder's
+    to report).
+  - **Holds:** the server keeps a ledger of what its calls left on its connection to the app,
+    and the first call after that connection is lost answers what went with it before anything
+    is sent. A recording is written to a file by the server, under a number of the server's.
 
-  Tool failure is `isError` with the error object; protocol failure is a JSON-RPC error. Captures
-  return image content plus `CaptureMeta`. The adapter keeps no handle state: refs are `w3/e12`
-  strings the app validates. A test checks that the core set stays at 13 tools or fewer and that
-  every method belongs to exactly one tier.
+  Tool failure is `isError` with the error object; protocol failure is a JSON-RPC error. A
+  screenshot returns image content plus `Screenshot`. Refs are `w3/e12` strings the app
+  validates. A test checks that the core set stays at 13 tools or fewer, that every method
+  belongs to exactly one tier and that no row that reaches the host is listed by default.
 - **Inspector:** `flui inspect` starts `tools/flui-inspector`. It is a FLUI app with material
   widgets, built on `flui-driver`, with tree panes for semantics, widgets, render and layers
   linked by the `links` ids; a live presented-frame view with click-to-pick (`element.actionability`
@@ -921,7 +939,7 @@ becomes a cannot-verify check, never a failure.
   journal entries and arena decisions from `events.subscribe`; and a trace player scrubbing
   `trace.jsonl` with its evidence. It has its own scenario suite driven by `flui-driver`.
   When a FLUI defect breaks the inspector, the CLI is the fallback that renders nothing with FLUI:
-  `flui drive semantics read`, `inspect widgets|render|layers --json`, `capture … -o` and
+  `flui drive window snapshot`, `inspect widget-tree|render-tree|layer-tree --json`, `window screenshot -o` and
   `trace show` cover everything the inspector shows except picking on a live image.
   `docs/testing.md` documents that path.
 
