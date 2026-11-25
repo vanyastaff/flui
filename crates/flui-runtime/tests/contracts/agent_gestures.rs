@@ -1718,3 +1718,298 @@ fn every_gesture_crosses_the_wire_through_the_connections_lease() {
         );
     }
 }
+
+/// `element.type_text` of "hi" into "Go", on `via`.
+fn text_into_go(via: InputPolicy) -> TypeTextParams {
+    let mut params: TypeTextParams = serde_json::from_value(json!({
+        "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+        "text": "hi",
+    }))
+    .expect("type text reads");
+    params.options.via = Some(via);
+    params
+}
+
+/// A point at (10, 10) in `window`.
+fn point_in(window: &AgentWindow) -> Target {
+    Target::Point {
+        window: window.id(),
+        at: LogicalPoint::new(10.0, 10.0),
+    }
+}
+
+/// What a gesture's target and path rules answer, each refusal naming why: a point and a path the
+/// gesture has a form on are taken; a path it has no form on falls back unless required, then is
+/// refused; a point to scroll into view and a call with no lease are
+/// refused before anything is held; text typed on the semantic path focuses its target through
+/// the semantics action and injects only the text.
+#[test]
+fn a_gesture_answers_by_its_target_and_path_rules() {
+    type Make = fn(&AgentWindow, &InputLease) -> AgentAnswer<ActOutcome>;
+    type Expected = Result<InputPath, (ErrorCode, &'static str)>;
+    let rows: [(&str, Make, Expected); 10] = [
+        (
+            "a tap on a point preferring the semantic path falls back to synthetic input",
+            |window, lease| {
+                let mut tap = TapParams::new(point_in(window));
+                tap.options.via = Some(InputPolicy::prefer(InputPath::Semantic));
+                ask::<method::ElementTap>(lease, tap)
+            },
+            Ok(InputPath::Synthetic),
+        ),
+        (
+            "a secondary tap requiring the semantic path",
+            |_, lease| {
+                let mut tap = TapParams::new(named("Go"));
+                tap.button = PointerButton::Secondary;
+                tap.options.via = Some(InputPolicy::require(InputPath::Semantic));
+                ask::<method::ElementTap>(lease, tap)
+            },
+            Err((
+                ErrorCode::NotSupported,
+                "this gesture has no semantics action that does the same",
+            )),
+        ),
+        (
+            "scroll_into_view requiring the semantic path",
+            |_, lease| {
+                ask::<method::ElementScrollIntoView>(
+                    lease,
+                    scroll_item_12_into_view(InputPolicy::require(InputPath::Semantic)),
+                )
+            },
+            Ok(InputPath::Semantic),
+        ),
+        (
+            "scroll_into_view on a point",
+            |window, lease| {
+                let mut params = scroll_item_12_into_view(InputPolicy::default());
+                params.target = point_in(window);
+                ask::<method::ElementScrollIntoView>(lease, params)
+            },
+            Err((
+                ErrorCode::InvalidArgument,
+                "a point names no element to scroll into view",
+            )),
+        ),
+        (
+            "text requiring the semantic path",
+            |_, lease| {
+                ask::<method::ElementTypeText>(
+                    lease,
+                    text_into_go(InputPolicy::require(InputPath::Semantic)),
+                )
+            },
+            Err((
+                ErrorCode::NotSupported,
+                "text and keys have no semantics action that does the same",
+            )),
+        ),
+        (
+            "text requiring synthetic input",
+            |_, lease| {
+                ask::<method::ElementTypeText>(
+                    lease,
+                    text_into_go(InputPolicy::require(InputPath::Synthetic)),
+                )
+            },
+            Ok(InputPath::Synthetic),
+        ),
+        (
+            "text preferring the semantic path",
+            |_, lease| {
+                ask::<method::ElementTypeText>(
+                    lease,
+                    text_into_go(InputPolicy::prefer(InputPath::Semantic)),
+                )
+            },
+            Ok(InputPath::Synthetic),
+        ),
+        (
+            "a swipe down on a point naming no distance",
+            |window, lease| {
+                let mut swipe = swipe_up();
+                swipe.direction = Direction::Down;
+                swipe.target = Target::Point {
+                    window: window.id(),
+                    at: LogicalPoint::new(100.0, 200.0),
+                };
+                ask::<method::ElementSwipe>(lease, swipe)
+            },
+            Ok(InputPath::Synthetic),
+        ),
+        (
+            "a tap asked with no lease, on a target that never passes",
+            |window, _| {
+                window
+                    .call::<method::ElementTap>(TapParams::new(named("Gated")))
+                    .expect("the inbox has room")
+            },
+            Err((
+                ErrorCode::InvalidArgument,
+                "a gesture's synthetic input is asked through an input lease",
+            )),
+        ),
+        (
+            "a tap on the os path",
+            |_, lease| {
+                let mut tap = TapParams::new(named("Go"));
+                tap.options.via = Some(InputPolicy::prefer(InputPath::Os));
+                ask::<method::ElementTap>(lease, tap)
+            },
+            Err((
+                ErrorCode::NotSupported,
+                "the os path is composed by the driver with its lane, not in the app",
+            )),
+        ),
+    ];
+    for (case, make, expected) in rows {
+        let (mut host, _agent, window, lease, _presses) = shown();
+        let mut asked = make(&window, &lease);
+        let (answer, frames) = answered(&mut host, &mut asked, 60);
+        match (answer, expected) {
+            (Ok(outcome), Ok(via)) => {
+                assert_eq!(outcome.via, via, "{case}: {outcome:?}");
+                if case.starts_with("text preferring") {
+                    // The focus is the semantics action; only the text is injected.
+                    assert_eq!(
+                        kinds_made(&mut host, &window, &outcome),
+                        [InputKind::Text],
+                        "{case}"
+                    );
+                    assert!(outcome.element.is_some(), "{case}: {outcome:?}");
+                    let go = element(&mut host, &window, "Go");
+                    let mut read = window
+                        .call::<method::SemanticsRead>(
+                            flui_protocol::tree::ReadParams::new(window.id())
+                                .query(flui_protocol::tree::ReadQuery::new().root(go.element)),
+                        )
+                        .expect("the inbox has room");
+                    let tree = answered(&mut host, &mut read, 2).0.expect("read");
+                    assert!(tree.roots[0].focused, "{case}: Go has focus: {tree:?}");
+                }
+            }
+            (Err(refused), Err((code, says))) => {
+                assert_eq!(refused.code, code, "{case}: {refused:?}");
+                assert_eq!(refused.message, says, "{case}: {refused:?}");
+                assert_eq!(frames, 1, "{case}: refused before anything is held");
+            }
+            (answer, expected) => panic!("{case}: {answer:?}, not {expected:?}"),
+        }
+    }
+}
+
+/// Whether `host`'s list names a cause only a frame clears.
+fn owes_a_frame(host: &mut HeadlessHost) -> bool {
+    host.unsettled()
+        .causes()
+        .any(|cause| cause.cleared_by == ClearedBy::NextFrame)
+}
+
+/// A gated tap, held until `timeout_ms` passes, through `lease`; on the semantic path when
+/// `semantic`.
+fn gated(lease: &InputLease, timeout_ms: u64, semantic: bool) -> AgentAnswer<ActOutcome> {
+    let mut tap = TapParams::new(named("Gated"));
+    tap.options = timeout(tap.options, timeout_ms);
+    if semantic {
+        tap.options.via = Some(InputPolicy::require(InputPath::Semantic));
+    }
+    ask::<method::ElementTap>(lease, tap)
+}
+
+/// The window's held acts are each their own: an act nobody awaits any more injects nothing and
+/// holds back none behind it; a lease let go ends the acts that inject through it and no other,
+/// and not an act on the semantic path, which injects through none; while an act is held the
+/// window asks for frames, and once the last is answered it stops asking.
+#[test]
+fn each_held_act_ends_on_its_own() {
+    let (mut host, _agent, window, lease, presses) = shown();
+    // Given up on: injects nothing when its target turns ready, and holds back no act behind it.
+    let mut before = ask::<method::ElementTap>(&lease, TapParams::new(named("Go")));
+    let abandoned = gated(&lease, 60_000, false);
+    let mut go = ask::<method::ElementTap>(&lease, TapParams::new(named("Move")));
+    // All three are held at the drain that serves them, then the middle one is given up on.
+    let _ = host.pump(Duration::ZERO);
+    assert!(go.try_take().is_none(), "held for stability");
+    drop(abandoned);
+    answered(&mut host, &mut go, 30)
+        .0
+        .expect("the act behind the one given up on is performed");
+    answered(&mut host, &mut before, 30)
+        .0
+        .expect("the act before the one given up on is performed");
+    press(&mut host, &window, "Enable");
+    for _ in 0..10 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert_eq!(
+        presses.gated.load(Ordering::SeqCst),
+        0,
+        "an act nobody awaits injects nothing"
+    );
+
+    let (mut host, _agent, window, first, _presses) = shown();
+    let second = window.input_lease().expect("leased again");
+    let mut through_first = gated(&first, 60_000, false);
+    let mut through_second = gated(&second, 60_000, false);
+    let mut semantic = gated(&first, 300, true);
+    for _ in 0..3 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert!(
+        owes_a_frame(&mut host),
+        "a window holding acts asks for frames"
+    );
+    drop(first);
+    let gone = answered(&mut host, &mut through_first, 4)
+        .0
+        .expect_err("its lease went");
+    assert_eq!(gone.code, ErrorCode::Gone, "{gone:?}");
+    for _ in 0..3 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert!(
+        through_second.try_take().is_none(),
+        "the act through the other lease holds on"
+    );
+    let timed_out = answered(&mut host, &mut semantic, 40)
+        .0
+        .expect_err("the semantic act holds to its timeout, not to the lease");
+    assert_eq!(timed_out.code, ErrorCode::NotActionable, "{timed_out:?}");
+    drop(through_second);
+    drop(second);
+    for _ in 0..3 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert!(
+        !owes_a_frame(&mut host),
+        "a window holding no act asks for no frame"
+    );
+}
+
+/// On a turn without a frame the acts whose deadline passed are answered and the others hold on,
+/// in whatever order they were held, and an act nobody awaits holds back none behind it: in a
+/// window that draws nothing, a tap held to 60 s and one given up on, before
+/// one held to 200 ms leaves the last answered at its deadline and the first still held.
+#[test]
+fn a_turn_without_a_frame_answers_the_acts_due_and_keeps_the_rest() {
+    let (mut host, _agent, _window, lease, _presses) = shown();
+    host.set_window_visible(false);
+    let _ = host.pump(Duration::from_millis(16));
+    let mut long = gated(&lease, 60_000, false);
+    let abandoned = gated(&lease, 60_000, false);
+    let mut short = gated(&lease, 200, false);
+    let _ = host.pump(Duration::ZERO);
+    drop(abandoned);
+    let Some(answer) = host.run_until_answered(
+        &mut short,
+        Duration::from_millis(16),
+        Duration::from_secs(5),
+    ) else {
+        panic!("the act held to 200 ms is answered at its deadline");
+    };
+    let refused = answer.expect_err("its target never passed");
+    assert_eq!(refused.code, ErrorCode::NotActionable, "{refused:?}");
+    let _ = host.pump(Duration::ZERO);
+    assert!(long.try_take().is_none(), "the act held to 60 s holds on");
+}
