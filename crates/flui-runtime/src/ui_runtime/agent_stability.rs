@@ -5,10 +5,12 @@
 //! comparison made with no frame between the two says nothing about whether
 //! the element moves, so one counts only when a terminal frame has run since
 //! the earlier call, or when the presentation has no work pending that could
-//! still move the element. A call that reads the tree an earlier call already
-//! compared, with work pending, answers what that call did, so a turn without
-//! a frame at the same revision never reports an element still on that frame
-//! as moving. Owner thread only.
+//! still move the element. A call at the revision of the last one, with work
+//! pending, answers what the comparison across the frame into that revision
+//! did, so a turn without a frame never reports an element still on that frame
+//! as moving; a comparison made only because the presentation was idle is not
+//! replayed, since the work pending now may move the element on the next
+//! frame. Owner thread only.
 
 use rustc_hash::FxHashMap;
 
@@ -22,9 +24,11 @@ use crate::epoch::TreeRevision;
 struct Seen {
     revision: TreeRevision,
     rect: LogicalRect,
-    /// The bounds it had at the earlier read `rect` was compared with, when one could be: the
-    /// answer every read at the same revision gives.
-    compared_with: Option<LogicalRect>,
+    /// The bounds it had at the read before the frame that brought `revision`, when a read at an
+    /// earlier revision was taken: the answer a read at `revision` with work pending gives. A
+    /// comparison made while the presentation was idle is not kept here, since it holds only
+    /// while nothing is pending.
+    across_frame: Option<LogicalRect>,
     /// When the check last read it, in the table's own count of reads.
     read: u64,
 }
@@ -52,8 +56,10 @@ impl AgentStability {
     /// bounds it had at the earlier read it is compared with, if one can be:
     /// a frame has run since the last read (`revision` moved), or nothing is
     /// pending (`idle`). A read at the revision of the last one, with work
-    /// pending, learns nothing new and gives the answer that read gave: the
-    /// tree it reads is the same.
+    /// pending, learns nothing new and gives the answer the comparison across
+    /// the frame into that revision gave, or none when no read before that
+    /// frame was taken: an earlier answer that held only because nothing was
+    /// pending does not hold now.
     pub(crate) fn observe(
         &mut self,
         element: ElementRef,
@@ -74,26 +80,31 @@ impl AgentStability {
             let first = Seen {
                 revision,
                 rect,
-                compared_with: None,
+                across_frame: None,
                 read,
             };
             self.seen.insert(element, first);
             return None;
         };
-        if revision > before.revision || idle {
-            let earlier = Some(before.rect);
+        let earlier = before.rect;
+        before.read = read;
+        if revision > before.revision {
             *before = Seen {
                 revision,
                 rect,
-                compared_with: earlier,
+                across_frame: Some(earlier),
                 read,
             };
-            earlier
+            Some(earlier)
+        } else if idle {
+            // Nothing pending can move it: the last bounds it had are the ones to compare with.
+            // The answer holds only while that lasts, so the comparison across the frame stays
+            // the one a read with work pending gives.
+            before.rect = rect;
+            Some(earlier)
         } else {
-            // Read again within the frame: it stays, its bounds and its answer those of the
-            // earlier read.
-            before.read = read;
-            before.compared_with
+            // Read again within the frame with work pending: the tree is the one the frame left.
+            before.across_frame
         }
     }
 

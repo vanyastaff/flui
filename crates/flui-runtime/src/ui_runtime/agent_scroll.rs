@@ -274,8 +274,13 @@ impl ScrollSearch {
             return answer(reply, Ok(outcome));
         }
         let owed = ReadingOwed::new(outcome, self.snapshot, self.before.take());
-        ctx.runtime
-            .park_act_read(ctx.state, owed, reply.clone(), ctx.caught);
+        ctx.runtime.park_act_read(
+            ctx.state,
+            owed,
+            Some(ctx.deadline),
+            reply.clone(),
+            ctx.caught,
+        );
         Attempt::Done
     }
 }

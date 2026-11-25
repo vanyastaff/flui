@@ -30,8 +30,8 @@ use flui_view::Signal;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 use flui_view::prelude::*;
 use flui_widgets::{
-    AnimatedPadding, Column, ListView, Listener, Positioned, RawButton, ScrollView, Semantics,
-    SingleChildScrollView, SizedBox, Stack, Text,
+    AnimatedPadding, Column, ListView, Listener, Padding, Positioned, RawButton, ScrollView,
+    Semantics, SingleChildScrollView, SizedBox, Stack, Text,
 };
 use parking_lot::Mutex;
 use serde_json::json;
@@ -482,6 +482,124 @@ fn an_act_held_for_stability_lands_at_the_bounds_of_the_frame_it_passed_on() {
     assert!(
         (at.x - rest.x).abs() < 0.5 && (at.y - rest.y).abs() < 0.5,
         "pressed at {at:?}, the target rests at {rest:?}"
+    );
+}
+
+/// What `element` shows in `rig`'s window, read at one drain.
+fn facts_in(rig: &mut crate::agent_rig::Rig, element: ElementRef) -> Actionability {
+    let mut facts = rig
+        .window
+        .call::<method::ElementActionability>(ActionabilityParams::new(element))
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    facts
+        .try_take()
+        .expect("answered at the drain")
+        .expect("its facts")
+}
+
+/// "Jump", whose press moves "Target" 80 px right on the next frame.
+#[derive(Clone, StatefulView)]
+struct Jumping;
+
+struct JumpingState {
+    jumped: Signal<bool>,
+}
+
+impl StatefulView for Jumping {
+    type State = JumpingState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        JumpingState {
+            jumped: ctx.signal(false),
+        }
+    }
+}
+
+impl ViewState<Jumping> for JumpingState {
+    fn build(&self, _view: &Jumping, ctx: &dyn BuildContext) -> impl IntoView {
+        let jumped = self.jumped;
+        let inset = if jumped.get(ctx) {
+            EdgeInsets::only_left(80.0)
+        } else {
+            EdgeInsets::ZERO
+        };
+        Column::new(vec![
+            RawButton::new(Text::new("Jump"))
+                .on_pressed(move |ctx| jumped.update(ctx, |on| *on = true))
+                .into_view()
+                .boxed(),
+            Padding::new(inset)
+                .child(RawButton::new(Text::new("Target")).on_pressed(|_| {}))
+                .into_view()
+                .boxed(),
+        ])
+    }
+}
+
+/// The stability an idle window answered is not carried to a later read of the same frame with
+/// work pending: a target read twice while nothing is pending, then moved by a handler in the
+/// drain that asks for a tap on it, is held until it holds still, and the press lands where it
+/// rests, not where it was when the tap was asked.
+#[test]
+fn stability_answered_while_idle_does_not_pass_an_act_once_work_is_pending() {
+    let mut rig = crate::agent_rig::Rig::showing(&Jumping);
+    let mut located = rig
+        .window
+        .call::<method::SemanticsLocate>(LocateParams::new(Locator::named("Target")))
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    let target = located
+        .try_take()
+        .expect("located at the drain")
+        .expect("located")
+        .matches[0]
+        .element;
+    let _ = facts_in(&mut rig, target);
+    let asked = facts_in(&mut rig, target);
+    assert!(asked.stable, "idle, it holds still: {asked:?}");
+    let asked_at = asked.rect.expect("Target shows bounds").center();
+    // One drain: the handler moves it, then the tap is attempted with that work pending and no
+    // frame since the idle read.
+    let mut moved = rig
+        .window
+        .call::<method::SemanticsAct>(ActParams::new(named("Jump"), ActionName::Invoke))
+        .expect("the inbox has room");
+    let mut tap = rig
+        .lease
+        .call::<method::ElementTap>(TapParams::new(named("Target")))
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    moved
+        .try_take()
+        .expect("pressed at the drain")
+        .expect("pressed");
+    let mut outcome = None;
+    for _ in 0..90 {
+        rig.frame();
+        if let Some(answer) = tap.try_take() {
+            outcome = Some(answer.expect("the target settles and is tapped"));
+            break;
+        }
+    }
+    let outcome = outcome.expect("the tap is answered within 90 frames");
+    let rest = facts_in(&mut rig, target)
+        .rect
+        .expect("Target shows bounds")
+        .center();
+    assert!(rest.x - asked_at.x > 10.0, "{asked_at:?} to {rest:?}");
+    let span = outcome.observed.expect("the tap made entries");
+    let down = rig
+        .journal()
+        .entries
+        .into_iter()
+        .filter(|entry| (span.from..=span.to).contains(&entry.seq))
+        .find(|entry| entry.kind == InputKind::PointerDown)
+        .expect("the tap pressed");
+    let at = down.at.expect("a press has a position");
+    assert!(
+        (at.x - rest.x).abs() < 0.5 && (at.y - rest.y).abs() < 0.5,
+        "pressed at {at:?}, the target rests at {rest:?}, and was at {asked_at:?}"
     );
 }
 
@@ -1158,6 +1276,125 @@ fn input_whose_window_stops_drawing_is_answered_within_its_play_time() {
     );
 }
 
+/// How many of `entries` are of `kind`.
+fn count_of(entries: &[flui_protocol::input::JournalEntry], kind: InputKind) -> usize {
+    entries.iter().filter(|entry| entry.kind == kind).count()
+}
+
+/// Pumps 250 ms frames, four times slower than the 60 Hz an act's play time counts, until `answer`
+/// is answered, at most 20 of them.
+fn answered_slowly<T>(
+    host: &mut HeadlessHost,
+    answer: &mut AgentAnswer<T>,
+) -> Result<T, ErrorObject> {
+    for _ in 0..20 {
+        let _ = host.pump(Duration::from_millis(250));
+        if let Some(answer) = answer.try_take() {
+            return answer;
+        }
+    }
+    panic!("no answer within 20 slow frames");
+}
+
+/// An act whose input stops before its last tick, its promise run out in a window drawing slower
+/// than the 60 Hz the play time counts, lets go of what it pressed as it is answered: a drag cut
+/// after its press cancels its contact, so the same lease's next tap presses and the button sees
+/// the tap; a chord cut after its first keys lifts them.
+#[test]
+fn an_act_stopped_mid_play_lets_go_of_what_it_pressed() {
+    let (mut host, _agent, window, lease, presses) = shown();
+    let journaled = journal(&mut host, &window).entries.len();
+    let mut drag: DragParams = serde_json::from_value(json!({
+        "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+        "to": { "locator": { "name": { "match": "exact", "text": "Enable" } } },
+    }))
+    .expect("a drag reads");
+    drag.options = timeout(drag.options, 50);
+    let mut drag = ask::<method::ElementDragTo>(&lease, drag);
+    let cut = answered_slowly(&mut host, &mut drag)
+        .expect_err("its input did not play out by its promise");
+    assert_eq!(cut.code, ErrorCode::Timeout, "{cut:?}");
+    let entries = journal(&mut host, &window).entries.split_off(journaled);
+    assert_eq!(count_of(&entries, InputKind::PointerDown), 1, "{entries:?}");
+    assert_eq!(
+        count_of(&entries, InputKind::PointerUp) + count_of(&entries, InputKind::PointerCancel),
+        1,
+        "the press is let go: {entries:?}"
+    );
+    let mut tap = ask::<method::ElementTap>(&lease, TapParams::new(named("Go")));
+    let outcome = answered(&mut host, &mut tap, 30).0.expect("the tap runs");
+    assert_eq!(outcome.effect.kind, EffectKind::Ran);
+    let made = kinds_made(&mut host, &window, &outcome);
+    assert!(
+        made.contains(&InputKind::PointerDown) && made.contains(&InputKind::PointerUp),
+        "the next tap through the lease presses and lifts: {made:?}"
+    );
+    assert_eq!(presses.go.load(Ordering::SeqCst), 1, "Go saw the tap");
+
+    let (mut host, _agent, window, lease, _presses) = shown();
+    let journaled = journal(&mut host, &window).entries.len();
+    let mut keys: PressKeysParams = serde_json::from_value(json!({
+        "window": lease.window(),
+        "keys": ["Shift+Control+a"],
+    }))
+    .expect("press keys reads");
+    keys.options = timeout(keys.options, 50);
+    let mut keys = ask::<method::ElementPressKeys>(&lease, keys);
+    let cut = answered_slowly(&mut host, &mut keys)
+        .expect_err("its input did not play out by its promise");
+    assert_eq!(cut.code, ErrorCode::Timeout, "{cut:?}");
+    let entries = journal(&mut host, &window).entries.split_off(journaled);
+    let down = count_of(&entries, InputKind::KeyDown);
+    assert!(down >= 1, "a key went down before the cut: {entries:?}");
+    assert_eq!(
+        count_of(&entries, InputKind::KeyUp),
+        down,
+        "every key it pressed is up: {entries:?}"
+    );
+}
+
+/// An act whose last tick has played is answered by its deadline even when its window stops
+/// drawing before the frame its reading waits for: a tap whose release reached the button, with
+/// the window hidden right after that boundary, is answered `ran` by the owner turn at the end of
+/// its promise, which wakes the loop.
+#[test]
+fn an_act_whose_window_stops_drawing_after_its_input_played_is_answered_by_its_deadline() {
+    let (mut host, _agent, _window, lease, presses) = shown();
+    let mut tap = TapParams::new(named("Go"));
+    tap.options = timeout(tap.options, 300);
+    let mut tap = ask::<method::ElementTap>(&lease, tap);
+    let mut played = false;
+    for _ in 0..30 {
+        let _ = host.pump(Duration::from_millis(16));
+        if presses.go.load(Ordering::SeqCst) == 1 {
+            played = true;
+            break;
+        }
+    }
+    assert!(played, "the tap's release reached Go while the window drew");
+    assert!(
+        tap.try_take().is_none(),
+        "its answer waits for the frame after its last tick"
+    );
+    host.set_window_visible(false);
+    let hidden_at = host.clock().elapsed();
+    let Some(answer) =
+        host.run_until_answered(&mut tap, Duration::from_millis(16), Duration::from_secs(5))
+    else {
+        panic!("answered by its deadline while the window draws nothing");
+    };
+    let outcome = answer.expect("its input played");
+    assert_eq!(outcome.effect.kind, EffectKind::Ran, "{outcome:?}");
+    assert!(
+        !outcome.readback_failed,
+        "no reading was asked for: {outcome:?}"
+    );
+    assert!(
+        host.clock().elapsed().saturating_sub(hidden_at) < Duration::from_millis(1_000),
+        "answered by its promise, not at the 5 s bound"
+    );
+}
+
 /// "Row 0" to "Row 149", each a line of text.
 #[derive(Clone, StatelessView)]
 struct Rows;
@@ -1250,7 +1487,7 @@ fn the_stability_check_remembers_every_element_read_between_two_frames() {
 #[test]
 fn a_gesture_answers_why_it_did_not_run() {
     type Setup = fn(&mut HeadlessHost, &AgentWindow, &InputLease) -> AgentAnswer<ActOutcome>;
-    let rows: [(&str, Setup, Result<(), ErrorCode>); 9] = [
+    let rows: [(&str, Setup, Result<(), ErrorCode>); 10] = [
         (
             "a pinch inside the scale slop",
             |_, _, lease| {
@@ -1298,6 +1535,18 @@ fn a_gesture_answers_why_it_did_not_run() {
                 let params: PressKeysParams = serde_json::from_value(json!({
                     "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
                     "keys": ["Control+"],
+                }))
+                .expect("press keys reads");
+                ask::<method::ElementPressKeys>(lease, params)
+            },
+            Err(ErrorCode::InvalidArgument),
+        ),
+        (
+            "a chord naming a mistyped key",
+            |_, _, lease| {
+                let params: PressKeysParams = serde_json::from_value(json!({
+                    "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+                    "keys": ["Ctrl-a"],
                 }))
                 .expect("press keys reads");
                 ask::<method::ElementPressKeys>(lease, params)
@@ -2685,11 +2934,11 @@ fn a_window_asks_for_no_frame_once_its_last_act_is_answered() {
         .0
         .expect_err("its element left");
     assert_eq!(gone.code, ErrorCode::Gone, "{gone:?}");
-    let owes = host
-        .unsettled()
-        .causes()
-        .any(|cause| cause.cleared_by == ClearedBy::NextFrame);
-    assert!(!owes, "no act is held, so no frame is asked for");
+    // The frames an act asks for are a wake of the loop, never a cause of the application's.
+    assert!(
+        !asks_for_a_frame(&mut host),
+        "no act is held, so the loop is not woken for a frame"
+    );
 }
 
 /// `scroll_until` that finds its element at once, with no reading asked for, answers in the turn

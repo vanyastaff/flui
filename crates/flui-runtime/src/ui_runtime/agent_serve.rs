@@ -559,7 +559,9 @@ impl Serve for method::SemanticsAct {
                 // The reading is owed once the effect settled; the reply waits with it.
                 let reply = ctx.park();
                 let (runtime, state) = (ctx.runtime, ctx.state);
-                runtime.park_act_read(state, owed, reply, &mut ctx.caught);
+                // No act holds it, so it has no deadline of its own: a window that draws no
+                // frame answers it when a newer reading displaces it or the window closes.
+                runtime.park_act_read(state, owed, None, reply, &mut ctx.caught);
                 Answer::Later
             }
             Err(error) => Answer::Now(Err(error)),

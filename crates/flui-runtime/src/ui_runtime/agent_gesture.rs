@@ -484,9 +484,15 @@ fn semantic_act(
     ) {
         Ok(Served::Answered(outcome)) => answer(reply, Ok(outcome)),
         Ok(Served::Reading(owed)) => {
-            // The reading is owed once the effect settled; the reply waits with it.
-            ctx.runtime
-                .park_act_read(ctx.state, owed, reply.clone(), ctx.caught);
+            // The reading is owed once the effect settled, by the act's deadline; the reply
+            // waits with it.
+            ctx.runtime.park_act_read(
+                ctx.state,
+                owed,
+                Some(ctx.deadline),
+                reply.clone(),
+                ctx.caught,
+            );
             Attempt::Done
         }
         Err(error) => answer(reply, Err(error)),

@@ -323,7 +323,15 @@ fn input_the_window_cannot_play_as_asked_is_refused_whole() {
         .expect_err("injected input is synthetic");
     assert_eq!(refused.code, ErrorCode::InvalidArgument, "{refused:?}");
 
-    let cases: [(&str, Vec<InputSource>, ErrorCode); 6] = [
+    let key_down = |key: &str| {
+        vec![InputSource::Keys {
+            id: "keyboard".to_owned(),
+            actions: vec![KeyAction::Down {
+                key: key.to_owned(),
+            }],
+        }]
+    };
+    let cases: [(&str, Vec<InputSource>, ErrorCode); 10] = [
         (
             "two sources of one name",
             vec![pointer(vec![to(1.0, 1.0)]), pointer(vec![to(2.0, 2.0)])],
@@ -331,12 +339,27 @@ fn input_the_window_cannot_play_as_asked_is_refused_whole() {
         ),
         (
             "a key that is neither a key name nor the text of one",
-            vec![InputSource::Keys {
-                id: "keyboard".to_owned(),
-                actions: vec![KeyAction::Down {
-                    key: "NoSuchKey".to_owned(),
-                }],
-            }],
+            key_down("NoSuchKey"),
+            ErrorCode::InvalidArgument,
+        ),
+        (
+            "a mistyped key name with a hyphen",
+            key_down("Ctrl-a"),
+            ErrorCode::InvalidArgument,
+        ),
+        (
+            "a mistyped modifier name with a hyphen",
+            key_down("Control-a"),
+            ErrorCode::InvalidArgument,
+        ),
+        (
+            "a key name with a space inside",
+            key_down("Arrow Down"),
+            ErrorCode::InvalidArgument,
+        ),
+        (
+            "a key name with an underscore",
+            key_down("Page_Down"),
             ErrorCode::InvalidArgument,
         ),
         (

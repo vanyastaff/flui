@@ -84,7 +84,8 @@ pub(crate) trait AgentSide {
     /// A running perf span takes the frames presented since its last pull.
     fn after_frame(&self, ui_runtime: &UiRuntime);
 
-    /// An owner turn ended without a frame: the waits agents parked that hold without reading
+    /// An owner turn ended without a frame: the acts, their queued input and the readings they owe
+    /// whose deadline passed are answered, and the waits agents parked that hold without reading
     /// settledness see the window as it is.
     fn after_turn(&self, ui_runtime: &UiRuntime);
 
@@ -95,8 +96,8 @@ pub(crate) trait AgentSide {
     /// against the frame just committed, and one whose target passed queues its input.
     fn advance_held_acts(&self, ui_runtime: &UiRuntime);
 
-    /// The earliest deadline of an act an agent holds, or of the input an act queued, on a window
-    /// that is not closing.
+    /// The earliest deadline of an act an agent holds, of the input an act queued, or of the
+    /// reading an act owes, on a window that is not closing.
     fn next_act_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant>;
 
     /// The earliest deadline of a wait an agent parked on a window that is not closing.
@@ -219,12 +220,14 @@ impl AgentSide for AgentOwnerSide {
     }
 
     fn after_turn(&self, ui_runtime: &UiRuntime) {
-        // A held act whose deadline passed is answered on a turn without a frame too, and so is
-        // the input an act queued that no frame started by its deadline. The waits are evaluated
-        // whichever panics, and the first panic continues after all three.
+        // A held act whose deadline passed is answered on a turn without a frame too, and so are
+        // the input an act queued that no frame started by its deadline and the reading an act
+        // owes that no frame came for. The waits are evaluated whichever panics, and the first
+        // panic continues after all four.
         let mut first = FirstPanic::new();
         first.contain(|| ui_runtime.advance_held_acts(super::agent_held::Pass::Expired));
         first.contain(|| ui_runtime.expire_act_input());
+        first.contain(|| ui_runtime.expire_act_reads());
         first.contain(|| ui_runtime.evaluate_agent_waits(false));
         first.resume();
     }

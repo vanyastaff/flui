@@ -407,6 +407,59 @@ fn parameters_that_make_no_gesture_are_refused() {
             "{chord:?}"
         );
     }
+    // A key that is neither a key name nor the text one key types is a mistyped name, refused
+    // rather than typed into the focused field as its whole text.
+    let not_keys = [
+        ("Ctrl-a", "Ctrl-a"),
+        ("Control-a", "Control-a"),
+        ("Arrow Down", "Arrow Down"),
+        ("Page_Down", "Page_Down"),
+        ("Shift+ctrl", "ctrl"),
+        ("Control+ab", "ab"),
+    ];
+    for (chord, key) in not_keys {
+        let refused = gestures::chords(&[chord.to_owned()]).expect_err("not a key");
+        assert_eq!(
+            refused,
+            GestureError::NotAKey {
+                chord: chord.to_owned(),
+                key: key.to_owned(),
+            },
+            "{chord:?}"
+        );
+    }
+}
+
+/// One key is a key name (an upper-case ASCII letter, then ASCII letters and digits) or the text
+/// one key types (one character, and only the non-ASCII marks that join it); nothing else is.
+#[test]
+fn a_key_is_a_key_name_or_the_text_of_one_key() {
+    let rows = [
+        ("Enter", true),
+        ("ArrowDown", true),
+        ("F12", true),
+        ("Ctrl", true),
+        ("a", true),
+        ("A", true),
+        ("+", true),
+        (" ", true),
+        ("é", true),
+        ("e\u{301}", true),
+        ("E\u{301}", true),
+        ("\u{1f44d}\u{1f3fd}", true),
+        ("", false),
+        ("ctrl", false),
+        ("Ctrl-a", false),
+        ("Page_Down", false),
+        ("Arrow Down", false),
+        ("ab", false),
+        ("aé", false),
+        ("e ", false),
+        ("日本", false),
+    ];
+    for (key, one) in rows {
+        assert_eq!(gestures::is_one_key(key), one, "{key:?}");
+    }
 }
 
 /// A `+` where a key stands is the plus key, alone or after a modifier; a space is the space key.

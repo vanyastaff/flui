@@ -53,6 +53,44 @@ fn bounds_compare_across_a_frame_or_an_idle_presentation_and_not_otherwise() {
     );
 }
 
+/// A read at the same revision with work pending replays only a comparison made across a frame:
+/// one made because the presentation was idle held only while nothing was pending, and work
+/// pending now may move the element on the next frame.
+#[test]
+fn a_comparison_made_while_idle_is_not_replayed_once_work_is_pending() {
+    let revision = TreeRevision::ZERO;
+    let rect = |x: f64| Some(LogicalRect::new(x, 0.0, 10.0, 10.0));
+    let mut stability = AgentStability::default();
+    let _ = stability.observe(element(1), revision, false, rect(1.0));
+    assert_eq!(
+        stability.observe(element(1), revision, true, rect(1.0)),
+        rect(1.0),
+        "idle: compared with the last bounds"
+    );
+    assert_eq!(
+        stability.observe(element(1), revision, false, rect(1.0)),
+        None,
+        "work pending at the same revision: the idle comparison no longer holds"
+    );
+
+    let after = revision.next();
+    assert_eq!(
+        stability.observe(element(1), after, false, rect(3.0)),
+        rect(1.0),
+        "a frame ran: compared across it"
+    );
+    assert_eq!(
+        stability.observe(element(1), after, true, rect(3.0)),
+        rect(3.0),
+        "idle at that revision"
+    );
+    assert_eq!(
+        stability.observe(element(1), after, false, rect(3.0)),
+        rect(1.0),
+        "work pending again: the comparison across the frame is replayed, not the idle one"
+    );
+}
+
 #[test]
 fn elements_are_remembered_apart_and_the_table_stays_bounded() {
     let revision = TreeRevision::ZERO;

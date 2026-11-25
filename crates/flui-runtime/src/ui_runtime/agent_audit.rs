@@ -25,7 +25,13 @@
 //! rest counted, and the findings of the texts it judged are still reported: a partial check is
 //! never a pass. The text of a disabled control, or of anything under one, is not judged: WCAG
 //! 1.4.3 exempts an inactive component, so each such text is listed in `not_checked` with that
-//! reason instead of a finding nobody can fix.
+//! reason instead of a finding nobody can fix. Which controls are disabled comes from one read of
+//! the committed semantics tree, at most [`INACTIVE_READ_NODES`] nodes; a text below its contrast
+//! whose element that read did not reach (it failed, or the tree is larger) is listed in
+//! `not_checked` with why, since it may be exempt, never reported as a finding.
+//!
+//! The report carries at most [`AuditReport::MAX_FINDINGS`] findings and counts the rest in its
+//! `truncated`, so a screen of thousands of failing controls still answers in one bounded reply.
 //!
 //! The target-size minimum is the window's primary pointer's, the pointer a composed tap plays
 //! with (`agent_gesture::primary_pointer`): a touch contact on Android, iOS and Fuchsia, a mouse
@@ -44,7 +50,7 @@ use flui_protocol::method;
 use flui_protocol::tree::{ElementId, ElementRef, Node, ReadQuery, WindowId};
 use flui_rendering::audit::{ContrastOutcome, ContrastReading, TextContrast};
 use flui_semantics::{MinimumTarget, SemanticsOwner, WireReadError};
-use rustc_hash::FxHashSet;
+use rustc_hash::FxHashMap;
 
 use super::agent::{IssuedHandles, placement_of, read_tree};
 use super::agent_gesture::primary_pointer;
@@ -67,7 +73,12 @@ impl Serve for method::AuditA11y {
     /// Runs the rules asked for and answers what they found and what they could not check
     /// (module docs).
     fn serve(ctx: &mut ServeContext<'_, AuditReport>, params: AuditParams) -> Answer<AuditReport> {
-        Answer::Now(Ok(audit(ctx.state, ctx.window, &params.rules)))
+        Answer::Now(Ok(audit(
+            ctx.state,
+            ctx.window,
+            &params.rules,
+            INACTIVE_READ_NODES,
+        )))
     }
 }
 
@@ -81,8 +92,15 @@ enum RuleOutcome {
     NotChecked(String),
 }
 
-/// The report of `rules` (every rule when empty) over `state`'s window.
-fn audit(state: &PresentationState, window: WindowId, rules: &[AuditRule]) -> AuditReport {
+/// The report of `rules` (every rule when empty) over `state`'s window, reading at most
+/// `inactive_read_nodes` semantics nodes for the controls `text_contrast` exempts
+/// ([`INACTIVE_READ_NODES`] as served).
+pub(super) fn audit(
+    state: &PresentationState,
+    window: WindowId,
+    rules: &[AuditRule],
+    inactive_read_nodes: usize,
+) -> AuditReport {
     let mut asked: Vec<AuditRule> = Vec::new();
     for &rule in if rules.is_empty() {
         AuditRule::ALL
@@ -97,7 +115,7 @@ fn audit(state: &PresentationState, window: WindowId, rules: &[AuditRule]) -> Au
     let mut findings = Vec::new();
     let mut not_checked = Vec::new();
     for rule in asked {
-        match run(state, window, rule) {
+        match run(state, window, rule, inactive_read_nodes) {
             RuleOutcome::Checked(found) => {
                 checked.push(rule);
                 findings.extend(found);
@@ -116,7 +134,12 @@ fn audit(state: &PresentationState, window: WindowId, rules: &[AuditRule]) -> Au
 }
 
 /// Runs `rule` over `state`'s window.
-fn run(state: &PresentationState, window: WindowId, rule: AuditRule) -> RuleOutcome {
+fn run(
+    state: &PresentationState,
+    window: WindowId,
+    rule: AuditRule,
+    inactive_read_nodes: usize,
+) -> RuleOutcome {
     let placement = placement_of(state, window);
     match rule {
         AuditRule::Unnamed => semantics_rule(state, |owner| owner.audit_unnamed(placement)),
@@ -137,7 +160,7 @@ fn run(state: &PresentationState, window: WindowId, rule: AuditRule) -> RuleOutc
                  positive size"
             )),
         },
-        AuditRule::TextContrast => text_contrast(state, window),
+        AuditRule::TextContrast => text_contrast(state, window, inactive_read_nodes),
         _ => RuleOutcome::NotChecked("this app's agent does not run this rule".to_owned()),
     }
 }
@@ -185,8 +208,13 @@ fn judged_for(mut finding: AuditFinding, pointer: &str) -> AuditFinding {
     finding
 }
 
-/// `text_contrast` over the frame `state`'s scene last applied.
-fn text_contrast(state: &PresentationState, window: WindowId) -> RuleOutcome {
+/// `text_contrast` over the frame `state`'s scene last applied, reading at most
+/// `inactive_read_nodes` semantics nodes for the controls it exempts ([`Activity`]).
+fn text_contrast(
+    state: &PresentationState,
+    window: WindowId,
+    inactive_read_nodes: usize,
+) -> RuleOutcome {
     let Ok(version) = state.scene.current_version() else {
         return RuleOutcome::NotChecked("a frame holds the window's scene".to_owned());
     };
@@ -196,26 +224,38 @@ fn text_contrast(state: &PresentationState, window: WindowId) -> RuleOutcome {
     else {
         return RuleOutcome::NotChecked("the window has not painted a frame yet".to_owned());
     };
-    let inactive = inactive_elements(state, window);
+    let activity = Activity::read(state, window, inactive_read_nodes);
     let mut findings = Vec::new();
     let mut unchecked: Vec<String> = Vec::new();
     for text in &texts {
         let element = text.element.map(flui_semantics::element_id_of);
-        if element.is_some_and(|element| inactive.contains(&element)) {
-            unchecked.push(format!(
-                "\"{}\": its control is disabled, and an inactive control's text has no contrast \
-                 requirement",
-                quoted(&text.text)
-            ));
-            continue;
-        }
+        let active = match element.map(|element| activity.of(element)) {
+            Some(Active::No) => {
+                unchecked.push(format!(
+                    "\"{}\": its control is disabled, and an inactive control's text has no \
+                     contrast requirement",
+                    quoted(&text.text)
+                ));
+                continue;
+            }
+            Some(Active::Unknown(why)) => Err(why),
+            Some(Active::Yes) | None => Ok(()),
+        };
         match (&text.outcome, text.element) {
             (ContrastOutcome::Meets(_), _) => {}
-            (ContrastOutcome::Below(reading), Some(element)) => findings.push(AuditFinding::new(
-                AuditRule::TextContrast,
-                ElementRef::new(window, flui_semantics::element_id_of(element)),
-                below_detail(text, reading),
-            )),
+            (ContrastOutcome::Below(reading), Some(element)) => match active {
+                Ok(()) => findings.push(AuditFinding::new(
+                    AuditRule::TextContrast,
+                    ElementRef::new(window, flui_semantics::element_id_of(element)),
+                    below_detail(text, reading),
+                )),
+                // Below its contrast, but whether its control is disabled, which would exempt
+                // it, is not known: neither a finding nor a pass.
+                Err(why) => unchecked.push(format!(
+                    "\"{}\": whether its control is disabled could not be read: {why}",
+                    quoted(&text.text)
+                )),
+            },
             (ContrastOutcome::Below(_), None) => unchecked.push(format!(
                 "\"{}\": the render object that paints it has no element",
                 quoted(&text.text)
@@ -252,28 +292,64 @@ fn text_contrast(state: &PresentationState, window: WindowId) -> RuleOutcome {
     )
 }
 
-/// The elements of `state`'s committed semantics tree that are inactive: disabled, or under a
-/// disabled node, whose text WCAG 1.4.3 exempts from its contrast requirement. The walk reads at
-/// most [`INACTIVE_READ_NODES`] nodes; a node past them is judged as an active one.
-fn inactive_elements(state: &PresentationState, window: WindowId) -> FxHashSet<ElementId> {
-    fn walk(nodes: &[Node], under_disabled: bool, inactive: &mut FxHashSet<ElementId>) {
-        for node in nodes {
-            let disabled = under_disabled || node.disabled;
-            if disabled {
-                inactive.insert(node.id);
-            }
-            walk(&node.children, disabled, inactive);
-        }
-    }
-    let mut inactive = FxHashSet::default();
-    let query = ReadQuery::new().max_nodes(INACTIVE_READ_NODES);
-    if let Ok(tree) = read_tree(state, window, &query, true) {
-        walk(&tree.roots, false, &mut inactive);
-    }
-    inactive
+/// Which elements of a window's committed semantics tree are active, as far as one read of it
+/// says: an inactive one is disabled, or under a disabled node, and WCAG 1.4.3 exempts its text
+/// from the contrast requirement.
+struct Activity {
+    /// Each element the read reached, and whether it is inactive.
+    read: FxHashMap<ElementId, bool>,
+    /// Why the read left some elements out (it failed, or the tree has more nodes than it reads);
+    /// `None` when it reached the whole tree.
+    partial: Option<String>,
 }
 
-/// The most semantics nodes [`inactive_elements`] reads.
+/// Whether one element is active.
+enum Active<'a> {
+    Yes,
+    No,
+    /// The read did not reach it, for this reason.
+    Unknown(&'a str),
+}
+
+impl Activity {
+    /// `state`'s committed tree read for activity, at most `max_nodes` nodes of it.
+    fn read(state: &PresentationState, window: WindowId, max_nodes: usize) -> Self {
+        fn walk(nodes: &[Node], under_disabled: bool, read: &mut FxHashMap<ElementId, bool>) {
+            for node in nodes {
+                let inactive = under_disabled || node.disabled;
+                read.insert(node.id, inactive);
+                walk(&node.children, inactive, read);
+            }
+        }
+        let mut read = FxHashMap::default();
+        let query = ReadQuery::new().max_nodes(max_nodes);
+        let partial = match read_tree(state, window, &query, true) {
+            Ok(tree) => {
+                walk(&tree.roots, false, &mut read);
+                tree.truncated.then(|| {
+                    format!(
+                        "the semantics tree has more than the {max_nodes} nodes the audit reads"
+                    )
+                })
+            }
+            Err(error) => Some(format!("the semantics tree could not be read ({error})")),
+        };
+        Self { read, partial }
+    }
+
+    /// Whether `element` is active: an element the read reached is as it found it; one it did not
+    /// reach is active when the read reached the whole tree (it has no semantics node of its own),
+    /// and unknown otherwise.
+    fn of(&self, element: ElementId) -> Active<'_> {
+        match (self.read.get(&element), &self.partial) {
+            (Some(true), _) => Active::No,
+            (Some(false), _) | (None, None) => Active::Yes,
+            (None, Some(why)) => Active::Unknown(why),
+        }
+    }
+}
+
+/// The most semantics nodes `audit.a11y` reads for the controls `text_contrast` exempts.
 const INACTIVE_READ_NODES: usize = 1 << 16;
 
 /// A finding's detail for a text below its contrast.

@@ -21,6 +21,13 @@
 //! ([`flui_view::dev_agent::InputLease`]) and stays held across injections, as the platform's
 //! input would. `input.release`, or the lease going, lets it go: contacts are cancelled, never
 //! lifted (a lift could click), then keys come up, the latest first.
+//!
+//! An act's input is a gesture whole, which presses and lets go of what it presses: when it stops
+//! before its last tick (its act's promise ran out, or a tick could not be delivered), what it
+//! pressed and still holds is let go the same way at once, and what the lease held before it
+//! started stays held. So the lease's next gesture through the same source presses again, as
+//! it would on a fresh lease. `input.inject` composes no gesture: what it leaves held, stopped or
+//! not, stays with its lease.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
@@ -44,7 +51,7 @@ use flui_protocol::{
     act::ActOutcome, act::Effect, act::EffectKind, act::JournalSpan, geometry::LogicalPoint,
     input::ActionSequence, input::ImeAction, input::InputPath, input::PlannedInput,
     input::PointerDevice, input::Released, input::STEP, input::SourceKind, input::TimedInput,
-    snapshot::Snapshot, tree::ElementRef,
+    input::gestures, snapshot::Snapshot, tree::ElementRef,
 };
 use flui_semantics::TreeSnapshot;
 use flui_view::__runtime::LeaseId;
@@ -339,21 +346,24 @@ fn pressure_of(pressure: f64) -> Result<Pressure, AgentError> {
     Pressure::try_new(pressure as f32).map_err(|_| range)
 }
 
-/// A key the protocol names: a W3C key name (`Enter`, `Shift`), or the text the key types
-/// (`a`, `é`); `Dead` is a dead key whose accent the protocol does not say. A longer ASCII word
-/// is a name, and an unknown one is refused rather than typed.
+/// A key the protocol names, by its one rule for a key ([`gestures::is_one_key`]): a W3C key name
+/// (`Enter`, `Shift`), or the text the key types (`a`, `é`); `Dead` is a dead key whose accent the
+/// protocol does not say. A name this window does not know, and anything that is not one key, is
+/// refused rather than typed.
 fn key_named(name: &str) -> Result<Key, AgentError> {
+    let refused = || invalid("a key is a W3C key name (`Enter`) or the text it types (`a`)");
+    if !gestures::is_one_key(name) {
+        return Err(refused());
+    }
     if name == "Dead" {
         return Ok(Key::Dead(None));
     }
     if let Some(named) = NamedKey::from_w3c(name) {
         return Ok(Key::Named(named));
     }
-    let word = name.len() > 1 && name.bytes().all(|byte| byte.is_ascii_alphanumeric());
-    if name.is_empty() || word {
-        return Err(invalid(
-            "a key is a W3C key name (`Enter`) or the text it types (`a`)",
-        ));
+    // A key name's shape that is no W3C name this window knows.
+    if name.len() > 1 && name.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return Err(refused());
     }
     Ok(Key::character(name))
 }
@@ -667,6 +677,67 @@ impl Held {
         }
         (batch, released)
     }
+
+    /// What it holds now of an act's input with `sources`, taken as that input starts: those
+    /// sources whose contacts are pressed, and the keys held.
+    fn mark(&self, sources: &[Source]) -> HeldMark {
+        HeldMark {
+            pressed: self
+                .pointers
+                .iter()
+                .filter(|contact| {
+                    contact.buttons != PointerButtons::NONE
+                        && sources.iter().any(|source| source.name == contact.source)
+                })
+                .map(|contact| contact.source.clone())
+                .collect::<Vec<String>>(),
+            keys: self.keys.clone(),
+        }
+    }
+
+    /// Let go of what was pressed since `before` was taken, stamped `time`, as [`Self::let_go`]
+    /// does: each contact of `sources` pressed since cancelled, the latest first, then each key
+    /// pressed since up, the latest first. What `before` held stays held.
+    fn let_go_since(
+        &mut self,
+        before: &HeldMark,
+        sources: &[Source],
+        time: EventTime,
+    ) -> Vec<PlatformInput> {
+        let mut batch = Vec::new();
+        for contact in self.pointers.iter_mut().rev() {
+            let ours = sources.iter().any(|source| source.name == contact.source);
+            if ours
+                && contact.buttons != PointerButtons::NONE
+                && !before.pressed.contains(&contact.source)
+            {
+                contact.buttons = PointerButtons::NONE;
+                batch.push(PlatformInput::Pointer(PointerEvent::Cancel(
+                    PointerCancel::new(contact.info(), time, CancelReason::Platform),
+                )));
+            }
+        }
+        let mut at = self.keys.len();
+        while at > 0 {
+            at -= 1;
+            if before.keys.contains(&self.keys[at]) {
+                continue;
+            }
+            let key = self.keys.remove(at);
+            batch.push(PlatformInput::Keyboard(
+                KeyEvent::new(KeyState::Up, key, Code::Unidentified, time)
+                    .with_modifiers(modifiers_of(&self.keys)),
+            ));
+        }
+        batch
+    }
+}
+
+/// What a lease held as an act's input started: the sources of that input whose contacts were
+/// pressed, and the keys held. See [`Held::let_go_since`].
+struct HeldMark {
+    pressed: Vec<String>,
+    keys: Vec<Key>,
 }
 
 enum Job {
@@ -706,6 +777,10 @@ struct Injection {
     /// The deadline of the act that queued it, and how long its script takes to play
     /// ([`Script::plays_within`]); `None` for `input.inject`. See [`Injection::expiry`].
     deadline: Option<(Instant, Duration)>,
+    /// What its lease held as its first tick started, for an act's input: what it let go of if it
+    /// stops before its last tick ([`Held::let_go_since`]). `None` before it starts, and always
+    /// for `input.inject`.
+    held_before: Option<HeldMark>,
 }
 
 impl Injection {
@@ -744,6 +819,14 @@ impl Injection {
                 total: u32::try_from(self.total).unwrap_or(u32::MAX),
             }
         })
+    }
+
+    /// It stops before its last tick: what an act's input pressed through `held` and still holds is
+    /// let go, stamped `time`; nothing for `input.inject`, whose held input stays with its lease.
+    fn let_go_pressed(&self, held: &mut Held, time: EventTime) -> Vec<PlatformInput> {
+        self.held_before
+            .as_ref()
+            .map_or_default(|before| held.let_go_since(before, &self.script.sources, time))
     }
 
     /// The instant [`Self::expiry`] next answers it at.
@@ -828,14 +911,24 @@ impl AgentInput {
             reply,
             observed: None,
             deadline,
+            held_before: None,
         })));
         Ok(InjectionId(self.injections))
     }
 
     /// Take off the queue every act's input whose promise ran out by `now`
-    /// ([`Injection::expiry`]), each with the answer it gets. What one under way left held stays
-    /// with its lease, as a failed injection's does; nothing of any of them goes out after this.
-    fn expire(&mut self, now: Instant) -> Vec<(ReplySender<ActOutcome>, AgentError)> {
+    /// ([`Injection::expiry`]), each with the answer it gets, and the input that lets go of what
+    /// one under way pressed and still holds, stamped `time` ([`Injection::let_go_pressed`]):
+    /// nothing else of any of them goes out after this.
+    fn expire(
+        &mut self,
+        now: Instant,
+        time: EventTime,
+    ) -> (
+        Vec<PlatformInput>,
+        Vec<(ReplySender<ActOutcome>, AgentError)>,
+    ) {
+        let mut batch = Vec::new();
         let mut expired = Vec::new();
         let mut at = 0;
         while at < self.jobs.len() {
@@ -850,9 +943,12 @@ impl AgentInput {
             let Some(Job::Inject(injection)) = self.jobs.remove(at) else {
                 unreachable!("BUG: the job just read is an injection");
             };
+            if let Some(held) = self.leases.get_mut(&injection.lease) {
+                batch.extend(injection.let_go_pressed(held, time));
+            }
             expired.push((injection.reply, answer));
         }
-        expired
+        (batch, expired)
     }
 
     /// The earliest instant an act's queued input is answered at if it has not played by then.
@@ -945,6 +1041,10 @@ impl AgentInput {
             }
         };
         let held = leases.entry(injection.lease).or_default();
+        // An act's input starts at its first turn: what the lease holds then is not its own.
+        if injection.deadline.is_some() && injection.held_before.is_none() {
+            injection.held_before = Some(held.mark(&injection.script.sources));
+        }
         let mut batch = Vec::new();
         // Whether this boundary delivered an input of the running tick: a boundary delivers the
         // inputs of one tick at most, so the next tick waits for the next boundary.
@@ -963,7 +1063,10 @@ impl AgentInput {
                     match held.step(pointers, &injection.script.sources, step.input, time) {
                         Ok(Some(input)) => batch.push(input),
                         Ok(None) => {}
-                        Err(error) => return Self::failed(jobs, batch, error),
+                        Err(error) => {
+                            batch.extend(injection.let_go_pressed(held, time));
+                            return Self::failed(jobs, batch, error);
+                        }
                     }
                 }
                 if !running.steps.is_empty() || elapsed < running.lasts {
@@ -996,8 +1099,9 @@ impl AgentInput {
         Turn::Played(batch, injection)
     }
 
-    /// The front injection stopped at `error` in the tick under way, after making `batch`: the
-    /// ticks before it went out in full, and it is neither in the script nor running any more.
+    /// The front injection stopped at `error` in the tick under way, after making `batch` (with
+    /// what an act's input pressed let go at its end): the ticks before it went out in full, and
+    /// it is neither in the script nor running any more.
     fn failed(jobs: &mut VecDeque<Job>, batch: Vec<PlatformInput>, error: AgentError) -> Turn {
         let Some(Job::Inject(injection)) = jobs.pop_front() else {
             unreachable!("BUG: the front job is an injection");
@@ -1135,21 +1239,27 @@ impl UiRuntime {
     /// Answer every act's queued input whose act's promise has run out, on each presentation's
     /// clock (ADR-0400 §2): none of its ticks started by the act's deadline (`timeout`, nothing
     /// played), or under way then and not ended within its play time past it (`timeout`, with
-    /// the ticks played). Each answer runs contained, after the queue is let go; the first panic
-    /// continues once every window's are sent.
+    /// the ticks played). What one under way pressed and still holds is let go first, as its
+    /// input; each answer runs contained, after the queue is let go and that input went out; the
+    /// first panic continues once every window's are sent.
     ///
     /// Run at a frame boundary after its input went on, and at an owner turn without a frame
     /// after the acts whose deadline passed were attempted, so the input a last attempt queued on
     /// a frame starts on that frame, and a window that draws no frame answers its acts at their
     /// deadline whatever they queued ([`Self::next_act_input_deadline`] wakes the owner then).
     pub(super) fn expire_act_input(&self) {
+        let time = self.event_time_at(flui_foundation::MonotonicClock::now(&self.clock));
         let mut first = FirstPanic::new();
         for state in self.presentations.iter() {
             let now = state.clock().now();
-            let expired = state.agent_input.borrow_mut().expire(now);
+            let (batch, expired) = state.agent_input.borrow_mut().expire(now, time);
+            // What an input under way pressed is let go before it is answered, a handler's panic
+            // included: the answer says the act is over.
+            let mut sent = self.send_agent_input(state, batch);
             for (reply, answer) in expired {
-                first.contain(|| send_reply(&reply, None, Err(answer)));
+                sent.panic.contain(|| send_reply(&reply, None, Err(answer)));
             }
+            first.absorb(sent.panic);
         }
         first.resume();
     }
@@ -1192,6 +1302,7 @@ impl UiRuntime {
                         before,
                         reply,
                         observed,
+                        deadline,
                         ..
                     } = *injection;
                     let mut sent = self.send_agent_input(state, batch);
@@ -1202,9 +1313,13 @@ impl UiRuntime {
                     // Owed once the input has gone out, a handler's panic included: the answer
                     // waits for the frame after it, which shows what the input did. The window
                     // is still open, since closing one takes the runtime mutably. Parking wakes
-                    // the platform, so it runs behind a handler's panic, which stays first.
+                    // the platform, so it runs behind a handler's panic, which stays first. An
+                    // act's reading is still owed by the end of the act's promise, the same
+                    // instant its input had to end by, whether or not the window draws.
                     let owed = ReadingOwed::new(outcome, snapshot, before);
-                    self.park_act_read(state, owed, reply, &mut sent.panic);
+                    let act_ends = deadline
+                        .map(|(deadline, plays)| deadline.checked_add(plays).unwrap_or(deadline));
+                    self.park_act_read(state, owed, act_ends, reply, &mut sent.panic);
                     sent.resume();
                     return;
                 }

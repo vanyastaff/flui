@@ -106,12 +106,18 @@ pub struct NotChecked {
 pub struct AuditReport {
     /// `pass` only when every rule asked for ran and found nothing.
     pub verdict: Verdict,
-    /// What was found.
+    /// What was found, the first [`AuditReport::MAX_FINDINGS`] of it.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Vec::is_empty")
     )]
     pub findings: Vec<AuditFinding>,
+    /// Findings past [`AuditReport::MAX_FINDINGS`], counted and not reported.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "crate::skip::is_default")
+    )]
+    pub truncated: u32,
     /// The rules that ran.
     pub checked: Vec<AuditRule>,
     /// The rules asked for that did not run.
@@ -123,18 +129,26 @@ pub struct AuditReport {
 }
 
 impl AuditReport {
+    /// The most findings a report carries; the rest are counted in `truncated`, so a screen of
+    /// thousands of failing controls still answers in one bounded reply, with its verdict.
+    pub const MAX_FINDINGS: usize = 256;
+
     /// The report of `checked` rules finding `findings`, with every rule asked for run; the
-    /// verdict follows from them.
+    /// verdict follows from them. Findings past [`Self::MAX_FINDINGS`] are counted in
+    /// `truncated`, not reported.
     #[must_use]
-    pub fn new(checked: Vec<AuditRule>, findings: Vec<AuditFinding>) -> Self {
+    pub fn new(checked: Vec<AuditRule>, mut findings: Vec<AuditFinding>) -> Self {
         let verdict = if findings.is_empty() {
             Verdict::Pass
         } else {
             Verdict::Fail
         };
+        let past = findings.len().saturating_sub(Self::MAX_FINDINGS);
+        findings.truncate(Self::MAX_FINDINGS);
         Self {
             verdict,
             findings,
+            truncated: u32::try_from(past).unwrap_or(u32::MAX),
             checked,
             not_checked: Vec::new(),
         }

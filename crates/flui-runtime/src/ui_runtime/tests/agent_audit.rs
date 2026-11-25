@@ -9,7 +9,7 @@ use flui_protocol::audit::{AuditParams, AuditReport, AuditRule};
 use flui_protocol::method;
 use flui_protocol::verdict::Verdict;
 use flui_view::dev_agent::AgentWindow;
-use flui_widgets::{ColoredBox, Column, RawButton, Text};
+use flui_widgets::{ColoredBox, Column, RawButton, Row, Text};
 
 use super::agent_semantics::{answer, find, frame, read};
 use super::*;
@@ -423,4 +423,92 @@ fn text_contrast_lists_a_disabled_controls_text_as_not_checked() {
          control's text has no contrast requirement",
         "{report:#?}"
     );
+}
+
+/// A read of the semantics tree that stops short of a text's element cannot say whether its
+/// control is disabled: a faint text it did not reach is listed in `not_checked` with why, never a
+/// finding, since it may be exempt. Read here one node deep, so neither faint text is reached.
+#[test]
+fn text_contrast_does_not_judge_a_text_whose_control_the_read_did_not_reach() {
+    let ui_runtime = UiRuntime::for_test();
+    ui_runtime
+        .enter(|ui_runtime| {
+            ui_runtime.attach_root_widget_to_for_test(ui_runtime.presentation_id(), &DisabledLabel)
+        })
+        .expect("the page attaches");
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
+        .expect("the ui_runtime hosts its primary presentation");
+    let mut sink = ScriptedSink::always_presents();
+    frame(&ui_runtime, &mut sink);
+    let state = ui_runtime
+        .presentations
+        .get(ui_runtime.presentation_id())
+        .expect("the primary presentation is hosted");
+    let report =
+        crate::ui_runtime::agent_audit::audit(state, window.id(), &[AuditRule::TextContrast], 1);
+    assert!(
+        report.findings.is_empty(),
+        "no text whose control was not read is a finding: {report:#?}"
+    );
+    assert_eq!(report.verdict, Verdict::CannotVerify, "{report:#?}");
+    let [entry] = report.not_checked.as_slice() else {
+        panic!("text_contrast is listed: {report:#?}");
+    };
+    assert_eq!(entry.rule, AuditRule::TextContrast);
+    let why = "whether its control is disabled could not be read: the semantics tree has more \
+               than the 1 nodes the audit reads";
+    assert_eq!(
+        entry.reason,
+        format!("2 of 2 texts could not be judged: \"Faint\": {why}; \"Off\": {why}"),
+        "{report:#?}"
+    );
+}
+
+/// 300 unnamed 10 px buttons, in 30 rows of 10.
+#[derive(Clone, StatelessView)]
+struct ManyUnnamed;
+
+impl StatelessView for ManyUnnamed {
+    fn build(&self, _: &dyn BuildContext) -> impl IntoView {
+        Column::new(
+            (0..30)
+                .map(|_| {
+                    Row::new(
+                        (0..10)
+                            .map(|_| {
+                                RawButton::new(SizedBox::square(10.0))
+                                    .on_pressed(|_| {})
+                                    .into_view()
+                                    .boxed()
+                            })
+                            .collect::<Vec<BoxedView>>(),
+                    )
+                    .into_view()
+                    .boxed()
+                })
+                .collect::<Vec<BoxedView>>(),
+        )
+    }
+}
+
+/// A report carries at most 256 findings and counts the rest: 300 unnamed buttons answer 256
+/// findings, 44 counted in `truncated`, and the verdict `fail`.
+#[test]
+fn an_audit_reports_a_bounded_number_of_findings_and_counts_the_rest() {
+    let ui_runtime = UiRuntime::for_test();
+    ui_runtime
+        .enter(|ui_runtime| {
+            ui_runtime.attach_root_widget_to_for_test(ui_runtime.presentation_id(), &ManyUnnamed)
+        })
+        .expect("the page attaches");
+    let window = ui_runtime
+        .dev_agent_window(ui_runtime.presentation_id())
+        .expect("the ui_runtime hosts its primary presentation");
+    let mut sink = ScriptedSink::always_presents();
+    frame(&ui_runtime, &mut sink);
+    let report = audit(&ui_runtime, &window, &[AuditRule::Unnamed]);
+    assert_eq!(report.verdict, Verdict::Fail);
+    assert_eq!(report.findings.len(), AuditReport::MAX_FINDINGS);
+    assert_eq!(report.truncated, 44, "300 found, 256 reported");
 }

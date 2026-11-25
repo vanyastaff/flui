@@ -12,7 +12,9 @@
 //! act if the target passed on that frame, and otherwise answers why it never did. The act is
 //! dropped as it is answered, so nothing it would have sent goes out after its answer. The input
 //! it queues carries the deadline, so the act is answered by it whether or not a frame plays the
-//! input ([`UiRuntime::expire_act_input`]); that input's deadline wakes the owner too.
+//! input ([`UiRuntime::expire_act_input`]), and so does the reading the act owes once its input
+//! played or its semantics action ran ([`UiRuntime::expire_act_reads`]); their deadlines wake the
+//! owner too.
 //!
 //! Every exit answers once and leaves nothing held: performed (the act hands its reply to what
 //! answers it: the injection, or the reading a semantics action owes), refused, timed out, the
@@ -281,9 +283,10 @@ impl UiRuntime {
     }
 
     /// The earliest deadline of an act on a window that is not closing, on the presentations'
-    /// clocks: a held act's, and that of the input an act queued that has not played yet
-    /// ([`UiRuntime::expire_act_input`]), so an act is answered by it whether or not its window
-    /// draws.
+    /// clocks: a held act's, that of the input an act queued that has not played yet
+    /// ([`UiRuntime::expire_act_input`]), and that of the reading an act owes once its input
+    /// played ([`UiRuntime::expire_act_reads`]), so an act is answered by it whether or not its
+    /// window draws.
     pub(super) fn next_held_act_deadline(&self) -> Option<Instant> {
         self.presentations
             .iter()
@@ -291,7 +294,8 @@ impl UiRuntime {
             .filter_map(|presentation| {
                 let held = presentation.agent_acts.borrow().next_deadline();
                 let queued = Self::next_act_input_deadline(presentation);
-                held.into_iter().chain(queued).min()
+                let read = Self::next_act_read_deadline(presentation);
+                held.into_iter().chain(queued).chain(read).min()
             })
             .min()
     }

@@ -183,6 +183,14 @@ pub enum GestureError {
         /// The chord as asked.
         chord: String,
     },
+    /// A chord of `element.press_keys` with a key that is neither a key name nor the text one key
+    /// types ([`is_one_key`]): a mistyped name (`Ctrl-a`, `Page_Down`), never typed as text.
+    NotAKey {
+        /// The chord as asked.
+        chord: String,
+        /// The key it names.
+        key: String,
+    },
 }
 
 impl fmt::Display for GestureError {
@@ -208,6 +216,11 @@ impl fmt::Display for GestureError {
             Self::UnreadableChord { chord } => {
                 write!(f, "the chord {chord:?} does not read as `+`-joined keys")
             }
+            Self::NotAKey { chord, key } => write!(
+                f,
+                "the chord {chord:?} names {key:?}, which is neither a key name (`Enter`, \
+                 `ArrowDown`) nor the text one key types (`a`)"
+            ),
         }
     }
 }
@@ -489,15 +502,39 @@ pub fn text(text: &str) -> ActionSequence {
     }])
 }
 
+/// Whether `key` names one key, the one rule for a key a chord or a key action names: a key name,
+/// an upper-case ASCII letter then ASCII letters and digits (the shape of every W3C key name:
+/// `Enter`, `ArrowDown`, `F12`), or the text one key types, one character and only what joins it
+/// (a combining accent, the rest of an emoji), none of which is ASCII, a letter, a digit or a
+/// space. A name of that shape the window does not know is refused where it is lowered; anything
+/// else (`Ctrl-a`, `Page_Down`, `Arrow Down`, `ctrl`) is not a key, and never typed as text.
+#[must_use]
+pub fn is_one_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    let rest = chars.as_str();
+    if rest.is_empty() {
+        return true;
+    }
+    if first.is_ascii_uppercase() && rest.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return true;
+    }
+    rest.chars()
+        .all(|joined| !joined.is_ascii() && !joined.is_alphanumeric() && !joined.is_whitespace())
+}
+
 /// The keys of one chord, in the order they go down: its keys joined by `+`, where a `+` that
 /// stands where a key does is the plus key (`"+"`, `"Control++"`), and a key name has no space
-/// around it (`" "` alone is the space key). The one reading of a chord, for every composer.
+/// around it (`" "` alone is the space key). Each key is one key ([`is_one_key`]). The one reading
+/// of a chord, for every composer.
 ///
 /// # Errors
 ///
-/// [`GestureError::EmptyChord`] for an empty chord, and [`GestureError::UnreadableChord`] for a
-/// `+` with no key after it, a key after a `+` key with no `+` between, or a key name with space
-/// around it.
+/// [`GestureError::EmptyChord`] for an empty chord, [`GestureError::UnreadableChord`] for a `+`
+/// with no key after it, a key after a `+` key with no `+` between, or a key name with space
+/// around it, and [`GestureError::NotAKey`] for a key that is not one key.
 pub fn chord_keys(chord: &str) -> Result<Vec<&str>, GestureError> {
     let unreadable = || GestureError::UnreadableChord {
         chord: chord.to_owned(),
@@ -518,6 +555,12 @@ pub fn chord_keys(chord: &str) -> Result<Vec<&str>, GestureError> {
         if key.chars().count() > 1 && key.trim() != key {
             return Err(unreadable());
         }
+        if !is_one_key(key) {
+            return Err(GestureError::NotAKey {
+                chord: chord.to_owned(),
+                key: key.to_owned(),
+            });
+        }
         keys.push(key);
         if after.is_empty() {
             return Ok(keys);
@@ -534,8 +577,9 @@ pub fn chord_keys(chord: &str) -> Result<Vec<&str>, GestureError> {
 ///
 /// # Errors
 ///
-/// [`GestureError::EmptyChord`] for a chord that names no key, and
-/// [`GestureError::UnreadableChord`] for one that does not read as `+`-joined keys.
+/// [`GestureError::EmptyChord`] for a chord that names no key,
+/// [`GestureError::UnreadableChord`] for one that does not read as `+`-joined keys, and
+/// [`GestureError::NotAKey`] for one naming a key that is not one key.
 pub fn chords(chords: &[String]) -> Result<ActionSequence, GestureError> {
     let mut actions = Vec::new();
     for chord in chords {

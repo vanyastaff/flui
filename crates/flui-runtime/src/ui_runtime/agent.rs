@@ -22,6 +22,7 @@ use std::sync::{Arc, Weak};
 use crate::renderer_binding::ViewHitTest;
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
+use flui_protocol::input::STEP;
 use flui_protocol::{
     act::ActOutcome, act::ActionRequest, act::ActionabilityCheck, act::ActionabilityParams,
     act::Effect, act::EffectKind, act::EffectUnit, error::ErrorCode, error::ErrorObject,
@@ -37,6 +38,7 @@ use flui_semantics::{
 use flui_view::__runtime::{AgentPort, LeaseId, Reply, WindowCall};
 use flui_view::dev_agent::{AgentAnswer, AgentEvents, AgentRecording, AgentWindow};
 use parking_lot::{Mutex, RwLock};
+use web_time::Instant;
 
 use super::UiRuntime;
 use super::agent_serve::PanicAnswer;
@@ -899,13 +901,18 @@ pub(super) fn tree_before(
 pub(crate) struct PendingActRead {
     owed: ReadingOwed,
     reply: ReplySender<ActOutcome>,
+    /// On the presentation's clock, when the act that owes it promised an answer by: a turn
+    /// without a frame at or past it answers without the reading
+    /// ([`UiRuntime::expire_act_reads`]). `None` for `semantics.act`, which no act holds.
+    answer_by: Option<Instant>,
 }
 
 impl PendingActRead {
-    /// The window or the frame is gone before the reading could be taken: the
-    /// action still ran, and the outcome says the tree could not be read back.
+    /// The window or the frame is gone before the reading could be taken, or no
+    /// frame came by the act's promise: the action still ran, and the outcome
+    /// says the tree could not be read back when a reading was asked for.
     pub(crate) fn abandon(mut self) {
-        self.owed.outcome.readback_failed = true;
+        self.owed.outcome.readback_failed = self.owed.snapshot != Snapshot::None;
         let element = self.owed.outcome.element.map(|element| element.element);
         send_reply(&self.reply, element, Ok(self.owed.outcome));
     }
@@ -1172,6 +1179,13 @@ impl UiRuntime {
     /// Holds an action's reply until a frame has passed, and asks for one, so
     /// the reading comes even when the action dirtied nothing.
     ///
+    /// An act's reading carries `act_ends`, the instant its act's promise runs
+    /// out on the presentation's clock (its deadline, and the time its input
+    /// takes to play past it): a window that draws no frame by a frame's time
+    /// past it ([`STEP`]) answers without the reading
+    /// ([`Self::expire_act_reads`]), and that instant wakes the owner
+    /// ([`Self::next_held_act_deadline`]).
+    ///
     /// The reading is parked first: the reply is handed on, and the reading
     /// answers it. The code this runs after (the answer of a reading it
     /// displaces, the platform's wake) runs contained in `after`, whose first
@@ -1180,10 +1194,16 @@ impl UiRuntime {
         &self,
         state: &PresentationState,
         owed: ReadingOwed,
+        act_ends: Option<Instant>,
         reply: ReplySender<ActOutcome>,
         after: &mut FirstPanic,
     ) {
-        let pending = PendingActRead { owed, reply };
+        let answer_by = act_ends.map(|ends| ends.checked_add(STEP).unwrap_or(ends));
+        let pending = PendingActRead {
+            owed,
+            reply,
+            answer_by,
+        };
         let displaced = {
             let mut parked = state.agent_reads.borrow_mut();
             parked.push(pending);
@@ -1193,6 +1213,37 @@ impl UiRuntime {
             after.contain(|| oldest.abandon());
         }
         after.contain(|| self.request_agent_frame_for(state));
+    }
+
+    /// On an owner turn without a frame: answer every act's reading whose act's promise ran out
+    /// with no frame since ([`Self::park_act_read`]), each without its reading, contained, after
+    /// the readings are let go; the first panic continues once every window's are sent.
+    pub(super) fn expire_act_reads(&self) {
+        let mut first = FirstPanic::new();
+        for state in self.presentations.iter() {
+            let now = state.clock().now();
+            let expired = {
+                let mut owed = state.agent_reads.borrow_mut();
+                let (expired, kept): (Vec<PendingActRead>, Vec<PendingActRead>) =
+                    std::mem::take(&mut *owed)
+                        .into_iter()
+                        .partition(|read| read.answer_by.is_some_and(|by| now >= by));
+                *owed = kept;
+                expired
+            };
+            first.absorb(super::deliver_each(expired, PendingActRead::abandon));
+        }
+        first.resume();
+    }
+
+    /// The earliest instant [`Self::expire_act_reads`] answers one of `state`'s readings at.
+    pub(super) fn next_act_read_deadline(state: &PresentationState) -> Option<Instant> {
+        state
+            .agent_reads
+            .borrow()
+            .iter()
+            .filter_map(|read| read.answer_by)
+            .min()
     }
 
     /// Takes the readings the presentation owes, now that a frame has passed
@@ -1209,7 +1260,7 @@ impl UiRuntime {
                 .semantics_owner()
                 .map(|owner| owner.snapshot_wire(placement))
         });
-        for PendingActRead { owed, reply } in owed {
+        for PendingActRead { owed, reply, .. } in owed {
             let ReadingOwed {
                 mut outcome,
                 snapshot,

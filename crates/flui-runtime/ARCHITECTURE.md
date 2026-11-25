@@ -1110,8 +1110,15 @@ completes in `drive_frame`, right after the frame the effect landed in (before t
 the new tree against the snapshot (`TreeSnapshot::delta_to`): appeared, gone and changed nodes
 (name, value, description, state, actions; bounds only when asked), a role change counting as
 appeared, capped at 256 entries with `truncated`. A presentation that closes first answers each
-owed reading `readback_failed` with the effect `ran`, since the action was delivered. Pinned by
-`src/ui_runtime/tests/agent_act_read.rs` and `crates/flui-semantics/tests/delta.rs`.
+owed reading with the effect `ran`, since the action was delivered, and `readback_failed` when a
+snapshot was asked for. A gesture's answer waits in the same place for the frame after its input
+or its semantics action, and carries the end of its act's promise (the deadline, and the time its
+input takes to play past it): an owner turn without a frame a frame's time past it answers it
+without the reading (`UiRuntime::expire_act_reads`), and that instant wakes the owner, so a window
+that stops drawing after the input played still answers by the deadline. Pinned by
+`src/ui_runtime/tests/agent_act_read.rs`, `crates/flui-semantics/tests/delta.rs` and
+`tests/contracts/agent_gestures.rs`
+(`an_act_whose_window_stops_drawing_after_its_input_played_is_answered_by_its_deadline`).
 
 **Injected input.** `input.inject` and `input.release` reach the owner through an input lease
 (`AgentWindow::input_lease`; the call carries its `LeaseId`) and are refused `invalid_argument`
@@ -1168,11 +1175,16 @@ acts whose deadline passed are attempted; a frame boundary, after its input went
 a last attempt queued on that frame starts on it) input none of whose ticks started is withdrawn
 and the act answers `timeout` (`InputTimedOut`, retry `soon`), nothing played; input under way
 then has its play time past the deadline (`Script::plays_within`, the bound the reply counts,
-ADR-0288 §4), and still running then, because its window stopped drawing, stops where it is as a
-failed injection does, what it holds staying with its lease, and answers `timeout` with the ticks
-played. Until then the input's deadline is a wake of the agent (`next_act_deadline`), so a window
-that draws nothing answers its acts on time and nothing plays once it draws again.
-`input.inject` carries no deadline: its asker bounds its own reply.
+ADR-0288 §4), and still running then, because its window stopped drawing, stops where it is and
+answers `timeout` with the ticks played. An act's input is a gesture whole: when it stops before its
+last tick, its deadline passed or a tick failed, what it pressed and still holds is let go at once
+as `input.release` lets go (its contacts cancelled, its keys up, the latest first), and what the
+lease held before it started stays held (`Held::let_go_since`), so the lease's next gesture
+through the same source presses again. Until then the input's deadline is a wake of the agent
+(`next_act_deadline`), so a window that draws nothing answers its acts on time and nothing plays
+once it draws again. `input.inject` carries no deadline: its asker bounds its own reply, and what
+it leaves held, stopped or not, stays with its lease. Pinned by `tests/contracts/agent_gestures.rs`
+(`an_act_stopped_mid_play_lets_go_of_what_it_pressed`).
 An attempt resolves a locator again in the application (none holds on, several under a strict
 pick answer `ambiguous`, counting every match and naming the first ten, by
 `flui_protocol::locator::resolve_strict`, the rule `scroll_until` and the driver follow too),
