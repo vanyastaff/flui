@@ -10,7 +10,9 @@
 //! The deadline is the act's own timeout, on the presentation's clock, and it wakes the owner
 //! ([`UiRuntime::next_held_act_deadline`]). An attempt at or past it is the last: it performs the
 //! act if the target passed on that frame, and otherwise answers why it never did. The act is
-//! dropped as it is answered, so nothing it would have sent goes out after its answer.
+//! dropped as it is answered, so nothing it would have sent goes out after its answer. The input
+//! it queues carries the deadline, so the act is answered by it whether or not a frame plays the
+//! input ([`UiRuntime::expire_act_input`]); that input's deadline wakes the owner too.
 //!
 //! Every exit answers once and leaves nothing held: performed (the act hands its reply to what
 //! answers it: the injection, or the reading a semantics action owes), refused, timed out, the

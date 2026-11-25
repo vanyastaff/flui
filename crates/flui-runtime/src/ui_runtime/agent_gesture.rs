@@ -19,6 +19,9 @@
 //!   path; `scroll_into_view`, which has only the semantics action, takes it unless the call
 //!   requires synthetic input. The `os` path is the driver's: the agent refuses it. Every gesture
 //!   asks [`takes_semantic_path`] before it is held.
+//! - **Pointer.** A tap, a double tap and a drag play with the window's primary pointer
+//!   ([`primary_pointer`]), the stroke gestures and a long press with a touch contact; what the
+//!   call leaves unnamed comes from the window's gesture settings ([`window_defaults`]).
 //! - **Answer.** What performing it answers: the injection's outcome once a frame has passed since
 //!   its last tick, or the semantics action's, naming the element acted on.
 

@@ -1093,11 +1093,15 @@ facts against the path found (`actionability_wire`). A hit-test the render tree 
 (`TreeBusy`) answers `RenderTreeBusy` (`busy`, retry `soon`); a render object that panics in it
 answers `HitTestPanicked` (`platform`, nothing ran) first and its panic then continues on the
 owner, as an action's does. `stable` needs bounds from an earlier call: `AgentStability`, on the
-presentation, keeps the bounds of the last 64 elements read, and a comparison counts once a
-terminal frame has run since (the presentation's tree revision moved) or while the presentation
-has no work pending that could still move the element. The first call for an element, and one
-made in the frame of the call before it with work pending, answer unstable. Pinned by
-`src/ui_runtime/tests/agent_locate.rs` and `agent_stability.rs`.
+presentation, is the one owner of what every reader (a held act, a poll) saw of an element, and a
+comparison counts once a terminal frame has run since (the presentation's tree revision moved) or
+while the presentation has no work pending that could still move the element. The first call for
+an element answers unstable; every later call at the same revision with work pending reads the same
+tree and answers what the comparison made at that revision did, so two readers of one frame, and a
+held act's last attempt on a turn without a frame, are told the same. Pinned by
+`src/ui_runtime/tests/agent_locate.rs`, `agent_stability.rs` and
+`tests/contracts/agent_gestures.rs`
+(`a_last_attempt_on_a_turn_without_a_frame_names_the_check_that_failed`).
 
 **Act and read.** `semantics.act` with a `snapshot` takes the committed tree
 as the before-snapshot (`SemanticsOwner::snapshot_wire`), serves the action as one without it, parks
@@ -1151,11 +1155,28 @@ passed: every held act's deadline wakes the owner (`AgentSide::next_act_deadline
 so a window that draws nothing still answers it. While any act is held the window asks for frames,
 the frame asked for before the act is held or its input queued. An answer or a wake after an
 attempt runs inside the pass's `FirstPanic`, and `after_turn` evaluates the parked waits inside it
-too, so the first panic of a turn continues. The stability check remembers the two elements each
+too, so the first panic of a turn continues; a parked wait asks for the frames it counts before it
+is parked, and the answer pass contains each window's wake, so a wake that panics parks nothing and
+leaves the next windows' waits answered. The stability check remembers the two elements each
 held act reads and room for polls beside them (`AgentStability`), forgetting the element read
 longest ago.
+
+An act's deadline is a promise: every act is answered by it, the input it queued included. The
+input an act queues (a gesture's injection, `type_text` and `press_keys`, a scroll step) carries
+the act's deadline. At the first pass at or past it (an owner turn without a frame, after the
+acts whose deadline passed are attempted; a frame boundary, after its input went on, so the input
+a last attempt queued on that frame starts on it) input none of whose ticks started is withdrawn
+and the act answers `timeout` (`InputTimedOut`, retry `soon`), nothing played; input under way
+then has its play time past the deadline (`Script::plays_within`, the bound the reply counts,
+ADR-0288 §4), and still running then, because its window stopped drawing, stops where it is as a
+failed injection does, what it holds staying with its lease, and answers `timeout` with the ticks
+played. Until then the input's deadline is a wake of the agent (`next_act_deadline`), so a window
+that draws nothing answers its acts on time and nothing plays once it draws again.
+`input.inject` carries no deadline: its asker bounds its own reply.
 An attempt resolves a locator again in the application (none holds on, several under a strict
-pick answer `ambiguous`), reads the element's actionability as `element.actionability` does (the
+pick answer `ambiguous`, counting every match and naming the first ten, by
+`flui_protocol::locator::resolve_strict`, the rule `scroll_until` and the driver follow too),
+reads the element's actionability as `element.actionability` does (the
 same `actionability`, its stability included), and performs once every check passes, or only
 attached under `force`: the sequence `flui_protocol::input::gestures` composes from that frame's
 point and the part of the element the window shows (`flui_semantics::ActionabilityReading::shown`;
@@ -1163,15 +1184,26 @@ the whole bounds only where none shows), with what the call leaves unnamed (a lo
 stroke's speed and least length) taken from the window's own gesture settings by
 `window_defaults`, each rule stated there, a long press at most `Defaults::LONGEST_LONG_PRESS_MS`,
 which the reply bound counts (a long press the window would need longer for is refused, naming the duration
-to give), injected through the call's lease as `input.inject` is, or on the semantic path
+to give). A tap, a double tap and a drag play with the window's primary pointer
+(`agent_gesture::primary_pointer`: a touch contact on Android, iOS and Fuchsia, a mouse elsewhere,
+`Defaults::pointer`), so on a touch platform a tap is a touch and a drag scrolls what a finger
+scrolls; a long press, a swipe, a fling and a pinch are touch gestures everywhere. The audit's
+`target_size` judges by the same pointer's minimum and names it. What the shared composer refuses
+it refuses for every composer: a drag no longer than the primary pointer's pan slop
+(`Defaults::min_drag`), a fling whose window-chosen stroke is over in fewer than the two moves a
+release velocity is measured from (naming the distance or velocity to give); the agent also refuses
+a pinch whose scale change does not pass the window's scale slop. A drag holds still before it
+lifts (`SWIPE_SETTLE_MS`), so it is dropped where it ends, not flung. The sequence is injected
+through the call's lease as `input.inject` is, or on the semantic path
 the semantics action that does the same (a primary tap invokes; a focus before text or keys
 focuses). The deadline is the act's own timeout on the presentation's clock; the attempt at or
 past it is the last, and answers the check that failed (`NotActionable` with `failed` and
 `covered_by`), `not_found` or `gone` when it does not perform. An act is dropped as it is answered,
 so nothing it would send goes out after its answer; an act nobody awaits is dropped unanswered; the
 lease an act injects through being let go answers it `gone`, as does the presentation closing; a
-panic in app code an attempt reaches (a hit-test, a semantics handler) answers the act before it
-continues. `scroll_until` turns the wheel at the scrollable's visible centre a viewport at a time,
+panic in app code an attempt reaches (a hit-test, a semantics handler) answers the act once, with
+the step that failed, before it continues
+(`app_code_that_panics_in_a_held_acts_attempt_answers_the_act_once`). `scroll_until` turns the wheel at the scrollable's visible centre a viewport at a time,
 each step an injection whose answer the next attempt waits for, until the locator resolves under
 the scrollable to an element that shows, or the scrollable's descendants and their bounds are
 unchanged after a step (`ScrollEnded`, `not_found`), so a scrollable that does not move ends the
