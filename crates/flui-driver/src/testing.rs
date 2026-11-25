@@ -45,12 +45,15 @@ use flui_protocol::error::{ErrorObject, Retry};
 use flui_protocol::framing::LineReader;
 use flui_protocol::input::PointerDevice;
 use flui_protocol::session::{AppDescription, Capabilities, HelloReply, Isolation, Placement};
+use flui_protocol::tree::Tree;
 use flui_protocol::version::PROTOCOL_VERSION;
 use serde_json::Value;
 
 use crate::coordinates::WindowGeometry;
 use crate::error::{Error, Result};
-use crate::lane::{ActivityGuard, ForeignInput, Lane, LaneCapabilities, PositionFidelity};
+use crate::lane::{
+    AccessibilityApi, ActivityGuard, ForeignInput, Lane, LaneCapabilities, PositionFidelity,
+};
 use crate::pixels::Image;
 use crate::steps::OsEvent;
 
@@ -141,7 +144,13 @@ pub struct ScriptedLane {
     panicking_releases: bool,
     /// What its captures show; it captures nothing without one.
     screen: Option<Screen>,
+    /// The API it reads the OS tree through, and how it answers each read; it reads none
+    /// without one.
+    tree: Option<(AccessibilityApi, TreeRead)>,
 }
+
+/// How a [`ScriptedLane`] answers a read of the OS tree, from the app's tree it is handed.
+pub type TreeRead = Box<dyn FnMut(&Tree) -> Result<Tree> + Send>;
 
 impl std::fmt::Debug for ScriptedLane {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -170,6 +179,7 @@ impl ScriptedLane {
                 panicking_releases: false,
                 hanging_sends: false,
                 screen: None,
+                tree: None,
             },
             log,
         )
@@ -215,6 +225,14 @@ impl ScriptedLane {
         self
     }
 
+    /// Reading the OS tree through `api`, each read answered by `read` from the app's tree the
+    /// driver hands it ([`Lane::read_tree`]).
+    #[must_use]
+    pub fn reading_tree(mut self, api: AccessibilityApi, read: TreeRead) -> Self {
+        self.tree = Some((api, read));
+        self
+    }
+
     /// With a guard that reports no foreign input.
     #[must_use]
     pub fn guarded(mut self) -> Self {
@@ -246,12 +264,27 @@ impl Lane for ScriptedLane {
     }
 
     fn capabilities(&self) -> LaneCapabilities {
-        LaneCapabilities::new(
+        let capabilities = LaneCapabilities::new(
             vec![PointerDevice::Mouse, PointerDevice::Touch],
             true,
             self.isolation,
             PositionFidelity::Exact,
-        )
+        );
+        match &self.tree {
+            Some((api, _)) => capabilities.accessibility(*api),
+            None => capabilities,
+        }
+    }
+
+    fn read_tree(&mut self, placement: &Placement, app: &Tree) -> Result<Tree> {
+        let _ = placement;
+        match self.tree.as_mut() {
+            Some((_, read)) => read(app),
+            None => Err(Error::not_supported(
+                "os_accessibility_tree",
+                "the scripted lane was given no tree to read",
+            )),
+        }
     }
 
     fn guard(&mut self) -> Option<&mut dyn ActivityGuard> {

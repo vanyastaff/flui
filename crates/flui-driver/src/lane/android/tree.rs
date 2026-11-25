@@ -129,6 +129,7 @@ impl TreeError {
                      another one"
                 ),
                 candidates: Vec::new(),
+                effect: None,
                 retry: ErrorCode::NotFound.default_retry(),
             },
             Self::Ambiguous { node, candidates } => Error::Ambiguous {

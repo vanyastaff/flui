@@ -62,7 +62,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   handle holds the OS file lock (a lock file this user may only read is opened for reading, one
   it cannot open is `Error::Io`, never retried); the first OS
   event of a session is announced once; once OS input went out, a failed read of what it did is
-  `may_have_run`, never not run.
+  `may_have_run`, never not run. Whatever ends a run once the lane took an event that acts
+  (`OsEvent::acts`), a refusal, the guard's interruption, a failed command, a release that fails
+  after the last event, `send_guarded` answers as `Error::PartlySent` around it, on every lane:
+  the events taken as `Effect::partial` and no retry, which would send them again; a failure
+  with an effect of its own that invites no retry (a timed-out command) stays as it is.
 - **A person's interruption followed by a failed release is cannot-verify, the held input
   named.** When the guard sees the person's input, the run stops and is cannot-verify: the input
   that reached the app is no longer the scenario's, so neither a pass nor a failure of the app can
@@ -117,13 +121,14 @@ app's trees, frames and input, and this crate composes that with what only the O
   `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
   the mouse included, going down at the display's edge; before each press, key, text and scroll
   one `dumpsys window -a` must show the window the lane located holding the focus, compared by
-  its hash, frame and rotation, on the display holding the device's focus: another display is
-  `android_default_display`, another window of the app's title is `NotForeground`, the same
-  window moved or turned is `Busy` until the lane locates it again. The whole dump runs under the
-  window manager's lock, which every window change on the device waits for, once a locate and
-  once before each such command; `-a` is what prints the frames. Whatever ends a sequence
-  after part of it went out answers `Error::PartlySent` around its own failure: the commands
-  that went out may have run, and no retry is invited, which would send them again.
+  its hash, frame and rotation, on the display holding the device's focus: another display, or
+  the app's window on another display, is `android_default_display`, another window of the
+  app's title is `NotForeground`, the same window moved or turned is `Busy` until the lane
+  locates it again. The whole dump runs under the window manager's lock, which every window
+  change on the device waits for, once a locate and once before each such command; `-a` is what
+  prints the frames. A window that takes no focus over the press point is not checked
+  (`docs/gaps.md`). A contact going down is recorded before its command goes out, so a send that
+  times out or unwinds leaves it for the release to cancel.
 - **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is

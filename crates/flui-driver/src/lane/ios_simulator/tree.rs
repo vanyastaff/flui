@@ -177,6 +177,7 @@ impl TreeError {
                     }
                 ),
                 candidates: groups,
+                effect: None,
                 retry: ErrorCode::NotFound.default_retry(),
             },
             Self::SearchCut { title } => Error::NotFound {
@@ -187,6 +188,7 @@ impl TreeError {
                      second one, may sit in the part not read, so none is taken; read again"
                 ),
                 candidates: Vec::new(),
+                effect: None,
                 retry: ErrorCode::NotFound.default_retry(),
             },
             Self::NoAppTree => Error::NotFound {
@@ -194,6 +196,7 @@ impl TreeError {
                           elements against"
                     .to_owned(),
                 candidates: Vec::new(),
+                effect: None,
                 retry: ErrorCode::NotFound.default_retry(),
             },
             Self::Ambiguous { node, candidates } => Error::Ambiguous {

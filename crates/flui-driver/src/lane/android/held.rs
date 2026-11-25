@@ -190,6 +190,20 @@ impl Command {
             Self::Key(_) | Self::Chord(_) | Self::Text(_) | Self::Scroll { .. } => true,
         }
     }
+
+    /// Whether the command puts a touch or mouse contact down through `input`: what the release
+    /// must undo even when the command's answer never came (the pen's contacts go with its
+    /// device).
+    #[must_use]
+    pub fn puts_contact_down(&self) -> bool {
+        matches!(
+            self,
+            Self::Motion {
+                action: MotionAction::Down,
+                ..
+            }
+        )
+    }
 }
 
 /// A part of what the lane holds that is released on its own, so one part's failure never hides
@@ -631,6 +645,14 @@ impl HeldInput {
         self.modifiers.clear();
         self.pending = None;
         self.modifier_used = false;
+    }
+
+    /// The device refused `command` outright (its command answered, failing): a contact recorded
+    /// before its press went out is not down.
+    pub fn refused(&mut self, command: &Command) {
+        if command.puts_contact_down() {
+            self.contact = None;
+        }
     }
 
     /// The pen's device is gone, and with it everything it held: the kernel removes a device's

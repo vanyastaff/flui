@@ -190,7 +190,7 @@ mod lane {
             let (pointer, device, regions) = session.interface::<ei::PointerAbsolute>()?;
             let (x, y) = mapping::ei_point(to, scale, &regions).ok_or_else(|| {
                 Error::outside_target(format!(
-                    "({}, {}) lies in no region the compositor's pointer covers; nothing was sent",
+                    "({}, {}) lies in no region the compositor's pointer covers: the event is not sent",
                     to.x, to.y
                 ))
             })?;

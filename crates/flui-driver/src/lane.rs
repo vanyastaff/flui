@@ -46,6 +46,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use flui_foundation::panic::{FirstPanic, discard_payload};
+use flui_protocol::act::{Effect, EffectUnit};
 use flui_protocol::input::PointerDevice;
 use flui_protocol::session::{Isolation, Placement};
 use flui_protocol::tree::Tree;
@@ -398,6 +399,12 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 /// failure that ended the run is its `first`, and the run's effect and verdict are that failure's
 /// ([`Error::effect`], [`Error::is_cannot_verify`]).
 ///
+/// Whatever ends the run once the lane took an event that acts ([`OsEvent::acts`]: not a move or
+/// a pause), a refusal, an interruption, a failed command or a release that fails after the last
+/// event, comes as [`Error::PartlySent`] around it, with the count of events taken
+/// (`Effect::partial`, in events) and no retry, which would send them again; a failure that
+/// names an effect of its own and invites no retry (a command that timed out) stays as it is.
+///
 /// # Errors
 ///
 /// As [`admit`] and [`Lane::check`], before any event, and [`Error::NotSupported`] naming
@@ -419,10 +426,24 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     if let Some(guard) = lane.guard() {
         guard.arm()?;
     }
-    let sent = send_each(lane, &name, events);
+    let (taken, sent) = send_each(lane, &name, events);
     if let Some(guard) = lane.guard() {
         guard.disarm();
     }
+    // Once the lane took an event that acts, whatever ends the run says how many it took.
+    let acted = events.iter().take(taken).any(OsEvent::acts);
+    let partly = |failure: Error| {
+        if !acted {
+            return failure;
+        }
+        let count = |events: usize| u32::try_from(events).unwrap_or(u32::MAX);
+        failure.after_partly_sent(Effect::partial(
+            count(taken),
+            count(events.len()),
+            EffectUnit::Event,
+        ))
+    };
+    let sent = sent.map_err(partly);
     let released = lane.release_all();
     match (sent, released) {
         // The error names what stays down whatever ended the run, and keeps that first failure,
@@ -442,6 +463,7 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
             message: format!("{message}; the run had failed first: {failure}"),
             first: Some(Box::new(failure)),
         }),
+        (Ok(()), Err(release)) => Err(partly(release)),
         (sent, released) => sent.and(released),
     }
 }
@@ -455,25 +477,31 @@ pub(crate) fn no_composition(lane: &str) -> Error {
     )
 }
 
-fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> {
-    for event in events {
-        if let Some(foreign) = lane.guard().and_then(ActivityGuard::foreign_input) {
-            return Err(Error::InterruptedByUser {
+/// Send `events` one at a time, asking the guard before each and after the last: how many the
+/// lane took, and what ended the run.
+fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> (usize, Result<()>) {
+    let interrupted = |lane: &mut dyn Lane| {
+        lane.guard()
+            .and_then(ActivityGuard::foreign_input)
+            .map(|foreign| Error::InterruptedByUser {
                 lane: name.to_owned(),
                 event: foreign.description,
-            });
+            })
+    };
+    for (taken, event) in events.iter().enumerate() {
+        if let Some(interruption) = interrupted(lane) {
+            return (taken, Err(interruption));
         }
-        lane.send(event)?;
+        if let Err(failure) = lane.send(event) {
+            return (taken, Err(failure));
+        }
     }
     // Input that came during the last event still ends the run: it may have changed what the
     // last event did.
-    if let Some(foreign) = lane.guard().and_then(ActivityGuard::foreign_input) {
-        return Err(Error::InterruptedByUser {
-            lane: name.to_owned(),
-            event: foreign.description,
-        });
+    match interrupted(lane) {
+        Some(interruption) => (events.len(), Err(interruption)),
+        None => (events.len(), Ok(())),
     }
-    Ok(())
 }
 
 /// Release what `lane` holds where no caller is left to retry (the worker ending, a job that

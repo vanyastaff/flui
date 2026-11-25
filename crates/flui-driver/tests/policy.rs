@@ -317,6 +317,63 @@ fn input_left_held_is_named_whatever_ended_the_run() {
     ));
 }
 
+/// Whatever ends a run once the lane took an event that acts says how many it took, on every
+/// lane: the guard's interruption between events, the guard's look after the last one, and a
+/// release that fails after every event went out come as `PartlySent`, with the typed count and
+/// no retry. Moves and pauses alone are no part of the call that went out.
+#[test]
+fn a_run_ended_after_an_event_went_out_says_how_many_on_every_lane() {
+    use flui_driver::protocol::act::{EffectKind, EffectUnit};
+    use flui_driver::protocol::error::Retry;
+
+    let key = |name: &str| {
+        [
+            OsEvent::KeyDown(name.to_owned()),
+            OsEvent::KeyUp(name.to_owned()),
+        ]
+    };
+    let partly = |error: &Error, sent: u32, total: u32| {
+        assert!(matches!(error, Error::PartlySent { .. }), "{error:?}");
+        let effect = error.effect().expect("an effect");
+        assert_eq!(
+            (effect.kind, effect.sent, effect.total, effect.unit),
+            (
+                EffectKind::Partial,
+                Some(sent),
+                Some(total),
+                Some(EffectUnit::Event)
+            )
+        );
+        assert_eq!(error.retry(), Retry::Never);
+    };
+    // Interrupted between the key's press and its release.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.foreign_input_after(1, "a key");
+    let refused = lane::send_guarded(&mut lane, &key("a")).expect_err("interrupted");
+    partly(&refused, 1, 2);
+    assert!(refused.is_cannot_verify(), "{refused}");
+    // Interrupted after the last event.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.foreign_input_after(2, "a key");
+    let refused = lane::send_guarded(&mut lane, &key("a")).expect_err("interrupted");
+    partly(&refused, 2, 2);
+    // Every event went out, and the release failed.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.guarded().failing_releases(1);
+    let refused = lane::send_guarded(&mut lane, &key("a")).expect_err("held");
+    partly(&refused, 2, 2);
+    // Only pauses went out before the interruption: nothing that acts was sent.
+    let pause = || OsEvent::Pause(Duration::from_millis(1));
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.foreign_input_after(1, "a key");
+    let refused = lane::send_guarded(&mut lane, &[pause(), pause()]).expect_err("interrupted");
+    assert!(
+        matches!(refused, Error::InterruptedByUser { .. }),
+        "{refused:?}"
+    );
+    assert!(!refused.may_have_run());
+}
+
 #[test]
 fn an_rtl_windows_button_is_aimed_at_from_the_surfaces_physical_left() {
     use flui_foundation::TextDirection;

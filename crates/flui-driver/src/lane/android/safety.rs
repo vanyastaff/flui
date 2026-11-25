@@ -138,7 +138,7 @@ impl Refusal {
         match self {
             Self::NotForeground { focus } => Error::NotForeground {
                 message: format!(
-                    "the app's window does not hold the input focus ({}); nothing was sent",
+                    "the app's window does not hold the input focus ({}): the command is not sent",
                     focus.as_deref().unwrap_or("no window holds it")
                 ),
                 retry: ErrorCode::NotForeground.default_retry(),
