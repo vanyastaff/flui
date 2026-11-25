@@ -747,6 +747,14 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - `an_ancestor_scale_below_1_still_loses_the_pixel_a_content_clip_shares` (`crates/flui-layer/tests/scene_damage.rs`) pins the cull's miss and a placement's.
 - The entry closes when a stored bound carries what the surface map needs to keep the strip under any scale, and that test asserts the cull keeps the node and the placement damages the pixel.
 
+### A toolbar's overflow clip cuts off paint but not semantics or input regions
+
+> **Environments:** all · **Who it hurts:** Screen-reader users, who reach the part of a toolbar command a too-narrow toolbar clips out of view, and apps whose clipped-off command reports an input region (a system-gesture exclusion) the OS then honours · **Parity:** [Quality bar](platform-parity.md#quality-bar)
+
+- `RenderToolbarItems` (`crates/flui-objects/src/layout/toolbar_items.rs`) clips its shown children's paint to its box while its last arrangement was larger than the box, from a `clipped` flag its layout writes and only `paint` reads. It describes no clip through `describe_approximate_paint_clip`, so the semantics and input-region walks keep the cut-off part of a shown child.
+- The six other boxes that clip at their overflow keep the answer in `OverflowClip` (`crates/flui-objects/src/shown.rs`) and report it to both walks ("Mapping decisions" in [crates/flui-objects/ARCHITECTURE.md](../crates/flui-objects/ARCHITECTURE.md)). `every_keeper_of_a_shown_record_runs_the_shared_row` cannot see the toolbar, because it keys on that record.
+- The entry closes when the toolbar keeps its clip in `OverflowClip`, runs the shared row, and has a row for the semantics and region cut-off.
+
 ### Two rest distances for logical pixels
 
 > **Environments:** all · **Who it hurts:** Apps that mix a scroll fling with an animated offset, size or rect on a dense display, where the two settle at visibly different precision · **Parity:** none (animation has no row)

@@ -103,6 +103,7 @@ impl RenderConstraintsTransformBox {
     /// Returns whether the aligned child left this box's own size at the
     /// last layout. `true` before the first layout and after a layout that
     /// failed: the box then clips to the size it keeps.
+    /// A layout in which a descendant failed counts as one that failed.
     #[inline]
     pub fn has_visual_overflow(&self) -> bool {
         self.overflow.clips()
@@ -183,11 +184,7 @@ impl RenderConstraintsTransformBox {
         // Overflow is the ALIGNED child rect leaving the box rect —
         // not a size-only comparison: an out-of-range alignment can push a
         // smaller-than-box child outside the box.
-        let child_offset = self.inner.child_offset();
-        let overflows = child_offset.dx < 0.0
-            || child_offset.dy < 0.0
-            || child_offset.dx + child_size.width > our_size.width
-            || child_offset.dy + child_size.height > our_size.height;
+        let overflows = OverflowClip::leaves(our_size, self.inner.child_offset(), child_size);
         self.inner.record_child_baselines(ctx)?;
         Ok((our_size, overflows))
     }
@@ -216,7 +213,7 @@ impl RenderBox for RenderConstraintsTransformBox {
     ) -> flui_rendering::RenderResult<Size> {
         self.overflow.begin();
         let laid_out = self.lay_out(ctx);
-        self.overflow.commit(laid_out)
+        self.overflow.commit(ctx, laid_out)
     }
 
     /// Serves the live baseline recorded at the last layout, shifted by the

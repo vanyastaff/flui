@@ -400,6 +400,7 @@ impl RenderWrap {
     /// Whether the last accepted layout overflowed its constraints. `true`
     /// before the first layout and after a layout that failed: the wrap then
     /// clips to the size it keeps.
+    /// A layout in which a descendant failed counts as one that failed.
     #[must_use]
     pub const fn has_visual_overflow(&self) -> bool {
         self.overflow.clips()
@@ -784,7 +785,7 @@ impl RenderBox for RenderWrap {
     ) -> flui_rendering::RenderResult<Size> {
         self.overflow.begin();
         let laid_out = self.lay_out(ctx);
-        self.overflow.commit(laid_out)
+        self.overflow.commit(ctx, laid_out)
     }
 
     fn compute_dry_layout(

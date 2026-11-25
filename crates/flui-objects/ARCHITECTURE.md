@@ -333,17 +333,36 @@ is `true` before the first layout and after a failed one, and
 not a rectangle: the hook builds the rectangle from the size the walk hands it
 (ADR-0224).
 
+A descendant whose own layout fails hands the box a stand-in size (zero), while
+paint, hit testing and semantics keep drawing it at the geometry it last
+committed, which the stand-in does not describe. The box therefore takes no
+answer from a degraded pass: `commit` reads `descendant_layout_degraded()` and
+keeps `begin`'s answer, so the box clips to its size until a pass without a
+stand-in, as after a layout of its own that failed. The answer of a box that
+places its child by offset is the child's rectangle against the box
+(`OverflowClip::leaves`): `RenderAnimatedSize` answers from where its aligned
+child lies, not from the size it animates toward, which a refused resize leaves
+behind the child, and its tight fast path aligns the child too, so no offset
+kept from an earlier, larger child draws it outside the box.
+
 At `Clip::None` an overflowing child is painted and published in full, but a
 box hit test rejects a point outside the box's own size, so the child is hit
 only inside the box (Flutter #19445). A parent sized to contain the child is
 the remedy, not a hit test that reaches outside the box.
 
+`RenderToolbarItems` still clips its paint from a flag of its own and reports
+no clip to the walks ([gaps](../../docs/gaps.md#a-toolbars-overflow-clip-cuts-off-paint-but-not-semantics-or-input-regions)).
+
 Tests: the `harness_<object>_hits_and_publishes_a_child_only_where_it_paints`
 and `harness_<object>_cuts_semantics_and_regions_at_its_overflow_clip` rows,
 `harness_overflow_clip_publishes_what_a_clip_rect_publishes`,
-`harness_an_overflow_box_clips_after_a_layout_that_fails`,
+`harness_an_overflow_box_clips_after_a_layout_that_fails` (a returned error, a
+panic in the box's layout, and a child's panic that leaves a stand-in),
+`harness_an_overflow_box_clips_before_its_first_layout`,
 `harness_an_overflow_answer_is_cleared_by_a_layout_that_returns_early`,
 `harness_no_overflow_reports_no_clip`,
+`harness_an_overflow_by_one_operand_alone_clips`,
+`harness_an_animated_size_answers_from_where_its_child_lies`,
 `harness_an_unclipped_overflow_is_painted_and_published_but_hit_only_inside_the_box`,
 and `every_keeper_of_a_shown_record_runs_the_shared_row`, which fails the
 crate's tests for a type that keeps a record without running the shared row.

@@ -16262,6 +16262,18 @@ fn family_shown() {
                 shown::harness_no_overflow_reports_no_clip,
             ),
             (
+                "an_overflow_box_clips_before_its_first_layout",
+                shown::harness_an_overflow_box_clips_before_its_first_layout,
+            ),
+            (
+                "an_overflow_by_one_operand_alone_clips",
+                shown::harness_an_overflow_by_one_operand_alone_clips,
+            ),
+            (
+                "an_animated_size_answers_from_where_its_child_lies",
+                shown::harness_an_animated_size_answers_from_where_its_child_lies,
+            ),
+            (
                 "an_unclipped_overflow_is_painted_and_published_but_hit_only_inside_the_box",
                 shown::harness_an_unclipped_overflow_is_painted_and_published_but_hit_only_inside_the_box,
             ),

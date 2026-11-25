@@ -156,10 +156,11 @@ impl<C> IndexedStack<C> {
         }
     }
 
-    /// How the shown child's paint is clipped, as [`Stack::clip_behavior`]:
+    /// How the shown child is clipped, as [`Stack::clip_behavior`]:
     /// `Clip::HardEdge` by default, `Clip::None` to let it paint outside. The
-    /// clip applies when any positioned child overflowed the last layout, the
-    /// hidden ones included, since every child is laid out.
+    /// clip applies when the shown child, positioned, lay outside the stack at
+    /// the last layout; a hidden child is neither painted nor published, so
+    /// where it lies does not matter.
     #[must_use]
     pub fn clip_behavior(mut self, clip_behavior: Clip) -> Self {
         self.clip_behavior = clip_behavior;

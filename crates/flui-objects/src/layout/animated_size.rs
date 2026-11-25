@@ -444,7 +444,7 @@ pub struct RenderAnimatedSize {
     /// Last frame's already-`constrain()`-ed committed size. Read only by
     /// [`dry_size_for`](Self::dry_size_for)'s `Stable` branch.
     current_size: Size,
-    /// Whether the shown size is smaller than the target, written by
+    /// Whether the aligned child leaves the shown size, written by
     /// `perform_layout` alone (`crate::shown`).
     overflow: OverflowClip,
     clip_behavior: Clip,
@@ -513,10 +513,11 @@ impl RenderAnimatedSize {
         self.state
     }
 
-    /// Whether the last layout produced a size smaller than the target, so
+    /// Whether the aligned child left the shown size at the last layout, so
     /// paint, semantics and input regions clip to the box. `true` before the
     /// first layout and after a layout that failed: the box then clips to the
     /// size it keeps.
+    /// A layout in which a descendant failed counts as one that failed.
     pub fn has_visual_overflow(&self) -> bool {
         self.overflow.clips()
     }
@@ -608,8 +609,8 @@ impl RenderAnimatedSize {
 }
 
 impl RenderAnimatedSize {
-    /// Lays the child out and returns the shown size with whether it is
-    /// smaller than the target.
+    /// Lays the child out and returns the shown size with whether the
+    /// aligned child leaves it.
     fn lay_out(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
@@ -617,19 +618,27 @@ impl RenderAnimatedSize {
         let constraints = *ctx.constraints();
 
         // Fast path: no child, or the parent gave us no freedom to animate
-        // into. The child is still laid out (so its own subtree stays
-        // consistent) but `align_child` is deliberately NOT called — the
-        // child keeps whatever offset it had, possibly stale. The shown size
-        // is the target, so nothing is clipped.
+        // into. The shown size snaps to the constraints and the child, laid
+        // out at them, is aligned in it like on the full path: an offset kept
+        // from an earlier, larger child would draw it outside the box.
         if ctx.child_count() == 0 || constraints.is_tight() {
-            if ctx.child_count() > 0 {
-                ctx.layout_single_child()?;
-            }
+            let child_size = if ctx.child_count() > 0 {
+                Some(ctx.layout_single_child()?)
+            } else {
+                None
+            };
             let snapped = constraints.smallest();
             self.track(snapped);
             self.size.apply_pending_motion();
             self.state = AnimatedSizeState::Start;
             self.current_size = snapped;
+            let Some(child_size) = child_size else {
+                return Ok((snapped, false));
+            };
+            self.inner.align_child(ctx, snapped, child_size);
+            self.inner.record_child_baselines(ctx)?;
+            // Laid out at tight constraints, the child is the box's size and
+            // aligns at its origin, so it lies inside.
             return Ok((snapped, false));
         }
 
@@ -647,7 +656,9 @@ impl RenderAnimatedSize {
         self.current_size = size;
         self.inner.align_child(ctx, size, child_size);
         self.inner.record_child_baselines(ctx)?;
-        let overflows = size.width < self.target.width || size.height < self.target.height;
+        // The child's rectangle, not the target: a resize the motion refused
+        // leaves the target behind the child it was meant to follow.
+        let overflows = OverflowClip::leaves(size, self.inner.child_offset(), child_size);
         Ok((size, overflows))
     }
 }
@@ -687,7 +698,7 @@ impl RenderBox for RenderAnimatedSize {
     ) -> flui_rendering::RenderResult<Size> {
         self.overflow.begin();
         let laid_out = self.lay_out(ctx);
-        self.overflow.commit(laid_out)
+        self.overflow.commit(ctx, laid_out)
     }
 
     fn compute_distance_to_actual_baseline(

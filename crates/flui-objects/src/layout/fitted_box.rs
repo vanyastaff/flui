@@ -97,7 +97,8 @@ pub struct RenderFittedBox {
     /// size and so is only knowable after layout.
     child_is_empty: bool,
     /// Last valid `(own_size, child_size)` pair, used to recompute paint data
-    /// when fit or alignment changes without layout.
+    /// when the alignment changes without layout. A fit change relayouts,
+    /// since the fit decides the crop, which only layout writes.
     last_layout_sizes: Option<(Size, Size)>,
 }
 
@@ -140,6 +141,7 @@ impl RenderFittedBox {
     /// Returns whether the scaled child overflowed the box at the last
     /// layout. `true` before the first layout and after a layout that failed:
     /// the box then clips to the size it keeps.
+    /// A layout in which a descendant failed counts as one that failed.
     #[inline]
     pub fn has_visual_overflow(&self) -> bool {
         self.overflow.clips()
@@ -414,7 +416,7 @@ impl RenderBox for RenderFittedBox {
     ) -> flui_rendering::RenderResult<Size> {
         self.overflow.begin();
         let laid_out = self.lay_out(ctx);
-        self.overflow.commit(laid_out)
+        self.overflow.commit(ctx, laid_out)
     }
 
     flui_rendering::forward_single_child_intrinsics!();

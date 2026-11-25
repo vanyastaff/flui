@@ -1111,9 +1111,9 @@ pub(crate) fn merge_semantics_collapses_its_descendants_in_the_a11y_tree() {
     );
 }
 
-/// A fit change that only moves the fitted transform moves the child's
-/// published semantics with its pixels: `Contain` scales the 40×40 child to
-/// fill the 200×200 box, `None` leaves it at its size, centred.
+/// A fit change, which relayouts the box, moves the child's published
+/// semantics with its pixels: `Contain` scales the 40×40 child to fill the
+/// 200×200 box, `None` leaves it at its size, centred.
 pub(crate) fn a_fitted_child_moved_by_a_fit_change_moves_its_semantics() {
     use flui_painting::BoxFit;
     use flui_widgets::{FittedBox, Semantics};

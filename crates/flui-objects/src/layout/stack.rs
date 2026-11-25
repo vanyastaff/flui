@@ -300,6 +300,7 @@ impl RenderStack {
     /// Returns whether the last layout produced positioned children
     /// that fell outside the stack box. `true` before the first layout and
     /// after a layout that failed: the box then clips to the size it keeps.
+    /// A layout in which a descendant failed counts as one that failed.
     #[inline]
     pub fn has_visual_overflow(&self) -> bool {
         self.overflow.clips()
@@ -352,15 +353,6 @@ impl RenderStack {
             StackFit::Expand => BoxConstraints::tight(incoming.biggest()),
             StackFit::Passthrough => incoming,
         }
-    }
-
-    /// Returns whether the offset+size leave `stack_size` (the overflow
-    /// answer `lay_out` returns).
-    fn child_overflows(stack_size: Size, offset: Offset, child_size: Size) -> bool {
-        offset.dx < 0.0
-            || offset.dy < 0.0
-            || (offset.dx + child_size.width) > stack_size.width
-            || (offset.dy + child_size.height) > stack_size.height
     }
 
     fn child_offset(&self, spec: Option<PositionedSpec>, size: Size, child_size: Size) -> Offset {
@@ -506,7 +498,7 @@ impl RenderStack {
                 child_sizes[i] = ctx.layout_child(i, spec.child_constraints(size))?;
             }
             let offset = self.child_offset(specs[i], size, child_sizes[i]);
-            if specs[i].is_some() && Self::child_overflows(size, offset, child_sizes[i]) {
+            if specs[i].is_some() && OverflowClip::leaves(size, offset, child_sizes[i]) {
                 overflows = true;
             }
             ctx.position_child(i, offset);
@@ -555,7 +547,7 @@ impl RenderBox for RenderStack {
     ) -> flui_rendering::RenderResult<Size> {
         self.overflow.begin();
         let laid_out = self.lay_out(ctx);
-        self.overflow.commit(laid_out)
+        self.overflow.commit(ctx, laid_out)
     }
 
     fn compute_dry_layout(
@@ -792,6 +784,7 @@ impl RenderIndexedStack {
     /// Whether the displayed child lay outside the box at the last layout.
     /// `true` before the first layout and after a layout that failed: the box
     /// then clips to the size it keeps.
+    /// A layout in which a descendant failed counts as one that failed.
     #[inline]
     pub fn has_visual_overflow(&self) -> bool {
         self.stack.has_visual_overflow()
@@ -904,8 +897,8 @@ impl RenderIndexedStack {
             ctx.position_child(i, offset);
 
             if displayed_index == Some(i) {
-                overflows = specs[i].is_some()
-                    && RenderStack::child_overflows(size, offset, child_sizes[i]);
+                overflows =
+                    specs[i].is_some() && OverflowClip::leaves(size, offset, child_sizes[i]);
                 for kind in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
                     let slot = baseline_kind_index(kind);
                     self.reported_baselines[slot] = ctx
@@ -947,7 +940,7 @@ impl RenderBox for RenderIndexedStack {
     ) -> flui_rendering::RenderResult<Size> {
         self.stack.overflow.begin();
         let laid_out = self.lay_out(ctx);
-        self.stack.overflow.commit(laid_out)
+        self.stack.overflow.commit(ctx, laid_out)
     }
 
     fn compute_dry_layout(

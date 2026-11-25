@@ -17,15 +17,15 @@ use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::{MotionSpec, SharedCurve, curves};
+use flui_animation::{MotionSpec, SharedCurve, SpringDescription, curves};
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_foundation::inspect::{Fields, Inspect};
 use flui_foundation::{Leaf, RenderId};
 use flui_objects::{
-    RenderAlign, RenderAnimatedSize, RenderClipRect, RenderColoredBox, RenderConstrainedBox,
-    RenderConstraintsTransformBox, RenderFittedBox, RenderIndexedStack, RenderInputRegion,
-    RenderSemanticsAnnotations, RenderSliverToBoxAdapter, RenderStack, RenderViewport, RenderWrap,
-    SizeMotion,
+    AnimatedSizeState, RenderAlign, RenderAnimatedSize, RenderClipRect, RenderColoredBox,
+    RenderConstrainedBox, RenderConstraintsTransformBox, RenderFittedBox, RenderIndexedStack,
+    RenderInputRegion, RenderSemanticsAnnotations, RenderSliverToBoxAdapter, RenderStack,
+    RenderViewport, RenderWrap, SizeMotion, SizeMotionHandle,
 };
 use flui_painting::paint::Clip;
 use flui_painting::{Alignment, BoxFit};
@@ -57,16 +57,21 @@ const WHOLLY: Rect = Rect::from_ltrb(30.0, 150.0, 70.0, 190.0);
 /// The region every content child reports.
 const EXCLUSION: InputRegionKind = InputRegionKind::SystemGestureExclusion;
 
-/// A content child: a semantics container labelled `label` over an input
-/// region over `leaf`, the leaf labelled `label` for hit testing.
-fn content_child(label: &'static str, leaf: TreeNode, at: Rect) -> TreeNode {
+/// A semantics container labelled `label` over an input region over `leaf`,
+/// the leaf labelled `label` for hit testing: one child seen by paint, hits,
+/// semantics and regions.
+fn seen_child(label: &'static str, leaf: TreeNode) -> TreeNode {
     box_node(RenderSemanticsAnnotations::from_configuration(labelled(label)).with_container(true))
         .child(box_node(RenderInputRegion::new(EXCLUSION)).child(leaf.label(label)))
-        .with_stack_parent_data(
-            StackParentData::new()
-                .with_left(at.left())
-                .with_top(at.top()),
-        )
+}
+
+/// A [`seen_child`] of the content stack, positioned at `at`'s top left.
+fn content_child(label: &'static str, leaf: TreeNode, at: Rect) -> TreeNode {
+    seen_child(label, leaf).with_stack_parent_data(
+        StackParentData::new()
+            .with_left(at.left())
+            .with_top(at.top()),
+    )
 }
 
 /// A colored leaf of `rect`'s size.
@@ -207,22 +212,37 @@ fn fitted_box(clip: Clip, child: TreeNode) -> TreeNode {
     )
 }
 
-/// A box whose shown size stays at zero, its owner gone, so it keeps the
-/// least size its constraints allow (100×100) while its child is larger.
-fn animated_size(clip: Clip, child: TreeNode) -> TreeNode {
-    let released = SizeMotion::new(
+/// A size motion whose owner is gone: its value stays at zero and it refuses
+/// every resize.
+fn released_motion() -> SizeMotionHandle {
+    SizeMotion::new(
         MotionSpec::Curve {
             duration: Duration::from_millis(100),
             curve: SharedCurve::new(curves::LINEAR),
         },
         None,
     )
-    .handle();
+    .handle()
+}
+
+/// A box whose shown size stays at zero, its owner gone, so it keeps the
+/// least size its constraints allow (100×100) while its child is larger.
+fn animated_size(clip: Clip, child: TreeNode) -> TreeNode {
+    animated_size_over(clip, Alignment::TOP_LEFT, child)
+}
+
+/// [`animated_size`] clipping by `Clip::HardEdge`, its child aligned by
+/// `alignment`.
+fn animated_size_aligned(alignment: Alignment, child: TreeNode) -> TreeNode {
+    animated_size_over(Clip::HardEdge, alignment, child)
+}
+
+fn animated_size_over(clip: Clip, alignment: Alignment, child: TreeNode) -> TreeNode {
     box_node(RenderConstrainedBox::new(BoxConstraints::new(
         100.0, 200.0, 100.0, 200.0,
     )))
     .child(
-        box_node(RenderAnimatedSize::new(released, Alignment::TOP_LEFT, clip))
+        box_node(RenderAnimatedSize::new(released_motion(), alignment, clip))
             .label("box")
             .child(child),
     )
@@ -649,11 +669,16 @@ enum Failure {
     Refuses,
     /// Its baseline, which the box reads during its own layout, panics.
     Panics,
+    /// Its own layout panics: the walk contains the panic, poisons the leaf
+    /// and hands the box a stand-in size, so the box's layout returns `Ok`
+    /// from a degraded pass.
+    PanicsInLayout,
 }
 
 /// A 50×50 leaf that fails on demand: its layout returns an error that
-/// propagates up through its parent, or its baseline query panics inside the
-/// parent's layout.
+/// propagates up through its parent or panics, or its baseline query panics
+/// inside the parent's layout. A panic disarms it first, so the test can tell
+/// that the failing call ran.
 #[derive(Debug)]
 struct FailsWhenArmed {
     failure: Rc<Cell<Option<Failure>>>,
@@ -675,8 +700,13 @@ impl RenderBox for FailsWhenArmed {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
     ) -> RenderResult<Size> {
-        if self.failure.get() == Some(Failure::Refuses) {
-            return Err(RenderError::TextContextBusy);
+        match self.failure.get() {
+            Some(Failure::Refuses) => return Err(RenderError::TextContextBusy),
+            Some(Failure::PanicsInLayout) => {
+                self.failure.set(None);
+                panic!("deliberate test failure in a child's layout");
+            }
+            Some(Failure::Panics) | None => {}
         }
         Ok(ctx.constraints().constrain(Size::new(50.0, 50.0)))
     }
@@ -697,16 +727,18 @@ impl RenderBox for FailsWhenArmed {
 
 /// After a layout that fails, by a returned error or a panic, a box clips to
 /// the size it keeps, though its last good layout had nothing outside it: the
-/// failed pass moved children, so no earlier answer is true of them.
-/// `RenderFittedBox` reads no baseline in its layout, so only the returned
-/// error reaches it.
+/// failed pass moved children, so no earlier answer is true of them. A child
+/// whose own layout panics hands the box a stand-in size, which says nothing
+/// of where the child is drawn, so that pass counts as failed too.
+/// `RenderFittedBox` reads no baseline in its layout, so the baseline panic
+/// does not reach it.
 pub(super) fn harness_an_overflow_box_clips_after_a_layout_that_fails() {
     for object in OVERFLOW_BOXES {
         let name = object.name;
         let failures: &[Failure] = if object.name == FITTED_BOX.name {
-            &[Failure::Refuses]
+            &[Failure::Refuses, Failure::PanicsInLayout]
         } else {
-            &[Failure::Refuses, Failure::Panics]
+            &[Failure::Refuses, Failure::Panics, Failure::PanicsInLayout]
         };
         for &failure in failures {
             let armed = Rc::new(Cell::new(None));
@@ -735,10 +767,10 @@ pub(super) fn harness_an_overflow_box_clips_after_a_layout_that_fails() {
                     matches!(failed, Ok(Err(_))),
                     "{name}: the refusal reaches the frame: {failed:?}"
                 ),
-                Failure::Panics => assert_eq!(
+                Failure::Panics | Failure::PanicsInLayout => assert_eq!(
                     armed.get(),
                     None,
-                    "{name}: the box's layout reached the panicking query"
+                    "{name} {failure:?}: the box's layout reached the panicking call"
                 ),
             }
             assert!(
@@ -859,6 +891,319 @@ pub(super) fn harness_no_overflow_reports_no_clip() {
         "a fit that scales the content into the box crops nothing"
     );
     assert!(!records_a_clip(&run), "and pushes no clip");
+}
+
+/// A box no layout has reached clips: its record starts where a layout
+/// that failed leaves it.
+pub(super) fn harness_an_overflow_box_clips_before_its_first_layout() {
+    let size = BOX.size();
+    let clip = Some(BOX);
+    let stack = RenderStack::new().with_clip_behavior(Clip::HardEdge);
+    assert!(stack.has_visual_overflow(), "stack");
+    assert_eq!(
+        stack.describe_approximate_paint_clip(0, size),
+        clip,
+        "stack"
+    );
+
+    let indexed = RenderIndexedStack::new().with_clip_behavior(Clip::HardEdge);
+    assert!(indexed.has_visual_overflow(), "indexed_stack");
+    assert_eq!(
+        indexed.describe_approximate_paint_clip(0, size),
+        clip,
+        "indexed_stack"
+    );
+
+    let wrap = RenderWrap::new().with_clip_behavior(Clip::HardEdge);
+    assert!(wrap.has_visual_overflow(), "wrap");
+    assert_eq!(wrap.describe_approximate_paint_clip(0, size), clip, "wrap");
+
+    let fitted = RenderFittedBox::new(BoxFit::None, Alignment::TOP_LEFT, Clip::HardEdge);
+    assert!(fitted.has_visual_overflow(), "fitted_box");
+    assert_eq!(
+        fitted.describe_approximate_paint_clip(0, size),
+        clip,
+        "fitted_box"
+    );
+
+    let animated = RenderAnimatedSize::new(released_motion(), Alignment::TOP_LEFT, Clip::HardEdge);
+    assert!(animated.has_visual_overflow(), "animated_size");
+    assert_eq!(
+        animated.describe_approximate_paint_clip(0, size),
+        clip,
+        "animated_size"
+    );
+
+    let transform = RenderConstraintsTransformBox::new(Alignment::TOP_LEFT, None, Clip::HardEdge);
+    assert!(transform.has_visual_overflow(), "constraints_transform_box");
+    assert_eq!(
+        transform.describe_approximate_paint_clip(0, size),
+        clip,
+        "constraints_transform_box"
+    );
+}
+
+/// The four sides a child can leave a box by, each alone.
+#[derive(Clone, Copy, Debug)]
+enum Side {
+    Left,
+    Top,
+    Right,
+    Bottom,
+}
+
+const SIDES: [Side; 4] = [Side::Left, Side::Top, Side::Right, Side::Bottom];
+
+impl Side {
+    /// An alignment outside the unit square that pushes a 50×50 child out of
+    /// a 100×100 box by this side alone.
+    fn pushing_alignment(self) -> Alignment {
+        match self {
+            Self::Left => Alignment::new(-3.0, 0.0),
+            Self::Top => Alignment::new(0.0, -3.0),
+            Self::Right => Alignment::new(3.0, 0.0),
+            Self::Bottom => Alignment::new(0.0, 3.0),
+        }
+    }
+
+    /// Where a 50×50 positioned child leaves a 100×100 stack by this side
+    /// alone.
+    fn positioned_at(self) -> StackParentData {
+        let (left, top) = match self {
+            Self::Left => (-20.0, 20.0),
+            Self::Top => (20.0, -20.0),
+            Self::Right => (70.0, 20.0),
+            Self::Bottom => (20.0, 70.0),
+        };
+        StackParentData::new().with_left(left).with_top(top)
+    }
+
+    /// A child larger than a 100×100 box on this side's axis, and the
+    /// alignment that puts its excess on this side alone.
+    fn larger_child(self) -> (Size, Alignment) {
+        match self {
+            Self::Left => (Size::new(200.0, 100.0), Alignment::TOP_RIGHT),
+            Self::Top => (Size::new(100.0, 200.0), Alignment::BOTTOM_LEFT),
+            Self::Right => (Size::new(200.0, 100.0), Alignment::TOP_LEFT),
+            Self::Bottom => (Size::new(100.0, 200.0), Alignment::TOP_LEFT),
+        }
+    }
+}
+
+/// Asserts the box labelled `box` answers that it overflows and clips.
+fn assert_clips(run: &FrameRun, object: OverflowBox, case: &str) {
+    let id = run.id("box");
+    assert!((object.overflows)(run.owner(), id), "{case}: overflows");
+    assert_eq!(
+        (object.clip_of)(run.owner(), id, run.box_geometry(id)),
+        Some(BOX),
+        "{case}: reports the clip"
+    );
+    assert!(records_a_clip(run), "{case}: pushes the clip");
+}
+
+/// Each operand of each box's overflow answer is enough on its own: a child
+/// leaving the box by one side only, a fit that crops one axis only, and an
+/// indexed stack whose displayed child overflows while the hidden one does
+/// not. A hidden child that overflows does not make the box clip.
+pub(super) fn harness_an_overflow_by_one_operand_alone_clips() {
+    let leaf = || leaf_of(Rect::from_ltrb(0.0, 0.0, 50.0, 50.0));
+    for side in SIDES {
+        let run = mount(
+            Host::Alone,
+            tight_box(
+                box_node(RenderStack::new().with_clip_behavior(Clip::HardEdge))
+                    .child(leaf().with_stack_parent_data(side.positioned_at())),
+            ),
+        );
+        assert_clips(&run, STACK, &format!("stack {side:?}"));
+
+        let run = mount(
+            Host::Alone,
+            tight_box(
+                box_node(RenderConstraintsTransformBox::new(
+                    side.pushing_alignment(),
+                    None,
+                    Clip::HardEdge,
+                ))
+                .child(leaf()),
+            ),
+        );
+        assert_clips(
+            &run,
+            CONSTRAINTS_TRANSFORM_BOX,
+            &format!("constraints_transform_box {side:?}"),
+        );
+
+        let (child, alignment) = side.larger_child();
+        let run = mount(
+            Host::Alone,
+            animated_size_aligned(
+                alignment,
+                leaf_of(Rect::from_origin_size(Point::ZERO, child)),
+            ),
+        );
+        assert_clips(&run, ANIMATED_SIZE, &format!("animated_size {side:?}"));
+    }
+
+    // A covering fit crops the axis the child is longer on, and only it; the
+    // clip cuts the scaled child's semantics to the box.
+    for child in [Size::new(200.0, 100.0), Size::new(100.0, 200.0)] {
+        let rect = Rect::from_origin_size(Point::ZERO, child);
+        let run = mount(
+            Host::Alone,
+            tight_box(
+                box_node(RenderFittedBox::new(
+                    BoxFit::Cover,
+                    Alignment::CENTER,
+                    Clip::HardEdge,
+                ))
+                .child(seen_child("leaf", leaf_of(rect))),
+            ),
+        );
+        assert_clips(&run, FITTED_BOX, &format!("fitted_box Cover {child:?}"));
+        assert_eq!(
+            published(&run),
+            vec![("leaf".to_owned(), BOX, false)],
+            "fitted_box Cover {child:?}: the scaled child is published cut to the box"
+        );
+    }
+
+    // Child 0 lies inside the box and child 1 leaves it by the right.
+    let indexed =
+        |index: usize| {
+            mount(
+                Host::Alone,
+                tight_box(
+                    box_node(
+                        RenderIndexedStack::new()
+                            .with_index(Some(index))
+                            .with_clip_behavior(Clip::HardEdge),
+                    )
+                    .child(leaf().with_stack_parent_data(
+                        StackParentData::new().with_left(20.0).with_top(20.0),
+                    ))
+                    .child(leaf().with_stack_parent_data(Side::Right.positioned_at())),
+                ),
+            )
+        };
+    assert_clips(
+        &indexed(1),
+        INDEXED_STACK,
+        "indexed_stack showing the overflowing child",
+    );
+    let run = indexed(0);
+    let id = run.id("box");
+    assert!(
+        !(INDEXED_STACK.overflows)(run.owner(), id),
+        "indexed_stack: a hidden child that overflows does not make the box clip"
+    );
+    assert!(!records_a_clip(&run), "indexed_stack: and pushes no clip");
+}
+
+/// An animated size answers from where its child lies, not from the size it
+/// aims for: a resize its motion refuses leaves the target behind the grown
+/// child, and a tight parent snaps the box while the child, laid out at the
+/// box's size, is aligned in it rather than left at an offset kept from a
+/// larger child.
+pub(super) fn harness_an_animated_size_answers_from_where_its_child_lies() {
+    // A live motion whose run cannot be represented refuses every resize, so
+    // the shown size and the target stay at the first child's 100×100 while
+    // the child grows: a spring of ω = 1e154 is admitted (ω² is finite), but
+    // a 100-unit displacement times ω² is not.
+    let stiff = SpringDescription::with_damping_ratio(1e-300, 1e8, 1.0)
+        .expect("ω = 1e154 and ω² are finite");
+    let refusing = SizeMotion::new(MotionSpec::Spring(stiff), None);
+    let mut run = mount(
+        Host::Alone,
+        box_node(RenderConstrainedBox::new(BoxConstraints::new(
+            100.0, 200.0, 100.0, 200.0,
+        )))
+        .child(
+            box_node(RenderAnimatedSize::new(
+                refusing.handle(),
+                Alignment::TOP_LEFT,
+                Clip::HardEdge,
+            ))
+            .label("box")
+            .child(
+                box_node(RenderConstrainedBox::new(BoxConstraints::tight(BOX.size())))
+                    .label("grows")
+                    .child(leaf_of(BOX)),
+            ),
+        ),
+    );
+    let id = run.id("box");
+    assert!(
+        !(ANIMATED_SIZE.overflows)(run.owner(), id),
+        "precondition: the first child fits"
+    );
+    let grows = run.id("grows");
+    flui_rendering::testing::update_render_object::<RenderConstrainedBox>(
+        run.owner_mut(),
+        grows,
+        |grows| grows.set_additional_constraints(BoxConstraints::tight(Size::new(200.0, 200.0))),
+    );
+    run.pump();
+    let animated = run
+        .owner()
+        .render_object::<RenderAnimatedSize>(id)
+        .expect("the box is an animated size");
+    assert_eq!(
+        (animated.state(), run.box_geometry(id)),
+        (AnimatedSizeState::Stable, BOX.size()),
+        "precondition: the resize is refused, so no run starts and the size stays"
+    );
+    assert_clips(&run, ANIMATED_SIZE, "a refused resize");
+    drop(refusing);
+
+    // A 200×200 child aligned bottom-right in the 100×100 shown size lies at
+    // (-100, -100); a tight 100×100 parent then lays it out at 100×100.
+    let mut run = mount(
+        Host::Alone,
+        box_node(RenderConstrainedBox::new(BoxConstraints::new(
+            100.0, 200.0, 100.0, 200.0,
+        )))
+        .label("parent")
+        .child(
+            box_node(RenderAnimatedSize::new(
+                released_motion(),
+                Alignment::BOTTOM_RIGHT,
+                Clip::HardEdge,
+            ))
+            .label("box")
+            .child(seen_child(
+                "leaf",
+                leaf_of(Rect::from_ltrb(0.0, 0.0, 200.0, 200.0)),
+            )),
+        ),
+    );
+    assert_clips(
+        &run,
+        ANIMATED_SIZE,
+        "precondition: the larger child is clipped",
+    );
+    let parent = run.id("parent");
+    flui_rendering::testing::update_render_object::<RenderConstrainedBox>(
+        run.owner_mut(),
+        parent,
+        |parent| parent.set_additional_constraints(BoxConstraints::tight(BOX.size())),
+    );
+    run.pump();
+    let id = run.id("box");
+    assert!(
+        !(ANIMATED_SIZE.overflows)(run.owner(), id),
+        "the child laid out at the box's size fits it"
+    );
+    assert_eq!(
+        published(&run),
+        vec![("leaf".to_owned(), BOX, false)],
+        "the child is published where the box is, not at its old offset"
+    );
+    assert!(
+        hits(&run, "leaf", Point::new(50.0, 50.0)),
+        "and is hit inside the box"
+    );
 }
 
 /// An unclipped overflow is painted, published and reports its region in
