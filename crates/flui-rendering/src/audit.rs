@@ -32,7 +32,11 @@
 //!   only such a layer, a clip of a shape the walk does not resolve or a paint that changes what
 //!   is already painted keeps from being one known colour: [`ContrastUnknown::UnresolvedEffect`];
 //! - anything but a covering translucent fill painted over its box after it:
-//!   [`ContrastUnknown::PaintedOver`].
+//!   [`ContrastUnknown::PaintedOver`];
+//! - bold and regular spans mixed at a size where only bold text is large (from 18.66 px to
+//!   under 24 px), when its runs do not say which is which: [`ContrastUnknown::MixedWeight`];
+//! - a run whose font size, as painted, is not a finite positive number:
+//!   [`ContrastUnknown::NonFinite`].
 //!
 //! A text under a clip of any shape is judged against what is behind its box: the clip hides
 //! part of the text, not the fill behind what shows.
@@ -206,7 +210,7 @@ impl PipelineOwner {
                         text: text.text,
                     }
                 })
-                .collect(),
+                .collect::<Vec<TextContrast>>(),
         )
     }
 

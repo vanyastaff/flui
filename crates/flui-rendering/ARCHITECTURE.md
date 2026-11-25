@@ -1320,7 +1320,10 @@ the box before it (`UnresolvedBackdrop`), no opaque fill at all (`NothingOpaqueB
 under opacity, a filter, a mask, a translucent save layer or a transform other than a scale, flip
 or quarter turn, or a fill behind it that such a layer, an unresolved clip shape, a backdrop
 filter or a replacing save layer keeps from being known (`UnresolvedEffect`), or anything else
-painted over the box after it (`PaintedOver`) makes the text `NotChecked` with why. A text under
+painted over the box after it (`PaintedOver`), bold and regular spans mixed at a size from 18.66
+px to under 24 px whose runs do not say which is which (`MixedWeight`), or a run whose painted
+font size is not a finite positive number (`NonFinite`) makes the text `NotChecked` with why: those
+six reasons are every `ContrastUnknown`. A text under
 a clip of any shape is judged against what is behind its box: the clip hides part of the text,
 not the fill behind what shows. Colours are the run's span colour or the paragraph command's,
 sizes the run's times the axis scale it is painted under; the requirement is WCAG 1.4.3's 4.5:1,

@@ -653,7 +653,10 @@ fn a_composed_scroll_into_view_refuses_a_path_it_has_no_form_on() {
 /// A scripted agent whose hello serves `element.tap`, `element.long_press` and
 /// `element.scroll_until`, answering each that it ran synthetically, and each method it was asked
 /// with the `via` it was asked with.
-fn recording_via() -> (ScriptedAgent, Arc<Mutex<Vec<(String, Option<InputPolicy>)>>>) {
+fn recording_via() -> (
+    ScriptedAgent,
+    Arc<Mutex<Vec<(String, Option<InputPolicy>)>>>,
+) {
     let asked = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&asked);
     let agent = ScriptedAgent::start(

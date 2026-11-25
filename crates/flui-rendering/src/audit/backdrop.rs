@@ -192,7 +192,7 @@ impl Cover {
     /// This cover inside the union `rects`.
     fn within(&self, rects: &[Rect<f64>]) -> Self {
         match self {
-            Self::Plane => Self::Rects(rects.iter().copied().collect()),
+            Self::Plane => Self::Rects(rects.iter().copied().collect::<SmallVec<[Rect<f64>; 4]>>()),
             Self::Rects(own) => Self::Rects(intersect_unions(own, rects)),
         }
     }

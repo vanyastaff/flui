@@ -158,7 +158,7 @@ fn through_the_agent(driver: &mut Driver, sequence: ActionSequence) -> Vec<Route
             device: entry.device,
             at: entry.at.map(device_pixel),
         })
-        .collect()
+        .collect::<Vec<Routed>>()
 }
 
 /// Each gesture kind's sequence, as `gestures` composes it, routes the same events through the

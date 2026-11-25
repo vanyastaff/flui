@@ -849,7 +849,12 @@ fn focus(driver: &mut Driver, aim: Aim, options: &GestureOptions) -> Result<ActO
 
 /// `element.press_keys`: focus the target when there is one, then each chord in turn.
 pub(crate) fn press_keys(driver: &mut Driver, params: PressKeysParams) -> Result<ActOutcome> {
-    let forms = Forms::input(params.target.as_ref().is_some_and(|target| !is_point(target)));
+    let forms = Forms::input(
+        params
+            .target
+            .as_ref()
+            .is_some_and(|target| !is_point(target)),
+    );
     if let Some(answer) = answered_by_agent::<method::ElementPressKeys>(driver, &params, forms)? {
         return Ok(answer);
     }
