@@ -182,13 +182,17 @@ pub(crate) fn connect_function() -> String {
                 throw new Error(`the page's agent speaks version ${{page.version}} of its export, \
                                  not {PAGE_EXPORT_VERSION}`);
             }}
+            let ended = false;
             const connection = page.connect((line) => {{
                 if (line === null) {{
+                    ended = true;
                     relay.open.delete(id);
                 }}
                 report(JSON.stringify([id, line]));
             }});
-            relay.open.set(id, connection);
+            if (!ended) {{
+                relay.open.set(id, connection);
+            }}
             return connection;
         }}",
         relay = relay_record!(),
@@ -206,16 +210,27 @@ pub(crate) const CLOSE_FUNCTION: &str = concat!(
     ".open.delete(id); this.close(); }"
 );
 
-/// Abandons the connection whose ID it is given, for a connect call the page did not answer in
-/// time: the page may still run that call. It closes the connection if the call opened one, and
-/// makes the call open none if it has not run yet. Called as [`connect_function`] is, so a
-/// report function follows the ID; it takes none.
+/// Abandons the connections whose IDs it is given, as a JSON array of strings, for connect calls
+/// the page did not answer in time: the page may still run them. It closes each connection a
+/// call opened, and makes each call that has not run yet open none. Called as
+/// [`connect_function`] is, so a report function follows the IDs; it takes none.
 pub(crate) const ABANDON_FUNCTION: &str = concat!(
-    "(id) => { const relay = ",
+    "(ids) => { const relay = ",
     relay_record!(),
-    "; relay.abandoned.add(id); const connection = relay.open.get(id); relay.open.delete(id); \
-     if (connection !== undefined) { connection.close(); } }"
+    "; for (const id of JSON.parse(ids)) { relay.abandoned.add(id); \
+     const connection = relay.open.get(id); relay.open.delete(id); \
+     if (connection !== undefined) { connection.close(); } } }"
 );
+
+/// The page object a command's answer holds, at `field` of its result's value (`objectId` in
+/// the DevTools protocol, `handle` in WebDriver BiDi): what a link releases of an answer that
+/// came after its command timed out, which nothing else holds.
+fn held_by(answer: &serde_json::Value, field: &str) -> Option<Remote> {
+    answer
+        .pointer(&format!("/result/result/{field}"))
+        .and_then(serde_json::Value::as_str)
+        .map(|held| Remote(held.to_owned()))
+}
 
 /// What a report of [`connect_function`]'s says: the connection's ID and the line, or `None`
 /// when the app ended the connection. `None` for a report it did not make.

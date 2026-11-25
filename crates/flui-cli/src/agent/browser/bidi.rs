@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 use super::launch::AttachError;
 use super::socket::Socket;
-use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote};
+use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote, held_by};
 
 /// The channel every report comes back on.
 const CHANNEL: &str = "flui-agent";
@@ -208,6 +208,11 @@ impl BrowserLink for Bidi {
     }
 
     fn next_event(&mut self, deadline: Instant) -> Result<Option<LinkEvent>, LinkError> {
+        while let Some(answer) = self.socket.take_late() {
+            if let Some(remote) = held_by(&answer, "handle") {
+                self.release(remote);
+            }
+        }
         loop {
             let Some(event) = self.socket.next_event(deadline)? else {
                 return Ok(None);

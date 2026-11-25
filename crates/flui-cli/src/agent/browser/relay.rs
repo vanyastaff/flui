@@ -10,11 +10,12 @@
 //!
 //! What the relay holds of each connection in the page, and what letting its client go must do
 //! there, is one value, the client's [`Page`]: every transition is a change of it, and
-//! [`Turns::leave`] reads it alone.
+//! [`Turns::leave`] reads it alone. What the relay owes the page for connect calls it did not
+//! answer in time is owed to the page rather than to a client, and is kept apart
+//! ([`Abandons`]).
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{self, Read as _};
-use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -35,8 +36,7 @@ use super::{
 /// The longest pause between two turns of the relay.
 const TICK: Duration = Duration::from_millis(10);
 
-/// How often a client waiting for the page's export tries it again, and how often a connection
-/// the page did not answer is abandoned again.
+/// How often a client waiting for the page's export tries it again.
 const CONNECT_RETRY: Duration = Duration::from_millis(100);
 
 /// How long a client waits for the page's export before it is closed.
@@ -48,6 +48,13 @@ const MAX_QUEUED: usize = 16;
 /// The most bytes kept for a client that does not read: one that falls further behind is
 /// closed at once, its page connection with it.
 pub(super) const MAX_UNWRITTEN: usize = 64 << 20;
+
+/// The pause before the second try of an abandon the page did not answer; it doubles with each
+/// try after.
+const ABANDON_BACKOFF: Duration = Duration::from_millis(100);
+
+/// How many times the relay tries the abandons it owes before it gives them up.
+pub(super) const ABANDON_TRIES: u32 = 5;
 
 /// The relay's thread: dropping the handle stops it, ending every connection.
 pub(crate) struct Relay {
@@ -67,6 +74,17 @@ impl Relay {
         endpoint: &str,
         export: String,
     ) -> io::Result<Self> {
+        Self::serve(link, endpoint, export, ABANDON_BACKOFF)
+    }
+
+    /// [`Self::start`], pausing `abandon_backoff` before the second try of an unanswered
+    /// abandon.
+    pub(super) fn serve(
+        link: Box<dyn BrowserLink>,
+        endpoint: &str,
+        export: String,
+        abandon_backoff: Duration,
+    ) -> io::Result<Self> {
         let listener = bind(endpoint)?;
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = Arc::clone(&stop);
@@ -80,6 +98,7 @@ impl Relay {
                     clients: BTreeMap::new(),
                     next_id: 0,
                     drains: 0,
+                    abandons: Abandons::new(abandon_backoff),
                 };
                 if let Err(error) = relay.run(&listener, &stopped) {
                     let _ = crate::ui::warning(format!("the agent's page link ended: {error}"));
@@ -117,9 +136,10 @@ struct Turns {
     connect: String,
     clients: BTreeMap<u64, Client>,
     next_id: u64,
-    /// How many times the tab's events were delivered: the drain a [`Page::Refused`] waits
-    /// one past.
+    /// How many times the tab's events were delivered: the drain a refused connection waits
+    /// one past ([`Connection::Refused`]).
     drains: u64,
+    abandons: Abandons,
 }
 
 /// One client's connection and the page connection it is carried to.
@@ -138,27 +158,93 @@ struct Client {
 enum Page {
     /// The page defines no export yet; tried again at `retry`. Nothing is in the page.
     Waiting { since: Instant, retry: Instant },
-    /// Open, as the page keeps it. Letting go closes it in the page and releases it.
-    Open(Remote),
-    /// The page threw at a line sent on the connection during the turn before the drain
-    /// numbered `drain`. Either the page ended the connection, and its end and the lines before
-    /// it reached the link before the throw did, so that drain delivers them and the connection
-    /// becomes [`Page::Ended`]; or the connection broke, and the turn after that drain closes it
-    /// in the page and writes the client what it is owed, as for an ended one. Letting go closes
-    /// it in the page, which does nothing to a connection the page ended, and releases it.
-    Refused { remote: Remote, drain: u64 },
+    /// A connection the page made, held by `remote` until it is released.
+    Connected { remote: Remote, state: Connection },
+}
+
+/// What a connection the page made is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Connection {
+    /// Open, as the page keeps it. Letting go closes it in the page.
+    Open,
+    /// The page threw at a line sent on it during the turn before the drain numbered `drain`.
+    /// Either the page ended the connection, and its end and the lines before it reached the
+    /// link before the throw did, so that drain delivers them and the connection becomes
+    /// [`Connection::Ended`]; or the connection broke, and the turn after that drain closes it in
+    /// the page and writes the client what it is owed, as for an ended one. Letting go closes it
+    /// in the page, which does nothing to a connection the page ended.
+    Refused { drain: u64 },
     /// Nothing is left open in the page: the page ended the connection, or the relay closed it
     /// after a refusal. The client is written what it was sent, a reload notwithstanding, since
-    /// those bytes are the relay's already; then the connection is released, never closed again.
-    Ended(Remote),
-    /// The page did not answer the connect call in time, which does not mean it never runs
-    /// it: it may open the connection later, with nobody holding it. The relay abandons the
-    /// connection by its ID ([`ABANDON_FUNCTION`]), again at `retry` while the page does not
-    /// answer, and the client is closed once the page has. Letting go before that abandons it
-    /// once more.
-    Abandoning { retry: Instant },
-    /// The page answered the abandon: nothing of the connection is there, nor will be.
-    Abandoned,
+    /// those bytes are the relay's already. Letting go never closes it again.
+    Ended,
+}
+
+/// The abandons the relay owes the page ([`ABANDON_FUNCTION`]): the IDs of connect calls the
+/// page did not answer in time. An unanswered call is not one that opened nothing: the page
+/// may run it late and open a connection nobody holds. The abandon is owed to the page, not to
+/// the client, which is closed at once. Every ID owed is abandoned in one call, tried at most
+/// [`ABANDON_TRIES`] times on a doubling backoff and then given up; a reload drops them, since
+/// the document the late calls could open a connection in is gone.
+struct Abandons {
+    ids: BTreeSet<u64>,
+    /// The pause before the second try.
+    backoff: Duration,
+    /// The tries made for what is owed.
+    tries: u32,
+    /// When the next try is due.
+    next_try: Instant,
+}
+
+impl Abandons {
+    fn new(backoff: Duration) -> Self {
+        Self {
+            ids: BTreeSet::new(),
+            backoff,
+            tries: 0,
+            next_try: Instant::now(),
+        }
+    }
+
+    /// Owes the abandon of `id`: tried at the next turn when nothing else is owed, and with
+    /// what is owed already otherwise, every ID given its full count of tries.
+    fn owe(&mut self, id: u64, now: Instant) {
+        if self.ids.is_empty() {
+            self.next_try = now;
+        }
+        self.ids.insert(id);
+        self.tries = 0;
+    }
+
+    /// The argument of the abandon to make now, if one is due.
+    fn due(&self, now: Instant) -> Option<String> {
+        (!self.ids.is_empty() && now >= self.next_try).then(|| self.argument())
+    }
+
+    /// Every ID owed, as [`ABANDON_FUNCTION`] takes them.
+    fn argument(&self) -> String {
+        serde_json::Value::from(self.ids.iter().map(u64::to_string).collect::<Vec<String>>())
+            .to_string()
+    }
+
+    /// The page did not answer the try that ended at `now`: tried again after a pause twice the
+    /// last, or given up after the last try.
+    fn unanswered(&mut self, now: Instant) {
+        self.tries = self.tries.saturating_add(1);
+        if self.tries >= ABANDON_TRIES {
+            crate::ui::debug("the page answered none of the relay's abandons; given up");
+            self.clear();
+            return;
+        }
+        let doublings = self.tries.saturating_sub(1).min(16);
+        self.next_try = now + self.backoff.saturating_mul(1_u32 << doublings);
+    }
+
+    /// Nothing is owed any more: the page answered, or the document went.
+    fn clear(&mut self) {
+        self.ids.clear();
+        self.tries = 0;
+    }
 }
 
 /// What a client's turn decided.
@@ -178,6 +264,7 @@ impl Turns {
                     self.leave(id);
                 }
             }
+            self.abandon()?;
             let deadline = Instant::now() + TICK;
             while let Some(event) = self.link.next_event(deadline)? {
                 self.deliver(event);
@@ -243,7 +330,12 @@ impl Turns {
             && now >= retry
         {
             match self.link.call(&self.connect, &[&self.export, &connection]) {
-                Ok(Some(remote)) => client.page = Page::Open(remote),
+                Ok(Some(remote)) => {
+                    client.page = Page::Connected {
+                        remote,
+                        state: Connection::Open,
+                    };
+                }
                 Ok(None) if now.duration_since(since) < CONNECT_WAIT => {
                     client.page = Page::Waiting {
                         since,
@@ -255,9 +347,11 @@ impl Turns {
                     return Ok(Outcome::Leave);
                 }
                 Err(LinkError::Gone(why)) => return Err(LinkError::Gone(why)),
+                // Unanswered is not unopened: the page may still run the call.
                 Err(LinkError::Timeout) => {
                     crate::ui::debug("the page did not answer a connection in time");
-                    client.page = Page::Abandoning { retry: now };
+                    self.abandons.owe(id, Instant::now());
+                    return Ok(Outcome::Leave);
                 }
                 // The page answered: the call opened nothing.
                 Err(error) => {
@@ -266,63 +360,31 @@ impl Turns {
                 }
             }
         }
-        if let Page::Abandoning { retry } = client.page {
-            if now < retry {
-                return Ok(Outcome::Keep);
-            }
-            return match self.link.call(ABANDON_FUNCTION, &[&connection]) {
-                Err(LinkError::Gone(why)) => Err(LinkError::Gone(why)),
-                Err(LinkError::Timeout) => {
-                    client.page = Page::Abandoning {
-                        retry: now + CONNECT_RETRY,
-                    };
-                    Ok(Outcome::Keep)
-                }
-                answered => {
-                    if let Err(error) = answered {
-                        crate::ui::debug(format!(
-                            "the page refused to abandon a connection: {error}"
-                        ));
-                    }
-                    client.page = Page::Abandoned;
-                    Ok(Outcome::Leave)
-                }
-            };
-        }
-        client.page = match mem::replace(&mut client.page, Page::Abandoned) {
-            // The drain after the refusal brought no end: the connection broke in the page.
-            Page::Refused { remote, drain } if self.drains > drain => {
-                let _ = self.link.call_on(&remote, CLOSE_FUNCTION, &[&connection]);
-                Page::Ended(remote)
-            }
-            page => page,
+        let Page::Connected { remote, state } = &mut client.page else {
+            return Ok(if read { Outcome::Keep } else { Outcome::Leave });
         };
-        if let Page::Open(remote) = &client.page {
-            let mut refused = false;
+        if let Connection::Refused { drain } = *state
+            && self.drains > drain
+        {
+            // The drain after the refusal brought no end: the connection broke in the page.
+            let _ = self.link.call_on(remote, CLOSE_FUNCTION, &[&connection]);
+            *state = Connection::Ended;
+        }
+        if *state == Connection::Open {
             while let Some(line) = client.queued.pop_front() {
                 match self.link.call_on(remote, SEND_FUNCTION, &[&line]) {
                     Ok(()) => {}
                     Err(LinkError::Gone(why)) => return Err(LinkError::Gone(why)),
                     Err(LinkError::Threw(_)) => {
-                        refused = true;
-                        break;
+                        client.queued.clear();
+                        *state = Connection::Refused { drain: self.drains };
                     }
                     // Unanswered, or refused by the browser: the connection may be open.
                     Err(_) => return Ok(Outcome::Leave),
                 }
             }
-            if refused {
-                client.queued.clear();
-                client.page = match mem::replace(&mut client.page, Page::Abandoned) {
-                    Page::Open(remote) => Page::Refused {
-                        remote,
-                        drain: self.drains,
-                    },
-                    page => page,
-                };
-            }
         }
-        if let Page::Ended(_) = client.page {
+        if *state == Connection::Ended {
             return Ok(match client.write() {
                 Ok(true) | Err(_) => Outcome::Leave,
                 Ok(false) => Outcome::Keep,
@@ -337,6 +399,24 @@ impl Turns {
         })
     }
 
+    /// Makes the abandon owed, if one is due: one call for every ID owed, whatever their count.
+    fn abandon(&mut self) -> Result<(), LinkError> {
+        let Some(ids) = self.abandons.due(Instant::now()) else {
+            return Ok(());
+        };
+        match self.link.call(ABANDON_FUNCTION, &[&ids]) {
+            Err(LinkError::Gone(why)) => return Err(LinkError::Gone(why)),
+            Err(LinkError::Timeout) => self.abandons.unanswered(Instant::now()),
+            answered => {
+                if let Err(error) = answered {
+                    crate::ui::debug(format!("the page refused the relay's abandons: {error}"));
+                }
+                self.abandons.clear();
+            }
+        }
+        Ok(())
+    }
+
     /// Hands the tab's event to the client it concerns.
     fn deliver(&mut self, event: LinkEvent) {
         match event {
@@ -348,8 +428,11 @@ impl Turns {
                     return;
                 };
                 // Only a connection the relay holds open reports to its client: one the page
-                // ended reports nothing after its end, and one being abandoned is no client's.
-                if !matches!(client.page, Page::Open(_) | Page::Refused { .. }) {
+                // ended reports nothing after its end.
+                let Page::Connected { state, .. } = &mut client.page else {
+                    return;
+                };
+                if *state == Connection::Ended {
                     return;
                 }
                 match line {
@@ -363,28 +446,28 @@ impl Turns {
                         client.unwritten.extend_from_slice(line.as_bytes());
                         client.unwritten.extend_from_slice(b"\n");
                     }
-                    None => {
-                        client.page = match mem::replace(&mut client.page, Page::Abandoned) {
-                            Page::Open(remote) | Page::Refused { remote, .. } => {
-                                Page::Ended(remote)
-                            }
-                            page => page,
-                        };
-                    }
+                    None => *state = Connection::Ended,
                 }
             }
             // The document goes, and every connection open in it, so their clients are closed.
             // Each is closed in the page all the same, and released: one opened while the event
             // was on its way belongs to the next document, and would hold its place in the
-            // app's agent. A connection the page ended is left to finish writing its client,
-            // a client still waiting for the export connects to the next document, and an
-            // abandon still owed is still made.
+            // app's agent. A connection the page ended is left to finish writing its client, a
+            // client still waiting for the export connects to the next document, and the
+            // abandons owed go with the document their late calls could open a connection in.
             LinkEvent::Navigated => {
+                self.abandons.clear();
                 let open = self
                     .clients
                     .iter()
                     .filter(|(_, client)| {
-                        matches!(client.page, Page::Open(_) | Page::Refused { .. })
+                        matches!(
+                            client.page,
+                            Page::Connected {
+                                state: Connection::Open | Connection::Refused { .. },
+                                ..
+                            }
+                        )
                     })
                     .map(|(id, _)| *id)
                     .collect::<Vec<u64>>();
@@ -395,32 +478,35 @@ impl Turns {
         }
     }
 
-    /// Lets go of the client `id`, doing in the page what its [`Page`] says: an open connection
-    /// is closed and released, an ended one released, an abandon still owed made once more.
+    /// Lets go of the client `id`, doing in the page what its [`Page`] says: a connection open
+    /// there, or refused, is closed and released, an ended one released.
     fn leave(&mut self, id: u64) {
         let Some(client) = self.clients.remove(&id) else {
             return;
         };
-        let connection = id.to_string();
-        match client.page {
-            Page::Waiting { .. } | Page::Abandoned => {}
-            Page::Open(remote) | Page::Refused { remote, .. } => {
-                let _ = self.link.call_on(&remote, CLOSE_FUNCTION, &[&connection]);
-                self.link.release(remote);
-            }
-            Page::Ended(remote) => self.link.release(remote),
-            // Only as the relay stops: the last try it can make.
-            Page::Abandoning { .. } => {
-                let _ = self.link.call(ABANDON_FUNCTION, &[&connection]);
-            }
+        let Page::Connected { remote, state } = client.page else {
+            return;
+        };
+        if state != Connection::Ended {
+            let _ = self
+                .link
+                .call_on(&remote, CLOSE_FUNCTION, &[&id.to_string()]);
         }
+        self.link.release(remote);
     }
 
-    /// Ends every connection: the relay stops, and what it owes its clients is dropped.
+    /// Ends every connection: the relay stops, and what it owes its clients is dropped. The
+    /// abandons owed get one try in all, the last the relay can make.
     fn end(&mut self) {
         let ids = self.clients.keys().copied().collect::<Vec<u64>>();
         for id in ids {
             self.leave(id);
+        }
+        if !self.abandons.ids.is_empty() {
+            let _ = self
+                .link
+                .call(ABANDON_FUNCTION, &[&self.abandons.argument()]);
+            self.abandons.clear();
         }
     }
 }
@@ -445,7 +531,14 @@ impl Client {
                             return false;
                         };
                         // A line can go only on a connection open or still to open.
-                        if !matches!(self.page, Page::Waiting { .. } | Page::Open(_)) {
+                        if !matches!(
+                            self.page,
+                            Page::Waiting { .. }
+                                | Page::Connected {
+                                    state: Connection::Open,
+                                    ..
+                                }
+                        ) {
                             continue;
                         }
                         if self.queued.len() >= MAX_QUEUED {
