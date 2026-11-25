@@ -11,14 +11,30 @@ use std::rc::Rc;
 pub enum PipeAnswer {
     /// A read returns this many bytes (zeros); a write takes this many.
     Bytes(usize),
+    /// The call is interrupted before it moves a byte (`Interrupted`), to be made again.
+    Interrupted,
+    /// The call finds nothing to read or no room (`WouldBlock`), as a polled stream answers.
+    WouldBlock,
     /// The call fails as on a closed pipe (`BrokenPipe`).
     Closed,
 }
 
+impl PipeAnswer {
+    /// The answer to a call that offered `len` bytes.
+    fn answer(self, len: usize) -> io::Result<usize> {
+        match self {
+            Self::Bytes(count) => Ok(count.min(len)),
+            Self::Interrupted => Err(io::Error::from(io::ErrorKind::Interrupted)),
+            Self::WouldBlock => Err(io::Error::from(io::ErrorKind::WouldBlock)),
+            Self::Closed => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
+        }
+    }
+}
+
 /// A pipe that answers each read and each write from its script, read and written through
 /// `&ScriptedPipe` as a local endpoint's stream is, and records how many bytes each write
-/// offered. Its clones share one script and one record, so a test keeps a clone of a pipe it
-/// hands to a wrapper.
+/// offered and how many flushes reached it. Its clones share one script and one record, so a
+/// test keeps a clone of a pipe it hands to a wrapper.
 ///
 /// # Panics
 ///
@@ -33,6 +49,7 @@ struct Script {
     reads: VecDeque<PipeAnswer>,
     writes: VecDeque<PipeAnswer>,
     offered: Vec<usize>,
+    flushes: usize,
 }
 
 impl ScriptedPipe {
@@ -47,6 +64,7 @@ impl ScriptedPipe {
                 reads: reads.into_iter().collect(),
                 writes: writes.into_iter().collect(),
                 offered: Vec::new(),
+                flushes: 0,
             })),
         }
     }
@@ -55,6 +73,12 @@ impl ScriptedPipe {
     #[must_use]
     pub fn offered(&self) -> Vec<usize> {
         self.script.borrow().offered.clone()
+    }
+
+    /// How many flushes reached the pipe.
+    #[must_use]
+    pub fn flushes(&self) -> usize {
+        self.script.borrow().flushes
     }
 
     /// Whether every scripted read and write was made.
@@ -73,14 +97,9 @@ impl Read for &ScriptedPipe {
             .reads
             .pop_front()
             .expect("BUG: the script names every read");
-        match answer {
-            PipeAnswer::Bytes(count) => {
-                let count = count.min(buf.len());
-                buf[..count].fill(0);
-                Ok(count)
-            }
-            PipeAnswer::Closed => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
-        }
+        let count = answer.answer(buf.len())?;
+        buf[..count].fill(0);
+        Ok(count)
     }
 }
 
@@ -92,13 +111,11 @@ impl Write for &ScriptedPipe {
             .writes
             .pop_front()
             .expect("BUG: the script names every write");
-        match answer {
-            PipeAnswer::Bytes(count) => Ok(count.min(buf.len())),
-            PipeAnswer::Closed => Err(io::Error::from(io::ErrorKind::BrokenPipe)),
-        }
+        answer.answer(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.script.borrow_mut().flushes += 1;
         Ok(())
     }
 }

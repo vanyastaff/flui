@@ -13,10 +13,12 @@ use interprocess::local_socket::{Listener, ListenerNonblockingMode, ListenerOpti
 
 use super::client::name;
 
-/// What an endpoint still owes one client, written from the front as the client takes it. Each
-/// byte is moved once: a write advances an offset, and the bytes go only once all of them are
-/// written, so a reply a Windows pipe takes [`flui_protocol::endpoint::PIPE_WRITE_CHUNK`] bytes
-/// at a time costs work linear in its length.
+/// What an endpoint still owes one client, written from the front as the client takes it. A
+/// write advances an offset rather than moving what is left, so a reply a Windows pipe takes
+/// [`flui_protocol::endpoint::PIPE_WRITE_CHUNK`] bytes at a time costs work linear in its
+/// length. The written front is let go once it is at least as long as what follows it, so what
+/// the buffer holds stays within twice what is owed (plus what is being added), whatever the
+/// client's pace, and each byte moves at most once for every byte written before it.
 #[derive(Debug, Default)]
 pub(crate) struct Unwritten {
     bytes: Vec<u8>,
@@ -35,9 +37,20 @@ impl Unwritten {
         self.len() == 0
     }
 
-    /// Owes `bytes` after what is owed already.
+    /// Owes `bytes` after what is owed already, letting go of the written front first once it
+    /// is at least as long as what is owed.
     pub(crate) fn extend_from_slice(&mut self, bytes: &[u8]) {
+        if self.sent > 0 && self.sent >= self.len() {
+            self.bytes.drain(..self.sent);
+            self.sent = 0;
+        }
         self.bytes.extend_from_slice(bytes);
+    }
+
+    /// How many bytes the buffer holds, the written front included.
+    #[cfg(test)]
+    fn held(&self) -> usize {
+        self.bytes.len()
     }
 
     /// Owes nothing more.
@@ -164,37 +177,83 @@ mod tests {
         }
     }
 
-    /// What a client is owed leaves from the front by an offset: a write that takes a chunk
-    /// moves no byte of the rest, and the whole is written in order once the client has room.
-    /// Fails if a partial write drains the front of the buffer, which moves the whole tail per
-    /// chunk and makes a reply's cost quadratic in its length.
+    /// A client that takes most of each reply but never catches up is owed its bytes in order,
+    /// and the buffer holds at most twice what is owed after each reply is added. Fails if the
+    /// written front is kept until the client catches up, which a client that stays behind never
+    /// does, so the buffer grows for the life of the connection.
     #[test]
-    fn what_a_client_is_owed_leaves_by_an_offset() {
-        let reply = (0..4 * PIPE_WRITE_CHUNK)
-            .map(|i| u8::try_from(i % 251).expect("BUG: below 251"))
-            .collect::<Vec<u8>>();
+    fn what_a_client_that_stays_behind_is_owed_stays_bounded_and_in_order() {
+        const REPLY: usize = 2 * PIPE_WRITE_CHUNK;
         let mut owed = Unwritten::default();
-        owed.extend_from_slice(&reply);
-
         let mut client = Chunked {
-            room: PIPE_WRITE_CHUNK,
+            room: 0,
             taken: Vec::new(),
         };
-        assert!(
-            !owed.write_to(&mut client).expect("a write"),
-            "the client is full"
-        );
-        assert_eq!(owed.len(), 3 * PIPE_WRITE_CHUNK);
-        assert_eq!(owed.bytes, reply, "no byte moved");
-        assert_eq!(owed.sent, PIPE_WRITE_CHUNK);
-
+        let mut sent = Vec::new();
+        for round in 0..256_usize {
+            let reply = (0..REPLY)
+                .map(|i| u8::try_from((round * 7 + i) % 251).expect("BUG: below 251"))
+                .collect::<Vec<u8>>();
+            owed.extend_from_slice(&reply);
+            sent.extend_from_slice(&reply);
+            assert!(
+                owed.held() <= 2 * owed.len(),
+                "round {round}: {} bytes held for {} owed",
+                owed.held(),
+                owed.len()
+            );
+            // The client takes all of each reply but a few bytes.
+            client.room = REPLY - 24;
+            assert!(
+                !owed.write_to(&mut client).expect("a write"),
+                "round {round}"
+            );
+        }
         client.room = usize::MAX;
         assert!(
             owed.write_to(&mut client).expect("a write"),
             "all of it is written"
         );
         assert!(owed.is_empty());
-        assert_eq!(client.taken, reply, "written whole and in order");
+        assert_eq!(client.taken, sent, "written whole and in order");
+    }
+
+    /// A write that takes nothing is `WriteZero`, an interrupted one is made again, and a failed
+    /// one is handed on with what was written kept. Fails if one of the three answers is taken
+    /// for another.
+    #[test]
+    fn what_is_owed_is_written_as_the_stream_answers() {
+        use flui_protocol::testing::{PipeAnswer, ScriptedPipe};
+
+        let line = b"0123456789";
+        let written_as = |answers: Vec<PipeAnswer>| {
+            let mut owed = Unwritten::default();
+            owed.extend_from_slice(line);
+            let pipe = ScriptedPipe::new([], answers);
+            let outcome = owed.write_to(&pipe).map_err(|error| error.kind());
+            assert!(pipe.is_spent(), "every scripted write is made");
+            (outcome, owed.len())
+        };
+        assert_eq!(
+            written_as(vec![PipeAnswer::Bytes(0)]),
+            (Err(io::ErrorKind::WriteZero), line.len()),
+            "a write that takes nothing"
+        );
+        assert_eq!(
+            written_as(vec![PipeAnswer::Interrupted, PipeAnswer::Bytes(line.len())]),
+            (Ok(true), 0),
+            "an interrupted write, made again"
+        );
+        assert_eq!(
+            written_as(vec![PipeAnswer::Bytes(4), PipeAnswer::Closed]),
+            (Err(io::ErrorKind::BrokenPipe), line.len() - 4),
+            "a failed write after a partial one"
+        );
+        assert_eq!(
+            written_as(vec![PipeAnswer::Bytes(4), PipeAnswer::WouldBlock]),
+            (Ok(false), line.len() - 4),
+            "no room after a partial write"
+        );
     }
 
     /// A private endpoint, its listener, and one client connected to it with the server's end
