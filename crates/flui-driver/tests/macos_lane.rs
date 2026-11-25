@@ -1848,11 +1848,11 @@ fn a_window_that_is_gone_is_named_as_the_window_handle() {
 /// that permission missing.
 #[test]
 fn a_press_sent_keeps_its_effect_when_the_permission_goes() {
-    use flui_driver::lane::macos::press::pressed;
+    use flui_driver::lane::macos::press;
     use flui_driver::lane::walk::ProviderError;
     let deadline = std::time::Duration::from_millis(5000);
     for failure in [ProviderError::Timeout, ProviderError::Gone] {
-        let answer = pressed(
+        let answer = press::answer(
             Ok(true),
             || Err(failure.clone()),
             "like",
@@ -1866,7 +1866,7 @@ fn a_press_sent_keeps_its_effect_when_the_permission_goes() {
             "{failure:?}: {error:?}"
         );
     }
-    let hung = pressed(
+    let hung = press::answer(
         Ok(true),
         || Err(ProviderError::Timeout),
         "like",
@@ -1875,7 +1875,7 @@ fn a_press_sent_keeps_its_effect_when_the_permission_goes() {
     )
     .expect_err("hung");
     assert!(hung.to_string().contains("5000 ms"), "{hung:?}");
-    let refused = pressed(
+    let refused = press::answer(
         Err(ProviderError::Timeout),
         || Ok(()),
         "like",
@@ -1887,5 +1887,5 @@ fn a_press_sent_keeps_its_effect_when_the_permission_goes() {
         refused.missing_capability().as_deref(),
         Some("macos_permission_accessibility")
     );
-    assert!(pressed(Ok(true), || Ok(()), "like", deadline, || true).is_ok());
+    assert!(press::answer(Ok(true), || Ok(()), "like", deadline, || true).is_ok());
 }

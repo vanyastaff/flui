@@ -960,12 +960,14 @@ fn a_level_read_short_is_marked_whatever_stopped_it() {
 }
 
 /// What a node of a test's window does by the time its frame is read again, after the walk.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum Later {
     /// It moves to this frame.
     Moves(PointFrame),
     /// It goes away.
     Goes,
+    /// Its frame read fails so.
+    Fails(ProviderError),
 }
 
 /// One node of a window a test builds.
@@ -981,6 +983,9 @@ struct Fixture {
     facts_error: Option<ProviderError>,
     /// What a read of the node's frame alone answers, once the walk is done.
     later: Option<Later>,
+    /// Whether the node goes away before the walk reads it as an element, after the search
+    /// read its facts.
+    gone_in_walk: bool,
 }
 
 /// A set of windows written out as nodes by index, each window a root.
@@ -1022,6 +1027,7 @@ impl Windows {
             gone_after: None,
             facts_error: None,
             later: None,
+            gone_in_walk: false,
         });
         if let Some(parent) = parent {
             self.nodes[parent].children.push(index);
@@ -1047,9 +1053,10 @@ impl WindowTree for Windows {
 
     fn frame(&mut self, element: &usize) -> Result<Option<PointFrame>, ProviderError> {
         let node = &self.nodes[*element];
-        match node.later {
-            Some(Later::Moves(frame)) => Ok(Some(frame)),
+        match &node.later {
+            Some(Later::Moves(frame)) => Ok(Some(*frame)),
             Some(Later::Goes) => Err(ProviderError::Gone),
+            Some(Later::Fails(error)) => Err(error.clone()),
             None => Ok(node.facts.frame),
         }
     }
@@ -1078,7 +1085,11 @@ impl ScreenSource for Windows {
     }
 
     fn element(&mut self, element: &usize) -> Result<ScreenElement, ProviderError> {
-        let facts = &self.nodes[*element].facts;
+        let node = &self.nodes[*element];
+        if node.gone_in_walk {
+            return Err(ProviderError::Gone);
+        }
+        let facts = &node.facts;
         let mut read = ScreenElement::new(facts.role.clone());
         read.subrole.clone_from(&facts.subrole);
         read.frame = facts.frame;
@@ -1612,7 +1623,7 @@ fn a_screen_moved_or_gone_during_the_read_is_read_again() {
     let moved = PointFrame::new(SCREEN.x + 40.0, SCREEN.y, SCREEN.width, SCREEN.height);
     for later in [Later::Moves(moved), Later::Goes] {
         let (mut windows, window, screen) = simulator_app();
-        windows.nodes[screen].later = Some(later);
+        windows.nodes[screen].later = Some(later.clone());
         let refused = tree::read_screen(&mut windows, &request(), vec![window]).expect_err("busy");
         assert!(
             matches!(&refused, Error::Busy { message, .. } if message.contains("read again")),
@@ -1620,17 +1631,99 @@ fn a_screen_moved_or_gone_during_the_read_is_read_again() {
         );
     }
 
-    // A screen gone while the process is no longer trusted is the permission taken back, which
-    // no read again serves.
-    let (mut windows, window, screen) = simulator_app();
-    windows.nodes[screen].later = Some(Later::Goes);
-    windows.untrusted = true;
-    let refused = tree::read_screen(&mut windows, &request(), vec![window]).expect_err("refused");
-    assert_eq!(
-        refused.missing_capability().as_deref(),
-        Some("macos_permission_accessibility"),
-        "{refused:?}"
+    // A frame read again that fails otherwise fails the read with what it answered.
+    for (error, timed_out) in [
+        (ProviderError::Timeout, true),
+        (ProviderError::Failed("-25200".to_owned()), false),
+    ] {
+        let (mut windows, window, screen) = simulator_app();
+        windows.nodes[screen].later = Some(Later::Fails(error.clone()));
+        let failed = tree::read_screen(&mut windows, &request(), vec![window]).expect_err("fails");
+        if timed_out {
+            assert!(
+                matches!(failed, Error::Timeout { .. }),
+                "{error:?}: {failed:?}"
+            );
+        } else {
+            assert!(
+                matches!(failed, Error::Platform { .. }),
+                "{error:?}: {failed:?}"
+            );
+        }
+    }
+}
+
+/// Within one read every element gone goes through one trust check: gone in the search, in the
+/// walk, or as the screen read again, it is a cut, a short read or a busy screen while the
+/// process is trusted, and the permission taken back once it is not, which no read again serves.
+#[test]
+fn an_element_gone_while_untrusted_is_the_permission_taken_back() {
+    let refused = |result: Result<(HostScreen, accessibility::ScreenWalk<usize>), Error>| {
+        let error = result.expect_err("refused");
+        assert_eq!(
+            error.missing_capability().as_deref(),
+            Some("macos_permission_accessibility"),
+            "{error:?}"
+        );
+    };
+    let simulator_app = || {
+        let mut windows = Windows::new();
+        let window = windows.add(None, "AXWindow", None, Some((231.0, 142.0, 456.0, 972.0)));
+        let screen = windows.add(
+            Some(window),
+            "AXGroup",
+            None,
+            Some((258.0, 222.0, 393.0, 852.0)),
+        );
+        let button = windows.add(
+            Some(screen),
+            "AXButton",
+            None,
+            Some((258.0, 239.0, 60.0, 33.0)),
+        );
+        (windows, window, screen, button)
+    };
+
+    // Gone in the search, beside the screen: a cut chrome while trusted.
+    let gone_beside = |untrusted: bool| {
+        let (mut windows, window, _, _) = simulator_app();
+        let beside = windows.add(
+            Some(window),
+            "AXButton",
+            None,
+            Some((231.0, 142.0, 20.0, 20.0)),
+        );
+        windows.nodes[beside].facts_error = Some(ProviderError::Gone);
+        windows.untrusted = untrusted;
+        tree::read_screen(&mut windows, &request(), vec![window])
+    };
+    let cut = gone_beside(false).expect_err("cut");
+    assert!(
+        matches!(&cut, Error::NotFound { message, .. } if message.contains("read again")),
+        "{cut:?}"
     );
+    refused(gone_beside(true));
+
+    // Gone in the walk: left out of a whole read while trusted.
+    let gone_in_walk = |untrusted: bool| {
+        let (mut windows, window, _, button) = simulator_app();
+        windows.nodes[button].gone_in_walk = true;
+        windows.untrusted = untrusted;
+        tree::read_screen(&mut windows, &request(), vec![window])
+    };
+    let (read, _) = gone_in_walk(false).expect("left out");
+    assert_eq!(read.elements, Vec::<ScreenElement>::new());
+    refused(gone_in_walk(true));
+
+    // The screen gone when its frame is read again: busy while trusted.
+    let screen_gone = |untrusted: bool| {
+        let (mut windows, window, screen, _) = simulator_app();
+        windows.nodes[screen].later = Some(Later::Goes);
+        windows.untrusted = untrusted;
+        tree::read_screen(&mut windows, &request(), vec![window])
+    };
+    assert!(matches!(screen_gone(false), Err(Error::Busy { .. })));
+    refused(screen_gone(true));
 }
 
 /// Simulator.app's window: the screen a child of a group the bezel adds, beside the bezel's

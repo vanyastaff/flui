@@ -359,6 +359,24 @@ struct Search<E> {
     groups: Vec<(E, ScreenCandidate)>,
     visited: usize,
     size: LogicalSize,
+    /// Whether any element went away during the search, in the chrome or in a candidate:
+    /// what [`gone_or_refused`] is asked once before the search answers.
+    met_gone: bool,
+}
+
+/// What an element gone during a read means for `tree`: an element gone, which the read takes
+/// as a cut or a busy screen, unless the source answers it as the permission refused (the Mac's
+/// `read_failure` while the process is no longer trusted), which no read again serves. The one
+/// place a read decides it, asked once for the search and once for the walk and the frame.
+///
+/// # Errors
+///
+/// The source's refusal ([`Error::NotSupported`]).
+fn gone_or_refused<T: WindowTree>(tree: &mut T) -> Result<()> {
+    match tree.failure(ProviderError::Gone) {
+        refused @ Error::NotSupported { .. } => Err(refused),
+        _ => Ok(()),
+    }
 }
 
 impl<E: Clone> Search<E> {
@@ -411,6 +429,7 @@ impl<E: Clone> Search<E> {
                 SearchRole::Chrome => read.chrome.push(child),
             }
         }
+        self.met_gone |= read.gone;
         Ok(read)
     }
 }
@@ -517,7 +536,9 @@ fn the_window<T: WindowTree>(
 ///
 /// # Errors
 ///
-/// As [`choose_window`]; as [`choose_screen`] (`TreeError::into_error`); the API's failure.
+/// As [`choose_window`]; as [`choose_screen`] (`TreeError::into_error`); the API's failure; the
+/// refusal the source answers an element gone as, when it does ([`WindowTree::failure`]: the
+/// permission taken back), asked once when any element went away during the search.
 pub fn find_screen<T: WindowTree>(
     tree: &mut T,
     screen: &ScreenRequest,
@@ -528,6 +549,7 @@ pub fn find_screen<T: WindowTree>(
         groups: Vec::new(),
         visited: 0,
         size: screen.size,
+        met_gone: false,
     };
     let mut reach = SearchReach::Whole;
     let mut inside: Vec<(T::Element, usize)> = Vec::new();
@@ -580,6 +602,9 @@ pub fn find_screen<T: WindowTree>(
         .iter()
         .map(|(_, candidate)| candidate.clone())
         .collect();
+    if search.met_gone {
+        gone_or_refused(tree)?;
+    }
     let index = choose_screen(&screen.title, &candidates, screen.size, reach)
         .map_err(TreeError::into_error)?;
     let (group, candidate) = search.groups.swap_remove(index);
@@ -599,8 +624,9 @@ pub fn find_screen<T: WindowTree>(
 ///
 /// As [`find_screen`]; [`Error::Busy`] when the screen moved, was resized or went away during
 /// the read; a failure of the walk or of the frame's read, as `source` answers it
-/// ([`WindowTree::failure`]), the gone screen included when `source` answers it as a refusal
-/// (the permission taken back).
+/// ([`WindowTree::failure`]); and, for an element gone anywhere in the read (the search, the
+/// walk, the frame read again), the refusal `source` answers it as, when it does (the permission
+/// taken back).
 pub fn read_screen<E, S>(
     source: &mut S,
     screen: &ScreenRequest,
@@ -612,16 +638,16 @@ where
 {
     let (group, frame) = find_screen(source, screen, windows)?;
     let walk = walk_screen(source, &group).map_err(|error| WindowTree::failure(source, error))?;
-    let after = match WindowTree::frame(source, &group) {
-        Ok(after) => after,
-        // A screen gone is one to read again, unless the source answers it as the permission
-        // refused, which no read again serves.
-        Err(ProviderError::Gone) => match WindowTree::failure(source, ProviderError::Gone) {
-            refused @ Error::NotSupported { .. } => return Err(refused),
-            _ => None,
-        },
+    let (after, frame_gone) = match WindowTree::frame(source, &group) {
+        Ok(after) => (after, false),
+        Err(ProviderError::Gone) => (None, true),
         Err(error) => return Err(WindowTree::failure(source, error)),
     };
+    // An element gone in the walk, or the screen gone since, is a short or busy read, unless the
+    // source answers it as the permission refused, which no read again serves.
+    if walk.met_gone || frame_gone {
+        gone_or_refused(source)?;
+    }
     screen_steady(frame, after)?;
     Ok((walk.screen(frame), walk))
 }
