@@ -157,7 +157,8 @@ impl<R, A> fmt::Debug for Answer<R, A> {
 ///
 /// 1. nothing yet, while a [hold](Self::hold) of the script lives: it waits
 ///    until the last hold is dropped, then goes down this list, or until the
-///    test releases it;
+///    test releases it; the last hold let go with
+///    [`leave_held`](ScriptHold::leave_held) instead leaves it to the test;
 /// 2. the earliest step ([`expect`](Self::expect),
 ///    [`expect_held`](Self::expect_held)) whose [`Expect`] accepts it, which
 ///    it uses up; a step that accepts nothing stays and is
@@ -218,12 +219,14 @@ struct Waiting<R, A> {
 }
 
 enum Until<R, A> {
-    /// Until the test releases or abandons it: a step held it, or the code
-    /// that was to answer it panicked.
+    /// Until the test releases or abandons it: a step held it, the code
+    /// that was to answer it panicked, or the last hold that kept it was let
+    /// go with [`ScriptHold::leave_held`].
     Released,
     /// Until the last [`ScriptHold`] is dropped, which sends it on to the
     /// steps and the standing answer, or until the test releases or abandons
-    /// it.
+    /// it. A request is kept so only while a hold lives (or a lift is
+    /// sending the kept requests on).
     Lifted,
     /// Until the scenario's clock reaches the instant scheduled for it.
     Due {
@@ -267,13 +270,35 @@ impl<R, A> ScriptState<R, A> {
         self.waiting.remove(position)
     }
 
-    /// Take out the oldest request a hold kept.
-    fn take_oldest_lifted(&mut self) -> Option<Waiting<R, A>> {
-        let position = self
+    /// Take out the oldest request a hold kept that `reported` does not
+    /// name. One it names was reported unanswered by a `verify` already: it
+    /// stays where it is, held for the test, so what was reported stays
+    /// reported.
+    fn take_oldest_lifted(&mut self, reported: impl Fn(EntryId) -> bool) -> Option<Waiting<R, A>> {
+        let mut position = None;
+        for (index, waiting) in self.waiting.iter_mut().enumerate() {
+            if !matches!(waiting.until, Until::Lifted) {
+                continue;
+            }
+            if reported(waiting.id) {
+                waiting.until = Until::Released;
+            } else {
+                position = Some(index);
+                break;
+            }
+        }
+        self.waiting.remove(position?)
+    }
+
+    /// Leave the request `id` held for the test, where it is.
+    fn mark_released(&mut self, id: EntryId) {
+        if let Some(waiting) = self
             .waiting
-            .iter()
-            .position(|waiting| matches!(waiting.until, Until::Lifted))?;
-        self.waiting.remove(position)
+            .iter_mut()
+            .find(|waiting| waiting.id == id && waiting.until.is_held())
+        {
+            waiting.until = Until::Released;
+        }
     }
 }
 
@@ -394,8 +419,11 @@ where
         for observe in self.observers() {
             first.contain(|| observe(request, Some(&value)));
         }
-        // A retired owner has nobody left to tell.
-        let _ = resolver.resolve(value);
+        // A retired owner has nobody left to tell; the answer it never gets
+        // is dropped here, and its `Drop` is the test's code.
+        first.contain(|| {
+            let _ = resolver.resolve(value);
+        });
     }
 
     /// End `request` unanswered, after every observer heard it.
@@ -403,7 +431,7 @@ where
         for observe in self.observers() {
             first.contain(|| observe(request, None));
         }
-        drop(resolver);
+        first.retire(resolver);
     }
 
     /// Answer what no step takes with a clone of `value`.
@@ -423,11 +451,14 @@ where
     /// kept go on, oldest first and one at a time, to the steps and the
     /// standing answer, as if they arrived then; a request that arrives
     /// meanwhile queues behind them. A request a step holds is not one of
-    /// them: it
-    /// waits for [`release_oldest`](Self::release_oldest),
+    /// them: it waits for [`release_oldest`](Self::release_oldest),
     /// [`release_held`](Self::release_held) or
     /// [`abandon_held`](Self::abandon_held), which also answer requests a
-    /// hold keeps.
+    /// hold keeps, and so do the ones the last hold leaves with
+    /// [`ScriptHold::leave_held`]. A lift does not send on a request the
+    /// last [`verify`](Scenario::verify) reported unanswered either (a hold
+    /// dropped at the end of a test, after its `verify`): it stays held, and
+    /// reported.
     #[must_use = "requests are held only while the hold is alive"]
     pub fn hold(&self) -> ScriptHold {
         {
@@ -467,7 +498,8 @@ where
     /// script until its own answer is given, so code that runs meanwhile
     /// (an answer, an observer) still finds the requests after it and can
     /// withdraw one by its ticket. A request whose answer panics stays held
-    /// where it was, the others are still answered, and the first panic is
+    /// where it was, for the test (no hold's lift sends it on), the others
+    /// are still answered, and the first panic is
     /// resumed once all of them have been tried.
     pub fn release_held(&self, mut answer: impl FnMut(&R) -> A) -> usize {
         let held = self.cell.state.borrow().held_ids();
@@ -479,6 +511,9 @@ where
                 continue;
             };
             let Some(value) = first.contain(|| answer(&request)) else {
+                // Its answer panicked: held for the test, as on every other
+                // path where the code that was to answer a request panics.
+                self.cell.state.borrow_mut().mark_released(id);
                 continue;
             };
             let taken = self.cell.state.borrow_mut().take_held(id);
@@ -670,7 +705,7 @@ where
                         position.and_then(|position| state.steps.remove(position))
                     };
                     if let Some(Step { expect, answer, .. }) = step {
-                        drop(expect);
+                        first.retire(expect);
                         if let Some(answer) = answer {
                             return self.answer(id, request, resolver, answer, first);
                         }
@@ -879,12 +914,17 @@ impl ScriptHold {
         answered
     }
 
-    /// Let go of this hold without sending on what the holds kept: when it
-    /// was the last, later requests are answered again, and the kept ones
-    /// stay held, for the test to release or the run to report
-    /// [`Unanswered`](ScenarioFailure::Unanswered). A double that keeps a
-    /// hold in its own state lets go of it this way when the state is torn
-    /// down, so its teardown answers nothing.
+    /// Let go of this hold without sending anything on. While another hold
+    /// of the script lives, the kept requests stay that hold's, and its
+    /// lift sends them on. When this was the last, later requests are
+    /// answered again and the kept ones are left to the test, as a step
+    /// holds one: no later hold's lift answers them, only
+    /// [`release_oldest`](Script::release_oldest),
+    /// [`release_held`](Script::release_held) or
+    /// [`abandon_held`](Script::abandon_held) do, and the run reports one
+    /// still held [`Unanswered`](ScenarioFailure::Unanswered). A double that
+    /// keeps a hold in its own state lets go of it this way when the state is
+    /// torn down, so its teardown answers nothing.
     pub fn leave_held(mut self) {
         if let Some(script) = self.script.take().and_then(|script| script.upgrade()) {
             script.leave();
@@ -945,16 +985,22 @@ impl<R: fmt::Debug + 'static, A: 'static> Lift for ScriptCell<R, A> {
         // One request at a time, the oldest first, taken out only as it is
         // sent on: the code it runs (a step, a standing answer, an observer,
         // the test's) finds the rest in the script, where a ticket can
-        // withdraw one and a new request queues behind them. That code is
-        // contained, so the loop always reaches its end. A hold taken
-        // meanwhile stops it and keeps the rest, in order.
+        // withdraw one and a new request queues behind them. A hold taken
+        // meanwhile stops it and keeps the rest, in order. Each request is
+        // sent on under its own containment, the drops of the test's values
+        // that the steps let go of included, so a panic never leaves the
+        // loop: `lifting` is always cleared and the rest stay in order. A
+        // request a `verify` already reported unanswered is not sent on (a
+        // hold dropped at the end of a test, after its `verify`): it stays
+        // held and reported.
         loop {
             let next = {
                 let mut state = script.cell.state.borrow_mut();
                 if state.holds > 0 {
                     None
                 } else {
-                    state.take_oldest_lifted()
+                    let scenario = &script.cell.scenario;
+                    state.take_oldest_lifted(|id| scenario.acknowledged_debt(id.0))
                 }
             };
             let Some(Waiting {
@@ -966,7 +1012,14 @@ impl<R: fmt::Debug + 'static, A: 'static> Lift for ScriptCell<R, A> {
             else {
                 break;
             };
-            if script.answer_by_script(id, request, resolver, first) {
+            let mut inside = FirstPanic::new();
+            let mut escaped = FirstPanic::new();
+            let sent =
+                escaped.contain(|| script.answer_by_script(id, request, resolver, &mut inside));
+            // The panics contained inside came before one that escaped.
+            first.absorb(inside);
+            first.absorb(escaped);
+            if sent == Some(true) {
                 answered += 1;
             }
         }
@@ -977,6 +1030,16 @@ impl<R: fmt::Debug + 'static, A: 'static> Lift for ScriptCell<R, A> {
     fn leave(&self) {
         let mut state = self.state.borrow_mut();
         state.holds = state.holds.saturating_sub(1);
+        if state.holds > 0 {
+            return;
+        }
+        // No hold is left to send them on: they wait for the test, and a
+        // later hold's lift does not answer them.
+        for waiting in &mut state.waiting {
+            if matches!(waiting.until, Until::Lifted) {
+                waiting.until = Until::Released;
+            }
+        }
     }
 }
 

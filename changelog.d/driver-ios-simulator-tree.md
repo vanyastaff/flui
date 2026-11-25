@@ -10,6 +10,31 @@
   are inferred, whether it carries the app's identifier is unconfirmed, and no run on a Mac has
   pinned either yet, so the read stands for VoiceOver on iOS only as far as those runs confirm
   it. `testing::ScriptedSimulatorScreen` scripts the Simulator's window.
+- **How the iOS Simulator lane takes its window, its screen and its element** (`flui-driver`).
+  A window is taken by an allow-list that every host goes through (`tree::choose_window`): the
+  one window naming the device's UDID, whatever the others name, else the one naming no UUID
+  while no other simulator of the default device set, in any state, shares its title, and never
+  one naming any other UUID. Every run of a UUID's 8-4-4-4-12 form in the window's
+  `AXIdentifier` or `AXDocument`, read whole up to `accessibility::IDENTITY_TEXT_LIMIT` and
+  refused past it, is read as a UUID whatever stands beside it. The device is looked up by its
+  UDID in the listing read before each read, and one renamed or removed since the lane connected
+  is refused. The screen search reads the window's chrome breadth first and never goes into a
+  group of the app window's shape, whose children are the app's; a search that an element gone
+  or its budget left partial takes no screen (`TreeError::SearchCut`). The screen's walk and the
+  search list children through one bounded listing (`accessibility::list_children`), a level of
+  exactly the budget's children read whole. A level a vanished element or the budget cuts is
+  marked unread on its parent, the screen included, and a probe past the depth that fails fails
+  the read; a screen moved or resized during the read answers `Error::Busy`. A press refuses an
+  element that two read as, or one on a read that stopped short; a press sent and not answered,
+  or whose element went away, keeps `may_have_run` when the Accessibility permission is gone
+  afterwards, as the macOS lane's `AXPress` does (`lane::ax::pressed`, the answer both lanes
+  give); and a timeout names the deadline of the element its call was asked of, or says that
+  element refused it.
+- **The accessibility walks mark a vanished element's level cut** (`flui-driver`): on Windows,
+  macOS and Linux, a step to a next child that finds an element gone (the parent, or the sibling
+  the step is asked from) leaves the parent's children marked unread (`children_unread`) and the
+  read truncated (`Tree::truncated`, whose remedy then is to read again), and a search that
+  meets one says so.
 - **`AccessibilityApi::activates`** (`flui-driver`): whether a lane's API performs an element's
   action; UI Automator's does not.
 

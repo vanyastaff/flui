@@ -1317,8 +1317,11 @@ fn a_rotated_display_turns_the_gesture_edges_with_it() {
     assert_ne!(turned, WINDOWS);
     // Turned when the lane locates the window and still when it checks the press.
     let adb = scripted(true, true)
-        .reply_once("shell dumpsys window |", AdbReply::new(0, turned.clone()))
-        .reply_once("shell dumpsys window |", AdbReply::new(0, turned));
+        .reply_once(
+            "shell dumpsys window -a |",
+            AdbReply::new(0, turned.clone()),
+        )
+        .reply_once("shell dumpsys window -a |", AdbReply::new(0, turned));
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
     let window: flui_driver::protocol::tree::WindowId = "w1".parse().expect("a window");
     let placement = flui_driver::protocol::session::Placement::new(

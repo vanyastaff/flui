@@ -13,7 +13,7 @@
   or `release`d sends the requests the holds kept on to the steps and the standing answer,
   oldest first and one at a time, with a request that arrives meanwhile queued behind them; a
   request a step holds waits for the test, and `ScriptHold::leave_held` lets go without sending
-  anything on.
+  anything on: as the last hold, it leaves the kept requests to the test as a step does.
 - `HeadlessHost::with_scenario`, `try_with_scenario`, `scenario` and `advance`: a host that
   drives a scenario's clock, applies its due changes whenever time moves, and waits for its
   scheduled changes in `time_to_next_frame` and `pump_until_settled`. A second host on the same

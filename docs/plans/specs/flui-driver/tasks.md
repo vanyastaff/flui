@@ -1145,7 +1145,12 @@ graph LR
     refusal on one that does not; the pen's axes at each rotation and under a `wm size` override;
     `getevent -l` over `adb shell -tt` seeing the person's touch and not the lane's `input`
     commands; the window's frame and rotation as the device's `dumpsys window` prints them (the
-    window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`);
+    window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`); the
+    reply's `WINDOW MANAGER` part headers and where the focus is printed on each Android version
+    (the default display's section from Android 10, the windows' part before), with a `LAST ANR`
+    part in the reply; the windows' frames present in the one `dumpsys window -a` reading, its
+    `mTopFocusedDisplayId=`, and what that dump under the window manager's lock costs before each
+    press;
     `uiautomator dump` answering while the app animates; `screencap`'s raw header and
     format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
     endpoint forward and the app's exit when the session ends; which window is under the point
@@ -1194,9 +1199,11 @@ graph LR
     on (`enabled_accessibility_services`, a list never set or emptied being none) or touch
     exploration is, naming `android_tree_dump` and the services (`docs/gaps.md`). Input and
     capture take no dump. The window is the focused one by its hash, on the default display, read
-    with the rotation from one `dumpsys window`; the focus check before each press, key, text and
-    scroll reads it again and compares hash, frame and rotation (another window `NotForeground`,
-    the same one moved or turned `Busy`); a read of the tree locates the window again after the
+    with the rotation from one `dumpsys window -a`; the focus check before each press, key, text
+    and scroll reads it again and compares hash, frame and rotation (another focused display
+    `android_default_display`, another window `NotForeground`, the same one moved or turned
+    `Busy`, any of them after part of the sequence went out `PartlySent`); a read of the tree
+    locates the window again after the
     dump, and a window replaced, moved or turned in between answers `Busy`.
   - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
     sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,
@@ -1405,6 +1412,8 @@ graph LR
     `the_walk_reads_its_budget_and_leaves_out_a_gone_element`,
     `a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone`,
     `the_search_keeps_to_its_budget_and_depth`,
+    `the_search_reads_the_chrome_and_never_the_apps_elements`,
+    `a_screen_moved_during_the_read_is_read_again`,
     `a_group_gone_mid_search_cuts_the_search_short`,
     `the_search_reaches_devicehubs_screen_seven_levels_down`,
     `the_search_reaches_a_screen_inside_simulator_apps_bezel`,
@@ -1483,7 +1492,9 @@ graph LR
     refused. The screen is found by walking every group of
     the window within ten levels: an `iOSContentGroup` (DeviceHub) when there is one, else the
     shallowest group of the app's window's shape (Simulator.app, inside its bezel or not), which a
-    search left partial by a group gone or its budget does not take.
+    search left partial above or beside the candidates by an element gone or its budget does not
+    take; the search never goes into a group of the app window's shape, whose children are the
+    app's.
     `accesskit_ios` serves the elements VoiceOver reads, so an element is matched among the
     descendants of the node its nearest matched ancestor fits. The client is shared with the macOS
     lane as `lane::ax`, and `Lane::invoke` is handed the app's tree as `read_tree` is.

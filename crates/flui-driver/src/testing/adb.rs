@@ -14,6 +14,8 @@ use crate::lane::android::adb::{
 enum Answer {
     Reply(AdbReply),
     Timeout,
+    /// The command unwinds, as a device binding the driver does not own may.
+    Unwind,
 }
 
 #[derive(Debug, Clone)]
@@ -129,6 +131,13 @@ impl ScriptedAdb {
     #[must_use]
     pub fn timeout_once(self, prefix: impl Into<String>) -> Self {
         self.rule(prefix.into(), Answer::Timeout, Duration::ZERO, true)
+    }
+
+    /// Let the next command starting with `prefix` unwind, as an [`Adb`] the driver does not own
+    /// may; the payload is the command's text.
+    #[must_use]
+    pub fn unwind_once(self, prefix: impl Into<String>) -> Self {
+        self.rule(prefix.into(), Answer::Unwind, Duration::ZERO, true)
     }
 
     fn rule(self, prefix: String, answer: Answer, taking: Duration, once: bool) -> Self {
@@ -342,6 +351,7 @@ impl Adb for ScriptedAdb {
             return Err(timed_out(command, timeout));
         }
         match rule.answer {
+            Answer::Unwind => std::panic::resume_unwind(Box::new(text)),
             Answer::Timeout => Err(timed_out(command, timeout)),
             Answer::Reply(reply) if reply.stdout.len() > limit => Err(over_limit(command, limit)),
             Answer::Reply(reply) => Ok(reply),

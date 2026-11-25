@@ -485,6 +485,13 @@ fn an_error_is_stated_on_the_wire_as_it_was_read() {
             .retry(Retry::Soon),
         ErrorObject::new(ErrorCode::Platform, "the OS refused")
             .effect(Effect::new(EffectKind::Partial)),
+        // A code whose variant names no effect, answered with one: part of the call went out.
+        ErrorObject::new(ErrorCode::Busy, "the window moved")
+            .effect(Effect::new(EffectKind::MayHaveRun).detail("1 commands went out"))
+            .retry(Retry::Never),
+        ErrorObject::new(ErrorCode::NotForeground, "the shade is in front")
+            .effect(Effect::new(EffectKind::MayHaveRun).detail("2 commands went out"))
+            .retry(Retry::Never),
     ];
     for answer in answers {
         let read = Error::from_wire(answer.clone());

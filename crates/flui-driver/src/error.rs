@@ -55,7 +55,9 @@ pub enum Error {
         /// Whether the same call can succeed later.
         retry: Retry,
     },
-    /// The target is busy; the same call may succeed soon.
+    /// The target is busy; `retry` says whether the same call may succeed later. A busy that
+    /// ended an OS sequence after part of it went out comes as [`Error::PartlySent`], which says
+    /// it may have run and invites no retry.
     #[error("busy: {message}")]
     Busy {
         /// Why, for people.
@@ -276,6 +278,17 @@ pub enum Error {
         /// effect and verdict are read from ([`Error::effect`], [`Error::is_cannot_verify`]).
         first: Option<Box<Error>>,
     },
+    /// Part of an acting call went out before the failure `first` ended it: `effect` says how
+    /// much, and the call invites no retry, which would send that part again. It answers to
+    /// `first`'s wire code, verdict and missing capability; the wire states it as `first` with
+    /// `effect` and `retry: never`, and [`Error::from_wire`] reads such an answer back as this.
+    #[error("{first}; part of the call went out first")]
+    PartlySent {
+        /// How much went out.
+        effect: Effect,
+        /// The failure that ended the call.
+        first: Box<Error>,
+    },
     /// The conversation with the app broke its protocol: a line that is not one, an answer to
     /// nothing asked.
     #[error("protocol: {message}")]
@@ -327,7 +340,10 @@ impl Error {
             client,
             ..
         } = error;
-        match code {
+        // A code whose variant holds no effect, answered with one: the effect is the part of the
+        // call that went out before it failed.
+        let carried = effect.clone();
+        let read = match code {
             ErrorCode::InvalidArgument => Self::InvalidArgument { message, retry },
             ErrorCode::NotSupported => Self::NotSupported {
                 capability,
@@ -396,6 +412,26 @@ impl Error {
                 message,
                 retry,
             },
+        };
+        match carried {
+            Some(effect) if read.effect().is_none() => Self::PartlySent {
+                effect,
+                first: Box::new(read),
+            },
+            _ => read,
+        }
+    }
+
+    /// This failure, after part of the call went out as `effect` says: [`Error::PartlySent`],
+    /// unless it already names an effect of its own.
+    #[must_use]
+    pub(crate) fn after_partly_sent(self, effect: Effect) -> Self {
+        if self.effect().is_some() && self.retry() == Retry::Never {
+            return self;
+        }
+        Self::PartlySent {
+            effect,
+            first: Box::new(self),
         }
     }
 
@@ -405,6 +441,12 @@ impl Error {
     /// ([`Self::is_cannot_verify`]), `platform` otherwise, its message the whole failure.
     #[must_use]
     pub fn to_wire(&self) -> ErrorObject {
+        if let Self::PartlySent { effect, first } = self {
+            let mut object = first.to_wire();
+            object.effect = Some(effect.clone());
+            object.retry = Retry::Never;
+            return object;
+        }
         let code = self.code().unwrap_or(if self.is_cannot_verify() {
             ErrorCode::NotSupported
         } else {
@@ -556,6 +598,9 @@ impl Error {
     /// The wire code this error answers to; `None` for the driver's own failures.
     #[must_use]
     pub fn code(&self) -> Option<ErrorCode> {
+        if let Self::PartlySent { first, .. } = self {
+            return first.code();
+        }
         Some(match self {
             Self::InvalidArgument { .. } => ErrorCode::InvalidArgument,
             Self::NotSupported { .. } => ErrorCode::NotSupported,
@@ -580,6 +625,7 @@ impl Error {
             Self::InterruptedByUser { .. }
             | Self::Lane { .. }
             | Self::ReleaseFailed { .. }
+            | Self::PartlySent { .. }
             | Self::Protocol { .. }
             | Self::Expectation { .. }
             | Self::Unreadable { .. }
@@ -615,6 +661,7 @@ impl Error {
             Self::InterruptedByUser { .. }
             | Self::Lane { .. }
             | Self::ReleaseFailed { .. }
+            | Self::PartlySent { .. }
             | Self::Protocol { .. }
             | Self::Expectation { .. }
             | Self::Unreadable { .. }
@@ -630,6 +677,7 @@ impl Error {
             Self::Timeout { effect, .. }
             | Self::Platform { effect, .. }
             | Self::Gone { effect, .. } => effect.as_ref(),
+            Self::PartlySent { effect, .. } => Some(effect),
             Self::ReleaseFailed {
                 first: Some(first), ..
             } => first.effect(),
@@ -654,7 +702,8 @@ impl Error {
         match self {
             Self::ReleaseFailed {
                 first: Some(first), ..
-            } => first.is_cannot_verify(),
+            }
+            | Self::PartlySent { first, .. } => first.is_cannot_verify(),
             _ => matches!(
                 self,
                 Self::NotSupported { .. }
@@ -673,7 +722,8 @@ impl Error {
         match self {
             Self::ReleaseFailed {
                 first: Some(first), ..
-            } => first.missing_capability(),
+            }
+            | Self::PartlySent { first, .. } => first.missing_capability(),
             Self::NotSupported { capability, .. } => {
                 Some(capability.clone().unwrap_or_else(|| "unnamed".to_owned()))
             }

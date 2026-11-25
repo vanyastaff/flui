@@ -116,9 +116,14 @@ app's trees, frames and input, and this crate composes that with what only the O
   the keys and chords that leave the app or change the device (the fallbacks of AOSP's
   `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
   the mouse included, going down at the display's edge; before each press, key, text and scroll
-  one `dumpsys window` must show the window the lane located holding the focus, compared by its
-  hash, frame and rotation: another window of the app's title is `NotForeground`, the same
-  window moved or turned is `Busy` until the lane locates it again.
+  one `dumpsys window -a` must show the window the lane located holding the focus, compared by
+  its hash, frame and rotation, on the display holding the device's focus: another display is
+  `android_default_display`, another window of the app's title is `NotForeground`, the same
+  window moved or turned is `Busy` until the lane locates it again. The whole dump runs under the
+  window manager's lock, which every window change on the device waits for, once a locate and
+  once before each such command; `-a` is what prints the frames. Whatever ends a sequence
+  after part of it went out answers `Error::PartlySent` around its own failure: the commands
+  that went out may have run, and no retry is invited, which would send them again.
 - **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
@@ -178,11 +183,17 @@ app's trees, frames and input, and this crate composes that with what only the O
   element gone as its level cut, never ended (`lane::walk`); `ax::child_at` answers
   `kAXErrorInvalidUIElement`, the parent gone, as that. Every element the read asks is given the
   client's deadline and carries it, so a timeout, a press's included, names the deadline of the
-  element its call was asked of, or says that element refused it. The screen is found by walking every group of the
-  window within ten levels (`tree::find_screen`), each group's children listed by the bounded
-  listing the screen's walk shares (`accessibility::list_children`): an `iOSContentGroup` when
-  there is one, else the shallowest group of the app's window's shape, which a search left
-  partial by a group gone or its budget does not take. `Lane::read_tree` and `Lane::invoke` are handed
+  element its call was asked of, or says that element refused it. A window's identity texts are
+  read whole up to `accessibility::IDENTITY_TEXT_LIMIT`, never through the outline's cut, and a
+  longer one is refused. The screen is found by reading the window's chrome within ten levels,
+  breadth first (`tree::find_screen`), each element's children listed by the bounded listing the
+  screen's walk shares (`accessibility::list_children`); the search never goes into a candidate
+  (a group of the app window's shape, or an `iOSContentGroup`), whose children are the app's, so
+  the app's elements neither spend its budget nor cut it. It takes an `iOSContentGroup` when
+  there is one, else the shallowest group of the app's window's shape, and none from a search
+  that an element gone above or beside the candidates (while listed, or before its facts were
+  read) or its budget left partial. The screen's frame is read again after the walk, and a
+  screen moved meanwhile answers `Error::Busy`. `Lane::read_tree` and `Lane::invoke` are handed
   the app's own tree, and each element is matched among the descendants of the node its nearest
   matched ancestor fits (the bridge serves only the elements VoiceOver reads), an app node once,
   by the role `lane::ios_simulator::roles` gives `accesskit_ios`'s trait, its label (a static
@@ -190,9 +201,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   enabled state, an identifier it carries, and its frame on the window; two candidates alike are
   `Error::Ambiguous`. A press finds its element again by the facts the read gave, refusing none,
   two, and one on a read that stopped short (`tree::locate`), and presses it through `AXPress`
-  (`accessibility::pressed`). A failure while the process is no longer trusted answers the
-  Accessibility permission, wherever it comes, except a press already sent: one not answered,
-  or whose element went away, keeps `may_have_run` and names the permission in its message.
+  with the answer the macOS lane's press gives too (`lane::ax::pressed`). A failure while the
+  process is no longer trusted answers the Accessibility permission, wherever it comes, except a
+  press already sent: one not answered, or whose element went away, keeps `may_have_run` and
+  names the permission in its message.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

@@ -815,12 +815,12 @@ fn a_window_that_moves_or_turns_during_the_dump_is_busy() {
         (
             "moved",
             emulator_showing(CONTROLS)
-                .reply_once("shell dumpsys window |", AdbReply::new(0, moved)),
+                .reply_once("shell dumpsys window -a |", AdbReply::new(0, moved)),
         ),
         (
             "replaced",
             emulator_showing(CONTROLS)
-                .reply_once("shell dumpsys window |", AdbReply::new(0, replaced)),
+                .reply_once("shell dumpsys window -a |", AdbReply::new(0, replaced)),
         ),
         (
             "turned",
@@ -832,7 +832,7 @@ fn a_window_that_moves_or_turns_during_the_dump_is_busy() {
             .read_tree(&placement(), &controls())
             .expect_err("the window did not hold still");
         assert!(matches!(refused, Error::Busy { .. }), "{case}: {refused:?}");
-        assert_eq!(adb.commands("shell dumpsys window |").len(), 2, "{case}");
+        assert_eq!(adb.commands("shell dumpsys window -a |").len(), 2, "{case}");
     }
 }
 
@@ -1419,7 +1419,7 @@ fn a_tree_that_moves_while_the_os_tree_is_read_is_read_again() {
     let (_agent, mut driver, _reads, adb) = session((1..=1_000_000).collect::<Vec<u64>>());
     let _moved = adb
         .clone()
-        .reply_once("shell dumpsys window |", AdbReply::new(0, moved));
+        .reply_once("shell dumpsys window -a |", AdbReply::new(0, moved));
     let busy = driver
         .main_window()
         .and_then(|mut window| window.os_tree())
