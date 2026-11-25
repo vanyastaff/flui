@@ -42,6 +42,8 @@ pub(crate) struct Rig {
     pub(crate) runtime: UiRuntime,
     pub(crate) clock: ManualClock,
     failing: Arc<AtomicBool>,
+    /// How many times the wake ran, failing or not.
+    wakes: Arc<AtomicU32>,
     pub(crate) window: AgentWindow,
     pub(crate) lease: InputLease,
     sink: Discard,
@@ -64,10 +66,13 @@ impl Rig {
         let platform_window = Rc::clone(window.window());
         let clock = ManualClock::new();
         let failing = Arc::new(AtomicBool::new(false));
+        let wakes = Arc::new(AtomicU32::new(0));
         let wake = {
             let failing = Arc::clone(&failing);
             let failed = AtomicU32::new(0);
+            let wakes = Arc::clone(&wakes);
             Arc::new(move || {
+                wakes.fetch_add(1, Ordering::SeqCst);
                 if failing.load(Ordering::SeqCst) {
                     let n = failed.fetch_add(1, Ordering::SeqCst) + 1;
                     std::panic::panic_any(format!("wake {n}"));
@@ -96,6 +101,7 @@ impl Rig {
             runtime,
             clock,
             failing,
+            wakes,
             window,
             lease,
             sink: Discard { size },
@@ -163,5 +169,12 @@ impl Rig {
             self.frame();
         }
         panic!("the journal is not read within 30 frames");
+    }
+}
+
+impl Rig {
+    /// How many times the runtime's wake has run so far.
+    pub(crate) fn wakes(&self) -> u32 {
+        self.wakes.load(Ordering::SeqCst)
     }
 }

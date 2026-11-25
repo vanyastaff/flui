@@ -552,3 +552,58 @@ fn app_code_that_panics_in_a_held_acts_attempt_answers_the_act_once() {
         assert!(asked.try_take().is_none(), "{case}: answered once");
     }
 }
+
+/// A call whose serving catches a panic and hands its reply on (a tap whose hit-test panics as it
+/// is held) continues the panic out of the drain, and wakes the owner first when calls are still
+/// queued behind it, so they are drained at the next turn; with none queued it wakes no more than
+/// holding the act did.
+#[test]
+fn a_call_that_panics_in_the_drain_wakes_the_owner_for_the_calls_behind_it() {
+    let mut extra_wakes = Vec::new();
+    for queued_behind in [false, true] {
+        let mut rig = Rig::showing(&Traps);
+        let mut show = rig
+            .window
+            .call::<method::SemanticsAct>(ActParams::new(named("Show"), ActionName::Invoke))
+            .expect("the inbox has room");
+        rig.runtime.pump_background();
+        show.try_take()
+            .expect("pressed at the drain")
+            .expect("pressed");
+        for _ in 0..3 {
+            rig.frame();
+        }
+        let mut tap = TapParams::new(named("Trap"));
+        tap.options.timeout_ms = Some(60_000);
+        let mut tap = rig
+            .lease
+            .call::<method::ElementTap>(tap)
+            .expect("the inbox has room");
+        let behind = queued_behind.then(|| {
+            rig.window
+                .call::<method::InputJournal>(flui_protocol::input::JournalParams::new(
+                    rig.window.id(),
+                ))
+                .expect("the inbox has room")
+        });
+        // Counted once the calls are queued: what the turn that drains them wakes.
+        let before = rig.wakes();
+        let drained = catch_unwind(AssertUnwindSafe(|| rig.runtime.pump_background()));
+        assert!(
+            drained.is_err(),
+            "queued {queued_behind}: the hit-test's panic continues"
+        );
+        let refused = tap
+            .try_take()
+            .expect("answered before the panic continued")
+            .expect_err("its hit-test panicked");
+        assert_eq!(refused.code, ErrorCode::Platform, "{refused:?}");
+        extra_wakes.push(rig.wakes() - before);
+        drop(behind);
+    }
+    assert_eq!(
+        extra_wakes[1],
+        extra_wakes[0] + 1,
+        "one more wake when a call waits behind the panic: {extra_wakes:?}"
+    );
+}

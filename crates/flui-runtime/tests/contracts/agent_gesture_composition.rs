@@ -514,3 +514,121 @@ fn a_default_fling_is_composed_from_the_range_the_host_reports() {
         }
     }
 }
+
+/// The journal's entries of `window` that `outcome` says its act made.
+fn entries_made(
+    host: &mut HeadlessHost,
+    window: &AgentWindow,
+    outcome: &ActOutcome,
+) -> Vec<flui_protocol::input::JournalEntry> {
+    let span = outcome.observed.expect("its input went out");
+    let mut read = window
+        .call::<method::InputJournal>(JournalParams::new(window.id()))
+        .expect("the inbox has room");
+    answered(host, &mut read, 2)
+        .0
+        .expect("the journal is read")
+        .entries
+        .into_iter()
+        .filter(|entry| (span.from..=span.to).contains(&entry.seq))
+        .collect()
+}
+
+/// A long press naming no duration holds the window's long-press timeout and 300 ms, up to the
+/// 4000 ms the reply bound counts: a 500 ms timeout holds 800 ms; a 3700 ms timeout, exactly at
+/// the ceiling, still plays; a 3701 ms one is refused.
+#[test]
+fn a_default_long_press_holds_the_timeout_and_its_margin_up_to_the_ceiling() {
+    for (timeout_ms, held_ms) in [(500, Some(800_u64)), (3_700, Some(4_000)), (3_701, None)] {
+        let setting = Setting {
+            long_press: Some(Duration::from_millis(timeout_ms)),
+            ..Setting::preset(TargetPlatform::Android)
+        };
+        let heard = Heard::default();
+        let (mut host, _agent, window, lease) = shown(setting.window(), &setting.pad(&heard));
+        setting.apply(&host);
+        let _ = host.pump(Duration::from_millis(16));
+        let mut asked = ask_default(&lease, Unnamed::LongPress);
+        let answer = answered(&mut host, &mut asked, 400).0;
+        match (answer, held_ms) {
+            (Ok(outcome), Some(held_ms)) => {
+                let entries = entries_made(&mut host, &window, &outcome);
+                let time = |kind: flui_protocol::input::InputKind| {
+                    entries
+                        .iter()
+                        .find(|entry| entry.kind == kind)
+                        .map(|entry| entry.time_us)
+                        .unwrap_or_else(|| panic!("{timeout_ms} ms: a {kind:?} in {entries:?}"))
+                };
+                let down = time(flui_protocol::input::InputKind::PointerDown);
+                let up = time(flui_protocol::input::InputKind::PointerUp);
+                // The hold is a tick of its own, which starts a 16 ms frame after the press.
+                assert_eq!(up - down, (held_ms + 16) * 1_000, "{timeout_ms} ms: held");
+            }
+            (Err(refused), None) => {
+                assert_eq!(refused.code, ErrorCode::InvalidArgument, "{refused:?}");
+                assert!(refused.message.contains("4001 ms"), "{refused:?}");
+            }
+            (answer, held_ms) => panic!("{timeout_ms} ms: {answer:?}, expected {held_ms:?}"),
+        }
+    }
+}
+
+/// "Chip", 40 × 20, below a tall spacer.
+#[derive(Clone, StatelessView)]
+struct Chip;
+
+impl StatelessView for Chip {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        Column::new(vec![
+            SizedBox::new(200.0, 200.0).into_view().boxed(),
+            Semantics::new()
+                .label("Chip")
+                .container(true)
+                .child(
+                    SizedBox::new(40.0, 20.0)
+                        .child(ColoredBox::new(flui_painting::styling::Color::WHITE)),
+                )
+                .into_view()
+                .boxed(),
+        ])
+    }
+}
+
+/// A swipe naming no distance on a target with little room goes at least twice the window's pan
+/// slop for a touch, so it drags: up from the middle of a 20 px chip in a window whose touch pan
+/// slop is 30 px, it goes 60 px.
+#[test]
+fn a_default_swipe_goes_at_least_twice_the_windows_touch_slop() {
+    let touch = GestureSettings::preset(TargetPlatform::Android, PointerKind::Touch)
+        .try_with_pan_slop(30.0)
+        .expect("a pan slop");
+    let window = HeadlessWindow::new(200, 400)
+        .with_platform(TargetPlatform::Android)
+        .with_gesture_preset(
+            GestureProfiles::preset(TargetPlatform::Android).with_kind(PointerKind::Touch, touch),
+        );
+    let (mut host, _agent, agent_window, lease) = shown(window, &Chip);
+    let params: SwipeParams = serde_json::from_value(json!({
+        "target": { "locator": { "name": { "match": "exact", "text": "Chip" } } },
+        "direction": "up",
+    }))
+    .expect("a swipe reads");
+    let mut asked = ask::<method::ElementSwipe>(&lease, params);
+    let outcome = answered(&mut host, &mut asked, 200)
+        .0
+        .expect("the swipe plays");
+    let entries = entries_made(&mut host, &agent_window, &outcome);
+    let ys: Vec<f64> = entries
+        .iter()
+        .filter_map(|entry| entry.at.map(|at| at.y))
+        .collect();
+    let (Some(start), Some(end)) = (ys.first(), ys.last()) else {
+        panic!("the swipe's points: {entries:?}");
+    };
+    assert!(
+        (start - end - 60.0).abs() < 0.01,
+        "went {} px from {start} to {end}",
+        start - end
+    );
+}
