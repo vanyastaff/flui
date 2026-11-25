@@ -8,7 +8,7 @@ use serde_json::{Map, Value, json};
 
 use super::launch::AttachError;
 use super::socket::Socket;
-use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote};
+use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote, held_by};
 
 /// The page's function that reports to the link.
 const BINDING: &str = "__flui_agent_report";
@@ -182,6 +182,11 @@ impl BrowserLink for Cdp {
     }
 
     fn next_event(&mut self, deadline: Instant) -> Result<Option<LinkEvent>, LinkError> {
+        while let Some(answer) = self.socket.take_late() {
+            if let Some(remote) = held_by(&answer, "objectId") {
+                self.release(remote);
+            }
+        }
         loop {
             let Some(event) = self.socket.next_event(deadline)? else {
                 return Ok(None);

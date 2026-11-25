@@ -21,11 +21,17 @@ const MAX_MESSAGE: usize = 16 << 20;
 /// than the relay reads is no agent's page.
 const MAX_EVENTS: usize = 4096;
 
+/// The most answers kept that no request waits for any more; past it the oldest goes.
+const MAX_LATE: usize = 64;
+
 /// A WebSocket to a browser on this host.
 pub(super) struct Socket {
     ws: WebSocket<TcpStream>,
     /// Events that arrived while a request waited for its answer, oldest first.
     events: VecDeque<Value>,
+    /// Answers that came after their request gave up waiting, oldest first: what they hold in
+    /// the page is the link's to release ([`Socket::take_late`]).
+    late: VecDeque<Value>,
     /// The ID of the next request; never reused.
     next_id: u64,
 }
@@ -47,12 +53,14 @@ impl Socket {
         Ok(Self {
             ws,
             events: VecDeque::new(),
+            late: VecDeque::new(),
             next_id: 1,
         })
     }
 
     /// Sends `message` with a fresh `id` and waits no later than `deadline` for the message
-    /// that answers it. A late answer to an earlier request is passed over.
+    /// that answers it. A late answer to an earlier request is kept aside
+    /// ([`Socket::take_late`]).
     pub(super) fn request(
         &mut self,
         mut message: Map<String, Value>,
@@ -70,7 +78,7 @@ impl Socket {
             };
             match message.get("id") {
                 Some(answered) if answered.as_u64() == Some(id) => return Ok(message),
-                Some(_) => {}
+                Some(_) => self.keep_late(message),
                 None => {
                     if self.events.len() >= MAX_EVENTS {
                         return Err(LinkError::Gone(format!(
@@ -93,9 +101,21 @@ impl Socket {
                 None => return Ok(None),
                 Some(message) if message.get("id").is_none() => return Ok(Some(message)),
                 // An answer no request waits for any more.
-                Some(_) => {}
+                Some(message) => self.keep_late(message),
             }
         }
+    }
+
+    /// The oldest answer that came after its request gave up waiting.
+    pub(super) fn take_late(&mut self) -> Option<Value> {
+        self.late.pop_front()
+    }
+
+    fn keep_late(&mut self, answer: Value) {
+        if self.late.len() >= MAX_LATE {
+            self.late.pop_front();
+        }
+        self.late.push_back(answer);
     }
 
     fn send(&mut self, message: &Value) -> Result<(), LinkError> {
@@ -173,7 +193,54 @@ fn broken(error: impl std::fmt::Display) -> LinkError {
 
 #[cfg(test)]
 mod tests {
-    use super::loopback_address;
+    use std::net::TcpListener;
+    use std::time::{Duration, Instant};
+
+    use serde_json::{Map, Value, json};
+    use tungstenite::Message;
+
+    use super::{LinkError, Socket, loopback_address};
+
+    /// An answer that comes after its request gave up waiting is kept for the link, apart from
+    /// the events, which still come in order. Fails if a late answer is dropped: what it holds
+    /// in the page would stay held for the life of the document.
+    #[test]
+    fn a_late_answer_is_kept_for_the_link() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+        let url = format!("ws://{}/", listener.local_addr().expect("an address"));
+        let browser = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("the link connects");
+            let mut ws = tungstenite::accept(stream).expect("the handshake");
+            let request = ws.read().expect("a request");
+            let request =
+                serde_json::from_str::<Value>(&request.into_text().expect("text")).expect("JSON");
+            // Answered only after the request gave up.
+            std::thread::sleep(Duration::from_millis(300));
+            let answer =
+                json!({ "id": request["id"], "result": { "result": { "objectId": "late" } } });
+            ws.send(Message::text(answer.to_string()))
+                .expect("the answer goes");
+            ws.send(Message::text(json!({ "method": "after" }).to_string()))
+                .expect("the event goes");
+            // Kept open until the link has read both.
+            let _ = ws.read();
+        });
+        let mut socket = Socket::connect(&url, Duration::from_secs(5)).expect("the socket");
+        let mut message = Map::new();
+        message.insert("method".into(), Value::from("call"));
+        let asked = socket.request(message, Instant::now() + Duration::from_millis(50));
+        assert_eq!(asked.map(drop), Err(LinkError::Timeout));
+        let event = socket
+            .next_event(Instant::now() + Duration::from_secs(5))
+            .expect("the link reads")
+            .expect("the event");
+        assert_eq!(event["method"], "after");
+        let late = socket.take_late().expect("the late answer is kept");
+        assert_eq!(late["result"]["result"]["objectId"], "late");
+        assert!(socket.take_late().is_none());
+        drop(socket);
+        browser.join().expect("the browser's side");
+    }
 
     #[test]
     fn a_browser_socket_is_reached_on_the_loopback_alone() {
