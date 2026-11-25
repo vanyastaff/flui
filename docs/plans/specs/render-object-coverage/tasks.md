@@ -89,7 +89,7 @@
 | RC13 | "Mapping decisions" entries for what stays covered by a different design; the nested-scroll behaviours against ADR-0209 | R18 | docs, `flui-widgets` (tests) | — | | not started |
 | RC14 | ADR: a tap is classified against the regions on the path of its down, by the binding; it supersedes ADR-0208 §2 rule 4 in part | R12 | `docs/adr`, `docs/gaps.md` | — | | not started |
 | RC15 | Tap regions, the pointer route: event, registry, snapshot, every end of a contact, hold, capability, group liveness, `RenderTapRegion`, `TapRegion`, the popup's group, the field's overlays, the `flui-sdk` re-exports | R12 | `flui-interaction`, `flui-objects`, `flui-view`, `flui-runtime`, `flui-widgets`, `flui-sdk`, `flui-testing` | RC14, RC0 | | not started |
-| RC16 | ADR: a subtree's filter and its group blend are paint effects | R11, R26 | `docs/adr`, `docs/gaps.md` | — | with RC17 | not started |
+| RC16 | ADR: a subtree's filter and its group blend are paint effects | R11, R26 | `docs/adr`, `docs/gaps.md` | — | with RC17 | in review |
 | RC17 | The filter effect and the records of the effect order, `RenderColorFiltered`, `RenderImageFiltered` and their widgets | R11 | `flui-rendering`, `flui-engine` (tests), `flui-objects`, `flui-widgets` | RC16, RC0 | yes | not started |
 | RC18 | `RenderImage` inversion and filter quality | R10 | `flui-painting`, `flui-engine`, `flui-objects`, `flui-widgets` | RC7, RC16 | yes | not started |
 | RC19 | ADR: a paragraph lays out the boxes its spans embed, and an editing value holds its placeholders | R13, R14 | `docs/adr`, `docs/gaps.md` | — | with RC20 | not started |
