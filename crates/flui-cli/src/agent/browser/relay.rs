@@ -19,7 +19,8 @@ use flui_protocol::framing::{LineReader, MAX_LINE};
 use interprocess::local_socket::traits::Listener as _;
 use interprocess::local_socket::{Listener, Stream};
 
-use super::super::listener::{Unwritten, bind, polled};
+use super::super::listener::{bind, polled};
+use super::super::unwritten::Unwritten;
 use super::{
     BrowserLink, CLOSE_FUNCTION, LinkError, LinkEvent, Remote, SEND_FUNCTION, connect_function,
     read_report,
@@ -37,8 +38,9 @@ const CONNECT_WAIT: Duration = Duration::from_secs(30);
 /// The most lines a client sends before its page connection is open.
 const MAX_QUEUED: usize = 16;
 
-/// The most bytes kept for a client that does not read.
-const MAX_UNWRITTEN: usize = 64 << 20;
+/// The most bytes kept for a client that does not read: one that falls further behind is
+/// closed at once, its page connection with it.
+pub(super) const MAX_UNWRITTEN: usize = 64 << 20;
 
 /// The relay's thread: dropping the handle stops it, ending every connection.
 pub(crate) struct Relay {
@@ -118,7 +120,8 @@ struct Client {
     /// Lines read before the page connection opened.
     queued: VecDeque<String>,
     page: Page,
-    /// The page ended the connection: the client is closed once what it was sent is written.
+    /// The page ended the connection: the client is closed once what it was sent is written,
+    /// and the connection is not closed again in the page.
     ending: bool,
 }
 
@@ -133,10 +136,18 @@ enum Page {
 /// What a client's turn decided.
 enum Outcome {
     Keep,
-    /// The client went, or broke the protocol: its page connection is closed.
+    Leave(Leaving),
+}
+
+/// How a client leaves the relay. Either way what the page holds of an open connection is
+/// released ([`BrowserLink::release`]), so it does not live as long as the document.
+#[derive(Clone, Copy)]
+enum Leaving {
+    /// The client went, broke the protocol or fell too far behind, or the relay stops: its
+    /// page connection is closed, which ends its place in the app's agent.
     Close,
     /// The page ended the connection, or never opened it: nothing is left to close there.
-    Drop,
+    Ended,
 }
 
 impl Turns {
@@ -145,12 +156,8 @@ impl Turns {
             self.accept(listener);
             let ids = self.clients.keys().copied().collect::<Vec<u64>>();
             for id in ids {
-                match self.turn(id)? {
-                    Outcome::Keep => {}
-                    Outcome::Close => self.close(id),
-                    Outcome::Drop => {
-                        self.clients.remove(&id);
-                    }
+                if let Outcome::Leave(leaving) = self.turn(id)? {
+                    self.leave(id, leaving);
                 }
             }
             let deadline = Instant::now() + TICK;
@@ -214,7 +221,7 @@ impl Turns {
         let read = client.read();
         if client.ending {
             return Ok(match client.write() {
-                Ok(true) | Err(_) => Outcome::Drop,
+                Ok(true) | Err(_) => Outcome::Leave(Leaving::Ended),
                 Ok(false) => Outcome::Keep,
             });
         }
@@ -234,12 +241,12 @@ impl Turns {
                     }
                     Ok(None) => {
                         crate::ui::debug("the page defined no agent export in time");
-                        return Ok(Outcome::Drop);
+                        return Ok(Outcome::Leave(Leaving::Ended));
                     }
                     Err(LinkError::Gone(why)) => return Err(LinkError::Gone(why)),
                     Err(error) => {
                         crate::ui::debug(format!("the page refused a connection: {error}"));
-                        return Ok(Outcome::Drop);
+                        return Ok(Outcome::Leave(Leaving::Ended));
                     }
                 }
             }
@@ -250,16 +257,16 @@ impl Turns {
                     Ok(()) => {}
                     Err(LinkError::Gone(why)) => return Err(LinkError::Gone(why)),
                     // The connection ended in the page: its end is reported, or was.
-                    Err(_) => return Ok(Outcome::Close),
+                    Err(_) => return Ok(Outcome::Leave(Leaving::Close)),
                 }
             }
         }
         if !read {
-            return Ok(Outcome::Close);
+            return Ok(Outcome::Leave(Leaving::Close));
         }
         Ok(match client.write() {
             Ok(_) => Outcome::Keep,
-            Err(_) => Outcome::Close,
+            Err(_) => Outcome::Leave(Leaving::Close),
         })
     }
 
@@ -276,9 +283,10 @@ impl Turns {
                 match line {
                     Some(line) => {
                         if client.unwritten.len() + line.len() + 1 > MAX_UNWRITTEN {
-                            // A client this far behind is closed with the rest.
-                            client.ending = true;
-                            client.unwritten.clear();
+                            // A client this far behind is given up on at once: a line written
+                            // after a gap would read as one it was sent whole.
+                            let leaving = client.leaving();
+                            self.leave(id, leaving);
                             return;
                         }
                         client.unwritten.extend_from_slice(line.as_bytes());
@@ -296,36 +304,53 @@ impl Turns {
                     .clients
                     .iter()
                     .filter(|(_, client)| matches!(client.page, Page::Open(_)))
-                    .map(|(id, _)| *id)
-                    .collect::<Vec<u64>>();
-                for id in open {
-                    self.close(id);
+                    .map(|(id, client)| (*id, client.leaving()))
+                    .collect::<Vec<(u64, Leaving)>>();
+                for (id, leaving) in open {
+                    self.leave(id, leaving);
                 }
             }
         }
     }
 
-    /// Closes the client `id` and its page connection.
-    fn close(&mut self, id: u64) {
+    /// Lets go of the client `id`: its page connection is closed as `leaving` says, and
+    /// released.
+    fn leave(&mut self, id: u64, leaving: Leaving) {
         let Some(client) = self.clients.remove(&id) else {
             return;
         };
         if let Page::Open(remote) = client.page {
-            let _ = self.link.call_on(&remote, CLOSE_FUNCTION, &[]);
+            if matches!(leaving, Leaving::Close) {
+                let _ = self.link.call_on(&remote, CLOSE_FUNCTION, &[]);
+            }
             self.link.release(remote);
         }
     }
 
     /// Ends every connection: the relay stops.
     fn end(&mut self) {
-        let ids = self.clients.keys().copied().collect::<Vec<u64>>();
-        for id in ids {
-            self.close(id);
+        let leaving = self
+            .clients
+            .iter()
+            .map(|(id, client)| (*id, client.leaving()))
+            .collect::<Vec<(u64, Leaving)>>();
+        for (id, leaving) in leaving {
+            self.leave(id, leaving);
         }
     }
 }
 
 impl Client {
+    /// How the client leaves when the relay lets go of it before it is done: closed in the
+    /// page, unless the page ended the connection itself.
+    fn leaving(&self) -> Leaving {
+        if self.ending {
+            Leaving::Ended
+        } else {
+            Leaving::Close
+        }
+    }
+
     /// Reads what the client sent, queueing its lines; `false` once it went or broke the
     /// protocol.
     fn read(&mut self) -> bool {
