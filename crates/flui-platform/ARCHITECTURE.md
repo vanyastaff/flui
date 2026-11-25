@@ -514,13 +514,13 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   reports had been read, and the ids of the debts and scheduled changes it listed; a failure
   recorded after it is new even when it equals one it returned.
 - **What a script holds has one owner.** `scripted::requests::Pending` keeps a script's
-  unanswered requests, its hold count and whether a drain runs; a request stays in it while its
+  pending requests, its hold count and whether a drain runs; a request stays in it while its
   answer is made. Every event goes through its one transition function, `Pending::apply`,
   which hands back what the script does next: a request arriving, being kept for the test,
   scheduled or answered; a hold taken, dropped or left with `leave_held`; a drain's next step;
   `verify`; a ticket; a release; a panicked answer; the clock. The script carries that out outside
   the borrow, one request at a time. The rules are stated once, in the "Held requests" section of
-  `Script`'s docs. Every transition is a row of `every_event_moves_the_unanswered_requests_as_the_rules_say`
+  `Script`'s docs. Every transition is a row of `every_event_moves_the_pending_requests_as_the_rules_say`
   (`src/capability/scripted/requests/tests.rs`). The rules the script carries out around them are
   pinned by the scenario tests of `crates/flui-testing/tests/scenario.rs`: what a release counts
   (`a_release_counts_only_the_requests_it_answered`,

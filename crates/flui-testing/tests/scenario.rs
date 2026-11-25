@@ -1717,14 +1717,7 @@ fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
                     }),
                     Answer::value(Ok(vec![9])),
                 );
-                camera
-                    .captures
-                    .expect(Expect::any(), Answer::value(Ok(vec![2])));
-                camera
-                    .captures
-                    .expect(Expect::any(), Answer::value(Ok(vec![8])));
                 unused.push("withdraws the first");
-                unused.push("any request");
             }
             Withdrawer::UsedStepCapture => {
                 // Its matcher returns with the request still asked for: the
@@ -1737,7 +1730,6 @@ fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
                     }),
                     Answer::value(Ok(vec![1])).after(Duration::from_millis(500)),
                 );
-                camera.captures.otherwise(|_| Ok(vec![2]));
             }
             Withdrawer::AbandonMatcher => {
                 let shared = Rc::clone(&ticket);
@@ -1751,10 +1743,35 @@ fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
                     }),
                     Answer::abandon(),
                 );
-                camera.captures.otherwise(|_| Ok(vec![2]));
                 unused.push("abandons the first");
             }
         }
+        // A later step and the standing answer that count how often they
+        // run for the withdrawn request: they must not run at all.
+        let later_calls = Rc::new(Cell::new(0_u32));
+        camera.captures.expect(
+            Expect::when("a later step", {
+                let later_calls = Rc::clone(&later_calls);
+                move |request: &CameraRequest| {
+                    if *request == (CameraRequest::Capture { width: 1 }) {
+                        later_calls.set(later_calls.get() + 1);
+                    }
+                    false
+                }
+            }),
+            Answer::value(Ok(vec![8])),
+        );
+        unused.push("a later step");
+        let standing_calls = Rc::new(Cell::new(0_u32));
+        camera.captures.otherwise({
+            let standing_calls = Rc::clone(&standing_calls);
+            move |request| {
+                if *request == (CameraRequest::Capture { width: 1 }) {
+                    standing_calls.set(standing_calls.get() + 1);
+                }
+                Ok(vec![2])
+            }
+        });
         assert_eq!(
             hold.release(),
             1,
@@ -1762,6 +1779,16 @@ fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
         );
         let _ = host.pump(Duration::from_millis(10));
         assert_eq!(camera.captures.withdrawn(), 1, "{withdrawer:?}");
+        assert_eq!(
+            later_calls.get(),
+            0,
+            "{withdrawer:?}: no step is tried after the one that ran"
+        );
+        assert_eq!(
+            standing_calls.get(),
+            0,
+            "{withdrawer:?}: the standing answer does not run"
+        );
         assert_eq!(
             taken(&withdrawn),
             Some(Err(Abandoned::ProviderDropped)),
