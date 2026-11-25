@@ -251,9 +251,10 @@ Its frame driver is `HeadlessHost`, which pumps a
   (the next turn's) and a parked future (something outside wakes it); a turn
   owed for a close or a quit; a window observation not yet delivered; a
   window's timed frame request at its instant, and the owed surface frame once
-  that instant has come; the scenario's next step. While a dropped frame's
-  retry is armed the host's next-turn causes wait for it too, as its loop
-  always has. `time_to_next_frame` is the list's wake, `pump_until_settled`
+  that instant has come; the scenario's next step. A window's observation
+  waits for that window's dropped-frame retry, and the application's causes
+  for none, by the runtime's one rule (`UiRuntime::list_for_next_turn`), which
+  its own half follows too. `time_to_next_frame` is the list's wake, `pump_until_settled`
   settles when it is empty, and a pump that ends while an agent's wait is
   parked (`UiRuntime::awaits_settled_answer`) gathers it once its own steps are
   done (after the owed frames are asked and the observations delivered) and
@@ -269,9 +270,14 @@ Its frame driver is `HeadlessHost`, which pumps a
   each at the list's wake, a re-armed next-turn cause a frame later, until the
   answer, `limit` of virtual time, nothing left to wake for, or
   `TURNS_AT_ONE_INSTANT` turns without the clock moving
-  (`run_until_answered_stops_at_its_limit_and_when_nothing_wakes`). Tests:
+  (`run_until_answered_stops_at_its_limit_and_when_nothing_wakes`,
+  `run_until_answered_counts_turns_at_one_instant_only`). What the agent asks
+  for itself (a held act's frames, a wait that counts frames) wakes the loop
+  and keeps nothing unsettled
+  (`an_act_the_agent_holds_asks_for_frames_as_a_wake_not_a_cause`). Tests:
   `tests/settledness.rs` (`the_host_settle_and_wait_settled_agree_on_every_cause`,
-  one row per cause).
+  its rows read through a match over every `UnsettledReason`, and every reason
+  a row's lists name has rows of its own).
 
 ## Mapping decisions
 

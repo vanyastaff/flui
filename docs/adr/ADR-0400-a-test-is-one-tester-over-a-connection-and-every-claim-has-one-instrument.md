@@ -289,8 +289,9 @@ pub enum WaitEnd { Satisfied, Unsatisfied, Idle } // how a wait ended: `WaitOutc
 // flui_runtime
 pub struct Unsettled { /* causes, and the exact `Instant` of the earliest wake */ }
 impl Unsettled {
-    /// The one wake rule every host calls: now for a `NextFrame` cause, the earliest deadline of
-    /// a `Deadline` cause, a parked wait or a held act; never for `Test` or `Outside`.
+    /// The one wake rule every host calls: now for a `NextFrame` cause or a frame the agent asks
+    /// for, the earliest deadline of a `Deadline` cause, a parked wait or a held act; never for
+    /// `Test` or `Outside`.
     pub fn wake(&self) -> Option<Instant>;
 }
 impl UiRuntime {
@@ -303,9 +304,10 @@ pub enum HostHalf<'a> { Complete(&'a Unsettled), Absent }
 ```
 
 The runtime's half derives each cause's `cleared_by` from its own state, so the combinations
-the host reads today are the runtime's: a redraw while a frame's retry is armed is a `Deadline`
-cause at the retry, and a redraw while the runtime's frames are off (no window seen) is not
-listed. Every host (the headless host, `AppRun`'s runner, each native runner) wakes at
+the host reads today are the runtime's: a cause of a window whose dropped frame's retry is armed
+is a `Deadline` cause at that retry (another window's retry holds nothing of it), and a redraw
+while the runtime's frames are off (no window seen), or of a window no frame serves (one not
+seen, one whose sink is full, one whose device was given up), is not listed. Every host (the headless host, `AppRun`'s runner, each native runner) wakes at
 `Unsettled::wake` and keeps no rule of its own; `HeadlessHost::pump_until_settled` and
 `time_to_next_frame` read it, and the runtime's `unsettled_causes` is deleted. A wake is an exact
 `Instant` owned by whoever armed it; `due_in_ms` is its rounded copy for the report.
@@ -324,7 +326,9 @@ never idle, and its answers carry `SettleScope::RuntimeOnly`: the runtime answer
 half wherever that host's outermost turn ends (an owner dispatch, a turn the host ran by itself, a
 frame's settlement outside any turn). `wait.settled` on a window counts that window's causes and
 the causes of the whole application: a redraw, a scheduled frame, tree work and pointer motion are
-causes of each window that has work for a frame, and of the whole application when none has.
+causes of each window whose work the next frame serves, and a scheduled frame no window's work
+asks for is the whole application's. What the agent asks for itself (a held act's frames, a wait
+that counts frames) is a wake, never a cause; input an act queued is the application's work.
 
 A settle that does not end fails with every cause named. The runtime answers `wait.settled`,
 `wait.frames`, `audit.a11y`, `perf.start` and `perf.stop`; the two captures stay with a host that

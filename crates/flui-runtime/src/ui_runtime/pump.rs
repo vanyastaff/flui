@@ -237,6 +237,11 @@ impl UiRuntime {
         paid.contain(|| {
             self.enter(UiRuntime::pay_owed_anchor);
         });
+        // The frames the development agent asked for are this one: what it still needs it asks
+        // again at this frame's boundary (`Self::request_agent_frame_for`).
+        for presentation in self.presentations.iter() {
+            presentation.agent_frame_asked.set(false);
+        }
         let sampled = clock.frame_time();
         let pending = self.pending_frame_request();
         let request = pending.map(|(request, _)| request);

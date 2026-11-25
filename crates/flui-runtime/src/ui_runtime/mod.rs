@@ -306,6 +306,10 @@ pub struct UiRuntime {
     /// ([`RuntimeHostServices::composes_host_half`]); fixed at construction, so no order of
     /// events answers a settled wait from the runtime's half on a host that composes one.
     composes_host_half: bool,
+    /// Which in-flight floors the host owes ([`RuntimeHostServices::with_floor_owed`]); every
+    /// floor without it. Read by the wake and by the runtime's half of what keeps the
+    /// application from being idle alike.
+    floor_owed: Option<std::rc::Rc<dyn Fn(flui_foundation::PresentationAddress) -> bool>>,
     /// The fan-out of the host's native journal, once the host attached one: the recordings of
     /// the `native` layer join it.
     native_lines: RefCell<Option<agent_record::NativeLines>>,

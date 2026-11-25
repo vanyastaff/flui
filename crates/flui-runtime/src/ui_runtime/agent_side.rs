@@ -105,6 +105,13 @@ pub(crate) trait AgentSide {
     /// answer reads settledness are answered from it (ADR-0400 §3).
     fn answer_settled(&self, ui_runtime: &UiRuntime, unsettled: &Unsettled, scope: SettleScope);
 
+    /// Whether a wait an agent parked is still unanswered, on any window.
+    fn awaits_settled_answer(&self, ui_runtime: &UiRuntime) -> bool;
+
+    /// A host that composes no half: the waits agents parked whose answer reads settledness are
+    /// answered from the runtime's half at `now` alone (`SettleScope::RuntimeOnly`).
+    fn answer_from_runtime_half(&self, ui_runtime: &UiRuntime, now: Instant);
+
     /// Platform input reached `presentation`: its agent's journal records it.
     fn journal_input(
         &self,
@@ -237,6 +244,17 @@ impl AgentSide for AgentOwnerSide {
 
     fn answer_settled(&self, ui_runtime: &UiRuntime, unsettled: &Unsettled, scope: SettleScope) {
         ui_runtime.answer_settled_agent_waits(unsettled, scope);
+    }
+
+    fn awaits_settled_answer(&self, ui_runtime: &UiRuntime) -> bool {
+        ui_runtime
+            .presentations
+            .iter()
+            .any(|presentation| !presentation.agent_waits.borrow().is_empty())
+    }
+
+    fn answer_from_runtime_half(&self, ui_runtime: &UiRuntime, now: Instant) {
+        ui_runtime.answer_settled_agent_waits_from_own_half(now);
     }
 
     fn journal_input(

@@ -31,6 +31,8 @@ pub struct Unsettled {
     causes: Vec<Listed>,
     /// Whether a cause the next turn serves is listed.
     next_frame: bool,
+    /// Whether a frame that keeps nothing from being idle is asked for at once.
+    wake_at_once: bool,
     /// The earliest deadline, of a cause or a wake alone.
     next_deadline: Option<Instant>,
 }
@@ -50,6 +52,7 @@ impl Unsettled {
             at,
             causes: Vec::new(),
             next_frame: false,
+            wake_at_once: false,
             next_deadline: None,
         }
     }
@@ -95,13 +98,20 @@ impl Unsettled {
         self.next_deadline = Some(self.next_deadline.map_or(due, |known| known.min(due)));
     }
 
+    /// A frame the loop runs at once that keeps nothing from being idle: one the development
+    /// agent asks for itself (a held act's next boundary, a wait that counts frames). It wakes
+    /// the loop as a cause the next turn serves does, and is no cause.
+    pub fn wake_at_once(&mut self) {
+        self.wake_at_once = true;
+    }
+
     /// When the host's loop wakes: the gather instant while a cause the next turn serves is
-    /// listed, otherwise the earliest deadline, of a cause or a wake alone. Never for a cause
-    /// only the test or something outside discharges; `None` when nothing but those, or nothing
-    /// at all, is listed.
+    /// listed or a frame is asked for at once, otherwise the earliest deadline, of a cause or a
+    /// wake alone. Never for a cause only the test or something outside discharges; `None` when
+    /// nothing but those, or nothing at all, is listed.
     #[must_use]
     pub fn wake(&self) -> Option<Instant> {
-        if self.next_frame {
+        if self.next_frame || self.wake_at_once {
             Some(self.at)
         } else {
             self.next_deadline
@@ -199,6 +209,19 @@ mod tests {
             held.wake(),
             Some(sooner),
             "the earliest deadline, a wake alone included"
+        );
+
+        let mut asked = held.clone();
+        asked.wake_at_once();
+        assert_eq!(
+            asked.wake(),
+            Some(at),
+            "a frame asked for at once wakes at once"
+        );
+        assert_eq!(
+            asked.causes().count(),
+            held.causes().count(),
+            "and is no cause"
         );
 
         held.next_frame(UnsettledReason::NeedsRedraw, None);

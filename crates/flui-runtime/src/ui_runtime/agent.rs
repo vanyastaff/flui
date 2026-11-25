@@ -1186,7 +1186,7 @@ impl UiRuntime {
         if let Some(oldest) = displaced {
             after.contain(|| oldest.abandon());
         }
-        after.contain(|| self.request_redraw_for(state));
+        after.contain(|| self.request_agent_frame_for(state));
     }
 
     /// Takes the readings the presentation owes, now that a frame has passed

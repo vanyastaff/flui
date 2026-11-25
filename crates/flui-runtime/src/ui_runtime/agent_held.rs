@@ -191,7 +191,7 @@ impl UiRuntime {
             return;
         }
         if_panics.set(AgentError::Panicked);
-        self.request_redraw_for(state);
+        self.request_agent_frame_for(state);
         let mut ctx = AttemptContext {
             runtime: self,
             state,
@@ -266,7 +266,7 @@ impl UiRuntime {
                 !held.acts.is_empty()
             };
             if holding {
-                first.contain(|| self.request_redraw_for(state));
+                first.contain(|| self.request_agent_frame_for(state));
             }
         }
         first.resume();

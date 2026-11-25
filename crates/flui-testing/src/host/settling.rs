@@ -58,26 +58,27 @@ impl HeadlessHost {
     ///   (`SurfaceFrame`);
     /// - the scenario's next change (`ScenarioStep`), at its instant.
     ///
-    /// While a dropped frame's retry is armed and not yet due the runtime runs
-    /// no frame sooner, and the host's own next-turn causes (background work,
-    /// a turn owed, an observation) wait for it too, listed at the retry; the
-    /// due frame request and the scenario's step are served at their own
-    /// instants.
+    /// The host's own next-turn causes follow the runtime's rule for a dropped
+    /// frame's retry ([`UiRuntime::list_for_next_turn`]): a window's
+    /// observation waits for its own presentation's retry, listed at it, and
+    /// the application's (background work, a turn owed) for none; the due frame
+    /// request and the scenario's step are served at their own instants.
     fn gather_unsettled(&self) -> Unsettled {
         use flui_protocol::wait::UnsettledReason;
 
         let now = flui_foundation::MonotonicClock::now(&self.clock);
         let mut unsettled = Unsettled::new(now);
-        let held_until = self.ui_runtime.as_ref().and_then(|runtime| {
+        let runtime = self.ui_runtime.as_ref();
+        if let Some(runtime) = runtime {
             runtime.unsettled(now, &mut unsettled);
-            runtime
-                .failure_retry_deadline()
-                .filter(|retry| *retry > now)
-        });
+        }
+        // The runtime's rule for what a dropped frame's retry holds, for a cause of a window's
+        // presentation or of the whole application: the one rule both halves follow.
         let next_turn =
-            |unsettled: &mut Unsettled, reason, window: Option<WindowId>| match held_until {
-                Some(retry) => unsettled.deadline(reason, window, retry),
-                None => unsettled.next_frame(reason, window),
+            |unsettled: &mut Unsettled, reason, presentation: Option<PresentationId>| match runtime
+            {
+                Some(runtime) => runtime.list_for_next_turn(unsettled, reason, presentation),
+                None => unsettled.next_frame(reason, presentation.map(wire_window)),
             };
 
         let background = &self.scripted.background;
@@ -102,7 +103,11 @@ impl HeadlessHost {
         for open in &self.open {
             let window = Some(wire_window(open.id));
             if open.window.chrome.borrow().unobserved {
-                next_turn(&mut unsettled, UnsettledReason::WindowObservation, window);
+                next_turn(
+                    &mut unsettled,
+                    UnsettledReason::WindowObservation,
+                    Some(open.id),
+                );
             }
             if let Some(at) = open.window.pending_timed_frame() {
                 let at = epoch

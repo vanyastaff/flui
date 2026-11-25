@@ -1083,13 +1083,9 @@ impl AppRuntime {
     #[must_use]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
         // A floor whose window the raster thread has settled and asked for
-        // its frame is that window's to serve (`RasterHost::floor_owed`).
-        // While the host is turning the floor stands: that turn answers it.
-        let floor_owed = |address| {
-            self.raster_host
-                .try_read(|host| host.floor_owed(address))
-                .unwrap_or(true)
-        };
+        // its frame is that window's to serve: the rule each runtime's half of
+        // what keeps the application from being idle reads too.
+        let floor_owed = |address| self.raster_host.floor_owed(address);
         let runtime = self
             .installed_host
             .logical()

@@ -90,16 +90,28 @@ fn mounted_runtime_waking(
     composes: bool,
     wake: Arc<dyn Fn() + Send + Sync>,
 ) -> (UiRuntime, Held, AgentWindow) {
+    mounted_runtime_built(clock, wake, move |services| {
+        if composes {
+            services.composes_host_half()
+        } else {
+            services
+        }
+    })
+}
+
+/// [`mounted_runtime`] whose host wake is `wake` and whose services `configure` finishes.
+fn mounted_runtime_built(
+    clock: &ManualClock,
+    wake: Arc<dyn Fn() + Send + Sync>,
+    configure: impl for<'a> FnOnce(RuntimeHostServices<'a>) -> RuntimeHostServices<'a>,
+) -> (UiRuntime, Held, AgentWindow) {
     let fonts = flui_painting::FontCollection::new();
-    let mut services = RuntimeHostServices::new(
+    let services = configure(RuntimeHostServices::new(
         wake,
         Arc::new(AtomicBool::new(false)),
         &fonts,
         flui_scheduler::ClockSource::Manual(clock.clone()),
-    );
-    if composes {
-        services = services.composes_host_half();
-    }
+    ));
     // The headless host's window answers what a runtime asks of its window (its gesture
     // geometry among it), so a still root leaves nothing armed.
     let platform_window: Rc<dyn PlatformWindow> = Rc::new(HeadlessWindow::new(40, 40));
@@ -584,6 +596,39 @@ fn a_presentation_whose_sink_is_full_is_named_for_no_frame() {
         )),
         "the in-flight floor, of its window: {named:?}"
     );
+}
+
+/// The in-flight floor of a window counts only where its host owes it, in the runtime's half as
+/// in its wake: one rule (`RuntimeHostServices::with_floor_owed`) decides both, so a host whose
+/// raster side settled the window's frames hears no `Timer` for a floor nothing wakes for.
+///
+/// Fails against a half that lists every floor whatever the host owes (the floor of a window it
+/// does not owe is listed), or a wake that reads a rule of its own (the two disagree).
+#[test]
+fn a_floor_the_host_does_not_owe_is_neither_listed_nor_woken_for() {
+    for owed in [true, false] {
+        let clock = ManualClock::new();
+        let (mut runtime, _held, window) =
+            mounted_runtime_built(&clock, Arc::new(|| {}), move |services| {
+                services.composes_host_half().with_floor_owed(move |_| owed)
+            });
+        let mut sink = Queueing::default();
+        clock.advance(Duration::from_millis(16));
+        let _ = runtime.pump(&mut SampledClock(clock.now()), &mut sink);
+        assert_eq!(sink.0.len(), 1, "the frame is in flight");
+
+        let mut half = Unsettled::new(clock.now());
+        runtime.unsettled(clock.now(), &mut half);
+        let floor_listed = half.causes().any(|cause| {
+            cause.reason == UnsettledReason::Timer && cause.window == Some(window.id())
+        });
+        assert_eq!(floor_listed, owed, "owed {owed}: {half:?}");
+        assert_eq!(
+            runtime.next_wake(),
+            half.next_deadline(),
+            "owed {owed}: the wake reads the rule the half reads"
+        );
+    }
 }
 
 /// A presentation whose device rebuild was given up is named for no frame: a redraw asked of it

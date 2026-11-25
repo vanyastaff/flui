@@ -165,6 +165,35 @@ impl UiRuntime {
         self.sender_prototype.wake_owner();
     }
 
+    /// A frame the development agent asks of `presentation` for itself: a held act's next
+    /// boundary, a wait that counts frames, a reading an action owes. It drives a frame as
+    /// [`Self::request_redraw_for`] does (the redraw flag a runner's frame gate reads, and the
+    /// platform's wake), but marks no work of the presentation's: a frame boundary is all the
+    /// agent needs, and the list of what keeps the application from being idle carries the
+    /// demand as a wake, never a cause ([`Self::unsettled`], ADR-0400 §3). Input an act queued
+    /// is the application's work, asked for with [`Self::request_redraw_for`].
+    ///
+    /// The mark lasts until the next pump begins; an act still held, or a wait still counting,
+    /// asks again at that frame's boundary.
+    pub(super) fn request_agent_frame_for(&self, presentation: &PresentationState) {
+        presentation.agent_frame_asked.set(true);
+        // A presentation that cannot be seen asks for no frame, as a redraw does not.
+        if !presentation.clock().is_hidden() {
+            self.needs_redraw.store(true, Ordering::Relaxed);
+        }
+        // The platform hook may unwind: the mark above is durable, and the next ingress or
+        // drain boundary retries the unacknowledged wake (`Self::request_redraw_for`).
+        self.sender_prototype.wake_owner();
+    }
+
+    /// Whether the development agent asked for a frame of a presentation that can be seen,
+    /// since the last pump began ([`Self::request_agent_frame_for`]).
+    pub(super) fn agent_frame_asked(&self) -> bool {
+        self.presentations.iter().any(|presentation| {
+            presentation.agent_frame_asked.get() && !presentation.clock().is_hidden()
+        })
+    }
+
     /// [`Self::request_redraw_for`]'s pipeline-dirtying counterpart,
     /// addressed to exactly `presentation` rather than always the primary.
     /// Forces `presentation` to repaint on its next pump segment even
@@ -726,16 +755,30 @@ impl UiRuntime {
     /// A wait an agent parked (`wait.until`) counts through its deadline, so a window
     /// that draws nothing still times it out.
     /// So does an act an agent holds (a gesture waiting for its target).
+    ///
+    /// A presentation's in-flight floor counts only where the host owes it
+    /// ([`RuntimeHostServices::with_floor_owed`](super::RuntimeHostServices::with_floor_owed)),
+    /// the rule the runtime's half of what keeps the application from being idle reads too.
     #[must_use]
     pub fn next_wake(&self) -> Option<web_time::Instant> {
-        self.next_wake_owing_floors(&|_| true)
+        self.next_wake_owing_floors(&|address| self.owes_floor(address))
+    }
+
+    /// Whether the host owes the in-flight floor of the presentation at `address`: what it said
+    /// at construction ([`RuntimeHostServices::with_floor_owed`](super::RuntimeHostServices::with_floor_owed)),
+    /// every floor where it said nothing.
+    pub(super) fn owes_floor(&self, address: PresentationAddress) -> bool {
+        self.floor_owed
+            .as_ref()
+            .is_none_or(|floor_owed| floor_owed(address))
     }
 
     /// [`Self::next_wake`] with the in-flight floor of a presentation only where `floor_owed`
-    /// holds for its address (ADR-0305 §5). The floor guards a settlement whose wake may be
-    /// lost; a host whose raster side has settled every frame it holds of a window, and asked
-    /// that window for the frame that drains them, owes the window that frame instead, which
-    /// the window's own host delivers once it can take one. Every other deadline counts.
+    /// holds for its address, in place of the host's own rule (ADR-0305 §5). The floor guards a
+    /// settlement whose wake may be lost; a host whose raster side has settled every frame it
+    /// holds of a window, and asked that window for the frame that drains them, owes the window
+    /// that frame instead, which the window's own host delivers once it can take one. Every
+    /// other deadline counts.
     #[doc(hidden)]
     #[must_use]
     pub fn next_wake_owing_floors(
@@ -765,10 +808,10 @@ impl UiRuntime {
 
     /// Every deadline the runtime wakes for, each with the presentation it belongs to (`None`
     /// for the runtime's own), the in-flight floor of a presentation only where `floor_owed`
-    /// holds for its address. The one enumeration of them: [`Self::next_wake_owing_floors`] and
-    /// the runtime's half of what keeps it from being idle ([`Self::unsettled`]) both read it,
-    /// so the two cannot disagree. The agent's deadlines ([`Self::next_agent_deadline`]) are not
-    /// here.
+    /// holds for its address. The one enumeration of them: [`Self::next_wake`] and the runtime's
+    /// half of what keeps it from being idle ([`Self::unsettled`]) both read it with the host's
+    /// rule for floors ([`Self::owes_floor`]), so the two cannot disagree. The agent's deadlines
+    /// ([`Self::next_agent_deadline`]) are not here.
     pub(super) fn visit_armed_deadlines(
         &self,
         floor_owed: &dyn Fn(PresentationAddress) -> bool,
@@ -792,14 +835,7 @@ impl UiRuntime {
                 // The frame an unseen window owes its surface is not here: the
                 // presentation asks its own window for it (`owed_frame_requests`,
                 // ADR-0389).
-                // A presentation at its in-flight limit attempts no frame when its backoff
-                // ends; the settlement that frees a place wakes it, and the in-flight floor
-                // bounds the sleep until then (ADR-0305 §5). An unseen one retries once it
-                // is seen, which wakes it.
-                presentation.failure_retry_at().filter(|_| {
-                    !presentation.frames_in_flight().is_saturated()
-                        && !presentation.clock().is_hidden()
-                }),
+                presentation.retry_served_at(),
                 presentation.in_flight_floor().filter(|_| {
                     floor_owed(PresentationAddress {
                         ui_runtime_id,

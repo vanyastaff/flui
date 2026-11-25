@@ -347,7 +347,48 @@ struct Row {
     state: fn() -> Served,
 }
 
+/// Every row, one reason after another, read through [`rows_of`] for each reason the protocol
+/// names: a reason added to the vocabulary fails the table until it has a row or its arm says
+/// why it has none.
 fn rows() -> Vec<Row> {
+    UnsettledReason::ALL
+        .iter()
+        .flat_map(|&reason| rows_of(reason))
+        .collect()
+}
+
+/// The rows of `reason`, one for each way a host lists it.
+fn rows_of(reason: UnsettledReason) -> Vec<Row> {
+    use UnsettledReason as R;
+    let of_reason = || -> Vec<Row> {
+        let rows: Vec<Row> = written_rows()
+            .into_iter()
+            .filter(|row| row.reason == reason)
+            .collect();
+        assert!(!rows.is_empty(), "{reason:?} has an arm but no row");
+        rows
+    };
+    match reason {
+        R::NeedsRedraw
+        | R::FrameScheduled
+        | R::PendingWork
+        | R::Timer
+        | R::Ticker
+        | R::Background
+        | R::OwedTurn
+        | R::WindowObservation
+        | R::FrameRequest
+        | R::ScenarioStep
+        | R::SurfaceFrame => of_reason(),
+        // No host tracks the replies its platform owes yet, so none lists one (docs/gaps.md,
+        // ADR-0400 §3).
+        R::PlatformReply => Vec::new(),
+        other => panic!("{other:?} has no row: write the state that lists it"),
+    }
+}
+
+/// The rows as written, each with its reason.
+fn written_rows() -> Vec<Row> {
     vec![
         Row {
             reason: UnsettledReason::NeedsRedraw,
@@ -557,25 +598,42 @@ fn covered_with_a_change() -> Served {
 /// satisfied exactly when the settle then ends at once, and where the cause outlives that turn it
 /// names it, with its `cleared_by`, as the list does.
 ///
+/// Every reason a row's state lists, beside the one the row is for, has rows of its own.
+///
 /// Fails against a host whose settle keeps a predicate of its own beside the list, or a runtime
-/// that answers `wait.settled` from its half alone: a host cause is missing from the answer.
+/// that answers `wait.settled` from its half alone (a host cause is missing from the answer), and
+/// against a table that has no row for a reason the protocol names or a host lists.
 #[test]
 fn the_host_settle_and_wait_settled_agree_on_every_cause() {
+    let rows = rows();
+    let seen = RefCell::new(Vec::new());
     let mut failed = Vec::new();
-    for row in rows() {
+    for row in &rows {
         let label = format!("{:?}/{:?}", row.reason, row.cleared_by);
-        if std::panic::catch_unwind(|| check(&row)).is_err() {
+        if std::panic::catch_unwind(AssertUnwindSafe(|| check(row, &seen))).is_err() {
             failed.push(label);
         }
     }
     assert!(failed.is_empty(), "failing rows: {failed:?}");
+    let without_a_row: Vec<UnsettledReason> = seen
+        .into_inner()
+        .into_iter()
+        .filter(|reason| !rows.iter().any(|row| row.reason == *reason))
+        .collect();
+    assert!(
+        without_a_row.is_empty(),
+        "listed with no row of their own: {without_a_row:?}"
+    );
 }
 
-fn check(row: &Row) {
+/// Runs `row`, noting in `seen` every reason its lists name.
+fn check(row: &Row, seen: &RefCell<Vec<UnsettledReason>>) {
     let mut served = (row.state)();
     let label = format!("{:?}/{:?}", row.reason, row.cleared_by);
     let listed = served.host.unsettled();
     let listed_causes: Vec<UnsettledCause> = listed.causes().cloned().collect();
+    seen.borrow_mut()
+        .extend(listed_causes.iter().map(|cause| cause.reason));
     assert!(
         named(&listed_causes).contains(&(row.reason, row.cleared_by)),
         "{label}: the list names it: {listed_causes:?}"
@@ -592,6 +650,8 @@ fn check(row: &Row) {
         .expect("answered after the turn that served it")
         .expect("a wait is an answer");
     assert_eq!(outcome.scope, SettleScope::Complete, "{label}");
+    seen.borrow_mut()
+        .extend(outcome.unsettled.iter().map(|cause| cause.reason));
     let settles = served.host.pump_until_settled(FRAME, 0);
     assert_eq!(
         outcome.end == WaitEnd::Satisfied,
@@ -759,16 +819,14 @@ fn a_redraw_while_a_retry_is_armed_wakes_at_the_retry() {
 
     let cleared_by = |host: &HeadlessHost, reason| {
         let listed = host.unsettled();
-        listed
-            .causes()
-            .find(|cause| cause.reason == reason)
-            .map(|cause| cause.cleared_by)
-            .unwrap_or_else(|| {
-                panic!(
-                    "{reason:?} is listed: {:?}",
-                    listed.causes().collect::<Vec<_>>()
-                )
-            })
+        let found = listed.causes().find(|cause| cause.reason == reason);
+        let Some(cause) = found else {
+            panic!(
+                "{reason:?} is listed: {:?}",
+                listed.causes().collect::<Vec<_>>()
+            )
+        };
+        cause.cleared_by
     };
     for reason in [
         UnsettledReason::NeedsRedraw,
@@ -1168,6 +1226,7 @@ fn a_frame_s_demand_names_the_window_whose_work_it_is() {
             },
         },
     ];
+    let mut wrong = Vec::new();
     for row in rows {
         let (served, [still_id, other_id]) = (row.state)();
         let unsettled = served.host.unsettled();
@@ -1176,26 +1235,18 @@ fn a_frame_s_demand_names_the_window_whose_work_it_is() {
             Named::Other => Some(other_id),
             Named::Application => None,
         };
-        assert!(
-            named.contains(&expected),
-            "{}: {:?} names {:?}: {named:?}",
-            row.name,
-            row.reason,
-            row.named
-        );
-        assert!(
-            !named.contains(&Some(still_id)),
-            "{}: the still window is not named: {named:?}",
-            row.name
-        );
-        if row.named == Named::Other {
-            assert!(
-                !named.contains(&None),
-                "{}: not the whole application's: {named:?}",
-                row.name
-            );
+        let right = named.contains(&expected)
+            && !named.contains(&Some(still_id))
+            && (row.named == Named::Application || !named.contains(&None));
+        if !right {
+            wrong.push(format!(
+                "{}: {:?} should name {:?} alone, names {named:?} (still {still_id:?}, other \
+                 {other_id:?})",
+                row.name, row.reason, row.named
+            ));
         }
     }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 /// **`run_until_answered` stops unanswered at its limit of virtual time, and when nothing is
@@ -1360,7 +1411,18 @@ fn a_parked_wait_and_a_held_act_wake_the_loop_at_the_sooner_deadline() {
             .window()
             .input_lease()
             .expect("an open window leases its input");
-        let _wait = served.wait_until(missing(), row.wait_ms);
+        // A wait for more frames than run before its deadline: it holds out to that deadline,
+        // and is never idle.
+        let window = served.window();
+        let params: flui_protocol::wait::FramesParams = serde_json::from_value(serde_json::json!({
+            "window": window.id(),
+            "frames": 1_000_000,
+            "timeout_ms": row.wait_ms,
+        }))
+        .expect("the parameters a client writes");
+        let _wait = window
+            .call::<flui_protocol::method::WaitFrames>(params)
+            .expect("the inbox has room");
         let mut tap = TapParams::new(Target::Locator(Locator::named("Missing")));
         tap.options.timeout_ms = Some(row.act_ms);
         let _act = lease.call::<ElementTap>(tap).expect("the inbox has room");
@@ -1410,7 +1472,8 @@ fn run_until_answered_counts_turns_at_one_instant_only() {
 }
 
 /// **A drag resting over a spring-loaded target lists the spring's deadline.** The runtime wakes
-/// for it, so its half names it: a `Timer` of the whole application, due at the spring's delay.
+/// for it, so its half names it: a `Timer` of the whole application, due at the spring's delay
+/// from the frame the drag entered the target on.
 ///
 /// Fails against a list that leaves the drag's deadline out: the host's loop would sleep past
 /// the spring.
@@ -1472,8 +1535,144 @@ fn a_drag_over_a_spring_loaded_target_lists_the_spring_s_deadline() {
             .causes()
             .any(|cause| cause.reason == UnsettledReason::Timer
                 && cause.window.is_none()
-                && cause.due_in_ms.is_some_and(|due| due > 0 && due <= 300)),
+                && cause.due_in_ms == Some(300)),
         "the spring's deadline: {:?}",
         listed.causes().collect::<Vec<_>>()
     );
+}
+
+/// **An act the agent holds drives frames and keeps nothing from being idle.** A tap held on a
+/// target that stays disabled asks for a frame at every boundary as a wake of the list, never a
+/// cause: a parked `wait.settled` is satisfied and a false `wait.until` ends idle at the turn
+/// that parked them, the host settles while the act is held, and the act's frames still wake its
+/// loop until the act's deadline answers it.
+///
+/// Fails against an agent that asks for its frames as the application's redraw: the list names
+/// that redraw, the settled wait holds out, the false one cannot end idle and the host never
+/// settles while the act is held.
+#[test]
+fn an_act_the_agent_holds_asks_for_frames_as_a_wake_not_a_cause() {
+    use flui_protocol::input::TapParams;
+    use flui_protocol::locator::Target;
+    use flui_protocol::method::ElementTap;
+    use flui_widgets::{RawButton, Text};
+
+    let mut served = Served::mounted(
+        HeadlessWindow::new(200, 100),
+        &RawButton::new(Text::new("Gated")),
+    );
+    let lease = served
+        .window()
+        .input_lease()
+        .expect("an open window leases its input");
+    served
+        .host
+        .pump_until_settled(FRAME, 8)
+        .expect("a disabled button settles");
+    let mut tap = TapParams::new(Target::Locator(Locator::named("Gated")));
+    tap.options.timeout_ms = Some(2_000);
+    let mut act = lease.call::<ElementTap>(tap).expect("the inbox has room");
+    let mut settled = served.wait_settled(1_000);
+    let mut false_wait = served.wait_until(missing(), 1_000);
+    let _ = served.host.pump(Duration::ZERO);
+
+    let outcome = settled
+        .try_take()
+        .expect("the turn that parked it answered the settled wait")
+        .expect("a wait is an answer");
+    assert_eq!(outcome.end, WaitEnd::Satisfied, "{outcome:?}");
+    let outcome = false_wait
+        .try_take()
+        .expect("the turn that parked it answered the false wait")
+        .expect("a wait is an answer");
+    assert_eq!(outcome.end, WaitEnd::Idle, "{outcome:?}");
+    assert!(act.try_take().is_none(), "the act still holds");
+    assert_eq!(
+        served.host.pump_until_settled(FRAME, 0),
+        Ok(0),
+        "the host settles while the act is held: {:?}",
+        served.host.unsettled().causes().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        served.host.time_to_next_frame(),
+        Some(Duration::ZERO),
+        "the act's frames still wake the loop"
+    );
+
+    let refused = served
+        .host
+        .run_until_answered(&mut act, FRAME, Duration::from_secs(3))
+        .expect("the act's deadline answered it");
+    assert!(
+        refused.is_err(),
+        "a target that stays disabled is refused: {refused:?}"
+    );
+}
+
+/// **A dropped frame's retry holds only its own window's causes.** One window's frame failed and
+/// waits out its retry while a second window animates: the animating window's ticker and its
+/// observation are the next turn's and the loop wakes at once, while the retrying window's
+/// redraw is listed at its retry.
+///
+/// Fails against a list that reads one runtime-wide retry: the animating window's causes are
+/// listed at the other window's retry, and the loop sleeps across its animation.
+#[test]
+fn a_retry_holds_only_its_own_window_s_causes() {
+    let number = SharedSignal::new(10);
+    let spinning = SharedSignal::new(false);
+    let (mut served, animating, [retrying_id, animating_id]) = two_windows(
+        &Shown {
+            number: number.clone(),
+        },
+        &Spinning {
+            on: spinning.clone(),
+        },
+    );
+    served
+        .host
+        .pump_until_settled(FRAME, 8)
+        .expect("both windows settle");
+    // The retrying window's change fails its frame, which arms its retry a refresh period on.
+    served.host.leave_unshown(1, UnshownFrame::Failed);
+    number.set(12);
+    let _ = catch_unwind(AssertUnwindSafe(|| served.host.pump(Duration::ZERO)));
+    spinning.set(true);
+    let _ = served.host.pump(Duration::ZERO);
+    served
+        .host
+        .window_of(animating)
+        .admit_and_apply(WindowCommand::SetFrame(WindowFrame::None))
+        .expect("the headless window takes every frame");
+    served.host.request_frame();
+
+    let listed = served.host.unsettled();
+    let cleared_by = |reason, window| {
+        listed
+            .causes()
+            .filter(|cause| cause.reason == reason && cause.window == Some(window))
+            .map(|cause| cause.cleared_by)
+            .collect::<Vec<_>>()
+    };
+    let causes = listed.causes().collect::<Vec<_>>();
+    assert_eq!(
+        cleared_by(UnsettledReason::Ticker, animating_id),
+        [ClearedBy::NextFrame],
+        "the animation runs at the next turn: {causes:?}"
+    );
+    assert_eq!(
+        cleared_by(UnsettledReason::WindowObservation, animating_id),
+        [ClearedBy::NextFrame],
+        "the animating window's observation too: {causes:?}"
+    );
+    assert_eq!(
+        cleared_by(UnsettledReason::NeedsRedraw, retrying_id),
+        [ClearedBy::Deadline],
+        "the retrying window's redraw waits for its retry: {causes:?}"
+    );
+    assert_eq!(
+        served.host.time_to_next_frame(),
+        Some(Duration::ZERO),
+        "the loop wakes for the animation, not at the retry"
+    );
+    served.kept.push(Box::new((number, spinning)));
 }

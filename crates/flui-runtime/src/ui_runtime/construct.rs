@@ -137,6 +137,7 @@ impl UiRuntime {
             process_nonce,
             close,
             composes_host_half,
+            floor_owed,
         } = services;
 
         // The ui_runtime's scheduler fires the SAME platform wake its presentation
@@ -245,6 +246,7 @@ impl UiRuntime {
             agent_recordings: super::agent_record::AgentRecordings::default(),
             agent_side: Cell::new(None),
             composes_host_half,
+            floor_owed,
             native_lines: RefCell::new(None),
             wake,
             capabilities,

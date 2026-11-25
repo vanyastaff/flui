@@ -138,7 +138,7 @@ impl UiRuntime {
         let keeps_frames_coming = counts_frames(&pending.condition);
         state.agent_waits.borrow_mut().push(pending);
         if keeps_frames_coming {
-            self.request_redraw_for(state);
+            self.request_agent_frame_for(state);
         }
     }
 
@@ -209,7 +209,7 @@ impl UiRuntime {
             let keeps_frames_coming = parked.iter().any(|wait| counts_frames(&wait.condition));
             drop(parked);
             if keeps_frames_coming {
-                self.request_redraw_for(state);
+                self.request_agent_frame_for(state);
             }
         }
         if let Some(payload) = first_panic.into_payload() {
@@ -285,7 +285,9 @@ impl UiRuntime {
                     WaitEnd::Unsatisfied,
                     unsettled.due_by(now).filter(in_window).cloned().collect(),
                 )
-            } else if idle {
+            // A wait that counts frames is changed by the frames the agent asks for it, which
+            // keep nothing else unsettled: it is never idle.
+            } else if idle && !counts_frames(&wait.condition) {
                 (
                     WaitEnd::Idle,
                     unsettled.causes().filter(in_window).cloned().collect(),

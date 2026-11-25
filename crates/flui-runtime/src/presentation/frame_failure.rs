@@ -109,6 +109,17 @@ impl PresentationState {
             && self.has_frame_work()
     }
 
+    /// The instant a turn retries this presentation's dropped frame, if one waits and a turn
+    /// at it serves it: none while its sink holds as many frames as it may (the settlement that
+    /// frees a place wakes it, and the in-flight floor bounds the sleep until then, ADR-0305 §5)
+    /// or while it cannot be seen (it retries once seen, which wakes it). The deadline the
+    /// runtime wakes for, and the instant its own next-turn causes, and its host's for its
+    /// window, are served at while it is ahead (`UiRuntime::list_for_next_turn`).
+    pub(crate) fn retry_served_at(&self) -> Option<Instant> {
+        self.failure_retry_at()
+            .filter(|_| !self.frames_in_flight().is_saturated() && !self.clock().is_hidden())
+    }
+
     /// While this presentation has frames pending, the latest the owner sleeps until: the next
     /// multiple of [`IN_FLIGHT_FLOOR`](crate::ui_runtime::IN_FLIGHT_FLOOR) since the oldest
     /// pending frame was handed to its sink, so a lost settlement wake costs at most that interval, and a

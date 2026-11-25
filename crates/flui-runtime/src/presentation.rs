@@ -650,6 +650,12 @@ pub struct PresentationState {
     /// (`Self::has_pending_work`) — see `UiRuntime::draw_frame_entered`'s
     /// per-presentation loop.
     redraw_pending: Cell<bool>,
+    /// Whether the development agent asked for a frame of this presentation since the last
+    /// pump began: a held act's next boundary, a wait that counts frames, a reading an action
+    /// owes. It drives a frame as a redraw does but is no work of the application's, so the
+    /// list of what keeps the application from being idle carries it as a wake alone
+    /// (`UiRuntime::request_agent_frame_for`, ADR-0400 §3).
+    pub(crate) agent_frame_asked: Cell<bool>,
     /// How many times [`Self::redraw_pending`] was marked, so the frame tail
     /// can tell a mark raised during the frame from one left by an earlier pump.
     redraw_requests: Cell<u64>,

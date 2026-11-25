@@ -129,8 +129,11 @@ fn an_action_that_dirtied_nothing_still_reads_back_after_a_frame() {
         .expect("the ui_runtime hosts its primary presentation");
     let element = flui_semantics::element_id_of(render_id);
 
-    let presentation = ui_runtime.presentation_id();
-    let _ = ui_runtime.take_redraw_pending_for_test(presentation);
+    ui_runtime
+        .presentations
+        .primary()
+        .agent_frame_asked
+        .set(false);
     let mut reply = window
         .call::<method::SemanticsAct>(
             act_params(&window, element, ActionName::Invoke).snapshot(Snapshot::Delta),
@@ -138,9 +141,9 @@ fn an_action_that_dirtied_nothing_still_reads_back_after_a_frame() {
         .expect("the inbox has room");
     let _report = ui_runtime.drain_commands();
     assert!(reply.try_take().is_none());
-    assert_eq!(
-        ui_runtime.take_redraw_pending_for_test(presentation),
-        Some(true),
+    // The agent's own frame, no work of the application's (ADR-0400 §3).
+    assert!(
+        ui_runtime.presentations.primary().agent_frame_asked.get(),
         "an action that dirtied nothing still asks for the frame its reading waits on"
     );
     let mut sink = ScriptedSink::always_presents();
