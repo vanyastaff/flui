@@ -141,7 +141,10 @@ fn a_rule_the_agent_cannot_run_makes_the_audit_cannot_verify() {
     );
     let listed: Vec<AuditRule> = report.not_checked.iter().map(|entry| entry.rule).collect();
     assert_eq!(listed, vec![AuditRule::FocusOrder], "{report:#?}");
-    assert_ne!(report.not_checked[0].reason, "", "the reason is given");
+    assert_eq!(
+        report.not_checked[0].reason, "this app's agent does not run this rule",
+        "the reason is given"
+    );
 
     let every = audit(&ui_runtime, &window, &[]);
     assert_eq!(
@@ -189,6 +192,19 @@ fn an_audit_before_the_first_frame_checks_nothing_and_says_so() {
     assert_eq!(
         listed,
         vec![AuditRule::Unnamed, AuditRule::TextContrast],
+        "{report:#?}"
+    );
+    let reasons: Vec<&str> = report
+        .not_checked
+        .iter()
+        .map(|entry| entry.reason.as_str())
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            "no semantics tree has been committed yet",
+            "the window has not painted a frame yet"
+        ],
         "{report:#?}"
     );
 }

@@ -436,3 +436,102 @@ fn the_plus_key_and_the_space_key_read_as_keys() {
         assert_eq!(actions, &wanted, "{chord:?}");
     }
 }
+
+/// A swipe naming no distance goes most of the way from its point to the edge of what it aims at,
+/// whichever way it goes, and at least the least stroke; a stroke over in under a millisecond
+/// lasts one.
+#[test]
+fn a_swipe_takes_its_room_in_each_direction() {
+    let defaults = Defaults::WINDOWLESS;
+    let rows = [
+        (
+            "left",
+            Aim::new(
+                at(50.0, 40.0),
+                Some(LogicalRect::new(0.0, 20.0, 100.0, 40.0)),
+            ),
+            Direction::Left,
+            "move 10,40/16",
+        ),
+        (
+            "down",
+            Aim::new(
+                at(50.0, 25.0),
+                Some(LogicalRect::new(10.0, 20.0, 100.0, 100.0)),
+            ),
+            Direction::Down,
+            "move 50,101/30",
+        ),
+        (
+            "up",
+            Aim::new(
+                at(50.0, 100.0),
+                Some(LogicalRect::new(10.0, 20.0, 100.0, 100.0)),
+            ),
+            Direction::Up,
+            "move 50,36/25",
+        ),
+    ];
+    for (case, aim, direction, stroke) in rows {
+        let swipe = gestures::swipe(aim, direction, None, None, false, &defaults)
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+        let written = written(&swipe);
+        let [(_, actions)] = written.as_slice() else {
+            panic!("{case}: one source: {written:?}");
+        };
+        assert_eq!(actions[2], stroke, "{case}: {actions:?}");
+    }
+    let quick = gestures::swipe(
+        Aim::new(at(50.0, 40.0), None),
+        Direction::Right,
+        Some(1.0),
+        Some(10_000.0),
+        false,
+        &defaults,
+    )
+    .expect("a stroke");
+    assert_eq!(written(&quick)[0].1[2], "move 51,40/1", "{quick:?}");
+}
+
+/// How long each gesture's parameters let a window hold the request past its timeout counts
+/// what those parameters play: a stroke of no distance or no velocity lasts nothing; the focusing
+/// tap counts only where keys have a target to focus.
+#[test]
+#[cfg(feature = "serde")]
+fn a_gestures_play_bound_counts_what_its_parameters_play() {
+    use flui_protocol::method::Addressed;
+    use std::time::Duration;
+    let target = serde_json::json!({ "element": "w3/e9" });
+    let swipe = |distance: f64, velocity: f64| {
+        serde_json::from_value::<flui_protocol::input::SwipeParams>(serde_json::json!({
+            "target": target, "direction": "up", "distance": distance, "velocity": velocity,
+            "timeout_ms": 1_000,
+        }))
+        .expect("a swipe reads")
+        .holds_for()
+    };
+    let settle = Duration::from_millis(gestures::SWIPE_SETTLE_MS);
+    // A move of no time, the stillness and the lift, each a 16 ms frame, past the timeout.
+    let still = Duration::from_millis(1_000) + settle + Duration::from_millis(5 * 16);
+    assert_eq!(swipe(0.0, 100.0), still, "no distance");
+    assert_eq!(swipe(10.0, 0.0), still, "no velocity");
+    let keys = |target: Option<&serde_json::Value>| {
+        let mut params = serde_json::json!({
+            "window": "w3", "keys": ["a"], "timeout_ms": 1_000,
+        });
+        if let Some(target) = target {
+            params["target"] = target.clone();
+        }
+        serde_json::from_value::<flui_protocol::input::PressKeysParams>(params)
+            .expect("press keys reads")
+            .holds_for()
+    };
+    let tap =
+        gestures::tap(at(0.0, 0.0), PointerButton::Primary, &Defaults::WINDOWLESS).plays_within();
+    let untargeted = keys(None);
+    assert_eq!(
+        keys(Some(&target)),
+        untargeted + tap,
+        "keys with a target count the tap that focuses it"
+    );
+}

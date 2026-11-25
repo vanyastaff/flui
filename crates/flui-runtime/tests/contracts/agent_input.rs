@@ -159,9 +159,9 @@ fn an_injected_tap_reaches_the_app_one_tick_per_frame_and_answers_after_a_frame(
         ["down", "up"],
         "a contact moved, pressed and lifted"
     );
-    assert!(
-        frames >= 4,
-        "three ticks at three boundaries, then a frame before the answer: {frames}"
+    assert_eq!(
+        frames, 4,
+        "three ticks at three boundaries, then a frame before the answer"
     );
 }
 
@@ -180,9 +180,9 @@ fn a_pause_holds_the_injection_for_its_duration() {
     let (outcome, frames) = answered(&mut host, &mut press, 40);
     outcome.expect("the press plays");
     assert_eq!(*seen.lock(), ["down", "up"]);
-    assert!(
-        frames >= 10,
-        "the press is held 160 ms, ten 16 ms frames: {frames}"
+    assert_eq!(
+        frames, 14,
+        "a move and a press, the press held ten 16 ms frames, the lift, then a frame before the answer"
     );
 }
 
@@ -377,6 +377,12 @@ fn input_the_window_cannot_play_as_asked_is_refused_whole() {
         let refused = answered(&mut host, &mut refused, 2).0.expect_err(case);
         assert_eq!(refused.code, code, "{case}: {refused:?}");
         assert_eq!(refused.effect, None, "{case} is refused whole: {refused:?}");
+        if case == "a trackpad gesture" {
+            assert_eq!(
+                refused.message, "this app's windows do not take injected trackpad gestures yet",
+                "{case}"
+            );
+        }
     }
     assert!(seen.lock().is_empty(), "nothing played: {:?}", seen.lock());
 }
@@ -588,6 +594,83 @@ fn the_journal_keeps_its_latest_entries_and_counts_the_ones_it_let_go() {
             (journal.span, journal.entries.len(), journal.dropped),
             expected,
             "since {since:?}, at most {max_entries:?}"
+        );
+    }
+}
+
+/// A move of its own duration goes out a step per frame boundary and its tick ends with its last
+/// step, so the lift has a boundary of its own; a move to where the contact already is sends
+/// nothing; a cancel takes a pressed contact away. Each played as the window counts its frames.
+#[test]
+fn each_pointer_action_plays_as_planned_one_boundary_at_a_time() {
+    type Case = (
+        &'static str,
+        Vec<PointerAction>,
+        &'static [&'static str],
+        u32,
+    );
+    let cases: [Case; 5] = [
+        (
+            "a pause of no time",
+            vec![to(50.0, 50.0), down(), pause(0), up()],
+            &["down", "up"],
+            5,
+        ),
+        (
+            "a move lasting 20 ms",
+            vec![
+                to(50.0, 50.0),
+                down(),
+                PointerAction::Move {
+                    to: LogicalPoint::new(70.0, 50.0),
+                    duration_ms: 20,
+                    pressure: None,
+                },
+                up(),
+            ],
+            &["down", "move", "move", "up"],
+            6,
+        ),
+        (
+            "a move lasting three frames",
+            vec![
+                to(50.0, 50.0),
+                down(),
+                PointerAction::Move {
+                    to: LogicalPoint::new(98.0, 50.0),
+                    duration_ms: 48,
+                    pressure: None,
+                },
+                up(),
+            ],
+            &["down", "move", "move", "move", "up"],
+            7,
+        ),
+        (
+            "a move to where the contact is",
+            vec![to(50.0, 50.0), down(), to(50.0, 50.0), up()],
+            &["down", "up"],
+            5,
+        ),
+        (
+            "a cancel",
+            vec![to(50.0, 50.0), down(), PointerAction::Cancel],
+            &["down", "cancel"],
+            4,
+        ),
+    ];
+    for (case, actions, expected, expected_frames) in cases {
+        let (mut host, _agent, window, seen) = shown();
+        let lease = window
+            .input_lease()
+            .expect("an open window leases its input");
+        let mut played = inject(&lease, vec![pointer(actions)]);
+        let (outcome, frames) = answered(&mut host, &mut played, 20);
+        outcome.unwrap_or_else(|error| panic!("{case}: {error:?}"));
+        assert_eq!(*seen.lock(), expected, "{case}");
+        assert_eq!(
+            frames, expected_frames,
+            "{case}: the frame it was answered at"
         );
     }
 }
