@@ -898,9 +898,10 @@ is user code, under the pipeline's borrows.
 **Rule.** A `Locator` resolves over the filtered tree the adapters see, reading the same wire
 `Node` as `semantics.read`, so a locator matches what the outline shows. `within` and `has` are
 scopes over that tree: an unlabelled container that is lifted away is no ancestor. A strict
-locator lists every match in `locate_wire`; `resolve_wire_locator` is where one element is needed
-and answers `Ambiguous` (the first ten outline lines) or `NotFound` (the ten nearest by held
-criteria, then name distance). Actionability is two calls with the caller's hit-test between them:
+locator lists every match in `locate_wire`, `max_matches` keeping the first and counting the rest;
+where one element is needed, the list read with `max_matches` of `STRICT_CANDIDATES` goes to
+`flui_protocol::locator::resolve_strict`, the one strict-locator rule, which counts every match and
+names the first ten as outline lines. Actionability is two calls with the caller's hit-test between them:
 `actionability_point` says where a pointer would land, `actionability_wire` takes the render
 objects the hit-test found there, most specific first. A path maps to the first render object
 whose node the filtered tree shows, because a published node's id is its render object's id.

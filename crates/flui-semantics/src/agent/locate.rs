@@ -17,26 +17,21 @@
 //!
 //! [`SemanticsOwner::locate_wire`] lists what a locator matches, so a caller
 //! can see what is ambiguous; `first`, `last` and `nth` narrow the list to the
-//! one match they name. [`SemanticsOwner::resolve_wire_locator`] is where one
-//! element is needed: it answers `ambiguous` for a strict locator with several
-//! matches, and `not_found` with the nearest candidates for none.
-
-use std::cmp::Reverse;
+//! one match they name. Where one element is needed, a strict locator's list,
+//! read with `max_matches` of [`flui_protocol::locator::STRICT_CANDIDATES`],
+//! goes to [`flui_protocol::locator::resolve_strict`], the one strict-locator
+//! rule.
 
 use accesskit_consumer::{NodeRef, TreeState};
 use flui_protocol::{
     locator::LocateParams, locator::Locator, locator::Match, locator::Matches, locator::Pick,
     locator::StateFilter, locator::TextMatch, tree::ElementRef, tree::Node, tree::WindowId,
-    tree::outline,
 };
 
 use super::{Placement, Published, WireReadError, element_id, surface_rect, wire_node};
 use crate::owner::SemanticsOwner;
 
-/// Candidates an `ambiguous` or `not_found` answer lists.
-const CANDIDATES: usize = 10;
-
-/// Why a locator did not resolve to an element.
+/// Why the published tree could not be searched for a locator's matches.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum WireLocateError {
@@ -46,21 +41,6 @@ pub enum WireLocateError {
     /// The published tree could not be read.
     #[error("the published semantics tree is malformed")]
     Malformed,
-    /// Nothing matches the locator (or `nth` is past the last match).
-    #[error("no element matches the locator")]
-    NotFound {
-        /// The closest elements by role, name distance and identifier, as outline lines,
-        /// closest first.
-        nearest: Vec<String>,
-    },
-    /// A strict locator matches more than one element.
-    #[error("the locator matches {count} elements; pick one with first, last or nth")]
-    Ambiguous {
-        /// How many elements match.
-        count: usize,
-        /// The first matches in tree order, as outline lines.
-        candidates: Vec<String>,
-    },
 }
 
 impl From<WireReadError> for WireLocateError {
@@ -121,51 +101,6 @@ impl SemanticsOwner {
             out
         });
         located.map_err(published_error)
-    }
-
-    /// The one element `locator` names: what an action through a locator acts
-    /// on.
-    ///
-    /// # Errors
-    ///
-    /// [`WireLocateError::NotFound`], listing the nearest elements, when
-    /// nothing matches (or `nth` is past the last match);
-    /// [`WireLocateError::Ambiguous`], listing the first matches, when a
-    /// strict locator matches several; and the errors of
-    /// [`Self::locate_wire`].
-    pub fn resolve_wire_locator(
-        &self,
-        locator: &Locator,
-        placement: Placement,
-    ) -> Result<Match, WireLocateError> {
-        let revision = self.revision();
-        let resolved = self.with_published(|state, root_claims_focus| {
-            let flat = Flat::new(
-                state,
-                self.device_pixel_ratio(),
-                super::AgentFilter::of(self),
-                root_claims_focus,
-                placement,
-            );
-            let hits = flat.matching(locator);
-            if locator.pick == Pick::Strict && hits.len() > 1 {
-                return Err(WireLocateError::Ambiguous {
-                    count: hits.len(),
-                    candidates: hits
-                        .iter()
-                        .take(CANDIDATES)
-                        .map(|&index| flat.line(index))
-                        .collect(),
-                });
-            }
-            match pick(locator.pick, hits).first() {
-                Some(&index) => Ok(flat.matched(index, placement, revision)),
-                None => Err(WireLocateError::NotFound {
-                    nearest: flat.nearest(locator),
-                }),
-            }
-        });
-        resolved.map_err(published_error)?
     }
 }
 
@@ -312,44 +247,6 @@ impl Flat {
         let wire = self.entries[index].wire.clone();
         Match::new(ElementRef::new(placement.window, wire.id), revision, wire)
     }
-
-    /// The entry as one outline line.
-    fn line(&self, index: usize) -> String {
-        outline(std::slice::from_ref(&self.entries[index].wire))
-            .trim_end()
-            .to_owned()
-    }
-
-    /// The entries closest to `locator`, closest first: those that hold the
-    /// most of its criteria (a whole locator whose scope fails holds all of
-    /// them), then the nearest by name.
-    fn nearest(&self, locator: &Locator) -> Vec<String> {
-        let needle = locator
-            .name
-            .as_ref()
-            .map(|name| name.needle().to_lowercase());
-        let mut ranked: Vec<(Reverse<usize>, usize, usize)> = Vec::new();
-        for (index, entry) in self.entries.iter().enumerate() {
-            let held = criteria(locator, entry).held();
-            let distance = match (&needle, &entry.wire.name) {
-                (Some(needle), Some(name)) => Some(edit_distance(needle, &name.to_lowercase())),
-                _ => None,
-            };
-            let near = match (&needle, distance) {
-                (Some(needle), Some(distance)) => distance <= (needle.chars().count() / 3).max(2),
-                _ => false,
-            };
-            if held > 0 || near {
-                ranked.push((Reverse(held), distance.unwrap_or(usize::MAX), index));
-            }
-        }
-        ranked.sort_unstable();
-        ranked
-            .into_iter()
-            .take(CANDIDATES)
-            .map(|(_, _, index)| self.line(index))
-            .collect()
-    }
 }
 
 /// How an entry stands against a locator's own criteria (not its scoping).
@@ -361,10 +258,6 @@ struct Criteria {
 impl Criteria {
     fn all(&self) -> bool {
         self.held == self.total
-    }
-
-    fn held(&self) -> usize {
-        self.held
     }
 }
 
@@ -417,23 +310,4 @@ fn criteria(locator: &Locator, entry: &Entry) -> Criteria {
         selected.is_some() && selected == wire.selected,
     );
     out
-}
-
-/// The Levenshtein distance between `a` and `b`, on their first 64 characters.
-fn edit_distance(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().take(64).collect();
-    let b: Vec<char> = b.chars().take(64).collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, &ca) in a.iter().enumerate() {
-        let mut diagonal = row[0];
-        row[0] = i + 1;
-        for (j, &cb) in b.iter().enumerate() {
-            let above = row[j + 1];
-            row[j + 1] = (above + 1)
-                .min(row[j] + 1)
-                .min(diagonal + usize::from(ca != cb));
-            diagonal = above;
-        }
-    }
-    row[b.len()]
 }

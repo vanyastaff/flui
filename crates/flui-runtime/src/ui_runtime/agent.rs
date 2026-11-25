@@ -392,9 +392,6 @@ impl AgentError {
     pub(super) fn from_locate(error: WireLocateError) -> Self {
         match error {
             WireLocateError::NoTree => Self::NoTreeYet,
-            // `locate_wire` lists matches and never answers `NotFound` or
-            // `Ambiguous`: resolving one element is `semantics.act`'s, over
-            // the matches it lists.
             _ => Self::Malformed,
         }
     }

@@ -259,11 +259,11 @@ graph LR
     `pick last`, the ancestor rule for disabled, the stable comparison, the self-or-under rule, the
     window intersection, the path walk and the visible centre in turn, and each broke a row.
   - As built:
-    - `SemanticsOwner::locate_wire` lists matches and `resolve_wire_locator` answers the one element
-      or `WireLocateError::{NotFound, Ambiguous}` with outline lines; the agent turns those into the
-      protocol's errors (FD5). Strictness is applied by `resolve_wire_locator` only: a strict
-      `element.locate` lists every match, so a caller can see what is ambiguous (`LocateParams`
-      said otherwise and is reworded; the schema golden holds no prose).
+    - `SemanticsOwner::locate_wire` lists matches; one element is resolved by
+      `flui_protocol::locator::resolve_strict` over a list read with `max_matches` of
+      `STRICT_CANDIDATES`, in the agent and in the driver alike. A strict `element.locate` lists
+      every match, so a caller can see what is ambiguous (`LocateParams` said otherwise and is
+      reworded; the schema golden holds no prose).
     - The actionability check is two pure calls, `actionability_point` and `actionability_wire`,
       with the render hit-test in between run by the caller, so no hit-test (user code) runs under
       a semantics borrow. There is no separate render-to-semantics index: a published node's id is
