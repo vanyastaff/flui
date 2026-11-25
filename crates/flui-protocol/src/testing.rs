@@ -33,8 +33,8 @@ impl PipeAnswer {
 
 /// A pipe that answers each read and each write from its script, read and written through
 /// `&ScriptedPipe` as a local endpoint's stream is, and records how many bytes each write
-/// offered and how many flushes reached it. Its clones share one script and one record, so a
-/// test keeps a clone of a pipe it hands to a wrapper.
+/// offered, the bytes the writes took and how many flushes reached it. Its clones share one
+/// script and one record, so a test keeps a clone of a pipe it hands to a wrapper.
 ///
 /// # Panics
 ///
@@ -49,6 +49,7 @@ struct Script {
     reads: VecDeque<PipeAnswer>,
     writes: VecDeque<PipeAnswer>,
     offered: Vec<usize>,
+    written: Vec<u8>,
     flushes: usize,
 }
 
@@ -61,9 +62,10 @@ impl ScriptedPipe {
     ) -> Self {
         Self {
             script: Rc::new(RefCell::new(Script {
-                reads: reads.into_iter().collect(),
-                writes: writes.into_iter().collect(),
+                reads: reads.into_iter().collect::<VecDeque<PipeAnswer>>(),
+                writes: writes.into_iter().collect::<VecDeque<PipeAnswer>>(),
                 offered: Vec::new(),
+                written: Vec::new(),
                 flushes: 0,
             })),
         }
@@ -73,6 +75,12 @@ impl ScriptedPipe {
     #[must_use]
     pub fn offered(&self) -> Vec<usize> {
         self.script.borrow().offered.clone()
+    }
+
+    /// The bytes the writes took, in order.
+    #[must_use]
+    pub fn written(&self) -> Vec<u8> {
+        self.script.borrow().written.clone()
     }
 
     /// How many flushes reached the pipe.
@@ -111,7 +119,9 @@ impl Write for &ScriptedPipe {
             .writes
             .pop_front()
             .expect("BUG: the script names every write");
-        answer.answer(buf.len())
+        let count = answer.answer(buf.len())?;
+        script.written.extend_from_slice(&buf[..count]);
+        Ok(count)
     }
 
     fn flush(&mut self) -> io::Result<()> {

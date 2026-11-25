@@ -105,6 +105,8 @@ struct Page {
     received: Vec<(String, String)>,
     /// The connections closed from the relay's side.
     closed: Vec<String>,
+    /// The connections the relay let the page drop.
+    released: Vec<String>,
     /// Events the tab reports next.
     events: VecDeque<LinkEvent>,
     /// Set: the browser went.
@@ -148,7 +150,9 @@ impl BrowserLink for Tab {
         Ok(())
     }
 
-    fn release(&mut self, _remote: Remote) {}
+    fn release(&mut self, remote: Remote) {
+        page(&self.0).released.push(remote.0);
+    }
 
     fn next_event(&mut self, deadline: Instant) -> Result<Option<LinkEvent>, LinkError> {
         let mut page = page(&self.0);
@@ -263,6 +267,7 @@ fn a_client_waits_for_the_page_export_and_is_carried_to_a_connection_of_its_own(
     assert_eq!(first.next(), None, "a stopped relay closes its clients");
     let closed = page(&state).closed.clone();
     assert_eq!(closed.len(), 2, "and their page connections: {closed:?}");
+    assert_eq!(page(&state).released, closed, "which the page may drop");
 }
 
 #[test]
@@ -294,10 +299,13 @@ fn a_page_connection_ends_with_its_client_and_every_one_with_a_reload() {
     }
     assert_eq!(ended.next().as_deref(), Some("last"));
     assert_eq!(ended.next(), None);
+    eventually(&state, |page| page.released.contains(&ended_id));
 
     page(&state).events.push_back(LinkEvent::Navigated);
     assert_eq!(staying.next(), None, "a reload ends every connection");
-    eventually(&state, |page| page.closed.contains(&staying_id));
+    eventually(&state, |page| {
+        page.closed.contains(&staying_id) && page.released.contains(&staying_id)
+    });
     assert!(
         !page(&state).closed.contains(&ended_id),
         "a connection the page ended is not closed again"
@@ -309,6 +317,28 @@ fn a_page_connection_ends_with_its_client_and_every_one_with_a_reload() {
         Some("echo:again"),
         "and the next connects"
     );
+}
+
+/// A client that falls further behind than the relay keeps for it is closed, and so is its page
+/// connection, which the page may then drop. Fails if the relay only forgets the client: the
+/// connection would keep its place in the app's agent, a driver's seat and held input included,
+/// until the page reloads.
+#[test]
+fn a_client_too_far_behind_is_closed_with_its_page_connection() {
+    let state = Arc::new(Mutex::new(Page::default()));
+    let (_project, session, _relay) = relayed(Box::new(Tab(Arc::clone(&state))));
+    let mut client = Client::connect(&session);
+    client.send("hello");
+    assert_eq!(client.next().as_deref(), Some("echo:hello"));
+    let id = page(&state).received[0].0.clone();
+    // One line, with its newline one byte past what the relay keeps for a client.
+    let flood = "x".repeat(super::relay::MAX_UNWRITTEN);
+    let report = serde_json::json!([id, flood]).to_string();
+    drop(flood);
+    page(&state).events.push_back(LinkEvent::Report(report));
+    assert_eq!(client.next(), None, "the client is closed");
+    eventually(&state, |page| page.closed == [id.clone()]);
+    eventually(&state, |page| page.released == [id.clone()]);
 }
 
 #[test]

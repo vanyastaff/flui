@@ -32,6 +32,7 @@ the same bug found by a whole-demo snapshot names a demo.
 |------|--------|-------------|------------|
 | Inspection | Typed self-description of any node | `flui_foundation::inspect::{Inspect, SnapshotNode}` | always |
 | Waker | A `Waker` that counts its wakes, runs an action, drops its captures when it retires, or panics | `flui_foundation::testing::{CountingWaker, panicking_waker}` | `flui-foundation/testing` |
+| Local endpoint | A pipe that answers each read and write from a script, recording what the writes took | `flui_protocol::testing::{ScriptedPipe, PipeAnswer}` | `flui-protocol/testing` |
 | Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
 | Layer | Structural walkers over a `LayerTree` (built with `push_child`, or a scene's `SceneVersion::flatten`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
