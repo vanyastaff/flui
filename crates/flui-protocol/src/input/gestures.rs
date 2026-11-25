@@ -351,9 +351,16 @@ pub fn text(text: &str) -> ActionSequence {
     }])
 }
 
-/// The keys of one chord, `+`-joined: a `+` where a key stands is the plus key (`"+"`,
-/// `"Control++"`).
-fn keys_of(chord: &str) -> Result<Vec<&str>, GestureError> {
+/// The keys of one chord, in the order they go down: its keys joined by `+`, where a `+` that
+/// stands where a key does is the plus key (`"+"`, `"Control++"`), and a key name has no space
+/// around it (`" "` alone is the space key). The one reading of a chord, for every composer.
+///
+/// # Errors
+///
+/// [`GestureError::EmptyChord`] for an empty chord, and [`GestureError::UnreadableChord`] for a
+/// `+` with no key after it, a key after a `+` key with no `+` between, or a key name with space
+/// around it.
+pub fn chord_keys(chord: &str) -> Result<Vec<&str>, GestureError> {
     let unreadable = || GestureError::UnreadableChord {
         chord: chord.to_owned(),
     };
@@ -394,7 +401,7 @@ fn keys_of(chord: &str) -> Result<Vec<&str>, GestureError> {
 pub fn chords(chords: &[String]) -> Result<ActionSequence, GestureError> {
     let mut actions = Vec::new();
     for chord in chords {
-        let keys = keys_of(chord)?;
+        let keys = chord_keys(chord)?;
         actions.extend(keys.iter().map(|key| KeyAction::Down {
             key: (*key).to_owned(),
         }));

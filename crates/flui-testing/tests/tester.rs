@@ -483,14 +483,55 @@ fn a_chord_naming_a_held_key_leaves_it_held() {
     );
 }
 
+/// A chord is read as the protocol reads it: one that does not read (a `+` with no key after it,
+/// a key after a `+` key with no `+` between, a key name with space around it, no key at all) is
+/// refused `invalid_argument`, and nothing of the call is pressed, the chords before it included.
 #[test]
-fn a_chord_with_an_unnamed_key_presses_nothing() {
-    let (mut t, log) = key_log();
-    let error = t
-        .try_press_keys(&["Enter", "Control+"])
-        .expect_err("an empty key is refused");
-    assert!(matches!(error, TestError::Agent(_)), "{error:?}");
-    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+fn a_chord_that_does_not_read_presses_nothing() {
+    for chord in ["Control+", "Shift+", "+a", "a++b", "Control + a", ""] {
+        let (mut t, log) = key_log();
+        let error = t
+            .try_press_keys(&["Enter", chord])
+            .expect_err("a chord that does not read is refused");
+        let TestError::Agent(refused) = &error else {
+            panic!("{chord:?}: {error:?}");
+        };
+        assert_eq!(
+            refused.code,
+            flui_protocol::error::ErrorCode::InvalidArgument,
+            "{chord:?}: {error:?}"
+        );
+        assert!(log.borrow().is_empty(), "{chord:?}: {:?}", log.borrow());
+    }
+}
+
+/// A `+` where a key stands is the plus key, alone or after modifiers; a space is the space key.
+#[test]
+fn the_plus_key_and_the_space_key_are_pressed_as_keys() {
+    let cases: [(&str, &[&str]); 4] = [
+        ("+", &["down +", "up +"]),
+        (
+            "Control++",
+            &["down Control^", "down +^", "up +^", "up Control"],
+        ),
+        (
+            "Shift+Control++",
+            &[
+                "down Shift^",
+                "down Control^^",
+                "down +^^",
+                "up +^^",
+                "up Control^",
+                "up Shift",
+            ],
+        ),
+        (" ", &["down  ", "up  "]),
+    ];
+    for (chord, heard) in cases {
+        let (mut t, log) = key_log();
+        t.press_keys(&[chord]);
+        assert_eq!(*log.borrow(), heard, "{chord:?}");
+    }
 }
 
 /// A field holding `Trip `, focused by a tap.

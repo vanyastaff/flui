@@ -834,7 +834,10 @@ pub struct TypeTextParams {
     pub options: GestureOptions,
 }
 
-/// `element.press_keys`: press chords in turn, each `+`-joined (`"Control+a"`, `"Enter"`).
+/// `element.press_keys`: press chords in turn. A chord is its keys joined by `+`, each a W3C key
+/// name or the text the key types (`"Control+a"`, `"Enter"`); a `+` where a key stands is the plus
+/// key (`"+"`, `"Control++"`), and a key name has no space around it (`" "` is the space key).
+/// [`gestures::chord_keys`] is the one reading.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
