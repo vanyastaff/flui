@@ -8,7 +8,7 @@
 //! closes their clients, which connect again.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Read as _};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
@@ -19,7 +19,7 @@ use flui_protocol::framing::{LineReader, MAX_LINE};
 use interprocess::local_socket::traits::Listener as _;
 use interprocess::local_socket::{Listener, Stream};
 
-use super::super::listener::{bind, polled};
+use super::super::listener::{Unwritten, bind, polled};
 use super::{
     BrowserLink, CLOSE_FUNCTION, LinkError, LinkEvent, Remote, SEND_FUNCTION, connect_function,
     read_report,
@@ -114,7 +114,7 @@ struct Client {
     stream: PolledStream<Stream>,
     reader: LineReader,
     /// What is still to be written to the client.
-    unwritten: Vec<u8>,
+    unwritten: Unwritten,
     /// Lines read before the page connection opened.
     queued: VecDeque<String>,
     page: Page,
@@ -193,7 +193,7 @@ impl Turns {
                 Client {
                     stream,
                     reader: LineReader::new(MAX_LINE),
-                    unwritten: Vec::new(),
+                    unwritten: Unwritten::default(),
                     queued: VecDeque::new(),
                     page: Page::Waiting {
                         since: now,
@@ -282,7 +282,7 @@ impl Turns {
                             return;
                         }
                         client.unwritten.extend_from_slice(line.as_bytes());
-                        client.unwritten.push(b'\n');
+                        client.unwritten.extend_from_slice(b"\n");
                     }
                     None => client.ending = true,
                 }
@@ -362,17 +362,6 @@ impl Client {
 
     /// Writes what it can of what the client was sent: `true` once all of it is written.
     fn write(&mut self) -> io::Result<bool> {
-        while !self.unwritten.is_empty() {
-            match (&self.stream).write(&self.unwritten) {
-                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
-                Ok(written) => {
-                    self.unwritten.drain(..written);
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(true)
+        self.unwritten.write_to(&self.stream)
     }
 }

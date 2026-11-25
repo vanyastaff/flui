@@ -40,7 +40,8 @@
 //!   [`ServerLine`](envelope::ServerLine) an app answers with;
 //! - [`framing`]: how a byte transport frames lines ([`LineReader`](framing::LineReader)) and binary payloads;
 //! - [`endpoint`]: how a local endpoint's pipe or socket is polled ([`PolledStream`](endpoint::PolledStream)),
-//!   alike on every host;
+//!   alike on every host, and, behind the `testing` feature, `testing::ScriptedPipe`, a stream
+//!   that answers from a script for tests of it (ADR-0243);
 //! - [`error`]: the fixed [`ErrorCode`](error::ErrorCode)s, [`Retry`](error::Retry) and the [`ErrorObject`](error::ErrorObject) that carries them;
 //! - [`input_recording`]: the schema of an input recording, the `HostInput` stream
 //!   a UI runtime applied with its gesture decisions and preferences (ADR-0215 §2), which
@@ -99,6 +100,8 @@ pub mod report;
 pub mod semantics;
 pub mod session;
 pub mod snapshot;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 pub mod tree;
 pub mod verdict;
 pub mod version;

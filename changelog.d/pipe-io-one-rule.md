@@ -3,6 +3,8 @@
 - `flui_protocol::endpoint::PolledStream`: a local endpoint's pipe or socket, polled, read and
   written alike on every host. The app's agent, the driver and the CLI's own endpoints all use
   it in place of three copies of the Windows named-pipe rule.
+- `flui-protocol`'s `testing` feature: `testing::ScriptedPipe`, a local endpoint's stream that
+  answers from a script, for tests of what reads and writes one.
 
 ### Fixed
 
