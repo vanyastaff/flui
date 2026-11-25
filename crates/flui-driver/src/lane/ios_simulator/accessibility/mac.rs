@@ -1,7 +1,6 @@
-//! The Mac's half of [`HostAccessibility`]: the device's window found among the windows on
-//! screen by its title, its screen group by the search of `tree::find_screen`, and the group's
-//! elements read through the shared accessibility client (`lane::ax`) by the pure walk
-//! (`accessibility::walk_screen`).
+//! The Mac's half of [`HostAccessibility`]: the windows on screen of the device's title, and the
+//! accessibility client's calls (`lane::ax`) as the pure read asks them (`tree::read_screen`:
+//! the screen search, the walk of its elements and the frame read again after it, every host's).
 //!
 //! The Simulator's process is not looked up by name: Simulator.app hosts the device's window
 //! before Xcode 27 and DeviceHub from it, and AppKit reports DeviceHub's process id as -1. The
@@ -13,10 +12,9 @@
 //! call was asked of, or says that element refused it. A failure while the process is no longer
 //! trusted is the permission taken back, wherever it comes (`accessibility::read_failure`), and a
 //! parent that went away mid-read leaves its children unread (`ax::child_at` answers
-//! `ProviderError::Gone`). A window's identity texts are read whole, up to
-//! `accessibility::IDENTITY_TEXT_LIMIT`, never through the outline's cut. The screen's frame is
-//! read again once the walk is done, and a screen that moved meanwhile answers `Error::Busy`
-//! (`accessibility::screen_steady`).
+//! `ProviderError::Gone`). A window's identity texts are copied one unit past
+//! `accessibility::IDENTITY_TEXT_LIMIT`, never through the outline's cut, so the pure
+//! `window_identity` reads each whole or tells it is longer.
 #![expect(
     unsafe_code,
     reason = "the window list's C call and its constant keys, read as CGWindow.h types them"
@@ -35,8 +33,7 @@ use objc2_core_graphics::{
 
 use super::{
     HostAccessibility, HostScreen, IDENTITY_TEXT_LIMIT, PointFrame, ScreenElement, ScreenRequest,
-    ScreenSource, ScreenWalk, identity_too_long, pressed, read_failure, screen_steady, untrusted,
-    walk_screen,
+    ScreenSource, ScreenWalk, pressed, read_failure, untrusted,
 };
 use crate::error::{Error, Result};
 use crate::lane::ax;
@@ -171,16 +168,11 @@ fn read_screen(screen: &ScreenRequest) -> Result<(HostScreen, ScreenWalk<TimedEl
     if !ax::trusted() {
         return Err(untrusted());
     }
-    let mut read = ScreenRead::default();
     let windows = titled_windows(&screen.title)?
         .into_iter()
         .map(TimedElement::new)
         .collect::<Vec<TimedElement>>();
-    let (group, frame) = tree::find_screen(&mut read, screen, windows)?;
-    let walk = walk_screen(&mut read, &group).map_err(|error| read.failed(error))?;
-    let after = read.frame(&group).map_err(|error| read.failed(error))?;
-    screen_steady(frame, after)?;
-    Ok((walk.screen(frame), walk))
+    tree::read_screen(&mut ScreenRead::default(), screen, windows)
 }
 
 impl ScreenSource for ScreenRead {
@@ -261,16 +253,13 @@ impl WindowTree for ScreenRead {
         let window = self.ask(window);
         let mut texts = Vec::new();
         for name in ["AXIdentifier", "AXDocument"] {
-            let value = ax::attribute(window, name).map_err(|error| self.failed(error))?;
-            let text = match value
-                .as_deref()
-                .map(|value| ax::whole_string(value, IDENTITY_TEXT_LIMIT))
-            {
-                None => None,
-                Some(Ok(text)) => text,
-                Some(Err(units)) => return Err(identity_too_long(name, units)),
-            };
-            texts.push(text);
+            // One unit past the limit, so `window_identity` can tell a longer text.
+            texts.push(
+                ax::attribute(window, name)
+                    .map_err(|error| self.failed(error))?
+                    .as_deref()
+                    .and_then(|value| ax::string_within(value, IDENTITY_TEXT_LIMIT + 1)),
+            );
         }
         Ok(texts)
     }

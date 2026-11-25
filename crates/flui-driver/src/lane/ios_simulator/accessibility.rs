@@ -252,11 +252,18 @@ pub enum WindowIdentity {
 /// read as a UUID, whatever stands beside it, a hexadecimal digit included: `udid` found
 /// anywhere makes the window `Named`; any other run of the form, and no `udid`, makes it `Other`,
 /// so a run glued to the text around it (`SimDevice<UUID>`, `<UUID>abc`) never reads as naming
-/// none. No run has shown which attribute, if any, carries a UDID, or in what form.
+/// none. A text longer than [`IDENTITY_TEXT_LIMIT`] UTF-16 units is not read at all and names
+/// something else, so a window that answers one is taken only when another of its texts names
+/// `udid`, and never on a text read in part. Every host's window goes through here. No run has
+/// shown which attribute, if any, carries a UDID, or in what form.
 #[must_use]
 pub fn window_identity(udid: &Udid, attributes: &[Option<String>]) -> WindowIdentity {
     let mut names_other = false;
     for text in attributes.iter().flatten() {
+        if text.encode_utf16().nth(IDENTITY_TEXT_LIMIT).is_some() {
+            names_other = true;
+            continue;
+        }
         for run in uuid_runs(text) {
             if run.eq_ignore_ascii_case(udid.as_str()) {
                 return WindowIdentity::Named;
@@ -318,27 +325,11 @@ pub fn untrusted() -> Error {
     )
 }
 
-/// The most UTF-16 units of a window's `AXIdentifier` or `AXDocument` the window's identity
-/// reads, each read whole ([`window_identity`] must see all of it to know which UUIDs it
-/// names): far past any document path or identifier, and far past the outline's cut. A longer
-/// one is refused ([`identity_too_long`]), never read in part.
+/// The most UTF-16 units of a window's `AXIdentifier` or `AXDocument` that [`window_identity`]
+/// reads, each whole, since it must see all of a text to know which UUIDs it names: far past any
+/// document path or identifier, and far past the outline's cut. A longer text names something
+/// else, never read in part; a host copies at most one unit more than this, so it can tell.
 pub const IDENTITY_TEXT_LIMIT: usize = 64 * 1024;
-
-/// What a read answers when a window of the device's title answers its `attribute` with `units`
-/// UTF-16 units, past [`IDENTITY_TEXT_LIMIT`]: the lane cannot tell whose window it is without
-/// reading all of it, and does not take a window on a text it read in part.
-#[must_use]
-pub fn identity_too_long(attribute: &str, units: usize) -> Error {
-    Error::Platform {
-        effect: None,
-        message: format!(
-            "a window titled for the device answers its {attribute} with {units} UTF-16 units, \
-             past the {IDENTITY_TEXT_LIMIT} the lane reads whole to tell whose window it is; the \
-             lane takes no window on a text it read in part"
-        ),
-        retry: Retry::Never,
-    }
-}
 
 /// Whether the screen stayed where the read placed its elements: `before`, the screen's frame
 /// the search read, and `after`, the same group's frame read once the walk is done. Every
@@ -379,7 +370,7 @@ pub fn read_failure(error: ProviderError, trusted: bool, deadline: Option<Durati
             effect: None,
             message: format!(
                 "the Simulator's window did not answer a call of the read {}",
-                ax::within(deadline)
+                ax::deadline_clause(deadline)
             ),
             retry: ErrorCode::Timeout.default_retry(),
         },
@@ -508,9 +499,26 @@ impl<E> ScreenWalk<E> {
 pub struct ChildList<E> {
     /// The children listed, in the API's order.
     pub children: Vec<E>,
-    /// Whether the list is short of the parent's children: the parent went away before they were
-    /// all listed, or one is there past the bound.
-    pub cut: bool,
+    /// What left the list short of the parent's children, if anything.
+    pub cut: Option<ListCut>,
+}
+
+impl<E> ChildList<E> {
+    /// Whether the list is short of the parent's children.
+    #[must_use]
+    pub const fn is_cut(&self) -> bool {
+        self.cut.is_some()
+    }
+}
+
+/// What left a [`ChildList`] short.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ListCut {
+    /// The parent went away before its children were all listed: a read again may list them.
+    ParentGone,
+    /// A child is there past the bound: a read again with the same bound stops there again.
+    Bound,
 }
 
 /// The children of a parent, `child_at` asked for each index in turn, at most `bound` of them:
@@ -535,8 +543,9 @@ pub fn list_children<E>(
                 children.push(child);
                 continue;
             }
-            Ok(Some(_)) | Err(ProviderError::Gone) => true,
-            Ok(None) => false,
+            Ok(Some(_)) => Some(ListCut::Bound),
+            Err(ProviderError::Gone) => Some(ListCut::ParentGone),
+            Ok(None) => None,
             Err(error) => return Err(error),
         };
         return Ok(ChildList { children, cut });
@@ -595,7 +604,8 @@ impl ScreenWalker {
             MAX_NODES.saturating_sub(self.visited),
         )?;
         self.visited += listed.children.len();
-        self.truncated |= listed.cut;
+        let unread = listed.is_cut();
+        self.truncated |= unread;
         let mut children = Vec::with_capacity(listed.children.len());
         for handle in listed.children {
             let mut element = match source.element(&handle) {
@@ -608,8 +618,8 @@ impl ScreenWalker {
                 // Past the depth only whether a child is there is asked: one there, or the
                 // element gone before it said, leaves its children unread.
                 let probe = list_children(|index| source.child_at(&handle, index), 0)?;
-                element.children_unread = probe.cut;
-                self.truncated |= probe.cut;
+                element.children_unread = probe.is_cut();
+                self.truncated |= probe.is_cut();
                 Vec::new()
             } else {
                 let level = self.children_of(source, &handle, depth + 1)?;
@@ -622,10 +632,7 @@ impl ScreenWalker {
                 children: grandchildren,
             });
         }
-        Ok(Level {
-            children,
-            unread: listed.cut,
-        })
+        Ok(Level { children, unread })
     }
 }
 
@@ -643,9 +650,8 @@ pub trait HostAccessibility: Send {
     /// screens fit ([`super::tree::find_screen`]); [`Error::NotSupported`] naming
     /// `macos_permission_accessibility` when the process is no trusted accessibility client
     /// ([`untrusted`]); [`Error::Timeout`] when the Simulator did not answer; [`Error::Busy`]
-    /// when the screen moved or was resized during the read ([`screen_steady`]);
-    /// [`Error::Platform`] when a window of the title answers an identity text past
-    /// [`IDENTITY_TEXT_LIMIT`] ([`identity_too_long`]).
+    /// when the screen moved, was resized or went away during the read ([`screen_steady`],
+    /// [`super::tree::read_screen`]).
     fn read(&mut self, screen: &ScreenRequest) -> Result<HostScreen>;
 
     /// Press, through `AXPress`, the one element of `screen` that reads as `wanted` (an element a

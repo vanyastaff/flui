@@ -144,11 +144,15 @@ cargo nextest run -p flui-platform -p flui-testing -p flui-material -p flui-cli 
 
 The reload-lifecycle fixture is a real plugin image. nextest's setup script
 `build-hot-reload-fixture` (`.config/nextest.toml`) builds its library before
-its tests, so Cargo publishes the cdylib to the artifact directory on the
+its tests in the dev profile, for the host target, into the default target
+directory, so Cargo publishes the cdylib to the artifact directory on the
 runner's dynamic-library search path; built only as the tests' dependency, it
-stays in the build directory. Under `cargo test`, run
-`cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked` first. The tests
-do not infer private Cargo build directories or choose a cached DLL by
+stays in the build directory. A run in another profile, target or target
+directory (`--release`, `--cargo-profile`, `--target`, `--target-dir`), and any
+run under `cargo test`, builds it first with the same flags:
+`cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`. Otherwise the
+tests find no fixture, or load one an earlier build left in that directory. The
+tests do not infer private Cargo build directories or choose a cached DLL by
 modification time.
 
 The `checks` job's test-reachability step takes each test target's root file from Cargo

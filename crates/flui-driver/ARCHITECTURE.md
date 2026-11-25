@@ -183,22 +183,26 @@ app's trees, frames and input, and this crate composes that with what only the O
   UDID, or two naming none when none names it, are refused. A device renamed or removed since
   the lane connected is refused (`accessibility::screen_title`). The screen's elements are read
   by a pure walk over a source (`accessibility::walk_screen`): a level the node budget or a
-  vanished element cuts is marked unread on its parent, the screen included, and a group gone
-  mid-search cuts the screen search short. Every walk over an OS tree takes a step that finds an
+  vanished element cuts is marked unread on its parent, the screen included. Every walk over an OS tree takes a step that finds an
   element gone as its level cut, never ended (`lane::walk`); `ax::child_at` answers
   `kAXErrorInvalidUIElement`, the parent gone, as that. Every element the read asks is given the
   client's deadline and carries it, so a timeout, a press's included, names the deadline of the
   element its call was asked of, or says that element refused it. A window's identity texts are
-  read whole up to `accessibility::IDENTITY_TEXT_LIMIT`, never through the outline's cut, and a
-  longer one is refused. The screen is found by reading the window's chrome within ten levels,
-  breadth first (`tree::find_screen`), each element's children listed by the bounded listing the
-  screen's walk shares (`accessibility::list_children`); the search never goes into a candidate
-  (a group of the app window's shape, or an `iOSContentGroup`), whose children are the app's, so
-  the app's elements neither spend its budget nor cut it. It takes an `iOSContentGroup` when
-  there is one, else the shallowest group of the app's window's shape, and none from a search
-  that an element gone above or beside the candidates (while listed, or before its facts were
-  read) or its budget left partial. The screen's frame is read again after the walk, and a
-  screen moved meanwhile answers `Error::Busy`. `Lane::read_tree` and `Lane::invoke` are handed
+  read whole up to `accessibility::IDENTITY_TEXT_LIMIT` by the pure `window_identity`, every
+  host's, and a longer one names something else, so a window that names the UDID is still taken
+  beside it. No run has recorded either Simulator window's tree yet (vanyastaff/flui#3152), so
+  the screen search holds for both shapes a plain group can take, the screen or a wrapper of the
+  `iOSContentGroup` (`tree::find_screen`): it reads the window's chrome first, breadth first
+  within ten levels, each element's children listed by the bounded listing the screen's walk
+  shares (`accessibility::list_children`), then goes into each plain group of the app window's
+  shape with what is left of the budget to look for an `iOSContentGroup` under it, never into an
+  `iOSContentGroup`. What cuts the search inside a plain candidate is the candidate's; a cut of
+  the chrome (an element gone, or the budget) is the search's (`tree::SearchReach`). The choice
+  is `tree::choose_screen`: an `iOSContentGroup` wherever it was found, else the shallowest plain
+  group, refused when the chrome was cut, with no retry offered when the budget cut it. The read
+  as a whole is `tree::read_screen`, every host's: the search, the walk, and the screen's frame
+  read again after it, a screen moved or gone meanwhile answering `Error::Busy`.
+  `Lane::read_tree` and `Lane::invoke` are handed
   the app's own tree, and each element is matched among the descendants of the node its nearest
   matched ancestor fits (the bridge serves only the elements VoiceOver reads), an app node once,
   by the role `lane::ios_simulator::roles` gives `accesskit_ios`'s trait, its label (a static
