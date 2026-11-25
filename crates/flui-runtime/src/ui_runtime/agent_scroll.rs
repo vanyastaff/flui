@@ -250,13 +250,13 @@ impl ScrollSearch {
             return Ok(None);
         };
         let element = found.element;
-        let reading = agent::actionability(
+        let read = agent::actionability(
             ctx.state,
             ctx.window,
             &ActionabilityParams::new(element),
             ctx.caught,
         )?;
-        Ok(reading.facts.visible.then_some(element))
+        Ok(read.reading.facts.visible.then_some(element))
     }
 
     /// The search ended at `found`: answer with it, and the reading asked for once a frame has

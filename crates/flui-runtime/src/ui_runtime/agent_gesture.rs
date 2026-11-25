@@ -121,13 +121,13 @@ pub(super) fn readiness(ctx: &mut AttemptContext<'_>, aimed: &Aimed, checks: Che
     ctx.if_panics.set(AgentError::ResolvePanicked {
         element: element.element,
     });
-    let (facts, shown) = match agent::actionability(
+    let (facts, shown, compared) = match agent::actionability(
         ctx.state,
         ctx.window,
         &ActionabilityParams::new(element),
         ctx.caught,
     ) {
-        Ok(reading) => (reading.facts, reading.shown),
+        Ok(read) => (read.reading.facts, read.reading.shown, read.compared),
         Err(
             error @ (AgentError::NoTreeYet | AgentError::RenderTreeBusy | AgentError::TreeBusy(_)),
         ) => return Readiness::NotYet(error),
@@ -145,7 +145,17 @@ pub(super) fn readiness(ctx: &mut AttemptContext<'_>, aimed: &Aimed, checks: Che
         };
     }
     let unmet = match checks {
-        Checks::All => facts.first_failed(),
+        Checks::All if compared => facts.first_failed(),
+        // Nothing says yet whether it holds still (no frame since its last read, with work
+        // pending): that holds the act back, but a check the committed tree fails outright is
+        // the one an answer names.
+        Checks::All => {
+            let mut known = facts.clone();
+            known.stable = true;
+            known
+                .first_failed()
+                .or(Some(flui_protocol::act::ActionabilityCheck::Stable))
+        }
         Checks::Attached => None,
     };
     if let Some(failed) = unmet {

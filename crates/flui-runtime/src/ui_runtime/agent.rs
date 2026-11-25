@@ -1010,7 +1010,7 @@ pub(super) fn actionability(
     window: WindowId,
     params: &ActionabilityParams,
     hit_panic: &mut FirstPanic,
-) -> Result<flui_semantics::ActionabilityReading, AgentError> {
+) -> Result<ActionabilityRead, AgentError> {
     let placement = placement_of(state, window);
     let point = state.pipeline().with(|pipeline| {
         pipeline
@@ -1060,10 +1060,23 @@ pub(super) fn actionability(
         !state.has_pending_work_snapshot(),
         reading.facts.rect,
     );
-    match previous {
-        Some(_) => read(previous),
-        None => Ok(reading),
-    }
+    Ok(ActionabilityRead {
+        reading: match previous {
+            Some(_) => read(previous)?,
+            None => reading,
+        },
+        compared: previous.is_some(),
+    })
+}
+
+/// What [`actionability`] read of an element.
+pub(super) struct ActionabilityRead {
+    /// The facts, and the part of the element the window shows.
+    pub(super) reading: flui_semantics::ActionabilityReading,
+    /// Whether its bounds could be compared with an earlier read's (`AgentStability`): when not,
+    /// its `stable` is `false` because nothing says yet whether it holds still, not because it
+    /// moved.
+    pub(super) compared: bool,
 }
 
 /// The owner half of `semantics.act` once its target is an element: the tree the action starts

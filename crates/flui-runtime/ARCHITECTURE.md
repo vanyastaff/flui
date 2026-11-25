@@ -1097,11 +1097,15 @@ presentation, is the one owner of what every reader (a held act, a poll) saw of 
 comparison counts once a terminal frame has run since (the presentation's tree revision moved) or
 while the presentation has no work pending that could still move the element. The first call for
 an element answers unstable; every later call at the same revision with work pending reads the same
-tree and answers what the comparison made at that revision did, so two readers of one frame, and a
-held act's last attempt on a turn without a frame, are told the same. Pinned by
+tree and answers what the comparison across the frame into that revision did, so two readers of one
+frame are told the same. A comparison made only because the presentation was idle is not replayed
+once work is pending: that work may move the element on the next frame, so no act passes on it.
+Unknown stability holds an act back, but its answer names a check the committed tree fails
+outright before `stable` (`ActionabilityRead::compared`). Pinned by
 `src/ui_runtime/tests/agent_locate.rs`, `agent_stability.rs` and
 `tests/contracts/agent_gestures.rs`
-(`a_last_attempt_on_a_turn_without_a_frame_names_the_check_that_failed`).
+(`a_last_attempt_on_a_turn_without_a_frame_names_the_check_that_failed`,
+`stability_answered_while_idle_does_not_pass_an_act_once_work_is_pending`).
 
 **Act and read.** `semantics.act` with a `snapshot` takes the committed tree
 as the before-snapshot (`SemanticsOwner::snapshot_wire`), serves the action as one without it, parks

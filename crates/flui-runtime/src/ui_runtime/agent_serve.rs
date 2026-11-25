@@ -586,7 +586,7 @@ impl Serve for method::ElementActionability {
         ctx.if_panics.set(AgentError::ResolvePanicked { element });
         Answer::Now(
             agent::actionability(ctx.state, ctx.window, &params, &mut ctx.caught)
-                .map(|reading| reading.facts),
+                .map(|read| read.reading.facts),
         )
     }
 }

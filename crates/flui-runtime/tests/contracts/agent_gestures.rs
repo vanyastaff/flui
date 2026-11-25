@@ -689,8 +689,10 @@ impl ViewState<Busy> for BusyState {
 }
 
 /// The last attempt of a held act may run on a turn without a frame, at the tree revision of the
-/// frame before, while the app has work pending. The element held still over the frames before,
-/// so the answer names the check that failed, `receives` for a covered button, never `stable`.
+/// frame before, while the app has work pending. Whether the element holds still is not known
+/// then (the work pending may move it on the next frame), so a second reader of that frame is not
+/// told it is stable, and the act is not performed; but the answer names the check the committed
+/// tree fails outright, `receives` for a covered button, not `stable`.
 #[test]
 fn a_last_attempt_on_a_turn_without_a_frame_names_the_check_that_failed() {
     let mut rig = crate::agent_rig::Rig::showing(&Busy);
@@ -734,8 +736,8 @@ fn a_last_attempt_on_a_turn_without_a_frame_names_the_check_that_failed() {
         .expect("read at the drain")
         .expect("its facts");
     assert!(
-        facts.stable,
-        "a second reader of the frame the act read is told what it was: {facts:?}"
+        !facts.stable,
+        "with work pending and no frame since, nothing says it holds still: {facts:?}"
     );
     let refused = tap
         .try_take()
@@ -1281,16 +1283,13 @@ fn count_of(entries: &[flui_protocol::input::JournalEntry], kind: InputKind) -> 
     entries.iter().filter(|entry| entry.kind == kind).count()
 }
 
-/// Pumps 250 ms frames, four times slower than the 60 Hz an act's play time counts, until `answer`
-/// is answered, at most 20 of them.
-fn answered_slowly<T>(
-    host: &mut HeadlessHost,
-    answer: &mut AgentAnswer<T>,
-) -> Result<T, ErrorObject> {
+/// Pumps 250 ms frames, four times slower than the 60 Hz an act's play time counts, until `act`
+/// is answered, at most 20 of them: the failure it answers, as an act cut off by its promise does.
+fn refused_slowly(host: &mut HeadlessHost, act: &mut AgentAnswer<ActOutcome>) -> ErrorObject {
     for _ in 0..20 {
         let _ = host.pump(Duration::from_millis(250));
-        if let Some(answer) = answer.try_take() {
-            return answer;
+        if let Some(answer) = act.try_take() {
+            return answer.expect_err("its input did not play out by its promise");
         }
     }
     panic!("no answer within 20 slow frames");
@@ -1311,9 +1310,15 @@ fn an_act_stopped_mid_play_lets_go_of_what_it_pressed() {
     .expect("a drag reads");
     drag.options = timeout(drag.options, 50);
     let mut drag = ask::<method::ElementDragTo>(&lease, drag);
-    let cut = answered_slowly(&mut host, &mut drag)
-        .expect_err("its input did not play out by its promise");
+    let cut = refused_slowly(&mut host, &mut drag);
     assert_eq!(cut.code, ErrorCode::Timeout, "{cut:?}");
+    assert!(
+        cut.effect
+            .as_ref()
+            .and_then(|effect| effect.sent)
+            .is_some_and(|sent| sent >= 2),
+        "it was cut after its press: {cut:?}"
+    );
     let entries = journal(&mut host, &window).entries.split_off(journaled);
     assert_eq!(count_of(&entries, InputKind::PointerDown), 1, "{entries:?}");
     assert_eq!(
@@ -1340,8 +1345,7 @@ fn an_act_stopped_mid_play_lets_go_of_what_it_pressed() {
     .expect("press keys reads");
     keys.options = timeout(keys.options, 50);
     let mut keys = ask::<method::ElementPressKeys>(&lease, keys);
-    let cut = answered_slowly(&mut host, &mut keys)
-        .expect_err("its input did not play out by its promise");
+    let cut = refused_slowly(&mut host, &mut keys);
     assert_eq!(cut.code, ErrorCode::Timeout, "{cut:?}");
     let entries = journal(&mut host, &window).entries.split_off(journaled);
     let down = count_of(&entries, InputKind::KeyDown);
