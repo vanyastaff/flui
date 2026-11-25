@@ -47,9 +47,10 @@
 //!   non-target text; a link alone in its parent is judged.
 //! - a target inside an interactive ancestor whose own hit region meets the
 //!   minimum: a pointer that misses the small target lands on that ancestor.
-//!   Android's Accessibility Test Framework reports this case as a warning
-//!   ("clickable ancestor"); a finding here has no severity, and the flui-driver
-//!   rule it serves exempts it.
+//!   Android's Accessibility Test Framework demotes this case to a warning
+//!   ("clickable ancestor"); an [`AuditFinding`] has no severity to say so
+//!   (`docs/gaps.md`, ADR-0400), so the case is not judged rather than reported
+//!   as a defect.
 //!
 //! A target an ancestor's fixed clip cuts stays judged by what the clip leaves,
 //! and its finding names the bounds it was cut from: a pointer reaches only the

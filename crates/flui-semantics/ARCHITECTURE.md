@@ -936,9 +936,10 @@ names the bounds it was cut from.
 **Why.** WCAG 2.5.8 exempts a target set in a sentence or held to the line-height of the text
 around it, which is what a paragraph's link region is: no change to the link fixes a height the
 line sets. A pointer that misses a small target inside a larger interactive ancestor lands on
-that ancestor, which Android's Accessibility Test Framework reports only as a warning; a finding
-carries no severity, and the flui-driver `small_target` rule this one serves lists the case as
-exempt. The framework's two other exemptions are built above or kept: the scrollable edge is the
+that ancestor, which Android's Accessibility Test Framework demotes to a warning; an
+`AuditFinding` has no severity to say so ([gaps](../../docs/gaps.md#accepted-adr-sections-not-built-yet)),
+so the case is not judged rather than reported as a defect. The framework's two other exemptions
+are built above or kept: the scrollable edge is the
 revealed extent, and a target clipped by an ancestor, which the framework also reports as a
 warning naming the unclipped size, stays a finding naming its bounds, because only the part shown
 can be reached. WCAG's spacing exception (an undersized target whose 24 px circle meets no other

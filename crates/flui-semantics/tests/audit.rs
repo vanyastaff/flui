@@ -335,6 +335,12 @@ fn link(c: &mut SemanticsConfiguration, label: &'static str) {
 ///    11 button "Pin" (20,170 20×20)
 ///  12 button "Chip" (250,80 30×30) →
 ///    13 button "Close" (255,85 20×20): its ancestor is under the minimum too
+///  14 paragraph (10,240 150×18) →
+///    15 link "Docs" (10,240 40×18): beside only an image with no name
+///    16 image, no name (50,240 18×18)
+///  17 toolbar (200,240 150×48) →
+///    18 link "Help" (200,240 40×18): beside a button, which is no text
+///    19 button "Go" (250,240 48×48)
 /// ```
 fn exemptions() -> Fixture {
     let mut f = Fixture::new();
@@ -369,6 +375,20 @@ fn exemptions() -> Fixture {
     f.add(Some(12), 13, (255.0, 85.0, 20.0, 20.0), |c| {
         button(c, Some("Close"));
     });
+    f.add(Some(1), 14, (10.0, 240.0, 150.0, 18.0), |_| {});
+    f.add(Some(14), 15, (10.0, 240.0, 40.0, 18.0), |c| link(c, "Docs"));
+    f.add(Some(14), 16, (50.0, 240.0, 18.0, 18.0), |c| {
+        c.set_role(SemanticsRole::Image);
+    });
+    f.add(Some(1), 17, (200.0, 240.0, 150.0, 48.0), |c| {
+        c.set_role(SemanticsRole::Toolbar);
+    });
+    f.add(Some(17), 18, (200.0, 240.0, 40.0, 18.0), |c| {
+        link(c, "Help");
+    });
+    f.add(Some(17), 19, (250.0, 240.0, 48.0, 48.0), |c| {
+        button(c, Some("Go"));
+    });
     f.flush();
     f
 }
@@ -376,8 +396,10 @@ fn exemptions() -> Fixture {
 /// The target-size rule does not judge a link set in a run of text, whose
 /// height the line sets (WCAG 2.5.8's inline exception), nor a target inside an
 /// interactive ancestor whose own hit region meets the minimum. A link alone in
-/// its paragraph, a target in a container that operates nothing, and a target
-/// whose interactive ancestor is under the minimum too are judged.
+/// its paragraph, one whose only sibling has no name (nothing a reader speaks
+/// sets its line), one beside a control that is no text (a toolbar's), a target
+/// in a container that operates nothing, and a target whose interactive
+/// ancestor is under the minimum too are judged.
 #[test]
 fn an_inline_link_and_a_target_inside_a_larger_control_are_not_judged() {
     let f = exemptions();
@@ -387,8 +409,24 @@ fn an_inline_link_and_a_target_inside_a_larger_control_are_not_judged() {
         .audit_target_size(minimum, placement())
         .expect("the published tree reads");
     let nodes: Vec<_> = findings.iter().map(|finding| finding.node).collect();
-    let wanted: Vec<_> = [7, 11, 12, 13].into_iter().map(element).collect();
+    let wanted: Vec<_> = [7, 11, 12, 13, 15, 18].into_iter().map(element).collect();
     assert_eq!(nodes, wanted, "{findings:#?}");
+}
+
+/// A link with no parent, the whole of a window smaller than the minimum,
+/// sits in no run of text and is judged.
+#[test]
+fn a_link_that_is_the_whole_tree_is_judged() {
+    let mut f = Fixture::new();
+    f.add(None, 1, (0.0, 0.0, 30.0, 18.0), |c| link(c, "Open"));
+    f.flush();
+    let minimum = MinimumTarget::try_new(44.0).expect("44 px is a minimum");
+    let findings = f
+        .owner
+        .audit_target_size(minimum, placement())
+        .expect("the published tree reads");
+    let nodes: Vec<_> = findings.iter().map(|finding| finding.node).collect();
+    assert_eq!(nodes, [element(1)], "{findings:#?}");
 }
 
 /// An element is interactive by any action that operates it, not only
@@ -518,6 +556,10 @@ fn a_minimum_target_is_a_finite_positive_extent() {
     // Within half a hundredth of the minimum is the minimum: round-off, never
     // a smaller target a device draws.
     assert!(minimum.admits(23.996, 23.996));
+    assert!(
+        minimum.admits(24.0 - 0.005, 24.0 - 0.005),
+        "the tolerance holds at half a hundredth exactly"
+    );
     assert!(!minimum.admits(23.994, 24.0));
     assert!(!minimum.admits(24.0, 23.994));
     for (width, height) in [
