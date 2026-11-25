@@ -2228,3 +2228,152 @@ fn scroll_until_withdraws_only_its_own_step() {
         }
     }
 }
+
+/// A list of 100 rows 20 px tall in a viewport 100 px tall, named "Items" until "Hide" renames it
+/// "Elsewhere", and "Items" again at the next press.
+#[derive(Clone, StatefulView)]
+struct Hideable;
+
+struct HideableState {
+    shown: Signal<bool>,
+}
+
+impl StatefulView for Hideable {
+    type State = HideableState;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        HideableState {
+            shown: ctx.signal(true),
+        }
+    }
+}
+
+impl ViewState<Hideable> for HideableState {
+    fn build(&self, _view: &Hideable, ctx: &dyn BuildContext) -> impl IntoView {
+        let shown = self.shown;
+        let label = if shown.get(ctx) { "Items" } else { "Elsewhere" };
+        let list = ListView::builder(100, 20.0, |index| {
+            Some(
+                SizedBox::new(200.0, 20.0)
+                    .child(Text::new(format!("Item {index}")))
+                    .into_view()
+                    .boxed(),
+            )
+        })
+        .semantics_label(label);
+        Column::new(vec![
+            RawButton::new(Text::new("Hide"))
+                .on_pressed(move |ctx| shown.update(ctx, |on| *on = !*on))
+                .into_view()
+                .boxed(),
+            SizedBox::new(200.0, 100.0).child(list).into_view().boxed(),
+        ])
+    }
+}
+
+/// `scroll_until` holds on while its locator names no scrollable, the answer of a step under way
+/// taken, and goes on scrolling once it names one again: it finds the element.
+#[test]
+fn scroll_until_goes_on_once_its_scrollable_is_back() {
+    let (mut host, _agent, window) = serving(&Hideable, 400);
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    let mut until = ScrollUntilParams::new(named("Items"), Locator::named("Item 40"));
+    until.options = timeout(until.options, 10_000);
+    let mut until = ask::<method::ElementScrollUntil>(&lease, until);
+    let journaled = journal(&mut host, &window).entries.len();
+    let mut stepped = false;
+    for _ in 0..30 {
+        let _ = host.pump(Duration::from_millis(16));
+        if journal(&mut host, &window).entries.len() >= journaled + 2 {
+            stepped = true;
+            break;
+        }
+    }
+    assert!(stepped, "two steps went out");
+    press(&mut host, &window, "Hide");
+    for _ in 0..8 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    assert!(
+        until.try_take().is_none(),
+        "held while the scrollable is gone"
+    );
+    press(&mut host, &window, "Hide");
+    let found = answered(&mut host, &mut until, 300)
+        .0
+        .expect("found once the scrollable is back");
+    assert_eq!(found.element, Some(element(&mut host, &window, "Item 40")));
+}
+
+/// A search naming no direction that moved down to the end of a vertical list ends there,
+/// `not_found`: it turns rightwards only when its first step down moved nothing. Each step is one
+/// wheel input in the window's journal: 100 rows of 20 px in a 100 px viewport take 19 steps that
+/// move and one that does not.
+#[test]
+fn scroll_until_turns_only_when_its_first_step_moves_nothing() {
+    let (mut host, _agent, window, lease, _presses) = shown();
+    let journaled = journal(&mut host, &window).entries.len();
+    let mut until = ScrollUntilParams::new(named("Items"), Locator::named("Item 100"));
+    until.options = timeout(until.options, 60_000);
+    let mut until = ask::<method::ElementScrollUntil>(&lease, until);
+    let ended = answered(&mut host, &mut until, 400)
+        .0
+        .expect_err("the list ends first");
+    assert_eq!(ended.code, ErrorCode::NotFound, "{ended:?}");
+    let scrolls = journal(&mut host, &window).entries[journaled..]
+        .iter()
+        .filter(|entry| entry.kind == InputKind::Scroll)
+        .count();
+    assert_eq!(scrolls, 20, "steps");
+}
+
+/// The element `scroll_until` found is reported as the agent's: once it scrolls away, a tap on
+/// its handle answers `gone`, not `unknown_handle`.
+#[test]
+fn the_element_scroll_until_found_is_the_agents() {
+    let (mut host, _agent, _window, lease, _presses) = shown();
+    let mut down = ask::<method::ElementScrollUntil>(
+        &lease,
+        ScrollUntilParams::new(named("Items"), Locator::named("Item 60")),
+    );
+    let found = answered(&mut host, &mut down, 200)
+        .0
+        .expect("found")
+        .element
+        .expect("the element found");
+    let mut up = ScrollUntilParams::new(named("Items"), Locator::named("Item 0"));
+    up.direction = Some(Direction::Up);
+    let mut up = ask::<method::ElementScrollUntil>(&lease, up);
+    answered(&mut host, &mut up, 200)
+        .0
+        .expect("back at the top");
+    for _ in 0..4 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    let mut tap = TapParams::new(Target::Element(found));
+    tap.options = timeout(tap.options, 200);
+    let mut tap = ask::<method::ElementTap>(&lease, tap);
+    let gone = answered(&mut host, &mut tap, 30)
+        .0
+        .expect_err("it scrolled away");
+    assert_eq!(gone.code, ErrorCode::Gone, "{gone:?}");
+}
+
+/// A gesture on a handle this agent was never given answers `unknown_handle`.
+#[test]
+fn a_gesture_on_a_handle_never_given_is_unknown() {
+    let (mut host, _agent, window, lease, _presses) = shown();
+    let made_up = ElementRef::new(
+        window.id(),
+        flui_protocol::tree::ElementId::from_u64(987_654_321).expect("an element id"),
+    );
+    let mut tap = TapParams::new(Target::Element(made_up));
+    tap.options = timeout(tap.options, 200);
+    let mut tap = ask::<method::ElementTap>(&lease, tap);
+    let refused = answered(&mut host, &mut tap, 30)
+        .0
+        .expect_err("no such element");
+    assert_eq!(refused.code, ErrorCode::UnknownHandle, "{refused:?}");
+}
