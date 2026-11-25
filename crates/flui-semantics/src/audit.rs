@@ -107,9 +107,11 @@ impl MinimumTarget {
 ///
 /// A published extent is a logical rect scaled to device pixels and back, and
 /// at a ratio that is not a power of two the round trip leaves an extent laid
-/// out at exactly the minimum a few ulps under it (`45 × 1.3 / 1.3 - 1.3 / 1.3`
-/// is `43.999999999999993`). Flutter's `MinimumTapTargetGuideline` allows
-/// `1e-10`, which the round-off of edges past about 10⁵ px exceeds. Half a
+/// out at exactly the minimum a few ulps under it (a 44 px target from 7 px to
+/// 51 px: `51 × 1.3 / 1.3 - 7 × 1.3 / 1.3` is `43.999999999999993` in `f64`).
+/// Flutter's `MinimumTapTargetGuideline` allows `1e-10`, which the round-off of
+/// edges past about 10⁶ px exceeds (there the same round trip misses by up to
+/// about `2.3e-10`). Half a
 /// hundredth of a pixel is far above any round-off, and a fiftieth of the
 /// smallest device pixel a platform draws (at a ratio of 4), so no target a
 /// device draws smaller passes; and a target that fails prints, at a finding's

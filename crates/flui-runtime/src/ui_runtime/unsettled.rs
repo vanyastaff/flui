@@ -10,7 +10,8 @@ use crate::presentation::PresentationState;
 use crate::settledness::{HostHalf, Unsettled};
 
 impl UiRuntime {
-    /// Lists into `into` what keeps this runtime from being idle at `now`, each cause with what
+    /// Lists into `into` what keeps this runtime from being idle at the instant `into` was
+    /// gathered at ([`Unsettled::at`], set by [`Unsettled::new`]), each cause with what
     /// discharges it as the runtime's own state says:
     ///
     /// - a redraw (`NeedsRedraw`), a scheduled frame (`FrameScheduled`), work a frame takes
@@ -220,7 +221,7 @@ impl UiRuntime {
         };
         if agent.awaits_settled_answer(self) {
             let now = flui_foundation::MonotonicClock::now(&self.clock);
-            agent.answer_from_runtime_half(self, now);
+            self.answer_settled_waits(now, HostHalf::Absent);
         }
     }
 

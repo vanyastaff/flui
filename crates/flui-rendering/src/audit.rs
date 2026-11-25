@@ -201,14 +201,11 @@ impl PipelineOwner {
         Some(
             painted
                 .into_iter()
-                .filter_map(|text| {
-                    let outcome = judge(&text)?;
-                    Some(TextContrast {
-                        painter: text.painter,
-                        element: self.element_of(text.painter, &with_nodes),
-                        outcome,
-                        text: text.text,
-                    })
+                .map(|text| TextContrast {
+                    painter: text.painter,
+                    element: self.element_of(text.painter, &with_nodes),
+                    outcome: judge(&text),
+                    text: text.text,
                 })
                 .collect::<Vec<TextContrast>>(),
         )
@@ -223,12 +220,12 @@ impl PipelineOwner {
     }
 }
 
-/// The outcome for one painted text: its runs against its backdrop. `None` for a text with no
-/// glyph run, which paints nothing to read and is left out of the answer (module docs).
-fn judge(text: &PaintedText) -> Option<ContrastOutcome> {
+/// The outcome for one painted text: its runs against its backdrop. A text is kept for judging
+/// only with a visible glyph run (`backdrop.rs`), so one of its runs gives the outcome.
+fn judge(text: &PaintedText) -> ContrastOutcome {
     let backdrop = match &text.backdrop {
         Ok(backdrop) => backdrop,
-        Err(unknown) => return Some(ContrastOutcome::NotChecked(*unknown)),
+        Err(unknown) => return ContrastOutcome::NotChecked(*unknown),
     };
     let mut worst_meeting: Option<ContrastReading> = None;
     let mut worst_below: Option<ContrastReading> = None;
@@ -249,10 +246,10 @@ fn judge(text: &PaintedText) -> Option<ContrastOutcome> {
         }
     }
     match (worst_below, unknown, worst_meeting) {
-        (Some(below), ..) => Some(ContrastOutcome::Below(below)),
-        (None, Some(why), _) => Some(ContrastOutcome::NotChecked(why)),
-        (None, None, Some(meeting)) => Some(ContrastOutcome::Meets(meeting)),
-        (None, None, None) => None,
+        (Some(below), ..) => ContrastOutcome::Below(below),
+        (None, Some(why), _) => ContrastOutcome::NotChecked(why),
+        (None, None, Some(meeting)) => ContrastOutcome::Meets(meeting),
+        (None, None, None) => unreachable!("BUG: a painted text kept for judging has a run"),
     }
 }
 

@@ -1350,13 +1350,13 @@ fn answered_by_wakes(
     rig: &mut crate::agent_rig::Rig,
     act: &mut AgentAnswer<ActOutcome>,
     period: Duration,
-) -> Result<ActOutcome, ErrorObject> {
+) -> Result<ActOutcome, Box<ErrorObject>> {
     rig.runtime.pump_background();
     assert!(act.try_take().is_none(), "held past its first attempt");
     for _ in 0..30 {
         rig.wake_after(period);
         if let Some(answer) = act.try_take() {
-            return answer;
+            return answer.map_err(Box::new);
         }
     }
     panic!("no answer within 30 wakes");

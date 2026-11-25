@@ -22,7 +22,8 @@
   listed in `not_checked`, so such a report is never `pass`. A target-size finding names the
   pointer it was judged for, the window's primary pointer; a disabled control's text is listed in
   `not_checked`, since an inactive control's text has no contrast requirement, and so is a text
-  whose control the disabled-state read did not reach. A report carries at most
+  below its contrast whose control the disabled-state read did not reach (one that meets it is
+  neither listed nor a finding). A report carries at most
   `AuditReport::MAX_FINDINGS` findings and counts the rest in `truncated` (protocol 0.33, additive).
 - The development agent answers `perf.start` and `perf.stop` with a `PerfReport` of the frames a
   window presented between them: percentiles of each frame's work from build to the end of paint
@@ -131,3 +132,18 @@
   cut short.
 - A strict locator the driver resolves for a gesture it composes reports its true count past ten
   matches, counting those the agent left out.
+- On a native runner, whose wake drains the owner inbox before its frame, an act whose deadline
+  passes between two frames is answered by that frame, as on the headless host: a last attempt
+  that passes plays instead of timing out, input due to end plays its last tick, and the reading
+  an act owes is taken instead of answered `readback_failed`. A drain answers an overdue act only
+  in a window that draws no frame.
+- An act cut short on a contact its lease already held down releases the buttons it pressed and
+  keeps the contact and the lease's buttons, so the lease's next tap presses again.
+- `gestures::is_one_key` refuses two symbols (`→→`, `€€`, `«»`): the text of one key is one
+  scalar value and only what joins it into one character.
+- `input.inject` is bounded by what it plans: a sequence planning more than
+  `flui_protocol::input::MAX_INPUTS` inputs (a move's steps each counted) is refused
+  `invalid_argument` (`PlanError::TooManyInputs`) before any is laid, and a window whose queued
+  injections would hold more than twice that answers `busy`.
+- The driver resolves a strict locator reading no more matches than the ten candidates it names,
+  so a locator matching thousands answers `ambiguous` instead of passing the reply line.
