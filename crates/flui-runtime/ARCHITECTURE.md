@@ -1389,9 +1389,13 @@ asks for every rule the protocol names, and a rule asked twice runs once; a rule
 (one this agent does not run, a semantics rule before the first committed tree, `text_contrast`
 before the first applied frame) is listed in `not_checked` and the verdict is never `pass`, and
 `text_contrast` with any text it could not judge is listed there too, with how many and the
-first three quoted, beside the findings of the texts it judged. A window with no tree yet is
-answered this way, not with an error. The elements findings name are recorded as issued. Pinned
-by `src/ui_runtime/tests/agent_audit.rs`.
+first three quoted, beside the findings of the texts it judged. The text of a disabled control
+is not judged (WCAG 1.4.3 exempts it); which controls are disabled comes from one read of the
+committed tree, bounded (`INACTIVE_READ_NODES`), and a text below its contrast whose element
+that read did not reach is listed as not judged, never a finding. A window with no tree yet is
+answered this way, not with an error. A report carries at most `AuditReport::MAX_FINDINGS`
+findings and counts the rest in `truncated`, so it stays one bounded reply. The elements findings name
+are recorded as issued. Pinned by `src/ui_runtime/tests/agent_audit.rs`.
 
 **Performance spans.** `perf.start` and `perf.stop` (`agent_perf.rs`) keep spans on the
 presentation's agent slot, one per caller: the input lease the call was asked through (`LeaseId`,
