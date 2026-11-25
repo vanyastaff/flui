@@ -24,22 +24,81 @@ pub const MAX_NODES: u32 = 100_000;
 /// The deepest a node of a dump may sit.
 pub const MAX_DEPTH: usize = 256;
 
-/// Where a session has its dumps written on the device: a directory the shell may write, a file
-/// named for the session (`session` is lowercase hex), so two sessions on one device never read
-/// each other's dump.
+/// Where a session has its dump numbered `dump` written on the device: a directory the shell may
+/// write, a file named for the session (`session` is lowercase hex) and the dump, so two sessions
+/// on one device never read each other's dump, and no dump reads a file an earlier one left.
 #[must_use]
-pub fn dump_path(session: &str) -> String {
-    format!("/data/local/tmp/flui-driver-{session}.xml")
+pub fn dump_path(session: &str, dump: u64) -> String {
+    format!("/data/local/tmp/flui-driver-{session}-{dump}.xml")
 }
 
-/// The line that dumps the active window to `path` and prints the dump: the file is removed
-/// whatever the dump's outcome.
+/// Every file a session's dumps write, as words of the device's shell: the dumps and their error
+/// streams, whatever their number.
+#[must_use]
+pub fn session_dumps(session: &str) -> String {
+    let every = dump_path(session, 0).replace("-0.xml", "-*.xml");
+    format!("{every} {every}.err")
+}
+
+/// The line that dumps the active window to the session's dump numbered `dump` and prints it, or,
+/// where the dump wrote no file, what it said on its error stream ([`DumpFailure`]). Each dump has
+/// a path of its own ([`dump_path`]), so a file an earlier dump left (one whose command the host
+/// ended at its deadline, before its removal ran) is never printed as this dump's; and the line
+/// ends by removing every file of the session's dumps ([`session_dumps`]), so what dumps the host
+/// ended left goes with the next that runs to its end.
 ///
 /// The dump connects to accessibility as `UiAutomation` does, which suspends the accessibility
 /// services running (TalkBack among them) until it ends.
 #[must_use]
-pub fn dump_line(path: &str) -> String {
-    format!("uiautomator dump {path} >/dev/null 2>&1 && cat {path}; rm -f {path}")
+pub fn dump_line(session: &str, dump: u64) -> String {
+    let path = dump_path(session, dump);
+    format!(
+        "uiautomator dump {path} >/dev/null 2>{path}.err; cat {path} 2>/dev/null || cat \
+         {path}.err; rm -f {}",
+        session_dumps(session)
+    )
+}
+
+/// Why a `uiautomator dump` wrote no file, where it says so: each a state of the device that
+/// passes, so the read is busy rather than failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DumpFailure {
+    /// The window never went idle within the dump's wait (AOSP `DumpCommand`'s
+    /// `waitForIdle(1000, 10000)`, which prints `ERROR: could not get idle state.`): the app
+    /// changes its tree all the time.
+    NotIdle,
+    /// Another `UiAutomation` client holds accessibility (`UiAutomationService … already
+    /// registered!`), as a test runner or a second dump does.
+    AnotherClient,
+}
+
+impl DumpFailure {
+    /// The failure the dump's error text `printed` names, if any.
+    pub(crate) fn of(printed: &str) -> Option<Self> {
+        if printed.contains("could not get idle state") {
+            Some(Self::NotIdle)
+        } else if printed.contains("already registered") {
+            Some(Self::AnotherClient)
+        } else {
+            None
+        }
+    }
+}
+
+impl std::fmt::Display for DumpFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotIdle => {
+                "`uiautomator dump` wrote no window: the window never went idle within its \
+                 wait, as an app that changes its tree on every frame keeps it; read again once \
+                 it settles"
+            }
+            Self::AnotherClient => {
+                "`uiautomator dump` wrote no window: another `UiAutomation` client holds the \
+                 device's accessibility; read again once it lets go"
+            }
+        })
+    }
 }
 
 /// A rectangle in display pixels.

@@ -438,15 +438,22 @@ the contract crate `flui-protocol`: the launch variables and the shortest token
   the launch again. The relay (`agent::browser::relay`) serves the session's
   usual local endpoint on one polling thread and carries each client to a
   connection of the export the launch names, its lines queued until the export
-  appears; a reload closes the clients whose connections went with the
-  document, and closes those connections in the page all the same, in case one
-  belongs to the next document. `flui mcp` does not change. The relay and
+  appears. What the relay holds of each connection in the page is one state per
+  client (`relay::Page`), and letting a client go does what that state says: a
+  connection open in the page is closed there and released, one the page ended
+  is released once its client has been written what the page sent before the
+  end, a reload included, and one whose connect call the page did not answer in
+  time is abandoned by its ID, which closes it if the page ran the call late
+  and refuses the call if it has not run yet. A reload closes the clients whose
+  connections went with the document, and closes those connections in the page
+  all the same, in case one belongs to the next document. A line the page
+  refuses leaves its connection ended when the page's end follows in the same
+  events, and closes it otherwise; closing a connection the page already ended
+  does nothing there. `flui mcp` does not change. The relay and
   `flui run`'s own endpoint (`agent::supervisor`, `run.reload`) poll their
-  clients through `agent::nonblocking::NonblockingStream`, which reads and
-  writes a non-blocking Windows named pipe as a Unix socket reads and writes:
-  a pipe answers an empty read as it answers a closed one, so an empty write
-  tells them apart, and answers a write into its full buffer with `Ok(0)`,
-  which reads as `WouldBlock`. The WebSocket is
+  clients through `flui_protocol::endpoint::PolledStream` (`agent::listener::polled`),
+  the one rule the app's agent and the driver read and write a local endpoint
+  by on Windows as on Unix. The WebSocket is
   `tungstenite`'s handshake and framing over a loopback `TcpStream`, no TLS.
   Safari is refused ([The driver agent cannot reach a page in Safari](../../docs/gaps.md#the-driver-agent-cannot-reach-a-page-in-safari)).
 - **Serve.** `flui mcp` speaks MCP over stdio (hand-written JSON-RPC: six

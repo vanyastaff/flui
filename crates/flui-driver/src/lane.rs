@@ -46,6 +46,7 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use flui_foundation::panic::{FirstPanic, discard_payload};
+use flui_protocol::act::{Effect, EffectUnit};
 use flui_protocol::input::PointerDevice;
 use flui_protocol::session::{Isolation, Placement};
 use flui_protocol::tree::Tree;
@@ -241,12 +242,31 @@ pub trait Lane: Send {
         Ok(())
     }
 
-    /// Send one event; a pause waits.
+    /// Send one event; a pause waits. Said on its own, a failure is the lane's: what of a run went
+    /// out before it is the run's to say ([`send_guarded`], through [`Self::send_counted`]).
     ///
     /// # Errors
     ///
     /// When the OS refused it.
     fn send(&mut self, event: &OsEvent) -> Result<()>;
+
+    /// Send `event` as [`Self::send`] does, saying in `delivered` each input of it that reached
+    /// the device: what [`send_guarded`] says of a run that fails part way. The default says an
+    /// event sent whole is one input where it acts ([`Delivered::sent`]), which holds for a lane
+    /// that sends each event as one input; a lane that sends an event as none or several (typed
+    /// keystrokes, Android's commands) says each input itself ([`Delivered::input`],
+    /// [`Delivered::command`]), so an event cut part way is partly sent.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::send`].
+    fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
+        let sent = self.send(event);
+        if sent.is_ok() {
+            delivered.sent(event);
+        }
+        sent
+    }
 
     /// The OS accessibility tree of the window `placement` describes, projected onto the wire's
     /// nodes (ADR-0095 §4): what a screen reader reads of the app. `app` is the window's tree as
@@ -394,14 +414,25 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
 /// pressed is released on every exit, a failed send included. When the release leaves input
-/// held, the run answers [`Error::ReleaseFailed`], so what stays down is always named; the
-/// failure that ended the run is its `first`, and the run's effect and verdict are that failure's
-/// ([`Error::effect`], [`Error::is_cannot_verify`]).
+/// held, the run names it in [`Error::ReleaseFailed`]: the failure that ended the run is its
+/// `first`, and the run's effect and verdict are that failure's ([`Error::effect`],
+/// [`Error::is_cannot_verify`]).
+///
+/// Whatever ends the run once an input of it reached the device ([`Lane::send_counted`]), a
+/// refusal, an interruption, a failed command or a release that fails after the last event, the
+/// run answers as [`Error::PartlySent`] around it, and no retry, which would send that input
+/// again. Its effect counts in events ([`Delivered`]): every event the lane took whole, a pause
+/// waited out and a move included, and the failing event where part of it reached the device;
+/// a lane that counts its commands names them in the effect's detail. A failure that names an
+/// effect of its own and invites no retry (a command that timed out) stays as it is. A release
+/// that fails after a run that ended for its own reason is that `ReleaseFailed`, the run's
+/// failure, partly sent or not, its `first`.
 ///
 /// # Errors
 ///
 /// As [`admit`] and [`Lane::check`], before any event, and [`Error::NotSupported`] naming
 /// `os_ime_composition` for a composition a lane that does not compose was handed;
+/// [`Error::PartlySent`] around what ended a run some of which went out;
 /// [`Error::ReleaseFailed`] naming what stays held, with the run's own failure as its `first`
 /// when there was one; [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
@@ -419,10 +450,16 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     if let Some(guard) = lane.guard() {
         guard.arm()?;
     }
-    let sent = send_each(lane, &name, events);
+    let (delivered, sent) = send_each(lane, &name, events);
     if let Some(guard) = lane.guard() {
         guard.disarm();
     }
+    // Once an input of the run reached the device, whatever ends it says how much went out.
+    let partly = |failure: Error| match delivered.effect(events.len()) {
+        Some(effect) => failure.after_partly_sent(effect),
+        None => failure,
+    };
+    let sent = sent.map_err(partly);
     let released = lane.release_all();
     match (sent, released) {
         // The error names what stays down whatever ended the run, and keeps that first failure,
@@ -442,6 +479,7 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
             message: format!("{message}; the run had failed first: {failure}"),
             first: Some(Box::new(failure)),
         }),
+        (Ok(()), Err(release)) => Err(partly(release)),
         (sent, released) => sent.and(released),
     }
 }
@@ -455,25 +493,112 @@ pub(crate) fn no_composition(lane: &str) -> Error {
     )
 }
 
-fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> {
-    for event in events {
-        if let Some(foreign) = lane.guard().and_then(ActivityGuard::foreign_input) {
-            return Err(Error::InterruptedByUser {
+/// What a run put on the device, the one record [`send_guarded`]'s partly-sent answer is read
+/// from. The run counts the events: every event the lane took whole, a pause waited out and a
+/// move included, and the failing event where part of it reached the device. The lane says, in
+/// [`Lane::send_counted`], each input of an event that reached the device: whether any did is
+/// whether the run acted, and whether one of the failing event's did is whether that event went
+/// out in part.
+#[derive(Debug, Default)]
+pub struct Delivered {
+    /// The events counted as sent: each taken whole, and the failing one where part of it went
+    /// out.
+    events: u32,
+    /// Whether an input of the event being sent reached the device.
+    part: bool,
+    /// Whether any input of the run reached the device.
+    acted: bool,
+    /// The commands a lane that counts them said, for the effect's detail.
+    commands: u32,
+}
+
+impl Delivered {
+    /// An input of the event being sent reached the device: a keystroke, a button, a click of
+    /// the wheel. An event cut after one is partly sent.
+    pub fn input(&mut self) {
+        self.part = true;
+        self.acted = true;
+    }
+
+    /// An input that is a command the lane counts (Android's `input` lines and pen reports): as
+    /// [`Self::input`], and named in the effect's detail.
+    pub fn command(&mut self) {
+        self.input();
+        self.commands = self.commands.saturating_add(1);
+    }
+
+    /// The lane sent `event` whole as one input: an input where the event acts
+    /// ([`OsEvent::acts`]: not a move or a pause).
+    pub fn sent(&mut self, event: &OsEvent) {
+        if event.acts() {
+            self.input();
+        }
+    }
+
+    /// The run starts sending its next event.
+    fn begin_event(&mut self) {
+        self.part = false;
+    }
+
+    /// The event being sent was taken whole, or failed: counted when taken, or when part of it
+    /// went out.
+    fn end_event(&mut self, taken: bool) {
+        if taken || self.part {
+            self.events = self.events.saturating_add(1);
+        }
+    }
+
+    /// What went out of a run of `total` events, when any input did: the events counted as sent
+    /// of `total`, with the commands in the detail where the lane counted them.
+    fn effect(&self, total: usize) -> Option<Effect> {
+        if !self.acted {
+            return None;
+        }
+        let effect = Effect::partial(
+            self.events,
+            u32::try_from(total).unwrap_or(u32::MAX),
+            EffectUnit::Event,
+        );
+        Some(if self.commands > 0 {
+            effect.detail(format!(
+                "the device took {} command(s) of the run",
+                self.commands
+            ))
+        } else {
+            effect
+        })
+    }
+}
+
+/// Send `events` one at a time, asking the guard before each and after the last: what the
+/// device took of them, and what ended the run.
+fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> (Delivered, Result<()>) {
+    let interrupted = |lane: &mut dyn Lane| {
+        lane.guard()
+            .and_then(ActivityGuard::foreign_input)
+            .map(|foreign| Error::InterruptedByUser {
                 lane: name.to_owned(),
                 event: foreign.description,
-            });
+            })
+    };
+    let mut delivered = Delivered::default();
+    for event in events {
+        if let Some(interruption) = interrupted(lane) {
+            return (delivered, Err(interruption));
         }
-        lane.send(event)?;
+        delivered.begin_event();
+        let sent = lane.send_counted(event, &mut delivered);
+        delivered.end_event(sent.is_ok());
+        if let Err(failure) = sent {
+            return (delivered, Err(failure));
+        }
     }
     // Input that came during the last event still ends the run: it may have changed what the
     // last event did.
-    if let Some(foreign) = lane.guard().and_then(ActivityGuard::foreign_input) {
-        return Err(Error::InterruptedByUser {
-            lane: name.to_owned(),
-            event: foreign.description,
-        });
+    match interrupted(lane) {
+        Some(interruption) => (delivered, Err(interruption)),
+        None => (delivered, Ok(())),
     }
-    Ok(())
 }
 
 /// Release what `lane` holds where no caller is left to retry (the worker ending, a job that

@@ -400,6 +400,7 @@ fn actionable(
                         .map_or_default(|cover| format!("; the point reached {cover}"))
                 ),
                 covered_by,
+                effect: None,
                 retry: ErrorCode::NotActionable.default_retry(),
             });
         }
@@ -436,6 +437,7 @@ fn aim(driver: &mut Driver, target: &Target, options: &GestureOptions) -> Result
             failed: Some(flui_protocol::act::ActionabilityCheck::Visible),
             covered_by: None,
             message: format!("{element} shows no point to aim at"),
+            effect: None,
             retry: ErrorCode::NotActionable.default_retry(),
         })?;
     Ok(Aim {

@@ -280,8 +280,37 @@ fn each_session_dumps_to_a_file_of_its_own() {
                 .is_some_and(|extension| extension == "xml"),
         "{one}"
     );
+    // The dump ends by removing every file of its session's dumps, its own and any an earlier
+    // dump the host ended left, so what such dumps leave stays bounded.
     let line = &first.commands("exec-out uiautomator dump")[0];
-    assert!(line.contains(&format!("rm -f {one}")), "{line}");
+    let every = one.replace("-1.xml", "-*.xml");
+    assert!(
+        line.ends_with(&format!("; rm -f {every} {every}.err")),
+        "{line}"
+    );
+    // Each dump of a session has a path of its own: a file an earlier dump left is never read.
+    let mut lane = connected(&first);
+    let empty = flui_driver::protocol::tree::Tree::new(Vec::new(), false);
+    let _ = lane.read_tree(&placement(), &empty);
+    let _ = lane.read_tree(&placement(), &empty);
+    let paths: Vec<String> = first
+        .commands("exec-out uiautomator dump")
+        .iter()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().nth(3).map(str::to_owned))
+        .collect();
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert_ne!(paths[0], paths[1]);
+    // Each lane's end removes what a dump of its session ended at its deadline may have left.
+    drop(lane);
+    let later = paths[0].replace("-1.xml", "-*.xml");
+    assert_eq!(
+        first.commands("shell rm -f"),
+        vec![
+            format!("shell rm -f {every} {every}.err"),
+            format!("shell rm -f {later} {later}.err"),
+        ]
+    );
 }
 
 #[test]
@@ -328,7 +357,8 @@ fn a_release_that_fails_after_the_run_did_keeps_the_runs_effect_and_verdict() {
         interrupted.missing_capability().as_deref(),
         Some("uninterrupted_os_input")
     );
-    assert!(!interrupted.may_have_run());
+    // The press went down before the touch was seen, so the run may have run.
+    assert!(interrupted.may_have_run(), "{interrupted}");
     // A release that fails on its own carries no first failure.
     let adb = scripted(true, true).reply_once(
         "shell input touchscreen motionevent CANCEL",

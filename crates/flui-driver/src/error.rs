@@ -31,8 +31,9 @@ pub enum Awaited {
 ///
 /// The variants up to [`Error::Platform`] are the app's answers, one per wire code, each with the
 /// fields its code carries and the `retry` the app said; [`Error::from_wire`] reads them. The driver
-/// raises the same codes for what it refuses itself, with the code's own retry. The rest are the
-/// driver's own failures.
+/// raises the same codes for what it refuses itself, with the code's own retry.
+/// [`Error::PartlySent`] is an answer of either side whose call went out in part, around the
+/// failure that ended it. The rest are the driver's own failures.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
@@ -55,11 +56,16 @@ pub enum Error {
         /// Whether the same call can succeed later.
         retry: Retry,
     },
-    /// The target is busy; the same call may succeed soon.
+    /// The target is busy; `retry` says whether the same call may succeed later. A busy that
+    /// ended an OS sequence after part of it went out comes as [`Error::PartlySent`], which says
+    /// it may have run and invites no retry.
     #[error("busy: {message}")]
     Busy {
         /// Why, for people.
         message: String,
+        /// How much of the call reached the app, when the app said so: part of an input it
+        /// played before it was found busy.
+        effect: Option<Effect>,
         /// Whether the same call can succeed later.
         retry: Retry,
     },
@@ -70,6 +76,8 @@ pub enum Error {
         message: String,
         /// The nearest elements by role, name and identifier, as outline lines.
         candidates: Vec<String>,
+        /// How much of the call reached the app, when the app said so.
+        effect: Option<Effect>,
         /// Whether the same call can succeed later.
         retry: Retry,
     },
@@ -160,6 +168,8 @@ pub enum Error {
     InputHeld {
         /// For people.
         message: String,
+        /// How much of the call reached the app, when the app said so.
+        effect: Option<Effect>,
         /// Whether the same call can succeed later.
         retry: Retry,
     },
@@ -190,6 +200,8 @@ pub enum Error {
         covered_by: Option<String>,
         /// For people.
         message: String,
+        /// How much of the call reached the app, when the app said so.
+        effect: Option<Effect>,
         /// Whether the same call can succeed later.
         retry: Retry,
     },
@@ -276,6 +288,22 @@ pub enum Error {
         /// effect and verdict are read from ([`Error::effect`], [`Error::is_cannot_verify`]).
         first: Option<Box<Error>>,
     },
+    /// Part of an acting call went out before the failure `first` ended it, which `first` cannot
+    /// say itself: `effect` says how much. It answers to `first`'s wire code, verdict and missing
+    /// capability, and the wire states it as `first` with `effect` and `retry`. The driver builds
+    /// it when an OS sequence fails after some of its events went out
+    /// ([`lane::send_guarded`](crate::lane::send_guarded)), with `retry: never`, since the same
+    /// call would send them again; [`Error::from_wire`] reads an app's answer that carries an
+    /// effect on a code whose variant holds none as this, its retry kept.
+    #[error("{first} (part of the call went out first)")]
+    PartlySent {
+        /// How much went out.
+        effect: Effect,
+        /// Whether the same call can succeed later.
+        retry: Retry,
+        /// The failure that ended the call.
+        first: Box<Error>,
+    },
     /// The conversation with the app broke its protocol: a line that is not one, an answer to
     /// nothing asked.
     #[error("protocol: {message}")]
@@ -327,17 +355,25 @@ impl Error {
             client,
             ..
         } = error;
-        match code {
+        // A code whose variant holds no effect, answered with one: the effect is the part of the
+        // call that went out before it failed.
+        let carried = effect.clone();
+        let read = match code {
             ErrorCode::InvalidArgument => Self::InvalidArgument { message, retry },
             ErrorCode::NotSupported => Self::NotSupported {
                 capability,
                 message,
                 retry,
             },
-            ErrorCode::Busy => Self::Busy { message, retry },
+            ErrorCode::Busy => Self::Busy {
+                message,
+                effect,
+                retry,
+            },
             ErrorCode::NotFound => Self::NotFound {
                 message,
                 candidates,
+                effect,
                 retry,
             },
             ErrorCode::UnknownHandle => Self::UnknownHandle {
@@ -365,7 +401,11 @@ impl Error {
                 message,
                 retry,
             },
-            ErrorCode::InputHeld => Self::InputHeld { message, retry },
+            ErrorCode::InputHeld => Self::InputHeld {
+                message,
+                effect,
+                retry,
+            },
             ErrorCode::ShuttingDown => Self::ShuttingDown { message, retry },
             ErrorCode::Ambiguous => Self::Ambiguous {
                 message,
@@ -376,6 +416,7 @@ impl Error {
                 failed,
                 covered_by,
                 message,
+                effect,
                 retry,
             },
             ErrorCode::Stale => Self::Stale {
@@ -396,6 +437,31 @@ impl Error {
                 message,
                 retry,
             },
+        };
+        // An effect on a code whose variant holds none (the app played part of an input before
+        // the failure): the answer is that failure, partly sent, its retry as the app said.
+        match carried {
+            Some(effect) if read.effect().is_none() => Self::PartlySent {
+                effect,
+                retry,
+                first: Box::new(read),
+            },
+            _ => read,
+        }
+    }
+
+    /// This failure, after part of an OS sequence went out as `effect` says: the failure itself
+    /// when it already names an effect of its own and invites no retry (a command that timed
+    /// out, which may have run), [`Error::PartlySent`] with `retry: never` otherwise.
+    #[must_use]
+    pub(crate) fn after_partly_sent(self, effect: Effect) -> Self {
+        if self.effect().is_some() && self.retry() == Retry::Never {
+            return self;
+        }
+        Self::PartlySent {
+            effect,
+            retry: Retry::Never,
+            first: Box::new(self),
         }
     }
 
@@ -405,6 +471,17 @@ impl Error {
     /// ([`Self::is_cannot_verify`]), `platform` otherwise, its message the whole failure.
     #[must_use]
     pub fn to_wire(&self) -> ErrorObject {
+        if let Self::PartlySent {
+            effect,
+            retry,
+            first,
+        } = self
+        {
+            let mut object = first.to_wire();
+            object.effect = Some(effect.clone());
+            object.retry = *retry;
+            return object;
+        }
         let code = self.code().unwrap_or(if self.is_cannot_verify() {
             ErrorCode::NotSupported
         } else {
@@ -493,6 +570,7 @@ impl Error {
         Self::NotFound {
             message: message.into(),
             candidates: Vec::new(),
+            effect: None,
             retry: ErrorCode::NotFound.default_retry(),
         }
     }
@@ -501,6 +579,7 @@ impl Error {
     pub(crate) fn busy(message: impl Into<String>) -> Self {
         Self::Busy {
             message: message.into(),
+            effect: None,
             retry: ErrorCode::Busy.default_retry(),
         }
     }
@@ -556,6 +635,9 @@ impl Error {
     /// The wire code this error answers to; `None` for the driver's own failures.
     #[must_use]
     pub fn code(&self) -> Option<ErrorCode> {
+        if let Self::PartlySent { first, .. } = self {
+            return first.code();
+        }
         Some(match self {
             Self::InvalidArgument { .. } => ErrorCode::InvalidArgument,
             Self::NotSupported { .. } => ErrorCode::NotSupported,
@@ -580,6 +662,7 @@ impl Error {
             Self::InterruptedByUser { .. }
             | Self::Lane { .. }
             | Self::ReleaseFailed { .. }
+            | Self::PartlySent { .. }
             | Self::Protocol { .. }
             | Self::Expectation { .. }
             | Self::Unreadable { .. }
@@ -587,8 +670,8 @@ impl Error {
         })
     }
 
-    /// Whether the same call can succeed later: what the app said for its answers, and never for
-    /// the driver's own failures.
+    /// Whether the same call can succeed later: what the app said for its answers, what a partly
+    /// sent call says ([`Error::PartlySent`]), and never for the driver's own failures.
     #[must_use]
     pub fn retry(&self) -> Retry {
         match self {
@@ -611,7 +694,8 @@ impl Error {
             | Self::Stale { retry, .. }
             | Self::Version { retry, .. }
             | Self::NotDriver { retry, .. }
-            | Self::Platform { retry, .. } => *retry,
+            | Self::Platform { retry, .. }
+            | Self::PartlySent { retry, .. } => *retry,
             Self::InterruptedByUser { .. }
             | Self::Lane { .. }
             | Self::ReleaseFailed { .. }
@@ -629,7 +713,12 @@ impl Error {
         match self {
             Self::Timeout { effect, .. }
             | Self::Platform { effect, .. }
-            | Self::Gone { effect, .. } => effect.as_ref(),
+            | Self::Gone { effect, .. }
+            | Self::Busy { effect, .. }
+            | Self::NotFound { effect, .. }
+            | Self::InputHeld { effect, .. }
+            | Self::NotActionable { effect, .. } => effect.as_ref(),
+            Self::PartlySent { effect, .. } => Some(effect),
             Self::ReleaseFailed {
                 first: Some(first), ..
             } => first.effect(),
@@ -654,7 +743,8 @@ impl Error {
         match self {
             Self::ReleaseFailed {
                 first: Some(first), ..
-            } => first.is_cannot_verify(),
+            }
+            | Self::PartlySent { first, .. } => first.is_cannot_verify(),
             _ => matches!(
                 self,
                 Self::NotSupported { .. }
@@ -673,7 +763,8 @@ impl Error {
         match self {
             Self::ReleaseFailed {
                 first: Some(first), ..
-            } => first.missing_capability(),
+            }
+            | Self::PartlySent { first, .. } => first.missing_capability(),
             Self::NotSupported { capability, .. } => {
                 Some(capability.clone().unwrap_or_else(|| "unnamed".to_owned()))
             }

@@ -29,11 +29,13 @@
 //! - **Reading.** [`roles`] is the role table the accessibility API is read against; the lane
 //!   projects the window's accessibility tree onto the wire's nodes (`Lane::read_tree`) through
 //!   the bounded walk of `lane::walk`, the window frame's own controls left out
-//!   ([`frame`]), and presses an element by its identifier (`Lane::invoke`, `AXPress`).
+//!   ([`frame`]), and presses an element by its identifier (`Lane::invoke`, `AXPress`), answered
+//!   as [`press::pressed`] says.
 //! - **Capture.** ScreenCaptureKit's capture of the window alone, from macOS 14 (`capture`).
 //!
 //! The pure parts (the key, role, coordinate and activity tables, the safety rules, the held keys,
-//! the pointer plan, the frame projection and the release gates) build on every host, so their
+//! the pointer plan, the frame projection, the press's answer and the release gates) build on
+//! every host, so their
 //! tables run on Linux CI; the parts that call macOS are `cfg(target_os = "macos")`.
 
 pub mod activity;
@@ -42,6 +44,7 @@ pub mod frame;
 pub mod held;
 pub mod keys;
 pub mod pointer;
+pub mod press;
 pub mod roles;
 pub mod safety;
 pub mod screen;
@@ -108,14 +111,16 @@ mod lane {
     use super::guard::MacosGuard;
     use super::held::{HeldKeys, KeyInput};
     use super::keys::{self, KeyName};
-    use super::pointer::{Point, Pointer, Step, Wheel};
+    use super::pointer::{MouseKind, Point, Pointer, Step, Wheel};
     use super::safety::{self, Desk, Landing, Permission, Refusal};
     use super::screen::{self, PointRect, WindowInfo};
     use super::{ax, capture, quartz};
     use crate::coordinates::{DevicePoint, WindowGeometry};
     use crate::error::{Error, Result};
     use crate::lane::pacing::slices;
-    use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
+    use crate::lane::{
+        AccessibilityApi, ActivityGuard, Delivered, Lane, LaneCapabilities, PositionFidelity,
+    };
     use crate::steps::OsEvent;
 
     /// How long the lane waits for the app it brought to the front to be there.
@@ -331,14 +336,20 @@ mod lane {
         }
 
         /// Post the keystrokes of `input` one by one, the desktop read again before each, each
-        /// recorded once it was posted.
-        fn type_keys(&mut self, target: Target, input: &KeyInput) -> Result<()> {
+        /// recorded and said in `delivered` once it was posted.
+        fn type_keys(
+            &mut self,
+            target: Target,
+            input: &KeyInput,
+            delivered: &mut Delivered,
+        ) -> Result<()> {
             let pid = self.pid;
             for stroke in self.keys.plan(input) {
                 self.checked(target, None)?;
                 self.keys.deliver(stroke, |stroke, flags| {
                     quartz::keystroke(pid, stroke, flags)
                 })?;
+                delivered.input();
             }
             Ok(())
         }
@@ -384,7 +395,14 @@ mod lane {
             })
         }
 
-        fn pointer(&mut self, target: Target, event: &OsEvent) -> Result<()> {
+        /// Post the pointer `event`, each press, release and turn of the wheel said in
+        /// `delivered` once it was posted.
+        fn pointer(
+            &mut self,
+            target: Target,
+            event: &OsEvent,
+            delivered: &mut Delivered,
+        ) -> Result<()> {
             if let OsEvent::Scroll {
                 at,
                 delta_x,
@@ -405,6 +423,7 @@ mod lane {
                 let (vertical, horizontal) = wheel.turn(*delta_x, *delta_y, target.scale)?;
                 if vertical != 0 || horizontal != 0 {
                     quartz::scroll(self.pid, point, vertical, horizontal, self.keys.flags())?;
+                    delivered.input();
                 }
                 self.wheel = wheel;
                 return Ok(());
@@ -415,8 +434,13 @@ mod lane {
             let events = self.pointer.plan(step)?;
             self.checked(target, aim)?;
             let (pid, flags) = (self.pid, self.keys.flags());
-            self.pointer
-                .deliver(&events, |event| quartz::mouse(pid, event, flags))
+            self.pointer.deliver(&events, |event| {
+                quartz::mouse(pid, event, flags)?;
+                if matches!(event.kind, MouseKind::Down(_) | MouseKind::Up(_)) {
+                    delivered.input();
+                }
+                Ok(())
+            })
         }
 
         /// Wait out `pause` whole, looking at the guard between slices: the person's input ends
@@ -508,6 +532,13 @@ mod lane {
         }
 
         fn send(&mut self, event: &OsEvent) -> Result<()> {
+            self.send_counted(event, &mut Delivered::default())
+        }
+
+        /// A key event or text is a keystroke or several, a press, a release and a turn of the
+        /// wheel one input each, each said once it was posted, so an event cut part way is
+        /// partly sent.
+        fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
             // `send_guarded` refuses it first; a caller that sends directly hears the same.
             if matches!(event, OsEvent::Composition(_)) {
                 return Err(crate::lane::no_composition(self.name()));
@@ -517,9 +548,9 @@ mod lane {
             }
             let target = self.target()?;
             if let Some(input) = Self::key_input(event)? {
-                return self.type_keys(target, &input);
+                return self.type_keys(target, &input, delivered);
             }
-            self.pointer(target, event)
+            self.pointer(target, event, delivered)
         }
 
         fn release_all(&mut self) -> Result<()> {

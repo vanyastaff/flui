@@ -32,6 +32,7 @@ the same bug found by a whole-demo snapshot names a demo.
 |------|--------|-------------|------------|
 | Inspection | Typed self-description of any node | `flui_foundation::inspect::{Inspect, SnapshotNode}` | always |
 | Waker | A `Waker` that counts its wakes, runs an action, drops its captures when it retires, or panics | `flui_foundation::testing::{CountingWaker, panicking_waker}` | `flui-foundation/testing` |
+| Local endpoint | A pipe that answers each read and write from a script, recording what the writes took | `flui_protocol::testing::{ScriptedPipe, PipeAnswer}` | `flui-protocol/testing` |
 | Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
 | Layer | Structural walkers over a `LayerTree` (built with `push_child`, or a scene's `SceneVersion::flatten`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
@@ -142,14 +143,33 @@ cargo fmt --all --check; typos; taplo fmt --check   # formatting, spelling, TOML
 cargo nextest run -p flui-platform -p flui-testing -p flui-material -p flui-cli -p flui-painting -p flui-native -p flui-system   # the generated files (key and recording vocabularies, Material icon constants, platform floors, font assets, Android dex digests) against their sources; FLUI_BLESS=1 rewrites what a generator wrote (not the font or dex checks, which compare)
 ```
 
-The reload-lifecycle fixture is a real plugin image. nextest's setup script
-`build-hot-reload-fixture` (`.config/nextest.toml`) builds its library before
-its tests, so Cargo publishes the cdylib to the artifact directory on the
-runner's dynamic-library search path; built only as the tests' dependency, it
-stays in the build directory. Under `cargo test`, run
-`cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked` first. The tests
-do not infer private Cargo build directories or choose a cached DLL by
-modification time.
+### The reload-lifecycle fixture
+
+The reload-lifecycle tests (`examples/hot_reload_lifecycle_fixture`) load a real
+plugin image: the fixture's cdylib, from Cargo's artifact directory on the
+runner's dynamic-library search path. Cargo puts it there only for a build that
+names the library; built as the tests' dependency, it stays in the build
+directory, at a path of Cargo's own, which the tests do not infer.
+
+nextest's setup script `build-hot-reload-fixture` (`.config/nextest.toml`) runs
+`cargo build -p flui-hot-reload-lifecycle-fixture --lib` before those tests, on
+every host. Nothing tells a setup script the run's profile, target or target
+directory (`NEXTEST_PROFILE` is nextest's own profile), so it builds the dev
+profile, for the host target, into the target directory Cargo resolves without
+`--target-dir`: `target/`, or `CARGO_TARGET_DIR`, which the script inherits. It
+passes no `--locked`: by the time it runs, the run's own build has held the
+lockfile to `--locked` or resolved it without, and the script builds against
+that lockfile either way.
+
+Any other run builds the fixture first, by hand, with the run's flags:
+`cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`, adding
+`--release`, `--target <triple>` or `--target-dir <dir>` as the run has them,
+and `--profile <name>` for nextest's `--cargo-profile <name>`. That holds for
+every run under `cargo test` too. Otherwise the tests find no fixture, or load
+one an earlier build left in that directory and test that build's code. The
+tests do not check the image's age: the test binary is relinked by a change to
+the test alone, which leaves an up-to-date fixture older than it, so a fixture
+older than the test binary is not a stale one.
 
 The `checks` job's test-reachability step takes each test target's root file from Cargo
 metadata (an implicit path included) and reads its `mod` and `#[path]` lines with a shell
@@ -1468,8 +1488,9 @@ Vulkan and once on GL, and locally on the host's adapter with the same two
 `cargo nextest run` lines and `FLUI_REQUIRE_GPU=1`.
 
 A scheduled `weekly.yml` workflow (Mondays, or manually via
-`workflow_dispatch`) builds and tests against a fresh `cargo update` — early
-warning for upstream semver breakage. It is not a merge gate. New RustSec
+`workflow_dispatch`) builds and tests against a fresh `cargo update`, which
+moves every dependency to its newest compatible version at least 7 days old
+(`.cargo/config.toml`) — early warning for upstream semver breakage. It is not a merge gate. New RustSec
 advisories have a daily workflow of their own, `advisories.yml`: it runs the
 `deps` job's advisories step against main and keeps the "RustSec advisory on
 main" issue open while a finding stands. `fuzz.yml` runs the fuzz targets every

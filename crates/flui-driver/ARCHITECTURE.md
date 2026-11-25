@@ -66,10 +66,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
   `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device
   without a guard, before the run is announced and again at every `lane::send_guarded`, which
-  asks the guard before every event and releases everything on every exit, answering
-  `ReleaseFailed` when the release leaves input held, whatever ended the run: the run's own
+  asks the guard before every event and releases everything on every exit, naming what the
+  release leaves held in `ReleaseFailed`: after a run that ended for its own reason, that
   failure is its `first`, whose effect and verdict it answers with (`Error::effect`,
-  `Error::is_cannot_verify`); an input-method composition reaches only a lane whose capabilities
+  `Error::is_cannot_verify`); after a run that went out whole, it comes inside `PartlySent`, as
+  below; an input-method composition reaches only a lane whose capabilities
   say it composes (`LaneCapabilities::compositions`, the Chrome lane alone), refused before the
   desktop is locked or the run announced, at `send_guarded`, and by every other lane's own `send`;
   `OsInputLock` holds one session per user's desktop (a headless browser, the session's own,
@@ -79,14 +80,25 @@ app's trees, frames and input, and this crate composes that with what only the O
   handle holds the OS file lock (a lock file this user may only read is opened for reading, one
   it cannot open is `Error::Io`, never retried); the first OS
   event of a session is announced once; once OS input went out, a failed read of what it did is
-  `may_have_run`, never not run.
+  `may_have_run`, never not run. Whatever ends a run once an input of it reached the device, a
+  refusal, the guard's interruption, a failed command, a release that fails after the last
+  event, `send_guarded` answers as `Error::PartlySent` around it, on every lane, read from one
+  record (`lane::Delivered`): the lane says each input of an event that reached the device
+  (`Lane::send_counted`: an event sent whole is one input where it acts by default; Windows,
+  X11 and macOS say each keystroke, button and click of the wheel, Android each command, an
+  `input` line or a pen report, one whose answer was lost included), the run counts every event
+  taken whole, a pause and a move included, and the failing event where part of it went out
+  (`Effect::partial`, in events; Android's commands in its detail), and no retry is invited,
+  which would send them again; a failure with an effect of its own that invites no retry (a
+  timed-out command) stays as it is.
 - **A person's interruption followed by a failed release is cannot-verify, the held input
   named.** When the guard sees the person's input, the run stops and is cannot-verify: the input
   that reached the app is no longer the scenario's, so neither a pass nor a failure of the app can
   be read from it. A release that then fails does not turn that into a failure of the app, which
   did nothing wrong; nor may it go unsaid, since input stays down on the person's desktop.
   `send_guarded` answers `Error::ReleaseFailed` with the keys, buttons and contacts still held in
-  `held` and the interruption as `first`, from which `Error::is_cannot_verify` and
+  `held` and the interruption as `first` (inside `PartlySent` once an input of the run reached
+  the device), from which `Error::is_cannot_verify` and
   `Error::effect` answer: the report says cannot-verify, and the error says what to release by
   hand. The same holds for any first failure: a timed-out act stays `may_have_run`.
 - **What a lane cannot send is refused before anything is sent.** `lane::send_guarded` asks
@@ -118,8 +130,11 @@ app's trees, frames and input, and this crate composes that with what only the O
   keys, actions, input-method steps and screenshot decoding are pure tables, and what reaches a
   browser goes through its session.
 - **The Android lane reaches the device through one door.** Every `adb` command runs through
-  `lane::android::adb::Adb` with a deadline and a bound on its output, a timed-out command being
-  `timeout` with `may_have_run`; a stream (`getevent`, `uinput`) hands over bounded records, at
+  `lane::android::adb::Adb` with a deadline and a bound on its output, and its failure says
+  whether the command reached the device (`adb::RunFailure`: never started, or its answer lost).
+  A timed-out command that acts is `timeout` with `may_have_run`, and one that reads
+  (`Printed::Data`: the windows, the settings, a dump, a capture) keeps no effect, since it sends
+  nothing that acts on the app; a stream (`getevent`, `uinput`) hands over bounded records, at
   most a fixed number waiting; a value from outside the lane enters a device shell line only
   through `adb::quote`. What the device prints is read as untrusted input: sizes checked before
   decoding (`screencap`, `uiautomator dump`), node, depth and device counts bounded.
@@ -133,9 +148,15 @@ app's trees, frames and input, and this crate composes that with what only the O
   the keys and chords that leave the app or change the device (the fallbacks of AOSP's
   `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
   the mouse included, going down at the display's edge; before each press, key, text and scroll
-  one `dumpsys window` must show the window the lane located holding the focus, compared by its
-  hash, frame and rotation: another window of the app's title is `NotForeground`, the same
-  window moved or turned is `Busy` until the lane locates it again.
+  one `dumpsys window -a` must show the window the lane located holding the focus, compared by
+  its hash, frame and rotation, on the display holding the device's focus: another display, or
+  the app's window on another display, is `android_default_display`, another window of the
+  app's title is `NotForeground`, the same window moved or turned is `Busy` until the lane
+  locates it again. The whole dump runs under the window manager's lock, which every window
+  change on the device waits for, once a locate and once before each such command; `-a` is what
+  prints the frames. A window that takes no focus over the press point is not checked
+  (`docs/gaps.md`). A contact going down is recorded before its command goes out, so a send that
+  times out or unwinds leaves it for the release to cancel.
 - **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
@@ -190,16 +211,39 @@ app's trees, frames and input, and this crate composes that with what only the O
   UDID, or two naming none when none names it, are refused. A device renamed or removed since
   the lane connected is refused (`accessibility::screen_title`). The screen's elements are read
   by a pure walk over a source (`accessibility::walk_screen`): a level the node budget or a
-  vanished element cuts is marked unread on its parent, the screen included, and a group gone
-  mid-search cuts the screen search short. Every walk over an OS tree takes a step that finds an
-  element gone as its level cut, never ended (`lane::walk`); `ax::child_at` answers
-  `kAXErrorInvalidUIElement`, the parent gone, as that. Every element the read asks is given the
+  vanished element cuts is marked unread on its parent, the screen included. Every walk over an
+  OS tree, `lane::walk`'s and this one, holds one rule with its cause (`lane::walk::Cut`): a
+  bound, the list gone (a step to a next child that finds an element gone; `ax::child_at`
+  answers `kAXErrorInvalidUIElement`, the parent gone, as that), or one element gone while read,
+  left out of a list read on to its end. Each marks its level unread and the read truncated, and
+  each reader acts on the cause: a press refuses a lone match on a short read with a retry unless
+  a bound cut it, and the projection leaves FLUI's announcers out unless the root's list ended
+  early. Every element the read asks is given the
   client's deadline and carries it, so a timeout, a press's included, names the deadline of the
-  element its call was asked of, or says that element refused it. The screen is found by walking every group of the
-  window within ten levels (`tree::find_screen`), each group's children listed by the bounded
-  listing the screen's walk shares (`accessibility::list_children`): an `iOSContentGroup` when
-  there is one, else the shallowest group of the app's window's shape, which a search left
-  partial by a group gone or its budget does not take. `Lane::read_tree` and `Lane::invoke` are handed
+  element its call was asked of, or says that element refused it. A window's identity texts are
+  read whole up to `accessibility::IDENTITY_TEXT_LIMIT` by the pure `window_identity`, every
+  host's, and a longer one names something else, so a window that names the UDID is still taken
+  beside it. No run has recorded either Simulator window's tree yet (vanyastaff/flui#3152), so
+  the screen search holds for both shapes a plain group can take, the screen or a wrapper of the
+  `iOSContentGroup` (`tree::find_screen`): it reads the window's chrome first, breadth first
+  within ten levels, each element's children listed by the bounded listing the screen's walk
+  shares (`accessibility::list_children`), then goes into each plain group of the app window's
+  shape with what is left of the budget to look for an `iOSContentGroup` under it, never into an
+  `iOSContentGroup`. What cuts the search inside a plain candidate is the candidate's; a cut of
+  the chrome (an element gone, or the budget) is the search's (`tree::SearchReach`). The choice
+  is `tree::choose_screen`: an `iOSContentGroup` wherever it was found, else the shallowest plain
+  group, refused when the chrome was cut, with no retry offered when the budget cut it. The read
+  as a whole is `tree::read_screen`, the Mac's and the tests' over their own trees: the search,
+  the walk, and the screen's frame alone read again after it, a screen moved or gone meanwhile
+  answering `Error::Busy`. An element gone anywhere in the read (the search, the walk, the
+  frame) goes through one trust check, the source's failure asked twice at most: once before
+  the search answers, and once for the walk and the frame read again together. While the
+  process is no longer trusted it is the permission refused, never a cut, a short read or a busy
+  screen; while it is trusted, an element gone in the walk leaves its level unread and the read
+  truncated, so a press does not take a lone match it could have been the twin of. The scripted window
+  (`testing::ScriptedSimulatorScreen`) serves a screen already read and shares only
+  `tree::choose_window` and `tree::locate`.
+  `Lane::read_tree` and `Lane::invoke` are handed
   the app's own tree, and each element is matched among the descendants of the node its nearest
   matched ancestor fits (the bridge serves only the elements VoiceOver reads), an app node once,
   by the role `lane::ios_simulator::roles` gives `accesskit_ios`'s trait, its label (a static
@@ -207,9 +251,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   enabled state, an identifier it carries, and its frame on the window; two candidates alike are
   `Error::Ambiguous`. A press finds its element again by the facts the read gave, refusing none,
   two, and one on a read that stopped short (`tree::locate`), and presses it through `AXPress`
-  (`accessibility::pressed`). A failure while the process is no longer trusted answers the
-  Accessibility permission, wherever it comes, except a press already sent: one not answered,
-  or whose element went away, keeps `may_have_run` and names the permission in its message.
+  with the answer the macOS lane's press gives too (`lane::ax::pressed`). A failure while the
+  process is no longer trusted answers the Accessibility permission, wherever it comes, except a
+  press already sent: one not answered, or whose element went away, keeps `may_have_run` and
+  names the permission in its message.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and

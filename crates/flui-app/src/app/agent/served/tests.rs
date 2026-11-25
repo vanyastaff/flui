@@ -10,6 +10,7 @@ use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use flui_protocol::endpoint::PolledStream;
 use flui_protocol::framing::MAX_LINE;
 use flui_protocol::version::{BREAKING, PROTOCOL_VERSION, ProtocolVersion};
 use flui_protocol::{
@@ -174,7 +175,8 @@ enum Recv {
 }
 
 struct Client {
-    stream: Stream,
+    /// Polled by the rule the agent reads and writes its end by.
+    stream: PolledStream<Stream>,
     buffer: Vec<u8>,
     next_id: u64,
     /// Event lines read while waiting for a reply.
@@ -186,7 +188,7 @@ impl Client {
         let stream = connect(address).expect("the endpoint accepts a connection");
         stream.set_nonblocking(true).expect("non-blocking");
         Self {
-            stream,
+            stream: PolledStream::new(stream),
             buffer: Vec::new(),
             next_id: 1,
             events: Vec::new(),
@@ -236,11 +238,8 @@ impl Client {
         let deadline = Instant::now() + RECV;
         let mut written = 0;
         while written < bytes.len() {
-            // A non-blocking pipe takes a write whole or not at all.
-            let end = bytes.len().min(written + 512);
-            match (&self.stream).write(&bytes[written..end]) {
-                Ok(count) if count > 0 => written += count,
-                Ok(_) => std::thread::sleep(Duration::from_micros(200)),
+            match (&self.stream).write(&bytes[written..]) {
+                Ok(count) => written += count,
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     std::thread::sleep(Duration::from_micros(200));
                 }
@@ -248,7 +247,7 @@ impl Client {
                 Err(error) => return Err(error),
             }
             if Instant::now() > deadline {
-                return Err(io::ErrorKind::TimedOut.into());
+                return Err(io::Error::from(io::ErrorKind::TimedOut));
             }
         }
         Ok(())
@@ -263,25 +262,22 @@ impl Client {
         let mut written = 0;
         let mut chunk = [0_u8; 8192];
         while written < bytes.len() {
-            // At most what the pipe's buffer holds, per write.
-            let end = bytes.len().min(written + 512);
-            match (&self.stream).write(&bytes[written..end]) {
-                Ok(count) if count > 0 => {
+            match (&self.stream).write(&bytes[written..]) {
+                Ok(count) => {
                     written += count;
                     progress = Instant::now();
                     continue;
                 }
-                Ok(_) => {}
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
                 // The agent closed while the line was being written.
                 Err(_) => return,
             }
-            match read_some(&self.stream, &mut chunk) {
+            match (&self.stream).read(&mut chunk) {
                 Ok(0) => return,
                 Ok(read) => {
                     self.buffer.extend_from_slice(&chunk[..read]);
-                    if self.buffer.contains(&b'\n') {
+                    if self.reply_buffered() {
                         return;
                     }
                 }
@@ -301,6 +297,21 @@ impl Client {
         }
     }
 
+    /// Whether a reply is buffered: the complete event lines in front of it move to `events`,
+    /// as [`Self::reply`] keeps them, and the reply stays in the buffer for it.
+    fn reply_buffered(&mut self) -> bool {
+        while let Some(end) = self.buffer.iter().position(|byte| *byte == b'\n') {
+            let line: Value =
+                serde_json::from_slice(&self.buffer[..=end]).expect("the reply is JSON");
+            if line.get("event").is_none() {
+                return true;
+            }
+            self.buffer.drain(..=end);
+            self.events.push(line);
+        }
+        false
+    }
+
     fn send(&mut self, value: &Value) {
         let mut bytes = serde_json::to_vec(value).expect("serializes");
         bytes.push(b'\n');
@@ -318,7 +329,7 @@ impl Client {
             if Instant::now() > deadline {
                 return Recv::TimedOut;
             }
-            match read_some(&self.stream, &mut chunk) {
+            match (&self.stream).read(&mut chunk) {
                 Ok(0) => return Recv::Closed,
                 Ok(read) => self.buffer.extend_from_slice(&chunk[..read]),
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -418,19 +429,6 @@ impl Client {
             "semantics.act",
             json!({ "target": { "element": element }, "action": "invoke" }),
         )
-    }
-}
-
-/// A non-blocking read that returns `Ok(0)` only once the agent has closed:
-/// on Windows an empty non-blocking pipe reads as end of file, so an empty
-/// write (which fails only on a closed pipe) tells the two apart.
-fn read_some(stream: &Stream, buffer: &mut [u8]) -> io::Result<usize> {
-    match (&*stream).read(buffer) {
-        Ok(0) if cfg!(windows) => match (&*stream).write(&[]) {
-            Ok(_) => Err(io::ErrorKind::WouldBlock.into()),
-            Err(_) => Ok(0),
-        },
-        other => other,
     }
 }
 
@@ -1234,13 +1232,9 @@ fn a_client_that_stops_reading_does_not_hold_up_detach() {
                 id += 1;
             }
             match (&client.stream).write(&pending) {
-                Ok(count) if count > 0 => {
+                Ok(count) => {
                     pending.drain(..count);
                     refused_since = None;
-                }
-                Ok(_) => {
-                    refused_since.get_or_insert_with(Instant::now);
-                    std::thread::sleep(Duration::from_millis(1));
                 }
                 Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                     refused_since.get_or_insert_with(Instant::now);

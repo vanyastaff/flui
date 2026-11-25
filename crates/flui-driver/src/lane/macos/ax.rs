@@ -25,6 +25,7 @@ use crate::error::{Error, Result};
 use crate::lane::ax::{self, MESSAGING_TIMEOUT_SECONDS, Visit, Walker, read_error, timeout};
 use crate::lane::macos::frame;
 use crate::lane::macos::pointer::Point;
+use crate::lane::macos::press;
 use crate::lane::macos::roles;
 use crate::lane::macos::screen::{self, PointRect};
 use crate::lane::walk::{self, Properties};
@@ -170,23 +171,23 @@ pub(super) fn read(pid: i32, frame: PointRect, scale: f64) -> Result<Tree> {
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] when no element within the walk's budgets has the identifier;
-/// [`Error::ActionUnsupported`] when it offers no press; [`Error::Timeout`] (with `may_have_run`
-/// for the press itself) when the app did not answer in time; [`Error::Gone`] when the element
-/// went away.
+/// [`Error::NotFound`] when no element within the walk's budgets has the identifier; then as
+/// `lane::ax::pressed`, the answer every `AXPress` gives: [`Error::ActionUnsupported`] when it
+/// offers no press, [`Error::Timeout`] and [`Error::Gone`] (with `may_have_run` once the press
+/// was sent, whatever the trust) when the app did not answer in time or the element went away,
+/// and the Accessibility permission refused when it was taken back before the press was sent.
 pub(super) fn press(pid: i32, frame: PointRect, scale: f64, identifier: &str) -> Result<()> {
     let root = Visit::root(window(pid, frame)?);
     let mut walker = Walker::new(|element: &AXUIElement, id, reads: &mut Properties| {
         describe(element, id, scale, reads)
     });
     let found = walk::find(&mut walker, root, identifier, timeout())?;
-    let offered = ax::actions(&found.element)
-        .map(|names| names.iter().any(|action| action == "AXPress").then_some(()));
-    walk::pattern(offered, identifier, "AXPress", timeout())?;
-    walk::invoked(
-        ax::perform(&found.element, "AXPress"),
+    press::pressed(
+        ax::actions(&found.element).map(|names| names.iter().any(|action| action == "AXPress")),
+        || ax::perform(&found.element, "AXPress"),
         identifier,
         timeout(),
+        trusted,
     )
 }
 

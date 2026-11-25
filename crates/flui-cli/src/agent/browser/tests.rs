@@ -3,11 +3,12 @@
 //! name one that is not on `PATH`).
 
 use std::collections::VecDeque;
-use std::io::{self, Read as _, Write as _};
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
+use flui_protocol::endpoint::PolledStream;
 use flui_protocol::framing::LineReader;
 use flui_protocol::launch::{ENDPOINT_EXTRA, PAGE_LAUNCH_GLOBAL, TOKEN_EXTRA};
 use interprocess::local_socket::Stream;
@@ -16,8 +17,9 @@ use interprocess::local_socket::traits::Stream as _;
 use super::launch::{LaunchError, LaunchedBrowser};
 use super::relay::Relay;
 use super::*;
-use crate::agent::nonblocking::NonblockingStream;
+use crate::agent::listener::polled;
 use crate::agent::{Endpoint, Session};
+use crate::testing::until_ready;
 
 /// How long a test waits for a line or an end.
 const WAIT: Duration = Duration::from_secs(20);
@@ -99,10 +101,23 @@ fn the_pipe_admits_the_user_whoami_names_by_sid() {
 struct Page {
     /// How many connect calls find no export yet.
     absent_for: usize,
+    /// How many connect calls go unanswered in time.
+    connect_timeouts: usize,
+    /// How many abandon calls go unanswered in time.
+    abandon_timeouts: usize,
     /// Every line a connection was sent, by connection.
     received: Vec<(String, String)>,
     /// The connections closed from the relay's side.
     closed: Vec<String>,
+    /// The connections the relay let the page drop.
+    released: Vec<String>,
+    /// The connections the relay abandoned, as the page answered each abandon.
+    abandoned: Vec<String>,
+    /// Connections the page ends as the next line reaches them, reporting `last` and the end
+    /// before the line's send throws.
+    end_on_send: Vec<String>,
+    /// Connections broken in the page: a line sent on one throws, and nothing is reported.
+    broken: Vec<String>,
     /// Events the tab reports next.
     events: VecDeque<LinkEvent>,
     /// Set: the browser went.
@@ -123,9 +138,21 @@ impl BrowserLink for Tab {
     }
 
     fn call(&mut self, function: &str, args: &[&str]) -> Result<Option<Remote>, LinkError> {
+        let mut page = page(&self.0);
+        if function == ABANDON_FUNCTION {
+            if page.abandon_timeouts > 0 {
+                page.abandon_timeouts -= 1;
+                return Err(LinkError::Timeout);
+            }
+            page.abandoned.push(args[0].to_owned());
+            return Ok(None);
+        }
         assert_eq!(function, connect_function());
         assert_eq!(args[0], PAGE_EXPORT);
-        let mut page = page(&self.0);
+        if page.connect_timeouts > 0 {
+            page.connect_timeouts -= 1;
+            return Err(LinkError::Timeout);
+        }
         if page.absent_for > 0 {
             page.absent_for -= 1;
             return Ok(None);
@@ -136,17 +163,32 @@ impl BrowserLink for Tab {
     fn call_on(&mut self, remote: &Remote, function: &str, args: &[&str]) -> Result<(), LinkError> {
         let mut page = page(&self.0);
         if function == CLOSE_FUNCTION {
+            assert_eq!(args, [remote.0.as_str()], "a close names its connection");
             page.closed.push(remote.0.clone());
             return Ok(());
         }
         assert_eq!(function, SEND_FUNCTION);
+        if page.broken.contains(&remote.0) {
+            return Err(LinkError::Threw("the connection is closed".into()));
+        }
+        if let Some(at) = page.end_on_send.iter().position(|id| *id == remote.0) {
+            page.end_on_send.remove(at);
+            page.broken.push(remote.0.clone());
+            let last = serde_json::json!([remote.0, "last"]).to_string();
+            let end = serde_json::json!([remote.0, null]).to_string();
+            page.events.push_back(LinkEvent::Report(last));
+            page.events.push_back(LinkEvent::Report(end));
+            return Err(LinkError::Threw("the connection is closed".into()));
+        }
         page.received.push((remote.0.clone(), args[0].to_owned()));
         let report = serde_json::json!([remote.0, format!("echo:{}", args[0])]).to_string();
         page.events.push_back(LinkEvent::Report(report));
         Ok(())
     }
 
-    fn release(&mut self, _remote: Remote) {}
+    fn release(&mut self, remote: Remote) {
+        page(&self.0).released.push(remote.0);
+    }
 
     fn next_event(&mut self, deadline: Instant) -> Result<Option<LinkEvent>, LinkError> {
         let mut page = page(&self.0);
@@ -177,7 +219,7 @@ fn relayed(link: Box<dyn BrowserLink>) -> (tempfile::TempDir, Session, Relay) {
 /// A client of the session's endpoint, reading line by line. A named pipe takes no read
 /// timeout, so the stream is polled.
 struct Client {
-    stream: NonblockingStream,
+    stream: PolledStream<Stream>,
     reader: LineReader,
 }
 
@@ -190,46 +232,32 @@ impl Client {
             Stream::connect(crate::agent::client::name(endpoint).expect("the endpoint is a name"))
                 .expect("the relay accepts");
         Self {
-            stream: NonblockingStream::try_new(stream).expect("non-blocking"),
+            stream: polled(stream).expect("non-blocking"),
             reader: LineReader::new(1 << 20),
         }
     }
 
     fn send(&mut self, line: &str) {
         let line = format!("{line}\n");
-        let deadline = Instant::now() + WAIT;
         let mut written = 0;
         while written < line.len() {
-            match (&self.stream).write(&line.as_bytes()[written..]) {
-                Ok(count) => written += count,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    assert!(Instant::now() < deadline, "the relay reads within {WAIT:?}");
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-                Err(error) => panic!("the relay reads: {error}"),
-            }
+            written += until_ready(WAIT, "room for the line", || {
+                (&self.stream).write(&line.as_bytes()[written..])
+            })
+            .expect("the relay reads");
         }
     }
 
     /// The next line; `None` once the relay closed the connection.
     fn next(&mut self) -> Option<String> {
-        let deadline = Instant::now() + WAIT;
         let mut chunk = [0_u8; 4096];
         loop {
             if let Some(line) = self.reader.next_line().expect("a line within bounds") {
                 return Some(String::from_utf8(line).expect("UTF-8"));
             }
-            assert!(
-                Instant::now() < deadline,
-                "no line and no end within {WAIT:?}"
-            );
-            match (&self.stream).read(&mut chunk) {
-                Ok(0) => return None,
+            match until_ready(WAIT, "line or end", || (&self.stream).read(&mut chunk)) {
+                Ok(0) | Err(_) => return None,
                 Ok(read) => self.reader.push(&chunk[..read]),
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                Err(_) => return None,
             }
         }
     }
@@ -275,6 +303,7 @@ fn a_client_waits_for_the_page_export_and_is_carried_to_a_connection_of_its_own(
     assert_eq!(first.next(), None, "a stopped relay closes its clients");
     let closed = page(&state).closed.clone();
     assert_eq!(closed.len(), 2, "and their page connections: {closed:?}");
+    assert_eq!(page(&state).released, closed, "which the page may drop");
 }
 
 #[test]
@@ -306,10 +335,13 @@ fn a_page_connection_ends_with_its_client_and_every_one_with_a_reload() {
     }
     assert_eq!(ended.next().as_deref(), Some("last"));
     assert_eq!(ended.next(), None);
+    eventually(&state, |page| page.released.contains(&ended_id));
 
     page(&state).events.push_back(LinkEvent::Navigated);
     assert_eq!(staying.next(), None, "a reload ends every connection");
-    eventually(&state, |page| page.closed.contains(&staying_id));
+    eventually(&state, |page| {
+        page.closed.contains(&staying_id) && page.released.contains(&staying_id)
+    });
     assert!(
         !page(&state).closed.contains(&ended_id),
         "a connection the page ended is not closed again"
@@ -321,6 +353,191 @@ fn a_page_connection_ends_with_its_client_and_every_one_with_a_reload() {
         Some("echo:again"),
         "and the next connects"
     );
+}
+
+/// A client that falls further behind than the relay keeps for it is closed, and so is its page
+/// connection, which the page may then drop. Fails if the relay only forgets the client: the
+/// connection would keep its place in the app's agent, a driver's seat and held input included,
+/// until the page reloads.
+#[test]
+fn a_client_too_far_behind_is_closed_with_its_page_connection() {
+    let state = Arc::new(Mutex::new(Page::default()));
+    let (_project, session, _relay) = relayed(Box::new(Tab(Arc::clone(&state))));
+    let mut client = Client::connect(&session);
+    client.send("hello");
+    assert_eq!(client.next().as_deref(), Some("echo:hello"));
+    let id = page(&state).received[0].0.clone();
+    // One line, with its newline one byte past what the relay keeps for a client.
+    let flood = "x".repeat(super::relay::MAX_UNWRITTEN);
+    let report = serde_json::json!([id, flood]).to_string();
+    drop(flood);
+    page(&state).events.push_back(LinkEvent::Report(report));
+    assert_eq!(client.next(), None, "the client is closed");
+    eventually(&state, |page| page.closed == [id.clone()]);
+    eventually(&state, |page| page.released == [id.clone()]);
+}
+
+/// A connection the page ended whose client the relay still holds when the page reloads is
+/// released and not closed again in the page, and its client still reads what the page sent it
+/// before the end. Its last line, its end and the reload come in one batch of the tab's events,
+/// so no turn writes the client first. Fails if a reload closes every open connection in the
+/// page, the ones the page ended included, or lets go of their clients with lines unwritten.
+#[test]
+fn a_reload_releases_a_connection_the_page_ended_without_closing_it() {
+    let state = Arc::new(Mutex::new(Page::default()));
+    let (_project, session, _relay) = relayed(Box::new(Tab(Arc::clone(&state))));
+    let mut client = Client::connect(&session);
+    client.send("hello");
+    assert_eq!(client.next().as_deref(), Some("echo:hello"));
+    let id = page(&state).received[0].0.clone();
+    {
+        let mut page = page(&state);
+        let last = serde_json::json!([id, "last"]).to_string();
+        let end = serde_json::json!([id, null]).to_string();
+        page.events.push_back(LinkEvent::Report(last));
+        page.events.push_back(LinkEvent::Report(end));
+        page.events.push_back(LinkEvent::Navigated);
+    }
+    assert_eq!(
+        client.next().as_deref(),
+        Some("last"),
+        "written across the reload"
+    );
+    assert_eq!(client.next(), None);
+    eventually(&state, |page| page.released == [id.clone()]);
+    assert!(
+        page(&state).closed.is_empty(),
+        "a connection the page ended is not closed again"
+    );
+}
+
+/// A connection the page ended whose client has not read what it was sent yet is released and
+/// not closed again in the page when the relay stops. Fails if a stopping relay closes every
+/// open connection in the page, the ones the page ended included.
+#[test]
+fn a_stopping_relay_releases_a_connection_the_page_ended_without_closing_it() {
+    let state = Arc::new(Mutex::new(Page::default()));
+    let (_project, session, relay) = relayed(Box::new(Tab(Arc::clone(&state))));
+    let mut client = Client::connect(&session);
+    client.send("hello");
+    assert_eq!(client.next().as_deref(), Some("echo:hello"));
+    let id = page(&state).received[0].0.clone();
+    {
+        // A line past what any host buffers for a client that does not read, then the end, in
+        // one batch: by the time the client reads a byte of the line, the page has ended it.
+        let mut page = page(&state);
+        let backlog = serde_json::json!([id, "x".repeat(8 << 20)]).to_string();
+        let end = serde_json::json!([id, null]).to_string();
+        page.events.push_back(LinkEvent::Report(backlog));
+        page.events.push_back(LinkEvent::Report(end));
+    }
+    let mut chunk = [0_u8; 4096];
+    let read = until_ready(WAIT, "the backlog", || (&client.stream).read(&mut chunk))
+        .expect("the client reads");
+    assert!(read > 0, "the relay closed the client before the stop");
+    drop(relay);
+    let seen = page(&state);
+    assert_eq!(seen.released, [id], "released as the relay stops");
+    assert!(
+        seen.closed.is_empty(),
+        "a connection the page ended is not closed again: {:?}",
+        seen.closed
+    );
+}
+
+/// A client carried to a page connection the page holds open, its first line answered and
+/// read: where the tests below start. Returns the client and its connection's ID.
+fn carried(state: &Arc<Mutex<Page>>, session: &Session) -> (Client, String) {
+    let mut client = Client::connect(session);
+    client.send("hello");
+    assert_eq!(client.next().as_deref(), Some("echo:hello"));
+    let id = page(state).received[0].0.clone();
+    (client, id)
+}
+
+/// A connect call the page does not answer in time is abandoned by the connection's ID, again
+/// while the page does not answer the abandon, and only then is the client closed. Fails if an
+/// unanswered call is taken for one that opened nothing: the page may run it late, and the
+/// connection it opens would hold its place in the app's agent with nobody to close it.
+#[test]
+fn a_connect_the_page_does_not_answer_is_abandoned_by_its_id() {
+    let state = Arc::new(Mutex::new(Page {
+        connect_timeouts: 1,
+        abandon_timeouts: 1,
+        ..Page::default()
+    }));
+    let (_project, session, _relay) = relayed(Box::new(Tab(Arc::clone(&state))));
+    let mut client = Client::connect(&session);
+    client.send("hello");
+    assert_eq!(client.next(), None, "the client is closed");
+    let seen = page(&state);
+    assert_eq!(seen.abandoned, ["0"], "abandoned once the page answered");
+    assert_eq!(
+        seen.abandon_timeouts, 0,
+        "the unanswered abandon was made again"
+    );
+    assert!(
+        seen.received.is_empty(),
+        "no line went: {:?}",
+        seen.received
+    );
+    assert!(seen.closed.is_empty() && seen.released.is_empty());
+}
+
+/// A line the page refuses because it ended the connection leaves the connection ended: its
+/// client reads what the page sent before the end, and the connection is released, not closed
+/// again. Fails if a refused line closes the connection at once: the client loses the page's
+/// last lines, and the page is asked to close what it ended.
+#[test]
+fn a_line_refused_by_a_connection_the_page_ended_leaves_it_ended() {
+    let state = Arc::new(Mutex::new(Page::default()));
+    let (_project, session, _relay) = relayed(Box::new(Tab(Arc::clone(&state))));
+    let (mut client, id) = carried(&state, &session);
+    page(&state).end_on_send.push(id.clone());
+    client.send("again");
+    assert_eq!(client.next().as_deref(), Some("last"));
+    assert_eq!(client.next(), None);
+    eventually(&state, |page| page.released == [id.clone()]);
+    assert!(page(&state).closed.is_empty(), "not closed again");
+}
+
+/// A line refused on a connection that broke in the page, with no end reported, closes the
+/// connection there and releases it once the tab's events show no end. Fails if a refused line
+/// waits for an end that never comes.
+#[test]
+fn a_line_refused_by_a_broken_connection_closes_it() {
+    let state = Arc::new(Mutex::new(Page::default()));
+    let (_project, session, _relay) = relayed(Box::new(Tab(Arc::clone(&state))));
+    let (mut client, id) = carried(&state, &session);
+    page(&state).broken.push(id.clone());
+    client.send("again");
+    assert_eq!(client.next(), None);
+    eventually(&state, |page| page.released == [id.clone()]);
+    assert_eq!(page(&state).closed, [id]);
+}
+
+/// A line the page reports after its own end is not the client's: it is dropped, even past what
+/// the relay keeps for a client, and the client reads what came before the end. Fails if such a
+/// line counts against the bound, which lets go of the client with the page's last line
+/// unwritten.
+#[test]
+fn a_line_reported_after_the_end_is_dropped() {
+    let state = Arc::new(Mutex::new(Page::default()));
+    let (_project, session, _relay) = relayed(Box::new(Tab(Arc::clone(&state))));
+    let (mut client, id) = carried(&state, &session);
+    {
+        let flood = serde_json::json!([id, "x".repeat(super::relay::MAX_UNWRITTEN)]).to_string();
+        let mut page = page(&state);
+        let last = serde_json::json!([id, "last"]).to_string();
+        let end = serde_json::json!([id, null]).to_string();
+        page.events.push_back(LinkEvent::Report(last));
+        page.events.push_back(LinkEvent::Report(end));
+        page.events.push_back(LinkEvent::Report(flood));
+    }
+    assert_eq!(client.next().as_deref(), Some("last"));
+    assert_eq!(client.next(), None);
+    eventually(&state, |page| page.released == [id.clone()]);
+    assert!(page(&state).closed.is_empty(), "not closed again");
 }
 
 #[test]

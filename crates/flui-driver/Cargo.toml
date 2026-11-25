@@ -193,6 +193,8 @@ objc2-core-graphics = { workspace = true, features = [
 [dev-dependencies]
 flui-driver = { path = ".", features = ["chrome", "headless", "testing", "wayland"] }
 flui-foundation = { workspace = true }
+# `testing::ScriptedPipe` for the test of how a line is written to the app.
+flui-protocol = { workspace = true, features = ["serde", "schemars", "testing"] }
 # The platform a headless scenario follows the conventions of (`PlatformConvention`).
 flui-platform = { workspace = true }
 flui-view = { workspace = true }

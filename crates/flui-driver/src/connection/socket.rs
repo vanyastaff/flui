@@ -30,6 +30,7 @@ use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TryRecvError, TrySendE
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use flui_protocol::endpoint::PolledStream;
 use flui_protocol::events::Event;
 use flui_protocol::framing::LineReader;
 use flui_protocol::session::HelloReply;
@@ -56,9 +57,6 @@ pub(crate) const INCOMING_ROOM: usize = 16;
 /// How long a write may make no progress before the connection is called broken: an app that
 /// stopped reading.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// The most one write offers a non-blocking named pipe, which takes a write whole or not at all.
-const WRITE_CHUNK: usize = 512;
 
 /// Where the app's agent listens.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,9 +305,10 @@ enum Received {
     End,
 }
 
-/// The stream, as the connection's thread owns it, non-blocking.
+/// The stream, as the connection's thread owns it, non-blocking. A local endpoint is polled by
+/// the rule its app reads and writes it by ([`PolledStream`]); a TCP stream ends with `Ok(0)`.
 enum Io {
-    Local(Stream),
+    Local(PolledStream<Stream>),
     Tcp(TcpStream),
 }
 
@@ -319,7 +318,7 @@ impl Io {
             Endpoint::Local(address) => {
                 let stream = Stream::connect(local_name(address)?)?;
                 stream.set_nonblocking(true)?;
-                Ok(Self::Local(stream))
+                Ok(Self::Local(PolledStream::new(stream)))
             }
             Endpoint::Forwarded(address) => {
                 let stream = TcpStream::connect_timeout(address, CONNECT_TIMEOUT)?;
@@ -337,7 +336,7 @@ impl Io {
             Self::Tcp(stream) => (&*stream).read(buffer),
         };
         match read {
-            Ok(0) => Ok(self.ended()),
+            Ok(0) => Ok(Received::End),
             Ok(count) => Ok(Received::Bytes(count)),
             Err(error)
                 if matches!(
@@ -351,49 +350,13 @@ impl Io {
         }
     }
 
-    /// What an empty read means. A non-blocking named pipe answers an empty read the way it
-    /// answers a closed one, so it is told apart by an empty write, which fails only on a closed
-    /// pipe; elsewhere an empty read is the end.
-    fn ended(&self) -> Received {
-        match self {
-            Self::Local(stream) if cfg!(windows) => match (&*stream).write(&[]) {
-                Ok(_) => Received::Nothing,
-                Err(_) => Received::End,
-            },
-            Self::Local(_) | Self::Tcp(_) => Received::End,
-        }
-    }
-
-    /// Write `line` whole, a chunk at a time, giving up after [`WRITE_TIMEOUT`] without progress.
+    /// Write `line` whole, as the stream takes it, giving up after [`WRITE_TIMEOUT`] without
+    /// progress ([`write_whole`]).
     fn write_line(&self, line: &[u8]) -> std::result::Result<(), String> {
-        let mut progress = Instant::now();
-        let mut written = 0;
-        while written < line.len() {
-            let end = line.len().min(written + WRITE_CHUNK);
-            let wrote = match self {
-                Self::Local(stream) => (&*stream).write(&line[written..end]),
-                Self::Tcp(stream) => (&*stream).write(&line[written..end]),
-            };
-            match wrote {
-                Ok(count) if count > 0 => {
-                    written += count;
-                    progress = Instant::now();
-                    continue;
-                }
-                Ok(_) => {}
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
-                    ) => {}
-                Err(error) => return Err(format!("could not write to the app: {error}")),
-            }
-            if progress.elapsed() >= WRITE_TIMEOUT {
-                return Err("the app stopped reading what the driver sends".to_owned());
-            }
-            thread::sleep(Duration::from_millis(1));
+        match self {
+            Self::Local(stream) => write_whole(stream, line, WRITE_TIMEOUT),
+            Self::Tcp(stream) => write_whole(stream, line, WRITE_TIMEOUT),
         }
-        Ok(())
     }
 
     /// Close the stream for both directions. A local stream closes when its one owner drops it,
@@ -403,6 +366,42 @@ impl Io {
             let _ = stream.shutdown(Shutdown::Both);
         }
     }
+}
+
+/// Write `line` whole to `stream`, a non-blocking stream, giving up once `stall_limit` passes
+/// without progress: each write that takes a byte starts the span again.
+///
+/// No room is `WouldBlock` on both kinds of stream the driver writes (a [`PolledStream`] maps a
+/// pipe's write that took nothing to it), so a write of something that takes nothing is a
+/// stream that will take no more: an error, not a wait.
+fn write_whole(
+    mut stream: impl Write,
+    line: &[u8],
+    stall_limit: Duration,
+) -> std::result::Result<(), String> {
+    let mut progress = Instant::now();
+    let mut written = 0;
+    while written < line.len() {
+        match stream.write(&line[written..]) {
+            Ok(0) => return Err("could not write to the app: it took nothing".to_owned()),
+            Ok(count) => {
+                written += count;
+                progress = Instant::now();
+                continue;
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) => {}
+            Err(error) => return Err(format!("could not write to the app: {error}")),
+        }
+        if progress.elapsed() >= stall_limit {
+            return Err("the app stopped reading what the driver sends".to_owned());
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    Ok(())
 }
 
 /// The connection's thread: send what the driver hands over, hand over what the app sends, until
@@ -569,5 +568,100 @@ pub(crate) fn local_name(address: &str) -> io::Result<interprocess::local_socket
         }
         use interprocess::local_socket::{GenericFilePath, ToFsName as _};
         address.to_fs_name::<GenericFilePath>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use flui_protocol::testing::{PipeAnswer, ScriptedPipe};
+
+    use super::{WRITE_TIMEOUT, write_whole};
+
+    /// How long the tests of a stalled write let it make no progress.
+    const STALL: Duration = Duration::from_millis(250);
+
+    /// A line goes whole across partial and interrupted writes and a write that found no room; a
+    /// write of something that takes nothing, or that fails, ends it at once. Fails if a write
+    /// that takes nothing is waited on, which would retry it without end.
+    #[test]
+    fn a_line_is_written_whole_or_ends_at_a_stream_that_takes_nothing() {
+        let line = b"{\"id\":1}\n";
+        let written = |answers: Vec<PipeAnswer>| {
+            let pipe = ScriptedPipe::new([], answers);
+            let outcome = write_whole(&pipe, line, WRITE_TIMEOUT);
+            assert!(pipe.is_spent(), "every scripted write is made");
+            outcome
+        };
+        assert_eq!(
+            written(vec![
+                PipeAnswer::Bytes(3),
+                PipeAnswer::WouldBlock,
+                PipeAnswer::Interrupted,
+                PipeAnswer::Bytes(line.len()),
+            ]),
+            Ok(())
+        );
+        let took_nothing = written(vec![PipeAnswer::Bytes(3), PipeAnswer::Bytes(0)]);
+        assert!(
+            took_nothing
+                .as_ref()
+                .is_err_and(|why| why.contains("took nothing")),
+            "{took_nothing:?}"
+        );
+        let failed = written(vec![PipeAnswer::Closed]);
+        assert!(
+            failed
+                .as_ref()
+                .is_err_and(|why| why.contains("could not write")),
+            "{failed:?}"
+        );
+    }
+
+    /// A stream that never has room is called broken once the stall limit passes, not before.
+    /// Fails if a write that finds no room is waited on without end, or given up on early.
+    #[test]
+    fn a_write_that_never_finds_room_gives_up_after_the_stall_limit() {
+        // More tries than the limit leaves time for: each one sleeps at least a millisecond.
+        let pipe = ScriptedPipe::new([], [PipeAnswer::WouldBlock; 1000]);
+        let started = Instant::now();
+        let outcome = write_whole(&pipe, b"{\"id\":1}\n", STALL);
+        assert!(
+            started.elapsed() >= STALL,
+            "gave up after {:?}",
+            started.elapsed()
+        );
+        assert!(
+            outcome
+                .as_ref()
+                .is_err_and(|why| why.contains("stopped reading")),
+            "{outcome:?}"
+        );
+    }
+
+    /// A stream that takes a byte at a time, with no room between, is written to for longer
+    /// than the stall limit and the line still goes whole. Fails if the span is measured from
+    /// the first write rather than from the last progress.
+    #[test]
+    fn a_write_that_keeps_making_progress_outlasts_the_stall_limit() {
+        // Each byte waits for one try that finds no room, which sleeps at least a millisecond,
+        // so the line takes longer than the limit.
+        let line = vec![b'x'; 300];
+        let answers = line
+            .iter()
+            .flat_map(|_| [PipeAnswer::WouldBlock, PipeAnswer::Bytes(1)])
+            .collect::<Vec<PipeAnswer>>();
+        let pipe = ScriptedPipe::new([], answers);
+        let started = Instant::now();
+        let outcome = write_whole(&pipe, &line, STALL);
+        assert!(
+            started.elapsed() > STALL,
+            "the write took only {:?}",
+            started.elapsed()
+        );
+        assert_eq!(outcome, Ok(()));
+        assert!(pipe.is_spent(), "every scripted write is made");
+        assert_eq!(pipe.written(), line, "written whole");
     }
 }

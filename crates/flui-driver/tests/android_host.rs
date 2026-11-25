@@ -6,7 +6,7 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use flui_driver::lane::android::adb::{self, Adb, AdbCommand, Framing, HostAdb};
+use flui_driver::lane::android::adb::{self, Adb, AdbCommand, Framing, HostAdb, RunFailure};
 use flui_driver::{Awaited, Error};
 
 /// A stand-in for `adb`, answering `devices` and a few shell lines the tests name.
@@ -78,14 +78,18 @@ fn a_command_answers_what_it_printed_and_how_it_exited() {
 fn output_past_its_bound_and_a_command_past_its_deadline_are_ended() {
     let (_dir, path) = stand_in();
     let mut host = HostAdb::try_new(&path, "x").expect("a named device");
+    // Both were started and their answers lost: the device may have done them.
     match host.run(&shell("flood"), 1000, Duration::from_secs(10)) {
-        Err(Error::Lane { message, .. }) => assert!(message.contains("1000 bytes"), "{message}"),
+        Err(RunFailure::Unanswered(Error::Lane { message, .. })) => {
+            assert!(message.contains("1000 bytes"), "{message}");
+        }
         other => panic!("{other:?}"),
     }
     let started = Instant::now();
-    let timed_out = host
-        .run(&shell("sleep"), 4096, Duration::from_millis(300))
-        .expect_err("past its deadline");
+    let timed_out = match host.run(&shell("sleep"), 4096, Duration::from_millis(300)) {
+        Err(RunFailure::Unanswered(timed_out)) => timed_out,
+        other => panic!("past its deadline: {other:?}"),
+    };
     assert!(timed_out.may_have_run(), "{timed_out}");
     assert!(matches!(
         timed_out,
@@ -99,10 +103,11 @@ fn output_past_its_bound_and_a_command_past_its_deadline_are_ended() {
         "ended, not waited out"
     );
     let mut missing = HostAdb::try_new("/nonexistent/adb", "x").expect("a named device");
+    // An `adb` that does not start sends nothing to the device.
     match missing.run(&AdbCommand::Devices, 4096, Duration::from_secs(1)) {
-        Err(Error::Lane {
+        Err(RunFailure::NotStarted(Error::Lane {
             unavailable: true, ..
-        }) => {}
+        })) => {}
         other => panic!("{other:?}"),
     }
     assert!(missing.open(&shell("lines"), Framing::Lines).is_err());

@@ -13,7 +13,7 @@
 //! - **Recorded once taken.** [`HeldInput::plan`] turns an event into commands and changes only
 //!   what is held here alone (the keys, where each pointer is); what is held on the device changes
 //!   with [`HeldInput::took`], once the device took a command (a `motionevent` returns once the
-//!   app finished with it), or [`HeldInput::unsure`] when the command timed out and may have
+//!   app finished with it), or [`HeldInput::unsure`] when its answer was lost and it may have
 //!   happened: a press that may have gone down is held, so it is released.
 //! - **Released on every exit, part by part.** [`HeldInput::release_plan_of`] is what releases a
 //!   [`Part`]: the contact cancelled where it is (`motionevent CANCEL`, which acts on nothing),
@@ -190,6 +190,20 @@ impl Command {
             Self::Key(_) | Self::Chord(_) | Self::Text(_) | Self::Scroll { .. } => true,
         }
     }
+
+    /// Whether the command puts a touch or mouse contact down through `input`: what the release
+    /// must undo even when the command's answer never came (the pen's contacts go with its
+    /// device).
+    #[must_use]
+    pub fn puts_contact_down(&self) -> bool {
+        matches!(
+            self,
+            Self::Motion {
+                action: MotionAction::Down,
+                ..
+            }
+        )
+    }
 }
 
 /// A part of what the lane holds that is released on its own, so one part's failure never hides
@@ -306,7 +320,7 @@ impl HeldInput {
                     })
                     .collect())
             }
-            // The lane waits a pause out itself (`AndroidLane::send`).
+            // The lane waits a pause out itself (`AndroidLane::send_counted`).
             OsEvent::Pause(_) => Ok(Vec::new()),
             // `send_guarded` refuses it first; a caller that plans or sends directly hears the
             // same.
@@ -571,8 +585,8 @@ impl HeldInput {
         }
     }
 
-    /// `command` timed out: it may have happened. What it may have pressed is held; what it may
-    /// have released stays held.
+    /// `command`'s answer was lost (it timed out, or its output passed its bound or broke off): it
+    /// may have happened. What it may have pressed is held; what it may have released stays held.
     pub fn unsure(&mut self, command: &Command) {
         match command {
             Command::Motion {
@@ -631,6 +645,14 @@ impl HeldInput {
         self.modifiers.clear();
         self.pending = None;
         self.modifier_used = false;
+    }
+
+    /// `command` changed nothing on the device (`adb` never started, or the device answered by
+    /// refusing it): a contact recorded before its press went out is not down.
+    pub fn refused(&mut self, command: &Command) {
+        if command.puts_contact_down() {
+            self.contact = None;
+        }
     }
 
     /// The pen's device is gone, and with it everything it held: the kernel removes a device's

@@ -576,9 +576,9 @@ graph LR
   - a send that panics skips `disarm`, so the guard watches until the next `arm` or the lane's
     drop, and its pending `foreign_input` survives; the worker's panicked-job path, which already
     releases, is where it would be disarmed;
-  - after a send that went through, `Error::ReleaseFailed` has no `first`, so it carries no
-    effect and reads as not run (`may_have_run` false) although the input went out, and its doc
-    says a retry does not cure it while the next sequence's release retries what stays held.
+  - after a send that went through, a release that fails comes inside `Error::PartlySent`
+    (may have run, no retry); what stays open is that `ReleaseFailed`'s doc says a retry does
+    not cure it while the next sequence's release retries what stays held.
 - **Evidence (2026-11-19):**
   - `flui-driver`'s `driver_it`:
     - `failure_matrix::every_failure_row_holds_on_every_fixture`: every failure scenario on the
@@ -1145,8 +1145,15 @@ graph LR
     refusal on one that does not; the pen's axes at each rotation and under a `wm size` override;
     `getevent -l` over `adb shell -tt` seeing the person's touch and not the lane's `input`
     commands; the window's frame and rotation as the device's `dumpsys window` prints them (the
-    window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`);
-    `uiautomator dump` answering while the app animates; `screencap`'s raw header and
+    window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`); the
+    reply's `WINDOW MANAGER` part headers and where the focus is printed on each Android version
+    (the default display's section from Android 10, the windows' part before), with a `LAST ANR`
+    part in the reply; the windows' frames present in the one `dumpsys window -a` reading, its
+    `mTopFocusedDisplayId=`, and what that dump under the window manager's lock costs before each
+    press; whether every dump, not only a session's first, finds the app's view still building
+    its tree after the previous dump turned its accessibility off; touch, mouse and pen input sent
+    and read back by the app with TalkBack's touch exploration on;
+    `uiautomator dump` answering while the app animates, and its `could not get idle state`; `screencap`'s raw header and
     format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
     endpoint forward and the app's exit when the session ends; which window is under the point
     before a press (a heads-up notification, the input method, an overlay), which the lane does
@@ -1186,17 +1193,20 @@ graph LR
     read raw; the driver's own PNG reader (`pixels::codec`) decodes the PNG within its bounds, and the capture is a `pixels::Image`; `roxmltree` reads the dump.
   - The lane never picks a device: `adb::HostAdb` cannot be built without a serial, and
     `lane::android::host_device` takes the one `FLUI_ANDROID_SERIAL` names and asks `adb` nothing
-    without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
-    and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
+    without it; AVD lifecycle stays with FD26. Each window dump of a session goes to a path of its
+    own, and the session's dump files are removed by every dump that runs to its end and by the
+    lane's end; its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
     port tried when one is taken, is removed by that port once `adb` made it or may have.
   - `uiautomator dump` suspends every accessibility service running while it dumps, so only the
     read of the tree takes one, and on a device or an emulator it is refused while any service is
     on (`enabled_accessibility_services`, a list never set or emptied being none) or touch
     exploration is, naming `android_tree_dump` and the services (`docs/gaps.md`). Input and
     capture take no dump. The window is the focused one by its hash, on the default display, read
-    with the rotation from one `dumpsys window`; the focus check before each press, key, text and
-    scroll reads it again and compares hash, frame and rotation (another window `NotForeground`,
-    the same one moved or turned `Busy`); a read of the tree locates the window again after the
+    with the rotation from one `dumpsys window -a`; the focus check before each press, key, text
+    and scroll reads it again and compares hash, frame and rotation (another focused display
+    `android_default_display`, another window `NotForeground`, the same one moved or turned
+    `Busy`, any of them after part of the sequence went out `PartlySent`); a read of the tree
+    locates the window again after the
     dump, and a window replaced, moved or turned in between answers `Busy`.
   - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
     sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,
@@ -1405,6 +1415,13 @@ graph LR
     `the_walk_reads_its_budget_and_leaves_out_a_gone_element`,
     `a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone`,
     `the_search_keeps_to_its_budget_and_depth`,
+    `the_search_refuses_only_a_cut_in_the_chrome`,
+    `the_screen_is_chosen_in_every_shape_its_group_can_take`,
+    `a_facts_read_that_fails_fails_the_search`,
+    `a_screen_moved_or_gone_during_the_read_is_read_again`,
+    `an_element_gone_while_untrusted_is_the_permission_taken_back`,
+    `a_press_refuses_a_lone_match_beside_an_element_gone_in_the_walk`,
+    `a_screen_holds_still_only_with_the_frame_it_was_found_at`,
     `a_group_gone_mid_search_cuts_the_search_short`,
     `the_search_reaches_devicehubs_screen_seven_levels_down`,
     `the_search_reaches_a_screen_inside_simulator_apps_bezel`,
@@ -1480,10 +1497,12 @@ graph LR
     others name; else the one naming no UUID, only while no other listed simulator shares the
     title; any other UUID never; two naming the UDID, or two naming none, refused), and the
     device looked up by its UDID in the listing read before each read, renamed or removed
-    refused. The screen is found by walking every group of
-    the window within ten levels: an `iOSContentGroup` (DeviceHub) when there is one, else the
-    shallowest group of the app's window's shape (Simulator.app, inside its bezel or not), which a
-    search left partial by a group gone or its budget does not take.
+    refused. The screen is found by reading the window's chrome within ten levels, then going
+    into each plain group of the app window's shape to look for an `iOSContentGroup` under it:
+    an `iOSContentGroup` (DeviceHub) wherever it is, else the shallowest group of the app's
+    window's shape (Simulator.app, inside its bezel or not), refused when the chrome was cut; a
+    cut inside a plain candidate is the candidate's. Which shape each window has waits on a
+    recorded tree (vanyastaff/flui#3152).
     `accesskit_ios` serves the elements VoiceOver reads, so an element is matched among the
     descendants of the node its nearest matched ancestor fits. The client is shared with the macOS
     lane as `lane::ax`, and `Lane::invoke` is handed the app's tree as `read_tree` is.

@@ -139,9 +139,9 @@ impl ScriptedPrimarySelection {
     }
 
     /// Keep every later read unanswered until
-    /// [`answer_held_reads`](Self::answer_held_reads). It is one hold of the
-    /// [`reads`](Self::reads) script: a hold a test took there itself keeps
-    /// reads held after `answer_held_reads`, until it is dropped too.
+    /// [`answer_held_reads`](Self::answer_held_reads): one hold of the
+    /// [`reads`](Self::reads) script, under the script's
+    /// [held-request rules](Script#held-requests).
     pub fn hold_reads(&self) {
         let fresh = self.selection.borrow().read_hold.is_none();
         if fresh {
@@ -150,12 +150,10 @@ impl ScriptedPrimarySelection {
         }
     }
 
-    /// Let go of the hold [`hold_reads`](Self::hold_reads) took: when no
-    /// other hold of the read script lives, the reads it kept go on, oldest
-    /// first, to the script's steps and its standing answer (the selection's
-    /// text, asked as each is answered), and later reads answer
-    /// at once again. Returns how many held reads it answered
-    /// ([`ScriptHold::release`]).
+    /// Release the hold [`hold_reads`](Self::hold_reads) took
+    /// ([`ScriptHold::release`]), whose drain answers the kept reads by the
+    /// script's steps and its standing answer, the selection's text asked as
+    /// each is answered. Returns how many reads it answered.
     pub fn answer_held_reads(&self) -> usize {
         // Taken out first: releasing asks a claim for its text and answers
         // reads, the test's code, with nothing borrowed.

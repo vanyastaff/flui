@@ -13,10 +13,10 @@
 //! - **Fidelity.** Order only: Android resamples moves, and each command is its own process, so
 //!   the timing between events is not the sequence's.
 //! - **Safety.** Before a sequence, `Lane::check` refuses what leaves the app or changes the device
-//!   ([`safety`]); before each press, key, text and scroll, one `dumpsys window` must show the
+//!   ([`safety`]); before each press, key, text and scroll, one `dumpsys window -a` must show the
 //!   window the lane located holding the input focus, by its hash, at the frame and turn the lane
-//!   located it at. What the lane holds is released on every exit ([`held`]), and what stays held is named
-//!   ([`crate::Error::ReleaseFailed`]).
+//!   located it at. What the lane holds is released on every exit ([`held`]), and what stays
+//!   held is named ([`crate::Error::ReleaseFailed`]).
 //! - **Isolation.** An emulator is isolated: nobody holds it. A device is someone's, so it runs
 //!   guarded: `getevent` watched for input from any device but the lane's own ([`guard`]).
 //! - **Reading.** The window's place and the display's rotation from `dumpsys window`
@@ -55,13 +55,14 @@ pub mod uinput;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use flui_protocol::act::{Effect, EffectKind};
 use flui_protocol::input::PointerDevice;
 use flui_protocol::launch::{ENDPOINT_EXTRA, EXIT_ON_DISCONNECT_EXTRA, TOKEN_EXTRA};
 use flui_protocol::session::{Isolation, Placement};
 use flui_protocol::tree::Tree;
 
 use self::adb::{
-    Adb, AdbCommand, AdbReply, AdbStream, Framing, Printed, command_failed, lane_error,
+    Adb, AdbCommand, AdbReply, AdbStream, Framing, Printed, RunFailure, command_failed, lane_error,
 };
 use self::device::{DeviceFacts, WindowHash};
 use self::guard::GeteventGuard;
@@ -70,7 +71,9 @@ use self::safety::{Display, Refusal};
 use self::uiautomator::{Bounds, UiDump};
 use crate::coordinates::{DevicePoint, WindowGeometry};
 use crate::error::{Error, Result};
-use crate::lane::{AccessibilityApi, ActivityGuard, Lane, LaneCapabilities, PositionFidelity};
+use crate::lane::{
+    AccessibilityApi, ActivityGuard, Delivered, Lane, LaneCapabilities, PositionFidelity,
+};
 use crate::pixels::Image;
 use crate::steps::OsEvent;
 
@@ -95,6 +98,10 @@ pub const FORWARD_ATTEMPTS: usize = 3;
 
 /// How long the pen's device may take to answer a sync.
 const SYNC_WITHIN: Duration = Duration::from_secs(5);
+
+/// The API level from which the window manager keeps a focus per display and prints the one
+/// holding the device's focus (`mTopFocusedDisplayId=`): Android 10.
+const MULTI_DISPLAY_FOCUS_SDK: u32 = 29;
 
 /// How far the app's surface may be from its logical size times its scale, in pixels on each
 /// side: a view is laid out in whole pixels.
@@ -178,6 +185,50 @@ struct PenDevice {
     next_token: u64,
 }
 
+/// What became of one command the lane sent, by whether it reached the device: the one answer
+/// the held record and the run's count are both read from.
+#[derive(Debug)]
+enum Delivery {
+    /// The device took it.
+    Taken,
+    /// It changed nothing on the device: `adb` never started, the device answered by refusing
+    /// it, or the pen's device no longer read its report.
+    Unsent(Error),
+    /// It reached the device and its answer was lost (a deadline, a bound, a pipe, a report not
+    /// confirmed): the device may have done it.
+    Unanswered(Error),
+}
+
+impl Delivery {
+    /// Whether the command reached the device: taken, or its answer lost.
+    fn reached_device(&self) -> bool {
+        !matches!(self, Self::Unsent(_))
+    }
+
+    /// The delivery as the lane's answer.
+    fn into_result(self) -> Result<()> {
+        match self {
+            Self::Taken => Ok(()),
+            Self::Unsent(error) | Self::Unanswered(error) => Err(error),
+        }
+    }
+}
+
+/// The pen's device ended while a report of it goes out, unless the report is confirmed: on a
+/// failure and on an unwind alike, the record of what the pen held goes with the device.
+struct PenDeviceGone<'a> {
+    held: &'a mut HeldInput,
+    confirmed: bool,
+}
+
+impl Drop for PenDeviceGone<'_> {
+    fn drop(&mut self) {
+        if !self.confirmed {
+            self.held.pen_device_gone();
+        }
+    }
+}
+
 /// The Android lane for one app on one device: see the [module docs](self).
 pub struct AndroidLane {
     adb: Box<dyn Adb>,
@@ -192,8 +243,9 @@ pub struct AndroidLane {
     app_started: bool,
     /// The loopback port the lane forwarded to the app, which it removes at its end.
     forwarded: Option<u16>,
-    /// Where this session's window dumps are written on the device.
-    dump_path: String,
+    /// The name this session's dumps are written under on the device, and how many it took.
+    dump_session: String,
+    dumps: u64,
 }
 
 impl AndroidLane {
@@ -233,7 +285,7 @@ impl AndroidLane {
             None
         };
         let uinput = probe_uinput(adb.as_mut());
-        let dump_path = uiautomator::dump_path(&crate::launch::launch_token()?[..16]);
+        let dump_session = crate::launch::launch_token()?[..16].to_owned();
         Ok(Self {
             adb,
             package,
@@ -250,7 +302,8 @@ impl AndroidLane {
             screen: None,
             app_started: false,
             forwarded: None,
-            dump_path,
+            dump_session,
+            dumps: 0,
         })
     }
 
@@ -336,11 +389,12 @@ impl AndroidLane {
             ]);
             let reply = match self.adb.run(&forward, STATUS.limit, STATUS.timeout) {
                 Ok(reply) => reply,
-                Err(error @ Error::Timeout { .. }) => {
+                // A forward whose answer was lost may be in place: it is removed with the lane.
+                Err(RunFailure::Unanswered(error)) => {
                     self.forwarded = Some(port);
                     return Err(error);
                 }
-                Err(error) => return Err(error),
+                Err(RunFailure::NotStarted(error)) => return Err(error),
             };
             let Some(failure) = reply.failure(Printed::Status) else {
                 self.forwarded = Some(port);
@@ -397,15 +451,18 @@ impl AndroidLane {
         };
         let printed = run_shell(self.adb.as_mut(), device::ACCESSIBILITY_SETTINGS, settings)?;
         safety::check_dump(&printed.text()).map_err(Refusal::into_error)?;
-        let command = AdbCommand::ExecOut(uiautomator::dump_line(&self.dump_path));
+        self.dumps = self.dumps.saturating_add(1);
+        let command = AdbCommand::ExecOut(uiautomator::dump_line(&self.dump_session, self.dumps));
         let run = Run {
             printed: Printed::Data,
             limit: uiautomator::MAX_DUMP,
             timeout: LONG,
         };
-        let reply = checked(self.adb.as_mut(), &command, run)?;
-        UiDump::parse(&reply.text())
-            .map_err(|why| lane_error(format!("`uiautomator dump` answered no window: {why}")))
+        let reply = checked(self.adb.as_mut(), &command, run)?.text();
+        UiDump::parse(&reply).map_err(|why| match uiautomator::DumpFailure::of(&reply) {
+            Some(failure) => Error::busy(failure.to_string()),
+            None => lane_error(format!("`uiautomator dump` answered no window: {why}")),
+        })
     }
 
     /// The app's surface `placement` describes, which the lane keeps as where the app's window is,
@@ -415,22 +472,6 @@ impl AndroidLane {
     /// whatever services run.
     fn find(&mut self, placement: &Placement) -> Result<Screen> {
         let windows = self.read_windows()?;
-        if let Some(window) = windows.focused_window()
-            && window.display != Some(device::DEFAULT_DISPLAY)
-        {
-            return Err(Error::not_supported(
-                "android_default_display",
-                format!(
-                    "the app's window {} holds the focus on display {}, and the {LANE} lane \
-                     drives the default display only, which `input`, `screencap` and the \
-                     rotation it reads are of",
-                    window.name.title,
-                    window
-                        .display
-                        .map_or_else(|| "none named".to_owned(), |display| display.to_string())
-                ),
-            ));
-        }
         let size = (
             placement.size.width * placement.scale,
             placement.size.height * placement.scale,
@@ -454,8 +495,16 @@ impl AndroidLane {
         Ok(screen)
     }
 
-    /// Where the windows are, from one `dumpsys window` ([`device::WINDOWS`]), whose focused
-    /// window must be the app's.
+    /// Where the windows are, from one `dumpsys window -a` ([`device::WINDOWS`]), on the default
+    /// display, whose focused window must be the app's: the one rule a locate, a press, key, text
+    /// and scroll, and a read of the tree are held to.
+    ///
+    /// Keys and text go to the display holding the device's focus, and `input`, `screencap` and
+    /// the rotation are the default display's: another display holding the device's focus, or
+    /// the app's focused window on another display or on one named by no number, is refused as
+    /// `android_default_display`. From Android 10, and where the API level is unread, the reply
+    /// must name the display holding the device's focus; one that names none is refused rather
+    /// than taken for the default one.
     fn read_windows(&mut self) -> Result<device::Windows> {
         let run = Run {
             limit: device::MAX_WINDOWS_REPLY,
@@ -464,10 +513,61 @@ impl AndroidLane {
         let printed = run_shell(self.adb.as_mut(), device::WINDOWS, run)?.text();
         let windows = device::parse_windows(&printed)
             .map_err(|why| lane_error(format!("`dumpsys window` answered no windows: {why}")))?;
+        let elsewhere = |what: String| {
+            Error::not_supported(
+                "android_default_display",
+                format!(
+                    "{what}, and the {LANE} lane drives the default display only, which `input`, \
+                     `screencap` and the rotation it reads are of"
+                ),
+            )
+        };
+        match windows.focused_display {
+            Some(display) if display != device::DEFAULT_DISPLAY => {
+                return Err(elsewhere(format!(
+                    "display {display} holds the device's input focus"
+                )));
+            }
+            None if self.facts.sdk == 0 || self.facts.sdk >= MULTI_DISPLAY_FOCUS_SDK => {
+                return Err(lane_error(format!(
+                    "`dumpsys window` named no display holding the device's input focus, which \
+                     API level {MULTI_DISPLAY_FOCUS_SDK} and later print, on a device of API level \
+                     {}",
+                    match self.facts.sdk {
+                        0 => "unread".to_owned(),
+                        sdk => sdk.to_string(),
+                    }
+                )));
+            }
+            Some(_) | None => {}
+        }
         let focus = windows.focus.as_ref();
         safety::check_focus(focus.map(|name| name.title.as_str()), &self.package)
             .map_err(Refusal::into_error)?;
+        if let Some(window) = windows.focused_window()
+            && window.display != Some(device::DEFAULT_DISPLAY)
+        {
+            return Err(elsewhere(format!(
+                "the app's window {} holds the focus on display {}",
+                window.name.title,
+                window
+                    .display
+                    .map_or_else(|| "none named".to_owned(), |display| display.to_string())
+            )));
+        }
         Ok(windows)
+    }
+
+    /// The window the reading `windows` shows holding the default display's focus, where and how
+    /// turned, whatever its size: what a read of the tree compares with the [`Screen`] it located
+    /// before its dump.
+    fn screen_of(windows: device::Windows) -> Option<Screen> {
+        let surface = windows.focused_frame()?;
+        Some(Screen {
+            window: windows.focus?.hash,
+            surface,
+            rotation: windows.rotation,
+        })
     }
 
     /// The safety rule before a command that acts on the app, from one reading of the windows:
@@ -475,7 +575,8 @@ impl AndroidLane {
     /// the [`Screen`] the lane located. A window of the same title (an activity's window leaving
     /// as it is started again, split screen) is another window, so the app is not in front; the
     /// same window moved, resized or turned would take the command at another place than the
-    /// lane computed it for, so it is busy until the lane locates it again.
+    /// lane computed it for, so it is busy until the lane locates it again. What went out of the
+    /// sequence before any of these refusals is said by the run ([`crate::lane::send_guarded`]).
     fn check_focus(&mut self) -> Result<()> {
         let windows = self.read_windows()?;
         let (Some(located), Some(focus)) = (&self.screen, &windows.focus) else {
@@ -501,22 +602,90 @@ impl AndroidLane {
         Ok(())
     }
 
-    /// Send `command`, recording what the device took.
-    fn deliver(&mut self, command: &Command) -> Result<()> {
-        let sent = match command.line() {
-            Some(line) => run_shell(self.adb.as_mut(), &line, STATUS).map(drop),
+    /// Send `command`, recording what the device took. A contact going down is recorded as held
+    /// before it goes out, so a send whose answer is lost or that unwinds leaves it for the
+    /// release to cancel, and is forgotten only when the command never reached the device or the
+    /// device answered by refusing it; any other command is recorded once the device took it, or
+    /// as unsure when its answer was lost. What the run counts of it is read from the same
+    /// [`Delivery`], so the count and the record agree.
+    fn deliver(&mut self, command: &Command) -> Delivery {
+        let holds = command.puts_contact_down();
+        if holds {
+            self.held.unsure(command);
+        }
+        let line = command.line();
+        let through_input = line.is_some();
+        let delivery = match line {
+            Some(line) => {
+                let shell = AdbCommand::Shell(line);
+                match self.adb.run(&shell, STATUS.limit, STATUS.timeout) {
+                    Ok(reply) => match reply.failure(STATUS.printed) {
+                        Some(failure) => Delivery::Unsent(command_failed(&shell, &reply, &failure)),
+                        None => Delivery::Taken,
+                    },
+                    Err(RunFailure::NotStarted(error)) => Delivery::Unsent(error),
+                    Err(RunFailure::Unanswered(error)) => Delivery::Unanswered(error),
+                }
+            }
             None => self.pen_report(command),
         };
-        match &sent {
-            Ok(()) => self.held.took(command),
-            Err(Error::Timeout { .. }) => self.held.unsure(command),
-            Err(_) => {}
+        match &delivery {
+            Delivery::Taken if !holds => self.held.took(command),
+            // The pen's report that went unconfirmed took its device, and its contacts, with it.
+            Delivery::Unanswered(_) if !holds && through_input => self.held.unsure(command),
+            Delivery::Unsent(_) if holds => self.held.refused(command),
+            Delivery::Taken | Delivery::Unsent(_) | Delivery::Unanswered(_) => {}
         }
-        sent
+        delivery
     }
 
-    /// Send the pen's report `command` through its device, registering it first.
-    fn pen_report(&mut self, command: &Command) -> Result<()> {
+    /// Send the pen's report `command` through its device, registering it first: unsent when it
+    /// was never written to the device, unanswered when the device did not confirm it.
+    fn pen_report(&mut self, command: &Command) -> Delivery {
+        let events = match self.pen_events(command) {
+            Ok(events) => events,
+            Err(error) => return Delivery::Unsent(error),
+        };
+        // The device is out of the lane while its report goes out, and goes back only once the
+        // report is confirmed: a report that fails or unwinds ends the device's command, which
+        // removes the device and the contacts it held, and the record of them goes with it.
+        let mut device = self
+            .pen
+            .take()
+            .expect("BUG: the pen's device was registered by `pen_events`");
+        let mut gone = PenDeviceGone {
+            held: &mut self.held,
+            confirmed: false,
+        };
+        let id = uinput::STYLUS_ID;
+        let delivery = match device.stream.send_line(&uinput::inject(id, &events)) {
+            // The command no longer reads its input: the report never reached the device.
+            Err(error) => Delivery::Unsent(error),
+            // A report written and never confirmed may have been injected: it says so.
+            Ok(()) => match device.sync(id) {
+                Ok(()) => Delivery::Taken,
+                Err(unconfirmed) => Delivery::Unanswered(Error::Timeout {
+                    awaited: crate::error::Awaited::Host,
+                    effect: Some(Effect::new(EffectKind::MayHaveRun).detail(
+                        "the pen's report was written to its `uinput` device, which did not \
+                         confirm it",
+                    )),
+                    message: unconfirmed.to_string(),
+                    retry: flui_protocol::error::Retry::Never,
+                }),
+            },
+        };
+        let confirmed = matches!(delivery, Delivery::Taken);
+        gone.confirmed = confirmed;
+        drop(gone);
+        if confirmed {
+            self.pen = Some(device);
+        }
+        delivery
+    }
+
+    /// The `uinput` events of the pen's report `command`, its device registered first.
+    fn pen_events(&mut self, command: &Command) -> Result<Vec<(&'static str, &'static str, i32)>> {
         let Command::Pen { change, at } = command else {
             return Err(lane_error("only the pen's reports go to its device"));
         };
@@ -559,22 +728,7 @@ impl AndroidLane {
             device.sync(registration.id)?;
             self.pen = Some(device);
         }
-        let device = self
-            .pen
-            .as_mut()
-            .expect("BUG: the pen's device was registered just above");
-        let id = uinput::STYLUS_ID;
-        let sent = device
-            .stream
-            .send_line(&uinput::inject(id, &events))
-            .and_then(|()| device.sync(id));
-        if sent.is_err() {
-            // The device's command is gone or stuck: ending it removes the device, and the kernel
-            // the contacts it held.
-            self.pen = None;
-            self.held.pen_device_gone();
-        }
-        sent
+        Ok(events)
     }
 
     /// Release what `part` holds: every command of its release tried, and what it still holds
@@ -582,7 +736,7 @@ impl AndroidLane {
     fn release_part(&mut self, part: Part) -> Result<()> {
         let mut first = None;
         for command in self.held.release_plan_of(part) {
-            if let Err(error) = self.deliver(&command) {
+            if let Err(error) = self.deliver(&command).into_result() {
                 first.get_or_insert(error);
             }
         }
@@ -698,7 +852,28 @@ const DATA: Run = Run {
 
 /// Run `command` as `run` says, failing on the device's failure.
 fn checked(adb: &mut dyn Adb, command: &AdbCommand, run: Run) -> Result<AdbReply> {
-    let reply = adb.run(command, run.limit, run.timeout)?;
+    let reply = adb.run(command, run.limit, run.timeout).map_err(|failed| {
+        // A command that prints data reads (the windows, the settings, a dump, a capture): its
+        // timeout keeps no effect, since it sends nothing that acts on the app, where
+        // `adb::timed_out` says the device may have done it, which holds for a command that acts.
+        match (run.printed, failed.into_error()) {
+            (
+                Printed::Data,
+                Error::Timeout {
+                    awaited,
+                    message,
+                    retry,
+                    ..
+                },
+            ) => Error::Timeout {
+                awaited,
+                effect: None,
+                message,
+                retry,
+            },
+            (_, other) => other,
+        }
+    })?;
     match reply.failure(run.printed) {
         Some(failure) => Err(command_failed(command, &reply, &failure)),
         None => Ok(reply),
@@ -767,6 +942,14 @@ impl Lane for AndroidLane {
     }
 
     fn send(&mut self, event: &OsEvent) -> Result<()> {
+        self.send_counted(event, &mut Delivered::default())
+    }
+
+    /// One event is none, one or several commands, each an `input` line or a pen report (a key
+    /// down is held for its release, text with a line break is typed around an Enter): each that
+    /// reached the device is counted, one whose answer was lost included, as the lane's own record
+    /// keeps it.
+    fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
         if let OsEvent::Pause(duration) = event {
             return self.pause(*duration);
         }
@@ -779,7 +962,11 @@ impl Lane for AndroidLane {
             if command.needs_focus() {
                 self.check_focus()?;
             }
-            self.deliver(&command)?;
+            let delivery = self.deliver(&command);
+            if delivery.reached_device() {
+                delivered.command();
+            }
+            delivery.into_result()?;
         }
         Ok(())
     }
@@ -805,26 +992,32 @@ impl Lane for AndroidLane {
     }
 
     fn read_tree(&mut self, placement: &Placement, app: &Tree) -> Result<Tree> {
-        // The window is located before and after the dump, which takes seconds on a phone: a
-        // window replaced or moved or a display turned in between, or a dump of another turn, is
-        // no snapshot the mapping holds for.
+        // The window is located before the dump, which takes seconds on a phone, and read again
+        // after it, whatever its size then: a window replaced, moved or resized or a display
+        // turned in between, a quarter turn included, or a dump of another turn, is no snapshot
+        // the mapping holds for.
         let before = self.find(placement)?;
         let dump = self.dump()?;
-        let screen = self.find(placement)?;
-        if screen != before || dump.rotation != screen.rotation {
+        let after = Self::screen_of(self.read_windows()?);
+        if after.as_ref() != Some(&before) || dump.rotation != before.rotation {
             return Err(Error::busy(format!(
                 "the app's window changed or the display turned while the {LANE} lane dumped it \
-                 (window {} at {:?} turned {} before, window {} at {:?} turned {} after, the \
-                 dump turned {}): read again once it holds still",
+                 (window {} at {:?} turned {} before, {} after, the dump turned {}): read again \
+                 once it holds still",
                 before.window,
                 before.surface,
                 before.rotation,
-                screen.window,
-                screen.surface,
-                screen.rotation,
+                after.map_or_else(
+                    || "no window on the default display".to_owned(),
+                    |after| format!(
+                        "window {} at {:?} turned {}",
+                        after.window, after.surface, after.rotation
+                    )
+                ),
                 dump.rotation
             )));
         }
+        let screen = before;
         let display = self.display(screen.rotation);
         let mapping = tree::Mapping {
             origin: DevicePoint::new(screen.surface.left, screen.surface.top),
@@ -890,6 +1083,15 @@ impl Drop for AndroidLane {
             let _ = run_shell(
                 self.adb.as_mut(),
                 &adb::shell_line(&["am", "force-stop", &self.package]),
+                STATUS,
+            );
+        }
+        // A dump the host ended at its deadline may have left its files; the session's go with
+        // it.
+        if self.dumps > 0 {
+            let _ = run_shell(
+                self.adb.as_mut(),
+                &format!("rm -f {}", uiautomator::session_dumps(&self.dump_session)),
                 STATUS,
             );
         }

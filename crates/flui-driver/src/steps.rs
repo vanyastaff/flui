@@ -78,6 +78,16 @@ pub enum OsEvent {
     Pause(Duration),
 }
 
+impl OsEvent {
+    /// Whether the event acts on the app, so sending it again repeats what it did: a press, a
+    /// lift, a key, text, a scroll, a composition's step. A pointer's move and a pause do not:
+    /// a move puts the pointer where it already is when played again.
+    #[must_use]
+    pub fn acts(&self) -> bool {
+        !matches!(self, Self::PointerMove { .. } | Self::Pause(_))
+    }
+}
+
 /// The events an OS lane sends for `sequence` into the window `geometry` places: see the
 /// [module docs](self).
 ///

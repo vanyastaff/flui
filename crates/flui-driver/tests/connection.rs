@@ -5,7 +5,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flui_driver::protocol::act::{ActionabilityCheck, ActionabilityParams, Effect, EffectKind};
+use flui_driver::protocol::act::{
+    ActionabilityCheck, ActionabilityParams, Effect, EffectKind, EffectUnit,
+};
 use flui_driver::protocol::client::{CallError, Connection, EndChecks};
 use flui_driver::protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
 use flui_driver::protocol::geometry::LogicalPoint;
@@ -560,11 +562,86 @@ fn an_error_is_stated_on_the_wire_as_it_was_read() {
             .retry(Retry::Soon),
         ErrorObject::new(ErrorCode::Platform, "the OS refused")
             .effect(Effect::new(EffectKind::Partial)),
+        // Part of an input played before the failure, as the app counts it: on a busy, which
+        // holds an effect, with its own `soon`.
+        ErrorObject::new(ErrorCode::Busy, "the app was busy")
+            .effect(Effect::partial(2, 5, EffectUnit::Tick))
+            .retry(Retry::Soon),
+        // On a code whose variant holds none, with `never` and with the app's own `soon`.
+        ErrorObject::new(ErrorCode::InvalidArgument, "no such key")
+            .effect(Effect::partial(2, 5, EffectUnit::Tick))
+            .retry(Retry::Never),
+        ErrorObject::new(ErrorCode::NotForeground, "the shade is in front")
+            .effect(Effect::partial(1, 3, EffectUnit::Event))
+            .retry(Retry::Soon),
     ];
     for answer in answers {
         let read = Error::from_wire(answer.clone());
         assert_eq!(read.to_wire(), answer, "{read:?}");
     }
+    // The other codes whose variant holds an effect keep it on the variant, not partly sent.
+    let held = |code: ErrorCode, retry: Retry| {
+        Error::from_wire(
+            ErrorObject::new(code, "part of an input played")
+                .effect(Effect::partial(1, 4, EffectUnit::Tick))
+                .retry(retry),
+        )
+    };
+    let not_found = held(ErrorCode::NotFound, Retry::WhenAppears);
+    assert!(
+        matches!(
+            not_found,
+            Error::NotFound {
+                effect: Some(_),
+                ..
+            }
+        ),
+        "{not_found:?}"
+    );
+    let input_held = held(ErrorCode::InputHeld, Retry::Soon);
+    assert!(
+        matches!(
+            input_held,
+            Error::InputHeld {
+                effect: Some(_),
+                ..
+            }
+        ),
+        "{input_held:?}"
+    );
+    let not_actionable = held(ErrorCode::NotActionable, Retry::WhenAppears);
+    assert!(
+        matches!(
+            not_actionable,
+            Error::NotActionable {
+                effect: Some(_),
+                ..
+            }
+        ),
+        "{not_actionable:?}"
+    );
+    for read in [not_found, input_held, not_actionable] {
+        assert!(read.may_have_run(), "{read:?}");
+    }
+    // A busy that holds the effect stays a busy; a code whose variant holds none is partly sent,
+    // its code and retry as the app said.
+    let busy = Error::from_wire(
+        ErrorObject::new(ErrorCode::Busy, "the app was busy")
+            .effect(Effect::partial(2, 5, EffectUnit::Tick))
+            .retry(Retry::Soon),
+    );
+    assert!(matches!(busy, Error::Busy { .. }), "{busy:?}");
+    assert!(busy.may_have_run());
+    let soon = Error::from_wire(
+        ErrorObject::new(ErrorCode::NotForeground, "the shade is in front")
+            .effect(Effect::partial(1, 3, EffectUnit::Event))
+            .retry(Retry::Soon),
+    );
+    assert!(matches!(soon, Error::PartlySent { .. }), "{soon:?}");
+    assert_eq!(
+        (soon.code(), soon.retry()),
+        (Some(ErrorCode::NotForeground), Retry::Soon)
+    );
     let mut unsupported = ErrorObject::new(ErrorCode::NotSupported, "no recorder");
     unsupported.capability = Some("record".to_owned());
     assert_eq!(Error::from_wire(unsupported.clone()).to_wire(), unsupported);

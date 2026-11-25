@@ -513,18 +513,27 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   position and identity, never by value: how far the owner-thread failures and the cross-thread
   reports had been read, and the ids of the debts and scheduled changes it listed; a failure
   recorded after it is new even when it equals one it returned.
-- **A hold has one owner: the script's count.** `Script::hold` hands out a `ScriptHold`, and the
-  script holds every request that reaches it while any lives, whoever took it (a test, or a
-  double such as the scripted clipboard's `hold_writes`). Nobody lets go of another's hold: the
-  last one dropped or `release`d sends the requests the holds kept, oldest first, on to the steps
-  and the standing answer, as if they arrived then, and counts the ones answered. A request a
-  step held is not one of them. The lift, like `release_oldest`, `release_held` and
-  `abandon_held` (which answer any held request), takes each request out only as it answers it:
-  the code that runs meanwhile finds the rest in the script, where a ticket withdraws one, a new
-  request queues behind them, and a hold taken stops the lift with the rest kept in order. A
-  double that keeps a hold in its own state lets go of it with `leave_held` when that state is
-  torn down, so the kept requests stay held for the run to report rather than being answered by
-  whatever standing answer the test left.
+- **What a script holds has one owner.** `scripted::requests::Pending` keeps a script's
+  pending requests, its hold count and whether a drain runs; a request stays in it while its
+  answer is made. Every event goes through its one transition function, `Pending::apply`,
+  which hands back what the script does next: a request arriving, being kept for the test,
+  scheduled or answered; a hold taken, dropped or left with `leave_held`; a drain's next step;
+  `verify`; a ticket; a release; a panicked answer; the clock. The script carries that out outside
+  the borrow, one request at a time. The rules are stated once, in the "Held requests" section of
+  `Script`'s docs. Every transition is a row of `every_event_moves_the_pending_requests_as_the_rules_say`
+  (`src/capability/scripted/requests/tests.rs`). The rules the script carries out around them are
+  pinned by the scenario tests of `crates/flui-testing/tests/scenario.rs`: what a release counts
+  (`a_release_counts_only_the_requests_it_answered`,
+  `a_request_withdrawn_while_its_release_answer_is_made_is_not_counted`) and how the test's
+  panics are kept, each piece of its code contained where it runs and the first panic resumed
+  (`a_panic_during_a_drain_is_kept_until_the_rest_are_answered`,
+  `an_answer_dropped_by_its_resolver_keeps_the_first_panic_and_the_next_request`,
+  `every_value_a_step_lets_go_of_drops_contained_before_the_answer`,
+  `an_answers_drop_is_contained_before_the_request_lets_go`,
+  `the_last_handles_send_on_lets_go_drop_before_the_answer`). A double that keeps a hold in its
+  own state lets go of it with `leave_held` when that state is torn down, so its teardown answers
+  nothing (`capability_seam::a_double_torn_down_with_its_reads_held_answers_none_of_them`,
+  `crates/flui-testing/tests/capability_seam.rs`).
 - **Reports from other threads are bounded.** A `FailureReport` keeps `MAX_REPORTS` and counts
   the rest as one `ReportsDropped`; once the scenario has ended, `report` answers `false` and
   nothing accumulates. A script keeps its first `MAX_RECORDED_REQUESTS` requests and counts
@@ -547,9 +556,15 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
 - **A request its caller calls off is withdrawn, not owed.** `Script::receive_with_ticket`
   hands back a `RequestTicket`, the scenario's form of a system request that lives while its
   requester holds it (a portal's `Request` object, an activity result's `ResultTicket`).
-  Dropping it while the request is held or scheduled removes the request, drops its resolver,
-  takes a scheduled answer off the timeline, tells the observers it ended unanswered and counts
-  it in `Script::withdrawn`; a withdrawn
+  Dropping it while the request is held, scheduled or while its answer is made removes the
+  request, drops its resolver, takes a scheduled answer off the timeline, stops the answer
+  being made (no step is tried after the one that ran, no standing answer runs, nothing is
+  recorded or scheduled), tells the observers it ended unanswered and counts it in
+  `Script::withdrawn`. A step is used up when its matcher accepted a request still asked for
+  once the matcher returns: a ticket dropped from then on leaves the step used and its answer
+  unmade (`a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it`,
+  `a_used_step_withdrawn_by_its_own_drop_runs_none_of_its_answer`,
+  `a_used_step_withdrawn_by_its_own_drop_schedules_none_of_its_answer`); a withdrawn
   request is neither `Unanswered` nor `NotReached`, and an answered one is untouched.
 
 The launcher, file dialog, clipboard and primary selection doubles are built on it. Three
@@ -570,12 +585,30 @@ is no request it could find unexpected.
 `a_scenario_dropped_unverified_with_debts_fails_the_test`,
 `a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest`,
 `a_scripts_last_hold_sends_on_only_what_the_holds_kept`,
-`a_request_sent_during_a_lift_queues_behind_the_kept_ones`,
-`a_ticket_dropped_during_a_lift_withdraws_its_request`,
+`a_request_sent_during_a_drain_queues_behind_the_kept_ones`,
+`a_ticket_dropped_during_a_drain_withdraws_its_request`,
 `a_release_leaves_the_rest_in_the_script_while_it_answers_one`,
-`a_panic_during_a_lift_is_kept_until_the_rest_are_answered`,
-`a_hold_taken_during_a_lift_keeps_the_rest_in_order`,
+`a_panic_during_a_drain_is_kept_until_the_rest_are_answered`,
+`a_hold_taken_during_a_drain_keeps_the_rest_in_order`,
 `a_hold_outliving_its_script_answers_nothing`,
+`a_panicking_drop_during_a_drain_leaves_the_script_answering`,
+`a_release_counts_only_the_requests_it_answered`,
+`a_hold_let_go_inside_a_drain_leaves_the_drain_to_finish`,
+`leave_held_leaves_the_kept_requests_to_another_hold_or_to_the_test`,
+`a_hold_let_go_after_verify_leaves_what_verify_reported`,
+`a_request_withdrawn_while_its_release_answer_is_made_is_not_counted`,
+`an_answer_dropped_by_its_resolver_keeps_the_first_panic_and_the_next_request`,
+`a_hold_left_inside_a_drain_leaves_the_rest_to_it`,
+`a_matcher_capture_dropped_on_the_receive_path_keeps_the_request_and_the_first_panic`,
+`every_value_a_step_lets_go_of_drops_contained_before_the_answer`,
+`an_answers_drop_is_contained_before_the_request_lets_go`,
+`a_request_being_answered_stays_in_the_script`,
+`the_last_handles_send_on_lets_go_drop_before_the_answer`,
+`a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it`,
+`a_request_whose_debug_withdraws_it_is_neither_unexpected_nor_scheduled`,
+`a_used_step_withdrawn_by_its_own_drop_runs_none_of_its_answer`,
+`a_used_step_withdrawn_by_its_own_drop_schedules_none_of_its_answer`,
+`a_request_its_own_answer_withdraws_is_not_answered_or_counted`,
 `a_scenario_drives_one_host_at_a_time`,
 `the_host_waits_for_a_scheduled_change_as_for_any_deadline`
 (`crates/flui-testing/tests/scenario.rs`);

@@ -4,13 +4,15 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use flui_driver::coordinates::DevicePoint;
 use flui_driver::lane;
 use flui_driver::os_input::OsDevice;
 use flui_driver::protocol::act::ActOutcome;
 use flui_driver::protocol::error::{ErrorCode, ErrorObject};
 use flui_driver::protocol::geometry::LogicalPoint;
 use flui_driver::protocol::input::{
-    ActionSequence, InputSource, PointerAction, PointerDevice, ScrollUnit, TapParams, WheelAction,
+    ActionSequence, InputSource, PointerAction, PointerButton, PointerDevice, ScrollUnit,
+    TapParams, WheelAction,
 };
 use flui_driver::protocol::locator::Target;
 use flui_driver::protocol::method::{self, Method};
@@ -317,6 +319,116 @@ fn input_left_held_is_named_whatever_ended_the_run() {
         lane::send_guarded(&mut lane, &[an_event(), an_event()]),
         Err(Error::InterruptedByUser { .. })
     ));
+}
+
+/// Whatever ends a run once an input of it reached the device says how many events went out, on
+/// every lane: the guard's interruption between events, the guard's look after the last one, a
+/// release that fails after every event went out, and an event cut part way come as
+/// `PartlySent`, with the typed count and no retry. The count holds every event taken whole, a
+/// move and a pause included, and the failing event where part of it went out; moves and pauses
+/// alone are no input that reached the device.
+#[test]
+fn a_run_ended_after_an_event_went_out_says_how_many_on_every_lane() {
+    use flui_driver::protocol::act::{EffectKind, EffectUnit};
+    use flui_driver::protocol::error::Retry;
+
+    let key = |name: &str| {
+        [
+            OsEvent::KeyDown(name.to_owned()),
+            OsEvent::KeyUp(name.to_owned()),
+        ]
+    };
+    let partly = |error: &Error, sent: u32, total: u32| {
+        assert!(matches!(error, Error::PartlySent { .. }), "{error:?}");
+        let effect = error.effect().expect("an effect");
+        assert_eq!(
+            (effect.kind, effect.sent, effect.total, effect.unit),
+            (
+                EffectKind::Partial,
+                Some(sent),
+                Some(total),
+                Some(EffectUnit::Event)
+            )
+        );
+        assert_eq!(error.retry(), Retry::Never);
+    };
+    // Interrupted between the key's press and its release.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.foreign_input_after(1, "a key");
+    let refused = lane::send_guarded(&mut lane, &key("a")).expect_err("interrupted");
+    partly(&refused, 1, 2);
+    assert!(refused.is_cannot_verify(), "{refused}");
+    // Interrupted after the last event.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.foreign_input_after(2, "a key");
+    let refused = lane::send_guarded(&mut lane, &key("a")).expect_err("interrupted");
+    partly(&refused, 2, 2);
+    // Every event went out, and the release failed.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.guarded().failing_releases(1);
+    let refused = lane::send_guarded(&mut lane, &key("a")).expect_err("held");
+    partly(&refused, 2, 2);
+    // A tap, its move and its pause included, went out whole, and the release failed.
+    let at = DevicePoint::new(10, 10);
+    let tap = [
+        OsEvent::PointerMove {
+            pointer: "touch".to_owned(),
+            device: PointerDevice::Touch,
+            to: at,
+        },
+        OsEvent::PointerDown {
+            pointer: "touch".to_owned(),
+            device: PointerDevice::Touch,
+            button: PointerButton::Primary,
+        },
+        OsEvent::Pause(Duration::from_millis(1)),
+        OsEvent::PointerUp {
+            pointer: "touch".to_owned(),
+            device: PointerDevice::Touch,
+            button: PointerButton::Primary,
+        },
+    ];
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.guarded().failing_releases(1);
+    let refused = lane::send_guarded(&mut lane, &tap).expect_err("held");
+    partly(&refused, 4, 4);
+    // Interrupted after the tap's press: its move and its press went out.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.foreign_input_after(2, "a touch");
+    let refused = lane::send_guarded(&mut lane, &tap).expect_err("interrupted");
+    partly(&refused, 2, 4);
+    // Text cut after two of its keystrokes, after a key that went out whole: the cut text is an
+    // event partly sent, counted with the key's two.
+    let mut run = key("a").to_vec();
+    run.push(OsEvent::Text("hello".to_owned()));
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.guarded().losing_focus_after_keystrokes(2);
+    let refused = lane::send_guarded(&mut lane, &run).expect_err("the focus went");
+    partly(&refused, 3, 3);
+    assert!(
+        matches!(&refused, Error::PartlySent { first, .. } if matches!(**first, Error::NotForeground { .. })),
+        "{refused:?}"
+    );
+    // The same text cut before its first keystroke, with nothing before it: nothing went out.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.guarded().losing_focus_after_keystrokes(0);
+    let refused = lane::send_guarded(&mut lane, &[OsEvent::Text("hello".to_owned())])
+        .expect_err("the focus went");
+    assert!(
+        matches!(refused, Error::NotForeground { .. }),
+        "{refused:?}"
+    );
+    assert!(!refused.may_have_run());
+    // Only pauses went out before the interruption: nothing that acts was sent.
+    let pause = || OsEvent::Pause(Duration::from_millis(1));
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.foreign_input_after(1, "a key");
+    let refused = lane::send_guarded(&mut lane, &[pause(), pause()]).expect_err("interrupted");
+    assert!(
+        matches!(refused, Error::InterruptedByUser { .. }),
+        "{refused:?}"
+    );
+    assert!(!refused.may_have_run());
 }
 
 #[test]

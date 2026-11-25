@@ -19,10 +19,12 @@
 //! ([`check_focus`]): a press with the shade, the lock screen or another app in front lands
 //! there. The lane also holds it to the window it located, compared by hash, frame and rotation:
 //! another window of the app's title is not in front, and the same window moved or turned is
-//! busy until the lane locates it again. The read of the
-//! tree takes a `uiautomator dump`, which suspends every accessibility service while it runs
-//! (TalkBack, Voice Access and Switch Access among them), so it is refused while one runs
-//! ([`check_dump`]); locating the window, input and capture take no dump.
+//! busy until the lane locates it again; after part of the sequence went out, either refusal
+//! comes as [`crate::Error::PartlySent`], which says that part may have run and invites no
+//! retry. The read of the tree takes a `uiautomator dump`, which
+//! suspends every accessibility service while it runs (TalkBack, Voice Access and Switch Access
+//! among them), so it is refused while one runs ([`check_dump`]); locating the window, input and
+//! capture take no dump.
 
 use flui_protocol::error::{ErrorCode, HandleKind};
 use flui_protocol::session::Isolation;
@@ -136,7 +138,7 @@ impl Refusal {
         match self {
             Self::NotForeground { focus } => Error::NotForeground {
                 message: format!(
-                    "the app's window does not hold the input focus ({}); nothing was sent",
+                    "the app's window does not hold the input focus ({}): the command is not sent",
                     focus.as_deref().unwrap_or("no window holds it")
                 ),
                 retry: ErrorCode::NotForeground.default_retry(),
