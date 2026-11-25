@@ -701,7 +701,21 @@ pub(crate) fn identifier_clashes(
 
 /// The wire handle of a published node: its generational accessibility id.
 pub(crate) fn element_id(node: &NodeRef<'_>) -> Option<ElementId> {
-    ElementId::from_u64(node.locate().0.0)
+    AccessibilityNodeId::from_u64(node.locate().0.0).and_then(wire_element_id)
+}
+
+/// The wire handle of the element `render` contributes to the published tree: the accessibility
+/// id of its node, as [`element_id`] reads it off a published node. The one mapping from a render
+/// object to the handle an agent's answers name.
+#[must_use]
+pub fn element_id_of(render: flui_foundation::RenderId) -> ElementId {
+    wire_element_id(AccessibilityNodeId::from(render))
+        .expect("BUG: an accessibility id derived from a render id is non-zero")
+}
+
+/// The wire handle of the node with accessibility id `id`; `None` for the zero id no node has.
+fn wire_element_id(id: AccessibilityNodeId) -> Option<ElementId> {
+    ElementId::from_u64(id.as_u64())
 }
 
 /// Whether UI Automation exposes `node` through the `Value` pattern, which

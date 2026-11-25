@@ -81,7 +81,7 @@ pub use action::{
 };
 pub use agent::{
     Evaluation, EventSet, Placement, TreeSnapshot, WaitFacts, WireActionError, WireLocateError,
-    WireReadError, counts_frames,
+    WireReadError, counts_frames, element_id_of,
 };
 pub use announce::{AnnounceError, Announcements, Announcer};
 pub use applicability::RoleAttribute;

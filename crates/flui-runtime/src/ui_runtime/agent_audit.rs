@@ -34,14 +34,13 @@
 //! [`SemanticsOwner::audit_target_size`]: flui_semantics::SemanticsOwner::audit_target_size
 //! [`PipelineOwner::audit_text_contrast`]: flui_rendering::PipelineOwner::audit_text_contrast
 
-use flui_foundation::RenderId;
 use flui_interaction::events::PointerKind;
 use flui_platform::TargetPlatform;
 use flui_protocol::audit::{AuditFinding, AuditParams, AuditReport, AuditRule};
 use flui_protocol::method;
-use flui_protocol::tree::{ElementId, ElementRef, WindowId};
+use flui_protocol::tree::{ElementRef, WindowId};
 use flui_rendering::audit::{ContrastOutcome, ContrastReading, TextContrast};
-use flui_semantics::{AccessibilityNodeId, MinimumTarget, SemanticsOwner, WireReadError};
+use flui_semantics::{MinimumTarget, SemanticsOwner, WireReadError};
 
 use super::agent::{IssuedHandles, placement_of};
 use super::agent_serve::{Answer, Serve, ServeContext};
@@ -177,7 +176,7 @@ fn text_contrast(state: &PresentationState, window: WindowId) -> RuleOutcome {
             (ContrastOutcome::Meets(_), _) => {}
             (ContrastOutcome::Below(reading), Some(element)) => findings.push(AuditFinding::new(
                 AuditRule::TextContrast,
-                ElementRef::new(window, element_id(element)),
+                ElementRef::new(window, flui_semantics::element_id_of(element)),
                 below_detail(text, reading),
             )),
             (ContrastOutcome::Below(_), None) => unchecked.push(format!(
@@ -214,12 +213,6 @@ fn text_contrast(state: &PresentationState, window: WindowId) -> RuleOutcome {
             texts.len()
         ),
     )
-}
-
-/// The wire handle of the element `render` contributes: its accessibility id.
-fn element_id(render: RenderId) -> ElementId {
-    ElementId::from_u64(AccessibilityNodeId::from(render).as_u64())
-        .expect("BUG: an accessibility id derived from a render id is non-zero")
 }
 
 /// A finding's detail for a text below its contrast.

@@ -11,9 +11,7 @@ use flui_protocol::{
     act::ActOutcome, act::EffectKind, input::InputPath, snapshot::ChangedField, snapshot::Snapshot,
     snapshot::SnapshotReading, wire::ActionName,
 };
-use flui_semantics::{
-    AccessibilityNodeId, SemanticsAction, SemanticsNode, SemanticsOwner, SemanticsRole,
-};
+use flui_semantics::{SemanticsAction, SemanticsNode, SemanticsOwner, SemanticsRole};
 
 use flui_view::dev_agent::{AgentAnswer, AgentWindow};
 
@@ -129,9 +127,7 @@ fn an_action_that_dirtied_nothing_still_reads_back_after_a_frame() {
     let window = ui_runtime
         .dev_agent_window(ui_runtime.presentation_id())
         .expect("the ui_runtime hosts its primary presentation");
-    let element =
-        flui_protocol::tree::ElementId::from_u64(AccessibilityNodeId::from(render_id).as_u64())
-            .expect("an accessibility id is non-zero");
+    let element = flui_semantics::element_id_of(render_id);
 
     let presentation = ui_runtime.presentation_id();
     let _ = ui_runtime.take_redraw_pending_for_test(presentation);
@@ -182,9 +178,7 @@ fn a_window_that_closes_first_leaves_an_outcome_that_ran_without_a_reading() {
     let window = ui_runtime
         .dev_agent_window(second)
         .expect("the ui_runtime hosts the second presentation");
-    let element =
-        flui_protocol::tree::ElementId::from_u64(AccessibilityNodeId::from(render_id).as_u64())
-            .expect("an accessibility id is non-zero");
+    let element = flui_semantics::element_id_of(render_id);
     let mut reply = window
         .call::<method::SemanticsAct>(
             act_params(&window, element, ActionName::Invoke).snapshot(Snapshot::Delta),
