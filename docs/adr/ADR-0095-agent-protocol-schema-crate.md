@@ -23,10 +23,9 @@
   `flui-devtools` server, its `op` framing and its `agent_endpoint` tests is history.
   [ADR-0238](ADR-0238-flui-driver-protocol.md) settles the still-Proposed items of §§1, 3 and 5
 - **Superseded in part by:** [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
-  for §3's sentence that `flui mcp`'s tools are written in the CLI and map one to one onto the
-  endpoint's operations (`flui_windows`, `flui_read`, `flui_locate`, `flui_act`, `flui_wait`,
-  `flui_motion`, `flui_reload`), only: the tools are the method table's rows under their own
-  names, and the methods those seven call are respelled.
+  for the names §3 gives `flui mcp`'s tools (`flui_windows`, `flui_read`, `flui_locate`,
+  `flui_act`, `flui_wait`, `flui_motion`, `flui_reload`) and the operations they call, only: a
+  tool is named for its method, and those methods are respelled.
 - **Related:** [ADR-0040](ADR-0040-tree-observation-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
   [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md),

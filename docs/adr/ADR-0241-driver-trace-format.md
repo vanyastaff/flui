@@ -2,6 +2,10 @@
 
 - **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-17
+- **Superseded-by:** [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
+  for §5's sentence that `flui_trace` is the one version a reader checks (it also refuses a
+  trace whose `protocol` a break separates from its own), and for the name `record.start` in
+  the Consequences (the method is `recording.start`), only.
 - **Related:** [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) (the input
   recording it embeds; its privacy rule and completeness rule are reused),
   [ADR-0238](ADR-0238-flui-driver-protocol.md),
