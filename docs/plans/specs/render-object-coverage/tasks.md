@@ -73,7 +73,7 @@
 | Task | Content | Req. | Crates | Depends on | Gated | Status |
 |------|---------|------|--------|------------|:-----:|--------|
 | RC0 | Harness reads family modules; the guard counts `pub` rows, whole names and mounted files; `docs/testing.md` drops the copied count | R1 | `flui-objects` (tests), docs | — | | done |
-| RC1 | The `shown` module with `OverflowClip`, the shared row and its guard; six overflow objects move onto it; the gap entry leaves | R2 | `flui-objects`, docs | RC0 | | not started |
+| RC1 | The `shown` module with `OverflowClip`, the shared row and its guard; six overflow objects move onto it; the gap entry leaves | R2 | `flui-objects`, docs | RC0 | | in review |
 | RC43 | `ShownChildren` and the sliver frame; the carousel, the list, the fixed-extent list and the grid move onto it; `PinnedChildren` returns its slots and keeps none | R2 | `flui-objects`, docs | RC1 | | not started |
 | RC2 | Sliver pass-through base; six proxies move to it | R3, R4 | `flui-objects` | RC0 | | not started |
 | RC3 | `MaxPaintRect`, `RenderSliverClip<S>`, `SliverClipRect`, `SliverClipRRect` | R3 | `flui-objects`, `flui-widgets` | RC43, RC2 | | not started |
