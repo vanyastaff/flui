@@ -380,6 +380,12 @@ impl Scenario {
         self.core.state.borrow_mut().events.push(failure);
     }
 
+    /// Whether the last [`verify`](Self::verify) reported the step or
+    /// request `id` as a debt.
+    fn acknowledged_debt(&self, id: NonZeroU64) -> bool {
+        self.core.state.borrow().acknowledged.debts.contains(&id)
+    }
+
     fn owe(&self, debts: Vec<Debt>) {
         self.core.state.borrow_mut().debts.extend(debts);
     }
