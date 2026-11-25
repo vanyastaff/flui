@@ -280,8 +280,14 @@ fn each_session_dumps_to_a_file_of_its_own() {
                 .is_some_and(|extension| extension == "xml"),
         "{one}"
     );
+    // The dump ends by removing every file of its session's dumps, its own and any an earlier
+    // dump the host ended left, so what such dumps leave stays bounded.
     let line = &first.commands("exec-out uiautomator dump")[0];
-    assert!(line.contains(&format!("rm -f {one}")), "{line}");
+    let every = one.replace("-1.xml", "-*.xml");
+    assert!(
+        line.ends_with(&format!("; rm -f {every} {every}.err")),
+        "{line}"
+    );
     // Each dump of a session has a path of its own: a file an earlier dump left is never read.
     let mut lane = connected(&first);
     let empty = flui_driver::protocol::tree::Tree::new(Vec::new(), false);
@@ -295,6 +301,16 @@ fn each_session_dumps_to_a_file_of_its_own() {
         .collect();
     assert_eq!(paths.len(), 2, "{paths:?}");
     assert_ne!(paths[0], paths[1]);
+    // Each lane's end removes what a dump of its session ended at its deadline may have left.
+    drop(lane);
+    let later = paths[0].replace("-1.xml", "-*.xml");
+    assert_eq!(
+        first.commands("shell rm -f"),
+        vec![
+            format!("shell rm -f {every} {every}.err"),
+            format!("shell rm -f {later} {later}.err"),
+        ]
+    );
 }
 
 #[test]

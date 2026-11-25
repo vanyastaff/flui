@@ -1193,8 +1193,9 @@ graph LR
     read raw; the driver's own PNG reader (`pixels::codec`) decodes the PNG within its bounds, and the capture is a `pixels::Image`; `roxmltree` reads the dump.
   - The lane never picks a device: `adb::HostAdb` cannot be built without a serial, and
     `lane::android::host_device` takes the one `FLUI_ANDROID_SERIAL` names and asks `adb` nothing
-    without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
-    and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
+    without it; AVD lifecycle stays with FD26. Each window dump of a session goes to a path of its
+    own, and the session's dump files are removed by every dump that runs to its end and by the
+    lane's end; its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
     port tried when one is taken, is removed by that port once `adb` made it or may have.
   - `uiautomator dump` suspends every accessibility service running while it dumps, so only the
     read of the tree takes one, and on a device or an emulator it is refused while any service is

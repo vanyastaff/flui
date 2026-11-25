@@ -2224,6 +2224,46 @@ fn a_run_says_what_of_an_event_went_out_command_by_command() {
             .is_some_and(|detail| detail.contains("1 command")),
         "{detail:?}"
     );
+    // "ab" and the Enter go out, and the device refuses "cd": one event of two commands.
+    let commands = |refused: &Error| refused.effect().and_then(|effect| effect.detail.clone());
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    let _cd_refused = adb.clone().reply_once(
+        "shell input text 'cd'",
+        AdbReply::new(1, "").stderr("Error: no keyboard"),
+    );
+    let refused = lane::send_guarded(&mut lane, &[OsEvent::Text("ab\ncd".to_owned())])
+        .expect_err("the device refused \"cd\"");
+    assert_eq!(inputs(&adb).len(), 3, "{:?}", inputs(&adb));
+    assert_partly_sent(&refused, 1, 1);
+    assert_eq!(
+        commands(&refused).as_deref(),
+        Some("the device took 2 command(s) of the run")
+    );
+    // The whole text went out, three commands, and the scroll after it is refused.
+    let adb = scripted(true, true);
+    let mut lane = connected(&adb);
+    let _scroll_refused = adb.reply_once(
+        "shell input mouse scroll",
+        AdbReply::new(1, "").stderr("Error: no mouse"),
+    );
+    let refused = lane::send_guarded(
+        &mut lane,
+        &[
+            OsEvent::Text("ab\ncd".to_owned()),
+            OsEvent::Scroll {
+                at: DevicePoint::new(300, 600),
+                delta_x: 0,
+                delta_y: 40,
+            },
+        ],
+    )
+    .expect_err("the scroll was refused");
+    assert_partly_sent(&refused, 1, 2);
+    assert_eq!(
+        commands(&refused).as_deref(),
+        Some("the device took 3 command(s) of the run")
+    );
     // The key held down for its release, refused at it: nothing went out.
     let adb = scripted(true, true);
     let mut lane = connected(&adb);
@@ -2241,8 +2281,8 @@ fn a_run_says_what_of_an_event_went_out_command_by_command() {
 }
 
 /// A press whose answer was lost after `adb` started it (here, more output than its bound) may
-/// have gone down: only a press the device answered by refusing is forgotten, and the release
-/// cancels this one.
+/// have gone down: the release cancels it, and the run counts it as part of what went out, as
+/// the lane's record keeps it.
 #[test]
 fn a_press_whose_answer_is_lost_is_cancelled_by_the_release() {
     let adb = scripted(true, true).reply_once(
@@ -2250,7 +2290,7 @@ fn a_press_whose_answer_is_lost_is_cancelled_by_the_release() {
         AdbReply::new(0, "x".repeat(70 * 1024)),
     );
     let mut lane = connected(&adb);
-    let _failed = lane::send_guarded(
+    let failed = lane::send_guarded(
         &mut lane,
         &tap(PointerDevice::Touch, DevicePoint::new(300, 600)),
     )
@@ -2262,6 +2302,37 @@ fn a_press_whose_answer_is_lost_is_cancelled_by_the_release() {
         "{:?}",
         adb.log()
     );
+    // The move and the press, of the tap's four events.
+    assert!(failed.may_have_run(), "{failed:?}");
+    assert_partly_sent(&failed, 2, 4);
+}
+
+/// A press whose `adb` never started never reached the device: the lane forgets it, cancels
+/// nothing, says nothing ran, and the next press is no second contact.
+#[test]
+fn a_press_whose_adb_never_started_is_forgotten() {
+    let adb = scripted(true, true).not_started_once("shell input touchscreen motionevent DOWN");
+    let mut lane = connected(&adb);
+    let tapped = tap(PointerDevice::Touch, DevicePoint::new(300, 600));
+    let failed = lane::send_guarded(&mut lane, &tapped).expect_err("adb did not start");
+    assert!(
+        matches!(
+            failed,
+            Error::Lane {
+                unavailable: true,
+                ..
+            }
+        ),
+        "{failed:?}"
+    );
+    assert!(!failed.may_have_run(), "{failed:?}");
+    assert!(
+        adb.commands("shell input touchscreen motionevent CANCEL")
+            .is_empty(),
+        "{:?}",
+        adb.log()
+    );
+    lane::send_guarded(&mut lane, &tapped).expect("the next tap is no second contact");
 }
 
 /// A capture is a read: one that times out says nothing may have run.
@@ -2400,7 +2471,9 @@ fn a_window_that_moves_within_a_sequence_stops_it_after_what_went_out() {
     );
     assert!(matches!(refused, Error::PartlySent { .. }), "{refused:?}");
     assert_eq!(inputs(&adb), vec!["shell input keyevent KEYCODE_A"]);
-    assert_partly_sent(&refused, 1, 3);
+    // The key down and its release were taken whole, the key going out at its release: two of
+    // three events, as on every lane.
+    assert_partly_sent(&refused, 2, 3);
     // The next sequence starts with nothing sent: its own refusal invites the call again.
     let _moved_again = adb.reply_once(
         "shell dumpsys window -a |",
@@ -2465,7 +2538,7 @@ fn any_failure_after_part_of_a_sequence_went_out_says_it_may_have_run() {
         Some(flui_driver::protocol::error::ErrorCode::NotForeground),
         "{refused:?}"
     );
-    assert_partly_sent(&refused, 1, 3);
+    assert_partly_sent(&refused, 2, 3);
     // The windows unreadable after the key.
     let adb = scripted(true, true);
     let mut lane = connected(&adb);
@@ -2480,7 +2553,7 @@ fn any_failure_after_part_of_a_sequence_went_out_says_it_may_have_run() {
         matches!(&refused, Error::PartlySent { first, .. } if matches!(**first, Error::Lane { .. })),
         "{refused:?}"
     );
-    assert_partly_sent(&refused, 1, 3);
+    assert_partly_sent(&refused, 2, 3);
     // The scroll's command refused by the device after the key went out.
     let adb = scripted(true, true);
     let mut lane = connected(&adb);
@@ -2489,7 +2562,7 @@ fn any_failure_after_part_of_a_sequence_went_out_says_it_may_have_run() {
         AdbReply::new(1, "").stderr("Error: no mouse"),
     );
     let refused = lane::send_guarded(&mut lane, &key_then_scroll).expect_err("the scroll failed");
-    assert_partly_sent(&refused, 1, 3);
+    assert_partly_sent(&refused, 2, 3);
     // A failure before anything that acts went out (a tap refused at its press, after its move)
     // says nothing ran.
     let adb = scripted(true, true);

@@ -4,7 +4,9 @@
 use std::time::{Duration, Instant};
 
 use flui_driver::coordinates::DevicePoint;
-use flui_driver::lane::android::adb::{AdbCommand, AdbReply, Framing, Printed, Splitter};
+use flui_driver::lane::android::adb::{
+    AdbCommand, AdbReply, Framing, Printed, RunFailure, Splitter,
+};
 use flui_driver::lane::android::device;
 use flui_driver::lane::android::getevent::{self, Line, Watch};
 use flui_driver::lane::android::guard::GeteventGuard;
@@ -429,7 +431,7 @@ fn a_slow_scripted_command_answers_within_its_deadline_and_times_out_past_it() {
         "the deadline ends the command, not the device"
     );
     match &refused {
-        Error::Timeout { effect, .. } => assert_eq!(
+        RunFailure::Unanswered(Error::Timeout { effect, .. }) => assert_eq!(
             effect.as_ref().map(|effect| effect.kind),
             Some(flui_driver::protocol::act::EffectKind::MayHaveRun)
         ),
@@ -1248,6 +1250,31 @@ fn a_lane_that_started_no_app_stops_nothing_when_it_ends() {
         adb.commands("forward --remove"),
         vec![format!("forward --remove {local}")]
     );
+    // A forward whose answer was lost otherwise (more output than its bound) may have been made
+    // too; one whose `adb` never started was not.
+    let adb = scripted(true, true)
+        .reply("shell 'am'", AdbReply::new(0, ""))
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .reply_once(
+            "forward --no-rebind",
+            AdbReply::new(0, "x".repeat(70 * 1024)),
+        );
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    assert!(lane.start(&app).is_err());
+    let local = local_spec(&adb.commands("forward --no-rebind")[0]);
+    drop(lane);
+    assert_eq!(
+        adb.commands("forward --remove"),
+        vec![format!("forward --remove {local}")]
+    );
+    let adb = scripted(true, true)
+        .reply("shell 'am'", AdbReply::new(0, ""))
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .not_started_once("forward --no-rebind");
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    assert!(lane.start(&app).is_err());
+    drop(lane);
+    assert_eq!(adb.commands("forward --remove"), Vec::<String>::new());
 }
 
 /// The local spec (`tcp:N`) of a logged `forward --no-rebind tcp:N localabstract:…`.

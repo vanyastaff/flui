@@ -52,7 +52,8 @@ use serde_json::Value;
 use crate::coordinates::WindowGeometry;
 use crate::error::{Error, Result};
 use crate::lane::{
-    AccessibilityApi, ActivityGuard, ForeignInput, Lane, LaneCapabilities, PositionFidelity,
+    AccessibilityApi, ActivityGuard, Delivered, ForeignInput, Lane, LaneCapabilities,
+    PositionFidelity,
 };
 use crate::pixels::Image;
 use crate::steps::OsEvent;
@@ -140,6 +141,9 @@ pub struct ScriptedLane {
     failing_releases: usize,
     /// Whether its sends time out, as a tool on the host that stops answering does.
     hanging_sends: bool,
+    /// How many keystrokes of text it types before the window loses the focus, typing text one
+    /// keystroke per character; it types text as one input without one.
+    keystrokes_before_focus_lost: Option<usize>,
     /// Whether its releases panic, as a lane's code or a log subscriber can.
     panicking_releases: bool,
     /// What its captures show; it captures nothing without one.
@@ -178,6 +182,7 @@ impl ScriptedLane {
                 failing_releases: 0,
                 panicking_releases: false,
                 hanging_sends: false,
+                keystrokes_before_focus_lost: None,
                 screen: None,
                 tree: None,
             },
@@ -214,6 +219,15 @@ impl ScriptedLane {
     #[must_use]
     pub fn hanging_sends(mut self) -> Self {
         self.hanging_sends = true;
+        self
+    }
+
+    /// Typing text one keystroke per character, as a desktop lane types it, and losing the
+    /// window's focus after `keystrokes` of them: text cut part way, each keystroke typed said to
+    /// the run ([`Lane::send_counted`]).
+    #[must_use]
+    pub fn losing_focus_after_keystrokes(mut self, keystrokes: usize) -> Self {
+        self.keystrokes_before_focus_lost = Some(keystrokes);
         self
     }
 
@@ -324,6 +338,34 @@ impl Lane for ScriptedLane {
                 message: "the scripted OS did not answer the send".into(),
                 retry: Retry::Never,
             });
+        }
+        self.log
+            .sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(event.clone());
+        Ok(())
+    }
+
+    fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
+        let (OsEvent::Text(text), Some(left)) = (event, self.keystrokes_before_focus_lost.as_mut())
+        else {
+            let sent = self.send(event);
+            if sent.is_ok() {
+                delivered.sent(event);
+            }
+            return sent;
+        };
+        for _ in text.chars() {
+            if *left == 0 {
+                return Err(Error::NotForeground {
+                    message: "the scripted window lost the focus: the input is not sent there"
+                        .into(),
+                    retry: flui_protocol::error::ErrorCode::NotForeground.default_retry(),
+                });
+            }
+            *left -= 1;
+            delivered.input();
         }
         self.log
             .sent

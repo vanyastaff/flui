@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use crate::error::{Error, Result};
 use crate::lane::android::adb::{
-    Adb, AdbCommand, AdbReply, AdbStream, Framing, over_limit, timed_out,
+    Adb, AdbCommand, AdbReply, AdbStream, Framing, RunFailure, over_limit, timed_out, unavailable,
 };
 
 /// How a rule answers.
@@ -14,6 +14,8 @@ use crate::lane::android::adb::{
 enum Answer {
     Reply(AdbReply),
     Timeout,
+    /// `adb` does not start, so the command never reaches the device.
+    NotStarted,
     /// The command unwinds, as a device binding the driver does not own may.
     Unwind,
 }
@@ -131,6 +133,13 @@ impl ScriptedAdb {
     #[must_use]
     pub fn timeout_once(self, prefix: impl Into<String>) -> Self {
         self.rule(prefix.into(), Answer::Timeout, Duration::ZERO, true)
+    }
+
+    /// Let `adb` fail to start for the next command starting with `prefix`, so that command never
+    /// reaches the device.
+    #[must_use]
+    pub fn not_started_once(self, prefix: impl Into<String>) -> Self {
+        self.rule(prefix.into(), Answer::NotStarted, Duration::ZERO, true)
     }
 
     /// Let the next command starting with `prefix` unwind, as an [`Adb`] the driver does not own
@@ -296,7 +305,12 @@ impl ScriptedAdb {
 }
 
 impl Adb for ScriptedAdb {
-    fn run(&mut self, command: &AdbCommand, limit: usize, timeout: Duration) -> Result<AdbReply> {
+    fn run(
+        &mut self,
+        command: &AdbCommand,
+        limit: usize,
+        timeout: Duration,
+    ) -> std::result::Result<AdbReply, RunFailure> {
         let text = command.to_string();
         let mut script = lock(&self.script);
         script.log.push(text.clone());
@@ -348,12 +362,17 @@ impl Adb for ScriptedAdb {
             std::thread::sleep(rule.taking.min(timeout));
         }
         if !rule.taking.is_zero() && rule.taking >= timeout {
-            return Err(timed_out(command, timeout));
+            return Err(RunFailure::Unanswered(timed_out(command, timeout)));
         }
         match rule.answer {
             Answer::Unwind => std::panic::resume_unwind(Box::new(text)),
-            Answer::Timeout => Err(timed_out(command, timeout)),
-            Answer::Reply(reply) if reply.stdout.len() > limit => Err(over_limit(command, limit)),
+            Answer::Timeout => Err(RunFailure::Unanswered(timed_out(command, timeout))),
+            Answer::NotStarted => Err(RunFailure::NotStarted(unavailable(format!(
+                "scripted adb: `adb` did not start for `{text}`"
+            )))),
+            Answer::Reply(reply) if reply.stdout.len() > limit => {
+                Err(RunFailure::Unanswered(over_limit(command, limit)))
+            }
             Answer::Reply(reply) => Ok(reply),
         }
     }

@@ -106,7 +106,8 @@ impl Refusal {
             ),
             Self::NotFocused { focus } => Error::NotForeground {
                 message: format!(
-                    "the app's window does not have the keyboard focus{}; no input was sent",
+                    "the app's window does not have the keyboard focus{}: the input is not sent \
+                     there",
                     focus.map_or_default(|window| format!(" ({window} has it)"))
                 ),
                 retry: flui_protocol::error::ErrorCode::NotForeground.default_retry(),

@@ -2,10 +2,10 @@
 
 - **`flui-driver`**: `Error::PartlySent { effect, retry, first }`: a call that went out in part
   before `first` ended it. `lane::send_guarded` answers it, on every lane, for whatever ends an OS
-  sequence once the device took a command of it (`Lane::send_counted`): a refusal, an
+  sequence once an input of it reached the device (`Lane::send_counted`): a refusal, an
   interruption of the guard, a failed command, a release that fails after the last event; its
-  effect counts the events the device took any command of (`Effect::partial`, in events) and it
-  invites no retry. A failure that names an effect of its own and invites no retry (a command
+  effect counts in events (`Effect::partial`: each taken whole, and the failing one where part of
+  it went out) and it invites no retry. A failure that names an effect of its own and invites no retry (a command
   that timed out) stays as it is.
 - **`flui-driver`**: `testing::ScriptedLane::reading_tree` reads the OS tree through a named API,
   answering each read from the app's tree.
