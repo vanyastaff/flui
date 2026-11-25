@@ -103,7 +103,7 @@ since BiDi has no binary frame.
 ← {"hello":{"protocol":"0.5","app":{…},"capabilities":{…}}}
 → {"id":7,"method":"element.locate","params":{…}}
 ← {"id":7,"result":{…}}            | {"id":7,"error":{"code":…,"message":…,"retry":…,"effect":…}}
-← {"event":"frame","params":{…}}   (only after events.subscribe)
+← {"event":"window.frame","params":{…}}   (only after events.subscribe)
 ```
 
 The shape is BiDi's (`id`/`method`/`params`; result or error; events by name), which the web lane
@@ -154,7 +154,7 @@ placed by that record's procedure.
 |---|---|---|
 | session | subject | `session.attach`, `session.capabilities`, `session.close` (D) |
 | app | subject | `app.launch` (D); `app.reload` (the supervisor, ADR-0401); `app.build`, `app.config` (A) |
-| window | subject | `window.list`, `window.placement`, `window.environment`, `window.snapshot`, `window.screenshot`, `window.announcements` (A) |
+| window | subject | `window.list`, `window.placement`, `window.environment`, `window.snapshot`, `window.screenshot`, `window.rendered_screenshot`, `window.announcements` (A) |
 | element | subject | `element.locate`, `element.actionability`, `element.perform_action` (A); `element.tap`, `element.double_tap`, `element.long_press`, `element.drag_to`, `element.fling`, `element.swipe`, `element.pinch`, `element.scroll_into_view`, `element.scroll_until_visible`, `element.type_text`, `element.press_keys` (A on the synthetic and semantic paths: the agent locates, checks actionability at each frame boundary and injects in the turn the check passed (ADR-0400 §2); D on the `os` path: locate → actionability → `input.perform_actions` → observe) |
 | input | instrument | `input.perform_actions` (D: chooses the path); `input.inject` (A, synthetic); `input.journal`, `input.release_actions` (A) |
 | events | instrument | `events.subscribe`, `events.unsubscribe` (A) |
@@ -163,17 +163,18 @@ placed by that record's procedure.
 | perf | instrument | `perf.start`, `perf.stop` (A: frame and journal samples over the span); `perf.expect` (D: budget assertion) |
 | recording | instrument | `recording.start`, `recording.stop` (A, for the input and native layers) |
 | inspect | examination | `inspect.widget_tree`, `inspect.render_tree`, `inspect.layer_tree` (A) |
-| audit | examination | `audit.accessibility` (A: static rules over the published tree); `audit.alternatives` (D: performs each gesture's alternative and compares effects); `audit.layout` (A); `audit.text_scale` (D); `audit.screen` (D: layout and accessibility, with checked and not-checked lists) |
+| audit | examination | `audit.accessibility` (A: static rules over the published tree); `audit.alternatives` (D, acts: performs each gesture's alternative and compares effects); `audit.layout` (A); `audit.text_scale` (D, acts: it changes the text scale and restores it); `audit.screen` (D: layout and accessibility, with checked and not-checked lists) |
 | wait | examination | `wait.until` (A for app conditions; D adds a wall-clock or virtual deadline); `wait.settled`, `wait.frames` (A) |
 | os | lane | `os.snapshot`, `os.compare_projection`, `os.perform_actions`, `os.screenshot` (L) |
 | device | lane | `device.list`, `device.create`, `device.boot`, `device.wipe`, `device.shutdown` (L) |
 | layout | reserved | `layout.facts`, `layout.snapshot` (A); `layout.expect`, `layout.expect_snapshot`, `layout.annotated_screenshot` (D) |
 | pixels, baseline, trace, report, explore | reserved | `pixels.expect_baseline`, `pixels.check`; `baseline.list`, `baseline.accept`, `baseline.reject`; `trace.replay`, `trace.codegen`; `report.write`; `explore.run`, `explore.shrink` (D) |
 
-`window.screenshot` takes its source, `presented` or `rendered`, as a parameter; the lane's
-capture is `os.screenshot`. A reserved group joins ADR-0403's table of groups, with its kind, in
-the record that lands its first row. The names are listed in `version::BREAKING` with ADR-0403,
-as protocol 0.5's were with ADR-0238.
+`window.screenshot` is the presented frame and `window.rendered_screenshot` the layer tree
+rendered again; the lane's capture is `os.screenshot`. An examination group's rows share one
+output type, and one that must drive the app to judge it acts. A reserved group joins
+ADR-0403's table of groups, with its kind, in the record that lands its first row. The names
+are listed in `version::BREAKING` with ADR-0403, as protocol 0.5's were with ADR-0238.
 
 ### Core types (all `#[non_exhaustive]`, `serde` and `schemars` behind features)
 
@@ -351,7 +352,7 @@ buffer is read asynchronously off the frame path and answered with the frame id.
 surface lacks `COPY_SRC`, the engine renders that frame's layer tree a second time into an
 offscreen target of the surface's size and format, and the answer says `source: rendered`, never
 `presented`. An occluded or minimized window that presents nothing answers `timeout` with the
-reason. With `source: rendered` the method re-renders the last committed layer tree offscreen; that is
+reason. `window.rendered_screenshot` re-renders the last committed layer tree offscreen on request; it is
 the headless source too (`HeadlessRenderer`). No capture blocks a frame: one pending request per
 window, and a second one gets `busy`.
 
@@ -684,7 +685,7 @@ A trace is a directory `<name>.flui-trace/`:
 {"flui_trace":1,"protocol":"0.5","target":{"kind":"windows","backend":"win32","app":"interaction_gallery","profile":"debug"},"started_unix_ms":…,"privacy":"redact"}
 {"command":{"seq":1,"t_ms":0,"method":"element.tap","params":{"target":{"locator":{…}},"via":"os"}}}
 {"result":{"seq":1,"t_ms":41,"ok":{"via":"os","effect":"ran","observed":{…}},"evidence":["evidence/9f…json"]}}
-{"event":{"t_ms":42,"name":"frame","params":{"frame":118}}}
+{"event":{"t_ms":42,"name":"window.frame","params":{"frame":118}}}
 {"gap":{"rows":3,"reason":"evidence_budget"}}
 {"end":{}}
 ```

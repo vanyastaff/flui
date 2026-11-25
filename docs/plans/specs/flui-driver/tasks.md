@@ -316,7 +316,7 @@ graph LR
     bounds-only changes left out unless asked);
   - a wait-condition registry evaluated after semantics publish and after input delivery, with
     unsettled causes from the runtime's own predicates;
-  - an event fan-out with bounded per-subscriber queues (`gap` on overflow).
+  - an event fan-out with bounded per-subscriber queues (`events.gap` on overflow).
   - every node id it answers is a `NodeRef` (`flui-foundation::inspect`): the presentation and
     the tree-local `Link`, printed `p3/v12.4`. The trees below the presentation keep `Link`; a
     ref to another or a closed presentation answers `UnknownPresentation`.
@@ -459,7 +459,7 @@ graph LR
     added.
   - **Wire.** `RecordLayer::Native`; a native line goes as its own `recording.native_line` event
     `{recording, window, stream, line}`, a line being a stream's header, one of its rows, or a
-    `gap` naming the rows that stream lost, so `recording.row` events stay as 0.9 sent them. A recording
+    `gap` naming the rows that stream lost, so the input layer's row events keep their shape. A recording
     of `native` records `input` too, and ends with the input layer's `end` row; `RecordSummary`
     counts the native losses apart (`native_lost_rows`).
   - **Bounds.** One 1024-row queue per recording; native rows take at most 768 of it, so input
@@ -1698,6 +1698,25 @@ graph LR
   10. **The schema.** Whatever the record adds to a closed union of the wire (a handle kind, a
       kind of held state) is a break (ADR-0342): it is weighed there, with ADR-0403's 0.33 if
       it can be, or as a second break if not. (second read 17)
+- **Tracked from ADR-0403's last read.** Each is owed by the change that builds the part it
+  names, and is not decided in ADR-0403:
+  1. A Restart reload and the agent's service: which service outlives the composition, and
+     where in a composition `app.config`'s reading is taken, so that `installed` names the dev
+     agent that serves the call. With ADR-0393's Restart. (third read 4)
+  2. A connection's hello after `Service::describe`: its `app` and its method list are a copy
+     from the handshake; whether a client is told, by an event or a stamp. With `app.build`
+     and `app.config`. (third read 5)
+  3. `recording.start`, `perf.start` and `events.subscribe` are read-only rows that leave
+     state: a start that timed out is answered retry `soon` and a retry starts a second. With
+     question 2 of "Open design"; until then the rows keep their effect. (third read 7)
+  4. The audits have no bound: `AuditParams` gains a `max_findings` and `AuditReport` an
+     `omitted`, or the reads are shown to be bounded another way. With the audit tasks.
+     (third read 13)
+  5. `StorageDir` and `InstalledHook` are closed unions on the wire: each hook stated later is
+     a break unless the reader has a fallback for an unknown one. With `app.config`. (third
+     read 15)
+  6. The performance overlay's live state has no read; `app.config` answers what was
+     configured. With the `overlay` rows. (third read 16)
 
 ### FD18. Inspector
 
