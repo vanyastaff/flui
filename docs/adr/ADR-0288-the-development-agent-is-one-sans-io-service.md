@@ -20,7 +20,11 @@
   for §1's last sentence only: an app that installs no hook links none of the agent's owner
   side; and [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
   for the names `input.release`, `record.start` and `record.stop` and the event names `input`,
-  `record` and `record_native` in §9, §10 and §11 only: what the methods do is unchanged.
+  `record` and `record_native` in §9, §10 and §11; for §8's clause that an observer never claims
+  a lease and §9's `InputLease` as a lease of input alone (a connection's lease on a window holds
+  everything its calls left there, and an observer's holds no input); and for §11's sentence on
+  how many recordings a runtime and a connection hold (observers together hold at most the
+  runtime's bound less one connection's), only.
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md) (the protocol);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (user code runs after
   the state is committed); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (what

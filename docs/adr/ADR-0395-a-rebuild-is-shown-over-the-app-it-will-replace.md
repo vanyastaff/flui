@@ -13,7 +13,12 @@
   read-only): an observer may also call a method whose effect is `annotates`. The rest of
   ADR-0288 §8 (one driver's seat, the hello's role, what an observer never claims) is unchanged.
 - **Superseded-by:** [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
-  for §2's name `build.report` only: the method is `overlay.show_build_status`.
+  for §2's name `build.report` (the method is `overlay.show_build_status`); for §2's sentence
+  that a report replaces the one before it whoever sent it (the banner is the lease's that
+  reported last, and goes with that lease); and for §1's sentence that `changes_app` is the one
+  rule for what is sent again and §4's answer to a call that timed out, for a row that takes a
+  hold (it is never sent on another connection, and a read that takes one answers
+  `may_have_run`), only.
 - **Related:** [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md) (every debug build
   serves the agent); [ADR-0393](ADR-0393-a-development-reload-applies-one-of-three-tiers-chosen-from-the-shape-of-the-edit.md)
   and [ADR-0394](ADR-0394-application-code-reloads-as-an-image-the-element-tree-adopts.md) (the

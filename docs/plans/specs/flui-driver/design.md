@@ -101,7 +101,7 @@ since BiDi has no binary frame.
 ```text
 → {"hello":{"token":"…","protocol":"0.5","client":"flui-driver/0.1.0"}}
 ← {"hello":{"protocol":"0.5","app":{…},"capabilities":{…}}}
-→ {"id":7,"method":"semantics.locate","params":{…}}
+→ {"id":7,"method":"element.locate","params":{…}}
 ← {"id":7,"result":{…}}            | {"id":7,"error":{"code":…,"message":…,"retry":…,"effect":…}}
 ← {"event":"frame","params":{…}}   (only after events.subscribe)
 ```
@@ -124,7 +124,7 @@ An older reader still reads every new code as `platform` (ADR-0095 versioning ru
 ```rust
 // flui-protocol::method
 pub trait Method: sealed::Sealed + 'static {
-    /// "semantics.locate": the wire name, the CLI subcommand path and the MCP tool name ("semantics_locate").
+    /// "element.locate": the wire name, the CLI subcommand path and the MCP tool name ("element_locate").
     const NAME: &'static str;
     const SERVED_BY: ServedBy;      // Agent | Driver | Lane
     const EFFECT: MethodEffect;     // ReadOnly | Acts | Destructive  → MCP annotations
@@ -142,24 +142,24 @@ what the app's endpoint answers. `Driver` and `Lane` methods are composed in `fl
 
 | Group | Methods (`ServedBy`) |
 |---|---|
-| session | `session.launch`, `session.attach`, `session.close`, `session.capabilities` (D); `windows.list`, `window.placement` (A) |
-| semantics | `semantics.read`, `semantics.locate`, `semantics.act` (A); `os.tree`, `os.compare_projection` (L) |
-| inspect | `inspect.widgets`, `inspect.render`, `inspect.layers` (A) |
-| input | `input.perform` (D: chooses the path); `input.inject` (A, synthetic); `input.os` (L); `input.journal`, `input.release` (A) |
-| gestures | `element.tap`, `element.double_tap`, `element.long_press`, `element.drag_to`, `element.fling`, `element.swipe`, `element.pinch`, `element.scroll_into_view`, `element.type_text`, `element.press_keys` (A on the synthetic and semantic paths: the agent locates, checks actionability at each frame boundary and injects in the turn the check passed (ADR-0400 §2); D on the `os` path: locate → actionability → `input.perform` → observe) |
+| session | `app.launch`, `session.attach`, `session.close`, `session.capabilities` (D); `window.list`, `window.placement` (A) |
+| semantics | `window.snapshot`, `element.locate`, `element.perform_action` (A); `os.snapshot`, `os.compare_projection` (L) |
+| inspect | `inspect.widget_tree`, `inspect.render_tree`, `inspect.layer_tree` (A) |
+| input | `input.perform_actions` (D: chooses the path); `input.inject` (A, synthetic); `os.perform_actions` (L); `input.journal`, `input.release_actions` (A) |
+| gestures | `element.tap`, `element.double_tap`, `element.long_press`, `element.drag_to`, `element.fling`, `element.swipe`, `element.pinch`, `element.scroll_into_view`, `element.type_text`, `element.press_keys` (A on the synthetic and semantic paths: the agent locates, checks actionability at each frame boundary and injects in the turn the check passed (ADR-0400 §2); D on the `os` path: locate → actionability → `input.perform_actions` → observe) |
 | facts | `element.actionability` (A) |
 | waits | `wait.until` (A for app conditions; D adds a wall-clock or virtual deadline); `wait.settled`, `wait.frames` (A) |
 | events | `events.subscribe`, `events.unsubscribe` (A) |
-| capture | `capture.presented`, `capture.rendered` (A); `capture.os` (L); `pixels.expect_baseline`, `pixels.check` (D) |
-| record | `record.start`, `record.stop` (A for input and native layers; D for the trace) ; `trace.replay`, `trace.codegen` (D) |
-| motion | `motion.set` (A, the existing ADR-0176 op renamed) |
+| capture | `window.screenshot`, `capture.rendered` (A); `os.screenshot` (L); `pixels.expect_baseline`, `pixels.check` (D) |
+| record | `recording.start`, `recording.stop` (A for input and native layers; D for the trace) ; `trace.replay`, `trace.codegen` (D) |
+| motion | `clock.set` (A, the existing ADR-0176 op renamed) |
 | perf | `perf.start`, `perf.stop` (A: frame and journal samples over the span); `perf.expect` (D: budget assertion) |
-| audit | `audit.a11y` (A: static rules over the published tree); `audit.alternatives` (D: performs each gesture's alternative and compares effects); `audit.layout` (A); `audit.text_scale` (D); `audit.screen` (D: layout + a11y, with checked and not-checked lists) |
-| layout | `layout.facts`, `layout.snapshot` (A); `layout.expect`, `layout.expect_snapshot`, `capture.annotated` (D) |
-| review, report, devices | `baselines.list`, `baselines.accept`, `baselines.reject`, `report.write` (D); `devices.list`, `devices.create`, `devices.boot`, `devices.wipe`, `devices.shutdown` (L) |
+| audit | `audit.accessibility` (A: static rules over the published tree); `audit.alternatives` (D: performs each gesture's alternative and compares effects); `audit.layout` (A); `audit.text_scale` (D); `audit.screen` (D: layout + a11y, with checked and not-checked lists) |
+| layout | `layout.facts`, `layout.snapshot` (A); `layout.expect`, `layout.expect_snapshot`, `layout.annotated_screenshot` (D) |
+| review, report, devices | `baseline.list`, `baseline.accept`, `baseline.reject`, `report.write` (D); `device.list`, `device.create`, `device.boot`, `device.wipe`, `device.shutdown` (L) |
 | explore | `explore.run`, `explore.shrink` (D) |
 
-The existing agent ops become `windows.list`, `semantics.read`, `semantics.act` and `motion.set`.
+The existing agent ops become `window.list`, `window.snapshot`, `element.perform_action` and `clock.set`.
 Pre-1.0 this rename is listed in `version::BREAKING` with ADR-0238.
 
 ### Core types (all `#[non_exhaustive]`, `serde` and `schemars` behind features)
@@ -235,17 +235,17 @@ today (`flui-runtime/src/ui_runtime/agent.rs`). The endpoint thread never touche
 parses, enqueues, waits a bounded time and answers. Consequences:
 
 - **Consistency.** A locate and an actionability check each read one committed tree
-  (`semantics.locate` answers with the tree revision). The protocol has no `batch` method. On the
+  (`element.locate` answers with the tree revision). The protocol has no `batch` method. On the
   synthetic and semantic paths the agent answers a gesture itself: it checks actionability at each
   frame boundary until the target is attached, visible, stable over two frames, enabled and
   receives the hit, and injects in the turn the check passed, aimed at that frame's bounds
   (ADR-0400 §2). On the `os` path the driver composes `element.tap` from `element.actionability`
-  and `input.os` at the point the facts named; an element that moved between the two is what
+  and `os.perform_actions` at the point the facts named; an element that moved between the two is what
   `receives` at the next check catches.
 - **Waits do not poll.** `wait.until` registers the condition with the owner. The owner evaluates
   it after each frame's semantics publish and after each input delivery, and answers when it holds or
   at the deadline. Live targets express the deadline in the runtime's `ClockSource`, so a test's
-  motion override (`motion.set`) also slows timeouts consistently. Headless waits run on the
+  motion override (`clock.set`) also slows timeouts consistently. Headless waits run on the
   manual clock. The `flui_testing::Headless` connection moves it to each next wake, up to the
   wait's limit of virtual time (ADR-0400 §3), so the outcome is deterministic.
 - **Unsettled causes** are one list the host gathers after each turn, the runtime's half and its
@@ -268,22 +268,22 @@ therefore see it exactly as native input. Ticks map to frame boundaries: one tic
 dispatched together; a `pause` spans frames by the clock. Devices are registered with the platform
 input vocabulary's device ids under a driver-owned device class, so a recording marks them. The
 agent tracks every contact and key it pressed and releases or cancels them when the connection
-closes or `input.release` is called (F2, R14).
+closes or `input.release_actions` is called (F2, R14).
 
 ### Input journal
 
 A bounded ring per window (default 4096 entries) of delivered input, written by an input tap
 (ADR-0215 `InputTap`) the agent installs. Each entry holds sequence, device class, kind, logical
 position, timestamp and whether the driver injected it. `input.journal{since}` and `input` events
-read it. OS-path actions observe through it (R13): after `input.os`, the driver waits up to the
+read it. OS-path actions observe through it (R13): after `os.perform_actions`, the driver waits up to the
 action timeout for journal entries matching kind, device and position (within one device pixel
 after the mapping in "Coordinates"). Match is `ran`; no match is `may_have_run` with what was seen.
 Gesture-arena `Decision` rows from the same tap feed the inspector timeline.
 
 ### Trees
 
-- `semantics.read` / `semantics.locate`: `flui-semantics::agent` resolves a `Locator` over the
-  published `SemanticsOwner` tree. `semantics.locate` lists every match of a strict locator and
+- `window.snapshot` / `element.locate`: `flui-semantics::agent` resolves a `Locator` over the
+  published `SemanticsOwner` tree. `element.locate` lists every match of a strict locator and
   narrows to the one match `first`, `last` or `nth` names; strictness bites where one element is
   needed (an action, an expectation about one element), which answers `ambiguous`. Matches carry
   the tree revision. `TextMatch` is exact/contains/prefix only, so no regex engine enters the app.
@@ -292,13 +292,13 @@ Gesture-arena `Decision` rows from the same tap feed the inspector timeline.
 All three trees are walked through ADR-0242's `InspectTree` and answer the owned `Inspect`
 snapshot, so every property arrives typed:
 
-- `inspect.widgets`: the element tree implements `InspectTree`. Each node reports its view kind,
+- `inspect.widget_tree`: the element tree implements `InspectTree`. Each node reports its view kind,
   key, element kind (`debug_kind`), lifecycle state, the linked render id, the creation site, and
   the fields of `View::inspect` when the view describes itself.
-- `inspect.render`: the render tree's `InspectTree` replaces `PipelineOwner::debug_diagnostics_tree`.
+- `inspect.render_tree`: the render tree's `InspectTree` replaces `PipelineOwner::debug_diagnostics_tree`.
   It reports constraints, size, offset, dirty flags and the linked semantics node, with the render
   object's own `Inspect` fields.
-- `inspect.layers`: the layer tree's `InspectTree`, which `flui_layer::testing::inspect` builds on.
+- `inspect.layer_tree`: the layer tree's `InspectTree`, which `flui_layer::testing::inspect` builds on.
 
 Ids are `InspectId`s with a kind prefix (`v`, `r`, `l`) and the generational slot of the tree's
 own ID (`ElementId`, `RenderId`, `LayerId`), so identity follows the "Identity is not a label" rule.
@@ -331,7 +331,7 @@ earlier bounds, and repeats until the action timeout (Playwright's actionability
 
 ### Presented-frame capture
 
-`capture.presented{window, region?}` arms a one-shot request in the window's raster lane. The
+`window.screenshot{window, region?}` arms a one-shot request in the window's raster lane. The
 next present copies the surface texture into a staging buffer before `present()`. The engine
 already configures surfaces with `COPY_SRC` when the adapter allows (`renderer.rs:688`). The
 buffer is read asynchronously off the frame path and answered with the frame id. When the
@@ -389,9 +389,9 @@ virtual time has no latency.
 
 ### Recording
 
-`record.start{layers}` installs the ADR-0215 recording tap (input layer) and, where the build
+`recording.start{layers}` installs the ADR-0215 recording tap (input layer) and, where the build
 carries `flui-native`'s `native-capture`, the native capture hook (native layer). Rows stream to
-the driver as `record` events. `record.stop` ends the recording with its `End` row. Privacy
+the driver as `record` events. `recording.stop` ends the recording with its `End` row. Privacy
 follows ADR-0215 §5: text is redacted unless `keep_text` is set.
 
 ### Transports and launch contract
@@ -693,7 +693,7 @@ Modes: `off`, `on`, `retain_on_failure` (written in place, removed when the repo
 
 ### Accessibility audit
 
-`audit.a11y` runs in the agent over the published tree in one frame. Its rules are pure
+`audit.accessibility` runs in the agent over the published tree in one frame. Its rules are pure
 functions in `flui-semantics::audit`:
 
 - **unnamed:** an interactive role or a node with actions has no name and no labelled-by;
@@ -805,13 +805,13 @@ per node. Baselines live beside pixel baselines (`<name>/<backend>-<os>.layout.j
 follow the same explicit-update rule. This is the golden for design work: it survives the 1 px
 glyph shifts that sank the pixel suite, and its diff says what moved.
 
-**Annotated capture** (`capture.annotated`, D, `vision` and `layout` groups). It draws over a
+**Annotated capture** (`layout.annotated_screenshot`, D, `vision` and `layout` groups). It draws over a
 presented or rendered capture: boxes, centre lines, baselines, gap measurements, and each
 finding's rule and numbers, coloured by severity. It is meant for a person or a vision model to
 look at. Findings never come from looking at it.
 
 **Claim discipline.** `audit.screen` (core in MCP as `audit_screen`) runs `audit.layout` and
-`audit.a11y` on a window. It answers the findings, an annotated capture's blob reference, and the
+`audit.accessibility` on a window. It answers the findings, an annotated capture's blob reference, and the
 lists of `checked` and `not_checked` rules with reasons. `Report` carries the same two lists for
 every check in a scenario. The verdict rule adds one clause: a check that was requested but did not
 run makes the verdict at best `cannot_verify`, never `pass`. A design-agent workflow on FLUI is
@@ -885,15 +885,15 @@ becomes a cannot-verify check, never a failure.
   flui-cli's policy (`--json`, `--quiet`, documented exit codes 0/1/2 for checks).
 - **MCP:** `flui mcp` runs the `flui-driver` `mcp` adapter over stdio, `rmcp` at MCP 2026-07-28. Each
   method in `METHODS` has a `tier`: `Core`, or one of the capability groups. Tools are listed in
-  `METHODS` order, name `group_verb`, input and output schemas from `schemars`, annotations from
+  `METHODS` order, name `group_member`, input and output schemas from `schemars`, annotations from
   `EFFECT` (ADR-0080's widened error branch stays).
-  - **Core (13, listed by default):** `session_launch`, `session_close`, `windows_list`,
-    `semantics_read`, `semantics_locate`, `semantics_act`, `element_tap`, `element_type_text`,
+  - **Core (13, listed by default):** `app_launch`, `session_close`, `window_list`,
+    `window_snapshot`, `element_locate`, `element_perform_action`, `element_tap`, `element_type_text`,
     `element_press_keys`, `element_scroll_into_view`, `wait_until`, `capture_presented`, `audit_screen`. Acting
     tools answer a snapshot delta by default.
-  - **Groups (`--caps a,b`):** `session` (`session_attach`, `session_capabilities`, `window_placement`, `wait_frames`, `wait_settled`, `motion_set`), `input` (`input_perform`, `input_inject`, `input_os`, the other
+  - **Groups (`--caps a,b`):** `session` (`session_attach`, `session_capabilities`, `window_placement`, `wait_frames`, `wait_settled`, `clock_set`), `input` (`input_perform_actions`, `input_inject`, `os_perform_actions`, the other
     gestures), `inspect`, `pixels`, `record` (with `trace_*`), `perf`, `audit`, `explore`, and
-    `layout` (assertions, snapshots, annotated captures), `vision` (coordinate targets and `capture.os`, as Playwright MCP gates coordinate tools).
+    `layout` (assertions, snapshots, annotated captures), `vision` (coordinate targets and `os.screenshot`, as Playwright MCP gates coordinate tools).
 
   Tool failure is `isError` with the error object; protocol failure is a JSON-RPC error. Captures
   return image content plus `CaptureMeta`. The adapter keeps no handle state: refs are `w3/e12`
@@ -924,8 +924,8 @@ What the driver relies on:
 | `Inspect`, `Value`, `Meta`, `Sink`, `Fields`, `InspectTree`, `InspectId`, `Link`, `#[derive(Inspect)]` (resolved through `flui-sdk`) | `flui-foundation::inspect`, `flui-macros` | `inspect.*`, `layout.facts` (paragraph and box facts are `Inspect` fields with units) |
 | Owned snapshot (`InspectNode`), typed accessors, structural diff | `flui-protocol` (serde, schemars), `flui-foundation` | protocol replies, layout snapshots, `trace.replay` divergences, report diffs |
 | Tree renderer with role styling, compact geometry `Display` | `flui-foundation` | CLI human output, report HTML, error text |
-| `View::inspect` (provided method), element `InspectTree` | `flui-view` | `inspect.widgets` |
-| Render and layer `InspectTree`s | `flui-rendering`, `flui-layer` | `inspect.render`, `inspect.layers` |
+| `View::inspect` (provided method), element `InspectTree` | `flui-view` | `inspect.widget_tree` |
+| Render and layer `InspectTree`s | `flui-rendering`, `flui-layer` | `inspect.render_tree`, `inspect.layer_tree` |
 | `flui.<subsystem>` targets, phase spans including semantics/commit/submit, primitive fields, TRACE per-root spans | every framework crate | trace rows, perf phases |
 | One capture layer, `(target, name)` phase table, `X`-event export | `flui-devtools` (layer and exporter) and the in-app agent | `perf.*`, trace `event` rows, the inspector timeline |
 | `CreationSite` and `#[track_caller]` constructors | `flui-foundation`, `flui-widgets`, the widget derive | inspector "go to source", SARIF locations, findings, errors |
@@ -957,7 +957,7 @@ enforced, not just intended.
 - **No model in a check.** No method in `METHODS` calls out to a model. The `vision` group serves
   images to an agent; it never sends them anywhere. R44's advisory rule keeps an agent's opinion
   out of verdicts.
-- **Review loop** (`baselines.list`, `baselines.accept`, `baselines.reject`, D; CLI
+- **Review loop** (`baseline.list`, `baseline.accept`, `baseline.reject`, D; CLI
   `flui drive baselines review`; the inspector's Review view):
   - it walks the `.new` and `.diff` files a run left under the baseline directories, for pixel
     baselines and layout snapshots;
@@ -974,7 +974,7 @@ enforced, not just intended.
     reason;
   - `findings.sarif` holds the layout and accessibility findings with their rule ids and node
     refs, plus source locations when a node's element records its creation site (debug builds).
-- **Devices** (`devices.list`, `devices.create`, `devices.boot`, `devices.wipe`, `devices.shutdown`,
+- **Devices** (`device.list`, `device.create`, `device.boot`, `device.wipe`, `device.shutdown`,
   L):
   - the Android lane drives `avdmanager`, `emulator` and `adb`; the iOS lane drives `simctl`;
   - the code moves from `flui-cli/src/commands/emulators.rs` into the lanes, and the CLI keeps
@@ -993,7 +993,7 @@ enforced, not just intended.
 |---|---|
 | `windows-a11y` (UIA walk, invoke) | scenario on the driver's scenario app (`a11y_probe` is gone): `os.compare_projection`, semantic actions through UIA and through the agent, the roles page (a page of every role of the role table) |
 | `windows-gallery` (built on the integration branch, against `examples/interaction_gallery`, both gone) | the **first scenario ported**, on the driver's scenario gallery until `interaction_gallery` returns: its checks by identifier, synthetic by default and OS input as the certification variant |
-| `windows-input` (contract child test + SendInput probe) | scenario: OS mouse, wheel, touch, pen and keys against the scenario gallery, verified through the journal, and a press beside the controls leaving them alone; native recording captured and held against the goldens (`record.start{native}`) once the driver records native input |
+| `windows-input` (contract child test + SendInput probe) | scenario: OS mouse, wheel, touch, pen and keys against the scenario gallery, verified through the journal, and a press beside the controls leaving them alone; native recording captured and held against the goldens (`recording.start{native}`) once the driver records native input |
 | `windows-notes` | scenario on a note field (`two_screens` is gone): chords, `VK_PACKET` text, IME through `input.inject`; DPI after resize once the driver resizes a window |
 | `web-input` (BiDi, wasm probe, JS API) | scenario on the chrome target: the same checks through the agent, and the probe's JS API is deleted |
 | `android-input` (adb, uinput, F-key probe, `status.txt`) | scenario on the android target: lane input, journal verification, `record` events replace F12 flush, and `dumpsys` reads stay as lane helpers (`AndroidLane::shell`) |

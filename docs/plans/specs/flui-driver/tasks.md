@@ -105,10 +105,10 @@ graph LR
 | FD18 | Inspector app (`tools/flui-inspector`) and `flui inspect`; its own scenario suite; baseline Review view; documented CLI fallback | R25, R31 | FD17, FD26 | — | L, W | 7 | — |
 | FD19 | `interaction_gallery` scenario suite on every target; delete desktop-mcp, xtask drivers, probes, device-check scripts; documentation | R35, R36, R36a, R45 | FD11–FD17, FD20–FD30 | — | all | 4 | IC |
 | FD20 | (Runtime part in testing-platform TP2, ADR-0400.) Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9, FD29 | [P] | L, W, A | 5 | — |
-| FD21 | (Runtime part in testing-platform TP2, ADR-0400.) Accessibility audit: `flui-semantics::audit` rules, `audit.a11y`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
+| FD21 | (Runtime part in testing-platform TP2, ADR-0400.) Accessibility audit: `flui-semantics::audit` rules, `audit.accessibility`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
 | FD22 | Exploration: seeded `explore.run` with invariants, delta-debugging `explore.shrink`, replay | R39, F12 | FD10 | — | L | 5 | — |
 | FD23 | Layout facts (boxes, clips, text ink bounds, baselines, styles, painted and background colours), `layout.expect` assertions, `audit.layout` lint with finding outcomes, `audit.text_scale`, `audit.screen` with checked and not-checked lists, the layout-defect benchmark | R40, R41, R41a, R41b, R44 | FD4, FD9, FD28 | [P] | L, W | 8 | — |
-| FD24 | Layout snapshot golden and `capture.annotated` | R42, R43 | FD10, FD23 | — | L, W | 4 | — |
+| FD24 | Layout snapshot golden and `layout.annotated_screenshot` | R42, R43 | FD10, FD23 | — | L, W | 4 | — |
 | FD25 | Parity coverage: scenario `proves` rows, `flui drive report --parity`, the `cargo xtask parity` gate in `checks`, gaps entries naming their scenarios | R45 | FD9 | [P] | L | 3 | — |
 | FD26 | Self-contained: baseline review (CLI and inspector), HTML, JUnit and SARIF reports, device management moved into the lanes, `--repeat` flake triage, `--offline` and the no-network-client test | R46–R49 | FD10, FD13, FD15 | [P] | L, W, A | 6 | — |
 | FD27 | `Inspect` core (ADR-0242): trait, `Value`, `Meta`, `Sink`, `InspectTree`, `Link`, derive with SDK path, owned snapshot in `flui-protocol`, typed accessors, structural diff, tree renderer, compact geometry `Display` | R50, R51 | — | [P] | L | 6 | — |
@@ -129,16 +129,16 @@ graph LR
 - **Done when:**
   - `tests/schema/protocol-0.5.json` is golden;
   - a containment test passes for 0.4 → 0.5 except the listed renames;
-  - a `METHODS` test checks unique names, `group.verb` spelling, a deterministic order, exactly one
+  - a `METHODS` test checks unique names, `group.member` spelling, a deterministic order, exactly one
     tier per method and at most 13 `Core` methods;
   - a wire spelling table covers every new enum;
   - nothing upstream appears in a signature (ADR-0089 gate).
 - **Evidence (2026-10-20):**
   - `METHODS` has 40 methods, 13 of them `Core`. The rest of the design's table joins with the
-    task that brings its types: the OS lanes (`os.*`, `input.os`, `capture.os`), baselines,
+    task that brings its types: the OS lanes (`os.*`, `os.perform_actions`, `os.screenshot`), baselines,
     recording and traces, layout, the other audits, reports, devices and exploration.
   - Every tier but `core` is a `--caps` group. `session` was added for session control beyond
-    the core (attach, capabilities, window placement, frame and settle waits, `motion.set`), and
+    the core (attach, capabilities, window placement, frame and settle waits, `clock.set`), and
     ADR-0238 §9, R28a and the front-end list name it.
   - The table reaches consumers through `for_each_method!` with concrete types, so no serde or
     schemars bound sits in a signature (ADR-0089 §2).
@@ -257,7 +257,7 @@ graph LR
     - `SemanticsOwner::locate_wire` lists matches and `resolve_wire_locator` answers the one element
       or `WireLocateError::{NotFound, Ambiguous}` with outline lines; the agent turns those into the
       protocol's errors (FD5). Strictness is applied by `resolve_wire_locator` only: a strict
-      `semantics.locate` lists every match, so a caller can see what is ambiguous (`LocateParams`
+      `element.locate` lists every match, so a caller can see what is ambiguous (`LocateParams`
       said otherwise and is reworded; the schema golden holds no prose).
     - The actionability check is two pure calls, `actionability_point` and `actionability_wire`,
       with the render hit-test in between run by the caller, so no hit-test (user code) runs under
@@ -416,7 +416,7 @@ graph LR
     `a_window_parks_a_bounded_number_of_layer_reads`,
     `a_window_that_closed_answers_gone`.
   - As built: `AgentWindow::inspect(InspectTarget, InspectParams)` answering `InspectReading`.
-    `inspect.layers` parks on the window and is answered from the next scene it shows; the wire
+    `inspect.layer_tree` parks on the window and is answered from the next scene it shows; the wire
     ids stay tree-local.
 
 ### FD6. Synthetic input, journal, recording (IC)
@@ -426,7 +426,7 @@ graph LR
     (`flui-app` `OwnerHost`, `HeadlessHost::dispatch`), with ticks mapped to frame boundaries and
     driver device classes;
   - the journal as an `InputTap`;
-  - `record.start/stop` over the ADR-0215 tap and the native capture hook;
+  - `recording.start/stop` over the ADR-0215 tap and the native capture hook;
   - injected contacts and keys released on close.
 - **Done when:**
   - every built-in gesture recognized identically through `synthetic` and through
@@ -719,13 +719,13 @@ graph LR
     `codegen_writes_the_checked_in_test_from_a_trace` with `trace_generated::a_generated_test_taps_the_counter`
     compiled and run in the same suite,
     `a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core` (over a scripted
-    agent's socket: `record.start{input, native}`, `input.jsonl`, `native/0.jsonl` read back through
+    agent's socket: `recording.start{input, native}`, `input.jsonl`, `native/0.jsonl` read back through
     `flui-protocol`, the stream's `gap` in place), `a_native_recording_past_its_bounds_or_of_a_newer_version_is_refused`.
   - After the review of `f45a3b4b`, each with its test failing with the fix taken out by hand:
     `trace_bounds::scripted::events_lost_mid_trace_mark_every_stream_and_the_callers_count`
     (a `gap` in `input.jsonl` and in every native stream, and the caller's dropped count),
     `trace_bounds::scripted::a_trace_that_cannot_start_leaves_the_app_recording_nothing`
-    (the trace's files before `record.start`, `record.stop` after a hold that fails),
+    (the trace's files before `recording.start`, `recording.stop` after a hold that fails),
     `trace_bounds::a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction`,
     `trace_bounds::scripted::a_replay_maps_handles_where_the_schema_has_them_only` (an input
     source's `id` of `e1` stays text, a node's `id` pairs),
@@ -741,13 +741,13 @@ graph LR
     (deltas worked out by hand from pixelmatch 5's published formula, the arithmetic in the test),
     a `cannot_verify` run keeping its trace in
     `trace::a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one`, and the
-    codegen golden marking `capture.os` as not generated and sending a control character as a
+    codegen golden marking `os.screenshot` as not generated and sending a control character as a
     Rust literal. The reader's running byte bound (a file that grows as it is read) and the
     linear `Trace::steps` have no test of their own: the first needs a file past 1 GiB, the
     second changes no answer.
 - **As built:**
   - `flui_driver::pixels` and `flui_driver::trace`, as the Rust API; their protocol rows
-    (`capture.os`, `pixels.*`, `trace.*`) join the method table with the front ends (FD17), as
+    (`os.screenshot`, `pixels.*`, `trace.*`) join the method table with the front ends (FD17), as
     FD11's `os.*` rows do, so a replay lists a pixel command as skipped rather than compare it.
   - One image type: `lane::OsCapture` became `pixels::Image`, and `Window::capture_os` became
     `Window::capture(CaptureSource::Os)`.
@@ -775,7 +775,7 @@ graph LR
   - `retain_on_failure` writes the trace in place and removes it when the report passes (a `cannot_verify` run keeps it, as a failing one does).
   - Left for later tasks: blessing `flui-native`'s native goldens through the driver in place of
     `FLUI_NATIVE_RECORDING_BLESS` (R26) comes with the scenarios that record through
-    `record.start{native}` on each OS (FD11, FD14, FD16, FD19); `flui drive trace replay`,
+    `recording.start{native}` on each OS (FD11, FD14, FD16, FD19); `flui drive trace replay`,
     `trace codegen`, `trace pack` and the inspector's player (R25) are FD17's and FD18's.
 
 ### FD11. Windows lane
@@ -797,7 +797,7 @@ graph LR
   **`cargo xtask device windows-gallery` is ported first** (IC). It is the gallery scenario the
   integration branch is building, here on `flui-driver`, synthetic by default, with OS input as its
   certification variant and the gallery's ADR-0240 identifiers as selectors. Then `windows-a11y`,
-  `windows-input` (with native goldens through `record.start{native}`) and `windows-notes` replace
+  `windows-input` (with native goldens through `recording.start{native}`) and `windows-notes` replace
   the xtask drivers.
 - **Done when:**
   - `windows-gallery` passes on W with every check of the integration-branch version;
@@ -904,7 +904,7 @@ graph LR
   - `Lane` gains `check` (asked by `send_guarded` before the guard arms), `read_tree`, `invoke` and
     `capture_window`, each `not_supported` by default; the Rust API reaches them as
     `Window::os_tree`, `compare_projection`, `os_invoke` and `capture(CaptureSource::Os)` (FD10's
-    `os` source). The protocol rows `os.tree`, `os.compare_projection` and `capture.os` are not in
+    `os` source). The protocol rows `os.snapshot`, `os.compare_projection` and `os.screenshot` are not in
     `flui_protocol::method` yet: they join it with the front ends.
   - ADR-0095 §4's projection is `flui_protocol::tree::normalized_outline`; it leaves out the
     window node, a title bar and the framework's own identifiers (`flui:`, the announcer's live
@@ -924,7 +924,7 @@ graph LR
     the gallery (`windows-gallery`), the accessibility checks with the roles page
     (`windows-a11y`, on a page of every role of the table instead of `a11y_probe`), `windows-input`
     and `windows-notes` (on a note field instead of `two_screens`). DPI after a resize and native
-    goldens through `record.start{native}` are not checked: the driver resizes no window, and its
+    goldens through `recording.start{native}` are not checked: the driver resizes no window, and its
     trace records the native layer (FD10) only from an app built with the `native-capture`
     journal, which no scenario run on Windows has made yet.
   - The headless target's window offers text input (`HeadlessWindow::with_text_input`): without it
@@ -1075,7 +1075,7 @@ graph LR
   names them. Of the Done-when items: the scenario is written and passes on the headless target,
   and has not run on A (no device or emulator was taken: the owner runs them); the device
   recordings are not re-recorded through the driver, which records no native input yet
-  (`record.start{native}`, FD10), and the existing hold
+  (`recording.start{native}`, FD10), and the existing hold
   (`android_device_recordings_decode_to_their_host_input` in `flui-native`) already compares their
   order; a device without root `uinput` reports `uinput_device` missing and its pen row
   cannot-verify, held on every host against a scripted device; the touchpad row is cannot-verify on
@@ -1697,7 +1697,7 @@ graph LR
 - **Changes:**
   - `flui-semantics::audit` rules (unnamed, focus order with text direction, target size by
     `GestureSettings::min_target`, no alternative from the arena's recognizer registry);
-  - `audit.a11y` in the agent;
+  - `audit.accessibility` in the agent;
   - `audit.alternatives` composed in the driver (gesture vs alternative, compared by snapshot
     delta);
   - the `a11y-audit` scenario.
@@ -1761,7 +1761,7 @@ graph LR
     baseline, font, colours, truncation);
   - `layout.expect_snapshot`, with geometric and ΔE tolerances, a numeric per-node diff, and
     baselines `<name>/<backend>-<os>.layout.json` under the explicit-update rule;
-  - `capture.annotated`, drawing boxes, centre lines, baselines, gaps and findings over a capture.
+  - `layout.annotated_screenshot`, drawing boxes, centre lines, baselines, gaps and findings over a capture.
 - **Done when:**
   - a 1 px glyph shift within tolerance passes, and a 6 px move fails with the diff naming the
     node and the delta;
@@ -1785,12 +1785,12 @@ graph LR
 ### FD26. Self-contained
 
 - **Changes:**
-  - `baselines.list|accept|reject` and `flui drive baselines review` (list-only under `CI`); the
+  - `baseline.list|accept|reject` and `flui drive baselines review` (list-only under `CI`); the
     inspector's Review view (built in FD18 on these methods);
   - `report.write`: a self-contained `report.html` with inline assets under a size cap,
     `junit.xml` (`cannot_verify` as `skipped` with its reason, `flaky` marked), and
     `findings.sarif` with rule ids, node refs and creation sites where recorded;
-  - `devices.*`: AVD and simulator lifecycle in the Android and iOS lanes, with
+  - `device.*`: AVD and simulator lifecycle in the Android and iOS lanes, with
     `flui-cli/src/commands/emulators.rs` reduced to a front end on them, and named device profiles
     in scenario matrices;
   - `--repeat N` with per-check pass rates and worst-outcome verdicts;

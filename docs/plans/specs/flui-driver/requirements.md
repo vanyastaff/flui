@@ -332,7 +332,7 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 
 ### Accessibility audit
 
-- **R38.** `audit.a11y` is a driver method and a standard scenario. It checks:
+- **R38.** `audit.accessibility` is a driver method and a standard scenario. It checks:
   - every interactive node has a name; siblings do not share a name or identical bounds unless the
     app waives it (ATF's duplicate-text and duplicate-clickable-bounds checks);
   - focus order visits every focusable node once, in reading order (direction-aware), with no

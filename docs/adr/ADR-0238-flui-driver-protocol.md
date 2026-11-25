@@ -17,9 +17,10 @@
   §8's `headless` feature and its edge to `flui-testing` (§1), and §9's Rust front end, `Driver`,
   `Window`, `Element` and `expect` (§1); and
   [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md) for §1's
-  form of a wire name and its clause on what the MCP tool list is made from, §9's tier names, core
-  set and bound of 13, and the method names §10 and the Consequences spell only: a group names the
-  subject or the instrument, and MCP lists the method table.
+  form of a wire name, its list of a row's columns and its clause on what the MCP tool list is
+  made from, §9's tier names and core set (the bound of 13 stands), and the method names §10 and
+  the Consequences spell only: a group names a subject or an instrument, a row also states what
+  it leaves and how far it reaches, and MCP lists the rows a person's flags grant.
 - **Settles:** the still-Proposed items of [ADR-0095](ADR-0095-agent-protocol-schema-crate.md)
   §1 (finder criteria, handle kinds, `effect` as a schema type, event shapes), §3 (`flui mcp` and
   the handle table across windows) and §5 (one finder shared by tests and agents). §4's projection
