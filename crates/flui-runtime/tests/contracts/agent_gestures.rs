@@ -1342,6 +1342,95 @@ fn input_under_way_is_answered_at_its_deadline_and_play_time() {
     );
 }
 
+/// Serves `act` on an owner turn without a frame, its first attempt finding its target not yet
+/// stable, then wakes `rig` as a native runner does, the inbox drained before each frame,
+/// `period` apart, until `act` is answered, at most 30 wakes: an act with a timeout under
+/// `period` is still held when the first wake's drain finds its deadline passed.
+fn answered_by_wakes(
+    rig: &mut crate::agent_rig::Rig,
+    act: &mut AgentAnswer<ActOutcome>,
+    period: Duration,
+) -> Result<ActOutcome, ErrorObject> {
+    rig.runtime.pump_background();
+    assert!(act.try_take().is_none(), "held past its first attempt");
+    for _ in 0..30 {
+        rig.wake_after(period);
+        if let Some(answer) = act.try_take() {
+            return answer;
+        }
+    }
+    panic!("no answer within 30 wakes");
+}
+
+/// On a host whose wake drains its inbox before its frame, as every native runner's does, an act
+/// whose deadline passes between two frames is the frame's to answer, as on the headless host,
+/// whose frames run no drain: a tap held past its 10 ms timeout, whose target passes at its last
+/// attempt, plays at that frame's boundary and answers `ran`, "Go" pressed once, where the drain
+/// would have made that attempt and timed out the input it queued before the frame could start it.
+/// At 16 ms frames; and at 20 ms, slower than the 16 ms per tick its play time counts, where its
+/// last tick goes out on the first boundary past the end of its promise, and the drain before that
+/// boundary would have cut it a tick short.
+#[test]
+fn a_last_attempt_that_passes_plays_on_a_host_that_drains_before_its_frame() {
+    for period in [16, 20] {
+        let presses = Presses::default();
+        let mut rig = crate::agent_rig::Rig::showing(&Board {
+            presses: presses.clone(),
+        });
+        let mut tap = TapParams::new(named("Go"));
+        tap.options = timeout(tap.options, 10);
+        let mut tap = rig
+            .lease
+            .call::<method::ElementTap>(tap)
+            .expect("the inbox has room");
+        let outcome = answered_by_wakes(&mut rig, &mut tap, Duration::from_millis(period))
+            .unwrap_or_else(|refused| panic!("{period} ms: its input played: {refused:?}"));
+        assert_eq!(
+            outcome.effect.kind,
+            EffectKind::Ran,
+            "{period} ms: {outcome:?}"
+        );
+        assert_eq!(
+            presses.go.load(Ordering::SeqCst),
+            1,
+            "{period} ms: Go saw the tap"
+        );
+    }
+}
+
+/// On a host whose wake drains its inbox before its frame, the reading an act owes is the frame's
+/// to take, however late past the act's promise that frame comes: a semantic tap held past its
+/// 10 ms timeout and performed at its last attempt, on a frame's boundary, answers with the delta
+/// it asked for, taken at the next frame's end, where the drain of that frame's wake, a frame's
+/// time past the deadline, would have answered it without its reading.
+#[test]
+fn a_reading_an_act_owes_is_taken_on_a_host_that_drains_before_its_frame() {
+    let presses = Presses::default();
+    let mut rig = crate::agent_rig::Rig::showing(&Board {
+        presses: presses.clone(),
+    });
+    let mut tap = TapParams::new(named("Go"));
+    tap.options = timeout(tap.options, 10);
+    tap.options.via = Some(InputPolicy::require(InputPath::Semantic));
+    tap.options.snapshot = Snapshot::Delta;
+    let mut tap = rig
+        .lease
+        .call::<method::ElementTap>(tap)
+        .expect("the inbox has room");
+    let outcome =
+        answered_by_wakes(&mut rig, &mut tap, Duration::from_millis(16)).expect("its action ran");
+    assert_eq!(outcome.via, InputPath::Semantic, "{outcome:?}");
+    assert!(
+        !outcome.readback_failed,
+        "its reading was taken: {outcome:?}"
+    );
+    assert!(
+        outcome.snapshot.is_some(),
+        "the delta it asked for: {outcome:?}"
+    );
+    assert_eq!(presses.go.load(Ordering::SeqCst), 1, "Go was invoked");
+}
+
 /// How many of `entries` are of `kind`.
 fn count_of(entries: &[flui_protocol::input::JournalEntry], kind: InputKind) -> usize {
     entries.iter().filter(|entry| entry.kind == kind).count()
@@ -1419,6 +1508,113 @@ fn an_act_stopped_mid_play_lets_go_of_what_it_pressed() {
         down,
         "every key it pressed is up: {entries:?}"
     );
+}
+
+/// What a lease held before an act whose input is cut stays held, button by button: with Control
+/// and the secondary button of the gestures' own mouse source held through `input.inject`, a drag
+/// cut after its press releases the primary button it pressed on that contact, which stays down,
+/// and lets go of nothing else; `input.release` then finds the contact and the key still held, and
+/// the lease's next tap presses and lifts the primary button again.
+#[test]
+fn an_act_cut_short_keeps_what_its_lease_held_before_it() {
+    use flui_protocol::input::{
+        ActionSequence, InputParams, InputSource, KeyAction, PointerAction, PointerDevice,
+    };
+    let (mut host, _agent, window, lease, _presses) = shown();
+    let held = ActionSequence::new(vec![
+        InputSource::Keys {
+            id: "keys".to_owned(),
+            actions: vec![KeyAction::Down {
+                key: "Control".to_owned(),
+            }],
+        },
+        InputSource::Pointer {
+            id: "gesture.mouse".to_owned(),
+            device: PointerDevice::Mouse,
+            actions: vec![
+                PointerAction::Move {
+                    to: LogicalPoint::new(190.0, 390.0),
+                    duration_ms: 0,
+                    pressure: None,
+                },
+                PointerAction::Down {
+                    button: PointerButton::Secondary,
+                    pressure: None,
+                },
+            ],
+        },
+    ]);
+    let mut held = lease
+        .call::<method::InputInject>(InputParams::new(lease.window(), held))
+        .expect("the inbox has room");
+    answered(&mut host, &mut held, 10)
+        .0
+        .expect("Control and the secondary button are held");
+    let journaled = journal(&mut host, &window).entries.len();
+    let mut drag: DragParams = serde_json::from_value(json!({
+        "target": { "locator": { "name": { "match": "exact", "text": "Go" } } },
+        "to": { "locator": { "name": { "match": "exact", "text": "Enable" } } },
+    }))
+    .expect("a drag reads");
+    drag.options = timeout(drag.options, 50);
+    let mut drag = ask::<method::ElementDragTo>(&lease, drag);
+    let cut = refused_slowly(&mut host, &mut drag);
+    assert_eq!(cut.code, ErrorCode::Timeout, "{cut:?}");
+    assert!(
+        cut.effect
+            .as_ref()
+            .and_then(|effect| effect.sent)
+            .is_some_and(|sent| sent >= 2),
+        "it was cut after its press: {cut:?}"
+    );
+    let entries = journal(&mut host, &window).entries.split_off(journaled);
+    assert_eq!(
+        count_of(&entries, InputKind::PointerDown),
+        1,
+        "the drag pressed the primary button: {entries:?}"
+    );
+    assert_eq!(
+        count_of(&entries, InputKind::PointerUp),
+        1,
+        "the primary button it pressed is released: {entries:?}"
+    );
+    assert_eq!(
+        count_of(&entries, InputKind::PointerCancel),
+        0,
+        "the contact the lease held down is not cancelled: {entries:?}"
+    );
+    assert_eq!(
+        count_of(&entries, InputKind::KeyUp),
+        0,
+        "the key the lease held stays down: {entries:?}"
+    );
+    let mut tap = ask::<method::ElementTap>(&lease, TapParams::new(named("Go")));
+    let outcome = answered(&mut host, &mut tap, 30).0.expect("the tap runs");
+    let made = kinds_made(&mut host, &window, &outcome);
+    assert_eq!(
+        (
+            count_of_kinds(&made, InputKind::PointerDown),
+            count_of_kinds(&made, InputKind::PointerUp)
+        ),
+        (1, 1),
+        "the next tap through the lease presses and lifts again: {made:?}"
+    );
+    let mut released = lease
+        .call::<method::InputRelease>(flui_protocol::session::WindowParams::new(lease.window()))
+        .expect("the inbox has room");
+    let released = answered(&mut host, &mut released, 10)
+        .0
+        .expect("the lease lets go");
+    assert_eq!(
+        (released.pointers, released.keys),
+        (1, 1),
+        "the contact and the key the lease held before the drag were still held"
+    );
+}
+
+/// How many of `kinds` are `kind`.
+fn count_of_kinds(kinds: &[InputKind], kind: InputKind) -> usize {
+    kinds.iter().filter(|made| **made == kind).count()
 }
 
 /// An act whose last tick has played is answered by its deadline even when its window stops

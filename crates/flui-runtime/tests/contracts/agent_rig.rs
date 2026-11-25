@@ -131,6 +131,22 @@ impl Rig {
         );
     }
 
+    /// A host's wake `period` on, in the order a native runner's takes: the owner inbox drained
+    /// first (`UiRuntime::drain_owner_inbox`), then, as the runner's gate decides, the frame a
+    /// window asked for, a background turn while the runtime runs no frames, or nothing.
+    pub(crate) fn wake_after(&mut self, period: Duration) {
+        self.clock.advance(period);
+        let asked = self.runtime.drain_owner_inbox();
+        if !self.runtime.runs_frames() {
+            self.runtime.pump_background();
+        } else if asked || self.runtime.needs_redraw() {
+            let _ = self.runtime.pump(
+                &mut flui_runtime::pump::SampledClock(self.clock.now()),
+                &mut self.sink,
+            );
+        }
+    }
+
     /// An owner turn with no frame whose wakes fail: the panic it continues with.
     pub(crate) fn failing_turn(&mut self) -> String {
         self.failing.store(true, Ordering::SeqCst);

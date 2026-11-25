@@ -1194,9 +1194,11 @@ impl UiRuntime {
     ///
     /// An act's reading carries `act_ends`, the instant its act's promise runs
     /// out on the presentation's clock (its deadline, and the time its input
-    /// takes to play past it): a window that draws no frame by a frame's time
+    /// takes to play past it): an owner turn without a frame a frame's time
     /// past it ([`STEP`]) answers without the reading
-    /// ([`Self::expire_act_reads`]), and that instant wakes the owner
+    /// ([`Self::expire_act_reads`]), unless a frame of the same wake follows
+    /// it in a window that draws, whose end takes the reading
+    /// ([`super::agent_held::Frameless`]); that instant wakes the owner
     /// ([`Self::next_held_act_deadline`]).
     ///
     /// The reading is parked first: the reply is handed on, and the reading
@@ -1228,12 +1230,16 @@ impl UiRuntime {
         after.contain(|| self.request_agent_frame_for(state));
     }
 
-    /// On an owner turn without a frame: answer every act's reading whose act's promise ran out
-    /// with no frame since ([`Self::park_act_read`]), each without its reading, contained, after
-    /// the readings are let go; the first panic continues once every window's are sent.
-    pub(super) fn expire_act_reads(&self) {
+    /// On an owner turn without a frame, in the windows `turn` answers (a window that draws takes
+    /// its readings at its next frame's end): answer every act's reading whose act's promise ran
+    /// out with no frame since ([`Self::park_act_read`]), each without its reading, contained,
+    /// after the readings are let go; the first panic continues once every window's are sent.
+    pub(super) fn expire_act_reads(&self, turn: super::agent_held::Frameless) {
         let mut first = FirstPanic::new();
         for state in self.presentations.iter() {
+            if !turn.answers(self, state) {
+                continue;
+            }
             let now = state.clock().now();
             let expired = {
                 let mut owed = state.agent_reads.borrow_mut();

@@ -24,9 +24,10 @@
 //!
 //! An act's input is a gesture whole, which presses and lets go of what it presses: when it stops
 //! before its last tick (its act's promise ran out, or a tick could not be delivered), what it
-//! pressed and still holds is let go the same way at once, and what the lease held before it
-//! started stays held. So the lease's next gesture through the same source presses again, as
-//! it would on a fresh lease. `input.inject` composes no gesture: what it leaves held, stopped or
+//! pressed and still holds is let go at once: a contact it put down is cancelled as above, a button
+//! it pressed on a contact the lease already held down is released with the contact left down, and
+//! its keys come up. What the lease held before it started stays held, button by button. So the
+//! lease's next gesture through the same source presses again, as it would on a fresh lease. `input.inject` composes no gesture: what it leaves held, stopped or
 //! not, stays with its lease.
 
 use std::collections::{BTreeMap, VecDeque};
@@ -59,6 +60,7 @@ use web_time::Instant;
 
 use super::UiRuntime;
 use super::agent::{AgentError, ReadingOwed, ReplySender, send_reply};
+use super::agent_held::Pass;
 use super::input::InputOrigin;
 use crate::presentation::PresentationState;
 
@@ -683,8 +685,8 @@ impl Held {
         (batch, released)
     }
 
-    /// What it holds now of an act's input with `sources`, taken as that input starts: those
-    /// sources whose contacts are pressed, and the keys held.
+    /// What it holds now of an act's input with `sources`, taken as that input starts: the
+    /// buttons each contact of those sources holds, and the keys held.
     fn mark(&self, sources: &[Source]) -> HeldMark {
         HeldMark {
             pressed: self
@@ -694,15 +696,17 @@ impl Held {
                     contact.buttons != PointerButtons::NONE
                         && sources.iter().any(|source| source.name == contact.source)
                 })
-                .map(|contact| contact.source.clone())
-                .collect::<Vec<String>>(),
+                .map(|contact| (contact.source.clone(), contact.buttons))
+                .collect::<Vec<(String, PointerButtons)>>(),
             keys: self.keys.clone(),
         }
     }
 
     /// Let go of what was pressed since `before` was taken, stamped `time`, as [`Self::let_go`]
-    /// does: each contact of `sources` pressed since cancelled, the latest first, then each key
-    /// pressed since up, the latest first. What `before` held stays held.
+    /// does, the latest first: each contact of `sources` that went down since is cancelled, and a
+    /// contact `before` held down keeps the buttons it held, each button pressed on it since
+    /// released by a button change (the contact stays down, so nothing lifts it); then each key
+    /// pressed since goes up. What `before` held stays held.
     fn let_go_since(
         &mut self,
         before: &HeldMark,
@@ -712,14 +716,40 @@ impl Held {
         let mut batch = Vec::new();
         for contact in self.pointers.iter_mut().rev() {
             let ours = sources.iter().any(|source| source.name == contact.source);
-            if ours
-                && contact.buttons != PointerButtons::NONE
-                && !before.pressed.contains(&contact.source)
-            {
-                contact.buttons = PointerButtons::NONE;
-                batch.push(PlatformInput::Pointer(PointerEvent::Cancel(
-                    PointerCancel::new(contact.info(), time, CancelReason::Platform),
-                )));
+            if !ours || contact.buttons == PointerButtons::NONE {
+                continue;
+            }
+            let held = before
+                .pressed
+                .iter()
+                .find(|(source, _)| *source == contact.source)
+                .map_or(PointerButtons::NONE, |(_, buttons)| *buttons);
+            let at = contact.at.map(|at| sample(time, at, None));
+            match at {
+                Some(Ok(at)) if held != PointerButtons::NONE => {
+                    let pressed: Vec<PointerButton> = contact
+                        .buttons
+                        .iter()
+                        .filter(|button| !held.contains(*button))
+                        .collect::<Vec<PointerButton>>();
+                    for button in pressed.into_iter().rev() {
+                        let release =
+                            PointerRelease::new(contact.info(), button, contact.buttons, at)
+                                .with_modifiers(modifiers_of(&self.keys));
+                        contact.buttons = contact.buttons.without(button);
+                        batch.push(PlatformInput::Pointer(PointerEvent::ButtonChange(
+                            ButtonChange::Released(release),
+                        )));
+                    }
+                }
+                // Down since, or (never, for a contact a button holds down) at no point the
+                // window takes: cancelled whole.
+                _ => {
+                    contact.buttons = PointerButtons::NONE;
+                    batch.push(PlatformInput::Pointer(PointerEvent::Cancel(
+                        PointerCancel::new(contact.info(), time, CancelReason::Platform),
+                    )));
+                }
             }
         }
         let mut at = self.keys.len();
@@ -738,10 +768,10 @@ impl Held {
     }
 }
 
-/// What a lease held as an act's input started: the sources of that input whose contacts were
-/// pressed, and the keys held. See [`Held::let_go_since`].
+/// What a lease held as an act's input started: the buttons each contact of that input's sources
+/// held, by source, and the keys held. See [`Held::let_go_since`].
 struct HeldMark {
-    pressed: Vec<String>,
+    pressed: Vec<(String, PointerButtons)>,
     keys: Vec<Key>,
 }
 
@@ -1237,25 +1267,29 @@ impl UiRuntime {
             first.contain(|| self.advance_window_input(state, now));
         }
         // After the boundary's input went on: what could start at it has.
-        first.contain(|| self.expire_act_input());
+        first.contain(|| self.expire_act_input(Pass::Boundary));
         first.resume();
     }
 
     /// Answer every act's queued input whose act's promise has run out, on each presentation's
-    /// clock (ADR-0400 §2): none of its ticks started by the act's deadline (`timeout`, nothing
-    /// played), or under way then and not ended within its play time past it (`timeout`, with
-    /// the ticks played). What one under way pressed and still holds is let go first, as its
-    /// input; each answer runs contained, after the queue is let go and that input went out; the
-    /// first panic continues once every window's are sent.
+    /// clock (ADR-0400 §2), in the windows `pass` answers: none of its ticks started by the act's
+    /// deadline (`timeout`, nothing played), or under way then and not ended within its play time
+    /// past it (`timeout`, with the ticks played). What one under way pressed and still holds is
+    /// let go first, as its input; each answer runs contained, after the queue is let go and that
+    /// input went out; the first panic continues once every window's are sent.
     ///
     /// Run at a frame boundary after its input went on, and at an owner turn without a frame
-    /// after the acts whose deadline passed were attempted, so the input a last attempt queued on
-    /// a frame starts on that frame, and a window that draws no frame answers its acts at their
-    /// deadline whatever they queued ([`Self::next_act_input_deadline`] wakes the owner then).
-    pub(super) fn expire_act_input(&self) {
+    /// after the acts whose deadline passed were attempted, in a window that draws no frame
+    /// ([`super::agent_held::Frameless`]), so the input a last attempt queued on a frame starts on
+    /// that frame, and a window that draws no frame answers its acts at their deadline whatever
+    /// they queued ([`Self::next_act_input_deadline`] wakes the owner then).
+    pub(super) fn expire_act_input(&self, pass: Pass) {
         let time = self.event_time_at(flui_foundation::MonotonicClock::now(&self.clock));
         let mut first = FirstPanic::new();
         for state in self.presentations.iter() {
+            if !pass.answers(self, state) {
+                continue;
+            }
             let now = state.clock().now();
             let (batch, expired) = state.agent_input.borrow_mut().expire(now, time);
             // What an input under way pressed is let go before it is answered, a handler's panic

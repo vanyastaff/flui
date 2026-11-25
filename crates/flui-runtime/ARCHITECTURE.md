@@ -1119,7 +1119,9 @@ snapshot was asked for. A gesture's answer waits in the same place for the frame
 or its semantics action, and carries the end of its act's promise (the deadline, and the time its
 input takes to play past it): an owner turn without a frame a frame's time past it answers it
 without the reading (`UiRuntime::expire_act_reads`), and that instant wakes the owner, so a window
-that stops drawing after the input played still answers by the deadline. Pinned by
+that stops drawing after the input played still answers by the deadline; in a window that draws,
+the drain that opens a host's wake leaves the reading to that wake's frame (`Frameless`, below).
+Pinned by
 `src/ui_runtime/tests/agent_act_read.rs`, `crates/flui-semantics/tests/delta.rs` and
 `tests/contracts/agent_gestures.rs`
 (`an_act_whose_window_stops_drawing_after_its_input_played_is_answered_by_its_deadline`).
@@ -1163,7 +1165,16 @@ runs), is the one owner of every act it holds. An act is attempted when it is se
 boundary before injected input goes on (`AgentSide::advance_held_acts`, so an act that passes
 injects its first tick at that boundary), and on an owner turn without a frame once its deadline
 passed: every held act's deadline wakes the owner (`AgentSide::next_act_deadline` in `next_wake`),
-so a window that draws nothing still answers it. While any act is held the window asks for frames,
+so a window that draws nothing still answers it. A window that draws leaves what is overdue (a held
+act, the input it queued, the reading it owes) to its next frame, as the headless host's frames do:
+a native runner's wake drains its inbox (`UiRuntime::drain_owner_inbox`) before it frames, and
+that drain answers only a window that draws no frame (hidden or covered, or the runtime runs none;
+`agent_held::Frameless`), so a last attempt that passes plays on the wake's frame and the reading
+it owes is taken at that frame's end; `pump_background`, which runs no frame, answers every window.
+Pinned by `tests/contracts/agent_gestures.rs`
+(`a_last_attempt_that_passes_plays_on_a_host_that_drains_before_its_frame`,
+`a_reading_an_act_owes_is_taken_on_a_host_that_drains_before_its_frame`). While any act is held the
+window asks for frames,
 the frame asked for before the act is held or its input queued. An answer or a wake after an
 attempt runs inside the pass's `FirstPanic`, and `after_turn` evaluates the parked waits inside it
 too, so the first panic of a turn continues; a parked wait asks for the frames it counts before it
@@ -1174,16 +1185,19 @@ longest ago.
 
 An act's deadline is a promise: every act is answered by it, the input it queued included. The
 input an act queues (a gesture's injection, `type_text` and `press_keys`, a scroll step) carries
-the act's deadline. At the first pass at or past it (an owner turn without a frame, after the
-acts whose deadline passed are attempted; a frame boundary, after its input went on, so the input
+the act's deadline. At the first pass at or past it (an owner turn without a frame in a window
+that draws none, after the acts whose deadline passed are attempted; a frame boundary, after its
+input went on, so the input
 a last attempt queued on that frame starts on it) input none of whose ticks started is withdrawn
 and the act answers `timeout` (`InputTimedOut`, retry `soon`), nothing played; input under way
 then has its play time past the deadline (`Script::plays_within`, the bound the reply counts,
 ADR-0288 §4), and still running then, because its window stopped drawing, stops where it is and
 answers `timeout` with the ticks played. An act's input is a gesture whole: when it stops before its
 last tick, its deadline passed or a tick failed, what it pressed and still holds is let go at once
-as `input.release` lets go (its contacts cancelled, its keys up, the latest first), and what the
-lease held before it started stays held (`Held::let_go_since`), so the lease's next gesture
+as `input.release` lets go (the contacts it put down cancelled, its keys up, the latest first), a
+button it pressed on a contact the lease already held down released with the contact left down,
+and what the lease held before it started stays held, button by button (`Held::let_go_since`), so
+the lease's next gesture
 through the same source presses again. Until then the input's deadline is a wake of the agent
 (`next_act_deadline`), so a window that draws nothing answers its acts on time and nothing plays
 once it draws again. `input.inject` carries no deadline: its asker bounds its own reply, and what

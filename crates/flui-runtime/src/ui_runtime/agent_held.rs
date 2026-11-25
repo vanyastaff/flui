@@ -3,8 +3,9 @@
 //!
 //! A presentation's [`HeldActs`] is the one owner of every act it holds. An act is attempted when
 //! it arrives, then at each frame boundary ([`UiRuntime::advance_held_acts`], which the frame path
-//! reaches through `AgentSide`), and at an owner turn without a frame once its deadline has
-//! passed, so a window that draws nothing still answers it. While any act is held the window asks
+//! reaches through `AgentSide`), and, in a window that draws no frame, at an owner turn without a
+//! frame once its deadline has passed, so such a window still answers it; a window that draws
+//! leaves its overdue acts to its next frame ([`Frameless`]). While any act is held the window asks
 //! for frames: stability is a fact about two frames.
 //!
 //! The deadline is the act's own timeout, on the presentation's clock, and it wakes the owner
@@ -161,13 +162,53 @@ impl HeldActs {
     }
 }
 
-/// Which held acts an attempt pass reaches.
+/// Which held acts an attempt pass reaches, and whose overdue obligations it answers.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Pass {
-    /// A frame boundary: every act.
+    /// A frame boundary: every act, in every window.
     Boundary,
-    /// An owner turn without a frame: the acts whose deadline has passed.
-    Expired,
+    /// An owner turn without a frame: the acts whose deadline has passed, in the windows the
+    /// turn answers ([`Frameless::answers`]).
+    Expired(Frameless),
+}
+
+impl Pass {
+    /// Whether this pass answers the obligations of `state`'s acts whose deadline passed.
+    pub(super) fn answers(self, runtime: &UiRuntime, state: &PresentationState) -> bool {
+        match self {
+            Self::Boundary => true,
+            Self::Expired(turn) => turn.answers(runtime, state),
+        }
+    }
+}
+
+/// What an owner turn without a frame comes before, which decides the windows whose overdue
+/// obligations (a held act, the input it queued, the reading it owes) it answers.
+///
+/// An obligation of a window that draws is answered by that window's next frame, at or past its
+/// deadline: the boundary makes a held act's last attempt and starts the input it queues, input due
+/// to end is cut after the boundary's input went on, and the frame's end takes the reading owed.
+/// A host's wake drains its inbox before it decides whether to frame
+/// ([`UiRuntime::drain_owner_inbox`]), and a window that draws has asked for that frame, so the
+/// drain leaves the window's obligations to it, as the headless host's frames, which run no
+/// drain, do. A window that draws no frame (hidden or covered, or the runtime runs none) has its
+/// obligations answered by the turn at their deadline, which wakes the owner.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Frameless {
+    /// The drain that opens a host's wake, which the wake's frame follows in a window that draws.
+    BeforeFrame,
+    /// A turn that runs no frame ([`UiRuntime::pump_background`]): every window.
+    NoFrame,
+}
+
+impl Frameless {
+    /// Whether this turn answers the overdue obligations of `state`'s acts.
+    pub(super) fn answers(self, runtime: &UiRuntime, state: &PresentationState) -> bool {
+        match self {
+            Self::BeforeFrame => !runtime.draws_agent_frames(state),
+            Self::NoFrame => true,
+        }
+    }
 }
 
 impl UiRuntime {
@@ -222,7 +263,7 @@ impl UiRuntime {
     pub(super) fn advance_held_acts(&self, pass: Pass) {
         let mut first = FirstPanic::new();
         for state in self.presentations.iter() {
-            if state.agent_acts.borrow().acts.is_empty() {
+            if state.agent_acts.borrow().acts.is_empty() || !pass.answers(self, state) {
                 continue;
             }
             let now = state.clock().now();
@@ -233,7 +274,7 @@ impl UiRuntime {
                 if !act.is_awaited() {
                     continue;
                 }
-                if pass == Pass::Expired && now < act.deadline {
+                if matches!(pass, Pass::Expired(_)) && now < act.deadline {
                     keep.push(act);
                     continue;
                 }

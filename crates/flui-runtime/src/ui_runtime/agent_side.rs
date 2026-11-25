@@ -27,6 +27,7 @@ use flui_protocol::wait::SettleScope;
 use flui_view::__runtime::{Reply, WindowCall};
 use flui_view::dev_agent::{AgentEvents, AgentRecording};
 
+use super::agent_held::{Frameless, Pass};
 use super::agent_inspect::StagedLayerRead;
 use super::{DrainReport, UiRuntime};
 use crate::presentation::PresentationState;
@@ -85,9 +86,9 @@ pub(crate) trait AgentSide {
     fn after_frame(&self, ui_runtime: &UiRuntime);
 
     /// An owner turn ended without a frame: the acts, their queued input and the readings they owe
-    /// whose deadline passed are answered, and the waits agents parked that hold without reading
-    /// settledness see the window as it is.
-    fn after_turn(&self, ui_runtime: &UiRuntime);
+    /// whose deadline passed are answered in the windows `turn` answers ([`Frameless`]), and the
+    /// waits agents parked that hold without reading settledness see the window as it is.
+    fn after_turn(&self, ui_runtime: &UiRuntime, turn: Frameless);
 
     /// The frame boundary: input agents injected goes on, one tick.
     fn advance_input(&self, ui_runtime: &UiRuntime, now: Instant);
@@ -219,15 +220,16 @@ impl AgentSide for AgentOwnerSide {
         ui_runtime.evaluate_agent_waits(true);
     }
 
-    fn after_turn(&self, ui_runtime: &UiRuntime) {
+    fn after_turn(&self, ui_runtime: &UiRuntime, turn: Frameless) {
         // A held act whose deadline passed is answered on a turn without a frame too, and so are
         // the input an act queued that no frame started by its deadline and the reading an act
-        // owes that no frame came for. The waits are evaluated whichever panics, and the first
-        // panic continues after all four.
+        // owes that no frame came for, in a window no frame of this wake serves. The waits are
+        // evaluated whichever panics, and the first panic continues after all four.
+        let pass = Pass::Expired(turn);
         let mut first = FirstPanic::new();
-        first.contain(|| ui_runtime.advance_held_acts(super::agent_held::Pass::Expired));
-        first.contain(|| ui_runtime.expire_act_input());
-        first.contain(|| ui_runtime.expire_act_reads());
+        first.contain(|| ui_runtime.advance_held_acts(pass));
+        first.contain(|| ui_runtime.expire_act_input(pass));
+        first.contain(|| ui_runtime.expire_act_reads(turn));
         first.contain(|| ui_runtime.evaluate_agent_waits(false));
         first.resume();
     }
@@ -237,7 +239,7 @@ impl AgentSide for AgentOwnerSide {
     }
 
     fn advance_held_acts(&self, ui_runtime: &UiRuntime) {
-        ui_runtime.advance_held_acts(super::agent_held::Pass::Boundary);
+        ui_runtime.advance_held_acts(Pass::Boundary);
     }
 
     fn next_act_deadline(&self, ui_runtime: &UiRuntime) -> Option<Instant> {

@@ -186,6 +186,13 @@ impl UiRuntime {
         self.sender_prototype.wake_owner();
     }
 
+    /// Whether a frame the development agent asks of `presentation` is drawn: the runtime runs
+    /// frames and the presentation can be seen, so [`Self::request_agent_frame_for`] marks the
+    /// redraw a runner's frame gate reads.
+    pub(super) fn draws_agent_frames(&self, presentation: &PresentationState) -> bool {
+        self.runs_frames() && !presentation.clock().is_hidden()
+    }
+
     /// Whether the development agent asked for a frame of a presentation that can be seen,
     /// since the last pump began ([`Self::request_agent_frame_for`]).
     pub(super) fn agent_frame_asked(&self) -> bool {
