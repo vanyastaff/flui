@@ -100,19 +100,22 @@ fn text(value: &CFString) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-/// `value` as text read whole, when it is a string of at most `limit` UTF-16 units; `Ok(None)`
-/// for an empty one or another type. A longer string is not copied: its length in units is the
-/// error, so a caller that must see all of a text refuses it rather than read a cut one.
-pub(crate) fn whole_string(value: &CFType, limit: usize) -> Result<Option<String>, usize> {
-    let Some(value) = value.downcast_ref::<CFString>() else {
-        return Ok(None);
+/// `value` as text, when it is a string, copied at most `units` UTF-16 units far; `None` for an
+/// empty one or another type. A caller that must see a text whole asks one unit more than it
+/// reads, so a longer text comes back longer than it reads and it can tell
+/// (`accessibility::window_identity`).
+pub(crate) fn string_within(value: &CFType, units: usize) -> Option<String> {
+    let value = value.downcast_ref::<CFString>()?;
+    let limit = CFIndex::try_from(units).unwrap_or(CFIndex::MAX);
+    let text: String = if value.length() > limit {
+        // SAFETY: the range starts at the string's first unit and ends inside it, since the
+        // string is longer than `limit` units.
+        let cut = unsafe { CFString::with_substring(None, Some(value), CFRange::new(0, limit)) };
+        cut.map(|cut| cut.to_string()).unwrap_or_default()
+    } else {
+        value.to_string()
     };
-    let units = usize::try_from(value.length()).unwrap_or(usize::MAX);
-    if units > limit {
-        return Err(units);
-    }
-    let text = value.to_string();
-    Ok((!text.is_empty()).then_some(text))
+    (!text.is_empty()).then_some(text)
 }
 
 /// `value` as a flag: a boolean, or a number that is not zero.

@@ -17,7 +17,7 @@ mod client;
 pub(crate) use self::client::{
     MESSAGING_TIMEOUT_SECONDS, Visit, Walker, actions, application, attribute, boolean, child_at,
     elements, frame, name, number_text, perform, read_error, set_messaging_timeout, settable,
-    string, timeout, trusted, whole_string,
+    string, string_within, timeout, trusted,
 };
 
 use std::time::Duration;
@@ -31,7 +31,7 @@ use crate::lane::walk::ProviderError;
 
 /// The deadline a call ran under, for people: `deadline`, the one the client gave the element the
 /// call was asked of, or, as `None`, the timeout that element kept when it refused the client's.
-pub(crate) fn within(deadline: Option<Duration>) -> String {
+pub(crate) fn deadline_clause(deadline: Option<Duration>) -> String {
     match deadline {
         Some(deadline) => format!("within {} ms", deadline.as_millis()),
         None => {
@@ -83,7 +83,7 @@ pub(crate) fn pressed(
                 effect: None,
                 message: format!(
                     "the accessibility API did not answer whether {label:?} offers a press {}",
-                    within(deadline)
+                    deadline_clause(deadline)
                 ),
                 retry: ErrorCode::Timeout.default_retry(),
             });
@@ -120,7 +120,7 @@ pub(crate) fn pressed(
             message: format!(
                 "the accessibility API did not answer the press of {label:?} {}: read the tree \
                  for its effect{permission}",
-                within(deadline)
+                deadline_clause(deadline)
             ),
             retry: ErrorCode::Timeout.default_retry(),
         }),

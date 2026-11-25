@@ -1412,8 +1412,11 @@ graph LR
     `the_walk_reads_its_budget_and_leaves_out_a_gone_element`,
     `a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone`,
     `the_search_keeps_to_its_budget_and_depth`,
-    `the_search_reads_the_chrome_and_never_the_apps_elements`,
-    `a_screen_moved_during_the_read_is_read_again`,
+    `the_search_refuses_only_a_cut_in_the_chrome`,
+    `the_screen_is_chosen_in_every_shape_its_group_can_take`,
+    `a_facts_read_that_fails_fails_the_search`,
+    `a_screen_moved_or_gone_during_the_read_is_read_again`,
+    `a_screen_holds_still_only_with_the_frame_it_was_found_at`,
     `a_group_gone_mid_search_cuts_the_search_short`,
     `the_search_reaches_devicehubs_screen_seven_levels_down`,
     `the_search_reaches_a_screen_inside_simulator_apps_bezel`,
@@ -1489,12 +1492,12 @@ graph LR
     others name; else the one naming no UUID, only while no other listed simulator shares the
     title; any other UUID never; two naming the UDID, or two naming none, refused), and the
     device looked up by its UDID in the listing read before each read, renamed or removed
-    refused. The screen is found by walking every group of
-    the window within ten levels: an `iOSContentGroup` (DeviceHub) when there is one, else the
-    shallowest group of the app's window's shape (Simulator.app, inside its bezel or not), which a
-    search left partial above or beside the candidates by an element gone or its budget does not
-    take; the search never goes into a group of the app window's shape, whose children are the
-    app's.
+    refused. The screen is found by reading the window's chrome within ten levels, then going
+    into each plain group of the app window's shape to look for an `iOSContentGroup` under it:
+    an `iOSContentGroup` (DeviceHub) wherever it is, else the shallowest group of the app's
+    window's shape (Simulator.app, inside its bezel or not), refused when the chrome was cut; a
+    cut inside a plain candidate is the candidate's. Which shape each window has waits on a
+    recorded tree (vanyastaff/flui#3152).
     `accesskit_ios` serves the elements VoiceOver reads, so an element is matched among the
     descendants of the node its nearest matched ancestor fits. The client is shared with the macOS
     lane as `lane::ax`, and `Lane::invoke` is handed the app's tree as `read_tree` is.
