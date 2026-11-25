@@ -33,7 +33,7 @@ pub mod ios_simulator;
 pub mod macos;
 pub mod pacing;
 pub mod screen;
-mod tool;
+pub(crate) mod tool;
 pub mod walk;
 pub mod wayland;
 pub mod windows;
