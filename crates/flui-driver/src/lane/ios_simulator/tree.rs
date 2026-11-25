@@ -10,12 +10,15 @@
 //! - **The screen.** The device's screen is a group of that window with the shape of the app's
 //!   window, which fills the screen: in Simulator.app a child of the window or of a group the
 //!   bezel adds around it, in DeviceHub (Xcode 27) a group about seven levels down whose subrole
-//!   is [`SCREEN_SUBROLE`]. The search walks every group within [`MAX_SCREEN_DEPTH`] levels,
-//!   going into each but a [`SCREEN_SUBROLE`] one, whose children are the app's, and
-//!   [`choose_screen`] takes a [`SCREEN_SUBROLE`] group when there is one and the shallowest of
-//!   the window's shape otherwise, but only from a search that read its levels whole: one that a
-//!   group gone or its budget left partial ([`SearchReach::Partial`]) takes no plain group
-//!   ([`TreeError::SearchCut`]). The window draws the screen scaled (DeviceHub at about three
+//!   is [`SCREEN_SUBROLE`]. The search reads every element within [`MAX_SCREEN_DEPTH`] levels,
+//!   breadth first, going into each but a candidate (a group of the window's shape, or a
+//!   [`SCREEN_SUBROLE`] group), whose children are the app's, so the app's own elements never
+//!   spend the search's budget or cut it. [`choose_screen`] takes a [`SCREEN_SUBROLE`] group
+//!   when there is one and the shallowest group of the window's shape otherwise, but only from a
+//!   search that read its levels whole: one that a group gone above or beside the candidates, or
+//!   its budget, left partial ([`SearchReach::Partial`]) takes none, since another candidate may
+//!   sit in the part not read ([`TreeError::SearchCut`]). The window draws the screen scaled
+//!   (DeviceHub at about three
 //!   quarters), so an element's frame is placed on the app's window by the screen's scale
 //!   ([`window_rect`]).
 //! - **What an element reads as** ([`describe`]): its native role (`AXRole` or
@@ -130,9 +133,9 @@ pub enum TreeError {
         /// How much of the window the search read.
         reach: SearchReach,
     },
-    /// The search read only part of the levels it searched and found no [`SCREEN_SUBROLE`]
-    /// group, so a plain group of the window's shape is not taken: the marked one may sit in the
-    /// part not read.
+    /// The search read only part of the levels it searched, above or beside the candidates it
+    /// saw, so none is taken: a [`SCREEN_SUBROLE`] group, or a second one, may sit in the part not
+    /// read, as a press refuses one match on a read that stopped short.
     SearchCut {
         /// The window's title.
         title: String,
@@ -178,11 +181,10 @@ impl TreeError {
             },
             Self::SearchCut { title } => Error::NotFound {
                 message: format!(
-                    "the search of the window {title:?} was cut short, by a group that went away \
-                     or by its budget ({MAX_NODES} elements), before it found the device's screen \
-                     by its subrole {SCREEN_SUBROLE}: a group of the app's window's shape was \
-                     seen, but the screen may sit in the part not read, so none is taken; read \
-                     again"
+                    "the search of the window {title:?} was cut short, by an element that went \
+                     away or by its budget ({MAX_NODES} elements), above or beside the groups of \
+                     the app's window's shape it saw: the device's screen ({SCREEN_SUBROLE}), or a \
+                     second one, may sit in the part not read, so none is taken; read again"
                 ),
                 candidates: Vec::new(),
                 retry: ErrorCode::NotFound.default_retry(),
@@ -243,8 +245,11 @@ pub trait WindowTree {
     ///
     /// # Errors
     ///
-    /// The API's failure.
-    fn facts(&mut self, element: &Self::Element) -> Result<WindowFacts>;
+    /// [`ProviderError::Gone`] when `element` went away after it was listed, which the search
+    /// takes as its level cut, as a list a gone parent cuts; any other failure fails the search,
+    /// as [`Self::failure`] answers it.
+    fn facts(&mut self, element: &Self::Element)
+    -> std::result::Result<WindowFacts, ProviderError>;
 
     /// The texts `window` answers that could name the simulator it shows (its `AXIdentifier`
     /// and `AXDocument`), for [`window_identity`].
@@ -255,10 +260,14 @@ pub trait WindowTree {
     fn identity(&mut self, window: &Self::Element) -> Result<Vec<Option<String>>>;
 }
 
-/// Whether the search goes into an element of the window: into every one but the screen's group
-/// as DeviceHub marks it, whose children are the iOS app's.
-fn descends(facts: &WindowFacts) -> bool {
-    facts.subrole.as_deref() != Some(SCREEN_SUBROLE)
+/// Whether `facts` are of a screen candidate for an app window of `size`: a group of the window's
+/// shape ([`screen_scale`]), or the screen's group as DeviceHub marks it.
+fn is_candidate(facts: &WindowFacts, size: LogicalSize) -> bool {
+    facts.subrole.as_deref() == Some(SCREEN_SUBROLE)
+        || (facts.role == "AXGroup"
+            && facts
+                .frame
+                .is_some_and(|frame| screen_scale(frame, size).is_some()))
 }
 
 /// Which of the windows on screen of `screen`'s title shows its device, by what each names
@@ -347,17 +356,19 @@ fn the_window<T: WindowTree>(
 
 /// The device's screen among `windows`, the windows on screen titled as `screen` asks: the
 /// window [`choose_window`] takes; and in it the group [`choose_screen`] takes among every group
-/// within [`MAX_SCREEN_DEPTH`] levels and [`MAX_NODES`] elements, the search going into each but
-/// a [`SCREEN_SUBROLE`] group, breadth first, each group's children listed by
-/// [`list_children`] within what is left of the budget. A group gone mid-search, or the budget,
-/// leaves part of the levels unread ([`SearchReach::Partial`]); groups past the deepest level are
-/// not entered ([`SearchReach::ToDepth`]).
+/// within [`MAX_SCREEN_DEPTH`] levels and [`MAX_NODES`] elements, breadth first, each element's
+/// children listed by [`list_children`] within what is left of the budget. The search goes into
+/// every element but a candidate (a group of the app window's shape, or a [`SCREEN_SUBROLE`]
+/// group), whose children are the app's, so only the window's chrome spends the budget. An
+/// element gone mid-search (while its children are listed, or after it was listed and before its
+/// facts are read), or the budget, leaves part of the levels unread ([`SearchReach::Partial`]);
+/// elements past the deepest level are not entered ([`SearchReach::ToDepth`]).
 ///
 /// # Errors
 ///
 /// As [`choose_window`]; [`Error::NotFound`] when the window shows no screen, or when the search
-/// read only part of its levels and found no [`SCREEN_SUBROLE`] group; [`Error::Ambiguous`] when
-/// two screens fit; the API's failure.
+/// read only part of its levels and saw a candidate; [`Error::Ambiguous`] when two screens fit;
+/// the API's failure.
 pub fn find_screen<T: WindowTree>(
     tree: &mut T,
     screen: &ScreenRequest,
@@ -382,7 +393,16 @@ pub fn find_screen<T: WindowTree>(
             }
             let spent = listed.cut && visited >= MAX_NODES;
             for child in listed.children {
-                let facts = tree.facts(&child)?;
+                let facts = match tree.facts(&child) {
+                    Ok(facts) => facts,
+                    // Gone between its listing and its facts: its level is cut, as a list a gone
+                    // parent cuts.
+                    Err(ProviderError::Gone) => {
+                        reach = SearchReach::Partial;
+                        continue;
+                    }
+                    Err(error) => return Err(tree.failure(error)),
+                };
                 if facts.role == "AXGroup"
                     && let Some(frame) = facts.frame
                 {
@@ -395,7 +415,8 @@ pub fn find_screen<T: WindowTree>(
                         },
                     ));
                 }
-                if descends(&facts) {
+                // A candidate's children are the app's, never the window's chrome.
+                if !is_candidate(&facts, screen.size) {
                     next.push(child);
                 }
             }
@@ -438,16 +459,17 @@ pub fn screen_scale(frame: PointFrame, size: LogicalSize) -> Option<f64> {
 /// app window of `size`: of the groups with the window's shape ([`screen_scale`]), the
 /// [`SCREEN_SUBROLE`] one when there is one, and otherwise the shallowest. Two groups of one
 /// frame are one screen, reached along two paths or wrapped by a group of its own frame.
-/// `reach` says how much of the window the search read: a plain group is taken only when no
-/// group of the levels searched went unread ([`SearchReach::Partial`]), since the
-/// [`SCREEN_SUBROLE`] group may sit in the part not read.
+/// `reach` says how much of the window the search read: a group is taken only when nothing of the
+/// levels searched went unread ([`SearchReach::Partial`]), since a [`SCREEN_SUBROLE`] group, or a
+/// second one, may sit in the part not read, as a press refuses one match on a read that stopped
+/// short.
 ///
 /// # Errors
 ///
-/// [`TreeError::NoScreen`] when none has the shape; [`TreeError::SearchCut`] when no
-/// [`SCREEN_SUBROLE`] group has it and the search read only part of the levels it searched;
-/// [`TreeError::Ambiguous`] when [`SCREEN_SUBROLE`] groups of two frames do, or plain groups of
-/// two frames at the shallowest depth.
+/// [`TreeError::NoScreen`] when none has the shape; [`TreeError::SearchCut`] when one has it but
+/// the search read only part of the levels it searched; [`TreeError::Ambiguous`] when
+/// [`SCREEN_SUBROLE`] groups of two frames do, or plain groups of two frames at the shallowest
+/// depth.
 pub fn choose_screen(
     title: &str,
     candidates: &[ScreenCandidate],
@@ -462,7 +484,7 @@ pub fn choose_screen(
         .copied()
         .filter(|index| candidates[*index].subrole.as_deref() == Some(SCREEN_SUBROLE))
         .collect();
-    if marked.is_empty() && !shaped.is_empty() && reach == SearchReach::Partial {
+    if !shaped.is_empty() && reach == SearchReach::Partial {
         return Err(TreeError::SearchCut {
             title: title.to_owned(),
         });

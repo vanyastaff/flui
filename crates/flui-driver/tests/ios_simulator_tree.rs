@@ -614,6 +614,7 @@ fn a_window_naming_any_other_uuid_is_not_the_devices() {
         UDID.replace('-', ""),
         UDID[..35].to_owned(),
         UDID.replacen('-', "_", 1),
+        UDID.replacen('F', "G", 1),
     ] {
         assert_eq!(
             accessibility::window_identity(&udid(), &[Some(none.clone())]),
@@ -820,6 +821,26 @@ fn the_walk_reads_its_budget_and_leaves_out_a_gone_element() {
     assert_eq!(walked.elements.len(), MAX_NODES);
     assert!(walked.truncated && walked.children_unread);
 
+    // Two wide levels share one budget: no level is past it, their sum is.
+    let mut wide = Source {
+        nodes: vec![Item::new(ScreenElement::new("AXGroup"))],
+    };
+    for _ in 0..80 {
+        let pane = wide.add(0, "AXGroup");
+        for _ in 0..80 {
+            wide.add(pane, "AXGenericElement");
+        }
+    }
+    let walked = accessibility::walk_screen(&mut wide, &0).expect("walked");
+    fn count(elements: &[accessibility::Walked<usize>]) -> usize {
+        elements
+            .iter()
+            .map(|element| 1 + count(&element.children))
+            .sum()
+    }
+    assert_eq!(count(&walked.elements), MAX_NODES, "the budget, in all");
+    assert!(walked.truncated);
+
     let mut gone = source(3);
     let list = gone.nodes[0].children[1];
     let first = gone.nodes[list].children[0];
@@ -907,16 +928,23 @@ struct Fixture {
     children: Vec<usize>,
     /// The index from which a child read answers that the node went away.
     gone_after: Option<usize>,
+    /// Whether a read of the node's facts answers that it went away, after it was listed.
+    gone: bool,
 }
 
 /// A set of windows written out as nodes by index, each window a root.
 struct Windows {
     nodes: Vec<Fixture>,
+    /// How many elements' facts the search read.
+    facts_read: usize,
 }
 
 impl Windows {
     fn new() -> Self {
-        Self { nodes: Vec::new() }
+        Self {
+            nodes: Vec::new(),
+            facts_read: 0,
+        }
     }
 
     /// Add a node of `role` and `subrole` at `frame` under `parent`; its index.
@@ -937,6 +965,7 @@ impl Windows {
             identity: Vec::new(),
             children: Vec::new(),
             gone_after: None,
+            gone: false,
         });
         if let Some(parent) = parent {
             self.nodes[parent].children.push(index);
@@ -960,8 +989,13 @@ impl WindowTree for Windows {
         accessibility::read_failure(error, true, None)
     }
 
-    fn facts(&mut self, element: &usize) -> flui_driver::Result<WindowFacts> {
-        Ok(self.nodes[*element].facts.clone())
+    fn facts(&mut self, element: &usize) -> Result<WindowFacts, ProviderError> {
+        self.facts_read += 1;
+        let node = &self.nodes[*element];
+        if node.gone {
+            return Err(ProviderError::Gone);
+        }
+        Ok(node.facts.clone())
     }
 
     fn identity(&mut self, window: &usize) -> flui_driver::Result<Vec<Option<String>>> {
@@ -1116,6 +1150,132 @@ fn the_search_keeps_to_its_budget_and_depth() {
     }
     let (found, _) = tree::find_screen(&mut deep, &request(), vec![window]).expect("to depth");
     assert_eq!(found, screen);
+
+    // A cut beside the candidate stays a cut when the depth also stops the search.
+    let beside = deep.add(
+        Some(window),
+        "AXGroup",
+        None,
+        Some((231.0, 142.0, 20.0, 20.0)),
+    );
+    deep.add(
+        Some(beside),
+        "AXButton",
+        None,
+        Some((231.0, 142.0, 5.0, 5.0)),
+    );
+    deep.nodes[beside].gone_after = Some(0);
+    let refused = tree::find_screen(&mut deep, &request(), vec![window]).expect_err("cut");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. } if message.contains("read again")),
+        "{refused:?}"
+    );
+
+    // With no screen, a search read to its depth says how far it read.
+    deep.nodes[beside].gone_after = None;
+    deep.nodes[window].children.retain(|child| *child != screen);
+    let refused = tree::find_screen(&mut deep, &request(), vec![window]).expect_err("no screen");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. }
+            if message.contains(&format!("within the {MAX_SCREEN_DEPTH} levels searched"))),
+        "{refused:?}"
+    );
+}
+
+/// The search never goes into a candidate: Simulator.app's plain screen group holds the app,
+/// whose elements neither spend the search's budget nor cut it when one goes away. A cut above
+/// or beside the candidates (an element gone while listed, or between its listing and its facts)
+/// refuses, and the budget is shared across the levels of the window's chrome.
+#[test]
+fn the_search_reads_the_chrome_and_never_the_apps_elements() {
+    let simulator_app = || {
+        let mut windows = Windows::new();
+        let window = windows.add(None, "AXWindow", None, Some((231.0, 142.0, 456.0, 972.0)));
+        let bezel = windows.add(
+            Some(window),
+            "AXGroup",
+            None,
+            Some((231.0, 194.0, 456.0, 920.0)),
+        );
+        let screen = windows.add(
+            Some(bezel),
+            "AXGroup",
+            None,
+            Some((258.0, 222.0, 393.0, 852.0)),
+        );
+        (windows, window, bezel, screen)
+    };
+
+    // The app's elements, past the budget, with one gone mid-listing: never read.
+    let (mut windows, window, _, screen) = simulator_app();
+    let list = windows.add(
+        Some(screen),
+        "AXGroup",
+        None,
+        Some((258.0, 222.0, 393.0, 400.0)),
+    );
+    for _ in 0..MAX_NODES + 10 {
+        windows.add(
+            Some(list),
+            "AXButton",
+            None,
+            Some((258.0, 222.0, 40.0, 40.0)),
+        );
+    }
+    windows.nodes[list].gone_after = Some(5);
+    let (found, _) = tree::find_screen(&mut windows, &request(), vec![window]).expect("the screen");
+    assert_eq!(found, screen);
+    assert!(windows.facts_read < 10, "{} facts read", windows.facts_read);
+
+    // A cut above the candidate: the window's list ends early after the bezel.
+    let (mut windows, window, _, _) = simulator_app();
+    windows.add(
+        Some(window),
+        "AXToolbar",
+        None,
+        Some((231.0, 142.0, 456.0, 52.0)),
+    );
+    windows.nodes[window].gone_after = Some(1);
+    let refused = tree::find_screen(&mut windows, &request(), vec![window]).expect_err("above");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. } if message.contains("read again")),
+        "{refused:?}"
+    );
+
+    // A cut beside it: a sibling of the screen gone between its listing and its facts.
+    let (mut windows, window, bezel, _) = simulator_app();
+    let button = windows.add(
+        Some(bezel),
+        "AXButton",
+        None,
+        Some((231.0, 300.0, 4.0, 40.0)),
+    );
+    windows.nodes[button].gone = true;
+    let refused = tree::find_screen(&mut windows, &request(), vec![window]).expect_err("beside");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. } if message.contains("read again")),
+        "{refused:?}"
+    );
+
+    // Two wide levels of chrome share one budget: the search reads at most its budget in all.
+    let mut wide = Windows::new();
+    let window = wide.add(None, "AXWindow", None, Some((0.0, 0.0, 1100.0, 800.0)));
+    for _ in 0..80 {
+        let pane = wide.add(Some(window), "AXGroup", None, Some((0.0, 0.0, 30.0, 30.0)));
+        for _ in 0..80 {
+            wide.add(Some(pane), "AXButton", None, Some((0.0, 0.0, 10.0, 10.0)));
+        }
+    }
+    let refused = tree::find_screen(&mut wide, &request(), vec![window]).expect_err("no screen");
+    assert!(
+        matches!(&refused, Error::NotFound { message, .. } if message.contains("budget")),
+        "{refused:?}"
+    );
+    assert!(
+        wide.facts_read <= MAX_NODES,
+        "{} facts read past the budget",
+        wide.facts_read
+    );
 }
 
 /// Simulator.app's window: the screen a child of a group the bezel adds, beside the bezel's
@@ -1273,12 +1433,17 @@ fn the_screen_is_the_group_with_the_windows_shape() {
         candidate((0.0, 0.0, 393.0, 852.0), None, 2),
         candidate((657.0, 266.0, 290.82, 630.48), Some(SCREEN_SUBROLE), 7),
     ];
-    for reach in [Whole, Partial] {
+    for reach in [Whole, ToDepth] {
         assert_eq!(
             tree::choose_screen(TITLE, &marked_deeper, SIZE, reach),
             Ok(1)
         );
     }
+    // A cut search cannot show the one marked group is the only one.
+    assert!(matches!(
+        tree::choose_screen(TITLE, &marked_deeper, SIZE, Partial),
+        Err(TreeError::SearchCut { .. })
+    ));
     let turned = [candidate((0.0, 0.0, 852.0, 393.0), None, 1)];
     assert_eq!(
         tree::choose_screen(TITLE, &turned, LogicalSize::new(852.0, 393.0), Whole),
@@ -1684,6 +1849,34 @@ fn a_permission_taken_back_mid_read_is_named() {
     ));
 }
 
+/// The screen's frame is read again once the walk is done: a screen moved, resized or gone
+/// meanwhile would place every element off by the move, so the read is refused as busy, to be
+/// read again. A window's identity text past its limit is refused, never read in part.
+#[test]
+fn a_screen_moved_during_the_read_is_read_again() {
+    assert!(accessibility::screen_steady(SCREEN, Some(SCREEN)).is_ok());
+    let moved = PointFrame::new(SCREEN.x + 40.0, SCREEN.y, SCREEN.width, SCREEN.height);
+    let resized = PointFrame::new(
+        SCREEN.x,
+        SCREEN.y,
+        SCREEN.width * 0.74,
+        SCREEN.height * 0.74,
+    );
+    for after in [Some(moved), Some(resized), None] {
+        let refused = accessibility::screen_steady(SCREEN, after).expect_err("moved");
+        assert!(
+            matches!(&refused, Error::Busy { message, .. } if message.contains("read again")),
+            "{after:?}: {refused:?}"
+        );
+    }
+    let refused =
+        accessibility::identity_too_long("AXDocument", accessibility::IDENTITY_TEXT_LIMIT + 1);
+    assert!(
+        matches!(&refused, Error::Platform { message, .. } if message.contains("AXDocument")),
+        "{refused:?}"
+    );
+}
+
 /// A press names the deadline of the element it presses: the one the read gave it, or, when
 /// that element refused it, the one it kept, whatever other elements of the read did; a press
 /// not answered may have run; a failure while the process is no longer trusted is the
@@ -1790,6 +1983,37 @@ fn a_press_names_its_own_elements_deadline() {
         ),
         "{gone:?}"
     );
+    // Trusted, a lookup that finds the element gone or fails says so, and nothing was sent; a
+    // press that failed otherwise is the platform's, not the permission.
+    let lookup_gone =
+        accessibility::pressed(Err(ProviderError::Gone), || Ok(()), "Like", given, || true);
+    assert!(
+        matches!(&lookup_gone, Err(Error::Gone { effect: None, .. })),
+        "{lookup_gone:?}"
+    );
+    let lookup_failed = accessibility::pressed(
+        Err(ProviderError::Failed("-25200".to_owned())),
+        || Ok(()),
+        "Like",
+        given,
+        || true,
+    );
+    assert!(
+        matches!(&lookup_failed, Err(Error::Platform { effect: None, .. })),
+        "{lookup_failed:?}"
+    );
+    let press_failed = accessibility::pressed(
+        Ok(true),
+        || Err(ProviderError::Failed("-25200".to_owned())),
+        "Like",
+        given,
+        || true,
+    );
+    assert!(
+        matches!(&press_failed, Err(Error::Platform { .. })),
+        "{press_failed:?}"
+    );
+
     // A press that failed otherwise with the permission gone is the permission refused.
     let failed = accessibility::pressed(
         Ok(true),

@@ -100,6 +100,21 @@ fn text(value: &CFString) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// `value` as text read whole, when it is a string of at most `limit` UTF-16 units; `Ok(None)`
+/// for an empty one or another type. A longer string is not copied: its length in units is the
+/// error, so a caller that must see all of a text refuses it rather than read a cut one.
+pub(crate) fn whole_string(value: &CFType, limit: usize) -> Result<Option<String>, usize> {
+    let Some(value) = value.downcast_ref::<CFString>() else {
+        return Ok(None);
+    };
+    let units = usize::try_from(value.length()).unwrap_or(usize::MAX);
+    if units > limit {
+        return Err(units);
+    }
+    let text = value.to_string();
+    Ok((!text.is_empty()).then_some(text))
+}
+
 /// `value` as a flag: a boolean, or a number that is not zero.
 pub(crate) fn boolean(value: &CFType) -> Option<bool> {
     if let Some(flag) = value.downcast_ref::<CFBoolean>() {
