@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use flui_foundation::panic::FirstPanic;
 
-use super::queue::{Effect, Event, Queue, Waits};
+use super::queue::{Effect, Event, HeldRequests, Waits};
 use super::{Audit, Debt, Scenario, ScenarioFailure, TimelineKey, describe};
 use crate::capability::Resolver;
 
@@ -203,9 +203,13 @@ impl<R, A> fmt::Debug for Answer<R, A> {
 ///   [`abandon_held`](Self::abandon_held) answer it (they answer a request
 ///   kept for a hold too), and the run reports one still waiting
 ///   [`Unanswered`](ScenarioFailure::Unanswered).
+/// - **While its answer is made** (by a matcher, a computed or standing
+///   answer) a request stays in the script, where it was: a ticket dropped
+///   meanwhile withdraws it, and one then kept for the test, or scheduled,
+///   keeps its place ahead of the requests that came after it.
 /// - **A ticket** ([`receive_with_ticket`](Self::receive_with_ticket))
-///   withdraws its request in any of these states, or while its answer is
-///   scheduled.
+///   withdraws its request in any of these states, while its answer is
+///   made, or while its answer is scheduled.
 /// - **Counts.** [`ScriptHold::release`] and [`release_held`](Self::release_held)
 ///   count the requests they answered then: a request a step holds or
 ///   answers later, one that ends unanswered or whose answer panicked, one
@@ -240,8 +244,8 @@ struct Due<R, A> {
     scheduled: TimelineKey,
 }
 
-/// The one owner of what the script holds (see [`Queue`]).
-type Requests<R, A> = Queue<EntryId, Held<R, A>, Due<R, A>>;
+/// The one owner of what the script holds (see [`HeldRequests`]).
+type Requests<R, A> = HeldRequests<EntryId, Held<R, A>, Due<R, A>>;
 type RequestEvent<R, A> = Event<EntryId, Held<R, A>, Due<R, A>>;
 type RequestEffect<R, A> = Effect<EntryId, Held<R, A>, Due<R, A>>;
 
@@ -267,11 +271,13 @@ struct Step<R, A> {
     answer: Option<Answer<R, A>>,
 }
 
-/// Run the test's code for one request, the one place a script does:
-/// `run` contains the panics it can go on after, and one that escapes it
-/// (the drop of a value the test supplied) is contained here. Every panic
-/// lands in `first`, which keeps the earliest: those `run` contained came
-/// before one that escaped it.
+/// Run the test's code for one request, the one place a script does. `run`
+/// contains each piece of the test's code where it runs (a matcher, an
+/// answer, an observer, the drop of a value the test supplied), so none is
+/// left alive across another; a panic that escapes `run` anyway is
+/// contained here, so the state `run` moves is never left half done. Every
+/// panic lands in `first`, which keeps the earliest: those `run` contained
+/// came before one that escaped it.
 fn contained<T>(first: &mut FirstPanic, run: impl FnOnce(&mut FirstPanic) -> T) -> Option<T> {
     let mut inside = FirstPanic::new();
     let mut escaped = FirstPanic::new();
@@ -396,8 +402,8 @@ where
     /// this script, lives ([held requests](Self#held-requests)).
     #[must_use = "requests are held only while the hold is alive"]
     pub fn hold(&self) -> ScriptHold {
-        let _ = self.step(Event::HoldTaken);
-        let script: Rc<dyn Lift> = Rc::clone(&self.cell) as Rc<dyn Lift>;
+        let _ = self.apply(Event::HoldTaken);
+        let script: Rc<dyn HoldOwner> = Rc::clone(&self.cell) as Rc<dyn HoldOwner>;
         ScriptHold {
             script: Some(Rc::downgrade(&script)),
         }
@@ -407,11 +413,9 @@ where
     /// held.
     pub fn release_oldest(&self, value: A) -> bool {
         let mut first = FirstPanic::new();
-        let released = if let RequestEffect::Taken(_, Held { request, resolver }, _) =
-            self.step(Event::ReleaseOldest)
-        {
+        let released = if let RequestEffect::Taken(_, held, _) = self.apply(Event::ReleaseOldest) {
             let _ = contained(&mut first, |first| {
-                self.deliver(&request, resolver, value, first);
+                self.deliver(held, value, first);
             });
             true
         } else {
@@ -446,18 +450,16 @@ where
                     return false;
                 };
                 let Some(value) = first.contain(|| answer(&request)) else {
-                    let _ = self.step(Event::AnswerPanicked(key));
+                    let _ = self.apply(Event::AnswerPanicked(key));
                     return false;
                 };
-                let RequestEffect::Taken(_, Held { request, resolver }, _) =
-                    self.step(Event::Release(key))
-                else {
+                let RequestEffect::Taken(_, held, _) = self.apply(Event::Release(key)) else {
                     // Withdrawn while its answer was made; the answer's
-                    // `Drop` is the test's code, contained by `contained`.
-                    drop(value);
+                    // `Drop` is the test's code.
+                    first.retire(value);
                     return false;
                 };
-                self.deliver(&request, resolver, value, first);
+                self.deliver(held, value, first);
                 true
             });
             if delivered == Some(true) {
@@ -477,12 +479,10 @@ where
         let mut first = FirstPanic::new();
         for key in keys {
             let dropped = contained(&mut first, |first| {
-                let RequestEffect::Taken(_, Held { request, resolver }, _) =
-                    self.step(Event::Release(key))
-                else {
+                let RequestEffect::Taken(_, held, _) = self.apply(Event::Release(key)) else {
                     return false;
                 };
-                self.end_unanswered(&request, resolver, first);
+                self.end_unanswered(held, first);
                 true
             });
             if dropped == Some(true) {
@@ -568,8 +568,8 @@ where
     }
 
     /// Carry `event` out on the script's requests.
-    fn step(&self, event: RequestEvent<R, A>) -> RequestEffect<R, A> {
-        self.cell.state.borrow_mut().requests.step(event)
+    fn apply(&self, event: RequestEvent<R, A>) -> RequestEffect<R, A> {
+        self.cell.state.borrow_mut().requests.apply(event)
     }
 
     fn receive_as(&self, id: EntryId, request: R, resolver: Resolver<A>) {
@@ -582,10 +582,10 @@ where
             }
         }
         let mut first = FirstPanic::new();
-        if let RequestEffect::SendOn(id, held) =
-            self.step(Event::Arrived(id, Held { request, resolver }))
+        if let RequestEffect::SendOn(id) =
+            self.apply(Event::Arrived(id, Held { request, resolver }))
         {
-            let _ = contained(&mut first, |first| self.send_on(id, held, first));
+            let _ = contained(&mut first, |first| self.send_on(id, first));
         }
         first.resume();
     }
@@ -594,20 +594,34 @@ where
     /// the queue says the drain is over. Returns how many were answered.
     fn drain(&self, first: &mut FirstPanic) -> usize {
         let mut answered = 0;
-        while let RequestEffect::SendOn(id, held) = self.step(Event::DrainNext) {
-            if contained(first, |first| self.send_on(id, held, first)) == Some(true) {
+        while let RequestEffect::SendOn(id) = self.apply(Event::DrainNext) {
+            if contained(first, |first| self.send_on(id, first)) == Some(true) {
                 answered += 1;
             }
         }
         answered
     }
 
-    /// Give the request to the steps, then the standing answer. Returns
-    /// whether it was answered now: `false` for one a step holds or answers
-    /// later, one whose matcher or answer panicked (kept for the test), and
-    /// one that ends unanswered. Runs inside [`contained`].
-    fn send_on(&self, id: EntryId, held: Held<R, A>, first: &mut FirstPanic) -> bool {
-        let Held { request, resolver } = held;
+    /// The request `id`, which waits in the queue while its answer is made;
+    /// `None` once a ticket withdrew it.
+    fn answering(&self, id: EntryId) -> Option<Rc<R>> {
+        self.cell
+            .state
+            .borrow()
+            .requests
+            .payload(id)
+            .map(|held| Rc::clone(&held.request))
+    }
+
+    /// Make the answer of the request `id` by the steps, then the standing
+    /// answer. Returns whether it was answered now: `false` for one a step
+    /// holds or answers later, one whose matcher or answer panicked (kept
+    /// for the test), one that ends unanswered and one withdrawn meanwhile.
+    /// Runs inside [`contained`].
+    fn send_on(&self, id: EntryId, first: &mut FirstPanic) -> bool {
+        let Some(request) = self.answering(id) else {
+            return false;
+        };
         let candidates: Vec<(EntryId, Matcher<R>)> = self
             .cell
             .state
@@ -615,7 +629,7 @@ where
             .steps
             .iter()
             .map(|step| (step.id, Rc::clone(&step.expect.matches)))
-            .collect();
+            .collect::<Vec<(EntryId, Matcher<R>)>>();
         // Matched with no borrow held; a matcher that re-entered and used a
         // step up leaves it gone, and the next candidate is tried. Each
         // clone is let go under `first`: once its step is gone it is the
@@ -633,21 +647,21 @@ where
                         position.and_then(|position| state.steps.remove(position))
                     };
                     if let Some(Step { expect, answer, .. }) = step {
-                        let answered = if let Some(answer) = answer {
-                            self.answer(id, request, resolver, answer, first)
-                        } else {
-                            self.keep_for_test(id, request, resolver);
-                            false
-                        };
-                        // The used step is let go once its answer is given.
+                        // The other matchers and the used step are let go
+                        // before the answer is given, so none of the test's
+                        // values is still held while its answer runs.
                         first.retire(candidates);
                         first.retire(expect);
-                        return answered;
+                        let Some(answer) = answer else {
+                            self.keep_for_test(id);
+                            return false;
+                        };
+                        return self.answer(id, &request, answer, first);
                     }
                 }
                 None => {
                     first.retire(candidates);
-                    self.keep_for_test(id, request, resolver);
+                    self.keep_for_test(id);
                     return false;
                 }
             }
@@ -656,79 +670,90 @@ where
         if let Some(otherwise) = otherwise {
             let value = first.contain(|| otherwise(&request));
             first.retire(otherwise);
-            return self.deliver_or_keep(id, request, resolver, value, first);
+            return self.finish(id, value, first);
         }
         let described = describe(&*request, first);
         self.cell.scenario.fail(ScenarioFailure::Unexpected {
             script: self.cell.name,
             request: described,
         });
-        self.end_unanswered(&request, resolver, first);
+        self.end_answering_unanswered(id, first);
         false
     }
 
-    /// Answer the request with the answer the test's code made, or keep it
-    /// for the test when that code panicked (`None`). Returns whether it was
-    /// answered.
-    fn deliver_or_keep(
-        &self,
-        id: EntryId,
-        request: Rc<R>,
-        resolver: Resolver<A>,
-        value: Option<A>,
-        first: &mut FirstPanic,
-    ) -> bool {
+    /// Answer the request `id` with the answer the test's code made, or keep
+    /// it for the test, where it is, when that code panicked (`None`).
+    /// Returns whether it was answered: not when a ticket withdrew it while
+    /// its answer was made, and then the answer is dropped as the test's
+    /// code.
+    fn finish(&self, id: EntryId, value: Option<A>, first: &mut FirstPanic) -> bool {
         let Some(value) = value else {
-            self.keep_for_test(id, request, resolver);
+            self.keep_for_test(id);
             return false;
         };
-        self.deliver(&request, resolver, value, first);
+        let RequestEffect::Taken(_, held, _) = self.apply(Event::Answered(id)) else {
+            first.retire(value);
+            return false;
+        };
+        self.deliver(held, value, first);
         true
     }
 
-    fn keep_for_test(&self, id: EntryId, request: Rc<R>, resolver: Resolver<A>) {
-        let _ = self.step(Event::KeepForTest(id, Held { request, resolver }));
+    /// The request `id`, whose answer was being made, waits for the test.
+    fn keep_for_test(&self, id: EntryId) {
+        let _ = self.apply(Event::KeepForTest(id));
     }
 
-    /// Answer `request` through `resolver` with `value`, after every
-    /// observer heard it. The resolver drops the value when its completion
-    /// is gone, and that `Drop` is the test's code: the caller runs this
-    /// inside [`contained`].
-    fn deliver(&self, request: &R, resolver: Resolver<A>, value: A, first: &mut FirstPanic) {
+    /// End the request `id`, whose answer was being made, unanswered.
+    fn end_answering_unanswered(&self, id: EntryId, first: &mut FirstPanic) {
+        if let RequestEffect::Taken(_, held, _) = self.apply(Event::Answered(id)) {
+            self.end_unanswered(held, first);
+        }
+    }
+
+    /// Answer the request with `value`, after every observer heard it. Each
+    /// piece of the test's code runs contained: the observers, the value's
+    /// `Drop` (the resolver drops it when its completion is gone) and the
+    /// request's.
+    fn deliver(&self, held: Held<R, A>, value: A, first: &mut FirstPanic) {
+        let Held { request, resolver } = held;
         let observers = self.cell.state.borrow().observers.clone();
         for observe in observers {
-            first.contain(|| observe(request, Some(&value)));
+            first.contain(|| observe(&request, Some(&value)));
         }
         // A retired owner has nobody left to tell.
-        let _ = resolver.resolve(value);
+        first.contain(|| {
+            let _ = resolver.resolve(value);
+        });
+        first.retire(request);
     }
 
-    /// End `request` unanswered, after every observer heard it.
-    fn end_unanswered(&self, request: &R, resolver: Resolver<A>, first: &mut FirstPanic) {
+    /// End the request unanswered, after every observer heard it.
+    fn end_unanswered(&self, held: Held<R, A>, first: &mut FirstPanic) {
         let observers = self.cell.state.borrow().observers.clone();
         for observe in observers {
-            first.contain(|| observe(request, None));
+            first.contain(|| observe(&held.request, None));
         }
-        drop(resolver);
+        first.retire(held);
     }
 
-    /// Give `answer` to the request. Returns whether it was answered now.
+    /// Give `answer` to the request `id`. Returns whether it was answered
+    /// now.
     fn answer(
         &self,
         id: EntryId,
-        request: Rc<R>,
-        resolver: Resolver<A>,
+        request: &R,
         answer: Answer<R, A>,
         first: &mut FirstPanic,
     ) -> bool {
         let Answer { reply, delay } = answer;
         if delay.is_zero() {
-            return self.reply_now(id, request, resolver, reply, first);
+            return self.reply_now(id, request, reply, first);
         }
         let what = Cow::Owned(format!(
             "{}: the answer to {}",
             self.cell.name,
-            describe(&*request, first)
+            describe(request, first)
         ));
         let at = self.cell.scenario.now().saturating_add(delay);
         let script = Rc::downgrade(&self.cell);
@@ -741,48 +766,41 @@ where
                 }
             }),
         );
-        let _ = self.step(Event::Schedule(
-            id,
-            Held { request, resolver },
-            Due { reply, scheduled },
-        ));
+        let _ = self.apply(Event::Schedule(id, Due { reply, scheduled }));
         false
     }
 
     fn answer_due(&self, id: EntryId) {
-        if let RequestEffect::Taken(id, Held { request, resolver }, Waits::Clock(due)) =
-            self.step(Event::ClockReached(id))
-        {
+        if let RequestEffect::Due(id, due) = self.apply(Event::ClockReached(id)) {
             let mut first = FirstPanic::new();
             let _ = contained(&mut first, |first| {
-                self.reply_now(id, request, resolver, due.reply, first)
+                let Some(request) = self.answering(id) else {
+                    return false;
+                };
+                self.reply_now(id, &request, due.reply, first)
             });
             first.resume();
         }
     }
 
-    /// Answer the request with `reply`. Returns whether it was answered: a
-    /// computed answer that panicked keeps it for the test, and an abandon
-    /// ends it unanswered.
+    /// Answer the request `id` with `reply`. Returns whether it was
+    /// answered: a computed answer that panicked keeps it for the test, and
+    /// an abandon ends it unanswered.
     fn reply_now(
         &self,
         id: EntryId,
-        request: Rc<R>,
-        resolver: Resolver<A>,
+        request: &R,
         reply: Reply<R, A>,
         first: &mut FirstPanic,
     ) -> bool {
         match reply {
-            Reply::Value(value) => {
-                self.deliver(&request, resolver, value, first);
-                true
-            }
+            Reply::Value(value) => self.finish(id, Some(value), first),
             Reply::Computed(compute) => {
-                let value = first.contain(|| compute(&request));
-                self.deliver_or_keep(id, request, resolver, value, first)
+                let value = first.contain(|| compute(request));
+                self.finish(id, value, first)
             }
             Reply::Abandon => {
-                self.end_unanswered(&request, resolver, first);
+                self.end_answering_unanswered(id, first);
                 false
             }
         }
@@ -825,7 +843,7 @@ impl fmt::Debug for RequestTicket {
 #[must_use = "requests are held only while the hold is alive"]
 pub struct ScriptHold {
     /// `None` once let go.
-    script: Option<std::rc::Weak<dyn Lift>>,
+    script: Option<std::rc::Weak<dyn HoldOwner>>,
 }
 
 impl ScriptHold {
@@ -839,7 +857,7 @@ impl ScriptHold {
     /// requests, once every one of them has been answered or kept.
     pub fn release(mut self) -> usize {
         let mut first = FirstPanic::new();
-        let answered = self.lift(&mut first);
+        let answered = self.drop_hold(&mut first);
         first.resume();
         answered
     }
@@ -850,22 +868,22 @@ impl ScriptHold {
     /// teardown answers nothing.
     pub fn leave_held(mut self) {
         if let Some(script) = self.script.take().and_then(|script| script.upgrade()) {
-            script.leave();
+            script.leave_hold();
         }
     }
 
-    fn lift(&mut self, first: &mut FirstPanic) -> usize {
+    fn drop_hold(&mut self, first: &mut FirstPanic) -> usize {
         self.script
             .take()
             .and_then(|script| script.upgrade())
-            .map_or(0, |script| script.lift(first))
+            .map_or(0, |script| script.drop_hold(first))
     }
 }
 
 impl Drop for ScriptHold {
     fn drop(&mut self) {
         let mut first = FirstPanic::new();
-        let _ = self.lift(&mut first);
+        let _ = self.drop_hold(&mut first);
         // While the thread unwinds, `resume` discards the panic instead of
         // raising a second one from a destructor (ADR-0281 §4).
         first.resume();
@@ -881,27 +899,27 @@ impl fmt::Debug for ScriptHold {
 }
 
 /// A script as a [`ScriptHold`] reaches it, whatever its types.
-trait Lift {
+trait HoldOwner {
     /// One hold dropped or released; returns how many requests the drain it
     /// started answered.
-    fn lift(self: Rc<Self>, first: &mut FirstPanic) -> usize;
+    fn drop_hold(self: Rc<Self>, first: &mut FirstPanic) -> usize;
 
     /// One hold let go with `leave_held`.
-    fn leave(&self);
+    fn leave_hold(&self);
 }
 
-impl<R: fmt::Debug + 'static, A: 'static> Lift for ScriptCell<R, A> {
-    fn lift(self: Rc<Self>, first: &mut FirstPanic) -> usize {
+impl<R: fmt::Debug + 'static, A: 'static> HoldOwner for ScriptCell<R, A> {
+    fn drop_hold(self: Rc<Self>, first: &mut FirstPanic) -> usize {
         let script = Script { cell: self };
-        if let RequestEffect::Drain = script.step(Event::HoldDropped) {
+        if let RequestEffect::Drain = script.apply(Event::HoldDropped) {
             script.drain(first)
         } else {
             0
         }
     }
 
-    fn leave(&self) {
-        let _ = self.state.borrow_mut().requests.step(Event::HoldLeft);
+    fn leave_hold(&self) {
+        let _ = self.state.borrow_mut().requests.apply(Event::HoldLeft);
     }
 }
 
@@ -913,7 +931,7 @@ trait Withdraw {
 
 impl<R: fmt::Debug + 'static, A: 'static> Withdraw for ScriptCell<R, A> {
     fn withdraw(&self, id: EntryId) {
-        let taken = self.state.borrow_mut().requests.step(Event::Withdraw(id));
+        let taken = self.state.borrow_mut().requests.apply(Event::Withdraw(id));
         let RequestEffect::Taken(_, held, waits) = taken else {
             return;
         };
@@ -950,7 +968,7 @@ impl<R: fmt::Debug + 'static, A: 'static> Audit for ScriptCell<R, A> {
     fn audit(&self, debts: &mut Vec<Debt>, first: &mut FirstPanic) {
         let (unanswered, unconsumed) = {
             let mut state = self.state.borrow_mut();
-            let _ = state.requests.step(Event::Reported);
+            let _ = state.requests.apply(Event::Reported);
             let unanswered: Vec<(EntryId, Rc<R>)> = state
                 .requests
                 .held()

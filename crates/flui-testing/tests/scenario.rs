@@ -8,8 +8,9 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_platform::capability::scripted::{
-    AlreadyDriven, Answer, EventSubscription, Events, Expect, MAX_REPORTS, RequestTicket, Scenario,
-    ScenarioFailure, Script, ScriptHold, ServiceState, StreamEnd, StreamItem, Track,
+    AlreadyDriven, Answer, EventSubscription, Events, Expect, MAX_RECORDED_REQUESTS, MAX_REPORTS,
+    RequestTicket, Scenario, ScenarioFailure, Script, ScriptHold, ServiceState, StreamEnd,
+    StreamItem, Track,
 };
 use flui_platform::capability::{
     Abandoned, Capability, CapabilityRegistrar, Completion, CompletionSource, Plugin,
@@ -552,7 +553,7 @@ fn a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest() {
     );
     assert_eq!(taken(&poisoned), None);
     assert_eq!(camera.captures.held(), 1, "the failed one stays held");
-    assert_eq!(hold.release(), 0, "and waits for the test, not the lift");
+    assert_eq!(hold.release(), 0, "and waits for the test, not the drain");
     assert_eq!(camera.captures.held(), 1);
 
     assert!(camera.captures.release_oldest(Err(CaptureError::Busy)));
@@ -665,11 +666,11 @@ fn a_release_leaves_the_rest_in_the_script_while_it_answers_one() {
     }
 }
 
-/// The last hold's lift sends the kept requests on one at a time: a request
+/// The last hold's drain sends the kept requests on one at a time: a request
 /// the first one's answer sends queues behind the older ones and takes no
 /// step before them.
 #[test]
-fn a_request_sent_during_a_lift_queues_behind_the_kept_ones() {
+fn a_request_sent_during_a_drain_queues_behind_the_kept_ones() {
     let scenario = Scenario::new();
     let (mut host, camera, handle) = camera_on(&scenario);
     camera
@@ -702,11 +703,11 @@ fn a_request_sent_during_a_lift_queues_behind_the_kept_ones() {
     scenario.verify().expect("every request was answered");
 }
 
-/// The last hold's lift leaves the requests it has not reached in the
+/// The last hold's drain leaves the requests it has not reached in the
 /// script: a ticket the first one's answer drops withdraws the later
 /// request it waits by, which is then neither answered nor owed.
 #[test]
-fn a_ticket_dropped_during_a_lift_withdraws_its_request() {
+fn a_ticket_dropped_during_a_drain_withdraws_its_request() {
     let scenario = Scenario::new();
     let (mut host, camera, handle) = camera_on(&scenario);
     camera.captures.otherwise(|_| Ok(vec![0]));
@@ -742,7 +743,7 @@ fn a_ticket_dropped_during_a_lift_withdraws_its_request() {
 /// resumed by `release` and by the hold's drop, or discarded when the hold
 /// drops while an earlier panic unwinds.
 #[test]
-fn a_panic_during_a_lift_is_kept_until_the_rest_are_answered() {
+fn a_panic_during_a_drain_is_kept_until_the_rest_are_answered() {
     #[derive(Clone, Copy, Debug)]
     enum LetGo {
         Release,
@@ -753,7 +754,7 @@ fn a_panic_during_a_lift_is_kept_until_the_rest_are_answered() {
         let scenario = Scenario::new();
         let (mut host, camera, handle) = camera_on(&scenario);
         camera.captures.otherwise(|request| match request {
-            CameraRequest::Capture { width: 2 } => panic!("the lifted answer failed"),
+            CameraRequest::Capture { width: 2 } => panic!("the drained answer failed"),
             _ => Ok(vec![0]),
         });
         let hold = camera.captures.hold();
@@ -773,7 +774,7 @@ fn a_panic_during_a_lift_is_kept_until_the_rest_are_answered() {
         }))
         .expect_err("a panic reaches the caller");
         let expected = match let_go {
-            LetGo::Release | LetGo::Drop => "the lifted answer failed",
+            LetGo::Release | LetGo::Drop => "the drained answer failed",
             LetGo::DropWhileUnwinding => "the test failed first",
         };
         assert_eq!(
@@ -794,11 +795,11 @@ fn a_panic_during_a_lift_is_kept_until_the_rest_are_answered() {
     }
 }
 
-/// A hold taken by the code a lift runs stops the lift there: the requests
+/// A hold taken by the code a drain runs stops the drain there: the requests
 /// after it, and those that arrive later, stay held in order until that
 /// hold goes.
 #[test]
-fn a_hold_taken_during_a_lift_keeps_the_rest_in_order() {
+fn a_hold_taken_during_a_drain_keeps_the_rest_in_order() {
     let scenario = Scenario::new();
     let (mut host, camera, handle) = camera_on(&scenario);
     camera.captures.otherwise(|request| match request {
@@ -822,7 +823,7 @@ fn a_hold_taken_during_a_lift_keeps_the_rest_in_order() {
     });
     let hold = camera.captures.hold();
     let slots: Vec<_> = (1..=3).map(|width| land(handle.capture(width))).collect();
-    assert_eq!(hold.release(), 1, "the new hold stops the lift");
+    assert_eq!(hold.release(), 1, "the new hold stops the drain");
     assert_eq!(camera.captures.held(), 2);
     let fourth = land(handle.capture(4));
     assert_eq!(
@@ -866,11 +867,11 @@ fn a_hold_outliving_its_script_answers_nothing() {
     drop(held);
 }
 
-/// A test's value that panics as a step lets go of it, mid-lift, is kept as
-/// the run's failure while the lift still sends the rest on, and the script
+/// A test's value that panics as a step lets go of it, mid-drain, is kept as
+/// the run's failure while the drain still sends the rest on, and the script
 /// answers later requests at once again.
 #[test]
-fn a_panicking_drop_during_a_lift_leaves_the_script_answering() {
+fn a_panicking_drop_during_a_drain_leaves_the_script_answering() {
     struct PanicOnDrop;
     impl Drop for PanicOnDrop {
         fn drop(&mut self) {
@@ -900,7 +901,7 @@ fn a_panicking_drop_during_a_lift_leaves_the_script_answering() {
     );
     let _ = host.pump(Duration::ZERO);
     assert_eq!(taken(&first), Some(Ok(Ok(vec![1]))));
-    assert_eq!(taken(&second), Some(Ok(Ok(vec![0]))), "the lift went on");
+    assert_eq!(taken(&second), Some(Ok(Ok(vec![0]))), "the drain went on");
 
     let later = land(handle.capture(3));
     let _ = host.pump(Duration::ZERO);
@@ -945,11 +946,11 @@ fn a_release_counts_only_the_requests_it_answered() {
     );
 }
 
-/// A hold taken and let go by the code a lift runs does not start a lift
-/// of its own: the first lift sends every kept request on, in order, and
+/// A hold taken and let go by the code a drain runs does not start a drain
+/// of its own: the first drain sends every kept request on, in order, and
 /// counts them all.
 #[test]
-fn a_hold_let_go_inside_a_lift_leaves_the_lift_to_finish() {
+fn a_hold_let_go_inside_a_drain_leaves_the_drain_to_finish() {
     let scenario = Scenario::new();
     let (mut host, camera, handle) = camera_on(&scenario);
     camera.captures.otherwise(|_| Ok(vec![0]));
@@ -1071,6 +1072,33 @@ impl Drop for Bomb {
 /// code: its panic is kept and the next held request is still answered.
 #[test]
 fn a_request_withdrawn_while_its_release_answer_is_made_is_not_counted() {
+    // The count: the withdrawn request is not counted, the next one is.
+    let scenario = Scenario::new();
+    let (mut host, _camera, handle) = camera_on(&scenario);
+    let script: Script<u32, Bomb> = scenario.script("bombs");
+    let hold = script.hold();
+    let (withdrawn, resolver) = handle.completions.pending::<Bomb>();
+    let withdrawn = land(withdrawn);
+    let ticket = RefCell::new(Some(script.receive_with_ticket(1, resolver)));
+    let (next, resolver) = handle.completions.pending::<Bomb>();
+    let next = land(next);
+    script.receive(2, resolver);
+    let answered = script.release_held(|request| {
+        if *request == 1 {
+            drop(ticket.take());
+        }
+        Bomb { armed: false }
+    });
+    assert_eq!(answered, 1, "the withdrawn request is not counted");
+    assert_eq!(script.withdrawn(), 1);
+    assert_eq!(hold.release(), 0);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&withdrawn), Some(Err(Abandoned::ProviderDropped)));
+    assert_eq!(taken(&next), Some(Ok(Bomb { armed: false })));
+    scenario.verify().expect("a withdrawn request is not owed");
+
+    // The panic: the answer made for the withdrawn request drops as the
+    // test's code, its panic kept and the next request still answered.
     let scenario = Scenario::new();
     let (mut host, _camera, handle) = camera_on(&scenario);
     let script: Script<u32, Bomb> = scenario.script("bombs");
@@ -1212,10 +1240,11 @@ fn a_hold_left_inside_a_drain_leaves_the_rest_to_it() {
 }
 
 /// A value a matcher captured is the test's: when a step is used up, the
-/// matcher's last handle is let go contained, on the receive path too. An
-/// observer's panic for the same request, which came first, is the one
-/// resumed; and a matcher that re-enters and uses a later step up does not
-/// lose the request it was testing when that step's matcher drops.
+/// matcher's last handle is let go contained, on the receive path too, and
+/// before the answer is given, so its panic is the first, ahead of an
+/// observer's for the same request; and a matcher that re-enters and uses a
+/// later step up does not lose the request it was testing when that step's
+/// matcher drops.
 #[test]
 fn a_matcher_capture_dropped_on_the_receive_path_keeps_the_request_and_the_first_panic() {
     struct PanicOnDrop;
@@ -1239,7 +1268,7 @@ fn a_matcher_capture_dropped_on_the_receive_path_keeps_the_request_and_the_first
         heard
     }
 
-    // The observer's panic comes before the capture's.
+    // The used step's capture drops before the observer runs.
     let scenario = Scenario::new();
     let (_host, camera, handle) = camera_on(&scenario);
     camera.captures.on_answer(|request, _| {
@@ -1261,7 +1290,10 @@ fn a_matcher_capture_dropped_on_the_receive_path_keeps_the_request_and_the_first
         drop(handle.capture(1));
     }))
     .expect_err("a panic reaches the caller");
-    assert_eq!(failure.downcast_ref::<&str>(), Some(&"the observer failed"));
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"a matcher's value panicked as it dropped")
+    );
     assert_eq!(*heard.borrow(), [(1, Some(Ok(vec![1])))]);
     scenario.verify().expect("the request was answered");
 
@@ -1317,6 +1349,276 @@ fn a_matcher_capture_dropped_on_the_receive_path_keeps_the_request_and_the_first
         }]
     );
     drop(reentered);
+}
+
+/// A value whose `Drop` panics every time, unguarded: two of them dropping
+/// for one request abort the process unless each drop runs contained.
+struct LoudCapture;
+
+impl Drop for LoudCapture {
+    fn drop(&mut self) {
+        panic!("a matcher's value panicked as it dropped");
+    }
+}
+
+/// An answer whose `Drop` panics every time it is armed, unguarded.
+#[derive(Debug)]
+struct LoudAnswer {
+    armed: bool,
+}
+
+impl Drop for LoudAnswer {
+    fn drop(&mut self) {
+        assert!(!self.armed, "an answer panicked as it dropped");
+    }
+}
+
+/// A request whose `Drop` panics when its key is `LOUD_REQUEST`, unguarded.
+#[derive(Debug)]
+struct LoudRequest(u32);
+
+const LOUD_REQUEST: u32 = 9_999;
+
+impl Drop for LoudRequest {
+    fn drop(&mut self) {
+        assert!(self.0 != LOUD_REQUEST, "a request panicked as it dropped");
+    }
+}
+
+/// The test's values a step lets go of and the answer it gives drop one at
+/// a time, each contained: the used step's matcher goes before the answer
+/// is given, so its panic is the first, and the answer's, dropped by a
+/// resolver whose completion is gone, is contained where it drops; neither
+/// is still held while the other unwinds, which would abort.
+#[test]
+fn every_value_a_step_lets_go_of_drops_contained_before_the_answer() {
+    let scenario = Scenario::new();
+    let (_host, _camera, handle) = camera_on(&scenario);
+    let script: Script<u32, LoudAnswer> = scenario.script("loud");
+    let captured = LoudCapture;
+    script.expect(
+        Expect::when("the request", move |_| {
+            let _ = &captured;
+            true
+        }),
+        Answer::value(LoudAnswer { armed: true }),
+    );
+    let (gone, resolver) = handle.completions.pending::<LoudAnswer>();
+    drop(gone);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        script.receive(1, resolver);
+    }))
+    .expect_err("the first panic reaches the caller");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"a matcher's value panicked as it dropped"),
+        "the used step is let go before its answer is given"
+    );
+    scenario.verify().expect("the request was answered");
+}
+
+/// The answer's drop is contained inside the delivery itself: when the
+/// request's last handle is the one the answering code holds (a request past
+/// `MAX_RECORDED_REQUESTS`), that handle drops after the delivery returned,
+/// never while the answer's panic unwinds, and the answer's panic, the
+/// earlier, is the one resumed.
+#[test]
+fn an_answers_drop_is_contained_before_the_request_lets_go() {
+    let scenario = Scenario::new();
+    let (_host, _camera, handle) = camera_on(&scenario);
+    let script: Script<LoudRequest, LoudAnswer> = scenario.script("loud");
+    script.otherwise(|request| LoudAnswer {
+        armed: request.0 == LOUD_REQUEST,
+    });
+    for filler in 0..u32::try_from(MAX_RECORDED_REQUESTS).expect("small") {
+        let (answered, resolver) = handle.completions.pending::<LoudAnswer>();
+        drop(answered);
+        script.receive(LoudRequest(filler), resolver);
+    }
+    let (gone, resolver) = handle.completions.pending::<LoudAnswer>();
+    drop(gone);
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        script.receive(LoudRequest(LOUD_REQUEST), resolver);
+    }))
+    .expect_err("the answer's panic reaches the caller");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"an answer panicked as it dropped"),
+        "the answer's drop came before the request's"
+    );
+    assert_eq!(script.received(), MAX_RECORDED_REQUESTS + 1);
+    scenario.verify().expect("every request was answered");
+}
+
+/// A request stays in the script while its answer is made: a ticket the
+/// answering code drops withdraws it, and a request kept for the test while
+/// a newer one entered meanwhile keeps its place ahead of it.
+#[test]
+fn a_request_being_answered_stays_in_the_script() {
+    // Withdrawn by the matcher that is answering it.
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    let hold = camera.captures.hold();
+    let (held, ticket) = handle.capture_until_dropped(1);
+    let held = land(held);
+    let ticket = Rc::new(RefCell::new(Some(ticket)));
+    camera
+        .captures
+        .expect_held(Expect::when("drops its own ticket", {
+            let ticket = Rc::clone(&ticket);
+            move |_: &CameraRequest| {
+                drop(ticket.borrow_mut().take());
+                true
+            }
+        }));
+    assert_eq!(hold.release(), 0);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(camera.captures.withdrawn(), 1, "the ticket found it");
+    assert_eq!(camera.captures.held(), 0, "not kept for the test");
+    assert_eq!(taken(&held), Some(Err(Abandoned::ProviderDropped)));
+    scenario.verify().expect("a withdrawn request is not owed");
+
+    // Kept for the test where it is, ahead of the request its matcher sent.
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    let answered = Rc::new(RefCell::new(Vec::<u32>::new()));
+    camera.captures.on_answer({
+        let answered = Rc::clone(&answered);
+        move |request, answer| {
+            if let (CameraRequest::Capture { width }, Some(_)) = (request, answer) {
+                answered.borrow_mut().push(*width);
+            }
+        }
+    });
+    camera
+        .captures
+        .expect_held(Expect::exactly(CameraRequest::Capture { width: 2 }));
+    let sent = Rc::new(RefCell::new(None));
+    camera.captures.expect(
+        Expect::when("sends a capture, then panics", {
+            let handle = handle.clone();
+            let sent = Rc::clone(&sent);
+            move |request: &CameraRequest| {
+                if *request == (CameraRequest::Capture { width: 1 }) {
+                    sent.replace(Some(land(handle.capture(2))));
+                    panic!("the matcher failed");
+                }
+                false
+            }
+        }),
+        Answer::value(Ok(vec![9])),
+    );
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drop(handle.capture(1));
+    }))
+    .expect_err("the matcher's panic reaches the caller");
+    assert_eq!(failure.downcast_ref::<&str>(), Some(&"the matcher failed"));
+    assert_eq!(camera.captures.held(), 2);
+    assert!(camera.captures.release_oldest(Ok(vec![1])));
+    assert_eq!(
+        *answered.borrow(),
+        [1],
+        "the older request is released first"
+    );
+    assert!(camera.captures.release_oldest(Ok(vec![2])));
+    let _ = host.pump(Duration::ZERO);
+    let second = sent.take().expect("the matcher sent a capture");
+    assert_eq!(taken(&second), Some(Ok(Ok(vec![2]))));
+    let failures = scenario.verify().expect_err("the panicking step stays");
+    assert_eq!(
+        failures.failures(),
+        [ScenarioFailure::Unconsumed {
+            script: "camera captures",
+            step: "sends a capture, then panics".into(),
+        }]
+    );
+}
+
+/// The handles `send_on` lets go of hold a matcher's or a standing answer's
+/// last handle when the test's code re-entered meanwhile: a later step a
+/// matcher used up, or a standing answer that replaced itself. Each is let
+/// go contained before the answer is given, so its capture's panic is the
+/// first, ahead of an observer's for the same request.
+#[test]
+fn the_last_handles_send_on_lets_go_drop_before_the_answer() {
+    struct PanicOnDrop;
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            assert!(
+                std::thread::panicking(),
+                "a captured value panicked as it dropped"
+            );
+        }
+    }
+    fn observe_panics_for_the_first(camera: &SimulatedCamera) {
+        camera.captures.on_answer(|request, _| {
+            assert!(
+                *request != (CameraRequest::Capture { width: 1 }),
+                "the observer failed"
+            );
+        });
+    }
+
+    // A matcher that accepts its request re-enters and uses a later step up.
+    let scenario = Scenario::new();
+    let (_host, camera, handle) = camera_on(&scenario);
+    observe_panics_for_the_first(&camera);
+    let sent = Rc::new(RefCell::new(None));
+    camera.captures.expect(
+        Expect::when("accepts the first after sending the second", {
+            let handle = handle.clone();
+            let sent = Rc::clone(&sent);
+            move |request: &CameraRequest| {
+                let first = *request == (CameraRequest::Capture { width: 1 });
+                if first && sent.borrow().is_none() {
+                    sent.replace(Some(land(handle.capture(2))));
+                }
+                first
+            }
+        }),
+        Answer::value(Ok(vec![1])),
+    );
+    let captured = PanicOnDrop;
+    camera.captures.expect(
+        Expect::when("the second", move |request: &CameraRequest| {
+            let _ = &captured;
+            *request == CameraRequest::Capture { width: 2 }
+        }),
+        Answer::value(Ok(vec![2])),
+    );
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drop(handle.capture(1));
+    }))
+    .expect_err("a panic reaches the caller");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"a captured value panicked as it dropped"),
+        "the later step's matcher drops before the answer is given"
+    );
+    scenario.verify().expect("both steps were used");
+    drop(sent);
+
+    // A standing answer that replaces itself while it runs.
+    let scenario = Scenario::new();
+    let (_host, camera, handle) = camera_on(&scenario);
+    observe_panics_for_the_first(&camera);
+    let captured = PanicOnDrop;
+    let script = camera.captures.clone();
+    camera.captures.otherwise(move |_| {
+        let _ = &captured;
+        script.otherwise(|_| Ok(vec![7]));
+        Ok(vec![0])
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        drop(handle.capture(1));
+    }))
+    .expect_err("a panic reaches the caller");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"a captured value panicked as it dropped"),
+        "the replaced standing answer drops before the answer is given"
+    );
+    scenario.verify().expect("the request was answered");
 }
 
 /// A script's observer hears every answer before the caller's completion

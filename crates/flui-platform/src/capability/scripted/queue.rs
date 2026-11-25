@@ -1,15 +1,17 @@
-//! [`Queue`]: the one owner of a script's unanswered requests and of its
-//! holds, with the one transition function, [`Queue::step`], every event goes
-//! through. The rules it carries out are stated once, on
+//! [`HeldRequests`]: the one owner of a script's unanswered requests and of
+//! its holds, with the one transition function, [`HeldRequests::apply`],
+//! every event goes through. The rules it carries out are stated once, on
 //! [`Script`](super::Script#held-requests).
 //!
-//! The queue runs no code of the test's: it moves requests between states
-//! and hands back an [`Effect`] for the script to carry out, outside any
-//! borrow, one request at a time.
+//! It runs no code of the test's: it moves requests between states and hands
+//! back an [`Effect`] for the script to carry out, outside any borrow, one
+//! request at a time. A request stays in it, [`Waits::Answering`], while the
+//! test's code makes its answer, so a ticket dropped meanwhile finds it and a
+//! request kept for the test keeps its place.
 
 use std::collections::VecDeque;
 
-/// What a request in the queue waits for.
+/// What a request waits for.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Waits<D> {
     /// The last hold: then it goes on to the steps and the standing answer.
@@ -19,10 +21,13 @@ pub(super) enum Waits<D> {
     Test,
     /// The scenario's clock, to be answered with `D` then.
     Clock(D),
+    /// Its answer, which the test's code (a matcher, a computed or standing
+    /// answer) is making now.
+    Answering,
 }
 
 impl<D> Waits<D> {
-    /// Whether the request waits for a hold or the test, not the clock.
+    /// Whether the request waits for a hold or the test.
     fn is_held(&self) -> bool {
         matches!(self, Self::Hold | Self::Test)
     }
@@ -33,11 +38,13 @@ impl<D> Waits<D> {
 pub(super) enum Event<K, T, D> {
     /// A request reached the script.
     Arrived(K, T),
-    /// A request the test answers: a step held it, or the code that was to
-    /// answer it panicked.
-    KeepForTest(K, T),
-    /// A request whose answer waits for the scenario's clock.
-    Schedule(K, T, D),
+    /// The request being answered waits for the test: a step held it, or
+    /// the code making its answer panicked.
+    KeepForTest(K),
+    /// The request being answered has an answer that waits for the clock.
+    Schedule(K, D),
+    /// The answer of the request being answered is made.
+    Answered(K),
     /// A hold was taken.
     HoldTaken,
     /// A hold was dropped or released.
@@ -61,22 +68,26 @@ pub(super) enum Event<K, T, D> {
     ClockReached(K),
 }
 
-/// What the script carries out after a [`Queue::step`].
+/// What the script carries out after [`HeldRequests::apply`].
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Effect<K, T, D> {
     /// Nothing.
     None,
-    /// Send this request on to the steps and the standing answer.
-    SendOn(K, T),
+    /// Make this request's answer by the steps and the standing answer; it
+    /// waits in the queue, `Answering`, meanwhile.
+    SendOn(K),
     /// The last hold went: send the kept requests on, one at a time, asking
     /// [`Event::DrainNext`] until it answers anything but `SendOn`.
     Drain,
-    /// This request left the queue as the event asked (released, abandoned,
-    /// withdrawn, due), with what it was waiting for.
+    /// Answer this request with the scheduled answer `D`; it waits in the
+    /// queue, `Answering`, meanwhile.
+    Due(K, D),
+    /// This request left the queue as the event asked (answered, released,
+    /// abandoned, withdrawn), with what it was waiting for.
     Taken(K, T, Waits<D>),
 }
 
-/// One request in the queue.
+/// One request.
 #[derive(Debug)]
 struct Entry<K, T, D> {
     key: K,
@@ -87,13 +98,13 @@ struct Entry<K, T, D> {
 /// A script's unanswered requests, oldest first, its live holds and whether
 /// a drain is sending the kept requests on.
 #[derive(Debug)]
-pub(super) struct Queue<K, T, D> {
+pub(super) struct HeldRequests<K, T, D> {
     entries: VecDeque<Entry<K, T, D>>,
     holds: usize,
     draining: bool,
 }
 
-impl<K, T, D> Default for Queue<K, T, D> {
+impl<K, T, D> Default for HeldRequests<K, T, D> {
     fn default() -> Self {
         Self {
             entries: VecDeque::new(),
@@ -103,25 +114,29 @@ impl<K, T, D> Default for Queue<K, T, D> {
     }
 }
 
-impl<K: Copy + Eq, T, D> Queue<K, T, D> {
+impl<K: Copy + Eq, T, D> HeldRequests<K, T, D> {
     /// Carry out `event` and say what the script does next.
-    pub(super) fn step(&mut self, event: Event<K, T, D>) -> Effect<K, T, D> {
+    pub(super) fn apply(&mut self, event: Event<K, T, D>) -> Effect<K, T, D> {
         match event {
             Event::Arrived(key, payload) => {
                 if self.holds > 0 || self.draining {
                     self.push(key, Waits::Hold, payload);
                     Effect::None
                 } else {
-                    Effect::SendOn(key, payload)
+                    self.push(key, Waits::Answering, payload);
+                    Effect::SendOn(key)
                 }
             }
-            Event::KeepForTest(key, payload) => {
-                self.push(key, Waits::Test, payload);
+            Event::KeepForTest(key) => {
+                self.answering_waits(key, Waits::Test);
                 Effect::None
             }
-            Event::Schedule(key, payload, due) => {
-                self.push(key, Waits::Clock(due), payload);
+            Event::Schedule(key, due) => {
+                self.answering_waits(key, Waits::Clock(due));
                 Effect::None
+            }
+            Event::Answered(key) => {
+                self.take(|entry| entry.key == key && matches!(entry.waits, Waits::Answering))
             }
             Event::HoldTaken => {
                 self.holds = self.holds.saturating_add(1);
@@ -160,8 +175,33 @@ impl<K: Copy + Eq, T, D> Queue<K, T, D> {
                 Effect::None
             }
             Event::ClockReached(key) => {
-                self.take(|entry| entry.key == key && matches!(entry.waits, Waits::Clock(_)))
+                let entry = self
+                    .entries
+                    .iter_mut()
+                    .find(|entry| entry.key == key && matches!(entry.waits, Waits::Clock(_)));
+                let Some(entry) = entry else {
+                    return Effect::None;
+                };
+                // The entry was found waiting for the clock, so it has a due
+                // answer to hand out.
+                if let Waits::Clock(due) = std::mem::replace(&mut entry.waits, Waits::Answering) {
+                    Effect::Due(key, due)
+                } else {
+                    Effect::None
+                }
             }
+        }
+    }
+
+    /// The request `key`, while its answer is being made, waits for `waits`
+    /// from now on, where it is.
+    fn answering_waits(&mut self, key: K, waits: Waits<D>) {
+        if let Some(entry) = self
+            .entries
+            .iter_mut()
+            .find(|entry| entry.key == key && matches!(entry.waits, Waits::Answering))
+        {
+            entry.waits = waits;
         }
     }
 
@@ -187,10 +227,13 @@ impl<K: Copy + Eq, T, D> Queue<K, T, D> {
             return Effect::None;
         }
         if self.holds == 0
-            && let Some(Entry { key, payload, .. }) =
-                self.remove(|entry| matches!(entry.waits, Waits::Hold))
+            && let Some(entry) = self
+                .entries
+                .iter_mut()
+                .find(|entry| matches!(entry.waits, Waits::Hold))
         {
-            return Effect::SendOn(key, payload);
+            entry.waits = Waits::Answering;
+            return Effect::SendOn(entry.key);
         }
         // Done, or a hold taken meanwhile keeps the rest, in order.
         self.draining = false;
@@ -205,13 +248,11 @@ impl<K: Copy + Eq, T, D> Queue<K, T, D> {
         });
     }
 
-    fn remove(&mut self, which: impl Fn(&Entry<K, T, D>) -> bool) -> Option<Entry<K, T, D>> {
-        let position = self.entries.iter().position(which)?;
-        self.entries.remove(position)
-    }
-
     fn take(&mut self, which: impl Fn(&Entry<K, T, D>) -> bool) -> Effect<K, T, D> {
-        match self.remove(which) {
+        let Some(position) = self.entries.iter().position(which) else {
+            return Effect::None;
+        };
+        match self.entries.remove(position) {
             Some(Entry {
                 key,
                 waits,
@@ -221,9 +262,17 @@ impl<K: Copy + Eq, T, D> Queue<K, T, D> {
         }
     }
 
+    /// The payload of the request `key`, whatever it waits for.
+    pub(super) fn payload(&self, key: K) -> Option<&T> {
+        self.entries
+            .iter()
+            .find(|entry| entry.key == key)
+            .map(|entry| &entry.payload)
+    }
+
     /// The held requests, oldest first.
     pub(super) fn held_keys(&self) -> Vec<K> {
-        self.held().map(|(key, _)| key).collect()
+        self.held().map(|(key, _)| key).collect::<Vec<K>>()
     }
 
     /// The held request `key`'s payload.

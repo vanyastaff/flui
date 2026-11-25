@@ -1,73 +1,99 @@
-//! Every documented rule of a script's held requests as a row: a queue in
-//! one state, one event, the state it leaves and the effect it hands back.
+//! Every transition of a script's held requests as a row: the requests in
+//! one state, one event, the state they are left in and the effect handed
+//! back. The rules the script carries out around them (what a release
+//! counts, how the test's panics are kept) are pinned by the scenario tests
+//! `crates/flui-platform/ARCHITECTURE.md` names.
 
-use super::{Effect, Event, Queue, Waits};
+use super::{Effect, Event, HeldRequests, Waits};
 
 /// What a row's request waits for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum W {
+enum WaitsFor {
     Hold,
     Test,
     Clock,
+    Answering,
 }
 
-/// A queue's state: its requests (key, what each waits for), its holds and
-/// whether a drain runs.
-type State = (Vec<(u32, W)>, usize, bool);
+/// The requests in a row, each a key and what it waits for, oldest first,
+/// with the live holds and whether a drain runs.
+#[derive(Debug, PartialEq, Eq)]
+struct QueueState {
+    requests: Vec<(u32, WaitsFor)>,
+    holds: usize,
+    draining: bool,
+}
 
-type Q = Queue<u32, u32, ()>;
-
-fn waits(w: W) -> Waits<()> {
-    match w {
-        W::Hold => Waits::Hold,
-        W::Test => Waits::Test,
-        W::Clock => Waits::Clock(()),
+fn state(requests: &[(u32, WaitsFor)], holds: usize, draining: bool) -> QueueState {
+    QueueState {
+        requests: requests.to_vec(),
+        holds,
+        draining,
     }
 }
 
-fn build((entries, holds, draining): &State) -> Q {
-    let mut queue = Q::default();
-    for &(key, w) in entries {
-        queue.push(key, waits(w), key);
+/// The queue a row runs on: a request's payload is its key, and a clock's
+/// answer is `()`.
+type RowRequests = HeldRequests<u32, u32, ()>;
+
+fn waits(waits_for: WaitsFor) -> Waits<()> {
+    match waits_for {
+        WaitsFor::Hold => Waits::Hold,
+        WaitsFor::Test => Waits::Test,
+        WaitsFor::Clock => Waits::Clock(()),
+        WaitsFor::Answering => Waits::Answering,
     }
-    queue.holds = *holds;
-    queue.draining = *draining;
-    queue
 }
 
-fn snapshot(queue: &Q) -> State {
-    let entries = queue
+fn build(state: &QueueState) -> RowRequests {
+    let mut requests = RowRequests::default();
+    for &(key, waits_for) in &state.requests {
+        requests.push(key, waits(waits_for), key);
+    }
+    requests.holds = state.holds;
+    requests.draining = state.draining;
+    requests
+}
+
+fn snapshot(requests: &RowRequests) -> QueueState {
+    let entries: Vec<(u32, WaitsFor)> = requests
         .entries
         .iter()
         .map(|entry| {
             assert_eq!(entry.key, entry.payload, "a row's payload is its key");
-            let w = match entry.waits {
-                Waits::Hold => W::Hold,
-                Waits::Test => W::Test,
-                Waits::Clock(()) => W::Clock,
+            let waits_for = match entry.waits {
+                Waits::Hold => WaitsFor::Hold,
+                Waits::Test => WaitsFor::Test,
+                Waits::Clock(()) => WaitsFor::Clock,
+                Waits::Answering => WaitsFor::Answering,
             };
-            (entry.key, w)
+            (entry.key, waits_for)
         })
-        .collect();
-    (entries, queue.holds, queue.draining)
+        .collect::<Vec<(u32, WaitsFor)>>();
+    QueueState {
+        requests: entries,
+        holds: requests.holds,
+        draining: requests.draining,
+    }
 }
 
-struct Row {
+/// One rule: `event` on `before` leaves `after` and hands back `effect`.
+struct Transition {
     rule: &'static str,
-    before: State,
+    before: QueueState,
     event: Event<u32, u32, ()>,
-    after: State,
+    after: QueueState,
     effect: Effect<u32, u32, ()>,
 }
 
-fn row(
+fn transition(
     rule: &'static str,
-    before: State,
+    before: QueueState,
     event: Event<u32, u32, ()>,
-    after: State,
+    after: QueueState,
     effect: Effect<u32, u32, ()>,
-) -> Row {
-    Row {
+) -> Transition {
+    Transition {
         rule,
         before,
         event,
@@ -78,203 +104,236 @@ fn row(
 
 #[test]
 fn every_event_moves_the_queue_as_the_rules_say() {
-    use W::{Clock, Hold, Test};
-    let rows = vec![
-        row(
-            "a request with no hold and no drain goes on at once",
-            (vec![(1, Test)], 0, false),
+    use WaitsFor::{Answering, Clock, Hold, Test};
+    let transitions = vec![
+        transition(
+            "a request with no hold and no drain is answered, waiting in the queue meanwhile",
+            state(&[(1, Test)], 0, false),
             Event::Arrived(5, 5),
-            (vec![(1, Test)], 0, false),
-            Effect::SendOn(5, 5),
+            state(&[(1, Test), (5, Answering)], 0, false),
+            Effect::SendOn(5),
         ),
-        row(
+        transition(
             "a request that arrives while a hold lives is kept, last",
-            (vec![(1, Hold)], 1, false),
+            state(&[(1, Hold)], 1, false),
             Event::Arrived(5, 5),
-            (vec![(1, Hold), (5, Hold)], 1, false),
+            state(&[(1, Hold), (5, Hold)], 1, false),
             Effect::None,
         ),
-        row(
+        transition(
             "a request that arrives during a drain queues behind the kept ones",
-            (vec![(1, Hold)], 0, true),
+            state(&[(1, Answering), (2, Hold)], 0, true),
             Event::Arrived(5, 5),
-            (vec![(1, Hold), (5, Hold)], 0, true),
+            state(&[(1, Answering), (2, Hold), (5, Hold)], 0, true),
             Effect::None,
         ),
-        row(
-            "a request a step holds, or whose answer panicked, waits for the test",
-            (vec![(1, Hold)], 1, false),
-            Event::KeepForTest(5, 5),
-            (vec![(1, Hold), (5, Test)], 1, false),
+        transition(
+            "a request a step holds, or whose answer panicked, waits for the test where it is",
+            state(&[(4, Answering), (5, Hold)], 1, false),
+            Event::KeepForTest(4),
+            state(&[(4, Test), (5, Hold)], 1, false),
             Effect::None,
         ),
-        row(
-            "a delayed answer waits for the clock",
-            (vec![], 0, false),
-            Event::Schedule(5, 5, ()),
-            (vec![(5, Clock)], 0, false),
+        transition(
+            "a delayed answer waits for the clock where the request is",
+            state(&[(4, Answering), (5, Hold)], 1, false),
+            Event::Schedule(4, ()),
+            state(&[(4, Clock), (5, Hold)], 1, false),
             Effect::None,
         ),
-        row(
+        transition(
+            "a request whose answer is made leaves the queue to be answered",
+            state(&[(4, Answering), (5, Hold)], 1, false),
+            Event::Answered(4),
+            state(&[(5, Hold)], 1, false),
+            Effect::Taken(4, 4, Waits::Answering),
+        ),
+        transition(
+            "an answer made for a request no longer being answered takes nothing",
+            state(&[(4, Test)], 0, false),
+            Event::Answered(4),
+            state(&[(4, Test)], 0, false),
+            Effect::None,
+        ),
+        transition(
             "a hold taken is counted",
-            (vec![], 1, false),
+            state(&[], 1, false),
             Event::HoldTaken,
-            (vec![], 2, false),
+            state(&[], 2, false),
             Effect::None,
         ),
-        row(
+        transition(
             "the last hold dropped starts the drain",
-            (vec![(1, Test), (2, Hold)], 1, false),
+            state(&[(1, Test), (2, Hold)], 1, false),
             Event::HoldDropped,
-            (vec![(1, Test), (2, Hold)], 0, true),
+            state(&[(1, Test), (2, Hold)], 0, true),
             Effect::Drain,
         ),
-        row(
+        transition(
             "a hold dropped while another lives sends nothing on",
-            (vec![(2, Hold)], 2, false),
+            state(&[(2, Hold)], 2, false),
             Event::HoldDropped,
-            (vec![(2, Hold)], 1, false),
+            state(&[(2, Hold)], 1, false),
             Effect::None,
         ),
-        row(
+        transition(
             "a hold dropped by the code a drain runs leaves the rest to that drain",
-            (vec![(2, Hold)], 1, true),
+            state(&[(1, Answering), (2, Hold)], 1, true),
             Event::HoldDropped,
-            (vec![(2, Hold)], 0, true),
+            state(&[(1, Answering), (2, Hold)], 0, true),
             Effect::None,
         ),
-        row(
+        transition(
             "the last hold left leaves the kept requests to the test",
-            (vec![(1, Test), (2, Hold), (3, Clock)], 1, false),
+            state(&[(1, Test), (2, Hold), (3, Clock)], 1, false),
             Event::HoldLeft,
-            (vec![(1, Test), (2, Test), (3, Clock)], 0, false),
+            state(&[(1, Test), (2, Test), (3, Clock)], 0, false),
             Effect::None,
         ),
-        row(
+        transition(
             "a hold left while another lives leaves the kept requests to it",
-            (vec![(2, Hold)], 2, false),
+            state(&[(2, Hold)], 2, false),
             Event::HoldLeft,
-            (vec![(2, Hold)], 1, false),
+            state(&[(2, Hold)], 1, false),
             Effect::None,
         ),
-        row(
+        transition(
             "a hold left by the code a drain runs leaves the rest to that drain",
-            (vec![(2, Hold), (3, Hold)], 1, true),
+            state(&[(1, Answering), (2, Hold), (3, Hold)], 1, true),
             Event::HoldLeft,
-            (vec![(2, Hold), (3, Hold)], 0, true),
+            state(&[(1, Answering), (2, Hold), (3, Hold)], 0, true),
             Effect::None,
         ),
-        row(
+        transition(
             "a drain sends on the oldest kept request, past one the test holds",
-            (vec![(1, Test), (2, Hold), (3, Hold)], 0, true),
+            state(&[(1, Test), (2, Hold), (3, Hold)], 0, true),
             Event::DrainNext,
-            (vec![(1, Test), (3, Hold)], 0, true),
-            Effect::SendOn(2, 2),
+            state(&[(1, Test), (2, Answering), (3, Hold)], 0, true),
+            Effect::SendOn(2),
         ),
-        row(
+        transition(
             "a hold taken during a drain stops it, the rest kept in order",
-            (vec![(2, Hold), (3, Hold)], 1, true),
+            state(&[(2, Hold), (3, Hold)], 1, true),
             Event::DrainNext,
-            (vec![(2, Hold), (3, Hold)], 1, false),
+            state(&[(2, Hold), (3, Hold)], 1, false),
             Effect::None,
         ),
-        row(
+        transition(
             "a drain with nothing kept left ends",
-            (vec![(1, Test), (3, Clock)], 0, true),
+            state(&[(1, Test), (3, Clock)], 0, true),
             Event::DrainNext,
-            (vec![(1, Test), (3, Clock)], 0, false),
+            state(&[(1, Test), (3, Clock)], 0, false),
             Effect::None,
         ),
-        row(
+        transition(
             "no drain runs, so there is nothing next",
-            (vec![(2, Hold)], 1, false),
+            state(&[(2, Hold)], 1, false),
             Event::DrainNext,
-            (vec![(2, Hold)], 1, false),
+            state(&[(2, Hold)], 1, false),
             Effect::None,
         ),
-        row(
+        transition(
             "what verify reported waits for the test, so no later drain answers it",
-            (vec![(1, Test), (2, Hold), (3, Clock)], 1, false),
+            state(
+                &[(1, Test), (2, Hold), (3, Clock), (4, Answering)],
+                1,
+                false,
+            ),
             Event::Reported,
-            (vec![(1, Test), (2, Test), (3, Clock)], 1, false),
+            state(
+                &[(1, Test), (2, Test), (3, Clock), (4, Answering)],
+                1,
+                false,
+            ),
             Effect::None,
         ),
-        row(
+        transition(
             "a ticket withdraws a kept request",
-            (vec![(1, Test), (2, Hold)], 1, false),
+            state(&[(1, Test), (2, Hold)], 1, false),
             Event::Withdraw(2),
-            (vec![(1, Test)], 1, false),
+            state(&[(1, Test)], 1, false),
             Effect::Taken(2, 2, Waits::Hold),
         ),
-        row(
+        transition(
+            "a ticket withdraws a request while its answer is being made",
+            state(&[(1, Answering), (2, Hold)], 0, true),
+            Event::Withdraw(1),
+            state(&[(2, Hold)], 0, true),
+            Effect::Taken(1, 1, Waits::Answering),
+        ),
+        transition(
             "a ticket withdraws a request waiting for the clock",
-            (vec![(3, Clock)], 0, false),
+            state(&[(3, Clock)], 0, false),
             Event::Withdraw(3),
-            (vec![], 0, false),
+            state(&[], 0, false),
             Effect::Taken(3, 3, Waits::Clock(())),
         ),
-        row(
+        transition(
             "a ticket of a request no longer waiting withdraws nothing",
-            (vec![(1, Test)], 0, false),
+            state(&[(1, Test)], 0, false),
             Event::Withdraw(9),
-            (vec![(1, Test)], 0, false),
+            state(&[(1, Test)], 0, false),
             Effect::None,
         ),
-        row(
-            "release_oldest takes the oldest held request, past the clock's",
-            (vec![(3, Clock), (2, Hold), (1, Test)], 1, false),
+        transition(
+            "release_oldest takes the oldest held request, past the clock's and one being answered",
+            state(
+                &[(3, Clock), (4, Answering), (2, Hold), (1, Test)],
+                1,
+                false,
+            ),
             Event::ReleaseOldest,
-            (vec![(3, Clock), (1, Test)], 1, false),
+            state(&[(3, Clock), (4, Answering), (1, Test)], 1, false),
             Effect::Taken(2, 2, Waits::Hold),
         ),
-        row(
+        transition(
             "release_held takes a request the test holds",
-            (vec![(1, Test), (2, Hold)], 1, false),
+            state(&[(1, Test), (2, Hold)], 1, false),
             Event::Release(1),
-            (vec![(2, Hold)], 1, false),
+            state(&[(2, Hold)], 1, false),
             Effect::Taken(1, 1, Waits::Test),
         ),
-        row(
+        transition(
             "release_held does not take a request waiting for the clock",
-            (vec![(3, Clock)], 0, false),
+            state(&[(3, Clock)], 0, false),
             Event::Release(3),
-            (vec![(3, Clock)], 0, false),
+            state(&[(3, Clock)], 0, false),
             Effect::None,
         ),
-        row(
+        transition(
             "a request whose release answer panicked waits for the test, where it is",
-            (vec![(1, Hold), (2, Hold)], 1, false),
-            Event::AnswerPanicked(1),
-            (vec![(1, Test), (2, Hold)], 1, false),
+            state(&[(1, Test), (2, Hold), (3, Hold)], 1, false),
+            Event::AnswerPanicked(2),
+            state(&[(1, Test), (2, Test), (3, Hold)], 1, false),
             Effect::None,
         ),
-        row(
-            "the clock takes the request scheduled for it",
-            (vec![(1, Hold), (3, Clock)], 1, false),
+        transition(
+            "the clock hands out the answer scheduled for its request, which waits meanwhile",
+            state(&[(1, Hold), (3, Clock), (4, Hold)], 1, false),
             Event::ClockReached(3),
-            (vec![(1, Hold)], 1, false),
-            Effect::Taken(3, 3, Waits::Clock(())),
+            state(&[(1, Hold), (3, Answering), (4, Hold)], 1, false),
+            Effect::Due(3, ()),
         ),
-        row(
-            "the clock takes nothing held",
-            (vec![(1, Hold)], 1, false),
+        transition(
+            "the clock hands out nothing for a held request",
+            state(&[(1, Hold)], 1, false),
             Event::ClockReached(1),
-            (vec![(1, Hold)], 1, false),
+            state(&[(1, Hold)], 1, false),
             Effect::None,
         ),
     ];
     let mut failed = Vec::new();
-    for Row {
+    for Transition {
         rule,
         before,
         event,
         after,
         effect,
-    } in rows
+    } in transitions
     {
-        let mut queue = build(&before);
-        let seen = queue.step(event);
-        let left = snapshot(&queue);
+        let mut requests = build(&before);
+        let seen = requests.apply(event);
+        let left = snapshot(&requests);
         if seen != effect || left != after {
             failed.push(format!(
                 "{rule}: effect {seen:?} (expected {effect:?}), state {left:?} (expected {after:?})"
