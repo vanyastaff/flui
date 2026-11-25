@@ -1841,3 +1841,51 @@ fn a_window_that_is_gone_is_named_as_the_window_handle() {
         "{gone:?}"
     );
 }
+
+/// The lane's `AXPress` answers as every `AXPress` does: the deadline it ran under named, a
+/// press sent and not answered, or whose element went away, kept as may-have-run when the
+/// Accessibility permission is gone by then, and a lookup that failed with it gone refused as
+/// that permission missing.
+#[test]
+fn a_press_sent_keeps_its_effect_when_the_permission_goes() {
+    use flui_driver::lane::macos::safety::pressed;
+    use flui_driver::lane::walk::ProviderError;
+    let deadline = std::time::Duration::from_millis(5000);
+    for failure in [ProviderError::Timeout, ProviderError::Gone] {
+        let answer = pressed(
+            Ok(true),
+            || Err(failure.clone()),
+            "like",
+            deadline,
+            || false,
+        );
+        let error = answer.expect_err("not answered");
+        assert!(error.effect().is_some(), "{failure:?}: {error:?}");
+        assert!(
+            error.to_string().contains("Accessibility permission"),
+            "{failure:?}: {error:?}"
+        );
+    }
+    let hung = pressed(
+        Ok(true),
+        || Err(ProviderError::Timeout),
+        "like",
+        deadline,
+        || true,
+    )
+    .expect_err("hung");
+    assert!(hung.to_string().contains("5000 ms"), "{hung:?}");
+    let refused = pressed(
+        Err(ProviderError::Timeout),
+        || Ok(()),
+        "like",
+        deadline,
+        || false,
+    )
+    .expect_err("untrusted");
+    assert_eq!(
+        refused.missing_capability().as_deref(),
+        Some("macos_permission_accessibility")
+    );
+    assert!(pressed(Ok(true), || Ok(()), "like", deadline, || true).is_ok());
+}

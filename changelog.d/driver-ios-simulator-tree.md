@@ -15,16 +15,19 @@
   one window naming the device's UDID, whatever the others name, else the one naming no UUID
   while no other simulator of the default device set, in any state, shares its title, and never
   one naming any other UUID. Every run of a UUID's 8-4-4-4-12 form in the window's
-  `AXIdentifier` or `AXDocument`, read whole up to `accessibility::IDENTITY_TEXT_LIMIT` and
-  refused past it, is read as a UUID whatever stands beside it. The device is looked up by its
-  UDID in the listing read before each read, and one renamed or removed since the lane connected
-  is refused. The screen search reads the window's chrome breadth first and never goes into a
-  group of the app window's shape, whose children are the app's; a search that an element gone
-  or its budget left partial takes no screen (`TreeError::SearchCut`). The screen's walk and the
-  search list children through one bounded listing (`accessibility::list_children`), a level of
-  exactly the budget's children read whole. A level a vanished element or the budget cuts is
-  marked unread on its parent, the screen included, and a probe past the depth that fails fails
-  the read; a screen moved or resized during the read answers `Error::Busy`. A press refuses an
+  `AXIdentifier` or `AXDocument`, read whole up to `accessibility::IDENTITY_TEXT_LIMIT`, is read
+  as a UUID whatever stands beside it, and a longer text names something else. The device is
+  looked up by its UDID in the listing read before each read, and one renamed or removed since
+  the lane connected is refused. The screen search reads the window's chrome breadth first, then
+  goes into each plain group of the app window's shape to look for an `iOSContentGroup` under it
+  (`tree::find_screen`): an `iOSContentGroup` is taken wherever it was found, else the shallowest
+  plain group, which a cut of the chrome (an element gone, or the budget, refused with no retry)
+  refuses (`TreeError::SearchCut`); what cuts the search inside a plain group is that group's.
+  The screen's walk and the search list children through one bounded listing
+  (`accessibility::list_children`), a level of exactly the budget's children read whole. A level
+  a vanished element or the budget cuts is marked unread on its parent, the screen included,
+  and a probe past the depth that fails fails the read; a screen moved, resized or gone during
+  the read answers `Error::Busy` (`tree::read_screen`, every host's read). A press refuses an
   element that two read as, or one on a read that stopped short; a press sent and not answered,
   or whose element went away, keeps `may_have_run` when the Accessibility permission is gone
   afterwards, as the macOS lane's `AXPress` does (`lane::ax::pressed`, the answer both lanes
