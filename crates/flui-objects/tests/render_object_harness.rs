@@ -112,8 +112,11 @@
 //! | `RenderSliverFloatingPersistentHeader` | `harness_sliver_persistent_header_floating_*` | yes | — | — | — | state machine |
 //! | `RenderSliverFloatingPinnedPersistentHeader` | `harness_sliver_persistent_header_floating_pinned_*` | yes | — | — | — | state machine |
 //!
-//! [`catalog_covers_every_render_object_name`] guards the table: every row's
-//! type string must appear in this file so a missing harness test fails CI.
+//! [`catalog_covers_every_render_object_name`] guards the catalog: every type
+//! of `RENDER_OBJECT_TYPES` must appear, as a whole identifier, inside a row (a
+//! column-0 `fn harness_*` under any visibility, up to the first lone `}` line)
+//! of this file or of a family file under `tests/harness/` that `FAMILY_FILES`
+//! lists and this file mounts, so a type with no row fails CI.
 
 #![allow(
     clippy::disallowed_methods,
@@ -13646,13 +13649,52 @@ fn harness_layout_builder_without_a_child_takes_its_smallest_size() {
 // Catalog guard — every exported render type must be exercised in a row
 // ============================================================================
 
-/// Family modules of rows, each mounted from this root at column 0 with
-/// `#[path = "harness/<name>.rs"]` and `mod <name>;`. A file counts toward the
-/// catalog only when it is listed here and mounted
-/// (`family_files_are_mounted_and_listed`).
-const FAMILY_FILES: &[(&str, &str)] = &[];
+/// The `(name, source)` pairs of the family files, built from the names alone:
+/// `family_files![a, b]`. The source is `include_str!` of `harness/<name>.rs`,
+/// a path the compiler resolves beside this file, so the text the guard counts
+/// is always the file the name mounts. The expansion also imports the module
+/// `<name>`, so a family whose `mod` line is missing, cfg-gated or commented
+/// out does not compile. The `@in` arm takes another directory, for the
+/// macro's own test.
+macro_rules! family_files {
+    (@in $directory:literal, $($name:ident),* $(,)?) => {
+        &[$({
+            #[expect(
+                unused_imports,
+                reason = "the import only proves that the family's module is compiled"
+            )]
+            use self::$name as _;
+            (
+                stringify!($name),
+                include_str!(concat!($directory, "/", stringify!($name), ".rs")),
+            )
+        }),*]
+    };
+    ($($name:ident),* $(,)?) => {
+        family_files!(@in "harness", $($name),*)
+    };
+}
 
-const FAMILY_DIRECTORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/harness");
+/// Family modules of rows, each mounted from this root with
+/// `#[path = "harness/<name>.rs"]` and `mod <name>;` (`is_mounted` says where
+/// the two lines may stand). A file counts toward the catalog only when it is
+/// listed here and mounted (`family_files_are_mounted_and_listed`).
+const FAMILY_FILES: &[(&str, &str)] = family_files![];
+
+/// The directory of the family files. The run's `CARGO_MANIFEST_DIR` comes
+/// first: cargo and nextest set it for the test process, and a nextest archive
+/// run with a workspace remap sets it to where the sources are on the machine
+/// that runs the binary, which the path compiled into it need not be. The
+/// compile-time path is the fallback for a binary started by hand.
+fn family_directory() -> std::path::PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(
+            || std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")),
+            std::path::PathBuf::from,
+        )
+        .join("tests")
+        .join("harness")
+}
 
 fn is_identifier_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
@@ -13688,15 +13730,46 @@ fn mount_lines(name: &str) -> [String; 2] {
     ]
 }
 
+/// Whether the root mounts the family file `name`: its two `mount_lines` stand
+/// at column 0 as consecutive lines, and nothing above them can keep the
+/// module from compiling. A pair is refused when
+/// - the nearest code above it (lines read up to their first `//`, blank ones
+///   skipped) is an attribute (starts with `#[`) or does not end an item (with
+///   `;` or `}`): a `#[cfg(..)]` or any other attribute over the pair, on one
+///   line or over several, refuses it, as does a pair inside an item still
+///   open; a pair right below an inner attribute, or below a line whose string
+///   holds `//`, is refused too, so it goes below a plain item such as another
+///   mount;
+/// - any line above it opens a block comment (`/*` after leading whitespace),
+///   closed or not.
+///
+/// A block comment opened after code on the same line is not seen here;
+/// `family_files!` imports the module, so a mount inside one does not compile.
 fn is_mounted(root: &str, name: &str) -> bool {
-    mount_lines(name)
-        .iter()
-        .all(|wanted| root.lines().any(|line| line == wanted))
+    let [path_line, mod_line] = mount_lines(name);
+    let lines: Vec<&str> = root.lines().collect();
+    lines.windows(2).enumerate().any(|(at, pair)| {
+        if pair[0] != path_line || pair[1] != mod_line {
+            return false;
+        }
+        let above = &lines[..at];
+        let opens_block_comment = above.iter().any(|line| line.trim_start().starts_with("/*"));
+        let nearest_code = above
+            .iter()
+            .rev()
+            .map(|line| line.split_once("//").map_or(*line, |(code, _)| code).trim())
+            .find(|code| !code.is_empty());
+        let ends_an_item = nearest_code.is_none_or(|line| {
+            !line.starts_with("#[") && (line.ends_with(';') || line.ends_with('}'))
+        });
+        !opens_block_comment && ends_an_item
+    })
 }
 
 /// How many rows of the root and of the mounted family files name `type_name`.
 /// A row starts at a column-0 `fn harness_` under any visibility and ends at
-/// the first `}` at column 0.
+/// the first line that is a lone `}`. Line ends are read without their `\r`,
+/// so a source saved with CRLF ends its rows where an LF source does.
 fn rows_naming(root: &str, families: &[(&str, &str)], type_name: &str) -> usize {
     let mounted = families
         .iter()
@@ -13723,8 +13796,9 @@ fn rows_naming(root: &str, families: &[(&str, &str)], type_name: &str) -> usize 
         .sum()
 }
 
-/// The stems of the `.rs` files in `directory`; a directory that does not
-/// exist holds none (git stores no empty directory).
+/// The stems of the `.rs` files in `directory`. A directory that does not
+/// exist holds none (git stores no empty directory); any other failure to list
+/// it, such as a path that is a file, panics with the path.
 fn family_file_stems(directory: &std::path::Path) -> Vec<String> {
     let entries = match std::fs::read_dir(directory) {
         Ok(entries) => entries,
@@ -13764,10 +13838,11 @@ fn mount_problems(root: &str, listed: &[&str], on_disk: &[String]) -> Vec<String
             problems.push(format!("FAMILY_FILES lists {name}, which has no file"));
         }
         if !is_mounted(root, name) {
+            let [path_line, mod_line] = mount_lines(name);
             problems.push(format!(
-                "{name} is not mounted: the root needs `{}` and `{}` at column 0",
-                mount_lines(name)[0],
-                mount_lines(name)[1],
+                "{name} is not mounted: the root needs `{path_line}` and `{mod_line}` as \
+                 consecutive column-0 lines below a complete item, with no attribute over \
+                 them and no block comment above them",
             ));
         }
     }
@@ -13789,17 +13864,49 @@ fn catalog_covers_every_render_object_name() {
 fn family_files_are_mounted_and_listed() {
     let root = include_str!("render_object_harness.rs");
     let listed: Vec<&str> = FAMILY_FILES.iter().map(|&(name, _)| name).collect();
-    let on_disk = family_file_stems(std::path::Path::new(FAMILY_DIRECTORY));
+    let directory = family_directory();
+    let on_disk = family_file_stems(&directory);
     let problems = mount_problems(root, &listed, &on_disk);
-    assert!(problems.is_empty(), "{problems:#?}");
+    assert!(
+        problems.is_empty(),
+        "{}: {problems:#?}",
+        directory.display()
+    );
+}
+
+#[test]
+fn a_family_entry_is_the_file_its_name_mounts() {
+    // `harness_snapshot` is mounted beside this file, so the `@in "."` arm
+    // expands to the same import and `include_str!` a family under `harness/`
+    // gets, without a family file on disk.
+    let families: &[(&str, &str)] = family_files!(@in ".", harness_snapshot);
+    assert_eq!(
+        families,
+        [("harness_snapshot", include_str!("harness_snapshot.rs"))]
+    );
 }
 
 #[test]
 fn the_guard_counts_a_pub_row_of_a_family_file() {
     let root = "#[path = \"harness/shown.rs\"]\nmod shown;\n";
     let family = "pub(super) fn harness_a() {\n    RenderShown::new();\n}\n\npub fn harness_b() {\n    RenderShown::new();\n}\n\npub(crate) fn harness_c() {\n    RenderOther::new();\n}\n\nfn helper() {\n    RenderShown::new();\n}\n";
-    assert_eq!(rows_naming(root, &[("shown", family)], "RenderShown"), 2);
-    assert_eq!(rows_naming(root, &[("shown", family)], "RenderOther"), 1);
+    // A file saved with CRLF ends its rows at the same lines: unread, the `\r`
+    // would run each row's body to the end of the file and into the next rows.
+    for line_end in ["\n", "\r\n"] {
+        let root = root.replace('\n', line_end);
+        let family = family.replace('\n', line_end);
+        let families = [("shown", family.as_str())];
+        assert_eq!(
+            rows_naming(&root, &families, "RenderShown"),
+            2,
+            "{line_end:?}"
+        );
+        assert_eq!(
+            rows_naming(&root, &families, "RenderOther"),
+            1,
+            "{line_end:?}"
+        );
+    }
 }
 
 #[test]
@@ -13814,20 +13921,100 @@ fn the_guard_refuses_a_name_inside_a_longer_one() {
 fn the_guard_refuses_a_family_file_that_is_not_mounted() {
     let family = "pub fn harness_a() {\n    RenderShown::new();\n}\n";
     let families = [("shown", family)];
-    let only_path = "#[path = \"harness/shown.rs\"]\n";
-    let only_mod = "mod shown;\n";
-    let indented = "    #[path = \"harness/shown.rs\"]\n    mod shown;\n";
     let mounted = "#[path = \"harness/shown.rs\"]\nmod shown;\n";
-    for root in [only_path, only_mod, indented, ""] {
-        assert_eq!(rows_naming(root, &families, "RenderShown"), 0, "{root:?}");
+    let refused = [
+        ("empty", ""),
+        ("only the path line", "#[path = \"harness/shown.rs\"]\n"),
+        ("only the mod line", "mod shown;\n"),
+        (
+            "indented",
+            "    #[path = \"harness/shown.rs\"]\n    mod shown;\n",
+        ),
+        (
+            "separated by an item",
+            "#[path = \"harness/shown.rs\"]\nfn other() {}\nmod shown;\n",
+        ),
+        (
+            "in the wrong order",
+            "mod shown;\n#[path = \"harness/shown.rs\"]\n",
+        ),
+        (
+            "cfg-gated",
+            "#[cfg(any())]\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "under another attribute",
+            "#[allow(dead_code)]\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "cfg-gated over several lines",
+            "#[cfg(\n    any()\n)]\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "cfg-gated with a trailing comment",
+            "#[cfg(any())] // gated;\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "cfg-gated over several lines with a trailing comment",
+            "#[cfg(\n    any()\n)] // gated;\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "cfg-gated across a blank line and a comment",
+            "#[cfg(any())]\n\n// rows\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "line comments",
+            "// #[path = \"harness/shown.rs\"]\n// mod shown;\n",
+        ),
+        (
+            "inside a block comment",
+            "/*\n#[path = \"harness/shown.rs\"]\nmod shown;\n*/\n",
+        ),
+        (
+            "inside a block comment, below an item",
+            "/*\nconst A: u8 = 0;\n#[path = \"harness/shown.rs\"]\nmod shown;\n*/\n",
+        ),
+        (
+            "inside an indented block comment, below an item",
+            "    /*\nconst A: u8 = 0;\n#[path = \"harness/shown.rs\"]\nmod shown;\n*/\n",
+        ),
+        (
+            "below a closed block comment",
+            "/* rows */\nconst A: u8 = 0;\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "inside an item still open",
+            "mod outer {\n#[path = \"harness/shown.rs\"]\nmod shown;\n}\n",
+        ),
+    ];
+    for (form, root) in refused {
+        assert_eq!(rows_naming(root, &families, "RenderShown"), 0, "{form}");
         let problems = mount_problems(root, &["shown"], &["shown".to_owned()]);
-        assert_eq!(problems.len(), 1, "{root:?}: {problems:?}");
+        assert_eq!(problems.len(), 1, "{form}: {problems:?}");
     }
-    assert_eq!(rows_naming(mounted, &families, "RenderShown"), 1);
-    assert_eq!(
-        mount_problems(mounted, &["shown"], &["shown".to_owned()]),
-        Vec::<String>::new()
-    );
+    let accepted = [
+        ("at the top", mounted),
+        (
+            "below another mount",
+            "#[path = \"harness_snapshot.rs\"]\nmod harness_snapshot;\n\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "below an item and a doc comment",
+            "const A: u8 = 0;\n\n/// Rows.\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
+        ),
+        (
+            "with CRLF line ends",
+            "fn other() {}\r\n#[path = \"harness/shown.rs\"]\r\nmod shown;\r\n",
+        ),
+    ];
+    for (form, root) in accepted {
+        assert_eq!(rows_naming(root, &families, "RenderShown"), 1, "{form}");
+        assert_eq!(
+            mount_problems(root, &["shown"], &["shown".to_owned()]),
+            Vec::<String>::new(),
+            "{form}"
+        );
+    }
     assert_eq!(
         mount_problems(
             mounted,
@@ -13840,22 +14027,80 @@ fn the_guard_refuses_a_family_file_that_is_not_mounted() {
 
 #[test]
 fn the_mount_check_takes_a_missing_directory_as_no_files() {
-    let base =
-        std::env::temp_dir().join(format!("flui_objects_harness_guard_{}", std::process::id()));
-    let missing = base.join("harness");
-    std::fs::remove_dir_all(&base).ok();
+    let scratch = ScratchDirectory::new();
+    // A second directory of the same run is another directory, and dropping
+    // it removes it.
+    let other = ScratchDirectory::new();
+    assert_ne!(scratch.path, other.path);
+    let other_path = other.path.clone();
+    drop(other);
+    assert!(!other_path.exists(), "{}", other_path.display());
+
+    let missing = scratch.path.join("harness");
     assert_eq!(family_file_stems(&missing), Vec::<String>::new());
     assert_eq!(
         mount_problems("", &[], &family_file_stems(&missing)),
         Vec::<String>::new()
     );
 
-    std::fs::create_dir_all(&missing).expect("the temporary directory is writable");
-    std::fs::write(missing.join("shown.rs"), "").expect("the temporary directory is writable");
-    std::fs::write(missing.join("notes.txt"), "").expect("the temporary directory is writable");
-    let stems = family_file_stems(&missing);
-    std::fs::remove_dir_all(&base).ok();
-    assert_eq!(stems, ["shown"]);
+    std::fs::create_dir(&missing).expect("the scratch directory is writable");
+    std::fs::write(missing.join("shown.rs"), "").expect("the scratch directory is writable");
+    std::fs::write(missing.join("notes.txt"), "").expect("the scratch directory is writable");
+    assert_eq!(family_file_stems(&missing), ["shown"]);
+}
+
+#[test]
+#[should_panic(expected = "cannot read the family directory")]
+fn the_mount_check_refuses_a_directory_it_cannot_list() {
+    let scratch = ScratchDirectory::new();
+    let file = scratch.path.join("harness");
+    std::fs::write(&file, "").expect("the scratch directory is writable");
+    let stems = family_file_stems(&file);
+    unreachable!("a file listed as a directory gave {stems:?}");
+}
+
+/// A directory of one call's own under the system temporary directory, named
+/// by the process id, a per-process call counter and the clock, so neither
+/// two calls of one run nor two runs sharing the temporary directory under
+/// separate pid namespaces name the same one. It is created with `create_dir`,
+/// so a name that exists fails the test instead of writing into a directory
+/// someone else owns, and dropping it removes it with its contents, after a
+/// failed assertion too.
+#[derive(Debug)]
+struct ScratchDirectory {
+    path: std::path::PathBuf,
+}
+
+impl ScratchDirectory {
+    fn new() -> Self {
+        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since_epoch| since_epoch.as_nanos());
+        let path = std::env::temp_dir().join(format!(
+            "flui_objects_harness_guard_{}_{call}_{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).unwrap_or_else(|error| {
+            panic!(
+                "{}: cannot create the scratch directory: {error}",
+                path.display()
+            )
+        });
+        Self { path }
+    }
+}
+
+impl Drop for ScratchDirectory {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.path) {
+            eprintln!(
+                "{}: the scratch directory was not removed: {error}",
+                self.path.display()
+            );
+        }
+    }
 }
 
 #[test]

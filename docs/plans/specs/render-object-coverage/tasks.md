@@ -171,13 +171,16 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
   the substring match covered only through a longer name gets its own row here. No existing
   row moves. `docs/testing.md` links `RENDER_OBJECT_TYPES` instead of saying "81".
 - **Owns:** `crates/flui-objects/tests/render_object_harness.rs` (the guards and the module
-  list), the harness paragraph of `docs/testing.md`. It creates no directory:
+  list), the harness paragraph of `docs/testing.md`, `crates/flui-objects/README.md` (its
+  copied counts). It creates no directory:
   `crates/flui-objects/tests/harness/` appears with RC1's first family file.
 - **Tests:** `the_guard_counts_a_pub_row_of_a_family_file`,
   `the_guard_refuses_a_name_inside_a_longer_one`,
   `the_guard_refuses_a_family_file_that_is_not_mounted`,
-  `the_mount_check_takes_a_missing_directory_as_no_files`, each over literal sources or a
+  `the_mount_check_takes_a_missing_directory_as_no_files`,
+  `the_mount_check_refuses_a_directory_it_cannot_list`, each over literal sources or a
   temporary directory and each failing with the matcher reverted;
+  `a_family_entry_is_the_file_its_name_mounts` over the expansion of `family_files!`;
   `family_files_are_mounted_and_listed`; the two existing guards pass.
 - **Checks:** clippy and nextest for `flui-objects`; the `checks` job's document steps (typos,
   lychee, unmounted-tests).

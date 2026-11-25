@@ -1,8 +1,9 @@
 # flui-objects
 
-**The concrete `RenderBox` / `RenderSliver` catalog for FLUI** — 83
-ready-to-use render objects in six domain families, sitting directly above the
-`flui-rendering` engine crate.
+**The concrete `RenderBox` / `RenderSliver` catalog for FLUI** — ready-to-use
+render objects in six domain families, sitting directly above the
+`flui-rendering` engine crate. `RENDER_OBJECT_TYPES` in
+[`tests/render_object_harness.rs`](tests/render_object_harness.rs) lists them.
 
 Part of the [FLUI](https://github.com/vanyastaff/flui) workspace — pre-release,
 consumed by path (not published to crates.io).
@@ -27,8 +28,8 @@ All types re-export flat from the crate root: `flui_objects::RenderPadding`.
 - **Harness-tested.** Every exported object appears in the render-object
   test catalog (`RENDER_OBJECT_TYPES`) with a `harness_*` row in a family table test exercising the
   real pipeline — the catalog completeness is CI-enforced.
-- **Authoring-surface proof.** 83 objects compiling from outside
-  `flui-rendering` prove the engine's custom-object authoring API is complete.
+- **Authoring-surface proof.** Every object in the catalog compiles from outside
+  `flui-rendering`, which proves the engine's custom-object authoring API is complete.
 
 ## Documentation
 
