@@ -3,8 +3,8 @@
 //! A gesture is one composition, whichever side performs it: the app's agent on the synthetic
 //! path and the driver's OS lane both build the sequence here from the point and bounds the
 //! target showed when it was found actionable, and both play it through [`plan`](super::plan).
-//! Each builder is data to data: it reads no clock and no tree. What a call leaves unnamed (a long
-//! press's hold, a double tap's gap, a stroke's speed, settle and least length) comes from
+//! Each builder is data to data: it reads no clock and no tree. What a call leaves unnamed and a
+//! window's settings decide (a long press's hold, a stroke's speed and least length) comes from
 //! [`Defaults`]: the window's own gesture settings where the composer has them, the windowless
 //! values otherwise.
 //!
@@ -23,8 +23,16 @@ use super::{
 use crate::geometry::{LogicalPoint, LogicalRect};
 use crate::wire::ActionName;
 
+/// The pause between the two taps of a double tap, in milliseconds: inside a double-tap timeout
+/// of 100 ms or more with the frames the taps themselves take.
+const DOUBLE_TAP_GAP_MS: u64 = 60;
+
 /// How long the move of a drag and of a pinch lasts, in milliseconds.
 const STROKE_MS: u64 = 300;
+
+/// How long a swipe holds still before it lifts, in milliseconds: longer than the 100 ms a
+/// velocity tracker looks back, so it lifts with no speed whatever speed it moved at.
+pub const SWIPE_SETTLE_MS: u64 = 120;
 
 /// The longest the move of a swipe or a fling lasts, in milliseconds; a slower stroke is this
 /// long.
@@ -45,70 +53,40 @@ const DEFAULT_PINCH_RADIUS: f64 = 50.0;
 /// The nearest a pinch's contacts start to the centre, in logical pixels.
 const MIN_PINCH_RADIUS: f64 = 4.0;
 
-/// What a gesture takes where its call names no duration, velocity or distance: what the window
-/// it plays in recognises as that gesture.
+/// What a gesture takes where its call names no duration, velocity or distance and the window it
+/// plays in decides what is recognised as that gesture.
 ///
-/// The app's agent fills it from the window's own gesture settings (the long-press and
-/// double-tap timeouts, the fling velocities, the slops that follow its platform and the
-/// system's preferences); a composer with no window to read, the driver's OS lane, takes
-/// [`Defaults::WINDOWLESS`]. Every value a composer uses is within [`Defaults::CEILING`], which
-/// the reply bound of a gesture's parameters counts ([`Addressed::holds_for`]), so the window
-/// never plays longer than the bound allows.
-///
-/// [`Addressed::holds_for`]: crate::method::Addressed::holds_for
+/// The app's agent fills it from the window's own gesture settings (the long-press timeout, the
+/// fling velocities and the slop, which follow its platform and the system's preferences); a
+/// composer with no window to read, the driver's OS lane, takes [`Defaults::WINDOWLESS`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct Defaults {
-    /// How long a long press holds, in milliseconds.
+    /// How long a long press holds, in milliseconds; at most
+    /// [`Self::LONGEST_LONG_PRESS_MS`].
     pub long_press_ms: u64,
-    /// The pause between the two taps of a double tap, in milliseconds.
-    pub double_tap_gap_ms: u64,
     /// A fling's speed, and a swipe's before it holds still, in logical pixels a second.
     pub fling_velocity: f64,
-    /// How long a swipe holds still before it lifts, in milliseconds, so it lifts slower than a
-    /// fling.
-    pub swipe_settle_ms: u64,
     /// The shortest stroke a swipe makes, in logical pixels, so it passes the slop a drag starts
     /// past.
     pub min_stroke: f64,
 }
 
 impl Defaults {
-    /// What a composer with no window to read takes: a press held 800 ms, taps 60 ms apart, a
-    /// stroke at 2500 px/s held still 120 ms before it lifts, and at least 36 px long.
+    /// What a composer with no window to read takes: a press held 800 ms, and a stroke at
+    /// 2500 px/s at least 36 px long.
     pub const WINDOWLESS: Self = Self {
         long_press_ms: 800,
-        double_tap_gap_ms: 60,
         fling_velocity: 2_500.0,
-        swipe_settle_ms: 120,
         min_stroke: 36.0,
     };
 
-    /// The most of each duration any composer uses: a long press of 4 s, taps 300 ms apart, a
-    /// swipe held still 500 ms. A window whose settings ask for more refuses the gesture with
-    /// the reason, so its call can name what it needs. The velocity and the stroke set no
-    /// duration of their own: a stroke's time is bounded by its distance and the longest stroke.
-    pub const CEILING: Self = Self {
-        long_press_ms: 4_000,
-        double_tap_gap_ms: 300,
-        fling_velocity: 2_500.0,
-        swipe_settle_ms: 500,
-        min_stroke: 36.0,
-    };
-
-    /// Whether every duration is within [`Self::CEILING`].
-    #[must_use]
-    pub const fn within_ceiling(&self) -> bool {
-        self.long_press_ms <= Self::CEILING.long_press_ms
-            && self.double_tap_gap_ms <= Self::CEILING.double_tap_gap_ms
-            && self.swipe_settle_ms <= Self::CEILING.swipe_settle_ms
-    }
-}
-
-impl Default for Defaults {
-    fn default() -> Self {
-        Self::WINDOWLESS
-    }
+    /// The longest a long press naming no duration holds, in milliseconds, which the reply bound
+    /// of its parameters counts ([`Addressed::holds_for`]): a window whose long-press timeout
+    /// asks for more refuses the call with the reason, so it can name its duration.
+    ///
+    /// [`Addressed::holds_for`]: crate::method::Addressed::holds_for
+    pub const LONGEST_LONG_PRESS_MS: u64 = 4_000;
 }
 
 /// The source id of a gesture's mouse.
@@ -242,9 +220,9 @@ pub fn tap_action(button: PointerButton) -> Option<ActionName> {
     (button == PointerButton::Primary).then_some(ActionName::Invoke)
 }
 
-/// `element.double_tap`: two taps of `button` at `at`, [`Defaults::double_tap_gap_ms`] apart.
+/// `element.double_tap`: two taps of `button` at `at`, 60 ms apart.
 #[must_use]
-pub fn double_tap(at: LogicalPoint, button: PointerButton, defaults: &Defaults) -> ActionSequence {
+pub fn double_tap(at: LogicalPoint, button: PointerButton) -> ActionSequence {
     ActionSequence::new(vec![pointer(
         PointerDevice::Mouse,
         MOUSE,
@@ -252,7 +230,7 @@ pub fn double_tap(at: LogicalPoint, button: PointerButton, defaults: &Defaults) 
             move_to(at, 0),
             down(button),
             up(button),
-            pause(defaults.double_tap_gap_ms),
+            pause(DOUBLE_TAP_GAP_MS),
             down(button),
             up(button),
         ],
@@ -337,7 +315,7 @@ fn room_of(aim: Aim, dx: f64, dy: f64) -> f64 {
 
 /// `element.swipe` (`fling` false) and `element.fling`: a touch contact pressed at the aim, moved
 /// `distance` towards `direction` at `velocity`, and lifted; a swipe holds still for
-/// [`Defaults::swipe_settle_ms`] first, so it ends below the fling velocity.
+/// [`SWIPE_SETTLE_MS`] first, so it ends below the fling velocity.
 ///
 /// With no distance named, the stroke goes most of the way from the point to the edge of what it
 /// aims at in that direction, so it ends inside the part the aim's bounds hold (the part of the
@@ -378,7 +356,7 @@ pub fn swipe(
         move_to(end, stroke_ms(distance, velocity)),
     ];
     if !fling {
-        actions.push(pause(defaults.swipe_settle_ms));
+        actions.push(pause(SWIPE_SETTLE_MS));
     }
     actions.push(up(PointerButton::Primary));
     Ok(ActionSequence::new(vec![pointer(
@@ -514,9 +492,8 @@ pub fn scroll(at: LogicalPoint, direction: Direction, distance: f64) -> ActionSe
 
 /// How long the sequences a gesture plays take a window to play once its target is found
 /// ([`ActionSequence::plays_within`]), from its parameters alone: where a duration depends on the
-/// target's bounds or on the window's gesture settings, the longest it can be ([`Defaults::CEILING`]
-/// for what the window chooses). A window that serves the gesture may hold the request
-/// this long past the act's timeout (ADR-0288 §4).
+/// target's bounds or on the window's gesture settings, the longest it can be. A window that
+/// serves the gesture may hold the request this long past the act's timeout (ADR-0288 §4).
 pub(crate) trait PlayBound {
     /// The bound.
     fn plays_within(&self) -> Duration;
@@ -527,13 +504,15 @@ const ORIGIN: LogicalPoint = LogicalPoint::new(0.0, 0.0);
 impl PlayBound for super::TapParams {
     /// A double tap, the longer of the two gestures these parameters take.
     fn plays_within(&self) -> Duration {
-        double_tap(ORIGIN, self.button, &Defaults::CEILING).plays_within()
+        double_tap(ORIGIN, self.button).plays_within()
     }
 }
 
 impl PlayBound for super::LongPressParams {
+    /// The press named, or the longest a window holds one naming no duration.
     fn plays_within(&self) -> Duration {
-        long_press(ORIGIN, self.duration_ms, &Defaults::CEILING).plays_within()
+        let duration_ms = self.duration_ms.unwrap_or(Defaults::LONGEST_LONG_PRESS_MS);
+        long_press(ORIGIN, Some(duration_ms), &Defaults::WINDOWLESS).plays_within()
     }
 }
 
@@ -544,7 +523,7 @@ impl PlayBound for super::DragParams {
 }
 
 impl PlayBound for super::SwipeParams {
-    /// A swipe, which holds still for the longest settle before it lifts, of the longest stroke
+    /// A swipe, which holds still before it lifts, of the longest stroke
     /// its parameters allow: the distance and velocity named, or the longest stroke (10 s) when
     /// either is the window's to choose.
     fn plays_within(&self) -> Duration {
@@ -566,7 +545,7 @@ impl PlayBound for super::SwipeParams {
                 move_to(ORIGIN, 0),
                 down(PointerButton::Primary),
                 move_to(ORIGIN, stroke),
-                pause(Defaults::CEILING.swipe_settle_ms),
+                pause(SWIPE_SETTLE_MS),
                 up(PointerButton::Primary),
             ],
         )])

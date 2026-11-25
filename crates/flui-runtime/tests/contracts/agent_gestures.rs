@@ -708,8 +708,7 @@ fn a_gestures_reply_deadline_is_its_timeout_and_its_play_past_the_reply_timeout(
     session.receive(&crate::agent_wire::line(&tap), now);
     session.poll(now, &waker);
     let origin = LogicalPoint::new(0.0, 0.0);
-    let plays = gestures::double_tap(origin, PointerButton::Primary, &gestures::Defaults::CEILING)
-        .plays_within();
+    let plays = gestures::double_tap(origin, PointerButton::Primary).plays_within();
     assert!(plays > Duration::ZERO);
     assert_eq!(
         session.next_deadline(),

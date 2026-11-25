@@ -197,7 +197,7 @@ impl Composed {
         let defaults = window_defaults(settings, self)?;
         Ok(match *self {
             Self::Tap(button) => gestures::tap(aim.point, button),
-            Self::DoubleTap(button) => gestures::double_tap(aim.point, button, &defaults),
+            Self::DoubleTap(button) => gestures::double_tap(aim.point, button),
             Self::LongPress(duration_ms) => gestures::long_press(aim.point, duration_ms, &defaults),
             Self::Drag => {
                 let to = to.map_or(aim.point, |to| to.point);
@@ -246,56 +246,39 @@ impl WindowGestures {
 /// timeout at the frame that ends it.
 const LONG_PRESS_MARGIN_MS: u64 = 300;
 
-/// The share of the window's double-tap timeout the pause between the taps takes, so the second
-/// press lands inside the timeout though each tap takes frames of its own.
-const DOUBLE_TAP_GAP_SHARE: u32 = 5;
-
 /// What a gesture the agent composes in `settings`' window takes where its call names nothing
 /// ([`Defaults`]), each by its rule:
 ///
 /// - a long press holds the window's long-press timeout and [`LONG_PRESS_MARGIN_MS`];
-/// - a double tap's taps are a fifth of the window's double-tap timeout for a mouse apart;
-/// - a fling's speed is twice the window's minimum fling velocity, at least the windowless
-///   speed and never above the window's maximum, so its release flings; a swipe moves at it and
-///   then holds still the windowless settle, longer than the 100 ms the velocity tracker looks
-///   back, so it lifts slower than any fling;
+/// - a fling's speed is twice the slowest release the window flings a touch at, at least the
+///   windowless speed and never above the fastest it reports, so its release flings where the
+///   stroke lasts the three samples a velocity is measured from; a swipe moves at that speed and
+///   then holds still, so it lifts slower than any fling;
 /// - a swipe's stroke is at least twice the window's pan slop for a touch, so it drags.
-///
-/// Every duration is within [`Defaults::CEILING`], the reply bound's: a gap past it is cut to it
-/// (still inside the timeout), and a long press whose window asks for longer is refused for the
-/// call to name its duration.
 ///
 /// # Errors
 ///
 /// `invalid_argument` for a long press naming no duration in a window whose long-press timeout
-/// leaves no room for one within the ceiling.
+/// asks for a press past [`Defaults::LONGEST_LONG_PRESS_MS`], the longest the reply bound counts.
 fn window_defaults(settings: &WindowGestures, composed: &Composed) -> Result<Defaults, AgentError> {
-    let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
-    let ceiling = Defaults::CEILING;
-    let long_press_ms =
-        millis(settings.touch.long_press_timeout()).saturating_add(LONG_PRESS_MARGIN_MS);
-    if matches!(composed, Composed::LongPress(None)) && long_press_ms > ceiling.long_press_ms {
+    let timeout = settings.touch.long_press_timeout();
+    let long_press_ms = u64::try_from(timeout.as_millis())
+        .unwrap_or(u64::MAX)
+        .saturating_add(LONG_PRESS_MARGIN_MS);
+    let longest = Defaults::LONGEST_LONG_PRESS_MS;
+    if matches!(composed, Composed::LongPress(None)) && long_press_ms > longest {
         return Err(AgentError::UnplayableInput(format!(
-            "this window's long-press timeout needs a press of {long_press_ms} ms, past the {} ms \
-             a long press naming no duration may hold: name its duration",
-            ceiling.long_press_ms
+            "this window's long-press timeout needs a press of {long_press_ms} ms, past the \
+             {longest} ms a long press naming no duration may hold: name its duration"
         )));
     }
-    let double_tap_timeout = settings.mouse.double_tap_timeout_for(PointerKind::Mouse);
-    let double_tap_gap_ms =
-        millis(double_tap_timeout / DOUBLE_TAP_GAP_SHARE).min(ceiling.double_tap_gap_ms);
-    let fling_velocity = (2.0 * settings.touch.min_fling_velocity())
-        .max(Defaults::WINDOWLESS.fling_velocity)
-        .min(settings.touch.max_fling_velocity());
+    let (min_fling, max_fling) = settings.touch.fling_velocity_range_for(PointerKind::Touch);
     let mut defaults = Defaults::WINDOWLESS;
-    defaults.long_press_ms = long_press_ms.min(ceiling.long_press_ms);
-    defaults.double_tap_gap_ms = double_tap_gap_ms;
-    defaults.fling_velocity = fling_velocity;
+    defaults.long_press_ms = long_press_ms.min(longest);
+    defaults.fling_velocity = (2.0 * min_fling)
+        .max(Defaults::WINDOWLESS.fling_velocity)
+        .min(max_fling);
     defaults.min_stroke = 2.0 * settings.touch.pan_slop_for(PointerKind::Touch);
-    debug_assert!(
-        defaults.within_ceiling(),
-        "BUG: a window's defaults stay within the ceiling"
-    );
     Ok(defaults)
 }
 

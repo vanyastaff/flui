@@ -617,7 +617,7 @@ pub(crate) fn double_tap(driver: &mut Driver, params: TapParams) -> Result<ActOu
         return answer;
     }
     let aim = aim(driver, &params.target, &params.options)?;
-    let sequence = gestures::double_tap(aim.point, params.button, &Defaults::WINDOWLESS);
+    let sequence = gestures::double_tap(aim.point, params.button);
     act(driver, aim, &params.options, sequence, None)
 }
 

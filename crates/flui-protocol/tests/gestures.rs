@@ -64,7 +64,7 @@ fn each_pointer_gesture_composes_to_its_sequence() {
         ),
         (
             "double tap",
-            gestures::double_tap(point, PointerButton::Primary, &Defaults::WINDOWLESS),
+            gestures::double_tap(point, PointerButton::Primary),
             vec![(
                 PointerDevice::Mouse,
                 strings(&[

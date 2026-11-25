@@ -1039,7 +1039,7 @@ impl Tester {
 
     /// Press at `start`, a point in the window's logical pixels, move by `dx`,
     /// `dy` over `duration`, hold still for the protocol's swipe settle
-    /// ([`Defaults::WINDOWLESS`](flui_protocol::input::gestures::Defaults::WINDOWLESS)`.swipe_settle_ms`)
+    /// ([`SWIPE_SETTLE_MS`](flui_protocol::input::gestures::SWIPE_SETTLE_MS))
     /// and release: a drag ends below the fling velocity, so what it scrolled
     /// stays where the contact left it.
     ///
@@ -1071,7 +1071,7 @@ impl Tester {
                 pressure: None,
             },
             PointerAction::Pause {
-                duration_ms: flui_protocol::input::gestures::Defaults::WINDOWLESS.swipe_settle_ms,
+                duration_ms: flui_protocol::input::gestures::SWIPE_SETTLE_MS,
             },
             PointerAction::Up {
                 button: PointerButton::Primary,

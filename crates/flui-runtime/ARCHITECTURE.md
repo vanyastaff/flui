@@ -1160,9 +1160,9 @@ same `actionability`, its stability included), and performs once every check pas
 attached under `force`: the sequence `flui_protocol::input::gestures` composes from that frame's
 point and the part of the element the window shows (`flui_semantics::ActionabilityReading::shown`;
 the whole bounds only where none shows), with what the call leaves unnamed (a long press's hold, a
-double tap's gap, a stroke's speed and least length) taken from the window's own gesture settings by
-`window_defaults`, each rule stated there and every duration within `Defaults::CEILING`, which the
-reply bound counts (a long press the window would need longer for is refused, naming the duration
+stroke's speed and least length) taken from the window's own gesture settings by
+`window_defaults`, each rule stated there, a long press at most `Defaults::LONGEST_LONG_PRESS_MS`,
+which the reply bound counts (a long press the window would need longer for is refused, naming the duration
 to give), injected through the call's lease as `input.inject` is, or on the semantic path
 the semantics action that does the same (a primary tap invokes; a focus before text or keys
 focuses). The deadline is the act's own timeout on the presentation's clock; the attempt at or

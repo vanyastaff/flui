@@ -171,7 +171,7 @@ fn each_gesture_kind_routes_the_same_events_through_the_agent_and_the_os_lowerin
         ("tap", gestures::tap(point, PointerButton::Primary)),
         (
             "double tap",
-            gestures::double_tap(point, PointerButton::Primary, &Defaults::WINDOWLESS),
+            gestures::double_tap(point, PointerButton::Primary),
         ),
         (
             "long press",

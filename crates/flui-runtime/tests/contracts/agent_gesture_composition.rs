@@ -95,11 +95,15 @@ struct Heard {
 
 /// "Pad", a surface that recognises a long press, a double tap and a drag; and "Drop" below it.
 #[derive(Clone, StatelessView)]
-struct Pad(Heard);
+struct Pad {
+    heard: Heard,
+    /// The pad's width, in logical pixels.
+    width: u32,
+}
 
 impl StatelessView for Pad {
     fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
-        let heard = self.0.clone();
+        let heard = self.heard.clone();
         let (long_presses, double_taps) = (heard.long_presses, heard.double_taps);
         let (drags, releases) = (heard.drags, heard.releases);
         let pad = GestureDetector::new()
@@ -113,7 +117,7 @@ impl StatelessView for Pad {
                     }),
             )
             .child(
-                SizedBox::new(200.0, 200.0)
+                SizedBox::new(f64::from(self.width), 200.0)
                     .child(ColoredBox::new(flui_painting::styling::Color::WHITE)),
             );
         Column::new(vec![
@@ -136,13 +140,18 @@ impl StatelessView for Pad {
     }
 }
 
-/// How the window's gesture settings were set: a platform's preset, and the system's long-press
-/// and double-tap timeouts where its preferences name them.
+/// How the window's gesture settings were set: a platform's preset, the system's long-press and
+/// double-tap timeouts where its preferences name them, and the range of release speeds a touch
+/// flings at where the window's own preset names one.
 #[derive(Clone, Copy, Debug)]
 struct Setting {
     platform: TargetPlatform,
     long_press: Option<Duration>,
     double_tap: Option<Duration>,
+    /// The slowest and the fastest release that flings, in logical pixels a second.
+    fling: Option<(f64, f64)>,
+    /// The width of the window and of the pad in it, in logical pixels.
+    width: u32,
 }
 
 impl Setting {
@@ -151,13 +160,28 @@ impl Setting {
             platform,
             long_press: None,
             double_tap: None,
+            fling: None,
+            width: 200,
+        }
+    }
+
+    /// The settings a touch contact is recognised with, before the system's preferences.
+    fn touch(self) -> GestureSettings {
+        let preset = GestureSettings::preset(self.platform, PointerKind::Touch);
+        match self.fling {
+            Some((min, max)) => preset
+                .try_with_fling_velocity(min, max)
+                .expect("a fling range in order"),
+            None => preset,
         }
     }
 
     fn window(self) -> HeadlessWindow {
-        HeadlessWindow::new(200, 400)
+        HeadlessWindow::new(self.width, 400)
             .with_platform(self.platform)
-            .with_gesture_preset(GestureProfiles::preset(self.platform))
+            .with_gesture_preset(
+                GestureProfiles::preset(self.platform).with_kind(PointerKind::Touch, self.touch()),
+            )
     }
 
     fn apply(self, host: &HeadlessHost) {
@@ -173,9 +197,16 @@ impl Setting {
         host.set_system_preferences(SystemPreferences::default().with_gestures(preferences));
     }
 
+    fn pad(self, heard: &Heard) -> Pad {
+        Pad {
+            heard: heard.clone(),
+            width: self.width,
+        }
+    }
+
     /// The least speed a touch release flings at in this window.
     fn min_fling(self) -> f64 {
-        GestureSettings::preset(self.platform, PointerKind::Touch).min_fling_velocity()
+        self.touch().fling_velocity_range_for(PointerKind::Touch).0
     }
 }
 
@@ -248,6 +279,13 @@ fn a_default_gesture_is_recognised_as_that_gesture_in_every_window() {
         double_tap: Some(Duration::from_millis(150)),
         ..Setting::preset(TargetPlatform::iOS)
     });
+    // A window that flings only from a release faster than the windowless stroke, wide enough
+    // that a stroke at twice that speed lasts the samples the velocity tracker measures from.
+    settings.push(Setting {
+        fling: Some((3_000.0, 8_000.0)),
+        width: 800,
+        ..Setting::preset(TargetPlatform::Android)
+    });
     let defaults = [
         Unnamed::LongPress,
         Unnamed::DoubleTap,
@@ -258,7 +296,7 @@ fn a_default_gesture_is_recognised_as_that_gesture_in_every_window() {
     for setting in settings {
         for default in defaults {
             let heard = Heard::default();
-            let (mut host, _agent, _window, lease) = shown(setting.window(), &Pad(heard.clone()));
+            let (mut host, _agent, _window, lease) = shown(setting.window(), &setting.pad(&heard));
             setting.apply(&host);
             let _ = host.pump(Duration::from_millis(16));
             let mut asked = ask_default(&lease, default);
@@ -304,7 +342,7 @@ fn a_long_press_past_the_ceiling_is_refused_until_its_duration_is_named() {
         ..Setting::preset(TargetPlatform::Android)
     };
     let heard = Heard::default();
-    let (mut host, _agent, _window, lease) = shown(setting.window(), &Pad(heard.clone()));
+    let (mut host, _agent, _window, lease) = shown(setting.window(), &setting.pad(&heard));
     setting.apply(&host);
     let _ = host.pump(Duration::from_millis(16));
     let mut refused = ask_default(&lease, Unnamed::LongPress);

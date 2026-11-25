@@ -383,8 +383,8 @@ fn every_gesture_is_a_window_method_held_for_its_act_timeout_and_its_play() {
     let mut tap = TapParams::new(element);
     assert_eq!(tap.window(), Some(window));
     // The parameters of a tap are a double tap's too, whose input plays the longer: six ticks of
-    // a frame each, and the longest gap a window may choose between its taps.
-    let double_tap_plays = Duration::from_millis(6 * 16 + 300);
+    // a frame each, and the 60 ms gap between its taps.
+    let double_tap_plays = Duration::from_millis(6 * 16 + 60);
     assert_eq!(
         tap.holds_for(),
         Duration::from_millis(GestureOptions::DEFAULT_TIMEOUT_MS) + double_tap_plays,
@@ -489,7 +489,7 @@ fn each_gesture_holds_for_its_timeout_and_the_input_its_parameters_play() {
                     pressure: None,
                 },
                 PointerAction::Pause {
-                    duration_ms: gestures::Defaults::CEILING.swipe_settle_ms,
+                    duration_ms: gestures::SWIPE_SETTLE_MS,
                 },
                 PointerAction::Up {
                     button: PointerButton::Primary,
@@ -506,7 +506,12 @@ fn each_gesture_holds_for_its_timeout_and_the_input_its_parameters_play() {
                 LongPressParams,
                 serde_json::json!({ "target": target, "timeout_ms": 1_000 })
             ),
-            gestures::long_press(origin, None, &gestures::Defaults::CEILING).plays_within(),
+            gestures::long_press(
+                origin,
+                Some(gestures::Defaults::LONGEST_LONG_PRESS_MS),
+                &gestures::Defaults::WINDOWLESS,
+            )
+            .plays_within(),
         ),
         (
             "a long press of 5 s",
@@ -516,7 +521,8 @@ fn each_gesture_holds_for_its_timeout_and_the_input_its_parameters_play() {
                     "target": target, "duration_ms": 5_000, "timeout_ms": 1_000,
                 })
             ),
-            gestures::long_press(origin, Some(5_000), &gestures::Defaults::CEILING).plays_within(),
+            gestures::long_press(origin, Some(5_000), &gestures::Defaults::WINDOWLESS)
+                .plays_within(),
         ),
         (
             "a swipe that names no distance",
@@ -623,13 +629,11 @@ fn each_gesture_holds_for_its_timeout_and_the_input_its_parameters_play() {
         "a long press holds for the press it names"
     );
     assert!(
-        rows[2].1
-            >= timeout
-                + Duration::from_millis(10_000 + gestures::Defaults::CEILING.swipe_settle_ms),
+        rows[2].1 >= timeout + Duration::from_millis(10_000 + gestures::SWIPE_SETTLE_MS),
         "a swipe with no distance holds for the longest stroke"
     );
     assert!(
-        rows[0].1 >= timeout + Duration::from_millis(gestures::Defaults::CEILING.long_press_ms),
+        rows[0].1 >= timeout + Duration::from_millis(gestures::Defaults::LONGEST_LONG_PRESS_MS),
         "a long press naming no duration holds for the longest press a window may choose"
     );
 }

@@ -705,7 +705,7 @@ pub(crate) fn element_id(node: &NodeRef<'_>) -> Option<ElementId> {
 }
 
 /// The wire handle of the element `render` contributes to the published tree: the accessibility
-/// id of its node, as [`element_id`] reads it off a published node. The one mapping from a render
+/// id of its node, the id a published node carries. The one mapping from a render
 /// object to the handle an agent's answers name.
 #[must_use]
 pub fn element_id_of(render: flui_foundation::RenderId) -> ElementId {
