@@ -346,7 +346,7 @@ fn parameters_that_make_no_gesture_are_refused() {
             "{defaults:?} to {to:?}: {drag:?}"
         );
     }
-    // A fling whose stroke the window chose is over in fewer than three moves of 16 ms is
+    // A fling whose stroke the window chose is over in fewer than two moves of 16 ms is
     // refused, naming what to give; one whose distance and velocity the call named is played. A
     // stroke of 17 ms (43 px at the window's 2500 px/s) is just two frames long.
     let room = Aim::new(
@@ -433,7 +433,9 @@ fn parameters_that_make_no_gesture_are_refused() {
 }
 
 /// One key is a key name (an upper-case ASCII letter, then ASCII letters and digits) or the text
-/// one key types (one character, and only the non-ASCII marks that join it); nothing else is.
+/// one key types (one scalar value, and only what joins it into one character: a combining mark, a
+/// skin tone, a flag's second half, what a zero-width joiner joins); nothing else is, two symbols
+/// included.
 #[test]
 fn a_key_is_a_key_name_or_the_text_of_one_key() {
     let rows = [
@@ -449,7 +451,16 @@ fn a_key_is_a_key_name_or_the_text_of_one_key() {
         ("e\u{301}", true),
         ("E\u{301}", true),
         ("\u{1f44d}\u{1f3fd}", true),
+        ("\u{1f1fa}\u{1f1e6}", true),
+        ("\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}", true),
+        ("1\u{fe0f}\u{20e3}", true),
+        ("→", true),
         ("", false),
+        ("→→", false),
+        ("€€", false),
+        ("«»", false),
+        ("\u{1f1fa}\u{1f1e6}\u{1f1fa}", false),
+        ("\u{1f468}\u{200d}", false),
         ("ctrl", false),
         ("Ctrl-a", false),
         ("Page_Down", false),

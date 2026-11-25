@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use flui_protocol::geometry::LogicalPoint;
 use flui_protocol::input::{
-    ActionSequence, ImeAction, InputSource, KeyAction, MAX_COORDINATE, MAX_SOURCES, MAX_SPAN,
-    MAX_STEPS, MAX_TICKS, PlanError, PlannedInput, PointerAction, PointerButton, PointerDevice,
-    STEP, ScrollUnit, SourceKind, TimedInput, TrackpadAction, WheelAction, plan,
+    ActionSequence, ImeAction, InputSource, KeyAction, MAX_COORDINATE, MAX_INPUTS, MAX_SOURCES,
+    MAX_SPAN, MAX_STEPS, MAX_TICKS, PlanError, PlannedInput, PointerAction, PointerButton,
+    PointerDevice, STEP, ScrollUnit, SourceKind, TimedInput, TrackpadAction, WheelAction, plan,
 };
 
 fn ms(ms: u64) -> Duration {
@@ -496,6 +496,23 @@ fn a_sequence_no_path_plays_is_refused_whole() {
             },
         ),
         (
+            "more inputs than the bound, within the span: 32 sources of 36 moves of 1024 steps",
+            ActionSequence::new(
+                (0..MAX_SOURCES)
+                    .map(|index| {
+                        pointer(
+                            &format!("p{index}"),
+                            PointerDevice::Mouse,
+                            vec![move_to(1.0, 1.0, 16_384); 36],
+                        )
+                    })
+                    .collect(),
+            ),
+            PlanError::TooManyInputs {
+                inputs: MAX_SOURCES * 36 * 1024,
+            },
+        ),
+        (
             "a pause past the span",
             ActionSequence::new(vec![pointer(
                 "p",
@@ -685,6 +702,22 @@ fn every_bound_is_inclusive() {
         ),
         ("a pressure of zero", pressed(0.0), Duration::ZERO),
         ("a pressure of one", pressed(1.0), Duration::ZERO),
+        (
+            "as many inputs as the bound: two sources of 32 moves split into the most steps",
+            ActionSequence::new(
+                ["a", "b"]
+                    .iter()
+                    .map(|id| {
+                        pointer(
+                            id,
+                            PointerDevice::Mouse,
+                            vec![move_to(1.0, 1.0, 16_384); MAX_INPUTS / 2 / 1024],
+                        )
+                    })
+                    .collect(),
+            ),
+            ms(16_384 * 32),
+        ),
     ];
     for (case, sequence, span) in table {
         let planned = plan(&sequence).unwrap_or_else(|error| panic!("{case}: {error}"));

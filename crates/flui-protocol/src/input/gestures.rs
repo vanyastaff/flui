@@ -504,10 +504,12 @@ pub fn text(text: &str) -> ActionSequence {
 
 /// Whether `key` names one key, the one rule for a key a chord or a key action names: a key name,
 /// an upper-case ASCII letter then ASCII letters and digits (the shape of every W3C key name:
-/// `Enter`, `ArrowDown`, `F12`), or the text one key types, one character and only what joins it
-/// (a combining accent, the rest of an emoji), none of which is ASCII, a letter, a digit or a
-/// space. A name of that shape the window does not know is refused where it is lowered; anything
-/// else (`Ctrl-a`, `Page_Down`, `Arrow Down`, `ctrl`) is not a key, and never typed as text.
+/// `Enter`, `ArrowDown`, `F12`), or the text one key types, one Unicode scalar value and only what
+/// joins it into one character (a combining accent, a variation selector, an emoji's
+/// skin tone, tags or keycap, a flag's second regional indicator, or what a zero-width joiner
+/// joins). A name of that shape the window does not know is refused where it is lowered; anything
+/// else (`Ctrl-a`, `Page_Down`, `Arrow Down`, `ctrl`, two symbols such as `→→`) is not a key, and
+/// never typed as text.
 #[must_use]
 pub fn is_one_key(key: &str) -> bool {
     let mut chars = key.chars();
@@ -521,8 +523,50 @@ pub fn is_one_key(key: &str) -> bool {
     if first.is_ascii_uppercase() && rest.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
         return true;
     }
-    rest.chars()
-        .all(|joined| !joined.is_ascii() && !joined.is_alphanumeric() && !joined.is_whitespace())
+    let mut previous = first;
+    let mut flag_open = is_regional_indicator(first);
+    for next in rest.chars() {
+        let joined = if previous == ZERO_WIDTH_JOINER {
+            !next.is_ascii() && !next.is_whitespace()
+        } else if flag_open && is_regional_indicator(next) {
+            flag_open = false;
+            true
+        } else {
+            joins(next)
+        };
+        if !joined {
+            return false;
+        }
+        previous = next;
+    }
+    previous != ZERO_WIDTH_JOINER
+}
+
+/// U+200D, which joins the characters on either side of it into one (an emoji sequence).
+const ZERO_WIDTH_JOINER: char = '\u{200D}';
+
+/// Whether `c` joins the character before it into one character a key types: a combining mark of
+/// the combining blocks, the zero-width joiner, a variation selector, an emoji skin-tone modifier
+/// or a tag character.
+fn joins(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0300}'..='\u{036F}'
+            | '\u{1AB0}'..='\u{1AFF}'
+            | '\u{1DC0}'..='\u{1DFF}'
+            | '\u{20D0}'..='\u{20FF}'
+            | '\u{FE20}'..='\u{FE2F}'
+            | ZERO_WIDTH_JOINER
+            | '\u{FE00}'..='\u{FE0F}'
+            | '\u{E0100}'..='\u{E01EF}'
+            | '\u{1F3FB}'..='\u{1F3FF}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
+}
+
+/// Whether `c` is a regional indicator, two of which make a flag.
+fn is_regional_indicator(c: char) -> bool {
+    matches!(c, '\u{1F1E6}'..='\u{1F1FF}')
 }
 
 /// The keys of one chord, in the order they go down: its keys joined by `+`, where a `+` that

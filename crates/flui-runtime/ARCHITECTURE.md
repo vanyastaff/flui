@@ -1133,7 +1133,8 @@ without one (ADR-0288 §9). `agent_input.rs` plans the sequence once with
 refusals are the protocol's, and lowers the plan into the events this window takes (`lower`, which
 refuses the whole sequence, adding only what the window cannot deliver: a key that is no W3C name
 nor text, a composition caret outside its text, a trackpad gesture); it queues the lowered script
-on the presentation (`agent_input`, at most 64 jobs, then `InputQueueFull`). The frame that plays a
+on the presentation (`agent_input`, at most 64 jobs holding at most twice the plan's
+`MAX_INPUTS` planned inputs together, then `InputQueueFull`, `busy`). The frame that plays a
 job is asked for before the job is queued: the wake reaches the platform, user code, and one that
 panics leaves nothing queued, so the panic's answer is what happened. `drive_frame` advances
 the queue once per frame boundary, after the commit anchor, on the plan's timeline: a tick starts

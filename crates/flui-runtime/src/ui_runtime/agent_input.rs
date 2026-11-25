@@ -67,6 +67,11 @@ use crate::presentation::PresentationState;
 /// The most injections and releases a window keeps queued; past it, a new one answers `busy`.
 const MAX_QUEUED: usize = 64;
 
+/// The most planned inputs the injections a window keeps queued hold together, a move's steps
+/// each counted; past it, a new one answers `busy`. Twice what one plan holds
+/// ([`flui_protocol::input::MAX_INPUTS`]), so a whole plan queues behind another.
+const MAX_QUEUED_INPUTS: usize = 2 * flui_protocol::input::MAX_INPUTS;
+
 /// The first pointer id an injection hands out. Platforms number their pointers far below it, so
 /// an injected contact never shares an id with one of the platform's.
 const INJECTED_POINTERS: u64 = 1 << 62;
@@ -81,6 +86,8 @@ pub(super) struct Script {
     /// ([`ActionSequence::plays_within`] of each sequence lowered into it). The plan's own ticks
     /// give a move that names no duration a frame to last, which that count does not add twice.
     plays: Duration,
+    /// How many inputs the plans it was lowered from hold, which [`MAX_QUEUED_INPUTS`] counts.
+    inputs: usize,
 }
 
 /// A pointer or wheel source of a script.
@@ -196,6 +203,7 @@ pub(super) fn lower(sequence: &ActionSequence) -> Result<Script, AgentError> {
         sources,
         ticks,
         plays: sequence.plays_within(),
+        inputs: plan.inputs().len(),
     })
 }
 
@@ -274,6 +282,7 @@ impl Script {
     pub(super) fn then(mut self, next: Self) -> Self {
         let offset = self.sources.len();
         self.plays = self.plays.saturating_add(next.plays);
+        self.inputs = self.inputs.saturating_add(next.inputs);
         self.sources.extend(next.sources);
         self.ticks.extend(next.ticks.into_iter().map(|mut tick| {
             for step in &mut tick.steps {
@@ -911,13 +920,22 @@ impl AgentInput {
     ///
     /// # Errors
     ///
-    /// `busy`, with the reply back, when the window already has [`MAX_QUEUED`] jobs.
+    /// `busy`, with the reply back, when the window already has [`MAX_QUEUED`] jobs, or its
+    /// queued injections and this one would hold more than [`MAX_QUEUED_INPUTS`] inputs.
     fn inject(
         &mut self,
         injecting: Injecting,
         reply: ReplySender<ActOutcome>,
     ) -> Result<InjectionId, ReplySender<ActOutcome>> {
-        if self.jobs.len() >= MAX_QUEUED {
+        let queued_inputs = self
+            .jobs
+            .iter()
+            .map(|job| match job {
+                Job::Inject(injection) => injection.script.inputs,
+                Job::Release { .. } => 0,
+            })
+            .fold(injecting.script.inputs, usize::saturating_add);
+        if self.jobs.len() >= MAX_QUEUED || queued_inputs > MAX_QUEUED_INPUTS {
             return Err(reply);
         }
         let Injecting {

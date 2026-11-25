@@ -12,8 +12,8 @@ pub mod gestures;
 mod planning;
 
 pub use planning::{
-    MAX_COORDINATE, MAX_SOURCES, MAX_SPAN, MAX_STEPS, MAX_TICKS, Plan, PlanError, PlannedInput,
-    PlannedSource, STEP, SourceKind, TimedInput, plan,
+    MAX_COORDINATE, MAX_INPUTS, MAX_SOURCES, MAX_SPAN, MAX_STEPS, MAX_TICKS, Plan, PlanError,
+    PlannedInput, PlannedSource, STEP, SourceKind, TimedInput, plan,
 };
 
 use crate::act::JournalSpan;

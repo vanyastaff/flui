@@ -768,6 +768,46 @@ fn a_full_input_queue_refuses_an_injection_and_a_release() {
     assert_eq!(refused.code, ErrorCode::Busy, "{refused:?}");
 }
 
+/// A window keeps at most twice one plan's bound of planned inputs queued, a move's steps each
+/// counted: with two injections of `MAX_INPUTS` move steps each queued, one more input is refused
+/// `busy`, answered at once, however few jobs are queued.
+#[test]
+fn a_window_refuses_input_past_the_inputs_its_queue_holds() {
+    let (mut host, _agent, window, _seen) = shown();
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    // 32 moves of 1024 steps on each of two sources: `MAX_INPUTS` inputs, within the span.
+    let full = || {
+        ["a", "b"]
+            .iter()
+            .map(|id| InputSource::Pointer {
+                id: (*id).to_owned(),
+                device: PointerDevice::Mouse,
+                actions: vec![
+                    PointerAction::Move {
+                        to: LogicalPoint::new(10.0, 10.0),
+                        duration_ms: 16_384,
+                        pressure: None,
+                    };
+                    flui_protocol::input::MAX_INPUTS / 2 / 1024
+                ],
+            })
+            .collect::<Vec<InputSource>>()
+    };
+    let mut first = inject(&lease, full());
+    let mut second = inject(&lease, full());
+    let mut third = inject(&lease, vec![pointer(vec![to(5.0, 5.0)])]);
+    let _ = host.pump(Duration::ZERO);
+    assert!(first.try_take().is_none(), "the first plan is queued");
+    assert!(second.try_take().is_none(), "the second plan is queued");
+    let refused = third
+        .try_take()
+        .expect("answered at the drain")
+        .expect_err("the queue holds its inputs' bound");
+    assert_eq!(refused.code, ErrorCode::Busy, "{refused:?}");
+}
+
 /// The window asks for the frame its queued input needs: a release, played by the turn that
 /// queues it, and an
 /// injection between its ticks, until the answer comes.
