@@ -57,6 +57,17 @@ struct Selection {
     handles: Rc<()>,
 }
 
+impl Drop for Selection {
+    /// Torn down with the selection, which may be before its read script:
+    /// the reads the hold kept stay held, for the run to report, instead of
+    /// being answered here by whatever standing answer the test left.
+    fn drop(&mut self) {
+        if let Some(hold) = self.read_hold.take() {
+            hold.leave_held();
+        }
+    }
+}
+
 impl Default for ScriptedPrimarySelection {
     fn default() -> Self {
         Self::new()
@@ -140,10 +151,11 @@ impl ScriptedPrimarySelection {
     }
 
     /// Let go of the hold [`hold_reads`](Self::hold_reads) took: when no
-    /// other hold of the read script lives, the reads it kept are answered,
-    /// oldest first, by the script's steps and its standing answer (the
-    /// selection's text, asked as each is answered), and later reads answer
-    /// at once again. Returns how many held reads went on to be answered.
+    /// other hold of the read script lives, the reads it kept go on, oldest
+    /// first, to the script's steps and its standing answer (the selection's
+    /// text, asked as each is answered), and later reads answer
+    /// at once again. Returns how many held reads it answered
+    /// ([`ScriptHold::release`]).
     pub fn answer_held_reads(&self) -> usize {
         // Taken out first: releasing asks a claim for its text and answers
         // reads, the test's code, with nothing borrowed.

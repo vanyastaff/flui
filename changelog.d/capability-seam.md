@@ -1,7 +1,7 @@
 ### Added
 - The capability seam (ADR-0152): `flui_platform::capability` declares a capability (`Capability`), its provider (`CapabilityProvider`, given a `ProviderContext`), a `Plugin` that registers providers, and `Completion`/`Resolver` for an answer that arrives later, settled at an owner turn and ended with `Abandoned::OwnerRetired` or `Abandoned::ProviderDropped` when no answer will come. `flui_runtime::capability::CapabilityRegistry` resolves overrides, then built-ins, then plugins, and reports a `CapabilityConflict` when two providers of one tier, or two capabilities of one name, meet. A widget acquires a capability with `cx.capability::<C>()` in a lifecycle hook.
 - `Application::capability::<C>(provider)` overrides a built-in provider and `Application::plugin(plugin)` adds a plugin's; a conflict fails the run with `AppRunError::CapabilityConflict` before the platform starts.
-- `flui_interaction::testing::ScriptedClipboard` (re-exported as `flui_testing::host::ScriptedClipboard`), the headless host's clipboard, which can hold, answer or drop reads and refuse to provide; `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin` run a host over a chosen registry.
+- `flui_interaction::testing::ScriptedClipboard` (re-exported as `flui_testing::host::ScriptedClipboard`), the headless host's clipboard, which can hold reads (one hold of its read script, so a test's own hold keeps them held too), answer or drop them, and refuse to provide; `HeadlessHost::with_capabilities` and `HeadlessHost::with_plugin` run a host over a chosen registry.
 - `flui_sdk::platform::capability` and the clipboard items in `flui_sdk::interaction` re-export the seam for packages.
 
 ### Changed

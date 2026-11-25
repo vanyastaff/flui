@@ -100,6 +100,17 @@ struct Contents {
     handles: Rc<()>,
 }
 
+impl Drop for Contents {
+    /// Torn down with the clipboard, which may be before its read script:
+    /// the reads the hold kept stay held, for the run to report, instead of
+    /// being answered here by whatever standing answer the test left.
+    fn drop(&mut self) {
+        if let Some(hold) = self.read_hold.take() {
+            hold.leave_held();
+        }
+    }
+}
+
 impl Contents {
     /// What a read answers now: the scripted failure, or the text.
     fn answer(&self) -> ClipboardRead {
@@ -277,10 +288,10 @@ impl ScriptedClipboard {
     }
 
     /// Let go of the hold [`hold_reads`](Self::hold_reads) took: when no
-    /// other hold of the read script lives, the reads it kept are answered,
-    /// oldest first, by the script's steps and its standing answer (the
-    /// clipboard's text now), and later reads answer at once again. Returns
-    /// how many held reads went on to be answered.
+    /// other hold of the read script lives, the reads it kept go on, oldest
+    /// first, to the script's steps and its standing answer (the clipboard's
+    /// text now), and later reads answer at once again. Returns
+    /// how many held reads it answered ([`ScriptHold::release`]).
     pub fn answer_held_reads(&self) -> usize {
         // Taken out first: releasing answers reads, whose observers are the
         // test's code, with nothing borrowed.
