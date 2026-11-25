@@ -65,13 +65,13 @@ use flui_protocol::tree::{ElementId, Node, Rect, Tree};
 use flui_protocol::wire::{Checked, Role};
 
 use super::accessibility::{
-    HostScreen, ListCut, PointFrame, ScreenElement, ScreenRequest, ScreenSource, ScreenWalk,
-    WindowIdentity, list_children, no_window, screen_steady, walk_screen, window_identity,
+    HostScreen, PointFrame, ScreenElement, ScreenRequest, ScreenSource, ScreenWalk, WindowIdentity,
+    list_children, no_window, screen_steady, walk_screen, window_identity,
 };
 use super::roles::{self, SCREEN_SUBROLE};
 use crate::error::{Error, Result};
 use crate::lane::ax;
-use crate::lane::walk::{MAX_DEPTH, MAX_NODES, ProviderError};
+use crate::lane::walk::{Cut, MAX_DEPTH, MAX_NODES, ProviderError};
 
 /// How far, in the window's points, an edge of an element's frame may sit from the same edge of
 /// the app node it fits: the bridge places an iOS frame in the Mac's points and the window draws
@@ -397,8 +397,8 @@ impl<E: Clone> Search<E> {
         let mut read = Children {
             chrome: Vec::new(),
             plain: Vec::new(),
-            gone: listed.cut == Some(ListCut::ParentGone),
-            spent: listed.cut == Some(ListCut::Bound),
+            gone: listed.cut == Some(Cut::ListGone),
+            spent: listed.cut == Some(Cut::Bound),
         };
         for child in listed.children {
             let facts = match tree.facts(&child) {
@@ -899,10 +899,11 @@ pub fn element_at<'s>(elements: &'s [ScreenElement], path: &[usize]) -> Option<&
 /// label attributes, identifier and frame, the facts a read gave and a press finds an element by
 /// again.
 ///
-/// A read that stopped short (`HostScreen::truncated`) cannot show that one element is the only
-/// one: a second that reads the same may sit in the part not read. An identifier is no proof
-/// either, since nothing makes an author's identifier unique. So a press refuses one match on
-/// such a read, as it refuses two.
+/// A read that stopped short (`HostScreen::cut`) cannot show that one element is the only one: a
+/// second that reads the same may sit in the part not read. An identifier is no proof either,
+/// since nothing makes an author's identifier unique. So a press refuses one match on such a
+/// read, as it refuses two, with a retry when the cut is one a read again may heal (an element
+/// gone) and none when it repeats (a bound).
 ///
 /// # Errors
 ///
@@ -935,22 +936,13 @@ pub fn locate(screen: &HostScreen, wanted: &ScreenElement) -> Result<Vec<usize>>
             .or(wanted.title.as_deref())
             .unwrap_or_default()
     );
-    match found.len() {
-        1 if screen.truncated => Err(Error::Ambiguous {
-            message: format!(
-                "the read of the Simulator's window stopped short (its budget of {MAX_NODES} \
-                 elements or {MAX_DEPTH} levels, or an element gone mid-read), so the one element \
-                 that reads as {what} cannot be shown to be the only one; the lane presses none: \
-                 read again, and press through the app's own path when the read stays short"
-            ),
-            candidates: Vec::new(),
-            retry: ErrorCode::Ambiguous.default_retry(),
-        }),
-        1 => Ok(found.swap_remove(0)),
-        0 => Err(Error::not_found(format!(
+    match (found.len(), screen.cut) {
+        (1, Some(cut)) => Err(short_read_refusal(&what, cut)),
+        (1, None) => Ok(found.swap_remove(0)),
+        (0, _) => Err(Error::not_found(format!(
             "the Simulator's window shows no element that reads as {what} now"
         ))),
-        count => Err(Error::Ambiguous {
+        (count, _) => Err(Error::Ambiguous {
             message: format!(
                 "{count} elements of the Simulator's window read as {what}; the lane presses \
                  none of them"
@@ -958,6 +950,33 @@ pub fn locate(screen: &HostScreen, wanted: &ScreenElement) -> Result<Vec<usize>>
             candidates: Vec::new(),
             retry: ErrorCode::Ambiguous.default_retry(),
         }),
+    }
+}
+
+/// What a press answers when the one element that reads as `what` was found on a read that `cut`
+/// stopped short: ambiguous, since a second may sit in the part not read, with a retry when a
+/// read again may see that part ([`Cut::repeats`] says it cannot).
+fn short_read_refusal(what: &str, cut: Cut) -> Error {
+    let (why, retry, remedy) = if cut.repeats() {
+        (
+            format!("its budget of {MAX_NODES} elements or {MAX_DEPTH} levels ran out"),
+            Retry::Never,
+            "press through the app's own path",
+        )
+    } else {
+        (
+            "an element went away while it was read".to_owned(),
+            Retry::Soon,
+            "read again",
+        )
+    };
+    Error::Ambiguous {
+        message: format!(
+            "the read of the Simulator's window stopped short ({why}), so the one element that \
+             reads as {what} cannot be shown to be the only one; the lane presses none: {remedy}"
+        ),
+        candidates: Vec::new(),
+        retry,
     }
 }
 
@@ -1001,7 +1020,7 @@ fn project(
         placing,
         tolerance: bounds_tolerance(placing.scale),
         next_id: 1,
-        truncated: screen.truncated,
+        truncated: screen.cut.is_some(),
         used: BTreeSet::new(),
         matched: Vec::new(),
     };
@@ -1012,12 +1031,16 @@ fn project(
     root.window = app_root.window;
     let scope = walk.scope(app_root);
     root.children = walk.children(elements, &mut path, &scope)?;
-    root.children_unread = screen.children_unread || unread;
+    let root_cut = unread.map_or(screen.children_unread, |cut| {
+        Cut::with(screen.children_unread, cut)
+    });
+    root.children_unread = root_cut.is_some();
     // The announcers the app's read leaves out: the root's last children of their shape that no
-    // app node fits. A list read short ends where the read stopped, not at the announcers, so
-    // its last children are kept.
+    // app node fits. A list that ended early ends where the read stopped, not at the announcers,
+    // so its last children are kept; a list read to its end with a gap (an element gone while
+    // read, `Cut::ElementGone`) still ends at them.
     let mut left_out = 0;
-    while !root.children_unread
+    while !root_cut.is_some_and(Cut::ends_list)
         && left_out < ANNOUNCERS
         && root
             .children
@@ -1052,10 +1075,10 @@ fn bounds_tolerance(scale: f64) -> i64 {
     pixels
 }
 
-/// The screen's elements, the path they sit at, and whether some went unread: its elements, or
-/// its one element's children when that element is the app's root read as a container (an
-/// unnamed group without an identifier).
-fn lifted(screen: &HostScreen) -> (&[ScreenElement], Vec<usize>, bool) {
+/// The screen's elements, the path they sit at, and why some went unread, if they did: its
+/// elements, or its one element's children when that element is the app's root read as a
+/// container (an unnamed group without an identifier).
+fn lifted(screen: &HostScreen) -> (&[ScreenElement], Vec<usize>, Option<Cut>) {
     if let [only] = screen.elements.as_slice()
         && only.role == "AXGroup"
         && only.subrole.is_none()
@@ -1065,7 +1088,7 @@ fn lifted(screen: &HostScreen) -> (&[ScreenElement], Vec<usize>, bool) {
     {
         return (&only.children, vec![0], only.children_unread);
     }
-    (&screen.elements, Vec::new(), false)
+    (&screen.elements, Vec::new(), None)
 }
 
 /// Whether the element `os` fits the app node of `candidate`: see the [module docs](self).
@@ -1213,7 +1236,7 @@ impl Walk {
             elements.iter().zip(described).zip(matched).enumerate()
         {
             node.id = self.next();
-            node.children_unread = element.children_unread;
+            node.children_unread = element.children_unread.is_some();
             path.push(index);
             if let Some(app) = app {
                 self.matched.push((app.id, path.clone()));

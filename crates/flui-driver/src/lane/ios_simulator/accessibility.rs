@@ -31,7 +31,7 @@ pub use self::mac::MacAccessibility;
 use super::device::{Simulator, Udid};
 use crate::error::{Error, Result};
 use crate::lane::ax;
-use crate::lane::walk::{MAX_DEPTH, MAX_NODES, ProviderError};
+use crate::lane::walk::{Cut, MAX_DEPTH, MAX_NODES, ProviderError};
 
 /// A rectangle in the Mac's global points: an element's `AXPosition` and `AXSize`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -98,9 +98,9 @@ pub struct ScreenElement {
     pub frame: Option<PointFrame>,
     /// Its children, in the API's order.
     pub children: Vec<ScreenElement>,
-    /// Whether the read stopped before it had seen all its children: the walk's budget or depth
-    /// ran out, or the element went away mid-read ([`walk_screen`]).
-    pub children_unread: bool,
+    /// Why the read stopped short of all its children, if it did ([`Cut`]: the walk's budget or
+    /// depth, the list gone, or one of them gone while read; [`walk_screen`]).
+    pub children_unread: Option<Cut>,
 }
 
 impl ScreenElement {
@@ -122,11 +122,12 @@ pub struct HostScreen {
     pub frame: PointFrame,
     /// The group's children.
     pub elements: Vec<ScreenElement>,
-    /// Whether the read stopped before it had seen all the group's own children, as
+    /// Why the read stopped short of the group's own children, if it did, as
     /// [`ScreenElement::children_unread`] says of an element's.
-    pub children_unread: bool,
-    /// Whether the read stopped short anywhere: a budget, the depth, or an element gone mid-read.
-    pub truncated: bool,
+    pub children_unread: Option<Cut>,
+    /// The most lasting cut the read met anywhere, if any: what a reader of the whole read acts
+    /// on (a press's retry, `Tree::truncated`).
+    pub cut: Option<Cut>,
 }
 
 impl HostScreen {
@@ -136,8 +137,8 @@ impl HostScreen {
         Self {
             frame,
             elements,
-            children_unread: false,
-            truncated: false,
+            children_unread: None,
+            cut: None,
         }
     }
 }
@@ -433,7 +434,8 @@ pub trait ScreenSource {
     ///
     /// # Errors
     ///
-    /// [`ProviderError::Gone`] when the element went away, which leaves it out; any other failure
+    /// [`ProviderError::Gone`] when the element went away, which leaves it out and its level read
+    /// short ([`Cut::ElementGone`]); any other failure
     /// fails the walk.
     fn element(
         &mut self,
@@ -471,14 +473,12 @@ impl<E> Walked<E> {
 pub struct ScreenWalk<E> {
     /// The screen's elements.
     pub elements: Vec<Walked<E>>,
-    /// Whether the screen's own children were left unread.
-    pub children_unread: bool,
-    /// Whether the walk stopped short anywhere: by its budget or depth, or by an element gone.
-    pub truncated: bool,
-    /// Whether one of the cuts behind `truncated` was an element gone (a parent while its
-    /// children were listed, an element while its attributes were read, or one past the depth
-    /// before it said whether it has a child): what a source that answers a gone element as a
-    /// refusal is asked about.
+    /// Why the screen's own children were left unread, if they were.
+    pub children_unread: Option<Cut>,
+    /// The most lasting cut the walk met anywhere, if any.
+    pub cut: Option<Cut>,
+    /// Whether any of the walk's cuts was an element gone ([`Cut::is_gone`]), read from the same
+    /// records as `cut`: what a source that answers a gone element as a refusal is asked about.
     pub met_gone: bool,
 }
 
@@ -494,7 +494,7 @@ impl<E> ScreenWalk<E> {
                 .collect::<Vec<ScreenElement>>(),
         );
         screen.children_unread = self.children_unread;
-        screen.truncated = self.truncated;
+        screen.cut = self.cut;
         screen
     }
 }
@@ -504,8 +504,9 @@ impl<E> ScreenWalk<E> {
 pub struct ChildList<E> {
     /// The children listed, in the API's order.
     pub children: Vec<E>,
-    /// What left the list short of the parent's children, if anything.
-    pub cut: Option<ListCut>,
+    /// What left the list short of the parent's children, if anything: [`Cut::ListGone`] for the
+    /// parent gone, [`Cut::Bound`] for a child there past the bound.
+    pub cut: Option<Cut>,
 }
 
 impl<E> ChildList<E> {
@@ -514,16 +515,6 @@ impl<E> ChildList<E> {
     pub const fn is_cut(&self) -> bool {
         self.cut.is_some()
     }
-}
-
-/// What left a [`ChildList`] short.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ListCut {
-    /// The parent went away before its children were all listed: a read again may list them.
-    ParentGone,
-    /// A child is there past the bound: a read again with the same bound stops there again.
-    Bound,
 }
 
 /// The children of a parent, `child_at` asked for each index in turn, at most `bound` of them:
@@ -548,8 +539,8 @@ pub fn list_children<E>(
                 children.push(child);
                 continue;
             }
-            Ok(Some(_)) => Some(ListCut::Bound),
-            Err(ProviderError::Gone) => Some(ListCut::ParentGone),
+            Ok(Some(_)) => Some(Cut::Bound),
+            Err(ProviderError::Gone) => Some(Cut::ListGone),
             Ok(None) => None,
             Err(error) => return Err(error),
         };
@@ -565,8 +556,9 @@ pub fn list_children<E>(
 /// an element that went away could have been the twin of one read; an element on the deepest
 /// level read has its children marked unread when it has a child or went away before it said.
 /// An element that went away while its own attributes were read is left out, its level marked
-/// so. Every cut is recorded once, with its cause, and what the walk reports (`truncated`,
-/// `met_gone`) is read from those records.
+/// so ([`Cut::ElementGone`]). The rule is `lane::walk`'s, the one for every walk over an OS tree,
+/// with its cause ([`Cut`]): each cut is one write that marks the level and the walk together,
+/// and what the walk reports (`cut`, `met_gone`) is read from those writes.
 ///
 /// # Errors
 ///
@@ -577,58 +569,40 @@ pub fn walk_screen<S: ScreenSource>(
 ) -> std::result::Result<ScreenWalk<S::Element>, ProviderError> {
     let mut walk = ScreenWalker {
         visited: 0,
-        cut_by_bound: false,
-        cut_by_gone: false,
+        cut: None,
+        met_gone: false,
     };
     let level = walk.children_of(source, screen, 0)?;
     Ok(ScreenWalk {
         elements: level.children,
         children_unread: level.unread,
-        truncated: walk.cut_by_bound || walk.cut_by_gone,
-        met_gone: walk.cut_by_gone,
+        cut: walk.cut,
+        met_gone: walk.met_gone,
     })
 }
 
-/// What cut a level of a walk short.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WalkCut {
-    /// The budget, or the depth: a read again cuts it the same way.
-    Bound,
-    /// An element went away: the parent while its children were listed, an element while it was
-    /// read, or one past the depth before it said whether it has a child.
-    Gone,
-}
-
-impl From<ListCut> for WalkCut {
-    fn from(cut: ListCut) -> Self {
-        match cut {
-            ListCut::ParentGone => Self::Gone,
-            ListCut::Bound => Self::Bound,
-        }
-    }
-}
-
-/// A walk's count of elements and the cuts it met, each recorded once by [`Self::cut`].
+/// A walk's count of elements and the cuts it met, each written by [`Self::cut`].
 struct ScreenWalker {
     visited: usize,
-    cut_by_bound: bool,
-    cut_by_gone: bool,
+    /// The most lasting cut met.
+    cut: Option<Cut>,
+    /// Whether any cut met was an element gone.
+    met_gone: bool,
 }
 
-/// One parent's children as a walk read them, and whether some were left unread.
+/// One parent's children as a walk read them, and why some were left unread, if they were.
 struct Level<E> {
     children: Vec<Walked<E>>,
-    unread: bool,
+    unread: Option<Cut>,
 }
 
 impl ScreenWalker {
-    /// Record that a level was cut short by `cause`: the one record the walk's `truncated` and
-    /// `met_gone` are read from.
-    fn cut(&mut self, cause: WalkCut) {
-        match cause {
-            WalkCut::Bound => self.cut_by_bound = true,
-            WalkCut::Gone => self.cut_by_gone = true,
-        }
+    /// Record that the list `level` speaks for was read short by `cause`: the one write that
+    /// marks the level and the walk together.
+    fn cut(&mut self, level: &mut Option<Cut>, cause: Cut) {
+        *level = Cut::with(*level, cause);
+        self.cut = Cut::with(self.cut, cause);
+        self.met_gone |= cause.is_gone();
     }
 
     /// The children of `parent`, `depth` levels under the screen, each with its own.
@@ -643,10 +617,9 @@ impl ScreenWalker {
             MAX_NODES.saturating_sub(self.visited),
         )?;
         self.visited += listed.children.len();
-        let mut unread = false;
+        let mut unread = None;
         if let Some(cut) = listed.cut {
-            unread = true;
-            self.cut(cut.into());
+            self.cut(&mut unread, cut);
         }
         let mut children = Vec::with_capacity(listed.children.len());
         for handle in listed.children {
@@ -655,8 +628,7 @@ impl ScreenWalker {
                 // An element that went away while it was read is left out, and its level read
                 // short: it could have been the twin of one read.
                 Err(ProviderError::Gone) => {
-                    unread = true;
-                    self.cut(WalkCut::Gone);
+                    self.cut(&mut unread, Cut::ElementGone);
                     continue;
                 }
                 Err(error) => return Err(error),
@@ -666,8 +638,7 @@ impl ScreenWalker {
                 // element gone before it said, leaves its children unread.
                 let probe = list_children(|index| source.child_at(&handle, index), 0)?;
                 if let Some(cut) = probe.cut {
-                    element.children_unread = true;
-                    self.cut(cut.into());
+                    self.cut(&mut element.children_unread, cut);
                 }
                 Vec::new()
             } else {
