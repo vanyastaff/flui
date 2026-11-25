@@ -554,11 +554,10 @@ fn a_default_long_press_holds_the_timeout_and_its_margin_up_to_the_ceiling() {
             (Ok(outcome), Some(held_ms)) => {
                 let entries = entries_made(&mut host, &window, &outcome);
                 let time = |kind: flui_protocol::input::InputKind| {
-                    entries
-                        .iter()
-                        .find(|entry| entry.kind == kind)
-                        .map(|entry| entry.time_us)
-                        .unwrap_or_else(|| panic!("{timeout_ms} ms: a {kind:?} in {entries:?}"))
+                    entries.iter().find(|entry| entry.kind == kind).map_or_else(
+                        || panic!("{timeout_ms} ms: a {kind:?} in {entries:?}"),
+                        |entry| entry.time_us,
+                    )
                 };
                 let down = time(flui_protocol::input::InputKind::PointerDown);
                 let up = time(flui_protocol::input::InputKind::PointerUp);

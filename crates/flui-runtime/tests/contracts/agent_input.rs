@@ -674,3 +674,137 @@ fn each_pointer_action_plays_as_planned_one_boundary_at_a_time() {
         );
     }
 }
+
+/// Whether `host`'s list names a cause only a frame clears.
+fn owes_a_frame(host: &mut HeadlessHost) -> bool {
+    host.unsettled()
+        .causes()
+        .any(|cause| cause.cleared_by == flui_protocol::wait::ClearedBy::NextFrame)
+}
+
+/// A window at a slower cadence than the plan's step plays a timed move's steps due by each
+/// boundary at once, and the tick that ends at a boundary where it delivered keeps that boundary:
+/// the lift goes out at the next one. At 30 ms frames a 20 ms move's two steps go out at the
+/// boundary after it starts, which it ends at, and the lift at the one after.
+#[test]
+fn a_tick_that_delivers_at_its_last_boundary_keeps_it() {
+    let (mut host, _agent, window, seen) = shown();
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    let mut played = inject(
+        &lease,
+        vec![pointer(vec![
+            to(50.0, 50.0),
+            down(),
+            PointerAction::Move {
+                to: LogicalPoint::new(70.0, 50.0),
+                duration_ms: 20,
+                pressure: None,
+            },
+            up(),
+        ])],
+    );
+    let mut frames = 0;
+    let outcome = loop {
+        frames += 1;
+        assert!(frames <= 20, "answered within 20 frames");
+        let _ = host.pump(Duration::from_millis(30));
+        if let Some(answer) = played.try_take() {
+            break answer;
+        }
+    };
+    outcome.expect("the move plays");
+    assert_eq!(*seen.lock(), ["down", "move", "move", "up"]);
+    assert_eq!(frames, 6, "the frame it was answered at");
+}
+
+/// A window keeps at most 64 jobs of injected input: past them an injection and a release are
+/// refused `busy`, answered at once.
+#[test]
+fn a_full_input_queue_refuses_an_injection_and_a_release() {
+    let (mut host, _agent, window, _seen) = shown();
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    let _queued: Vec<AgentAnswer<ActOutcome>> = (0..64)
+        .map(|_| inject(&lease, vec![pointer(vec![pause(60_000)])]))
+        .collect();
+    let mut injection = inject(&lease, vec![pointer(vec![pause(1)])]);
+    let mut released = release(&lease);
+    let _ = host.pump(Duration::ZERO);
+    let refused = injection
+        .try_take()
+        .expect("answered at the drain")
+        .expect_err("the queue is full");
+    assert_eq!(refused.code, ErrorCode::Busy, "{refused:?}");
+    let refused = released
+        .try_take()
+        .expect("answered at the drain")
+        .expect_err("the queue is full");
+    assert_eq!(refused.code, ErrorCode::Busy, "{refused:?}");
+}
+
+/// The window asks for the frame its queued input needs: a release, played by the turn that
+/// queues it, and an
+/// injection between its ticks, until the answer comes.
+#[test]
+fn queued_input_asks_for_the_frames_it_needs() {
+    let (mut host, _agent, window, _seen) = shown();
+    let lease = window
+        .input_lease()
+        .expect("an open window leases its input");
+    for _ in 0..3 {
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    let mut released = release(&lease);
+    // The frame the release asks for is drawn by the turn that queues it.
+    let _ = host.pump(Duration::ZERO);
+    released
+        .try_take()
+        .expect("the release asked for the frame that plays it")
+        .expect("the release runs");
+    let mut press = inject(
+        &lease,
+        vec![pointer(vec![to(50.0, 50.0), down(), pause(100), up()])],
+    );
+    let _ = host.pump(Duration::ZERO);
+    for frame in 1..=20 {
+        if press.try_take().is_some() {
+            return;
+        }
+        assert!(
+            owes_a_frame(&mut host),
+            "frame {frame}: the injection asks for the next"
+        );
+        let _ = host.pump(Duration::from_millis(16));
+    }
+    panic!("the press is answered within 20 frames");
+}
+
+/// A queued release asks for the frame that plays it: once served on a turn without a frame, the
+/// runtime owes its window a frame.
+#[test]
+fn a_queued_release_asks_for_the_frame_that_plays_it() {
+    let mut rig = crate::agent_rig::Rig::showing(&flui_widgets::Text::new("Still"));
+    let owes_a_frame = |rig: &crate::agent_rig::Rig| {
+        let now = flui_foundation::MonotonicClock::now(&rig.clock);
+        let mut unsettled = flui_runtime::settledness::Unsettled::new(now);
+        rig.runtime.unsettled(now, &mut unsettled);
+        unsettled
+            .causes()
+            .any(|cause| cause.cleared_by == flui_protocol::wait::ClearedBy::NextFrame)
+    };
+    assert!(!owes_a_frame(&rig), "a still window owes no frame");
+    let mut released = rig
+        .lease
+        .call::<InputRelease>(WindowParams::new(rig.window.id()))
+        .expect("the inbox has room");
+    rig.runtime.pump_background();
+    assert!(owes_a_frame(&rig), "the queued release asks for its frame");
+    rig.frame();
+    released
+        .try_take()
+        .expect("played at the frame it asked for")
+        .expect("the release runs");
+}
