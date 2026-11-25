@@ -276,9 +276,9 @@ impl ScriptedClipboard {
     }
 
     /// Keep every later read unanswered until
-    /// [`answer_held_reads`](Self::answer_held_reads). It is one hold of the
-    /// [`reads`](Self::reads) script: a hold a test took there itself keeps
-    /// reads held after `answer_held_reads`, until it is dropped too.
+    /// [`answer_held_reads`](Self::answer_held_reads): one hold of the
+    /// [`reads`](Self::reads) script, under the script's
+    /// [held-request rules](Script#held-requests).
     pub fn hold_reads(&self) {
         let fresh = self.contents.borrow().read_hold.is_none();
         if fresh {
@@ -287,11 +287,10 @@ impl ScriptedClipboard {
         }
     }
 
-    /// Let go of the hold [`hold_reads`](Self::hold_reads) took: when no
-    /// other hold of the read script lives, the reads it kept go on, oldest
-    /// first, to the script's steps and its standing answer (the clipboard's
-    /// text now), and later reads answer at once again. Returns
-    /// how many held reads it answered ([`ScriptHold::release`]).
+    /// Release the hold [`hold_reads`](Self::hold_reads) took
+    /// ([`ScriptHold::release`]), whose drain answers the kept reads by the
+    /// script's steps and its standing answer, the clipboard's text then.
+    /// Returns how many reads it answered.
     pub fn answer_held_reads(&self) -> usize {
         // Taken out first: releasing answers reads, whose observers are the
         // test's code, with nothing borrowed.
@@ -334,10 +333,8 @@ impl ScriptedClipboard {
     /// Hold every later write, unanswered and off the clipboard, while the
     /// returned hold lives, as a host whose clipboard another application
     /// holds keeps it waiting; reads asked after a held write wait for it.
-    /// It is one hold of the [`writes`](Self::writes) script ([`Script::hold`]):
-    /// writes stay held while it or any other hold of that script lives, a
-    /// test's own included, and when the last is dropped the held writes go
-    /// on, oldest first, to the script's steps and its standing answer.
+    /// It is one hold of the [`writes`](Self::writes) script, under the
+    /// script's [held-request rules](Script#held-requests).
     #[must_use = "writes are held only while the hold is alive"]
     pub fn hold_writes(&self) -> ClipboardWriteHold {
         ClipboardWriteHold {
@@ -487,9 +484,8 @@ impl Landing {
     }
 }
 
-/// Writes held on a [`ScriptedClipboard`] while this, or another hold of
-/// its write script, lives; when the last drops, the held writes go on,
-/// oldest first, to the script's steps and its standing answer.
+/// One hold of a [`ScriptedClipboard`]'s write script, under the script's
+/// [held-request rules](Script#held-requests).
 #[must_use = "writes are held only while the hold is alive"]
 pub struct ClipboardWriteHold {
     /// Held for its `Drop`, which lets go of the script's hold.

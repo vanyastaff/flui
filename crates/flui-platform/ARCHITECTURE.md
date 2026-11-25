@@ -513,24 +513,17 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   position and identity, never by value: how far the owner-thread failures and the cross-thread
   reports had been read, and the ids of the debts and scheduled changes it listed; a failure
   recorded after it is new even when it equals one it returned.
-- **A hold has one owner: the script's count.** `Script::hold` hands out a `ScriptHold`, and the
-  script holds every request that reaches it while any lives, whoever took it (a test, or a
-  double such as the scripted clipboard's `hold_writes`). Nobody lets go of another's hold: the
-  last one dropped or `release`d sends the requests the holds kept, oldest first, on to the steps
-  and the standing answer, as if they arrived then, and counts the ones answered. A request a
-  step held is not one of them. The lift, like `release_oldest`, `release_held` and
-  `abandon_held` (which answer any held request), takes each request out only as it answers it:
-  the code that runs meanwhile finds the rest in the script, where a ticket withdraws one, a new
-  request queues behind them, and a hold taken stops the lift with the rest kept in order. Each
-  request goes on under its own containment, so a test's panicking code (a destructor included)
-  never leaves the lift half done. A request the last `verify` reported unanswered is not sent
-  on (a hold dropped at the end of a test, after its `verify`), and neither is one whose
-  `release_held` answer panicked: both stay held for the test, so what was reported stays
-  reported. A double that keeps a hold in its own state lets go of it with
-  `leave_held` when that state is torn down, which sends nothing on: while another hold lives
-  the kept requests stay that hold's, and when it was the last they become held for the test, as
-  a step holds one, so no later lift answers them and the run reports them `Unanswered` rather
-  than the teardown answering them with whatever standing answer the test left
+- **What a script holds has one owner.** `scripted::queue::Queue` keeps a script's unanswered
+  requests, its hold count and whether a drain runs. Every event goes through its one transition
+  function, `Queue::step`, which hands back what the script does next: a request arriving, a
+  hold taken, dropped or left with `leave_held`, a drain's next step, `verify`, a ticket, a
+  release, a panicked answer, the clock. The script carries that out outside the borrow, one
+  request at a time, and runs all of the test's code for a request inside one containment, so the
+  first panic is kept and the next request is still answered. The rules are stated once, in the
+  "Held requests" section of `Script`'s docs, and each is a row of
+  `every_event_moves_the_queue_as_the_rules_say` (`src/capability/scripted/queue/tests.rs`). A
+  double that keeps a hold in its own state lets go of it with `leave_held` when that state is
+  torn down, so its teardown answers nothing
   (`capability_seam::a_double_torn_down_with_its_reads_held_answers_none_of_them`,
   `crates/flui-testing/tests/capability_seam.rs`).
 - **Reports from other threads are bounded.** A `FailureReport` keeps `MAX_REPORTS` and counts
@@ -590,6 +583,9 @@ is no request it could find unexpected.
 `leave_held_leaves_the_kept_requests_to_another_hold_or_to_the_test`,
 `a_hold_let_go_after_verify_leaves_what_verify_reported`,
 `a_request_withdrawn_while_its_release_answer_is_made_is_not_counted`,
+`an_answer_dropped_by_its_resolver_keeps_the_first_panic_and_the_next_request`,
+`a_hold_left_inside_a_drain_leaves_the_rest_to_it`,
+`a_matcher_capture_dropped_on_the_receive_path_keeps_the_request_and_the_first_panic`,
 `a_scenario_drives_one_host_at_a_time`,
 `the_host_waits_for_a_scheduled_change_as_for_any_deadline`
 (`crates/flui-testing/tests/scenario.rs`);
