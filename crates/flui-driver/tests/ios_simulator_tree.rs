@@ -33,7 +33,7 @@ use flui_driver::lane::ios_simulator::tree::{
     self, BOUNDS_TOLERANCE_POINTS, MAX_SCREEN_DEPTH, Placing, ScreenCandidate, SearchReach,
     TreeError, WindowFacts, WindowTree,
 };
-use flui_driver::lane::walk::{MAX_DEPTH, MAX_NODES, ProviderError};
+use flui_driver::lane::walk::{Cut, MAX_DEPTH, MAX_NODES, ProviderError};
 use flui_driver::lane::{AccessibilityApi, Lane as _};
 use flui_driver::projection::Projection;
 use flui_driver::protocol::error::Retry;
@@ -756,7 +756,7 @@ fn chain(levels: usize) -> (Source, usize) {
 /// and a bound of zero asks only whether a first child is there.
 #[test]
 fn a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone() {
-    use accessibility::{ChildList, ListCut, list_children};
+    use accessibility::{ChildList, list_children};
     let parent = |count: usize, gone_at: Option<usize>| {
         move |index: usize| {
             if gone_at == Some(index) {
@@ -766,20 +766,20 @@ fn a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone() {
             }
         }
     };
-    let listed = |children: &[usize], cut: Option<ListCut>| {
+    let listed = |children: &[usize], cut: Option<Cut>| {
         Ok(ChildList {
             children: children.to_vec(),
             cut,
         })
     };
-    let bound = Some(ListCut::Bound);
+    let bound = Some(Cut::Bound);
     assert_eq!(list_children(parent(3, None), 3), listed(&[0, 1, 2], None));
     assert_eq!(list_children(parent(4, None), 3), listed(&[0, 1, 2], bound));
     assert_eq!(list_children(parent(0, None), 0), listed(&[], None));
     assert_eq!(list_children(parent(1, None), 0), listed(&[], bound));
     assert_eq!(
         list_children(parent(3, Some(1)), 3),
-        listed(&[0], Some(ListCut::ParentGone))
+        listed(&[0], Some(Cut::ListGone))
     );
     assert_eq!(
         list_children(|_| Err::<Option<usize>, _>(ProviderError::Timeout), 3),
@@ -806,12 +806,12 @@ fn the_walk_reads_its_depth_and_marks_what_lies_past_it() {
     let (mut whole, _) = chain(MAX_DEPTH);
     let walked = accessibility::walk_screen(&mut whole, &0).expect("walked");
     assert_eq!(levels_read(&walked.elements), MAX_DEPTH);
-    assert!(!walked.truncated, "nothing lies past the depth");
+    assert_eq!(walked.cut, None, "nothing lies past the depth");
 
     let (mut deeper, deepest) = chain(MAX_DEPTH + 1);
     let walked = accessibility::walk_screen(&mut deeper, &0).expect("walked");
     assert_eq!(levels_read(&walked.elements), MAX_DEPTH);
-    assert!(walked.truncated, "a level lies past the depth");
+    assert_eq!(walked.cut, Some(Cut::Bound), "a level lies past the depth");
     let mut level = &walked.elements;
     let mut last = None;
     while let Some(first) = level.first() {
@@ -820,20 +820,21 @@ fn the_walk_reads_its_depth_and_marks_what_lies_past_it() {
     }
     let last = last.expect("a level was read");
     assert_eq!(last.handle, deepest - 1);
-    assert!(last.element.children_unread);
+    assert_eq!(last.element.children_unread, Some(Cut::Bound));
 
     let (mut gone, deepest) = chain(MAX_DEPTH);
     gone.nodes[deepest].gone_after = Some(0);
     let walked = accessibility::walk_screen(&mut gone, &0).expect("walked");
-    assert!(
-        walked.truncated,
+    assert_eq!(
+        walked.cut,
+        Some(Cut::ListGone),
         "an element gone before it said whether it has a child leaves its children unread"
     );
 
     let (mut hung, deepest) = chain(MAX_DEPTH + 1);
     hung.nodes[deepest - 1].hung = true;
     assert_eq!(
-        accessibility::walk_screen(&mut hung, &0).map(|walk| walk.truncated),
+        accessibility::walk_screen(&mut hung, &0).map(|walk| walk.cut),
         Err(ProviderError::Timeout),
         "the probe past the depth did not answer"
     );
@@ -855,11 +856,12 @@ fn the_walk_reads_its_budget_and_leaves_out_a_gone_element() {
     };
     let walked = accessibility::walk_screen(&mut flat(MAX_NODES), &0).expect("walked");
     assert_eq!(walked.elements.len(), MAX_NODES);
-    assert!(!walked.truncated && !walked.children_unread);
+    assert_eq!((walked.cut, walked.children_unread), (None, None));
 
     let walked = accessibility::walk_screen(&mut flat(MAX_NODES + 1), &0).expect("walked");
     assert_eq!(walked.elements.len(), MAX_NODES);
-    assert!(walked.truncated && walked.children_unread);
+    let bound = Some(Cut::Bound);
+    assert_eq!((walked.cut, walked.children_unread), (bound, bound));
 
     // Two wide levels share one budget: no level is past it, their sum is.
     let mut wide = Source {
@@ -879,7 +881,7 @@ fn the_walk_reads_its_budget_and_leaves_out_a_gone_element() {
             .sum()
     }
     assert_eq!(count(&walked.elements), MAX_NODES, "the budget, in all");
-    assert!(walked.truncated);
+    assert_eq!(walked.cut, Some(Cut::Bound));
 
     let mut gone = source(3);
     let list = gone.nodes[0].children[1];
@@ -895,7 +897,9 @@ fn the_walk_reads_its_budget_and_leaves_out_a_gone_element() {
             .collect::<Vec<usize>>(),
         gone.nodes[list].children[1..]
     );
-    assert!(items.element.children_unread && walked.truncated && walked.met_gone);
+    let gap = Some(Cut::ElementGone);
+    assert_eq!((items.element.children_unread, walked.cut), (gap, gap));
+    assert!(walked.met_gone);
 }
 
 /// The walk marks a level read short the same way whatever stopped it: a parent gone mid-read
@@ -904,32 +908,35 @@ fn the_walk_reads_its_budget_and_leaves_out_a_gone_element() {
 #[test]
 fn a_level_read_short_is_marked_whatever_stopped_it() {
     let whole = accessibility::walk_screen(&mut source(3), &0).expect("walked");
-    assert!(!whole.truncated && !whole.children_unread);
+    assert_eq!((whole.cut, whole.children_unread), (None, None));
     assert_eq!(whole.elements[1].children.len(), 3);
-    assert!(!whole.elements[1].element.children_unread);
+    assert_eq!(whole.elements[1].element.children_unread, None);
 
     let mut gone = source(3);
     gone.nodes[2].gone_after = Some(1);
     let walked = accessibility::walk_screen(&mut gone, &0).expect("walked");
-    assert!(walked.truncated);
+    assert_eq!(walked.cut, Some(Cut::ListGone));
     assert_eq!(walked.elements[1].children.len(), 1);
-    assert!(
+    assert_eq!(
         walked.elements[1].element.children_unread,
+        Some(Cut::ListGone),
         "the list went away"
     );
-    assert!(!walked.children_unread);
+    assert_eq!(walked.children_unread, None);
 
     let budget = accessibility::walk_screen(&mut source(MAX_NODES + 5), &0).expect("walked");
-    assert!(budget.truncated);
-    assert!(
+    assert_eq!(budget.cut, Some(Cut::Bound));
+    assert_eq!(
         budget.elements[1].element.children_unread,
-        "the list the budget cut is marked as a vanished one is"
+        Some(Cut::Bound),
+        "the list the budget cut is marked with its cause"
     );
 
     let mut screen_gone = source(0);
     screen_gone.nodes[0].gone_after = Some(1);
     let walked = accessibility::walk_screen(&mut screen_gone, &0).expect("walked");
-    assert!(walked.children_unread && walked.truncated);
+    let list_gone = Some(Cut::ListGone);
+    assert_eq!((walked.children_unread, walked.cut), (list_gone, list_gone));
     let screen = walked.screen(SCREEN);
     let mut app = controls();
     app.roots[0].children.truncate(2);
@@ -943,21 +950,36 @@ fn a_level_read_short_is_marked_whatever_stopped_it() {
         "the projection says the read was short"
     );
 
-    // A root list read short ends where the read stopped: its last elements are kept even in
-    // an announcer's shape, since the announcers at the list's real end were never read.
+    // A root list that ended early ends where the read stopped: its last elements are kept even
+    // in an announcer's shape, since the announcers at the list's real end were never read.
     let whole = tree::read(&controls_screen(true), &controls(), placing()).expect("read");
-    let mut cut = controls_screen(true);
-    cut.children_unread = true;
-    cut.truncated = true;
-    let projected = tree::read(&cut, &controls(), placing()).expect("read");
+    for ended in [Cut::Bound, Cut::ListGone] {
+        let mut cut = controls_screen(true);
+        cut.children_unread = Some(ended);
+        cut.cut = Some(ended);
+        let projected = tree::read(&cut, &controls(), placing()).expect("read");
+        assert_eq!(
+            projected.roots[0].children.len(),
+            whole.roots[0].children.len() + 2,
+            "{ended:?}: the last two elements read are kept"
+        );
+        assert!(projected.roots[0].children_unread);
+        assert!(projected.truncated);
+    }
+    assert!(!whole.truncated);
+
+    // A root list read to its end with a gap, an element gone while read, still ends at the
+    // announcers: they are left out, and the read is still said to be short.
+    let mut gap = controls_screen(true);
+    gap.children_unread = Some(Cut::ElementGone);
+    gap.cut = Some(Cut::ElementGone);
+    let projected = tree::read(&gap, &controls(), placing()).expect("read");
     assert_eq!(
         projected.roots[0].children.len(),
-        whole.roots[0].children.len() + 2,
-        "the last two elements read are kept"
+        whole.roots[0].children.len(),
+        "the announcers at the list's end are left out"
     );
-    assert!(projected.roots[0].children_unread);
-    assert!(projected.truncated);
-    assert!(!whole.truncated);
+    assert!(projected.roots[0].children_unread && projected.truncated);
 }
 
 /// What a node of a test's window does by the time its frame is read again, after the walk.
@@ -1656,7 +1678,9 @@ fn a_screen_moved_or_gone_during_the_read_is_read_again() {
 
 /// An element gone in the walk could have been the twin of one read: of two buttons that read
 /// alike, one gone while the walk reads it, the press refuses the one left rather than take it
-/// as the only one, the process trusted.
+/// as the only one, the process trusted, and says a read again may serve: the cut was a passing
+/// one. A lone match on a read the budget cut is refused with no retry, since a read again cuts it
+/// the same way.
 #[test]
 fn a_press_refuses_a_lone_match_beside_an_element_gone_in_the_walk() {
     let mut windows = Windows::new();
@@ -1682,7 +1706,16 @@ fn a_press_refuses_a_lone_match_beside_an_element_gone_in_the_walk() {
     };
     let refused = tree::locate(&read, left).expect_err("a twin may have gone");
     assert!(
-        matches!(&refused, Error::Ambiguous { message, .. } if message.contains("stopped short")),
+        matches!(&refused, Error::Ambiguous { message, retry, .. }
+            if message.contains("read again") && *retry == Retry::Soon),
+        "{refused:?}"
+    );
+
+    let mut bounded = read.clone();
+    bounded.cut = Some(Cut::Bound);
+    let refused = tree::locate(&bounded, left).expect_err("a bound repeats");
+    assert!(
+        matches!(&refused, Error::Ambiguous { retry, .. } if *retry == Retry::Never),
         "{refused:?}"
     );
 }
@@ -1747,7 +1780,8 @@ fn an_element_gone_while_untrusted_is_the_permission_taken_back() {
     };
     let (read, _) = gone_in_walk(false).expect("left out");
     assert_eq!(read.elements, Vec::<ScreenElement>::new());
-    assert!(read.truncated && read.children_unread, "{read:?}");
+    let gap = Some(Cut::ElementGone);
+    assert_eq!((read.cut, read.children_unread), (gap, gap), "{read:?}");
     refused(gone_in_walk(true));
 
     // A marked screen, which the search does not go into, whose list ends gone in the walk.
@@ -1773,7 +1807,12 @@ fn an_element_gone_while_untrusted_is_the_permission_taken_back() {
         tree::read_screen(&mut windows, &request(), vec![window])
     };
     let (read, _) = marked_list_gone(false).expect("read short");
-    assert!(read.truncated && read.children_unread, "{read:?}");
+    let list_gone = Some(Cut::ListGone);
+    assert_eq!(
+        (read.cut, read.children_unread),
+        (list_gone, list_gone),
+        "{read:?}"
+    );
     refused(marked_list_gone(true));
 
     // The deepest element the walk reads, gone when it is asked whether it has a child.
@@ -1799,7 +1838,7 @@ fn an_element_gone_while_untrusted_is_the_permission_taken_back() {
         tree::read_screen(&mut windows, &request(), vec![window])
     };
     let (read, _) = deepest_gone(false).expect("read short");
-    assert!(read.truncated, "{read:?}");
+    assert_eq!(read.cut, Some(Cut::ListGone), "{read:?}");
     refused(deepest_gone(true));
 
     // The screen gone when its frame is read again: busy while trusted.
@@ -2356,7 +2395,7 @@ fn a_press_refuses_an_element_it_cannot_tell_apart() {
     assert!(matches!(refused, Error::Ambiguous { .. }), "{refused:?}");
     // A read that stopped short cannot show the one match is the only one, identifier or not.
     let mut short = controls_screen(true);
-    short.truncated = true;
+    short.cut = Some(Cut::Bound);
     let tagged_like = short.elements[1].clone();
     assert!(tagged_like.identifier.is_some());
     let refused = tree::locate(&short, &tagged_like).expect_err("a read stopped short");

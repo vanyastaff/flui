@@ -3,11 +3,12 @@
 //! [`MAX_NODES`] elements and [`MAX_DEPTH`] levels.
 //!
 //! A provider that does not answer in time fails the walk at once with a typed timeout: a hung app
-//! never reads as a tree of empty defaults. An element that went away while its properties were
-//! read is left out; a step to a next child that finds an element gone (the parent a child is
-//! asked of, or the sibling the next one is asked from) leaves the parent's children marked
-//! unread and the read cut short, never a shorter list read as whole; and a property its provider
-//! does not offer reads as the field's default, which is the provider's own answer.
+//! never reads as a tree of empty defaults. A list read short of an element's children is marked
+//! unread on that element and the read cut short, never a shorter list read as whole, whatever
+//! cut it ([`Cut`]: a bound, the list gone, or one of its elements gone while read, which is left
+//! out); and a property its provider does not offer reads as the field's default, which is the
+//! provider's own answer. [`Cut`] is the one rule for every walk over an OS tree, this one and
+//! the iOS Simulator's screen walk alike.
 
 use std::time::Duration;
 
@@ -22,6 +23,50 @@ pub const MAX_NODES: usize = 4096;
 
 /// The deepest level one walk visits.
 pub const MAX_DEPTH: usize = 64;
+
+/// Why a walk read a list short of an element's children, the cause each reader of the cut acts
+/// on: a read again cuts a [`Cut::Bound`] the same way and may heal the others, and only an
+/// [`Cut::ElementGone`] leaves the list read to its end. Ordered from the least lasting to the
+/// most, so the larger of two is the one that speaks for both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum Cut {
+    /// One element of the list went away while it was read: it is left out, and the list was read
+    /// on to its end, so it could have been the twin of one read.
+    ElementGone,
+    /// The list went away before it was read to its end: its parent while its children were
+    /// listed, or the element a step to the next was asked from.
+    ListGone,
+    /// A bound stopped the list: the walk's budget or its depth.
+    Bound,
+}
+
+impl Cut {
+    /// Whether the list ended before its last child, so what its end holds was not read.
+    #[must_use]
+    pub const fn ends_list(self) -> bool {
+        !matches!(self, Self::ElementGone)
+    }
+
+    /// Whether a read again cuts the list the same way, so no read again serves it.
+    #[must_use]
+    pub const fn repeats(self) -> bool {
+        matches!(self, Self::Bound)
+    }
+
+    /// Whether an element went away: what a source that answers a gone element as a refusal is
+    /// asked about.
+    #[must_use]
+    pub const fn is_gone(self) -> bool {
+        !self.repeats()
+    }
+
+    /// `cut` and `other` as one: the more lasting of the two.
+    #[must_use]
+    pub fn with(cut: Option<Self>, other: Self) -> Option<Self> {
+        Some(cut.map_or(other, |cut| cut.max(other)))
+    }
+}
 
 /// Why a provider could not answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,22 +281,30 @@ fn provider_error(error: ProviderError, timeout: Duration) -> Error {
 pub fn read<P: Provider>(provider: &mut P, root: &P::Element, timeout: Duration) -> Result<Tree> {
     let mut walk = Walk {
         next_id: 1,
-        truncated: false,
+        cut: None,
         timeout,
     };
     match walk.visit(provider, root, 0)? {
-        Some(node) => Ok(Tree::new(vec![node], walk.truncated)),
+        Some(node) => Ok(Tree::new(vec![node], walk.cut.is_some())),
         None => Err(failed("the window's element went away")),
     }
 }
 
 struct Walk {
     next_id: u64,
-    truncated: bool,
+    /// The most lasting cut the walk met, which `Tree::truncated` reads.
+    cut: Option<Cut>,
     timeout: Duration,
 }
 
 impl Walk {
+    /// Record that `parent`'s list was read short by `cause`: the one write that marks the level
+    /// and the walk together.
+    fn cut(&mut self, parent: &mut Node, cause: Cut) {
+        parent.children_unread = true;
+        self.cut = Cut::with(self.cut, cause);
+    }
+
     fn visit<P: Provider>(
         &mut self,
         provider: &mut P,
@@ -269,20 +322,21 @@ impl Walk {
         let first = self.step(provider.first_child(element), &mut node)?;
         if depth >= MAX_DEPTH {
             if first.is_some() {
-                node.children_unread = true;
-                self.truncated = true;
+                self.cut(&mut node, Cut::Bound);
             }
             return Ok(Some(node));
         }
         let mut child = first;
         while let Some(current) = child {
             if usize::try_from(self.next_id).unwrap_or(usize::MAX) > MAX_NODES {
-                node.children_unread = true;
-                self.truncated = true;
+                self.cut(&mut node, Cut::Bound);
                 break;
             }
-            if let Some(read) = self.visit(provider, &current, depth + 1)? {
-                node.children.push(read);
+            match self.visit(provider, &current, depth + 1)? {
+                Some(read) => node.children.push(read),
+                // Gone while its properties were read: left out, and its level read short, since
+                // it could have been the twin of one read.
+                None => self.cut(&mut node, Cut::ElementGone),
             }
             child = self.step(provider.next_sibling(&current), &mut node)?;
         }
@@ -290,8 +344,8 @@ impl Walk {
     }
 
     /// A step to `parent`'s next child: an element gone (`parent` itself, or the sibling the step
-    /// was asked from) ends the level cut, `parent`'s children marked unread and the read cut
-    /// short, since no provider can say what followed; a timeout or a failure ends the walk.
+    /// was asked from) ends the level cut ([`Cut::ListGone`]), since no provider can say what
+    /// followed; a timeout or a failure ends the walk.
     fn step<E>(
         &mut self,
         step: Result<Option<E>, ProviderError>,
@@ -300,8 +354,7 @@ impl Walk {
         match step {
             Ok(next) => Ok(next),
             Err(ProviderError::Gone) => {
-                parent.children_unread = true;
-                self.truncated = true;
+                self.cut(parent, Cut::ListGone);
                 Ok(None)
             }
             Err(error) => Err(provider_error(error, self.timeout)),
@@ -346,7 +399,8 @@ pub fn find_by<P: Provider>(
 ) -> Result<P::Element> {
     let mut visited = 0_usize;
     let mut cut_short = false;
-    // Whether a step found an element gone (a parent or a sibling), which cut a level short.
+    // Whether an element went away (on a step, a parent or a sibling; or while its properties
+    // were read), which cut a level short.
     let mut met_gone = false;
     // Depth first, children before siblings: each level holds the next element to visit there.
     // The root's own siblings (the other windows) are not the app's.
@@ -369,7 +423,12 @@ pub fn find_by<P: Provider>(
             .expect("BUG: a visit count starts at one");
         let node = match provider.node(&element, id) {
             Ok(node) => Some(node),
-            Err(ProviderError::Gone) => None,
+            // Gone while its properties were read: as a read leaves it out and reads its level
+            // short (`Cut::ElementGone`), the search says an element went away.
+            Err(ProviderError::Gone) => {
+                met_gone = true;
+                None
+            }
             Err(error) => return Err(provider_error(error, timeout)),
         };
         if node.is_some_and(|node| matches(&node)) {
