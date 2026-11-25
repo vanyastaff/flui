@@ -716,16 +716,15 @@ where
                         position.and_then(|position| state.steps.remove(position))
                     };
                     if let Some(Step { expect, answer, .. }) = step {
-                        // The other matchers and the used step are let go
-                        // before the answer is given, so none of the test's
-                        // values is still held while its answer runs.
-                        // Both are let go, each contained on its own,
-                        // whatever the first one's drop did: a skipped
-                        // `expect` would drop as the matcher's last handle
-                        // outside the containment.
-                        let asked = self.drop_while_answering(id, first, candidates);
-                        let asked = self.drop_while_answering(id, first, expect) && asked;
-                        if !asked {
+                        // Each of the test's values (the other matchers, the
+                        // used step) is let go in its own `while_answering`
+                        // before the answer is given, whether or not an
+                        // earlier drop withdrew the request.
+                        let candidates_left_it_asked =
+                            self.drop_while_answering(id, first, candidates);
+                        let still_asked = self.drop_while_answering(id, first, expect)
+                            && candidates_left_it_asked;
+                        if !still_asked {
                             let _ = self.drop_while_answering(id, first, answer);
                             return false;
                         }
