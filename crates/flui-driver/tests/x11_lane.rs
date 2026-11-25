@@ -4,7 +4,6 @@
 
 use flui_driver::coordinates::DevicePoint;
 use flui_driver::lane::atspi::roles::{self as atspi, AtspiRole};
-use flui_driver::lane::release_outcome;
 use flui_driver::lane::windows::roles as uia;
 use flui_driver::lane::x11::activity::{EchoCount, Observed, RawKind};
 use flui_driver::lane::x11::held::{
@@ -16,6 +15,7 @@ use flui_driver::lane::x11::keys::{self, Keysym, Modifier, TextStroke};
 use flui_driver::lane::x11::safety::{
     self, Desk, Held, Keycode, Landing, Refusal, STICKY_KEYS, check_event,
 };
+use flui_driver::lane::{Delivered, release_outcome};
 use flui_driver::protocol::error::ErrorCode;
 use flui_driver::protocol::semantics::SemanticsRole;
 use flui_driver::protocol::session::Isolation;
@@ -317,8 +317,14 @@ fn send(held: &mut HeldInput, inputs: &[KeyInput]) {
     let keymap = keymap();
     for input in inputs {
         for stroke in held.plan(input, &keymap).expect("planned") {
-            held.deliver(stroke, &keymap, || Ok(()), || Ok(()))
-                .expect("sent");
+            held.deliver(
+                stroke,
+                &keymap,
+                &mut Delivered::default(),
+                || Ok(()),
+                || Ok(()),
+            )
+            .expect("sent");
         }
     }
 }
@@ -619,12 +625,96 @@ fn a_key_the_server_took_is_held_even_when_its_echo_never_comes() {
     let keymap = keymap();
     let mut held = HeldInput::new();
     let stroke = Keystroke::Press(Keycode(38));
-    let echo = held.deliver(stroke, &keymap, || Ok(()), refuse);
+    let echo = held.deliver(
+        stroke,
+        &keymap,
+        &mut Delivered::default(),
+        || Ok(()),
+        refuse,
+    );
     assert!(echo.is_err());
     assert_eq!(held.keys(), vec![Keycode(38)]);
-    let sent = held.deliver(Keystroke::Press(Keycode(39)), &keymap, refuse, || Ok(()));
+    let sent = held.deliver(
+        Keystroke::Press(Keycode(39)),
+        &keymap,
+        &mut Delivered::default(),
+        refuse,
+        || Ok(()),
+    );
     assert!(sent.is_err());
     assert_eq!(held.keys(), vec![Keycode(38)], "a press the server refused");
+}
+
+/// What the run is told of each input: a press, a release, a button and a click of the wheel the
+/// server took are said even when their echo never comes; a mapping, its undoing and the wait for
+/// the server to settle are the lane's housekeeping and never said, so text refused before its
+/// first key press says nothing went out.
+#[test]
+fn only_what_reaches_the_app_is_said_to_the_run() {
+    let keymap = keymap();
+    let said = |delivered: &Delivered| delivered.effect(1).is_some();
+    for housekeeping in [
+        Keystroke::Map {
+            key: Keycode(255),
+            keysym: Keysym(0xE9),
+        },
+        Keystroke::Settle,
+        Keystroke::Unmap(Keycode(255)),
+    ] {
+        let mut delivered = Delivered::default();
+        HeldInput::new()
+            .deliver(housekeeping, &keymap, &mut delivered, || Ok(()), refuse)
+            .expect("housekeeping waits for no echo");
+        assert!(!said(&delivered), "{housekeeping:?}");
+    }
+    for key in [
+        Keystroke::Press(Keycode(38)),
+        Keystroke::Release(Keycode(38)),
+    ] {
+        let mut delivered = Delivered::default();
+        let echo = HeldInput::new().deliver(key, &keymap, &mut delivered, || Ok(()), refuse);
+        assert!(echo.is_err());
+        assert!(said(&delivered), "{key:?}");
+    }
+    let mut delivered = Delivered::default();
+    let _ = HeldInput::new().deliver(
+        Keystroke::Press(Keycode(38)),
+        &keymap,
+        &mut delivered,
+        refuse,
+        || Ok(()),
+    );
+    assert!(!said(&delivered), "a press the server refused");
+    let mut delivered = Delivered::default();
+    let echo = HeldButtons::default().deliver(1, true, &mut delivered, || Ok(()), refuse);
+    assert!(echo.is_err());
+    assert!(said(&delivered), "a button whose echo never came");
+    // A turn of two clicks whose second press the server refuses: the first click went out.
+    let mut delivered = Delivered::default();
+    let mut presses = 0;
+    let turned = HeldButtons::default().scroll(
+        0,
+        2 * WHEEL_STEP,
+        &mut delivered,
+        |_, pressed| {
+            if pressed {
+                presses += 1;
+                if presses == 2 {
+                    return refuse();
+                }
+            }
+            Ok(())
+        },
+        || Ok(()),
+    );
+    assert!(turned.is_err());
+    assert!(said(&delivered));
+    // A turn refused at its first click: nothing went out.
+    let mut delivered = Delivered::default();
+    let turned =
+        HeldButtons::default().scroll(0, WHEEL_STEP, &mut delivered, |_, _| refuse(), || Ok(()));
+    assert!(turned.is_err());
+    assert!(!said(&delivered));
 }
 
 #[test]
@@ -638,6 +728,7 @@ fn a_release_or_emptying_the_server_refused_stays_held() {
             keysym: Keysym(0xFC),
         },
         &keymap,
+        &mut Delivered::default(),
         || Ok(()),
         || Ok(()),
     )
@@ -675,10 +766,10 @@ fn a_release_or_emptying_the_server_refused_stays_held() {
 
     let mut buttons = HeldButtons::default();
     buttons
-        .deliver(1, true, || Ok(()), || Ok(()))
+        .deliver(1, true, &mut Delivered::default(), || Ok(()), || Ok(()))
         .expect("down");
     buttons
-        .deliver(3, true, || Ok(()), refuse)
+        .deliver(3, true, &mut Delivered::default(), || Ok(()), refuse)
         .expect_err("no echo");
     assert_eq!(buttons.bits(), 0b101);
     let released = buttons.release_all(|button| if button == 3 { refuse() } else { Ok(()) });
@@ -733,10 +824,16 @@ fn the_held_records_follow_what_the_server_took() {
         key: Keycode(255),
         keysym: Keysym(0xFC),
     };
-    held.deliver(map, &keymap, || Ok(()), refuse)
+    held.deliver(map, &keymap, &mut Delivered::default(), || Ok(()), refuse)
         .expect("a mapping waits for no echo");
-    held.deliver(map, &keymap, || Ok(()), || Ok(()))
-        .expect("mapped again");
+    held.deliver(
+        map,
+        &keymap,
+        &mut Delivered::default(),
+        || Ok(()),
+        || Ok(()),
+    )
+    .expect("mapped again");
     assert_eq!(held.mapped(), vec![Keycode(255)], "a key mapped once");
 
     // No Shift on the keymap: a capital is typed through a spare key, never its key unshifted.
@@ -784,7 +881,13 @@ fn the_held_records_follow_what_the_server_took() {
     let mut buttons = HeldButtons::default();
     for button in [1, 3] {
         buttons
-            .deliver(button, true, || Ok(()), || Ok(()))
+            .deliver(
+                button,
+                true,
+                &mut Delivered::default(),
+                || Ok(()),
+                || Ok(()),
+            )
             .expect("down");
     }
     let mut sent = Vec::new();
@@ -817,7 +920,7 @@ fn a_release_failure_names_every_key_and_button_still_held() {
     let keys = input.unreleased(no_keymap());
     let mut buttons = HeldButtons::default();
     buttons
-        .deliver(3, true, || Ok(()), || Ok(()))
+        .deliver(3, true, &mut Delivered::default(), || Ok(()), || Ok(()))
         .expect("pressed");
     let buttons = buttons.release_all(|_| refuse());
     let answer = release_outcome([keys, buttons]);
@@ -853,6 +956,7 @@ fn a_wheel_click_left_down_is_released_with_the_rest() {
     let scrolled = buttons.scroll(
         0,
         1,
+        &mut Delivered::default(),
         |button, pressed| {
             sent.push((button, pressed));
             Ok(())
@@ -877,6 +981,7 @@ fn a_wheel_click_left_down_is_released_with_the_rest() {
         .scroll(
             -1,
             2 * WHEEL_STEP,
+            &mut Delivered::default(),
             |button, pressed| {
                 clicks.push((button, pressed));
                 Ok(())
@@ -959,14 +1064,26 @@ fn the_release_of_everything_completes_no_sticky_keys_shortcut() {
         for input in &tap {
             for stroke in cornered.plan(input, &full).expect("planned") {
                 cornered
-                    .deliver(stroke, &full, || Ok(()), || Ok(()))
+                    .deliver(
+                        stroke,
+                        &full,
+                        &mut Delivered::default(),
+                        || Ok(()),
+                        || Ok(()),
+                    )
                     .expect("sent");
             }
         }
     }
     for stroke in cornered.plan(&down("Shift"), &full).expect("planned") {
         cornered
-            .deliver(stroke, &full, || Ok(()), || Ok(()))
+            .deliver(
+                stroke,
+                &full,
+                &mut Delivered::default(),
+                || Ok(()),
+                || Ok(()),
+            )
             .expect("sent");
     }
     let released = cornered.release_all(&full, |stroke| {

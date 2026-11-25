@@ -8,10 +8,13 @@ use serde_json::{Map, Value, json};
 
 use super::launch::AttachError;
 use super::socket::Socket;
-use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote};
+use super::{BrowserLink, COMMAND_TIMEOUT, LinkError, LinkEvent, Remote, release_late};
 
 /// The channel every report comes back on.
 const CHANNEL: &str = "flui-agent";
+
+/// Where an answer's value names the page object it holds.
+pub(super) const HELD: &str = "handle";
 
 /// The first Firefox that reports `browsingContext.navigationCommitted`.
 pub(super) const MIN_FIREFOX: u32 = 140;
@@ -134,7 +137,11 @@ impl Bidi {
     }
 
     fn call_function(&mut self, params: Value) -> Result<Value, LinkError> {
-        let mut evaluated = self.command("script.callFunction", params)?;
+        self.call_function_by(params, Instant::now() + COMMAND_TIMEOUT)
+    }
+
+    fn call_function_by(&mut self, params: Value, deadline: Instant) -> Result<Value, LinkError> {
+        let mut evaluated = self.command_by("script.callFunction", params, deadline)?;
         if evaluated.get("type").and_then(Value::as_str) == Some("success") {
             return Ok(evaluated.get_mut("result").map_or_default(Value::take));
         }
@@ -143,6 +150,16 @@ impl Bidi {
             .and_then(Value::as_str)
             .unwrap_or("an exception");
         Err(LinkError::Threw(text.to_owned()))
+    }
+
+    /// Lets the page drop `remote`, waiting for the answer no later than `deadline`.
+    fn release_by(&mut self, remote: Remote, deadline: Instant) -> Result<(), LinkError> {
+        self.command_by(
+            "script.disown",
+            json!({ "handles": [remote.0], "target": { "context": self.context } }),
+            deadline,
+        )
+        .map(drop)
     }
 }
 
@@ -172,18 +189,26 @@ impl BrowserLink for Bidi {
         Ok(())
     }
 
-    fn call(&mut self, function: &str, args: &[&str]) -> Result<Option<Remote>, LinkError> {
+    fn call(
+        &mut self,
+        function: &str,
+        args: &[&str],
+        deadline: Instant,
+    ) -> Result<Option<Remote>, LinkError> {
         let mut arguments = arguments(args);
         arguments.push(json!({ "type": "channel", "value": { "channel": CHANNEL } }));
-        let result = self.call_function(json!({
-            "functionDeclaration": function,
-            "awaitPromise": true,
-            "target": { "context": self.context },
-            "arguments": arguments,
-            "resultOwnership": "root",
-        }))?;
+        let result = self.call_function_by(
+            json!({
+                "functionDeclaration": function,
+                "awaitPromise": true,
+                "target": { "context": self.context },
+                "arguments": arguments,
+                "resultOwnership": "root",
+            }),
+            deadline,
+        )?;
         Ok(result
-            .get("handle")
+            .get(HELD)
             .and_then(Value::as_str)
             .map(|handle| Remote(handle.to_owned())))
     }
@@ -201,13 +226,15 @@ impl BrowserLink for Bidi {
     }
 
     fn release(&mut self, remote: Remote) {
-        let _ = self.command(
-            "script.disown",
-            json!({ "handles": [remote.0], "target": { "context": self.context } }),
-        );
+        let _ = self.release_by(remote, Instant::now() + COMMAND_TIMEOUT);
     }
 
     fn next_event(&mut self, deadline: Instant) -> Result<Option<LinkEvent>, LinkError> {
+        let mut late = self.socket.take_late();
+        release_late(&mut late, HELD, deadline, |remote, by| {
+            self.release_by(remote, by)
+        });
+        self.socket.keep_unreleased(late);
         loop {
             let Some(event) = self.socket.next_event(deadline)? else {
                 return Ok(None);

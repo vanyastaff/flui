@@ -111,7 +111,7 @@ mod lane {
     use super::guard::MacosGuard;
     use super::held::{HeldKeys, KeyInput};
     use super::keys::{self, KeyName};
-    use super::pointer::{MouseKind, Point, Pointer, Step, Wheel};
+    use super::pointer::{Point, Pointer, Step, Wheel};
     use super::safety::{self, Desk, Landing, Permission, Refusal};
     use super::screen::{self, PointRect, WindowInfo};
     use super::{ax, capture, quartz};
@@ -119,7 +119,8 @@ mod lane {
     use crate::error::{Error, Result};
     use crate::lane::pacing::slices;
     use crate::lane::{
-        AccessibilityApi, ActivityGuard, Delivered, Lane, LaneCapabilities, PositionFidelity,
+        AccessibilityApi, ActingInput, ActivityGuard, Delivered, Lane, LaneCapabilities,
+        PositionFidelity,
     };
     use crate::steps::OsEvent;
 
@@ -346,10 +347,9 @@ mod lane {
             let pid = self.pid;
             for stroke in self.keys.plan(input) {
                 self.checked(target, None)?;
-                self.keys.deliver(stroke, |stroke, flags| {
+                self.keys.deliver(stroke, delivered, |stroke, flags| {
                     quartz::keystroke(pid, stroke, flags)
                 })?;
-                delivered.input();
             }
             Ok(())
         }
@@ -422,8 +422,10 @@ mod lane {
                 let mut wheel = self.wheel;
                 let (vertical, horizontal) = wheel.turn(*delta_x, *delta_y, target.scale)?;
                 if vertical != 0 || horizontal != 0 {
-                    quartz::scroll(self.pid, point, vertical, horizontal, self.keys.flags())?;
-                    delivered.input();
+                    let (pid, flags) = (self.pid, self.keys.flags());
+                    delivered.send(&ActingInput, || {
+                        quartz::scroll(pid, point, vertical, horizontal, flags)
+                    })?;
                 }
                 self.wheel = wheel;
                 return Ok(());
@@ -434,13 +436,8 @@ mod lane {
             let events = self.pointer.plan(step)?;
             self.checked(target, aim)?;
             let (pid, flags) = (self.pid, self.keys.flags());
-            self.pointer.deliver(&events, |event| {
-                quartz::mouse(pid, event, flags)?;
-                if matches!(event.kind, MouseKind::Down(_) | MouseKind::Up(_)) {
-                    delivered.input();
-                }
-                Ok(())
-            })
+            self.pointer
+                .deliver(&events, delivered, |event| quartz::mouse(pid, event, flags))
         }
 
         /// Wait out `pause` whole, looking at the guard between slices: the person's input ends
@@ -562,7 +559,7 @@ mod lane {
                 &mut self.pointer,
                 |stroke, flags| {
                     Self::permitted(Permission::Accessibility)?;
-                    quartz::keystroke(pid, stroke, flags)
+                    quartz::keystroke(pid, stroke, flags).map_err(Error::from)
                 },
                 |event, flags| {
                     Self::permitted(Permission::Accessibility)?;

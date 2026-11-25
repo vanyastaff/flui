@@ -293,21 +293,13 @@ mod lane {
                 .ok_or_else(|| lane_error("the lane is not connected to the X server"))?;
             let per_keycode = keymap.per_keycode();
             let guard = &mut self.guard;
-            let mut taken = false;
-            let sent = self.keys.deliver(
+            self.keys.deliver(
                 stroke,
                 keymap,
-                || {
-                    send_stroke(server, stroke, per_keycode)?;
-                    taken = true;
-                    Ok(())
-                },
+                delivered,
+                || send_stroke(server, stroke, per_keycode),
                 || guard.await_echo(),
-            );
-            if taken {
-                delivered.input();
-            }
-            sent
+            )
         }
 
         /// Press or release `button`, said in `delivered` as soon as the server took it.
@@ -336,25 +328,19 @@ mod lane {
                 .as_ref()
                 .ok_or_else(|| lane_error("the lane is not connected to the X server"))?;
             let guard = &mut self.guard;
-            let mut taken = false;
-            let sent = self.buttons.deliver(
+            self.buttons.deliver(
                 core,
                 pressed,
+                delivered,
                 || {
                     server.fake(if pressed {
                         Fake::ButtonPress(core)
                     } else {
                         Fake::ButtonRelease(core)
-                    })?;
-                    taken = true;
-                    Ok(())
+                    })
                 },
                 || guard.await_echo(),
-            );
-            if taken {
-                delivered.input();
-            }
-            sent
+            )
         }
 
         /// Move to `at` and turn the wheel, each click's press and release held by
@@ -375,26 +361,20 @@ mod lane {
             // The guard is told of each click before it goes out and waited on after: two uses
             // of one guard by the two steps of each click, on this thread.
             let guard = std::cell::RefCell::new(&mut self.guard);
-            let mut taken = false;
-            let sent = self.buttons.scroll(
+            self.buttons.scroll(
                 delta_x,
                 delta_y,
+                delivered,
                 |button, pressed| {
                     guard.borrow_mut().will_send();
                     server.fake(if pressed {
                         Fake::ButtonPress(button)
                     } else {
                         Fake::ButtonRelease(button)
-                    })?;
-                    taken = true;
-                    Ok(())
+                    })
                 },
                 || guard.borrow_mut().await_echo(),
-            );
-            if taken {
-                delivered.input();
-            }
-            sent
+            )
         }
 
         /// Wait out `pause` whole, looking at the guard between slices.

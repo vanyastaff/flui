@@ -14,7 +14,8 @@ use flui_driver::lane::windows::keys::{self, KeyName, Modifier, TextStroke, Virt
 use flui_driver::lane::windows::roles::{self, ControlType, ROLES, RoleFlags};
 use flui_driver::lane::windows::safety::{self, Desk, Held, Landing, Refusal, check_event};
 use flui_driver::lane::windows::screen;
-use flui_driver::lane::{release_outcome, windows};
+use flui_driver::lane::windows::send_input::KeyboardEvent;
+use flui_driver::lane::{ActingInput, Delivered, SendFailure, release_outcome, windows};
 use flui_driver::projection::{Projection, ProjectionDifference};
 use flui_driver::protocol::error::ErrorCode;
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalSize};
@@ -689,7 +690,15 @@ fn a_key_windows_took_is_held_even_when_its_echo_never_comes() {
     };
     let mut keys = HeldKeys::new();
     let control = Keystroke::Press(keys::CONTROL);
-    assert!(keys.deliver(control, || Ok(()), echo_never_comes).is_err());
+    assert!(
+        keys.deliver(
+            control,
+            &mut Delivered::default(),
+            || Ok(()),
+            echo_never_comes
+        )
+        .is_err()
+    );
     assert_eq!(
         keys.held(),
         [keys::CONTROL.code],
@@ -706,11 +715,14 @@ fn a_key_windows_took_is_held_even_when_its_echo_never_comes() {
     assert_eq!(keys.held(), [] as [u16; 0]);
 
     let refused = || {
-        Err(flui_driver::Error::Protocol {
+        Err(SendFailure::from(flui_driver::Error::Protocol {
             message: "refused".into(),
-        })
+        }))
     };
-    assert!(keys.deliver(control, refused, || Ok(())).is_err());
+    assert!(
+        keys.deliver(control, &mut Delivered::default(), refused, || Ok(()))
+            .is_err()
+    );
     assert_eq!(
         keys.held(),
         [] as [u16; 0],
@@ -720,10 +732,145 @@ fn a_key_windows_took_is_held_even_when_its_echo_never_comes() {
     let mut buttons = HeldButtons::default();
     assert!(
         buttons
-            .deliver(0, true, || Ok(()), echo_never_comes)
+            .deliver(
+                0,
+                true,
+                &mut Delivered::default(),
+                || Ok(()),
+                echo_never_comes
+            )
             .is_err()
     );
     assert_eq!(buttons.bits(), 0b1, "the button Windows took is held");
+}
+
+/// What the run is told of each input: a keystroke or button Windows took is said even when its
+/// echo never comes, a refused one is not, and text cut part way says the keystrokes typed.
+#[test]
+fn every_input_windows_took_is_said_to_the_run() {
+    let refused = || -> Result<(), SendFailure> {
+        Err(SendFailure::from(flui_driver::Error::Protocol {
+            message: "refused".into(),
+        }))
+    };
+    let echo_never_comes = || {
+        Err(flui_driver::Error::Lane {
+            lane: "windows".into(),
+            unavailable: true,
+            message: "no echo".into(),
+        })
+    };
+    let said = |delivered: &Delivered| delivered.effect(1).is_some();
+    let control = Keystroke::Press(keys::CONTROL);
+    // A keystroke taken whose echo never came.
+    let mut delivered = Delivered::default();
+    let _ = HeldKeys::new().deliver(control, &mut delivered, || Ok(()), echo_never_comes);
+    assert!(said(&delivered));
+    // A keystroke refused.
+    let mut delivered = Delivered::default();
+    let _ = HeldKeys::new().deliver(control, &mut delivered, refused, || Ok(()));
+    assert!(!said(&delivered));
+    // A button taken whose echo never came.
+    let mut delivered = Delivered::default();
+    let _ = HeldButtons::default().deliver(0, true, &mut delivered, || Ok(()), echo_never_comes);
+    assert!(said(&delivered));
+    // Text whose third keystroke is refused: the two before it were typed.
+    let mut keys = HeldKeys::new();
+    let mut delivered = Delivered::default();
+    let mut left = 2_u32;
+    let typed = keys
+        .plan(&KeyInput::Text("hello".to_owned()))
+        .into_iter()
+        .try_for_each(|stroke| {
+            keys.deliver(
+                stroke,
+                &mut delivered,
+                || {
+                    if left == 0 {
+                        return refused();
+                    }
+                    left -= 1;
+                    Ok(())
+                },
+                || Ok(()),
+            )
+        });
+    assert!(typed.is_err());
+    assert!(said(&delivered));
+}
+
+/// A `SendInput` call that inserted only some of its events (a character's press without its
+/// release, a wheel's vertical turn without its horizontal one) fails as partly sent, and the run
+/// says it went out; one that inserted none says nothing went out. A character Windows took in
+/// part holds its unit's packet, which the release of everything lets go of with that packet's own
+/// release, or a later whole packet's release does.
+#[test]
+fn a_send_windows_took_in_part_is_partly_sent() {
+    assert!(windows::send_input::outcome(2, 2, "a character").is_ok());
+    let mut delivered = Delivered::default();
+    let failed = delivered.send(&ActingInput, || {
+        windows::send_input::outcome(1, 2, "a turn of the wheel")
+    });
+    assert!(failed.is_err_and(|failure| failure.is_partly_sent()));
+    assert!(delivered.effect(1).is_some(), "the inserted part went out");
+    let mut delivered = Delivered::default();
+    let failed = delivered.send(&ActingInput, || {
+        windows::send_input::outcome(0, 2, "a turn of the wheel")
+    });
+    assert!(failed.is_err_and(|failure| !failure.is_partly_sent()));
+    assert!(delivered.effect(1).is_none(), "nothing went out");
+    let mut keys = HeldKeys::new();
+    let mut delivered = Delivered::default();
+    let failed = keys.deliver(
+        Keystroke::Unit(u16::from(b'a')),
+        &mut delivered,
+        || windows::send_input::outcome(1, 2, "a character"),
+        || Ok(()),
+    );
+    assert!(failed.is_err());
+    assert!(delivered.effect(1).is_some());
+    let unit = u16::from(b'a');
+    assert_eq!(keys.packets(), [unit], "the packet's press is down");
+    // The release of everything sends that packet's own release: the unit, as a Unicode
+    // packet's key-up.
+    assert_eq!(release_recorded(&mut keys), [Keystroke::UnitUp(unit)]);
+    assert_eq!(
+        windows::send_input::packet_events(Keystroke::UnitUp(unit)),
+        [KeyboardEvent {
+            virtual_key: 0,
+            scan: unit,
+            unicode: true,
+            up: true,
+        }]
+    );
+    assert_eq!(keys.packets(), [] as [u16; 0], "nothing stays held");
+    // A packet left down, then a whole one, whose release lets `VK_PACKET` up: nothing stays held.
+    let mut keys = HeldKeys::new();
+    let _ = keys.deliver(
+        Keystroke::Unit(unit),
+        &mut Delivered::default(),
+        || windows::send_input::outcome(1, 2, "a character"),
+        || Ok(()),
+    );
+    keys.deliver(
+        Keystroke::Unit(u16::from(b'b')),
+        &mut Delivered::default(),
+        || Ok(()),
+        || Ok(()),
+    )
+    .expect("the whole packet went out");
+    assert_eq!(keys.packets(), [] as [u16; 0]);
+    assert_eq!(release_recorded(&mut keys), Vec::<Keystroke>::new());
+    // A character Windows refused whole leaves nothing down.
+    let mut keys = HeldKeys::new();
+    let refused = keys.deliver(
+        Keystroke::Unit(u16::from(b'a')),
+        &mut Delivered::default(),
+        || windows::send_input::outcome(0, 2, "a character"),
+        || Ok(()),
+    );
+    assert!(refused.is_err());
+    assert_eq!(keys, HeldKeys::new());
 }
 
 /// A capital letter holds Shift around its key unless Shift is already held, and the Shift it
@@ -1684,9 +1831,9 @@ fn fake_window() -> FakeTree {
 const UIA_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// An element gone while its properties are read is left out, its siblings read on, and its level
-/// marked read short with the tree truncated: the one rule (`walk::Cut::ElementGone`) every walk
-/// over an OS tree holds, the iOS Simulator's screen walk included, since the gone element could
-/// have been the twin of one read.
+/// marked read short with the tree truncated: the rule (`walk::Cut::ElementGone`) both reads of a
+/// tree hold, `walk::read` and the iOS Simulator's screen walk, since the gone element could have
+/// been the twin of one read. A search that meets it says an element went away.
 #[test]
 fn the_walk_reads_the_window_and_leaves_a_gone_element_out() {
     let mut tree = fake_window();
@@ -1705,6 +1852,20 @@ fn the_walk_reads_the_window_and_leaves_a_gone_element_out() {
     assert!(
         !tree.read.contains(&6),
         "the window beside the app's is not read"
+    );
+
+    let mut tree = fake_window();
+    tree.gone = Some(4);
+    assert_eq!(
+        walk::find(&mut tree, 0, "third", UIA_TIMEOUT).expect("its siblings are searched on"),
+        5
+    );
+    let missing = walk::find(&mut tree, 0, "nobody", UIA_TIMEOUT).expect_err("absent");
+    assert!(
+        missing
+            .to_string()
+            .contains("went away before all its children were searched"),
+        "{missing}"
     );
 }
 
@@ -1860,6 +2021,7 @@ fn the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart() {
     let mut tree = fake_window();
     let missing = walk::find(&mut tree, 0, "nobody", UIA_TIMEOUT).expect_err("absent");
     assert_eq!(missing.code(), Some(ErrorCode::NotFound), "{missing:?}");
+    assert!(!missing.to_string().contains("went away"), "{missing}");
     assert!(
         !tree.read.contains(&6),
         "another window's element is not the app's"

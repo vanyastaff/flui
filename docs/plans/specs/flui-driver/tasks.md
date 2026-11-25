@@ -1411,6 +1411,7 @@ graph LR
     `a_target_renamed_or_removed_since_connecting_is_refused`,
     `a_window_naming_any_other_uuid_is_not_the_devices`,
     `a_level_read_short_is_marked_whatever_stopped_it`,
+    `a_gap_that_took_an_announcer_leaves_the_text_before_it`,
     `the_walk_reads_its_depth_and_marks_what_lies_past_it`,
     `the_walk_reads_its_budget_and_leaves_out_a_gone_element`,
     `a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone`,

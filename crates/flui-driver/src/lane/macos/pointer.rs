@@ -19,6 +19,7 @@ use flui_protocol::input::{PointerButton, PointerDevice};
 
 use crate::error::{Error, Result};
 use crate::lane::macos::safety::{LANE, Refusal};
+use crate::lane::{Delivered, OsInput};
 
 /// A point in global display points.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -116,6 +117,13 @@ pub struct MouseEvent {
     pub kind: MouseKind,
     /// Where, in global display points.
     pub at: Point,
+}
+
+impl OsInput for MouseEvent {
+    /// A press or a release acts on the app; a move or a drag is where the pointer goes.
+    fn acts(&self) -> bool {
+        matches!(self.kind, MouseKind::Down(_) | MouseKind::Up(_))
+    }
 }
 
 impl MouseEvent {
@@ -249,7 +257,8 @@ impl Pointer {
         }
     }
 
-    /// Post each of `events` through `post`, recording each once it went out.
+    /// Post each of `events` through `post`, recording each once it went out, and saying in
+    /// `delivered` each press and release ([`OsInput`]).
     ///
     /// # Errors
     ///
@@ -257,10 +266,11 @@ impl Pointer {
     pub fn deliver(
         &mut self,
         events: &[MouseEvent],
+        delivered: &mut Delivered,
         mut post: impl FnMut(&MouseEvent) -> Result<()>,
     ) -> Result<()> {
         for event in events {
-            post(event)?;
+            delivered.send(event, || post(event))?;
             self.apply(event);
         }
         Ok(())

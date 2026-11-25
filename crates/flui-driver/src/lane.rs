@@ -29,11 +29,12 @@ pub mod atspi;
 pub(crate) mod ax;
 #[cfg(feature = "chrome")]
 pub mod chrome;
+mod delivered;
 pub mod ios_simulator;
 pub mod macos;
 pub mod pacing;
 pub mod screen;
-mod tool;
+pub(crate) mod tool;
 pub mod walk;
 pub mod wayland;
 pub mod windows;
@@ -46,7 +47,6 @@ use std::sync::mpsc;
 use std::thread::{self, JoinHandle};
 
 use flui_foundation::panic::{FirstPanic, discard_payload};
-use flui_protocol::act::{Effect, EffectUnit};
 use flui_protocol::input::PointerDevice;
 use flui_protocol::session::{Isolation, Placement};
 use flui_protocol::tree::Tree;
@@ -55,6 +55,8 @@ use crate::coordinates::WindowGeometry;
 use crate::error::{Error, Result};
 use crate::pixels::Image;
 use crate::steps::OsEvent;
+
+pub use self::delivered::{ActingInput, Delivered, OsInput, SendFailure};
 
 /// Which positions a lane reproduces exactly: what replay and golden holds compare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -251,21 +253,19 @@ pub trait Lane: Send {
     fn send(&mut self, event: &OsEvent) -> Result<()>;
 
     /// Send `event` as [`Self::send`] does, saying in `delivered` each input of it that reached
-    /// the device: what [`send_guarded`] says of a run that fails part way. The default says an
-    /// event sent whole is one input where it acts ([`Delivered::sent`]), which holds for a lane
-    /// that sends each event as one input; a lane that sends an event as none or several (typed
-    /// keystrokes, Android's commands) says each input itself ([`Delivered::input`],
-    /// [`Delivered::command`]), so an event cut part way is partly sent.
+    /// the device: what [`send_guarded`] says of a run that fails part way. The default sends the
+    /// event as one input, said where it acts, which holds for a lane that sends each event as
+    /// one; a lane that sends an event as none or several (typed keystrokes, Android's commands)
+    /// says each input itself ([`Delivered::send`], [`Delivered::took_command`]), so an event cut
+    /// part way is partly sent.
     ///
     /// # Errors
     ///
     /// As [`Self::send`].
     fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
-        let sent = self.send(event);
-        if sent.is_ok() {
-            delivered.sent(event);
-        }
-        sent
+        delivered
+            .send(event, || self.send(event))
+            .map_err(Error::from)
     }
 
     /// The OS accessibility tree of the window `placement` describes, projected onto the wire's
@@ -493,83 +493,6 @@ pub(crate) fn no_composition(lane: &str) -> Error {
     )
 }
 
-/// What a run put on the device, the one record [`send_guarded`]'s partly-sent answer is read
-/// from. The run counts the events: every event the lane took whole, a pause waited out and a
-/// move included, and the failing event where part of it reached the device. The lane says, in
-/// [`Lane::send_counted`], each input of an event that reached the device: whether any did is
-/// whether the run acted, and whether one of the failing event's did is whether that event went
-/// out in part.
-#[derive(Debug, Default)]
-pub struct Delivered {
-    /// The events counted as sent: each taken whole, and the failing one where part of it went
-    /// out.
-    events: u32,
-    /// Whether an input of the event being sent reached the device.
-    part: bool,
-    /// Whether any input of the run reached the device.
-    acted: bool,
-    /// The commands a lane that counts them said, for the effect's detail.
-    commands: u32,
-}
-
-impl Delivered {
-    /// An input of the event being sent reached the device: a keystroke, a button, a click of
-    /// the wheel. An event cut after one is partly sent.
-    pub fn input(&mut self) {
-        self.part = true;
-        self.acted = true;
-    }
-
-    /// An input that is a command the lane counts (Android's `input` lines and pen reports): as
-    /// [`Self::input`], and named in the effect's detail.
-    pub fn command(&mut self) {
-        self.input();
-        self.commands = self.commands.saturating_add(1);
-    }
-
-    /// The lane sent `event` whole as one input: an input where the event acts
-    /// ([`OsEvent::acts`]: not a move or a pause).
-    pub fn sent(&mut self, event: &OsEvent) {
-        if event.acts() {
-            self.input();
-        }
-    }
-
-    /// The run starts sending its next event.
-    fn begin_event(&mut self) {
-        self.part = false;
-    }
-
-    /// The event being sent was taken whole, or failed: counted when taken, or when part of it
-    /// went out.
-    fn end_event(&mut self, taken: bool) {
-        if taken || self.part {
-            self.events = self.events.saturating_add(1);
-        }
-    }
-
-    /// What went out of a run of `total` events, when any input did: the events counted as sent
-    /// of `total`, with the commands in the detail where the lane counted them.
-    fn effect(&self, total: usize) -> Option<Effect> {
-        if !self.acted {
-            return None;
-        }
-        let effect = Effect::partial(
-            self.events,
-            u32::try_from(total).unwrap_or(u32::MAX),
-            EffectUnit::Event,
-        );
-        Some(if self.commands > 0 {
-            effect.detail(format!(
-                "the device took {} command(s) of the run",
-                self.commands
-            ))
-        } else {
-            effect
-        })
-    }
-}
-
 /// Send `events` one at a time, asking the guard before each and after the last: what the
 /// device took of them, and what ended the run.
 fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> (Delivered, Result<()>) {
@@ -648,18 +571,27 @@ impl LaneWorker {
             .spawn(move || {
                 let mut lane = lane;
                 while let Ok((state, job)) = inbox.recv() {
-                    if state
+                    let runs = state
                         .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                    {
-                        job(&mut lane);
+                        .is_ok();
+                    // A job and what it holds are code the driver does not own: run, or dropped
+                    // when it was cancelled, it is under containment, its answer nobody receives
+                    // included, so a destructor's panic never ends the worker before the release
+                    // at its end. Nobody waits for that panic: it is destroyed here.
+                    let mut served = FirstPanic::new();
+                    if runs {
+                        served.contain(|| job(&mut lane));
+                    } else {
+                        served.retire(job);
                     }
+                    drop(served);
                 }
-                // The worker is ending: nothing may stay pressed. A panic of the lane or of a log
-                // subscriber here has no one left to be raised to, so it is destroyed under
-                // containment as the collector drops.
+                // The worker is ending: nothing may stay pressed. A panic of the lane, its
+                // destructor or a log subscriber here has no one left to be raised to, so it is
+                // destroyed under containment as the collector drops.
                 let mut ending = FirstPanic::new();
                 ending.contain(|| release_at_end(&mut lane));
+                ending.retire(lane);
                 drop(ending);
             })?;
         Ok(Self {
@@ -751,8 +683,11 @@ impl LaneWorker {
 impl Drop for LaneWorker {
     fn drop(&mut self) {
         drop(self.jobs.take());
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        // No payload reaches the join while the thread contains every job, every job it drops
+        // and its own end (`ending.retire(lane)`); this arm is kept so a panic that ever escapes
+        // that containment is destroyed here, never raised from a destructor (ADR-0281).
+        if let Some(Err(payload)) = self.thread.take().map(JoinHandle::join) {
+            discard_payload(payload);
         }
     }
 }

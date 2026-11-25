@@ -419,6 +419,29 @@ fn a_run_ended_after_an_event_went_out_says_how_many_on_every_lane() {
         "{refused:?}"
     );
     assert!(!refused.may_have_run());
+    // One budget across two text events: the second is cut after its first keystroke.
+    let (lane, _log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane.guarded().losing_focus_after_keystrokes(3);
+    let refused = lane::send_guarded(
+        &mut lane,
+        &[
+            OsEvent::Text("ab".to_owned()),
+            OsEvent::Text("cd".to_owned()),
+        ],
+    )
+    .expect_err("the focus went in the second text");
+    partly(&refused, 2, 2);
+    // A scripted OS that hangs answers before any keystroke: the timeout, nothing typed or
+    // logged.
+    let (lane, log) = ScriptedLane::new(Isolation::Shared);
+    let mut lane = lane
+        .guarded()
+        .hanging_sends()
+        .losing_focus_after_keystrokes(2);
+    let refused = lane::send_guarded(&mut lane, &[OsEvent::Text("hello".to_owned())])
+        .expect_err("the OS hangs");
+    assert!(matches!(refused, Error::Timeout { .. }), "{refused:?}");
+    assert_eq!(log.sent(), Vec::<OsEvent>::new());
     // Only pauses went out before the interruption: nothing that acts was sent.
     let pause = || OsEvent::Pause(Duration::from_millis(1));
     let (lane, _log) = ScriptedLane::new(Isolation::Shared);

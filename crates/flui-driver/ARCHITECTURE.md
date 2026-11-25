@@ -84,13 +84,20 @@ app's trees, frames and input, and this crate composes that with what only the O
   refusal, the guard's interruption, a failed command, a release that fails after the last
   event, `send_guarded` answers as `Error::PartlySent` around it, on every lane, read from one
   record (`lane::Delivered`): the lane says each input of an event that reached the device
-  (`Lane::send_counted`: an event sent whole is one input where it acts by default; Windows,
-  X11 and macOS say each keystroke, button and click of the wheel, Android each command, an
-  `input` line or a pen report, one whose answer was lost included), the run counts every event
-  taken whole, a pause and a move included, and the failing event where part of it went out
-  (`Effect::partial`, in events; Android's commands in its detail), and no retry is invited,
-  which would send them again; a failure with an effect of its own that invites no retry (a
-  timed-out command) stays as it is.
+  (`Lane::send_counted`, through `Delivered::send`, whose input's type says whether it acts
+  (`lane::OsInput`), so a move, a pen's hover and a lane's housekeeping, the X11 keymap change
+  and its settle, are never said; a send that put part of its input out, a `SendInput` that
+  inserted some of its events, a macOS text run posted without its release, says that part
+  (`lane::SendFailure`), and the held record keeps what that part left down for the release (a
+  Windows packet's unit, released with that packet's own key-up; a macOS run's key), until a
+  release or a later stroke that lets it up (a whole packet, a whole run) clears it. By
+  default an event sent whole is one input where it acts; the held parts of Windows, X11 and
+  macOS say each keystroke, button and click of the wheel, and Android each command, an `input`
+  line or a pen report, taken or unanswered, by the same type rule), the
+  run counts every event taken whole, a pause and a move included, and the failing event where
+  part of it went out (`Effect::partial`, in events; Android's commands taken and unanswered in
+  its detail), and no retry is invited, which would send them again; a failure with an effect of
+  its own that invites no retry (a timed-out command) stays as it is.
 - **A person's interruption followed by a failed release is cannot-verify, the held input
   named.** When the guard sees the person's input, the run stops and is cannot-verify: the input
   that reached the app is no longer the scenario's, so neither a pass nor a failure of the app can
@@ -142,8 +149,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   between commands, so `lane::android::held::HeldInput` sends a key at its release (alone, or as
   one `keycombination` with the modifiers held) and holds only the one `motionevent` contact and
   the pen's range and touch, each recorded when its command returned (the pen's when its `uinput`
-  device answered a sync); a timed-out press is held and cancelled at the release, and a key a
-  timed-out command may have left down is named in `Error::ReleaseFailed`, never pressed again.
+  device answered a sync); a press whose answer was lost (a timeout, a bound, a pipe) is held and
+  cancelled at the release, and a key a command whose answer was lost may have left down is
+  named in `Error::ReleaseFailed`, never pressed again; a command whose `adb` never started holds
+  nothing.
   It refuses a second contact, a sequence that ends with a key down (which would never be sent),
   the keys and chords that leave the app or change the device (the fallbacks of AOSP's
   `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
@@ -156,13 +165,20 @@ app's trees, frames and input, and this crate composes that with what only the O
   change on the device waits for, once a locate and once before each such command; `-a` is what
   prints the frames. A window that takes no focus over the press point is not checked
   (`docs/gaps.md`). A contact going down is recorded before its command goes out, so a send that
-  times out or unwinds leaves it for the release to cancel.
+  times out, loses its answer or unwinds leaves it for the release to cancel.
 - **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
-  its own: a window dump at a path of the session's, and a forward from a loopback port the lane
-  picked, asked for with `--no-rebind` (a port another session holds is refused and another
-  picked) and removed by that port at its end once `adb` made it or may have.
+  its own: each window dump at a path of its own, removed with the earlier ones by every dump that
+  runs to its end (never a later dump's) and with all of the session's by the lane's end, and a
+  forward from a loopback port the lane picked, asked for with `--no-rebind` (a port another
+  session holds is refused and another picked) and removed by that port at its end once `adb`
+  made it or may have (its answer lost). Each step of the lane's end, and the destructors of its
+  device and streams (the binding's code), runs under one `FirstPanic`; a destructor has no
+  caller to raise to, so the first panic is logged and destroyed. The lane worker runs every job,
+  drops every job it skips and every answer nobody receives, and retires the lane, each under
+  containment, so no destructor's panic ends it before its release; its join destroys a payload
+  that ever escaped that.
 - **The Android lane finds the app's nodes by matching, never by guessing.** `accesskit_android`
   sets no `viewIdResourceName`, so `Lane::read_tree` is handed the app's own tree and
   `lane::android::tree` matches the dump to it: the root is the child of the decor view that fits
@@ -211,14 +227,17 @@ app's trees, frames and input, and this crate composes that with what only the O
   UDID, or two naming none when none names it, are refused. A device renamed or removed since
   the lane connected is refused (`accessibility::screen_title`). The screen's elements are read
   by a pure walk over a source (`accessibility::walk_screen`): a level the node budget or a
-  vanished element cuts is marked unread on its parent, the screen included. Every walk over an
-  OS tree, `lane::walk`'s and this one, holds one rule with its cause (`lane::walk::Cut`): a
+  vanished element cuts is marked unread on its parent, the screen included. Both reads of a
+  tree, `lane::walk::read` and this walk, hold one rule with its cause (`lane::walk::Cut`): a
   bound, the list gone (a step to a next child that finds an element gone; `ax::child_at`
   answers `kAXErrorInvalidUIElement`, the parent gone, as that), or one element gone while read,
   left out of a list read on to its end. Each marks its level unread and the read truncated, and
-  each reader acts on the cause: a press refuses a lone match on a short read with a retry unless
-  a bound cut it, and the projection leaves FLUI's announcers out unless the root's list ended
-  early. Every element the read asks is given the
+  a press refuses a lone match on a short read with a retry unless a bound cut it
+  (`Cut::repeats`). The projection leaves FLUI's announcers out only of the list that holds
+  them (a lifted container's, else the screen's) read whole, since a gap may have taken one of
+  them. The searches (`walk::find_by`, the screen search) keep
+  their own record of a cut, the screen search's retry by the same two causes
+  (`tree::SearchReach`). Every element the read asks is given the
   client's deadline and carries it, so a timeout, a press's included, names the deadline of the
   element its call was asked of, or says that element refused it. A window's identity texts are
   read whole up to `accessibility::IDENTITY_TEXT_LIMIT` by the pure `window_identity`, every

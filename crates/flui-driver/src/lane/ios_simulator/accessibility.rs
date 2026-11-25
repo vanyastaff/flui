@@ -556,8 +556,9 @@ pub fn list_children<E>(
 /// an element that went away could have been the twin of one read; an element on the deepest
 /// level read has its children marked unread when it has a child or went away before it said.
 /// An element that went away while its own attributes were read is left out, its level marked
-/// so ([`Cut::ElementGone`]). The rule is `lane::walk`'s, the one for every walk over an OS tree,
-/// with its cause ([`Cut`]): each cut is one write that marks the level and the walk together,
+/// so ([`Cut::ElementGone`]). The rule is `lane::walk`'s, the one both reads of a tree hold
+/// (`walk::read` and this walk), with its cause ([`Cut`]): each cut is one write that marks the
+/// level and the walk together,
 /// and what the walk reports (`cut`, `met_gone`) is read from those writes.
 ///
 /// # Errors

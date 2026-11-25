@@ -27,7 +27,7 @@ use flui_driver::{Awaited, Error, Isolation};
 
 use crate::android_lane::{
     FOCUSED, GETEVENT, PACKAGE, PROBED, USAGE, WINDOWS, abilities, answer_syncs, capability,
-    connected, focus_of, inputs, png_of, raw_capture, scripted, scripted_with, tap,
+    connected, focus_of, inputs, placement, png_of, raw_capture, scripted, scripted_with, tap,
 };
 
 const AT: DevicePoint = DevicePoint::new(300, 600);
@@ -1208,12 +1208,93 @@ fn a_probe_whose_command_ends_at_once_finds_no_uinput() {
     );
 }
 
+/// A subscriber whose every error event panics, as a log subscriber the driver does not own may.
+struct PanickingOnErrors;
+
+impl tracing::Subscriber for PanickingOnErrors {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() == tracing::Level::ERROR
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, _: &tracing::Event<'_>) {
+        panic!("the subscriber panics on an error event");
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A panic of the `Adb` (a binding the driver does not own) at one step of the lane's end leaves
+/// the steps after it to run, and the destructors after it (the guard's and the pen's streams,
+/// then the device) panicking too are competing failures; the log of the first panic, whose
+/// subscriber panics, is contained as well. Nothing aborts, everything is destroyed under
+/// containment, and the lane's end raises nothing to its caller, which has no one to raise it to.
+#[test]
+fn a_panic_at_one_step_of_the_lanes_end_leaves_the_others_to_run() {
+    // A device in someone's hands, so the lane watches it through a guard's stream.
+    let adb = scripted(false, true)
+        .reply("shell 'am'", AdbReply::new(0, ""))
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .reply_once(
+            "forward --no-rebind",
+            AdbReply::new(0, "x".repeat(70 * 1024)),
+        )
+        .unwind_once("shell rm -f");
+    let app = AndroidApp::try_new(PACKAGE, "a.B").expect("an app");
+    let mut lane =
+        AndroidLane::connect(adb.device_unwinding_on_drop(), PACKAGE).expect("the lane connects");
+    lane.locate_window(&placement())
+        .expect("the window is found");
+    assert!(lane.start(&app).is_err(), "the forward's answer was lost");
+    let empty = flui_driver::protocol::tree::Tree::new(Vec::new(), false);
+    let _ = lane.read_tree(&placement(), &empty);
+    // The pen comes into range, so its device's stream is open.
+    let pen = tap(PointerDevice::Pen, AT);
+    lane.check(&pen).expect("a pen");
+    lane.send(&pen[0]).expect("the pen enters");
+    adb.unwind_streams_on_drop("shell -tt getevent");
+    adb.unwind_streams_on_drop("shell uinput -");
+    tracing::subscriber::with_default(PanickingOnErrors, || drop(lane));
+    assert_eq!(adb.commands("shell rm -f").len(), 1);
+    assert_eq!(
+        adb.commands("forward --remove").len(),
+        1,
+        "the forward is removed after the panic"
+    );
+    let log = adb.log();
+    let at = |line: &str| {
+        log.iter()
+            .rposition(|logged| logged.starts_with(line))
+            .unwrap_or_else(|| panic!("{line} is logged: {log:?}"))
+    };
+    let device = at("the device's binding unwound");
+    assert!(
+        at("shell -tt getevent -l ended") < device,
+        "the guard's stream first"
+    );
+    assert!(
+        at("shell uinput - ended") < device,
+        "the pen's stream first"
+    );
+}
+
 #[test]
 fn a_lane_that_started_no_app_stops_nothing_when_it_ends() {
     let adb = scripted(true, true);
     drop(connected(&adb));
     assert_eq!(adb.commands("shell 'am'"), Vec::<String>::new());
     assert_eq!(adb.commands("forward"), Vec::<String>::new());
+    // A lane that never read the tree left no dump to remove.
+    assert_eq!(adb.commands("shell rm -f"), Vec::<String>::new());
     // A forward `adb` refused for another reason is no rule of the lane's: nothing is removed, and
     // the app it started is still stopped.
     let adb = scripted(true, true)
