@@ -202,10 +202,10 @@ enum CommandOutcome {
 impl CommandOutcome {
     /// Say the command in the run's record: taken, or unanswered and so may have run; one that
     /// never reached the device is not said.
-    fn say(&self, delivered: &mut Delivered) {
+    fn say(&self, command: &Command, delivered: &mut Delivered) {
         match self {
-            Self::Taken => delivered.took_command(),
-            Self::Unanswered(_) => delivered.unanswered_command(),
+            Self::Taken => delivered.took_command(command),
+            Self::Unanswered(_) => delivered.unanswered_command(command),
             Self::Unsent(_) => {}
         }
     }
@@ -971,7 +971,7 @@ impl Lane for AndroidLane {
                 self.check_focus()?;
             }
             let outcome = self.deliver(&command);
-            outcome.say(delivered);
+            outcome.say(&command, delivered);
             outcome.into_result()?;
         }
         Ok(())
@@ -1086,7 +1086,7 @@ impl Drop for AndroidLane {
         // The app also exits on its own once its driver's connection closes
         // (`flui.agent.exit_on_disconnect`): a failure here leaves nothing running past that.
         // Each step runs whatever the one before it came to, a panic of the `Adb` (a binding the
-        // driver does not own) included; the first panic is resumed once every step ran.
+        // driver does not own) included.
         let mut panicked = flui_foundation::panic::FirstPanic::new();
         let device = self.adb.as_mut();
         if self.app_started {
@@ -1116,7 +1116,47 @@ impl Drop for AndroidLane {
                 )
             });
         }
-        panicked.resume();
+        // The guard's and the pen's streams, then the device, are the binding's code too: each is
+        // dropped under the same containment, so a destructor that panics after a step did is a
+        // competing failure, not a panic during an unwind.
+        panicked.retire(self.guard.take());
+        panicked.retire(self.pen.take());
+        panicked.retire(std::mem::replace(&mut self.adb, Box::new(EndedAdb)));
+        // A destructor has no caller to raise to: the first panic is logged and destroyed under
+        // containment, the log's own subscriber included.
+        if let Some(payload) = panicked.into_payload() {
+            let mut logging = flui_foundation::panic::FirstPanic::new();
+            logging.contain(|| {
+                tracing::error!(
+                    lane = LANE,
+                    "a step of the lane's end panicked; the steps after it ran"
+                );
+            });
+            flui_foundation::panic::discard_payload(payload);
+        }
+    }
+}
+
+/// The device of a lane that has ended, left in its place while the lane's own device is dropped:
+/// it runs nothing.
+struct EndedAdb;
+
+impl Adb for EndedAdb {
+    fn run(
+        &mut self,
+        command: &AdbCommand,
+        _limit: usize,
+        _timeout: Duration,
+    ) -> std::result::Result<AdbReply, RunFailure> {
+        Err(RunFailure::NotStarted(lane_error(format!(
+            "the lane has ended: `adb {command}` is not run"
+        ))))
+    }
+
+    fn open(&mut self, command: &AdbCommand, _framing: Framing) -> Result<Box<dyn AdbStream>> {
+        Err(lane_error(format!(
+            "the lane has ended: `adb {command}` is not opened"
+        )))
     }
 }
 

@@ -12,7 +12,7 @@
 
 use flui_protocol::act::{Effect, EffectUnit};
 
-use crate::error::{Error, Result};
+use crate::error::Error;
 use crate::steps::OsEvent;
 
 /// One input a lane sends to the OS, and whether it acts on the app once it reaches the device.
@@ -58,10 +58,11 @@ impl SendFailure {
         }
     }
 
-    /// The failure as the lane's error.
+    /// Whether part of the input reached the device before the send failed: what it left down is
+    /// the sender's to record, so the release lets it go.
     #[must_use]
-    pub fn into_error(self) -> Error {
-        self.error
+    pub fn is_partly_sent(&self) -> bool {
+        self.partly_sent
     }
 }
 
@@ -99,7 +100,9 @@ pub struct Delivered {
 
 impl Delivered {
     /// Send `input` through `send`, saying it once it reached the device where it acts: when
-    /// `send` succeeds, and when it fails after part of the input went out.
+    /// `send` succeeds, and when it fails after part of the input went out
+    /// ([`SendFailure::is_partly_sent`], which the caller reads to record what that part left
+    /// down).
     ///
     /// # Errors
     ///
@@ -108,7 +111,7 @@ impl Delivered {
         &mut self,
         input: &impl OsInput,
         send: impl FnOnce() -> std::result::Result<(), E>,
-    ) -> Result<()> {
+    ) -> std::result::Result<(), SendFailure> {
         match send() {
             Ok(()) => {
                 if input.acts() {
@@ -117,25 +120,30 @@ impl Delivered {
                 Ok(())
             }
             Err(failure) => {
-                let failure = failure.into();
+                let failure: SendFailure = failure.into();
                 if failure.partly_sent && input.acts() {
                     self.reached();
                 }
-                Err(failure.error)
+                Err(failure)
             }
         }
     }
 
-    /// The device took one command of the event being sent, of a lane that counts its commands.
-    pub fn took_command(&mut self) {
-        self.reached();
+    /// The device took `command`, of a lane that counts its commands: said where it acts, and
+    /// counted for the effect's detail.
+    pub fn took_command(&mut self, command: &impl OsInput) {
+        if command.acts() {
+            self.reached();
+        }
         self.taken = self.taken.saturating_add(1);
     }
 
-    /// One command of the event being sent reached the device and its answer was lost, so it may
-    /// have run, of a lane that counts its commands.
-    pub fn unanswered_command(&mut self) {
-        self.reached();
+    /// `command` reached the device and its answer was lost, so it may have run, of a lane that
+    /// counts its commands: said where it acts, and counted for the effect's detail.
+    pub fn unanswered_command(&mut self, command: &impl OsInput) {
+        if command.acts() {
+            self.reached();
+        }
         self.unanswered = self.unanswered.saturating_add(1);
     }
 

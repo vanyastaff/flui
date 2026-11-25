@@ -360,26 +360,27 @@ impl Lane for ScriptedLane {
     }
 
     fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
-        let (OsEvent::Text(text), Some(_)) = (event, self.keystrokes_before_focus_lost) else {
-            return delivered.send(event, || self.send(event));
+        let (OsEvent::Text(text), Some(mut left)) = (event, self.keystrokes_before_focus_lost)
+        else {
+            return delivered
+                .send(event, || self.send(event))
+                .map_err(Error::from);
         };
         self.answers(event)?;
         for _ in text.chars() {
-            delivered.send(&ActingInput, || {
-                let left = self
-                    .keystrokes_before_focus_lost
-                    .as_mut()
-                    .expect("BUG: the keystroke count was read just above");
-                if *left == 0 {
+            let typed = delivered.send(&ActingInput, || {
+                if left == 0 {
                     return Err(Error::NotForeground {
                         message: "the scripted window lost the focus: the input is not sent there"
                             .into(),
                         retry: flui_protocol::error::ErrorCode::NotForeground.default_retry(),
                     });
                 }
-                *left -= 1;
+                left -= 1;
                 Ok(())
-            })?;
+            });
+            self.keystrokes_before_focus_lost = Some(left);
+            typed?;
         }
         self.log_sent(event);
         Ok(())

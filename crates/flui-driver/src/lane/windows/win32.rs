@@ -318,7 +318,7 @@ fn send(inputs: &[INPUT], what: &str) -> std::result::Result<(), SendFailure> {
     let size = i32::try_from(size_of::<INPUT>()).expect("BUG: an INPUT is a few dozen bytes");
     // SAFETY: fully initialized `INPUT`s and the size of one.
     let sent = unsafe { SendInput(inputs, size) };
-    crate::lane::windows::held::inserted(sent, inputs.len(), what)
+    crate::lane::windows::send_input::outcome(sent, inputs.len(), what)
 }
 
 fn mouse(dx: i32, dy: i32, data: u32, flags: MOUSE_EVENT_FLAGS) -> INPUT {
