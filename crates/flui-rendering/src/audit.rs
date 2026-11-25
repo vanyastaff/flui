@@ -51,10 +51,9 @@ mod backdrop;
 
 use std::fmt;
 
-use flui_foundation::RenderId;
+use flui_foundation::{RenderId, SlotSet};
 use flui_layer::SceneVersion;
 use flui_painting::styling::Color;
-use rustc_hash::FxHashSet;
 
 use crate::pipeline::PipelineOwner;
 use backdrop::{Backdrop, Boldness, PaintedText};
@@ -188,43 +187,48 @@ impl PipelineOwner {
     pub fn audit_text_contrast(&self, version: &SceneVersion) -> Option<Vec<TextContrast>> {
         let frame = self.scene_frame_node()?;
         let painted = backdrop::painted_texts(version, frame)?;
-        let with_nodes: FxHashSet<RenderId> = self.semantics_owner().map_or_default(|owner| {
-            owner
+        let with_nodes: SlotSet<RenderId> = self.semantics_owner().map_or_default(|owner| {
+            let mut with_nodes = SlotSet::new();
+            for render_id in owner
                 .tree()
                 .iter()
                 .filter_map(|(_, node)| node.source_render_id())
-                .collect::<FxHashSet<RenderId>>()
+            {
+                with_nodes.insert(render_id);
+            }
+            with_nodes
         });
         Some(
             painted
                 .into_iter()
-                .map(|text| {
-                    let element = self.element_of(text.painter, &with_nodes);
-                    TextContrast {
+                .filter_map(|text| {
+                    let outcome = judge(&text)?;
+                    Some(TextContrast {
                         painter: text.painter,
-                        element,
-                        outcome: judge(&text),
+                        element: self.element_of(text.painter, &with_nodes),
+                        outcome,
                         text: text.text,
-                    }
+                    })
                 })
                 .collect::<Vec<TextContrast>>(),
         )
     }
 
     /// The painter, or the nearest render object above it, that contributes a semantics node.
-    fn element_of(&self, painter: RenderId, with_nodes: &FxHashSet<RenderId>) -> Option<RenderId> {
+    fn element_of(&self, painter: RenderId, with_nodes: &SlotSet<RenderId>) -> Option<RenderId> {
         let tree = self.render_tree();
         // The tree's parent links end at its root, and each step goes up one level.
         std::iter::successors(Some(painter), |&id| tree.parent(id))
-            .find(|id| with_nodes.contains(id))
+            .find(|&id| with_nodes.contains(id))
     }
 }
 
-/// The outcome for one painted text: its runs against its backdrop.
-fn judge(text: &PaintedText) -> ContrastOutcome {
+/// The outcome for one painted text: its runs against its backdrop. `None` for a text with no
+/// glyph run, which paints nothing to read and is left out of the answer (module docs).
+fn judge(text: &PaintedText) -> Option<ContrastOutcome> {
     let backdrop = match &text.backdrop {
         Ok(backdrop) => backdrop,
-        Err(unknown) => return ContrastOutcome::NotChecked(*unknown),
+        Err(unknown) => return Some(ContrastOutcome::NotChecked(*unknown)),
     };
     let mut worst_meeting: Option<ContrastReading> = None;
     let mut worst_below: Option<ContrastReading> = None;
@@ -245,11 +249,10 @@ fn judge(text: &PaintedText) -> ContrastOutcome {
         }
     }
     match (worst_below, unknown, worst_meeting) {
-        (Some(below), ..) => ContrastOutcome::Below(below),
-        (None, Some(why), _) => ContrastOutcome::NotChecked(why),
-        (None, None, Some(meeting)) => ContrastOutcome::Meets(meeting),
-        // A text with no glyph runs paints nothing to read.
-        (None, None, None) => ContrastOutcome::NotChecked(ContrastUnknown::UnresolvedBackdrop),
+        (Some(below), ..) => Some(ContrastOutcome::Below(below)),
+        (None, Some(why), _) => Some(ContrastOutcome::NotChecked(why)),
+        (None, None, Some(meeting)) => Some(ContrastOutcome::Meets(meeting)),
+        (None, None, None) => None,
     }
 }
 

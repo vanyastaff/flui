@@ -1508,6 +1508,41 @@ fn a_shape_painted_over_the_text_box_is_unresolved_and_one_away_from_it_is_not()
     }
 }
 
+/// The blur radius of [`shadow_below`]'s shadow: a sigma of about 2 px.
+const SHADOW_RADIUS: f64 = 2.6;
+
+/// Paints [`TEXT`] in a transparent colour (no text to judge) 20 px below `text`, casting a
+/// black shadow blurred by [`SHADOW_RADIUS`] whose glyph box starts `gap_in_sigmas` of the
+/// blur's sigmas below `text`'s box.
+fn shadow_below(ctx: &mut CustomPaintContext<'_>, text: Rect<f64>, gap_in_sigmas: f64) {
+    let sigma = f64::from(
+        flui_painting::BlurSigma::from_blur_radius(SHADOW_RADIUS)
+            .expect("a finite radius")
+            .get(),
+    );
+    let at = Offset::new(AT.dx, text.bottom() + 20.0);
+    let shadow_dy = text.bottom() + gap_in_sigmas * sigma - at.dy;
+    let style = TextStyle::default()
+        .with_color(Color::TRANSPARENT)
+        .with_font_size(16.0)
+        .with_font_weight(FontWeight::NORMAL)
+        .with_shadow(flui_painting::styling::Shadow::new(
+            Color::BLACK,
+            Offset::new(0.0, shadow_dy),
+            SHADOW_RADIUS,
+        ));
+    let width = ctx.size().width;
+    let mut label = TextPainter::new()
+        .with_text(TextSpan::styled(TEXT, style))
+        .with_text_direction(TextDirection::Ltr);
+    ctx.text()
+        .expect("the paint pass lends the text context")
+        .measurement()
+        .layout(&mut label, 0.0, width)
+        .expect("the label lays out");
+    label.paint(ctx.canvas(), at);
+}
+
 /// A shape's extent is where it may touch: each edge of a tiny shape reaches the text box by
 /// its own coordinate, and a stroke, a spread or a line's width reaches further.
 #[test]
@@ -1632,6 +1667,16 @@ fn a_shapes_reach_is_its_extent_plus_its_stroke_width_or_spread() {
                 );
             },
             backdrop,
+        ),
+        (
+            "a text's shadow reaches three sigmas past its glyphs",
+            |ctx, text| shadow_below(ctx, text, 2.75),
+            backdrop,
+        ),
+        (
+            "a text's shadow six sigmas clear of the box does not touch it",
+            |ctx, text| shadow_below(ctx, text, 6.0),
+            Expect::Meets(4.5),
         ),
     ];
     for (name, probe, expect) in probes {
