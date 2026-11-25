@@ -531,7 +531,7 @@ fn a_scenario_dropped_unverified_with_debts_fails_the_test() {
 fn a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest() {
     let scenario = Scenario::new();
     let (mut host, camera, handle) = camera_on(&scenario);
-    let _held = camera.captures.hold();
+    let hold = camera.captures.hold();
     let first = land(handle.capture(1));
     let poisoned = land(handle.capture(2));
     let third = land(handle.capture(3));
@@ -552,6 +552,8 @@ fn a_panicking_release_answer_keeps_its_request_held_and_answers_the_rest() {
     );
     assert_eq!(taken(&poisoned), None);
     assert_eq!(camera.captures.held(), 1, "the failed one stays held");
+    assert_eq!(hold.release(), 0, "and waits for the test, not the lift");
+    assert_eq!(camera.captures.held(), 1);
 
     assert!(camera.captures.release_oldest(Err(CaptureError::Busy)));
     let _ = host.pump(Duration::ZERO);
@@ -862,6 +864,212 @@ fn a_hold_outliving_its_script_answers_nothing() {
         }]
     );
     drop(held);
+}
+
+/// A test's value that panics as a step lets go of it, mid-lift, is kept as
+/// the run's failure while the lift still sends the rest on, and the script
+/// answers later requests at once again.
+#[test]
+fn a_panicking_drop_during_a_lift_leaves_the_script_answering() {
+    struct PanicOnDrop;
+    impl Drop for PanicOnDrop {
+        fn drop(&mut self) {
+            panic!("a matcher's value panicked as it dropped");
+        }
+    }
+
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    camera.captures.otherwise(|_| Ok(vec![0]));
+    let captured = PanicOnDrop;
+    camera.captures.expect(
+        Expect::when("the first capture", move |request: &CameraRequest| {
+            let _ = &captured;
+            *request == CameraRequest::Capture { width: 1 }
+        }),
+        Answer::value(Ok(vec![1])),
+    );
+    let hold = camera.captures.hold();
+    let first = land(handle.capture(1));
+    let second = land(handle.capture(2));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hold.release()))
+        .expect_err("the drop's panic reaches whoever let go");
+    assert_eq!(
+        failure.downcast_ref::<&str>(),
+        Some(&"a matcher's value panicked as it dropped")
+    );
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&first), Some(Ok(Ok(vec![1]))));
+    assert_eq!(taken(&second), Some(Ok(Ok(vec![0]))), "the lift went on");
+
+    let later = land(handle.capture(3));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(
+        taken(&later),
+        Some(Ok(Ok(vec![0]))),
+        "no hold is left, so a later request is answered at once"
+    );
+    scenario.verify().expect("every request was answered");
+}
+
+/// A release counts only the requests it answered: one a step answers
+/// later, one a step abandons and one nothing answers are not counted.
+#[test]
+fn a_release_counts_only_the_requests_it_answered() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    camera
+        .captures
+        .answer_next(Answer::value(Ok(vec![1])).after(Duration::from_millis(10)));
+    camera.captures.answer_next(Answer::abandon());
+    let hold = camera.captures.hold();
+    let delayed = land(handle.capture(1));
+    let abandoned = land(handle.capture(2));
+    let unexpected = land(handle.capture(3));
+    assert_eq!(
+        hold.release(),
+        0,
+        "none of them was answered by the release"
+    );
+    let _ = host.pump(Duration::from_millis(10));
+    assert_eq!(taken(&delayed), Some(Ok(Ok(vec![1]))));
+    assert_eq!(taken(&abandoned), Some(Err(Abandoned::ProviderDropped)));
+    assert_eq!(taken(&unexpected), Some(Err(Abandoned::ProviderDropped)));
+    let failures = scenario.verify().expect_err("the third was unexpected");
+    assert_eq!(
+        failures.failures(),
+        [ScenarioFailure::Unexpected {
+            script: "camera captures",
+            request: "Capture { width: 3 }".to_owned(),
+        }]
+    );
+}
+
+/// A hold taken and let go by the code a lift runs does not start a lift
+/// of its own: the first lift sends every kept request on, in order, and
+/// counts them all.
+#[test]
+fn a_hold_let_go_inside_a_lift_leaves_the_lift_to_finish() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    camera.captures.otherwise(|_| Ok(vec![0]));
+    camera.captures.on_answer({
+        let captures = camera.captures.clone();
+        move |request, _| {
+            if *request == (CameraRequest::Capture { width: 1 }) {
+                drop(captures.hold());
+            }
+        }
+    });
+    let settled = Rc::new(RefCell::new(Vec::<u32>::new()));
+    let hold = camera.captures.hold();
+    for width in 1..=3 {
+        let settled = Rc::clone(&settled);
+        handle
+            .capture(width)
+            .on_complete(move |_| settled.borrow_mut().push(width));
+    }
+    assert_eq!(hold.release(), 3);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(*settled.borrow(), [1, 2, 3], "answered oldest first");
+    scenario.verify().expect("every request was answered");
+}
+
+/// `leave_held` sends nothing on: while another hold lives, the kept
+/// request stays that hold's and its release answers it; as the last hold,
+/// it leaves the request to the test, so a later hold's release answers
+/// nothing and the run reports it.
+#[test]
+fn leave_held_leaves_the_kept_requests_to_another_hold_or_to_the_test() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    camera.captures.otherwise(|_| Ok(vec![0]));
+    let left = camera.captures.hold();
+    let other = camera.captures.hold();
+    let kept = land(handle.capture(1));
+    left.leave_held();
+    assert_eq!(camera.captures.held(), 1);
+    assert_eq!(other.release(), 1, "the other hold sends it on");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&kept), Some(Ok(Ok(vec![0]))));
+
+    let last = camera.captures.hold();
+    let left_to_the_test = land(handle.capture(2));
+    last.leave_held();
+    let later = land(handle.capture(3));
+    assert_eq!(
+        camera.captures.hold().release(),
+        0,
+        "a later hold's release leaves it"
+    );
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&later), Some(Ok(Ok(vec![0]))), "no hold keeps it");
+    assert_eq!(taken(&left_to_the_test), None);
+    assert_eq!(camera.captures.held(), 1);
+    let failures = scenario.verify().expect_err("the left request is owed");
+    assert_eq!(
+        failures.failures(),
+        [ScenarioFailure::Unanswered {
+            script: "camera captures",
+            request: "Capture { width: 2 }".to_owned(),
+        }]
+    );
+    assert!(camera.captures.release_oldest(Err(CaptureError::Busy)));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&left_to_the_test), Some(Ok(Err(CaptureError::Busy))));
+}
+
+/// A hold let go after `verify` reported what it kept does not send that
+/// on: the request stays held and reported, so no new failure appears at
+/// teardown. A request it kept after the `verify` still goes on.
+#[test]
+fn a_hold_let_go_after_verify_leaves_what_verify_reported() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    let hold = camera.captures.hold();
+    let reported = land(handle.capture(1));
+    let owed = [ScenarioFailure::Unanswered {
+        script: "camera captures",
+        request: "Capture { width: 1 }".to_owned(),
+    }];
+    let failures = scenario.verify().expect_err("the kept request is owed");
+    assert_eq!(failures.failures(), owed);
+
+    camera.captures.otherwise(|_| Ok(vec![0]));
+    let after = land(handle.capture(2));
+    assert_eq!(hold.release(), 1, "only the request kept after verify");
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&after), Some(Ok(Ok(vec![0]))));
+    assert_eq!(taken(&reported), None, "what verify reported stays held");
+    assert_eq!(camera.captures.held(), 1);
+    let failures = scenario.verify().expect_err("still owed, nothing new");
+    assert_eq!(failures.failures(), owed);
+
+    assert!(camera.captures.release_oldest(Err(CaptureError::Busy)));
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&reported), Some(Ok(Err(CaptureError::Busy))));
+}
+
+/// A request withdrawn while `release_held` makes its own answer is not
+/// answered or counted: the answer made for it is dropped.
+#[test]
+fn a_request_withdrawn_while_its_release_answer_is_made_is_not_counted() {
+    let scenario = Scenario::new();
+    let (mut host, camera, handle) = camera_on(&scenario);
+    let hold = camera.captures.hold();
+    let (held, ticket) = handle.capture_until_dropped(1);
+    let held = land(held);
+    let ticket = RefCell::new(Some(ticket));
+    let answered = camera.captures.release_held(|_| {
+        drop(ticket.take());
+        Ok(vec![9])
+    });
+    assert_eq!(answered, 0, "withdrawn while its answer was made");
+    assert_eq!(camera.captures.withdrawn(), 1);
+    assert_eq!(hold.release(), 0);
+    let _ = host.pump(Duration::ZERO);
+    assert_eq!(taken(&held), Some(Err(Abandoned::ProviderDropped)));
+    scenario.verify().expect("a withdrawn request is not owed");
 }
 
 /// A script's observer hears every answer before the caller's completion
