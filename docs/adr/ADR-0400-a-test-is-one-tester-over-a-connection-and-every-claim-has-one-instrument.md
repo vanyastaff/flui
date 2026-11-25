@@ -581,8 +581,10 @@ link-time test registry; a testing crate beside `flui-testing`.
   its end checks; `freeze_at` on an activity indicator gives a golden that reruns byte for byte; a
   chord after a `Gesture` that left a key down sends no second down; a golden off the canonical
   adapter is `CannotVerify`; a mismatch writes a diff and a failed run blesses nothing.
-- A conformance test (`flui-driver`'s `gesture_conformance`): one `ActionSequence` per gesture kind, planned once, gives the same
-  routed events through the agent's injection, a platform lowering and a conformance row.
+- A conformance test: one `ActionSequence` per gesture kind, planned once, gives the same routed
+  events through the agent's injection, a platform lowering and a conformance row. `flui-driver`'s
+  `gesture_conformance` compares the first two; the conformance row waits for a plan lowered into
+  `HostInput` rows (`docs/gaps.md`).
 - One scenario of an example package runs headless in its `#[test]` and on a device in the
   nightly platform lanes through `each::<Device>`.
 - `flui-driver` has no `headless` feature and no edge to `flui-testing`.

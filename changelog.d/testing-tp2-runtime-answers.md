@@ -32,7 +32,8 @@
   ends with its connection.
 - `flui_semantics::MinimumTarget` and `SemanticsOwner::audit_unnamed` / `audit_target_size`: the
   target-size rule judges the hit region inside the window and every clip that does not scroll,
-  so a row partly scrolled out of a list is judged by its size once revealed; it does not judge an
+  so a row partly scrolled out of a list is judged by its size once revealed, and a target meets the
+  minimum to within 0.005 logical px; it does not judge an
   inline link (a `link` beside text in its parent) nor a target inside an interactive ancestor
   whose hit region meets the minimum.
 - `flui_rendering::audit` and `PipelineOwner::audit_text_contrast`: WCAG text contrast read from
@@ -51,8 +52,13 @@
   viewport at a time until the element shows under the scrollable, and ends `not_found` once the
   content stops moving. A window holds at most 64 acts (`busy` past it).
 - `flui_protocol::input::gestures`: the one composition of each gesture into an action sequence,
-  which the agent and the driver's OS lane both play; and `Plan::tick_ends`, where each tick of a
-  plan ends.
+  which the agent and the driver both play, its sources named `gesture.mouse`, `gesture.touch`,
+  `gesture.pinch.a`/`gesture.pinch.b` and `gesture.keys` so gestures on one input lease never share
+  one; `gestures::drag` holds still before it lifts, so a drag is dropped where it ends, and
+  refuses a drag inside the pointer's slop (`GestureError::DragTooShort`), a default fling over a
+  stroke too short to measure a release speed is refused naming the distance or velocity to give
+  (`GestureError::FlingTooShort`), and a pinch inside the window's scale slop is refused; and
+  `Plan::tick_ends`, where each tick of a plan ends.
 - `flui_protocol::input::gestures::Defaults`: what a gesture takes where its call names no
   duration, velocity or distance and a window's settings decide it, and the pointer a tap, double
   tap and drag play with. The app's agent fills it from the window's own `GestureSettings`, so a
@@ -96,12 +102,6 @@
 - `input.inject` plays `flui_protocol::input::plan`'s timeline: its bounds and refusals are the
   plan's, each step of a move is one event stamped at its planned instant, and a move that names no
   duration lasts a step (16 ms).
-- `gestures::drag` holds still before it lifts, so a drag is dropped where it ends, and refuses a
-  drag inside the pointer's slop (`GestureError::DragTooShort`); `Tester::drag` and `drag_from` hold
-  still the same `SWIPE_SETTLE_MS`. `gestures::tap`, `double_tap` and `drag` take `&Defaults`.
-- A default fling over a stroke too short to measure a release speed is refused naming the
-  distance or velocity to give (`GestureError::FlingTooShort`); a pinch inside the window's scale
-  slop is refused.
 - `SemanticsOwner::actionability_wire` returns an `ActionabilityReading`: the facts the wire
   carries and the part of the element the window shows. The agent aims a gesture's extent at that
   part: a swipe naming no distance goes most of the way from its point to the edge of the part
@@ -109,18 +109,13 @@
 - `Tester::press_keys` reads its chord with `gestures::chord_keys` and refuses one that does not
   read (`Control+`, `a++b`, a spaced `Control + a`) instead of pressing part of it.
 
+- `Tester::drag` and `drag_from` hold the contact still for `SWIPE_SETTLE_MS` before the release,
+  so a drag ends below the fling velocity on the plan's timeline.
+
 ### Fixed
 
 - A gesture's reply deadline (`Addressed::holds_for`) counts the time its input takes to play after
-  the act's timeout, so a long press, a slow swipe or a double tap is no longer cut short.
-- A composed gesture's pointer and keyboard sources are named `gesture.mouse`, `gesture.touch`,
-  `gesture.pinch.a`/`gesture.pinch.b` and `gesture.keys`, so a mouse gesture after a touch gesture on
-  one input lease no longer collides on one source name.
-- `MinimumTarget::admits` meets the minimum to within 0.005 logical px, so a target laid out at
-  exactly the minimum is no longer a finding at device ratios such as 1.1, 1.3 or 1.4.
-- A strict locator matched by more than ten elements reports its true count, from a gesture the
-  agent plays and from one the driver composes.
-- A wait that keeps frames coming parks nothing when the wake it asks for panics, and a wake that
-  panics for one window no longer cuts the wait answer pass short.
-- A held act's last attempt on a turn without a frame names the check that failed, not `stable`;
-  two readers of one frame get the same stability answer.
+  the act's timeout, so a long press, a slow swipe or a double tap the driver sends is no longer
+  cut short.
+- A strict locator the driver resolves for a gesture it composes reports its true count past ten
+  matches, counting those the agent left out.
