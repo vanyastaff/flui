@@ -212,9 +212,9 @@ impl TreeError {
             },
             Self::SearchCut { title, reach } => Error::NotFound {
                 message: format!(
-                    "the window {title:?} shows no {SCREEN_SUBROLE} group, and its search was cut \
-                     short above or beside the groups of the app's window's shape it saw{}: \
-                     another may sit in the part not read, so none is taken{}",
+                    "the window {title:?} shows no group of subrole {SCREEN_SUBROLE}, and its \
+                     search was cut short above or beside the groups of the app's window's shape \
+                     it saw{}: another may sit in the part not read, so none is taken{}",
                     reach.where_read(),
                     if reach == SearchReach::Budget {
                         "; the window's chrome is larger than the search reads, so reading again \
