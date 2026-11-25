@@ -9,7 +9,7 @@ use flui_driver::lane::pacing;
 use flui_driver::lane::walk::{self, Properties, Provider, ProviderError};
 use flui_driver::lane::windows::activity::{self, LANE_TAG, MouseMotion, Observed};
 use flui_driver::lane::windows::contacts::{Contacts, Frame, Phase, PointerKind};
-use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke, MASK};
+use flui_driver::lane::windows::held::{HeldButtons, HeldKeys, KeyInput, Keystroke, MASK, PACKET};
 use flui_driver::lane::windows::keys::{self, KeyName, Modifier, TextStroke, VirtualKey};
 use flui_driver::lane::windows::roles::{self, ControlType, ROLES, RoleFlags};
 use flui_driver::lane::windows::safety::{self, Desk, Held, Landing, Refusal, check_event};
@@ -714,10 +714,9 @@ fn a_key_windows_took_is_held_even_when_its_echo_never_comes() {
     assert_eq!(keys.held(), [] as [u16; 0]);
 
     let refused = || {
-        Err(flui_driver::Error::Protocol {
+        Err(SendFailure::from(flui_driver::Error::Protocol {
             message: "refused".into(),
-        }
-        .into())
+        }))
     };
     assert!(
         keys.deliver(control, &mut Delivered::default(), refused, || Ok(()))
@@ -749,10 +748,9 @@ fn a_key_windows_took_is_held_even_when_its_echo_never_comes() {
 #[test]
 fn every_input_windows_took_is_said_to_the_run() {
     let refused = || -> Result<(), SendFailure> {
-        Err(flui_driver::Error::Protocol {
+        Err(SendFailure::from(flui_driver::Error::Protocol {
             message: "refused".into(),
-        }
-        .into())
+        }))
     };
     let echo_never_comes = || {
         Err(flui_driver::Error::Lane {
@@ -802,34 +800,46 @@ fn every_input_windows_took_is_said_to_the_run() {
 
 /// A `SendInput` call that inserted only some of its events (a character's press without its
 /// release, a wheel's vertical turn without its horizontal one) fails as partly sent, and the run
-/// says it went out; one that inserted none says nothing went out.
+/// says it went out; one that inserted none says nothing went out. A character Windows took in
+/// part leaves `VK_PACKET` down, which the release of everything lets go of.
 #[test]
 fn a_send_windows_took_in_part_is_partly_sent() {
-    assert!(windows::held::inserted(2, 2, "a character").is_ok());
+    assert!(windows::send_input::outcome(2, 2, "a character").is_ok());
     let mut delivered = Delivered::default();
     let failed = delivered.send(&ActingInput, || {
-        windows::held::inserted(1, 2, "a turn of the wheel")
+        windows::send_input::outcome(1, 2, "a turn of the wheel")
     });
-    assert!(failed.is_err());
+    assert!(failed.is_err_and(|failure| failure.is_partly_sent()));
     assert!(delivered.effect(1).is_some(), "the inserted part went out");
     let mut delivered = Delivered::default();
     let failed = delivered.send(&ActingInput, || {
-        windows::held::inserted(0, 2, "a turn of the wheel")
+        windows::send_input::outcome(0, 2, "a turn of the wheel")
     });
-    assert!(failed.is_err());
+    assert!(failed.is_err_and(|failure| !failure.is_partly_sent()));
     assert!(delivered.effect(1).is_none(), "nothing went out");
-    // A character Windows took in part is said and holds nothing.
     let mut keys = HeldKeys::new();
     let mut delivered = Delivered::default();
     let failed = keys.deliver(
         Keystroke::Unit(u16::from(b'a')),
         &mut delivered,
-        || windows::held::inserted(1, 2, "a character"),
+        || windows::send_input::outcome(1, 2, "a character"),
         || Ok(()),
     );
     assert!(failed.is_err());
     assert!(delivered.effect(1).is_some());
-    assert_eq!(keys.held(), [] as [u16; 0]);
+    assert_eq!(keys.held(), [PACKET.code], "the packet's press is down");
+    assert_eq!(release_recorded(&mut keys), [Keystroke::Release(PACKET)]);
+    assert_eq!(keys.held(), [] as [u16; 0], "nothing stays held");
+    // A character Windows refused whole leaves nothing down.
+    let mut keys = HeldKeys::new();
+    let refused = keys.deliver(
+        Keystroke::Unit(u16::from(b'a')),
+        &mut Delivered::default(),
+        || windows::send_input::outcome(0, 2, "a character"),
+        || Ok(()),
+    );
+    assert!(refused.is_err());
+    assert_eq!(keys, HeldKeys::new());
 }
 
 /// A capital letter holds Shift around its key unless Shift is already held, and the Shift it

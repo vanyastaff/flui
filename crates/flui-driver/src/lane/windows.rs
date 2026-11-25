@@ -28,8 +28,8 @@
 //!   before its first instruction.
 //!
 //! The pure parts (the key, role, coordinate and activity tables, the safety rules, the held keys
-//! and buttons and the contact frames) build on every host, so their tables run on Linux
-//! CI; the parts that call Windows are `cfg(windows)`.
+//! and buttons, the contact frames and what a `SendInput` call answers) build on every host, so
+//! their tables run on Linux CI; the parts that call Windows are `cfg(windows)`.
 
 pub mod activity;
 pub mod contacts;
@@ -38,6 +38,7 @@ pub mod keys;
 pub mod roles;
 pub mod safety;
 pub mod screen;
+pub mod send_input;
 
 #[cfg(windows)]
 mod capture;
@@ -408,7 +409,9 @@ mod lane {
                         let (contacts, slot) = self.contacts_and(kind);
                         let device = device(slot, kind)?;
                         contacts.down(pointer, kind, |frame| {
-                            delivered.send(&ActingInput, || device.inject(frame))
+                            delivered
+                                .send(&ActingInput, || device.inject(frame))
+                                .map_err(Error::from)
                         })
                     }
                     None => self.mouse_button(*button, true, delivered),
@@ -422,7 +425,9 @@ mod lane {
                         let (contacts, slot) = self.contacts_and(kind);
                         let device = device(slot, kind)?;
                         contacts.up(pointer, kind, |frame| {
-                            delivered.send(&ActingInput, || device.inject(frame))
+                            delivered
+                                .send(&ActingInput, || device.inject(frame))
+                                .map_err(Error::from)
                         })
                     }
                     None => self.mouse_button(*button, false, delivered),

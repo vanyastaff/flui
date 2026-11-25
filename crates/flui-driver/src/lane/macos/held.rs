@@ -200,11 +200,11 @@ impl HeldKeys {
 
     /// Post `stroke` through `post`, which takes the flags the event carries, and record it and
     /// say it in `delivered` once `post` says it went out. A stroke posted in part (a text run's
-    /// press without its release) is said and not recorded: it holds nothing.
+    /// press without its release) is said, and what its part left down recorded ([`TEXT_KEY`]).
     ///
     /// # Errors
     ///
-    /// `post`'s failure, with nothing recorded.
+    /// `post`'s failure, with only what a part it posted left down recorded.
     pub fn deliver(
         &mut self,
         stroke: Keystroke,
@@ -212,9 +212,23 @@ impl HeldKeys {
         post: impl FnOnce(Keystroke, u64) -> std::result::Result<(), SendFailure>,
     ) -> Result<()> {
         let flags = self.flags_after(stroke);
-        delivered.send(&stroke, || post(stroke, flags))?;
+        if let Err(failure) = delivered.send(&stroke, || post(stroke, flags)) {
+            if failure.is_partly_sent() {
+                self.record_part(stroke);
+            }
+            return Err(Error::from(failure));
+        }
         let _ = self.apply(stroke);
         Ok(())
+    }
+
+    /// Record what the part of `stroke` that went out left down: a text run's press without its
+    /// release leaves [`TEXT_KEY`] down, which the release of everything lets go of. Every other
+    /// stroke is one event, all or nothing.
+    fn record_part(&mut self, stroke: Keystroke) {
+        if matches!(stroke, Keystroke::Text(_)) {
+            let _ = self.apply(Keystroke::Press(TEXT_KEY, None));
+        }
     }
 
     /// What of the system's `inputs`, sent from this state, would take: see
