@@ -1,5 +1,5 @@
-//! [`HeldRequests`]: the one owner of a script's unanswered requests and of
-//! its holds, with the one transition function, [`HeldRequests::apply`],
+//! [`Unanswered`]: the one owner of a script's unanswered requests and of
+//! its holds, with the one transition function, [`Unanswered::apply`],
 //! every event goes through. The rules it carries out are stated once, on
 //! [`Script`](super::Script#held-requests).
 //!
@@ -68,22 +68,26 @@ pub(super) enum Event<K, T, D> {
     ClockReached(K),
 }
 
-/// What the script carries out after [`HeldRequests::apply`].
+/// What the script carries out after [`Unanswered::apply`].
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Effect<K, T, D> {
     /// Nothing.
     None,
     /// Make this request's answer by the steps and the standing answer; it
-    /// waits in the queue, `Answering`, meanwhile.
+    /// stays unanswered, `Answering`, meanwhile.
     SendOn(K),
     /// The last hold went: send the kept requests on, one at a time, asking
     /// [`Event::DrainNext`] until it answers anything but `SendOn`.
     Drain,
-    /// Answer this request with the scheduled answer `D`; it waits in the
-    /// queue, `Answering`, meanwhile.
+    /// Answer this request with the scheduled answer `D`; it stays
+    /// unanswered, `Answering`, meanwhile.
     Due(K, D),
-    /// This request left the queue as the event asked (answered, released,
-    /// abandoned, withdrawn), with what it was waiting for.
+    /// A ticket withdrew this request while its answer was made: take the
+    /// answer `D` scheduled for it off the timeline and drop it.
+    Orphaned(K, D),
+    /// This request left the unanswered requests as the event asked
+    /// (answered, released, abandoned, withdrawn), with what it was waiting
+    /// for.
     Taken(K, T, Waits<D>),
 }
 
@@ -98,13 +102,13 @@ struct Entry<K, T, D> {
 /// A script's unanswered requests, oldest first, its live holds and whether
 /// a drain is sending the kept requests on.
 #[derive(Debug)]
-pub(super) struct HeldRequests<K, T, D> {
+pub(super) struct Unanswered<K, T, D> {
     entries: VecDeque<Entry<K, T, D>>,
     holds: usize,
     draining: bool,
 }
 
-impl<K, T, D> Default for HeldRequests<K, T, D> {
+impl<K, T, D> Default for Unanswered<K, T, D> {
     fn default() -> Self {
         Self {
             entries: VecDeque::new(),
@@ -114,7 +118,7 @@ impl<K, T, D> Default for HeldRequests<K, T, D> {
     }
 }
 
-impl<K: Copy + Eq, T, D> HeldRequests<K, T, D> {
+impl<K: Copy + Eq, T, D> Unanswered<K, T, D> {
     /// Carry out `event` and say what the script does next.
     pub(super) fn apply(&mut self, event: Event<K, T, D>) -> Effect<K, T, D> {
         match event {
@@ -128,13 +132,13 @@ impl<K: Copy + Eq, T, D> HeldRequests<K, T, D> {
                 }
             }
             Event::KeepForTest(key) => {
-                self.answering_waits(key, Waits::Test);
+                let _ = self.answering_waits(key, Waits::Test);
                 Effect::None
             }
-            Event::Schedule(key, due) => {
-                self.answering_waits(key, Waits::Clock(due));
-                Effect::None
-            }
+            Event::Schedule(key, due) => match self.answering_waits(key, Waits::Clock(due)) {
+                Some(Waits::Clock(due)) => Effect::Orphaned(key, due),
+                Some(Waits::Hold | Waits::Test | Waits::Answering) | None => Effect::None,
+            },
             Event::Answered(key) => {
                 self.take(|entry| entry.key == key && matches!(entry.waits, Waits::Answering))
             }
@@ -195,13 +199,22 @@ impl<K: Copy + Eq, T, D> HeldRequests<K, T, D> {
 
     /// The request `key`, while its answer is being made, waits for `waits`
     /// from now on, where it is.
-    fn answering_waits(&mut self, key: K, waits: Waits<D>) {
-        if let Some(entry) = self
+    ///
+    /// Returns `waits` back when no request `key` is being answered (a
+    /// ticket withdrew it meanwhile), so a scheduled answer it carries is
+    /// taken off the timeline and dropped by the script, outside any
+    /// borrow.
+    fn answering_waits(&mut self, key: K, waits: Waits<D>) -> Option<Waits<D>> {
+        match self
             .entries
             .iter_mut()
             .find(|entry| entry.key == key && matches!(entry.waits, Waits::Answering))
         {
-            entry.waits = waits;
+            Some(entry) => {
+                entry.waits = waits;
+                None
+            }
+            None => Some(waits),
         }
     }
 
@@ -262,6 +275,14 @@ impl<K: Copy + Eq, T, D> HeldRequests<K, T, D> {
         }
     }
 
+    /// Whether the request `key` is being answered: no ticket withdrew it
+    /// since its answer began.
+    pub(super) fn is_answering(&self, key: K) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| entry.key == key && matches!(entry.waits, Waits::Answering))
+    }
+
     /// The payload of the request `key`, whatever it waits for.
     pub(super) fn payload(&self, key: K) -> Option<&T> {
         self.entries
@@ -290,7 +311,7 @@ impl<K: Copy + Eq, T, D> HeldRequests<K, T, D> {
             .map(|entry| (entry.key, &entry.payload))
     }
 
-    /// How many requests are in the queue.
+    /// How many requests are unanswered, whatever each waits for.
     pub(super) fn len(&self) -> usize {
         self.entries.len()
     }

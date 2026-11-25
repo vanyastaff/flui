@@ -1476,7 +1476,17 @@ fn a_request_being_answered_stays_in_the_script() {
     assert_eq!(camera.captures.withdrawn(), 1, "the ticket found it");
     assert_eq!(camera.captures.held(), 0, "not kept for the test");
     assert_eq!(taken(&held), Some(Err(Abandoned::ProviderDropped)));
-    scenario.verify().expect("a withdrawn request is not owed");
+    let failures = scenario
+        .verify()
+        .expect_err("the step stays for a request still asked");
+    assert_eq!(
+        failures.failures(),
+        [ScenarioFailure::Unconsumed {
+            script: "camera captures",
+            step: "drops its own ticket".into(),
+        }],
+        "a withdrawn request is not owed, and uses no step up"
+    );
 
     // Kept for the test where it is, ahead of the request its matcher sent.
     let scenario = Scenario::new();
@@ -1619,6 +1629,211 @@ fn the_last_handles_send_on_lets_go_drop_before_the_answer() {
         "the replaced standing answer drops before the answer is given"
     );
     scenario.verify().expect("the request was answered");
+}
+
+/// A ticket the code making a request's answer drops stops that answer
+/// where it is: no later step is used up, no standing answer runs, nothing
+/// is recorded as unexpected and nothing is scheduled. The request counts
+/// as withdrawn and the release counts only the other request it answered.
+#[test]
+fn a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it() {
+    type Ticket = Rc<RefCell<Option<RequestTicket>>>;
+    /// Drops the ticket it shares when it drops, as test code may.
+    struct DropsTheTicket(Ticket);
+    impl Drop for DropsTheTicket {
+        fn drop(&mut self) {
+            drop(self.0.borrow_mut().take());
+        }
+    }
+    fn withdraw(ticket: &Ticket) {
+        drop(ticket.borrow_mut().take());
+    }
+    #[derive(Clone, Copy, Debug)]
+    enum Withdrawer {
+        /// A matcher that declines the request.
+        Matcher,
+        /// The used step's capture, dropped before its delayed answer.
+        UsedStepCapture,
+        /// A computed answer.
+        Computed,
+        /// The standing answer.
+        Standing,
+        /// The matcher of a step that abandons.
+        AbandonMatcher,
+        /// A computed answer given later, by the clock.
+        Delayed,
+    }
+    for withdrawer in [
+        Withdrawer::Matcher,
+        Withdrawer::UsedStepCapture,
+        Withdrawer::Computed,
+        Withdrawer::Standing,
+        Withdrawer::AbandonMatcher,
+        Withdrawer::Delayed,
+    ] {
+        let scenario = Scenario::new();
+        let (mut host, camera, handle) = camera_on(&scenario);
+        let first = CameraRequest::Capture { width: 1 };
+        let ticket = Ticket::default();
+        let hold = camera.captures.hold();
+        let (withdrawn, kept) = handle.capture_until_dropped(1);
+        let withdrawn = land(withdrawn);
+        ticket.replace(Some(kept));
+        let other = land(handle.capture(2));
+        let mut unused = Vec::new();
+        match withdrawer {
+            Withdrawer::Matcher => {
+                let shared = Rc::clone(&ticket);
+                camera.captures.expect(
+                    Expect::when("withdraws the first", move |request| {
+                        if *request == first {
+                            withdraw(&shared);
+                        }
+                        false
+                    }),
+                    Answer::value(Ok(vec![9])),
+                );
+                camera
+                    .captures
+                    .expect(Expect::any(), Answer::value(Ok(vec![2])));
+                camera
+                    .captures
+                    .expect(Expect::any(), Answer::value(Ok(vec![8])));
+                unused.push("withdraws the first");
+                unused.push("any request");
+            }
+            Withdrawer::UsedStepCapture => {
+                let capture = DropsTheTicket(Rc::clone(&ticket));
+                camera.captures.expect(
+                    Expect::when("the first", move |request| {
+                        let _ = &capture;
+                        *request == first
+                    }),
+                    Answer::value(Ok(vec![1])).after(Duration::from_millis(500)),
+                );
+                camera.captures.otherwise(|_| Ok(vec![2]));
+            }
+            Withdrawer::Computed => {
+                let shared = Rc::clone(&ticket);
+                camera.captures.expect(
+                    Expect::exactly(first),
+                    Answer::computed(move |_| {
+                        withdraw(&shared);
+                        Ok(vec![1])
+                    }),
+                );
+                camera.captures.otherwise(|_| Ok(vec![2]));
+            }
+            Withdrawer::Standing => {
+                let shared = Rc::clone(&ticket);
+                camera.captures.otherwise(move |request| {
+                    if *request == first {
+                        withdraw(&shared);
+                    }
+                    Ok(vec![2])
+                });
+            }
+            Withdrawer::AbandonMatcher => {
+                let shared = Rc::clone(&ticket);
+                camera.captures.expect(
+                    Expect::when("abandons the first", move |request| {
+                        let accepted = *request == first;
+                        if accepted {
+                            withdraw(&shared);
+                        }
+                        accepted
+                    }),
+                    Answer::abandon(),
+                );
+                camera.captures.otherwise(|_| Ok(vec![2]));
+                unused.push("abandons the first");
+            }
+            Withdrawer::Delayed => {
+                let shared = Rc::clone(&ticket);
+                camera.captures.expect(
+                    Expect::exactly(first),
+                    Answer::computed(move |_| {
+                        withdraw(&shared);
+                        Ok(vec![1])
+                    })
+                    .after(Duration::from_millis(10)),
+                );
+                camera.captures.otherwise(|_| Ok(vec![2]));
+            }
+        }
+        assert_eq!(
+            hold.release(),
+            1,
+            "{withdrawer:?}: only the other request is counted"
+        );
+        let _ = host.pump(Duration::from_millis(10));
+        assert_eq!(camera.captures.withdrawn(), 1, "{withdrawer:?}");
+        assert_eq!(
+            taken(&withdrawn),
+            Some(Err(Abandoned::ProviderDropped)),
+            "{withdrawer:?}"
+        );
+        assert_eq!(taken(&other), Some(Ok(Ok(vec![2]))), "{withdrawer:?}");
+        assert_eq!(
+            scenario.next_due(),
+            None,
+            "{withdrawer:?}: nothing is scheduled for the withdrawn request"
+        );
+        let expected: Vec<ScenarioFailure> = unused
+            .into_iter()
+            .map(|step| ScenarioFailure::Unconsumed {
+                script: "camera captures",
+                step: step.into(),
+            })
+            .collect::<Vec<ScenarioFailure>>();
+        match scenario.verify() {
+            Ok(()) => assert!(expected.is_empty(), "{withdrawer:?}: {expected:?}"),
+            Err(failures) => assert_eq!(failures.failures(), expected, "{withdrawer:?}"),
+        }
+    }
+}
+
+/// The request's `Debug` is the test's code too: one that drops its own
+/// ticket while the script describes it leaves nothing recorded as
+/// unexpected and nothing scheduled.
+#[test]
+fn a_request_whose_debug_withdraws_it_is_neither_unexpected_nor_scheduled() {
+    type Ticket = Rc<RefCell<Option<RequestTicket>>>;
+    /// A request that drops its own ticket when it is described.
+    struct Withdrawing(Ticket);
+    impl std::fmt::Debug for Withdrawing {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            drop(self.0.borrow_mut().take());
+            f.write_str("Withdrawing")
+        }
+    }
+    for delayed_step in [false, true] {
+        let scenario = Scenario::new();
+        let (mut host, _camera, handle) = camera_on(&scenario);
+        let script: Script<Withdrawing, u32> = scenario.script("describes");
+        if delayed_step {
+            script.answer_next(Answer::value(1).after(Duration::from_millis(10)));
+        }
+        let hold = script.hold();
+        let ticket = Ticket::default();
+        let (answer, resolver) = handle.completions.pending::<u32>();
+        let answer = land(answer);
+        ticket.replace(Some(
+            script.receive_with_ticket(Withdrawing(Rc::clone(&ticket)), resolver),
+        ));
+        assert_eq!(hold.release(), 0, "delayed step: {delayed_step}");
+        assert_eq!(
+            scenario.next_due(),
+            None,
+            "delayed step: {delayed_step}: nothing is left scheduled"
+        );
+        let _ = host.pump(Duration::from_millis(10));
+        assert_eq!(script.withdrawn(), 1, "delayed step: {delayed_step}");
+        assert_eq!(taken(&answer), Some(Err(Abandoned::ProviderDropped)));
+        scenario
+            .verify()
+            .expect("neither unexpected nor a change not reached");
+    }
 }
 
 /// A script's observer hears every answer before the caller's completion

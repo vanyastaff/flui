@@ -513,15 +513,15 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   position and identity, never by value: how far the owner-thread failures and the cross-thread
   reports had been read, and the ids of the debts and scheduled changes it listed; a failure
   recorded after it is new even when it equals one it returned.
-- **What a script holds has one owner.** `scripted::queue::HeldRequests` keeps a script's
+- **What a script holds has one owner.** `scripted::requests::Unanswered` keeps a script's
   unanswered requests, its hold count and whether a drain runs; a request stays in it while its
-  answer is made. Every event goes through its one transition function, `HeldRequests::apply`,
+  answer is made. Every event goes through its one transition function, `Unanswered::apply`,
   which hands back what the script does next: a request arriving, being kept for the test,
   scheduled or answered; a hold taken, dropped or left with `leave_held`; a drain's next step;
   `verify`; a ticket; a release; a panicked answer; the clock. The script carries that out outside
   the borrow, one request at a time. The rules are stated once, in the "Held requests" section of
-  `Script`'s docs. Every transition is a row of `every_event_moves_the_queue_as_the_rules_say`
-  (`src/capability/scripted/queue/tests.rs`). The rules the script carries out around them are
+  `Script`'s docs. Every transition is a row of `every_event_moves_the_unanswered_requests_as_the_rules_say`
+  (`src/capability/scripted/requests/tests.rs`). The rules the script carries out around them are
   pinned by the scenario tests of `crates/flui-testing/tests/scenario.rs`: what a release counts
   (`a_release_counts_only_the_requests_it_answered`,
   `a_request_withdrawn_while_its_release_answer_is_made_is_not_counted`) and how the test's
@@ -556,9 +556,11 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
 - **A request its caller calls off is withdrawn, not owed.** `Script::receive_with_ticket`
   hands back a `RequestTicket`, the scenario's form of a system request that lives while its
   requester holds it (a portal's `Request` object, an activity result's `ResultTicket`).
-  Dropping it while the request is held or scheduled removes the request, drops its resolver,
-  takes a scheduled answer off the timeline, tells the observers it ended unanswered and counts
-  it in `Script::withdrawn`; a withdrawn
+  Dropping it while the request is held, scheduled or while its answer is made removes the
+  request, drops its resolver, takes a scheduled answer off the timeline, stops the answer
+  being made (no later step is used, no standing answer runs, nothing is recorded or
+  scheduled), tells the observers it ended unanswered and counts it in `Script::withdrawn`
+  (`a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it`); a withdrawn
   request is neither `Unanswered` nor `NotReached`, and an answered one is untouched.
 
 The launcher, file dialog, clipboard and primary selection doubles are built on it. Three
@@ -598,6 +600,8 @@ is no request it could find unexpected.
 `an_answers_drop_is_contained_before_the_request_lets_go`,
 `a_request_being_answered_stays_in_the_script`,
 `the_last_handles_send_on_lets_go_drop_before_the_answer`,
+`a_request_withdrawn_while_its_answer_is_made_gets_no_more_of_it`,
+`a_request_whose_debug_withdraws_it_is_neither_unexpected_nor_scheduled`,
 `a_scenario_drives_one_host_at_a_time`,
 `the_host_waits_for_a_scheduled_change_as_for_any_deadline`
 (`crates/flui-testing/tests/scenario.rs`);

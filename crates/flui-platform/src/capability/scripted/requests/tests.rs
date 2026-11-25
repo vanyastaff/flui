@@ -4,7 +4,7 @@
 //! counts, how the test's panics are kept) are pinned by the scenario tests
 //! `crates/flui-platform/ARCHITECTURE.md` names.
 
-use super::{Effect, Event, HeldRequests, Waits};
+use super::{Effect, Event, Unanswered, Waits};
 
 /// What a row's request waits for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,23 +18,23 @@ enum WaitsFor {
 /// The requests in a row, each a key and what it waits for, oldest first,
 /// with the live holds and whether a drain runs.
 #[derive(Debug, PartialEq, Eq)]
-struct QueueState {
+struct RequestsState {
     requests: Vec<(u32, WaitsFor)>,
     holds: usize,
     draining: bool,
 }
 
-fn state(requests: &[(u32, WaitsFor)], holds: usize, draining: bool) -> QueueState {
-    QueueState {
+fn state(requests: &[(u32, WaitsFor)], holds: usize, draining: bool) -> RequestsState {
+    RequestsState {
         requests: requests.to_vec(),
         holds,
         draining,
     }
 }
 
-/// The queue a row runs on: a request's payload is its key, and a clock's
+/// The requests a row runs on: a request's payload is its key, and a clock's
 /// answer is `()`.
-type RowRequests = HeldRequests<u32, u32, ()>;
+type RowRequests = Unanswered<u32, u32, ()>;
 
 fn waits(waits_for: WaitsFor) -> Waits<()> {
     match waits_for {
@@ -45,7 +45,7 @@ fn waits(waits_for: WaitsFor) -> Waits<()> {
     }
 }
 
-fn build(state: &QueueState) -> RowRequests {
+fn build(state: &RequestsState) -> RowRequests {
     let mut requests = RowRequests::default();
     for &(key, waits_for) in &state.requests {
         requests.push(key, waits(waits_for), key);
@@ -55,7 +55,7 @@ fn build(state: &QueueState) -> RowRequests {
     requests
 }
 
-fn snapshot(requests: &RowRequests) -> QueueState {
+fn snapshot(requests: &RowRequests) -> RequestsState {
     let entries: Vec<(u32, WaitsFor)> = requests
         .entries
         .iter()
@@ -70,7 +70,7 @@ fn snapshot(requests: &RowRequests) -> QueueState {
             (entry.key, waits_for)
         })
         .collect::<Vec<(u32, WaitsFor)>>();
-    QueueState {
+    RequestsState {
         requests: entries,
         holds: requests.holds,
         draining: requests.draining,
@@ -80,17 +80,17 @@ fn snapshot(requests: &RowRequests) -> QueueState {
 /// One rule: `event` on `before` leaves `after` and hands back `effect`.
 struct Transition {
     rule: &'static str,
-    before: QueueState,
+    before: RequestsState,
     event: Event<u32, u32, ()>,
-    after: QueueState,
+    after: RequestsState,
     effect: Effect<u32, u32, ()>,
 }
 
 fn transition(
     rule: &'static str,
-    before: QueueState,
+    before: RequestsState,
     event: Event<u32, u32, ()>,
-    after: QueueState,
+    after: RequestsState,
     effect: Effect<u32, u32, ()>,
 ) -> Transition {
     Transition {
@@ -103,11 +103,11 @@ fn transition(
 }
 
 #[test]
-fn every_event_moves_the_queue_as_the_rules_say() {
+fn every_event_moves_the_unanswered_requests_as_the_rules_say() {
     use WaitsFor::{Answering, Clock, Hold, Test};
     let transitions = vec![
         transition(
-            "a request with no hold and no drain is answered, waiting in the queue meanwhile",
+            "a request with no hold and no drain is answered, unanswered meanwhile",
             state(&[(1, Test)], 0, false),
             Event::Arrived(5, 5),
             state(&[(1, Test), (5, Answering)], 0, false),
@@ -142,7 +142,21 @@ fn every_event_moves_the_queue_as_the_rules_say() {
             Effect::None,
         ),
         transition(
-            "a request whose answer is made leaves the queue to be answered",
+            "a request a ticket withdrew while its answer was made is not kept for the test",
+            state(&[(5, Hold)], 1, false),
+            Event::KeepForTest(4),
+            state(&[(5, Hold)], 1, false),
+            Effect::None,
+        ),
+        transition(
+            "an answer scheduled for a request a ticket withdrew meanwhile is handed back",
+            state(&[(5, Hold)], 1, false),
+            Event::Schedule(4, ()),
+            state(&[(5, Hold)], 1, false),
+            Effect::Orphaned(4, ()),
+        ),
+        transition(
+            "a request whose answer is made leaves the unanswered requests to be answered",
             state(&[(4, Answering), (5, Hold)], 1, false),
             Event::Answered(4),
             state(&[(5, Hold)], 1, false),
@@ -305,6 +319,20 @@ fn every_event_moves_the_queue_as_the_rules_say() {
             state(&[(1, Test), (2, Hold), (3, Hold)], 1, false),
             Event::AnswerPanicked(2),
             state(&[(1, Test), (2, Test), (3, Hold)], 1, false),
+            Effect::None,
+        ),
+        transition(
+            "a release answer that panicked leaves a request waiting for the clock as it is",
+            state(&[(3, Clock), (4, Answering)], 0, false),
+            Event::AnswerPanicked(3),
+            state(&[(3, Clock), (4, Answering)], 0, false),
+            Effect::None,
+        ),
+        transition(
+            "a release answer that panicked leaves a request being answered as it is",
+            state(&[(3, Clock), (4, Answering)], 0, false),
+            Event::AnswerPanicked(4),
+            state(&[(3, Clock), (4, Answering)], 0, false),
             Effect::None,
         ),
         transition(
