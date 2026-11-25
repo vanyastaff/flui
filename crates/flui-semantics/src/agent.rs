@@ -969,6 +969,7 @@ mod delta;
 mod locate;
 mod wait;
 
+pub use actionability::ActionabilityReading;
 pub(crate) use actionability::shown_bounds;
 pub use delta::TreeSnapshot;
 pub use locate::WireLocateError;

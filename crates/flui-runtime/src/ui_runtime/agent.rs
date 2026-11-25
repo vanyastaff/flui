@@ -23,12 +23,12 @@ use crate::renderer_binding::ViewHitTest;
 use flui_foundation::PresentationId;
 use flui_foundation::panic::FirstPanic;
 use flui_protocol::{
-    act::ActOutcome, act::ActionRequest, act::Actionability, act::ActionabilityCheck,
-    act::ActionabilityParams, act::Effect, act::EffectKind, act::EffectUnit, error::ErrorCode,
-    error::ErrorObject, error::HandleKind, error::Retry, events::EventFilter, input::InputPath,
-    locator::LocateParams, locator::Locator, locator::Matches, locator::Pick, record::RecordParams,
-    snapshot::Snapshot, snapshot::SnapshotReading, tree::ElementId, tree::ElementRef,
-    tree::ReadQuery, tree::Tree, tree::WindowId, wait::WaitOutcome, wire::ActionName,
+    act::ActOutcome, act::ActionRequest, act::ActionabilityCheck, act::ActionabilityParams,
+    act::Effect, act::EffectKind, act::EffectUnit, error::ErrorCode, error::ErrorObject,
+    error::HandleKind, error::Retry, events::EventFilter, input::InputPath, locator::LocateParams,
+    locator::Locator, locator::Matches, locator::Pick, record::RecordParams, snapshot::Snapshot,
+    snapshot::SnapshotReading, tree::ElementId, tree::ElementRef, tree::ReadQuery, tree::Tree,
+    tree::WindowId, wait::WaitOutcome, wire::ActionName,
 };
 use flui_semantics::{
     Placement, SemanticsActionError, TreeSnapshot, WireActionError, WireLocateError, WireReadError,
@@ -990,13 +990,14 @@ pub(super) fn was_issued(state: &PresentationState, element: ElementId) -> bool 
 /// land; the render tree's hit-test runs there, outside every semantics borrow because render
 /// objects are user code; then the owner reads the facts against the path the hit-test found. A
 /// render object that panics in the hit-test leaves its payload in `hit_panic`, for the caller to
-/// answer and resume.
+/// answer and resume. Beside the facts the wire carries, the reading holds the part of the element
+/// the window shows, which a gesture in the application aims its extent at.
 pub(super) fn actionability(
     state: &PresentationState,
     window: WindowId,
     params: &ActionabilityParams,
     hit_panic: &mut FirstPanic,
-) -> Result<Actionability, AgentError> {
+) -> Result<flui_semantics::ActionabilityReading, AgentError> {
     let placement = placement_of(state, window);
     let point = state.pipeline().with(|pipeline| {
         pipeline
@@ -1039,16 +1040,16 @@ pub(super) fn actionability(
                 .map_err(AgentError::from_unscoped_read)
         })
     };
-    let facts = read(None)?;
+    let reading = read(None)?;
     let previous = state.agent_stability.borrow_mut().observe(
         params.element,
         state.tree_revision(),
         !state.has_pending_work_snapshot(),
-        facts.rect,
+        reading.facts.rect,
     );
     match previous {
         Some(_) => read(previous),
-        None => Ok(facts),
+        None => Ok(reading),
     }
 }
 

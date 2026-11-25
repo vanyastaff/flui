@@ -2,7 +2,7 @@
 //! the app's agent and the driver's OS lane both play (ADR-0400 §2); and what it refuses.
 
 use flui_protocol::geometry::{LogicalPoint, LogicalRect};
-use flui_protocol::input::gestures::{self, Aim, GestureError};
+use flui_protocol::input::gestures::{self, Aim, Defaults, GestureError};
 use flui_protocol::input::{
     ActionSequence, Direction, InputSource, KeyAction, PointerAction, PointerButton, PointerDevice,
     ScrollUnit, WheelAction,
@@ -53,7 +53,7 @@ fn strings(lines: &[&str]) -> Vec<String> {
 fn each_pointer_gesture_composes_to_its_sequence() {
     let point = at(50.0, 40.0);
     let aim = Aim::new(point, Some(LogicalRect::new(0.0, 20.0, 100.0, 40.0)));
-    let cases: [(&str, ActionSequence, Vec<Written>); 9] = [
+    let cases: [(&str, ActionSequence, Vec<Written>); 10] = [
         (
             "tap",
             gestures::tap(point, PointerButton::Secondary),
@@ -64,7 +64,7 @@ fn each_pointer_gesture_composes_to_its_sequence() {
         ),
         (
             "double tap",
-            gestures::double_tap(point, PointerButton::Primary),
+            gestures::double_tap(point, PointerButton::Primary, &Defaults::WINDOWLESS),
             vec![(
                 PointerDevice::Mouse,
                 strings(&[
@@ -79,15 +79,15 @@ fn each_pointer_gesture_composes_to_its_sequence() {
         ),
         (
             "long press, its duration named",
-            gestures::long_press(point, Some(1_200)),
+            gestures::long_press(point, Some(1_200), &Defaults::WINDOWLESS),
             vec![(
                 PointerDevice::Touch,
                 strings(&["move 50,40/0", "down Primary", "pause 1200", "up Primary"]),
             )],
         ),
         (
-            "long press, the platform's delay and a margin",
-            gestures::long_press(point, None),
+            "long press, the windowless hold",
+            gestures::long_press(point, None, &Defaults::WINDOWLESS),
             vec![(
                 PointerDevice::Touch,
                 strings(&["move 50,40/0", "down Primary", "pause 800", "up Primary"]),
@@ -107,14 +107,37 @@ fn each_pointer_gesture_composes_to_its_sequence() {
             )],
         ),
         (
-            "swipe: most of the extent along the stroke, at the fling velocity, held still",
-            gestures::swipe(aim, Direction::Up, None, None, false).expect("a swipe"),
+            "swipe: most of the room to the edge of what it aims at, at the fling velocity, held still",
+            gestures::swipe(
+                aim,
+                Direction::Right,
+                None,
+                None,
+                false,
+                &Defaults::WINDOWLESS,
+            )
+            .expect("a swipe"),
             vec![(
                 PointerDevice::Touch,
                 strings(&[
                     "move 50,40/0",
                     "down Primary",
-                    "move 50,8/12",
+                    "move 90,40/16",
+                    "pause 120",
+                    "up Primary",
+                ]),
+            )],
+        ),
+        (
+            "swipe with less room than the least stroke: the least stroke",
+            gestures::swipe(aim, Direction::Up, None, None, false, &Defaults::WINDOWLESS)
+                .expect("a swipe"),
+            vec![(
+                PointerDevice::Touch,
+                strings(&[
+                    "move 50,40/0",
+                    "down Primary",
+                    "move 50,4/14",
                     "pause 120",
                     "up Primary",
                 ]),
@@ -122,8 +145,15 @@ fn each_pointer_gesture_composes_to_its_sequence() {
         ),
         (
             "fling: the distance and velocity named, lifted moving",
-            gestures::swipe(aim, Direction::Right, Some(200.0), Some(1_000.0), true)
-                .expect("a fling"),
+            gestures::swipe(
+                aim,
+                Direction::Right,
+                Some(200.0),
+                Some(1_000.0),
+                true,
+                &Defaults::WINDOWLESS,
+            )
+            .expect("a fling"),
             vec![(
                 PointerDevice::Touch,
                 strings(&[
@@ -136,8 +166,15 @@ fn each_pointer_gesture_composes_to_its_sequence() {
         ),
         (
             "a slow stroke is at most ten seconds",
-            gestures::swipe(aim, Direction::Left, Some(1_000.0), Some(1.0), true)
-                .expect("a slow fling"),
+            gestures::swipe(
+                aim,
+                Direction::Left,
+                Some(1_000.0),
+                Some(1.0),
+                true,
+                &Defaults::WINDOWLESS,
+            )
+            .expect("a slow fling"),
             vec![(
                 PointerDevice::Touch,
                 strings(&[
@@ -239,14 +276,28 @@ fn keys_text_and_a_scroll_step_compose_to_their_sequences() {
 #[test]
 fn parameters_that_make_no_gesture_are_refused() {
     let aim = Aim::new(at(1.0, 1.0), Some(LogicalRect::new(0.0, 0.0, 0.0, 0.0)));
-    let nowhere = gestures::swipe(aim, Direction::Down, None, None, false)
-        .expect_err("an element with no extent and no distance named");
+    let nowhere = gestures::swipe(
+        aim,
+        Direction::Down,
+        None,
+        None,
+        false,
+        &Defaults::WINDOWLESS,
+    )
+    .expect_err("an element with no extent and no distance named");
     assert!(
         matches!(nowhere, GestureError::StrokeGoesNowhere { distance, .. } if distance == 0.0),
         "{nowhere:?}"
     );
     for velocity in [0.0, f64::NAN, f64::INFINITY] {
-        let refused = gestures::swipe(aim, Direction::Down, Some(10.0), Some(velocity), true);
+        let refused = gestures::swipe(
+            aim,
+            Direction::Down,
+            Some(10.0),
+            Some(velocity),
+            true,
+            &Defaults::WINDOWLESS,
+        );
         assert!(
             matches!(refused, Err(GestureError::StrokeGoesNowhere { .. })),
             "{velocity}: {refused:?}"

@@ -581,12 +581,10 @@ impl Serve for method::ElementActionability {
     ) -> Answer<flui_protocol::act::Actionability> {
         let element = params.element.element;
         ctx.if_panics.set(AgentError::ResolvePanicked { element });
-        Answer::Now(agent::actionability(
-            ctx.state,
-            ctx.window,
-            &params,
-            &mut ctx.caught,
-        ))
+        Answer::Now(
+            agent::actionability(ctx.state, ctx.window, &params, &mut ctx.caught)
+                .map(|reading| reading.facts),
+        )
     }
 }
 

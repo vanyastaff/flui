@@ -24,7 +24,9 @@
 
 use std::time::Duration;
 
-use flui_protocol::input::gestures::{self, Aim, GestureError};
+use flui_interaction::gesture::GestureSettings;
+use flui_platform::input::pointer::PointerKind;
+use flui_protocol::input::gestures::{self, Aim, Defaults, GestureError};
 use flui_protocol::method::{self, Method};
 use flui_protocol::{
     act::ActOutcome, act::ActionRequest, act::ActionabilityCheck, act::ActionabilityParams,
@@ -41,6 +43,7 @@ use super::agent::{
 use super::agent_held::{Attempt, AttemptContext, HeldAct, Holding};
 use super::agent_input::{self, Injecting, Script};
 use super::agent_serve::{Answer, Serve, ServeContext};
+use crate::presentation::PresentationState;
 
 /// What a gesture aims at, as the call named it.
 pub(super) enum Aimed {
@@ -114,13 +117,13 @@ pub(super) fn readiness(ctx: &mut AttemptContext<'_>, aimed: &Aimed, checks: Che
     ctx.if_panics.set(AgentError::ResolvePanicked {
         element: element.element,
     });
-    let facts = match agent::actionability(
+    let (facts, shown) = match agent::actionability(
         ctx.state,
         ctx.window,
         &ActionabilityParams::new(element),
         ctx.caught,
     ) {
-        Ok(facts) => facts,
+        Ok(reading) => (reading.facts, reading.shown),
         Err(
             error @ (AgentError::NoTreeYet | AgentError::RenderTreeBusy | AgentError::TreeBusy(_)),
         ) => return Readiness::NotYet(error),
@@ -147,10 +150,14 @@ pub(super) fn readiness(ctx: &mut AttemptContext<'_>, aimed: &Aimed, checks: Che
             covered_by: facts.covered_by,
         });
     }
+    // The act lands in the part of the element shown, and takes its extent from that part: the
+    // whole bounds stand in only when nothing of it shows (an act under `force`, a scroll into
+    // view).
+    let region = shown.or(facts.rect);
     let aim = facts
         .point
-        .or_else(|| facts.rect.map(|rect| rect.center()))
-        .map(|point| Aim::new(point, facts.rect));
+        .or_else(|| region.map(|region| region.center()))
+        .map(|point| Aim::new(point, region));
     Readiness::Ready(Some(element), aim)
 }
 
@@ -178,26 +185,118 @@ pub(super) enum Composed {
 }
 
 impl Composed {
-    /// The sequence, landing at `aim` and, for a drag, dropped at `to`.
+    /// The sequence, landing at `aim` and, for a drag, dropped at `to`, with what the call leaves
+    /// unnamed taken from `settings`, the window's gesture settings ([`window_defaults`]).
     fn sequence(
         &self,
         aim: Aim,
         to: Option<Aim>,
-    ) -> Result<flui_protocol::input::ActionSequence, GestureError> {
+        settings: &WindowGestures,
+    ) -> Result<flui_protocol::input::ActionSequence, AgentError> {
+        let unplayable = |error: GestureError| AgentError::UnplayableInput(error.to_string());
+        let defaults = window_defaults(settings, self)?;
         Ok(match *self {
             Self::Tap(button) => gestures::tap(aim.point, button),
-            Self::DoubleTap(button) => gestures::double_tap(aim.point, button),
-            Self::LongPress(duration_ms) => gestures::long_press(aim.point, duration_ms),
-            Self::Drag => gestures::drag(aim.point, to.map_or(aim.point, |to| to.point)),
+            Self::DoubleTap(button) => gestures::double_tap(aim.point, button, &defaults),
+            Self::LongPress(duration_ms) => gestures::long_press(aim.point, duration_ms, &defaults),
+            Self::Drag => {
+                let to = to.map_or(aim.point, |to| to.point);
+                let (dx, dy) = (to.x - aim.point.x, to.y - aim.point.y);
+                let slop = settings.mouse.pan_slop_for(PointerKind::Mouse);
+                // A drag shorter than the slop starts no drag in this window.
+                if dx.hypot(dy) <= slop {
+                    return Err(AgentError::UnplayableInput(format!(
+                        "a drag of {:.1} px does not pass this window's drag slop of {slop} px",
+                        dx.hypot(dy)
+                    )));
+                }
+                gestures::drag(aim.point, to)
+            }
             Self::Swipe {
                 direction,
                 distance,
                 velocity,
                 fling,
-            } => gestures::swipe(aim, direction, distance, velocity, fling)?,
-            Self::Pinch(scale) => gestures::pinch(aim, scale)?,
+            } => gestures::swipe(aim, direction, distance, velocity, fling, &defaults)
+                .map_err(unplayable)?,
+            Self::Pinch(scale) => gestures::pinch(aim, scale).map_err(unplayable)?,
         })
     }
+}
+
+/// The gesture settings of a window, for the pointer kinds a composed gesture plays: a mouse
+/// (a tap, a double tap, a drag) and a touch contact (a long press, a swipe, a fling, a pinch).
+pub(super) struct WindowGestures {
+    mouse: GestureSettings,
+    touch: GestureSettings,
+}
+
+impl WindowGestures {
+    /// `state`'s settings now, its platform's preset with the system's preferences applied.
+    fn of(state: &PresentationState) -> Self {
+        let provider = state.gesture_settings.provider();
+        Self {
+            mouse: provider.snapshot_for(PointerKind::Mouse),
+            touch: provider.snapshot_for(PointerKind::Touch),
+        }
+    }
+}
+
+/// How much longer than the window's long-press timeout a long press holds, so it outlasts the
+/// timeout at the frame that ends it.
+const LONG_PRESS_MARGIN_MS: u64 = 300;
+
+/// The share of the window's double-tap timeout the pause between the taps takes, so the second
+/// press lands inside the timeout though each tap takes frames of its own.
+const DOUBLE_TAP_GAP_SHARE: u32 = 5;
+
+/// What a gesture the agent composes in `settings`' window takes where its call names nothing
+/// ([`Defaults`]), each by its rule:
+///
+/// - a long press holds the window's long-press timeout and [`LONG_PRESS_MARGIN_MS`];
+/// - a double tap's taps are a fifth of the window's double-tap timeout for a mouse apart;
+/// - a fling's speed is twice the window's minimum fling velocity, at least the windowless
+///   speed and never above the window's maximum, so its release flings; a swipe moves at it and
+///   then holds still the windowless settle, longer than the 100 ms the velocity tracker looks
+///   back, so it lifts slower than any fling;
+/// - a swipe's stroke is at least twice the window's pan slop for a touch, so it drags.
+///
+/// Every duration is within [`Defaults::CEILING`], the reply bound's: a gap past it is cut to it
+/// (still inside the timeout), and a long press whose window asks for longer is refused for the
+/// call to name its duration.
+///
+/// # Errors
+///
+/// `invalid_argument` for a long press naming no duration in a window whose long-press timeout
+/// leaves no room for one within the ceiling.
+fn window_defaults(settings: &WindowGestures, composed: &Composed) -> Result<Defaults, AgentError> {
+    let millis = |duration: Duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+    let ceiling = Defaults::CEILING;
+    let long_press_ms =
+        millis(settings.touch.long_press_timeout()).saturating_add(LONG_PRESS_MARGIN_MS);
+    if matches!(composed, Composed::LongPress(None)) && long_press_ms > ceiling.long_press_ms {
+        return Err(AgentError::UnplayableInput(format!(
+            "this window's long-press timeout needs a press of {long_press_ms} ms, past the {} ms \
+             a long press naming no duration may hold: name its duration",
+            ceiling.long_press_ms
+        )));
+    }
+    let double_tap_timeout = settings.mouse.double_tap_timeout_for(PointerKind::Mouse);
+    let double_tap_gap_ms =
+        millis(double_tap_timeout / DOUBLE_TAP_GAP_SHARE).min(ceiling.double_tap_gap_ms);
+    let fling_velocity = (2.0 * settings.touch.min_fling_velocity())
+        .max(Defaults::WINDOWLESS.fling_velocity)
+        .min(settings.touch.max_fling_velocity());
+    let mut defaults = Defaults::WINDOWLESS;
+    defaults.long_press_ms = long_press_ms.min(ceiling.long_press_ms);
+    defaults.double_tap_gap_ms = double_tap_gap_ms;
+    defaults.fling_velocity = fling_velocity;
+    defaults.min_stroke = 2.0 * settings.touch.pan_slop_for(PointerKind::Touch);
+    debug_assert!(
+        defaults.within_ceiling(),
+        "BUG: a window's defaults stay within the ceiling"
+    );
+    Ok(defaults)
 }
 
 /// What a gesture does once its target is ready.
@@ -259,9 +358,9 @@ impl GestureAct {
                 let Some(aim) = aim else {
                     return not_yet(ctx, reply, no_point());
                 };
+                let settings = WindowGestures::of(ctx.state);
                 match composed
-                    .sequence(aim, to)
-                    .map_err(|error| AgentError::UnplayableInput(error.to_string()))
+                    .sequence(aim, to, &settings)
                     .and_then(|sequence| agent_input::lower(&sequence))
                 {
                     Ok(script) => inject(ctx, reply, element, script, snapshot),

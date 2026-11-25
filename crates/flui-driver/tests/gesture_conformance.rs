@@ -10,7 +10,7 @@
 
 use flui_driver::coordinates::WindowGeometry;
 use flui_driver::protocol::geometry::{LogicalPoint, LogicalRect, LogicalSize};
-use flui_driver::protocol::input::gestures::{self, Aim};
+use flui_driver::protocol::input::gestures::{self, Aim, Defaults};
 use flui_driver::protocol::input::{
     ActionSequence, DeviceClass, Direction, InputKind, InputParams, PointerButton, PointerDevice,
 };
@@ -171,20 +171,32 @@ fn each_gesture_kind_routes_the_same_events_through_the_agent_and_the_os_lowerin
         ("tap", gestures::tap(point, PointerButton::Primary)),
         (
             "double tap",
-            gestures::double_tap(point, PointerButton::Primary),
+            gestures::double_tap(point, PointerButton::Primary, &Defaults::WINDOWLESS),
         ),
-        ("long press", gestures::long_press(point, Some(100))),
+        (
+            "long press",
+            gestures::long_press(point, Some(100), &Defaults::WINDOWLESS),
+        ),
         (
             "drag",
             gestures::drag(point, LogicalPoint::new(300.0, 260.0)),
         ),
         (
             "swipe",
-            gestures::swipe(aim, Direction::Up, None, None, false).expect("a swipe"),
+            gestures::swipe(aim, Direction::Up, None, None, false, &Defaults::WINDOWLESS)
+                .expect("a swipe"),
         ),
         (
             "fling",
-            gestures::swipe(aim, Direction::Left, Some(120.0), None, true).expect("a fling"),
+            gestures::swipe(
+                aim,
+                Direction::Left,
+                Some(120.0),
+                None,
+                true,
+                &Defaults::WINDOWLESS,
+            )
+            .expect("a fling"),
         ),
         ("pinch", gestures::pinch(aim, 0.5).expect("a pinch")),
         (

@@ -52,7 +52,10 @@ app's trees, frames and input, and this crate composes that with what only the O
   application (ADR-0400 §2). The driver composes a gesture only on the `os` path or for an app that
   does not serve it, and the sequence it performs is `flui_protocol::input::gestures`'s, the one
   the agent plays. `scroll_into_view` composed here is a semantics action alone, and a call that
-  requires another path is refused, as the agent refuses it.
+  requires another path is refused, as the agent refuses it. A gesture composed here reads its
+  target over the wire, so it takes its extent from the element's whole bounds and what the call
+  leaves unnamed from `gestures::Defaults::WINDOWLESS`; the agent aims at the part the window shows
+  and takes the window's own gesture settings.
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
   `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device

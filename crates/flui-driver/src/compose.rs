@@ -28,7 +28,7 @@ use flui_protocol::act::{
 };
 use flui_protocol::error::{ErrorCode, HandleKind};
 use flui_protocol::geometry::{LogicalPoint, LogicalRect};
-use flui_protocol::input::gestures::{self, Aim as Landing};
+use flui_protocol::input::gestures::{self, Aim as Landing, Defaults};
 use flui_protocol::input::{
     ActionSequence, DragParams, GestureOptions, InputKind, InputParams, InputPath, InputPolicy,
     InputSource, Journal, JournalParams, LongPressParams, PinchParams, PointerButton,
@@ -316,7 +316,11 @@ fn actionable(
     }
 }
 
-/// Where `target` lands, after the checks its options ask for.
+/// Where `target` lands, after the checks its options ask for. The driver reads the element over
+/// the wire, which carries its whole bounds and not the part the window shows, so a composed
+/// gesture takes its extent from the whole bounds; the agent in the application aims at the shown
+/// part. A composed gesture also takes the windowless [`Defaults`]: the driver does not read the
+/// window's gesture settings.
 fn aim(driver: &mut Driver, target: &Target, options: &GestureOptions) -> Result<Aim> {
     let timeout = timeout_of(driver, options);
     if let Target::Point { window, at } = target {
@@ -613,7 +617,7 @@ pub(crate) fn double_tap(driver: &mut Driver, params: TapParams) -> Result<ActOu
         return answer;
     }
     let aim = aim(driver, &params.target, &params.options)?;
-    let sequence = gestures::double_tap(aim.point, params.button);
+    let sequence = gestures::double_tap(aim.point, params.button, &Defaults::WINDOWLESS);
     act(driver, aim, &params.options, sequence, None)
 }
 
@@ -623,7 +627,7 @@ pub(crate) fn long_press(driver: &mut Driver, params: LongPressParams) -> Result
         return answer;
     }
     let aim = aim(driver, &params.target, &params.options)?;
-    let sequence = gestures::long_press(aim.point, params.duration_ms);
+    let sequence = gestures::long_press(aim.point, params.duration_ms, &Defaults::WINDOWLESS);
     act(driver, aim, &params.options, sequence, None)
 }
 
@@ -661,6 +665,7 @@ pub(crate) fn swipe(driver: &mut Driver, params: SwipeParams, fling: bool) -> Re
         params.distance,
         params.velocity,
         fling,
+        &Defaults::WINDOWLESS,
     )
     .map_err(|error| invalid_gesture(&error))?;
     act(driver, aim, &params.options, sequence, None)

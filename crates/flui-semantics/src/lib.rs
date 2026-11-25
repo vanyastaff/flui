@@ -80,8 +80,8 @@ pub use action::{
     SemanticsAction, SemanticsActionHandler, SemanticsActionRequest, TextSelection, UnroutedAction,
 };
 pub use agent::{
-    Evaluation, EventSet, Placement, TreeSnapshot, WaitFacts, WireActionError, WireLocateError,
-    WireReadError, counts_frames, element_id_of,
+    ActionabilityReading, Evaluation, EventSet, Placement, TreeSnapshot, WaitFacts,
+    WireActionError, WireLocateError, WireReadError, counts_frames, element_id_of,
 };
 pub use announce::{AnnounceError, Announcements, Announcer};
 pub use applicability::RoleAttribute;

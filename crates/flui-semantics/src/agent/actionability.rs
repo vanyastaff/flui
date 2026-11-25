@@ -31,6 +31,19 @@ use flui_protocol::{
 use super::{Placement, WireReadError, element_id, logical_bounds, wire_node};
 use crate::owner::SemanticsOwner;
 
+/// What the actionability check read of an element: the facts `element.actionability` answers,
+/// and the part of the element's bounds the window and every clipping ancestor show, which the
+/// wire does not carry. An agent in the application aims a gesture's extent at the shown part,
+/// where its point lies; a node under a scrollable keeps its whole bounds in `facts.rect`.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ActionabilityReading {
+    /// The facts, as the wire carries them.
+    pub facts: Actionability,
+    /// The part of the element shown, in logical pixels; `None` when it shows none.
+    pub shown: Option<LogicalRect>,
+}
+
 /// Rectangles closer than this, in logical pixels, are the same bounds.
 const SAME_BOUNDS: f64 = 1e-3;
 
@@ -73,8 +86,8 @@ impl SemanticsOwner {
         .unwrap_or(false)
     }
 
-    /// The facts about `element` that decide whether input can reach it, from
-    /// one committed tree.
+    /// The facts about `element` that decide whether input can reach it, and
+    /// the part of it the window shows, from one committed tree.
     ///
     /// `point` is where the pointer would land, as
     /// [`Self::actionability_point`] answered; `hit` the render objects the
@@ -98,7 +111,7 @@ impl SemanticsOwner {
         previous: Option<LogicalRect>,
         hit: &[RenderId],
         placement: Placement,
-    ) -> Result<Actionability, WireReadError> {
+    ) -> Result<ActionabilityReading, WireReadError> {
         let revision = self.revision();
         let read = self.with_published(|state, _| {
             let facts = Facts::read(state, self.device_pixel_ratio(), element, placement);
@@ -119,6 +132,8 @@ struct Facts<'s> {
     rect: Option<Bounds<f64>>,
     visible: bool,
     default_point: Option<LogicalPoint>,
+    /// The part of its bounds shown, in logical pixels.
+    shown: Option<Bounds<f64>>,
     enabled: bool,
 }
 
@@ -134,6 +149,7 @@ impl<'s> Facts<'s> {
             rect: None,
             visible: false,
             default_point: None,
+            shown: None,
             enabled: false,
         };
         if element.window != placement.window {
@@ -157,6 +173,7 @@ impl<'s> Facts<'s> {
             rect,
             visible,
             default_point,
+            shown,
         }
     }
 
@@ -167,7 +184,7 @@ impl<'s> Facts<'s> {
         previous: Option<LogicalRect>,
         hit: &[RenderId],
         revision: TreeRevision,
-    ) -> Actionability {
+    ) -> ActionabilityReading {
         let rect = self
             .rect
             .map(|rect| LogicalRect::new(rect.left(), rect.top(), rect.width(), rect.height()));
@@ -197,7 +214,12 @@ impl<'s> Facts<'s> {
                 });
             }
         }
-        out
+        ActionabilityReading {
+            facts: out,
+            shown: self.shown.map(|shown| {
+                LogicalRect::new(shown.left(), shown.top(), shown.width(), shown.height())
+            }),
+        }
     }
 }
 
