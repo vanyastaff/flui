@@ -200,8 +200,9 @@ app's trees, frames and input, and this crate composes that with what only the O
   answers `kAXErrorInvalidUIElement`, the parent gone, as that), or one element gone while read,
   left out of a list read on to its end. Each marks its level unread and the read truncated, and
   a press refuses a lone match on a short read with a retry unless a bound cut it
-  (`Cut::repeats`). The projection leaves FLUI's announcers out only of a root list read whole,
-  since a gap may have taken one of them. The searches (`walk::find_by`, the screen search) keep
+  (`Cut::repeats`). The projection leaves FLUI's announcers out only of the list that holds
+  them (a lifted container's, else the screen's) read whole, since a gap may have taken one of
+  them. The searches (`walk::find_by`, the screen search) keep
   their own record of a cut, the screen search's retry by the same two causes
   (`tree::SearchReach`). Every element the read asks is given the
   client's deadline and carries it, so a timeout, a press's included, names the deadline of the

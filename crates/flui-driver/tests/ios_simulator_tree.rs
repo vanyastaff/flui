@@ -1054,6 +1054,21 @@ fn a_level_read_short_is_marked_whatever_stopped_it() {
         "a container read whole ends at the announcers"
     );
     assert!(!projected.roots[0].children_unread && !projected.truncated);
+    // A container read whole beside a cut of the screen's list (a sibling of it gone, or the
+    // list gone after it; a bound leaves no single element) still ends at the announcers, which
+    // its own list holds, and the root still says its children went unread.
+    for screen_cut in [Cut::ElementGone, Cut::ListGone] {
+        let projected = lifted(None, Some(screen_cut));
+        assert_eq!(
+            projected.roots[0].children.len(),
+            whole.roots[0].children.len(),
+            "{screen_cut:?} around a container read whole: its announcers are left out"
+        );
+        assert!(
+            projected.roots[0].children_unread && projected.truncated,
+            "{screen_cut:?}: the root says its children went unread"
+        );
+    }
 }
 
 /// A gap in the root's list may have taken one of the two announcers: the element in an
