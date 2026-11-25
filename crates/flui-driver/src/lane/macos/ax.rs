@@ -25,8 +25,8 @@ use crate::error::{Error, Result};
 use crate::lane::ax::{self, MESSAGING_TIMEOUT_SECONDS, Visit, Walker, read_error, timeout};
 use crate::lane::macos::frame;
 use crate::lane::macos::pointer::Point;
+use crate::lane::macos::press;
 use crate::lane::macos::roles;
-use crate::lane::macos::safety;
 use crate::lane::macos::screen::{self, PointRect};
 use crate::lane::walk::{self, Properties};
 
@@ -182,7 +182,7 @@ pub(super) fn press(pid: i32, frame: PointRect, scale: f64, identifier: &str) ->
         describe(element, id, scale, reads)
     });
     let found = walk::find(&mut walker, root, identifier, timeout())?;
-    safety::pressed(
+    press::pressed(
         ax::actions(&found.element).map(|names| names.iter().any(|action| action == "AXPress")),
         || ax::perform(&found.element, "AXPress"),
         identifier,

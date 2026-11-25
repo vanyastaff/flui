@@ -278,6 +278,18 @@ pub trait WindowTree {
     /// What a child read that failed with `error` answers.
     fn failure(&mut self, error: ProviderError) -> Error;
 
+    /// `element`'s frame alone, when it has one: what [`read_screen`] reads again once the walk is
+    /// done.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Gone`] when `element` went away; any other failure, as
+    /// [`Self::failure`] answers it.
+    fn frame(
+        &mut self,
+        element: &Self::Element,
+    ) -> std::result::Result<Option<PointFrame>, ProviderError>;
+
     /// What `element` is and where.
     ///
     /// # Errors
@@ -571,17 +583,21 @@ pub fn find_screen<T: WindowTree>(
     Ok((group, candidate.frame))
 }
 
-/// The device's screen read whole: the screen `find_screen` finds in `windows`, the walk of its
-/// elements ([`walk_screen`]), and the screen's frame read again once the walk is done, which
-/// must be the one the search read ([`screen_steady`]): every element is placed on the app's
-/// window from it. A screen gone by then, or moved, answers [`Error::Busy`]. Every host's read is
-/// this one: the Mac's over its accessibility API, a test's over its own tree.
+/// The device's screen read whole over a source that serves both the window and the screen's
+/// elements: the screen `find_screen` finds in `windows`, the walk of its elements
+/// ([`walk_screen`]), and the screen's frame read again once the walk is done
+/// ([`WindowTree::frame`]), which must be the one the search read ([`screen_steady`]): every
+/// element is placed on the app's window from it. A screen gone by then, or moved, answers
+/// [`Error::Busy`]. The Mac's read is this one, and so is a test's over its own tree; the
+/// scripted window (`testing::ScriptedSimulatorScreen`) serves a screen already read, and shares
+/// only [`choose_window`] and [`locate`].
 ///
 /// # Errors
 ///
 /// As [`find_screen`]; [`Error::Busy`] when the screen moved, was resized or went away during
 /// the read; a failure of the walk or of the frame's read, as `source` answers it
-/// ([`WindowTree::failure`]).
+/// ([`WindowTree::failure`]), the gone screen included when `source` answers it as a refusal
+/// (the permission taken back).
 pub fn read_screen<E, S>(
     source: &mut S,
     screen: &ScreenRequest,
@@ -593,9 +609,14 @@ where
 {
     let (group, frame) = find_screen(source, screen, windows)?;
     let walk = walk_screen(source, &group).map_err(|error| WindowTree::failure(source, error))?;
-    let after = match WindowTree::facts(source, &group) {
-        Ok(facts) => facts.frame,
-        Err(ProviderError::Gone) => None,
+    let after = match WindowTree::frame(source, &group) {
+        Ok(after) => after,
+        // A screen gone is one to read again, unless the source answers it as the permission
+        // refused, which no read again serves.
+        Err(ProviderError::Gone) => match WindowTree::failure(source, ProviderError::Gone) {
+            refused @ Error::NotSupported { .. } => return Err(refused),
+            _ => None,
+        },
         Err(error) => return Err(WindowTree::failure(source, error)),
     };
     screen_steady(frame, after)?;

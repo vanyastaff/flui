@@ -27,7 +27,8 @@
   (`accessibility::list_children`), a level of exactly the budget's children read whole. A level
   a vanished element or the budget cuts is marked unread on its parent, the screen included,
   and a probe past the depth that fails fails the read; a screen moved, resized or gone during
-  the read answers `Error::Busy` (`tree::read_screen`, every host's read). A press refuses an
+  the read answers `Error::Busy` (`tree::read_screen`, the Mac's read and the tests' over their
+  own trees; the scripted window shares `choose_window` and `locate`). A press refuses an
   element that two read as, or one on a read that stopped short; a press sent and not answered,
   or whose element went away, keeps `may_have_run` when the Accessibility permission is gone
   afterwards, as the macOS lane's `AXPress` does (`lane::ax::pressed`, the answer both lanes
