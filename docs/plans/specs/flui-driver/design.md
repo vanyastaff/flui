@@ -727,9 +727,9 @@ as evidence.
 - the clip rect that applies;
 - for text: ink bounds, line boxes, first and last baselines, the resolved `TextStyle`,
   `TextAlign`, whether it was ellipsized or exceeded its lines, and its painted colour;
-- the composited background colour beneath the text, from the layer tree's opaque paints. When it
-  cannot be determined (an image or gradient behind), it is sampled from a `rendered` capture and
-  marked `sampled`;
+- the composited background colour beneath the text, from the scene's paints. When they do not
+  determine it (an image or gradient behind, an effect over it), the text is not checked and the
+  report lists it under `not_checked` (ADR-0400 §5);
 - the parent's layout kind (row, column, stack, overlay, wrap) and alignment;
 - the nearest semantics node and identifier.
 
@@ -760,7 +760,7 @@ The default tolerance is 0.5 logical px. A failure says what was measured: "ink 
 | `overlap` | sibling boxes intersect outside a stack, overlay or explicit z-order | area > 1 px² |
 | `clipped_text` / `truncated_text` | ink bounds exceed the clip, or the paragraph ellipsized or exceeded `max_lines` unexpectedly | any |
 | `outside_window` / `outside_safe_area` | content past the window or the safe-area insets | > 0 px |
-| `low_contrast` | WCAG 2.2 relative-luminance contrast below 4.5, or 3 for large text: ≥ 24 logical px, or ≥ 18.66 logical px bold (18 pt and 14 pt, a logical px taken as a CSS px). Disabled controls are skipped and listed in `not_checked` | ratio, with 0.01 tolerance |
+| `low_contrast` | WCAG 2.2 relative-luminance contrast below 4.5, or 3 for large text: ≥ 24 logical px, or ≥ 18.66 logical px bold (18 pt and 14 pt, a logical px taken as a CSS px). Disabled controls are skipped and listed in `not_checked` | ratio, compared exactly: the colours come from the scene, not from sampled pixels |
 | `non_text_contrast` (optional) | control boundary or focus indicator below 3:1 against its surroundings (WCAG 1.4.11) | ratio |
 | `small_target` | shared with the accessibility audit: per-platform minimum (Android 48 dp, iOS 44 pt, desktop and web 24 CSS px per WCAG 2.5.8, or a stricter 44 px profile) with the ATF exemptions (scrollable edge, larger clickable ancestor, clipped by ancestor, inline link) | per platform |
 | `hit_region` | the hit region is smaller than the visible bounds | > 0.5 px |
@@ -776,7 +776,7 @@ Every finding has an outcome:
 |---|---|---|
 | `error` | a fact breaks a rule | fails a check that asked for the rule |
 | `warning` | a rule configured as a warning | never fails |
-| `needs_review` | the fact is judgement-dependent: a background sampled from pixels (`sampled`), a ratio inside the 0.01 band, a near-miss pair in a wrap that reflows | keeps the check from `pass`; at best `cannot_verify` until reviewed or waived |
+| `needs_review` | the fact is judgement-dependent: a near-miss pair in a wrap that reflows | keeps the check from `pass`; at best `cannot_verify` until reviewed or waived |
 | `suppressed` | waived by identifier and rule | never fails; listed with the waiver's reason |
 
 These follow ATF's result types (ERROR, WARNING, NOT_RUN, SUPPRESSED) and axe's "incomplete".

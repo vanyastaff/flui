@@ -7,7 +7,9 @@
   (§8; D1, D3, D4 and D7's naming rules stand);
   [ADR-0238](ADR-0238-flui-driver-protocol.md): §5's last sentence and §6's "the driver repeats"
   for the synthetic and semantic paths (§2), §8's `headless` feature and its edge to
-  `flui-testing` (§1), and §9's Rust front end, `Driver`, `Window`, `Element` and `expect` (§1);
+  `flui-testing` (§1), §9's Rust front end, `Driver`, `Window`, `Element` and `expect` (§1), and
+  §10's "the rules live in `flui-semantics` and `flui-testing` shares them": each rule lives with
+  its facts, target size in `flui-semantics` and contrast in `flui-rendering::audit` (§5);
   [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) §6, the script builders (§2);
   [ADR-0216](ADR-0216-gesture-alternatives.md): the gesture path of `assert_gesture_alternatives`
   driven through `PointerScript` (§2)
@@ -224,7 +226,8 @@ up; `assert_gesture_alternatives` (ADR-0216) drives a gesture through it.
 A gesture on the synthetic or semantic path is answered by the agent in the application: it
 locates, checks actionability at each frame boundary until the target is attached, visible,
 stable over two frames, enabled and receives the hit, or the action's timeout passes
-(ADR-0238 §6), and injects in the turn the check passed, aimed at that frame's bounds. A failure
+(ADR-0238 §6), and injects in the turn the check passed, aimed at the part of the element that
+frame shows. A failure
 is `TestError::NotActionable` with the failed check and nothing sent. The action's timeout is in
 its request: the conversation counts it as what the window may hold the act for (ADR-0288 §4),
 the held act's deadline is a wake of §3, and when it passes the agent drops the act, so nothing
@@ -278,7 +281,7 @@ pub enum ClearedBy {
     NextFrame,  // the next turn serves it
     Deadline,   // a turn at its deadline serves it: a timer, a frame's retry, a scenario step
     Test,       // only the test discharges it: held background work
-    Outside,    // something outside the application answers it: a platform reply in flight
+    Outside,    // something outside the application answers it: a platform reply, a future the host parked
 }
 pub enum SettleScope { Complete, RuntimeOnly } // a field of `WaitOutcome` and of the report
 pub enum WaitEnd { Satisfied, Unsatisfied, Idle } // how a wait ended: `WaitOutcome::end`
@@ -557,7 +560,7 @@ link-time test registry; a testing crate beside `flui-testing`.
   fixtures of `flui-testing`.
 - clippy: `deprecated` on the old forms with the `#[expect]` marker of §8, until the last one is
   deleted.
-- Tests of `flui-runtime`: a table with one row per `UnsettledReason` on which the host's settle
+- Tests of `flui-testing` and `flui-runtime`: a table with one row per `UnsettledReason` on which the host's settle
   and `wait(Settled)` agree, a row where both stay unsettled and name the cause and its
   `cleared_by`, and a row where both settle on the same state; a held background job never wakes
   the loop and ends a false wait `WaitEnd::Idle` naming it; a parked wait's deadline is reached
@@ -574,7 +577,7 @@ link-time test registry; a testing crate beside `flui-testing`.
   its end checks; `freeze_at` on an activity indicator gives a golden that reruns byte for byte; a
   chord after a `Gesture` that left a key down sends no second down; a golden off the canonical
   adapter is `CannotVerify`; a mismatch writes a diff and a failed run blesses nothing.
-- A test of `flui-protocol`: one `ActionSequence` per gesture kind, planned once, gives the same
+- A conformance test (`flui-driver`'s `gesture_conformance`): one `ActionSequence` per gesture kind, planned once, gives the same
   routed events through the agent's injection, a platform lowering and a conformance row.
 - One scenario of an example package runs headless in its `#[test]` and on a device in the
   nightly platform lanes through `each::<Device>`.

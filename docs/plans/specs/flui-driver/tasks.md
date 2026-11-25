@@ -1709,13 +1709,16 @@ graph LR
 
 ### FD23. Layout facts, assertions and lint
 
+- **Status:** WCAG text contrast (`flui-rendering::audit`, the background read from the scene's
+  paints) was built with docs/plans/specs/testing-platform/tasks.md TP2 (ADR-0400 §5); the rest of
+  this task stays open here.
 - **Changes:**
   - `flui-rendering::inspect` gains geometry facts: window-logical box after transforms, clip,
     parent layout kind and alignment;
   - `RenderParagraph` exposes ink bounds, line boxes, baselines, resolved style, alignment,
     ellipsis and line overflow, and painted colour as data;
-  - the background colour beneath text comes from the layer tree's opaque paints, sampled from a
-    `rendered` capture only when it cannot be determined, and marked so;
+  - the background colour beneath text comes from the scene's paints, and a text whose background
+    they do not determine is not checked (ADR-0400 §5);
   - `flui-rendering::audit` holds the geometry rules: off centre, near-miss alignment, uneven gap,
     overlap, clipped and truncated text, outside window or safe area, WCAG contrast;
   - `layout.facts`, `layout.expect` (the CLI and MCP method; the Rust handle `expect(..)` is
@@ -1724,7 +1727,7 @@ graph LR
   - `audit.screen`, and `checked` and `not_checked` in `Report` with the verdict clause;
   - finding outcomes (`error`, `warning`, `needs_review`, `suppressed`);
   - the per-platform target-size profiles with the ATF exemptions;
-  - contrast at the WCAG large-text thresholds (24 px, 18.66 px bold) with a 0.01 tolerance;
+  - contrast at the WCAG large-text thresholds (24 px, 18.66 px bold), the ratio compared exactly;
   - `hit_region`, `duplicate_bounds`, `duplicate_name`, optional `non_text_contrast`;
   - `audit.text_scale` through the preferences override;
   - `benches/layout_defects/` with `cargo xtask layout-benchmark`.
