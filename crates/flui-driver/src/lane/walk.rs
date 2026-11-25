@@ -7,8 +7,10 @@
 //! unread on that element and the read cut short, never a shorter list read as whole, whatever
 //! cut it ([`Cut`]: a bound, the list gone, or one of its elements gone while read, which is left
 //! out); and a property its provider does not offer reads as the field's default, which is the
-//! provider's own answer. [`Cut`] is the one rule for every walk over an OS tree, this one and
-//! the iOS Simulator's screen walk alike.
+//! provider's own answer. [`Cut`] is the rule of the two reads of a tree, this one ([`read`])
+//! and the iOS Simulator's screen walk (`ios_simulator::accessibility::walk_screen`); the
+//! searches ([`find_by`] here, the Simulator's screen search) keep their own record of a cut,
+//! which their failures name.
 
 use std::time::Duration;
 
@@ -42,12 +44,6 @@ pub enum Cut {
 }
 
 impl Cut {
-    /// Whether the list ended before its last child, so what its end holds was not read.
-    #[must_use]
-    pub const fn ends_list(self) -> bool {
-        !matches!(self, Self::ElementGone)
-    }
-
     /// Whether a read again cuts the list the same way, so no read again serves it.
     #[must_use]
     pub const fn repeats(self) -> bool {

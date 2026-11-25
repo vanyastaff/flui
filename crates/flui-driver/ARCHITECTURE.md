@@ -194,14 +194,17 @@ app's trees, frames and input, and this crate composes that with what only the O
   UDID, or two naming none when none names it, are refused. A device renamed or removed since
   the lane connected is refused (`accessibility::screen_title`). The screen's elements are read
   by a pure walk over a source (`accessibility::walk_screen`): a level the node budget or a
-  vanished element cuts is marked unread on its parent, the screen included. Every walk over an
-  OS tree, `lane::walk`'s and this one, holds one rule with its cause (`lane::walk::Cut`): a
+  vanished element cuts is marked unread on its parent, the screen included. Both reads of a
+  tree, `lane::walk::read` and this walk, hold one rule with its cause (`lane::walk::Cut`): a
   bound, the list gone (a step to a next child that finds an element gone; `ax::child_at`
   answers `kAXErrorInvalidUIElement`, the parent gone, as that), or one element gone while read,
   left out of a list read on to its end. Each marks its level unread and the read truncated, and
-  each reader acts on the cause: a press refuses a lone match on a short read with a retry unless
-  a bound cut it, and the projection leaves FLUI's announcers out unless the root's list ended
-  early. Every element the read asks is given the
+  a press refuses a lone match on a short read with a retry unless a bound cut it
+  (`Cut::repeats`). The projection leaves FLUI's announcers out only of the list that holds
+  them (a lifted container's, else the screen's) read whole, since a gap may have taken one of
+  them. The searches (`walk::find_by`, the screen search) keep
+  their own record of a cut, the screen search's retry by the same two causes
+  (`tree::SearchReach`). Every element the read asks is given the
   client's deadline and carries it, so a timeout, a press's included, names the deadline of the
   element its call was asked of, or says that element refused it. A window's identity texts are
   read whole up to `accessibility::IDENTITY_TEXT_LIMIT` by the pure `window_identity`, every
