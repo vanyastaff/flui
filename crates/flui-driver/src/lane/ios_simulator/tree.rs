@@ -36,8 +36,8 @@
 //!   its nearest matched ancestor fits, not among that node's children alone, and an app node
 //!   matched once is matched to nothing else. When the screen's one child is an unnamed group
 //!   (the app's root as a container), its children are read as the screen's, and FLUI's
-//!   announcers, which the app's read leaves out, are left out of the projection
-//!   ([`ANNOUNCERS`]).
+//!   announcers, which the app's read leaves out, are left out of the projection when that root
+//!   list was read whole ([`ANNOUNCERS`]).
 //! - **What fits.** An element fits an app node when its native role is the one
 //!   [`roles::native_for`] gives the app node's AccessKit role and toggled state, its label is the
 //!   app node's name, its enabled and checked states are the app node's, an identifier it carries
@@ -1024,23 +1024,24 @@ fn project(
         used: BTreeSet::new(),
         matched: Vec::new(),
     };
-    let (elements, mut path, unread) = lifted(screen);
+    let (elements, mut path, list_cut) = lifted(screen);
     let mut root = Node::new(walk.next(), app_root.role, "AXGroup".to_owned());
     root.rect = window_rect(placing.screen, placing.screen, placing.size, placing.scale);
     root.identifier.clone_from(&app_root.identifier);
     root.window = app_root.window;
     let scope = walk.scope(app_root);
     root.children = walk.children(elements, &mut path, &scope)?;
-    let root_cut = unread.map_or(screen.children_unread, |cut| {
-        Cut::with(screen.children_unread, cut)
-    });
-    root.children_unread = root_cut.is_some();
+    // The root's children went unread when the list they come from was cut, or the screen's own
+    // list around a lifted container.
+    root.children_unread = list_cut.is_some() || screen.children_unread.is_some();
     // The announcers the app's read leaves out: the root's last children of their shape that no
-    // app node fits. A list that ended early ends where the read stopped, not at the announcers,
-    // so its last children are kept; a list read to its end with a gap (an element gone while
-    // read, `Cut::ElementGone`) still ends at them.
+    // app node fits, taken only from the list that holds them (the lifted container's, else the
+    // screen's) read whole. A list that ended early ends where the read stopped, not at the
+    // announcers; a list with a gap (`Cut::ElementGone`) may have lost an announcer to it, so its
+    // last two of that shape need not both be announcers. Either way its last children are kept,
+    // and the read is already marked short.
     let mut left_out = 0;
-    while !root_cut.is_some_and(Cut::ends_list)
+    while list_cut.is_none()
         && left_out < ANNOUNCERS
         && root
             .children
@@ -1075,9 +1076,9 @@ fn bounds_tolerance(scale: f64) -> i64 {
     pixels
 }
 
-/// The screen's elements, the path they sit at, and why some went unread, if they did: its
-/// elements, or its one element's children when that element is the app's root read as a
-/// container (an unnamed group without an identifier).
+/// The elements the app's root holds, the path they sit at, and why that list was cut, if it
+/// was: the screen's elements, or its one element's children when that element is the app's
+/// root read as a container (an unnamed group without an identifier).
 fn lifted(screen: &HostScreen) -> (&[ScreenElement], Vec<usize>, Option<Cut>) {
     if let [only] = screen.elements.as_slice()
         && only.role == "AXGroup"
@@ -1088,7 +1089,7 @@ fn lifted(screen: &HostScreen) -> (&[ScreenElement], Vec<usize>, Option<Cut>) {
     {
         return (&only.children, vec![0], only.children_unread);
     }
-    (&screen.elements, Vec::new(), None)
+    (&screen.elements, Vec::new(), screen.children_unread)
 }
 
 /// Whether the element `os` fits the app node of `candidate`: see the [module docs](self).

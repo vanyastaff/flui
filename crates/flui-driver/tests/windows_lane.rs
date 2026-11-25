@@ -1684,9 +1684,9 @@ fn fake_window() -> FakeTree {
 const UIA_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// An element gone while its properties are read is left out, its siblings read on, and its level
-/// marked read short with the tree truncated: the one rule (`walk::Cut::ElementGone`) every walk
-/// over an OS tree holds, the iOS Simulator's screen walk included, since the gone element could
-/// have been the twin of one read.
+/// marked read short with the tree truncated: the rule (`walk::Cut::ElementGone`) both reads of a
+/// tree hold, `walk::read` and the iOS Simulator's screen walk, since the gone element could have
+/// been the twin of one read. A search that meets it says an element went away.
 #[test]
 fn the_walk_reads_the_window_and_leaves_a_gone_element_out() {
     let mut tree = fake_window();
@@ -1705,6 +1705,20 @@ fn the_walk_reads_the_window_and_leaves_a_gone_element_out() {
     assert!(
         !tree.read.contains(&6),
         "the window beside the app's is not read"
+    );
+
+    let mut tree = fake_window();
+    tree.gone = Some(4);
+    assert_eq!(
+        walk::find(&mut tree, 0, "third", UIA_TIMEOUT).expect("its siblings are searched on"),
+        5
+    );
+    let missing = walk::find(&mut tree, 0, "nobody", UIA_TIMEOUT).expect_err("absent");
+    assert!(
+        missing
+            .to_string()
+            .contains("went away before all its children were searched"),
+        "{missing}"
     );
 }
 
@@ -1860,6 +1874,7 @@ fn the_search_for_an_automation_id_is_bounded_and_tells_its_failures_apart() {
     let mut tree = fake_window();
     let missing = walk::find(&mut tree, 0, "nobody", UIA_TIMEOUT).expect_err("absent");
     assert_eq!(missing.code(), Some(ErrorCode::NotFound), "{missing:?}");
+    assert!(!missing.to_string().contains("went away"), "{missing}");
     assert!(
         !tree.read.contains(&6),
         "another window's element is not the app's"
