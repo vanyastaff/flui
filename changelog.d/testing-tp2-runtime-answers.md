@@ -5,15 +5,15 @@
   discharges it (`next_frame`, `deadline` with its exact instant, `test`, `outside`), with
   `Unsettled::wake_at` and `Unsettled::wake_at_once` for what only wakes the loop, and
   `Unsettled::wake`, the wake rule `HeadlessHost` follows; the native runners' loops still wake
-  from `UiRuntime::next_wake_owing_floors` until they compose a half (`docs/gaps.md`).
+  from the owner registry's `next_wake` until they compose a half (`docs/gaps.md`).
 - `UiRuntime::unsettled` (the runtime's half) and `UiRuntime::answer_settled`, which answers the
   agent's waits that read settledness, every wait's timeout and the idle end from the host's
   list; `UiRuntime::awaits_settled_answer`, whether such a wait is parked, so a host gathers its
   list only then; `RuntimeHostServices::composes_host_half` says a host composes its half, and
   `RuntimeHostServices::with_floor_owed` gives the host's rule for which in-flight floors it owes,
-  read by `UiRuntime::next_wake` and `UiRuntime::unsettled` alike; `UiRuntime::list_for_next_turn`
-  is the one rule for what a dropped frame's retry holds, which the headless host's half follows
-  too.
+  read by `UiRuntime::next_wake`, `OwnerStatus::next_wake` and `UiRuntime::unsettled` alike;
+  `UiRuntime::list_for_next_turn` is the one rule for what a dropped frame's retry holds, which
+  the headless host's half follows too.
 - The development agent answers `wait.settled` and `wait.frames`.
 - `HeadlessHost::unsettled`, the host's whole list, and `HeadlessHost::run_until_answered`, which
   runs turns for a parked request on the virtual clock, moving it to the list's wake.
@@ -111,6 +111,12 @@
 
 - `Tester::drag` and `drag_from` hold the contact still for `SWIPE_SETTLE_MS` before the release,
   so a drag ends below the fling velocity on the plan's timeline.
+
+### Removed
+
+- `UiRuntime::next_wake_owing_floors` and `OwnerStatus::next_wake_owing_floors`: each runtime's wake,
+  and the owner registry's, read the floor rule the host gave at construction
+  (`RuntimeHostServices::with_floor_owed`).
 
 ### Fixed
 
