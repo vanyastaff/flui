@@ -1,10 +1,10 @@
-//! A host tool a lane drives (`adb`, `xcrun`), run to its end with a deadline and a bound on what
-//! it may print.
+//! A host tool the driver runs (a lane's `adb` or `xcrun`, the `cargo build` of
+//! `Launch::cargo_example`), run to its end with a deadline and a bound on what it may print.
 //!
 //! A tool that outlives its deadline is killed and answers [`Failure::Timeout`]; one that prints
 //! more than its bound is killed and answers [`Failure::OverLimit`], and nothing past the bound is
-//! kept. Its error output is kept up to [`MAX_STDERR`] bytes. What each failure means to the lane
-//! (a timeout's `may_have_run` effect, a tool that is not installed) is the lane's to say.
+//! kept. Its error output is kept up to [`MAX_STDERR`] bytes. What each failure means to its caller
+//! (a timeout's `may_have_run` effect, a tool that is not installed) is the caller's to say.
 
 use std::io::{self, Read};
 use std::process::{Child, Command, Stdio};
