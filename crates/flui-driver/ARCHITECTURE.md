@@ -116,9 +116,14 @@ app's trees, frames and input, and this crate composes that with what only the O
   the keys and chords that leave the app or change the device (the fallbacks of AOSP's
   `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
   the mouse included, going down at the display's edge; before each press, key, text and scroll
-  one `dumpsys window` must show the window the lane located holding the focus, compared by its
-  hash, frame and rotation: another window of the app's title is `NotForeground`, the same
-  window moved or turned is `Busy` until the lane locates it again.
+  one `dumpsys window -a` must show the window the lane located holding the focus, compared by
+  its hash, frame and rotation, on the display holding the device's focus: another display is
+  `android_default_display`, another window of the app's title is `NotForeground`, the same
+  window moved or turned is `Busy` until the lane locates it again. The whole dump runs under the
+  window manager's lock, which every window change on the device waits for, once a locate and
+  once before each such command; `-a` is what prints the frames. Whatever ends a sequence
+  after part of it went out answers `Error::PartlySent` around its own failure: the commands
+  that went out may have run, and no retry is invited, which would send them again.
 - **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
