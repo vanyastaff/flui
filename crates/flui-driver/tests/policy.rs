@@ -650,6 +650,106 @@ fn a_composed_scroll_into_view_refuses_a_path_it_has_no_form_on() {
     );
 }
 
+/// A scripted agent whose hello serves `element.tap`, `element.long_press` and
+/// `element.scroll_until`, answering each that it ran synthetically, and each method it was asked
+/// with the `via` it was asked with.
+fn recording_via() -> (ScriptedAgent, Arc<Mutex<Vec<(String, Option<InputPolicy>)>>>) {
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&asked);
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::ElementTap::NAME,
+            method::ElementLongPress::NAME,
+            method::ElementScrollUntil::NAME,
+        ],
+        Box::new(move |name, params| {
+            let via = params
+                .get("via")
+                .map(|via| serde_json::from_value::<InputPolicy>(via.clone()).expect("a policy"));
+            log.lock().expect("the log").push((name.to_owned(), via));
+            match name {
+                "windows.list" => Reply::Result(json!({ "windows": ["w1"] })),
+                _ => Reply::Result(json!({ "via": "synthetic", "effect": { "kind": "ran" } })),
+            }
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    (agent, asked)
+}
+
+/// The driver chooses a served gesture's path, and the agent, which knows no session, receives it
+/// as the gesture's `via`: a session that requires a path has it required in the app, one that
+/// prefers `os` with no lane falls back to synthetic and is the agent's, and a required path the
+/// gesture has no form on is refused before the agent hears of it.
+#[test]
+fn the_session_policy_reaches_the_agent_as_the_path_the_driver_chose() {
+    let (agent, asked) = recording_via();
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let long_press = || -> flui_driver::protocol::input::LongPressParams {
+        serde_json::from_value(json!({ "target": { "locator": { "identifier": "row" } } }))
+            .expect("a long press reads")
+    };
+    let scroll_until = || -> flui_driver::protocol::input::ScrollUntilParams {
+        serde_json::from_value(json!({
+            "target": { "locator": { "identifier": "list" } },
+            "until": { "identifier": "row" },
+        }))
+        .expect("a scroll until reads")
+    };
+    let synthetic = Some(InputPolicy::prefer(InputPath::Synthetic));
+    let semantic_required = Some(InputPolicy::require(InputPath::Semantic));
+    let refused_semantic = |answer: &Result<ActOutcome, Error>| {
+        matches!(
+            answer,
+            Err(Error::NotSupported { capability: Some(capability), .. })
+                if capability == "semantic_input"
+        )
+    };
+    let last = |asked: &Mutex<Vec<(String, Option<InputPolicy>)>>| {
+        asked.lock().expect("the log").last().cloned()
+    };
+
+    driver.set_input_policy(InputPolicy::require(InputPath::Semantic));
+    driver
+        .call::<method::ElementTap>(tap_increment())
+        .expect("the agent answers the tap");
+    assert_eq!(
+        last(&asked),
+        Some((method::ElementTap::NAME.to_owned(), semantic_required)),
+        "a tap has a semantic form: the session's requirement reaches the agent"
+    );
+    let before = asked.lock().expect("the log").len();
+    let pressed = driver.call::<method::ElementLongPress>(long_press());
+    assert!(refused_semantic(&pressed), "{pressed:?}");
+    let scrolled = driver.call::<method::ElementScrollUntil>(scroll_until());
+    assert!(refused_semantic(&scrolled), "{scrolled:?}");
+    assert_eq!(
+        asked.lock().expect("the log").len(),
+        before,
+        "a gesture with no semantic form is refused before the agent is asked"
+    );
+
+    driver.set_input_policy(InputPolicy::prefer(InputPath::Os));
+    driver
+        .call::<method::ElementLongPress>(long_press())
+        .expect("the agent answers the long press");
+    assert_eq!(
+        last(&asked),
+        Some((method::ElementLongPress::NAME.to_owned(), synthetic)),
+        "no lane: `os` falls back to synthetic, which the agent composes with the window's \
+         settings"
+    );
+    driver
+        .call::<method::ElementScrollUntil>(scroll_until())
+        .expect("the agent answers the scroll");
+    assert_eq!(
+        last(&asked),
+        Some((method::ElementScrollUntil::NAME.to_owned(), synthetic))
+    );
+}
+
 /// A counter whose session sends every input by the OS path through a guarded scripted lane on
 /// the shared desktop, its lock at `dir`'s `os-input.lock`.
 fn on_the_os_path(probe: &Probe, dir: &tempfile::TempDir) -> (Driver, LaneLog) {

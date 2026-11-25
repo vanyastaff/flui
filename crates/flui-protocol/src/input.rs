@@ -588,7 +588,12 @@ impl InputParams {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct GestureOptions {
-    /// Which input path; the session's when absent.
+    /// Which input path. A caller of the driver names it, or leaves it to the session's policy;
+    /// the driver chooses the path from both, and what it hands the app's agent carries that
+    /// path, required when the call or the session requires it. The agent knows no session: it
+    /// plays the path this names, falls back to the gesture's other path unless this requires
+    /// one, refuses `os`, which the driver composes with its lane, and takes synthetic input when
+    /// it is absent.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -795,7 +800,10 @@ pub struct ScrollUntilParams {
     pub target: Target,
     /// What to scroll to: the element it names must resolve, strictly, under the scrollable.
     pub until: Locator,
-    /// Which way to scroll; towards the end of the scrollable's axis when absent.
+    /// Which way to scroll. When absent the agent reads no axis: it scrolls down, and turns
+    /// right, once, when its first step down moves nothing, so a horizontal scrollable, or a
+    /// vertical one already at its end, is searched rightwards; a search that has moved and then
+    /// stops ends there.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
