@@ -421,7 +421,12 @@ fn a_dump_line_holds_its_directory_as_one_word() {
     let bin = parent.path().join("bin");
     std::fs::create_dir(&bin).expect("a directory");
     let tool = bin.join("uiautomator");
-    std::fs::write(&tool, "#!/bin/sh\nprintf '<hierarchy/>' > \"$2\"\n").expect("written");
+    // The stand-in notes the path it was told to dump to, then writes the dump there.
+    std::fs::write(
+        &tool,
+        "#!/bin/sh\nprintf '%s\\n' \"$2\" >> \"$(dirname \"$0\")/told\"\nprintf '<hierarchy/>' > \"$2\"\n",
+    )
+    .expect("written");
     std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).expect("executable");
     let directory = parent.path().join("dumps a'b $(c)");
     std::fs::create_dir(&directory).expect("a directory with a quote");
@@ -444,6 +449,16 @@ fn a_dump_line_holds_its_directory_as_one_word() {
         names_in(&directory),
         Vec::<String>::new(),
         "the dump is removed"
+    );
+    assert_eq!(
+        std::fs::read_to_string(bin.join("told")).expect("the tool ran"),
+        format!("{root}/flui-driver-0a1b-4.xml\n"),
+        "the tool was told the whole path, as one word"
+    );
+    assert_eq!(
+        names_in(parent.path()),
+        ["bin", "dumps a'b $(c)"],
+        "nothing was written beside the directory"
     );
 }
 
