@@ -54,6 +54,7 @@
 //! with work left undone.
 
 mod events;
+mod queue;
 mod script;
 mod track;
 
@@ -246,7 +247,9 @@ impl Scenario {
     /// Every failure of the run so far, or `Ok` when there is none. What it
     /// returns is acknowledged: the scenario does not panic over it when it
     /// drops. A failure recorded after this call is not, even when it equals
-    /// one this call returned.
+    /// one this call returned. A held request it reports waits for the test
+    /// from then on, so no later drain of a hold answers it
+    /// ([held requests](Script#held-requests)).
     ///
     /// # Errors
     ///
@@ -378,12 +381,6 @@ impl Scenario {
 
     fn fail(&self, failure: ScenarioFailure) {
         self.core.state.borrow_mut().events.push(failure);
-    }
-
-    /// Whether the last [`verify`](Self::verify) reported the step or
-    /// request `id` as a debt.
-    fn acknowledged_debt(&self, id: NonZeroU64) -> bool {
-        self.core.state.borrow().acknowledged.debts.contains(&id)
     }
 
     fn owe(&self, debts: Vec<Debt>) {

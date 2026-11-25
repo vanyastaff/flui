@@ -8,12 +8,10 @@
   `Scenario::verify` lists what the run left undone as `ScenarioFailure`s, a script dropped with
   debts hands them to the scenario, and a scenario that drops with a failure no `verify`
   returned panics (a failure recorded after `verify` is new, even if it repeats one). Only the
-  scenario's one `ScenarioDriver` holds and moves its clock. `Script::hold` hands out a
-  `ScriptHold`: the script holds requests while any of its holds lives, and the last one dropped
-  or `release`d sends the requests the holds kept on to the steps and the standing answer,
-  oldest first and one at a time, with a request that arrives meanwhile queued behind them; a
-  request a step holds waits for the test, and `ScriptHold::leave_held` lets go without sending
-  anything on: as the last hold, it leaves the kept requests to the test as a step does.
+  scenario's one `ScenarioDriver` holds and moves its clock. `Script::hold` hands out a counted
+  `ScriptHold`, which `release`, a drop or `leave_held` lets go; what a held request waits for
+  (a hold or the test), the drain the last hold starts, what `verify` and a ticket do to it and
+  what a release counts are the "Held requests" rules of `Script`'s docs.
 - `HeadlessHost::with_scenario`, `try_with_scenario`, `scenario` and `advance`: a host that
   drives a scenario's clock, applies its due changes whenever time moves, and waits for its
   scheduled changes in `time_to_next_frame` and `pump_until_settled`. A second host on the same
