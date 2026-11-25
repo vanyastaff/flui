@@ -1020,24 +1020,34 @@ fn a_session_takes_the_pointers_its_agent_says_it_delivers() {
     );
 }
 
-/// A strict locator the driver resolves for a gesture it composes counts every element it
-/// matched, those the agent left out of its answer included, as the agent's own resolution does
-/// (`flui_protocol::locator::resolve_strict`), and names the first ten.
+/// A strict locator the driver resolves for a gesture it composes asks the agent for no more
+/// matches than the candidates it names, and counts every element it matched, those the agent left
+/// out of its answer included, as the agent's own resolution does
+/// (`flui_protocol::locator::resolve_strict`): a locator matching 120 000 elements, whose every
+/// match reported would pass the longest line the driver reads (16 MiB), answers `ambiguous`
+/// with that count and the first ten.
 #[test]
 fn a_composed_gesture_refuses_a_strict_locator_with_its_true_count() {
+    const MATCHED: u64 = 120_000;
     let agent = ScriptedAgent::start(
         &[method::WindowsList::NAME, method::SemanticsLocate::NAME],
-        Box::new(move |name, _| match name {
+        Box::new(move |name, params| match name {
             "windows.list" => Reply::Result(json!({ "windows": ["w1"] })),
             "semantics.locate" => {
-                let matches: Vec<serde_json::Value> = (1..=10)
+                // As the agent does: at most `max_matches` reported, the rest counted.
+                let reported = params
+                    .get("max_matches")
+                    .and_then(serde_json::Value::as_u64)
+                    .map_or(MATCHED, |most| most.min(MATCHED));
+                let matches: Vec<serde_json::Value> = (1..=reported)
                     .map(|n| {
                         json!({ "element": format!("w1/e{n}"), "revision": 1, "node": {
                             "id": format!("e{n}"), "role": "button", "native_role": "Button",
+                            "name": "a row whose name makes each reported match long enough",
                         } })
                     })
                     .collect();
-                Reply::Result(json!({ "matches": matches, "truncated": 15 }))
+                Reply::Result(json!({ "matches": matches, "truncated": MATCHED - reported }))
             }
             _ => Reply::Close,
         }),
@@ -1053,9 +1063,9 @@ fn a_composed_gesture_refuses_a_strict_locator_with_its_true_count() {
             candidates,
             ..
         }) => {
-            assert!(message.starts_with("25 elements"), "{message}");
+            assert!(message.starts_with("120000 elements"), "{message}");
             assert_eq!(candidates.len(), 10, "{candidates:?}");
         }
-        other => panic!("a strict locator matching 25 elements is refused: {other:?}"),
+        other => panic!("a strict locator matching 120 000 elements is refused: {other:?}"),
     }
 }

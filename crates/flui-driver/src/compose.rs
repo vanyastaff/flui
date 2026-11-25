@@ -290,9 +290,14 @@ fn resolve_locator(
     timeout: Duration,
 ) -> Result<ElementRef> {
     let mut waited = false;
+    // A strict pick needs only the candidates it names reported: the rest it counts from
+    // `truncated`, so a locator matching thousands answers `ambiguous`, not a reply past the line.
+    let mut params = LocateParams::new(locator.clone());
+    if locator.pick == Pick::Strict {
+        params.max_matches = Some(flui_protocol::locator::STRICT_CANDIDATES);
+    }
     loop {
-        let found = driver
-            .agent::<method::SemanticsLocate>(LocateParams::new(locator.clone()), Duration::ZERO)?;
+        let found = driver.agent::<method::SemanticsLocate>(params.clone(), Duration::ZERO)?;
         let Matches {
             matches, truncated, ..
         } = found;
