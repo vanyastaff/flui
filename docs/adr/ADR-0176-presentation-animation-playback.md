@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-09)
 - **Date:** 2026-10-08
+- **Superseded-by:** [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
+  for the sentence that the operation is exposed as `motion` only: the method is `clock.set`.
 - **Related:** [ADR-0175](ADR-0175-owner-local-scheduling-and-animation.md),
   [ADR-0095](ADR-0095-agent-protocol-schema-crate.md).
 

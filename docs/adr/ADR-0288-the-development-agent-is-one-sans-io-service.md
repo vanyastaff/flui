@@ -18,7 +18,9 @@
   method whose effect is `annotates`, and a timed-out call is retried `soon` whenever it does not
   change the app; and [ADR-0402](ADR-0402-a-binary-links-the-development-agent-only-where-a-hook-is-installed.md)
   for §1's last sentence only: an app that installs no hook links none of the agent's owner
-  side.
+  side; and [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
+  for the names `input.release`, `record.start` and `record.stop` and the event names `input`,
+  `record` and `record_native` in §9, §10 and §11 only: what the methods do is unchanged.
 - **Related:** [ADR-0238](ADR-0238-flui-driver-protocol.md) (the protocol);
   [ADR-0287](ADR-0287-owner-state-is-committed-before-user-code-runs.md) (user code runs after
   the state is committed); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (what

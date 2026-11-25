@@ -11,6 +11,12 @@
   [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) §6, the script builders (§2);
   [ADR-0216](ADR-0216-gesture-alternatives.md): the gesture path of `assert_gesture_alternatives`
   driven through `PointerScript` (§2)
+- **Superseded-by:** [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
+  for §1's clause that `Placement` carries the platform convention (it is read with
+  `window.environment`); §2's verbs `enter_text` and `scroll_until` and §5's `Tester::semantics`
+  (`type_text`, `scroll_until_visible` and `snapshot`: a verb that sends one method has its
+  member's name); and the method name `audit.a11y` in §3 and §5 (`audit.accessibility`), only.
+  `settle`, `Settled` and `wait_settled` stand.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (the tiers the golden
   seam of §6 keeps); [ADR-0083](ADR-0083-one-frame-transaction-in-flui-runtime.md) (a test's frame is
   `UiRuntime::pump`); [ADR-0288](ADR-0288-the-development-agent-is-one-sans-io-service.md) §4 (an
