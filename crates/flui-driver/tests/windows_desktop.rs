@@ -578,7 +578,7 @@ fn a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input() {
         .long_press(Some(Duration::from_secs(2)));
     intruder.join().expect("the intruder moved the mouse");
     assert!(
-        matches!(held, Err(Error::InterruptedByUser { .. })),
+        matches!(&held, Err(Error::PartlySent { first, .. }) if matches!(**first, Error::InterruptedByUser { .. })),
         "the run ended on the foreign move: {held:?}"
     );
     // The contact the lane put down was lifted: the app's journal ends it.
