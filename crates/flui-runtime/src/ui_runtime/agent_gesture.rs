@@ -121,7 +121,7 @@ pub(super) fn readiness(ctx: &mut AttemptContext<'_>, aimed: &Aimed, checks: Che
     ctx.if_panics.set(AgentError::ResolvePanicked {
         element: element.element,
     });
-    let (facts, shown, compared) = match agent::actionability(
+    let (mut facts, shown, compared) = match agent::actionability(
         ctx.state,
         ctx.window,
         &ActionabilityParams::new(element),
@@ -149,10 +149,10 @@ pub(super) fn readiness(ctx: &mut AttemptContext<'_>, aimed: &Aimed, checks: Che
         // Nothing says yet whether it holds still (no frame since its last read, with work
         // pending): that holds the act back, but a check the committed tree fails outright is
         // the one an answer names.
+        // Below, `facts` is read only for where the act lands, never for `stable`.
         Checks::All => {
-            let mut known = facts.clone();
-            known.stable = true;
-            known
+            facts.stable = true;
+            facts
                 .first_failed()
                 .or(Some(flui_protocol::act::ActionabilityCheck::Stable))
         }

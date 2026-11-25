@@ -1318,8 +1318,10 @@ fn input_under_way_is_answered_at_its_deadline_and_play_time() {
     .plays_within();
     let ends = served + Duration::from_millis(300) + plays;
     let now = flui_foundation::MonotonicClock::now(&rig.clock);
-    rig.clock
-        .advance(ends.saturating_duration_since(now) - Duration::from_millis(1));
+    rig.clock.advance(
+        ends.saturating_duration_since(now)
+            .saturating_sub(Duration::from_millis(1)),
+    );
     rig.runtime.pump_background();
     assert!(
         press.try_take().is_none(),
