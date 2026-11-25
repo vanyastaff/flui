@@ -23,8 +23,8 @@
   operations they call, only (§3, §7).
   [ADR-0176](ADR-0176-presentation-animation-playback.md)'s sentence that the operation is
   exposed as `motion`, only (§3).
-  [ADR-0241](ADR-0241-driver-trace-format.md) §5's sentence that `flui_trace` is the one version
-  a reader checks, and the name `record.start` in its Consequences, only (§3, §4).
+  [ADR-0241](ADR-0241-driver-trace-format.md)'s name `record.start` in its Consequences, only
+  (§3).
 - **Related:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (the error object);
   [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) (the input recording, and
   which text a recording keeps); [ADR-0239](ADR-0239-every-debug-app-hosts-the-driver-agent.md)
@@ -58,11 +58,9 @@ groups were named as each method arrived.
 | The groups mix four kinds of word: a subject (`window`, `element`, `session`), a technique (`semantics`), a verb (`capture`, `record`, `inspect`) and the tool that serves (`run`) | the table |
 | One subject has two spellings | `windows.list` beside `window.placement` |
 | `motion` names the animation clock on the wire and the reduced-motion policy in the framework | `motion.set`; `MediaQueryData::motion`, `AppConfig::motion_override` |
-| Two rows differ by a value the protocol already has a type for | `capture.presented`, `capture.rendered`; `CaptureSource` |
 | The shipped MCP server lists seven hand-written tools named `flui_windows`, `flui_read`, `flui_locate`, `flui_act`, `flui_wait`, `flui_motion` and `flui_reload`; the table's own tool names are listed nowhere | `crates/flui-cli/src/agent/mcp.rs:148`; `MethodRow::tool_name` (`method.rs:388`) |
 | Event names are bare words, and one of them, `window`, means opened or closed only | `crates/flui-protocol/src/events.rs` |
 | Nothing reads the application's configuration, its build or a window's environment, though the window dispatch already reads the root media query | `crates/flui-runtime/src/ui_runtime/agent_serve.rs:403` |
-| The hello names the app by its window's title | `crates/flui-app/src/app/agent/served.rs:52` |
 | Before the first release a wire name may be respelled once, in a version `BREAKING` lists | `crates/flui-protocol/src/version.rs`; ADR-0342 |
 
 Scope: `flui-protocol`'s groups and names, its wire conventions, the names of its events, three
@@ -138,7 +136,8 @@ pub enum GroupKind {
     /// A development facility that keeps state a call leaves in the app: held input and its
     /// journal, a stream, a clock's rate, what is drawn over a window, a span, a recording.
     Instrument,
-    /// A family of reads with one output type. Every row is read-only.
+    /// A family of rows with one output type, each a judgement of a window. A row that must
+    /// drive the app to judge it declares that it acts.
     Examination,
     /// The app as the operating system shows and drives it. Every row is a lane's.
     Lane,
@@ -150,7 +149,7 @@ pub const GROUPS: &[(&str, GroupKind)];
 |-------|------|----|-------|
 | `session` | subject | the client's connection to one target | `attach`, `capabilities`, `close` |
 | `app` | subject | the application: its process, its build, its launch configuration | `launch`, `reload`, `build`, `config` |
-| `window` | subject | one window | `list`, `placement`, `environment`, `snapshot`, `screenshot`, `announcements` |
+| `window` | subject | one window | `list`, `placement`, `environment`, `snapshot`, `screenshot`, `rendered_screenshot`, `announcements` |
 | `element` | subject | one element, named by a target | `locate`, `actionability`, the gestures, `type_text`, `press_keys`, `perform_action` |
 | `input` | instrument | the input a client plays, what of it is held, and the journal of what a window was delivered | `inject`, `perform_actions`, `release_actions`, `journal` |
 | `events` | instrument | the connection's event streams | `subscribe`, `unsubscribe` |
@@ -159,7 +158,7 @@ pub const GROUPS: &[(&str, GroupKind)];
 | `perf` | instrument | frame performance over a span | `start`, `stop`, `expect` |
 | `recording` | instrument | the input recording of ADR-0215: what a runtime applied, row by row | `start`, `stop` |
 | `inspect` | examination (`InspectReading`) | the framework's own trees | `widget_tree`, `render_tree`, `layer_tree` |
-| `audit` | examination (`AuditReport`) | rule checks that answer findings | `accessibility`, `screen` |
+| `audit` | examination (`AuditReport`) | rule checks that answer findings | `accessibility`, `screen`; the spec's `layout`, and its `text_scale` and `alternatives`, which act |
 | `wait` | examination (`WaitOutcome`) | a request held until a condition answers | `until`, `settled`, `frames` |
 
 Names reserved for groups that have no row yet. Each joins `GROUPS`, with its kind, in the
@@ -176,7 +175,9 @@ A contributor places a new method by these steps, taking the first that applies:
 
 1. A lane serves it: `os`, or `device` for the device itself.
 2. It only draws over a window (`MethodEffect::Annotates`): `overlay`.
-3. Its output is an examination group's output type: that group.
+3. Its output is an examination group's output type: that group, whatever its effect. An
+   audit that performs gestures or changes a preference to judge the result is still `audit`'s,
+   declared `Acts`.
 4. It starts, stops, sets or releases state an instrument of the table keeps, or reads what
    that instrument holds or recorded: that instrument. A journal belongs to the instrument one
    of whose methods produces its entries (`input.inject` makes the entries `input.journal`
@@ -217,7 +218,7 @@ group.member          lower snake case; the group is one word with no underscore
 
 ### §3. The names
 
-Protocol 0.33 respells 19 methods, folds `capture.rendered` into `window.screenshot`, respells
+Protocol 0.33 respells 20 methods, respells
 the events (§5) and adds `window.environment` (§6). `METHODS` after it and after the two reads
 of §6 that join it later, in its order:
 
@@ -302,7 +303,10 @@ WindowEnvironment = "window.environment", Agent(window), ReadOnly, Control,
 WindowList = "window.list", Agent, ReadOnly, Core,
     $crate::session::Empty => $crate::window::Windows;
 WindowPlacement = "window.placement", Agent(window), ReadOnly, Control, …;
-/// A window's pixels: the frame it last presented, or its layer tree rendered again.
+/// The committed layer tree rendered again offscreen.
+WindowRenderedScreenshot = "window.rendered_screenshot", Agent(window), ReadOnly, Pixels,
+    $crate::window::ScreenshotParams => $crate::window::Screenshot;
+/// The pixels the window last put on screen.
 WindowScreenshot = "window.screenshot", Agent(window), ReadOnly, Core,
     $crate::window::ScreenshotParams => $crate::window::Screenshot;
 /// A window's semantics tree, or the part of it under one element.
@@ -313,11 +317,14 @@ WindowSnapshot = "window.snapshot", Agent(window), ReadOnly, Core,
 A row ending `…` keeps its parameters and output, and every row keeps its side, its effect and,
 but for the tier's name, its tier. Around the rows:
 
-- **`window.screenshot`** takes `source: Option<ScreenshotSource>`, a type with the two sources
-  an agent serves, `presented` and `rendered`. Absent, the window answers its presented frame,
-  and a host that cannot copy its surface answers the rendered one; named, it answers that
-  source or `not_supported`. The answer's `source` stays a `CaptureSource`, whose third value,
-  `os`, is the lane's `os.screenshot` alone. No host answers either source yet.
+- **Screenshots stay two rows.** `capture.presented` is `window.screenshot` and
+  `capture.rendered` is `window.rendered_screenshot`, each with the tier, the parameters and
+  the behaviour it had. A hello still says which of the two an app answers by listing the
+  method, and an answer still names its `source`: whatever compares two screenshots compares
+  those of one source, as a baseline's file is named for it. One row with a `source` parameter
+  was weighed and left: it would move the rendered capture into the core tier, leave no
+  method name for a host to list or omit, and need a rule for the source a host lacks. The
+  lane's capture is `os.screenshot`.
 - **Tiers.** `Tier::Session` becomes `Tier::Control`: it holds `session.attach`,
   `session.capabilities`, `window.placement`, the frame and settle waits, the clock, the build
   status and the reload, few of which are the `session` group's, and the reads of §6 join it.
@@ -343,6 +350,7 @@ Break {
         ("audit.a11y", "audit.accessibility"),
         ("build.report", "overlay.show_build_status"),
         ("capture.presented", "window.screenshot"),
+        ("capture.rendered", "window.rendered_screenshot"),
         ("element.scroll_until", "element.scroll_until_visible"),
         ("input.perform", "input.perform_actions"),
         ("input.release", "input.release_actions"),
@@ -361,8 +369,6 @@ Break {
         ("windows.list", "window.list"),
     ],
     removed: &[
-        // The method folded into `window.screenshot`.
-        "/methods=capture.rendered",
         // Definitions and top-level types published under the names their types had.
         "/$defs/MotionParams", "/$defs/MotionRequest", "/$defs/MotionState",
         "/MotionRequest", "/MotionState",
@@ -393,7 +399,7 @@ What changed, and the term each new name takes:
 |-----|----|------------------|
 | `audit.a11y` | `audit.accessibility` | `appium/appium-xcuitest-driver` `execute-methods.md:2444`, `mobile: performAccessibilityAudit`; the DevTools protocol's `Accessibility` domain (`browser_protocol.json:8`) |
 | `build.report` | `overlay.show_build_status` | the DevTools protocol's `Overlay` domain (`browser_protocol.json:20479`); the "error overlay" ADR-0395 cites; `flui run --no-build-overlay` |
-| `capture.presented`, `capture.rendered` | `window.screenshot` | BiDi `browsingContext.captureScreenshot` (`index.bs:3877`) and the DevTools protocol's `Page.captureScreenshot` with `fromSurface` (`browser_protocol.json:23742`, `:23769`), each on the window with the source as a parameter; Playwright `Page.screenshot` (`docs/src/api/class-page.md:4094`) |
+| `capture.presented`, `capture.rendered` | `window.screenshot`, `window.rendered_screenshot` | A screenshot is a command of the window or page in each protocol read: BiDi `browsingContext.captureScreenshot` (`index.bs:3877`), the DevTools protocol's `Page.captureScreenshot` (`browser_protocol.json:23742`), Playwright `Page.screenshot` (`docs/src/api/class-page.md:4094`). BiDi's `origin` chooses the viewport or the document, not where the pixels come from; the DevTools protocol's `fromSurface` (`:23769`, experimental) does choose that, as a parameter. FLUI keeps a row for each source because the two differ in tier and in which hosts answer them |
 | `element.scroll_until` | `element.scroll_until_visible` | Maestro `scrollUntilVisible` (`YamlFluentCommand.kt:142`); `flutter_test` (`controller.dart:2381`) and `flutter_driver` (`driver.dart:422`) |
 | `input.perform`, `input.release` | `input.perform_actions`, `input.release_actions` | BiDi `input.performActions`, `input.releaseActions` (`index.bs:15047`, `:15220`) |
 | `inspect.widgets`, `inspect.render`, `inspect.layers` | `inspect.widget_tree`, `inspect.render_tree`, `inspect.layer_tree` | `flutter_driver`'s `get_render_tree`, `get_layer_tree` (`common/render_tree.dart:19`, `common/layer_tree.dart:19`); the Dart MCP server's `get_widget_tree` (`lib/src/mixins/dtd.dart:2146`) |
@@ -411,16 +417,18 @@ The 26 names that stay are the field's already (`tap`, `swipe`, `pinch`, `attach
 `actionability`) or FLUI's own where the field has none or splits (`placement`, `journal`,
 `settled`, `until`).
 
-**`Tester` verbs.** ADR-0400 §4 and §6 stand: `pump`, `pump_for`, `settle` and `freeze_at` move
-a virtual clock, and `wait_settled` is the `wait.settled` method on any connection. A verb of
-the kit is one of two kinds, and a table in the kit lists every verb with its kind:
+**`Tester` verbs.** ADR-0400 §4 and §6 stand: on its `Tester<C>`, `pump`, `pump_for`, `settle`
+and `freeze_at` move a virtual clock, and `wait_settled` is the `wait.settled` method on any
+connection. That type is not built; this record respells the verbs of the kit that exists and
+takes none of ADR-0400's names for another meaning. A verb of the kit is one of two kinds, and
+a table in the kit lists every verb with its kind:
 
 - A **method verb** sends one method and answers its output. Its name is the method's member,
   or `group_member` where the member alone is not a verb or two groups have it (`wait_until`,
   `wait_settled`, `wait_frames`).
 - A **kit verb** moves the clock, composes several methods or projects an answer (`pump`,
-  `settle`, `expect`, `read`, `rect`, `find_all`, `drag`, `background`, `foreground`). Its name
-  is no method's member.
+  `pump_and_settle`, `expect`, `read`, `rect`, `find_all`, `drag`, `background`, `foreground`).
+  Its name is no method's member.
 
 | Was (`crates/flui-testing/src/tester.rs`) | Is | Kind |
 |-----|----|------|
@@ -428,7 +436,7 @@ the kit is one of two kinds, and a table in the kit lists every verb with its ki
 | `semantics` | `snapshot` | method verb, `window.snapshot` |
 | `inspect_widgets`, `inspect_render` | `inspect_widget_tree`, `inspect_render_tree` | method verbs |
 | `scroll_until` (ADR-0400 §2; not built) | `scroll_until_visible` | method verb |
-| `pump_and_settle` | `settle` | kit verb: ADR-0400's name for it |
+| `pump_and_settle` | unchanged | kit verb. ADR-0400's `settle` belongs to `Tester<C>` and returns a `Settled`; the type is not built, and the change that builds it replaces this verb. Until then no verb of the kit is named `settle` |
 | `background`, `foreground` | unchanged | kit verbs of the headless host; they take their methods' names when `app.background` and `app.activate` are rows |
 
 Each `try_` twin follows.
@@ -440,17 +448,21 @@ Each `try_` twin follows.
   its Rust name. A value's wire name is its variant in snake case or the name its `vocabulary!`
   row or `serde(rename)` gives it, which is how a dotted name and a name Rust cannot spell are
   written.
-- **Units.** A field that holds a duration or a time as a number names its unit: `_ms` in a
-  method's parameters and answers, `_us` in an event's timestamp, `_ns` in a recording. The
-  rows of an input recording keep `t` and `arrival`, nanoseconds by ADR-0215's format. Geometry
-  is logical pixels by type (`LogicalRect`, `LogicalPoint`, `LogicalSize`); a count of device
-  pixels says so in its documentation.
+- **Units.** A new field that holds a duration or a time as a number ends in its unit: `_ms`
+  in a method's parameters and answers, `_us` in an event's timestamp, `_ns` or `_s` in a
+  recording. Fields the crate ships keep their names, and three kinds of them do not follow
+  that form: the bare unit `ms` (`FrameSample::ms`, `PhaseTime::ms`), and the recordings'
+  nanosecond fields `t`, `arrival` and `at` (`FramePresented::at`), fixed by ADR-0215's
+  format. Geometry is logical pixels by type (`LogicalRect`, `LogicalPoint`, `LogicalSize`); a
+  count of device pixels says so in its documentation.
 - **Bounds.** A read whose answer grows with the application's state takes a `max_…` parameter
   with a stated default, and says what it left out in one of two ways: `truncated: bool` where
-  it cannot count (`Tree`, `InspectReading`), or `omitted`, a count, where it can
-  (`Diagnostics`, and `Matches`, whose count named `truncated` becomes `omitted`). A node keeps
-  `omitted_children`. A read is narrowed by its parameters (`root`, a locator); there is no
-  cursor.
+  it cannot count (`Tree`, `InspectReading`), or a count named `omitted`, or `omitted_<field>`
+  where the answer has other fields, where it can (`Diagnostics`, `Environment`'s
+  `omitted_locales`, and `Matches`, whose count named `truncated` becomes `omitted`). A node
+  keeps `omitted_children`. A read is narrowed by its parameters (`root`, a locator); there is
+  no cursor. The audits answer one finding for each offending node and have no bound today;
+  giving them one is a change to their wire shape, tracked with the driver spec.
 - **Journals.** A bounded journal is read with `since` and `max_entries` and answers `entries`,
   oldest first, each with its `seq`, and `dropped`. The last `seq` is the next `since`.
 - **Errors.** `ErrorCode` and the error object stay as they are. A code names the state that
@@ -458,9 +470,10 @@ Each `try_` twin follows.
   code is added by the record that needs it. `not_supported` names the missing `capability`.
 - **Versions.** The break is one version. An app that speaks it refuses an older client
   `version`, naming both (`ProtocolVersion::serves`). No server accepts an old name. A trace's
-  header names the protocol it was recorded in (ADR-0241 §2): beside the `flui_trace` check of
-  ADR-0241 §5, the trace reader refuses a trace whose protocol a break of `BREAKING` separates
-  from its own, with the same error, and the golden trace is recorded again.
+  header names the protocol it was recorded in (ADR-0241 §2), and replay already refuses a
+  trace of any protocol but the app's, naming both (`crates/flui-driver/src/trace/replay.rs:110`):
+  a trace recorded under the old names is refused by that rule, which this record does not
+  change, and the golden trace is recorded again.
 
 ### §5. Events are named as methods are
 
@@ -703,7 +716,7 @@ shipped server have it until the record named in "Context" decides it.
 - Good, because a model's tool list will read as the wire does, and the CLI, the kit and a
   trace spell a method one way.
 - Good, because the reads of §6 cost the runtime no state and a release binary no code.
-- Bad, because 19 names, 8 event names, 5 `Tester` verbs and a tier's name change at once:
+- Bad, because 20 names, 8 event names, 4 `Tester` verbs and a tier's name change at once:
   several hundred mentions across `crates/` and `docs/`, most of them in `flui-protocol`,
   `flui-cli`, `flui-runtime` and `flui-driver`, the schema's next golden and the golden trace.
 - Bad, because an app that speaks 0.33 refuses every older client, and a `flui` tool older than
@@ -730,7 +743,7 @@ protocol 0.33, and `app.build` and `app.config` in that version or a later addit
 | Rule | Held by |
 |------|---------|
 | A name is `group.member` in lower snake case, a group has no underscore, the table is sorted, and a tool name splits back into its method | `flui-protocol`'s `every_method_is_named_group_dot_member_once_and_listed_in_order`, which today's `every_method_is_named_group_dot_verb_once_and_listed_in_order` becomes |
-| Every row's group is in `GROUPS`; an examination group's rows are read-only and share one output type, and a row with that output type is in that group; an annotating row is in `overlay` and `overlay` has no other; a lane's row is in a lane group and a lane group has no other | `every_row_fits_the_kind_of_its_group`, over `for_each_method!` with each row's output type |
+| Every row's group is in `GROUPS`; an examination group's rows share one output type, and a row with that output type is in that group; an annotating row is in `overlay` and `overlay` has no other; a lane's row is in a lane group and a lane group has no other | `every_row_fits_the_kind_of_its_group`, over `for_each_method!` with each row's output type |
 | The rows that change the app are exactly a list | `only_these_rows_change_the_app`, which replaces `what_ends_the_app_is_destructive_and_reads_never_act`: the acting and destructive rows by name, and the destructive ones `app.reload` and `session.close`, so a read declared to act is a line of the diff |
 | A name `BREAKING` respelled is a method under the last name its chain reaches, and under no earlier one | `every_respelled_method_is_a_method_under_its_latest_name`, over every entry of `BREAKING`. It replaces the assertions of `the_ops_protocol_0_5_renamed_are_methods_now` and `protocol_0_5_renames_every_0_4_operation_into_the_method_table` that `windows.list`, `semantics.read`, `semantics.act` and `motion.set` are methods; the second test keeps its check that every 0.4 operation is listed |
 | The schema is 0.33's golden, and differs from 0.32's only by what `BREAKING` lists | `the_wire_schema_is_the_one_its_version_published`, `every_published_schema_is_additive_to_the_next` |
@@ -741,14 +754,12 @@ protocol 0.33, and `app.build` and `app.config` in that version or a later addit
 | A journal is read by `since` and answers `entries` and `dropped` | `every_journal_is_read_since_a_sequence_number`, over `input.journal` and `window.announcements` |
 | Every event name is `group.name` with a group of `GROUPS` | `every_event_is_named_for_a_group_of_the_table` |
 | The core set and its bound | `the_core_set_is_the_thirteen_tools_mcp_lists_by_default`, with the new names |
-| `window.screenshot` answers the presented frame when no source is named, the rendered one where the surface cannot be copied, and a named source or `not_supported` | the test of the first host that answers a source, `a_screenshot_answers_the_source_it_names_or_refuses`; until one does, `flui-runtime`'s `window_answers` lists the row as unanswered and `docs/gaps.md` owes it |
 | A method verb of `Tester` is named for its row, and every window method has its verb or the reason it has none | `flui-testing`'s `every_method_verb_is_its_methods_member`: a table made by a macro from each verb's own call, over a connection that records the methods sent. It fails a listed verb that sends another row or carries another name, and a window method with no entry |
 | `window.environment` answers the root's values, and `text_sizing` its policy | `flui-runtime`'s `a_windows_environment_is_what_its_root_media_query_holds`, with a fixed, a linear and an exact policy |
 | Every service answers `app.build` bounded and with FLUI's version, after a `describe` as after `new`; one handed no reading refuses `app.config` and does not list it | `flui-runtime`'s `a_description_is_bounded_and_versioned_however_it_was_stored`, `a_service_refuses_a_configuration_it_was_not_given`; `flui-testing`'s `the_headless_service_claims_no_configuration` |
-| The hello names the application, not its window | `flui-app`'s `the_hello_names_the_application_not_its_window` |
 | `app.config` states every field of `AppConfig` or leaves it out by name, sends no path, and a hook as its name alone | the compiler, over the reading's builder in `flui-app` (no `..`, no `_` arm); the types `StorageDir` and `InstalledHook`; `flui-app`'s `a_configured_storage_directory_is_answered_as_custom` |
 | A new string field is redacted in a trace or named as kept | `flui-driver`'s `every_text_field_of_the_wire_is_redacted_or_named_as_kept` |
-| A trace from before a break is refused | `flui-driver`'s `a_trace_from_before_a_break_is_refused_with_both_versions` |
+| A trace recorded under the old names is not replayed | `flui-driver`'s `a_trace_of_another_protocol_is_refused_before_any_command`, which exists: replay refuses a trace of any other protocol than the app's |
 | A read links nothing into a release binary | the `size` job, and the reader of a change to `ui_runtime` (ADR-0402) |
 
 No name is left under an alias. After the change that makes 0.33, `rg` of each old method name
