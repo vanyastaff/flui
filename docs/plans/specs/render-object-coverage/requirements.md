@@ -1,6 +1,6 @@
 # render-object-coverage: requirements
 
-- **Status:** Not started — awaiting owner approval of requirements and design
+- **Status:** Approved by the owner on 2026-11-25 (the decisions in design.md stand as recommended); tasks in progress, see tasks.md
 - **Date:** 2026-11-25
 - **Base:** `claude/project-thread-03lo7m` @ `fcab477`
 - **Reference:** `flutter/flutter` tag `3.50.1` (`ae9b586`), `packages/flutter/lib/src`. Statements

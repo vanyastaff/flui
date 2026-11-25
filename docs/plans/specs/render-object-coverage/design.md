@@ -1,6 +1,6 @@
 # render-object-coverage: design
 
-- **Status:** Not started — awaiting owner approval of requirements and design
+- **Status:** Approved by the owner on 2026-11-25 (the decisions in design.md stand as recommended); tasks in progress, see tasks.md
 - **Date:** 2026-11-25
 - **Base:** `claude/project-thread-03lo7m` @ `fcab477`
 - **Requirements:** [requirements.md](requirements.md); tasks: [tasks.md](tasks.md)

@@ -1,8 +1,8 @@
 # render-object-coverage: tasks
 
-- **Status:** Not started — awaiting owner approval of requirements and design
+- **Status:** In progress — requirements and design approved by the owner on 2026-11-25, the decisions in design.md as recommended; the table below records each task
 - **Date:** 2026-11-25
-- **Base:** `claude/project-thread-03lo7m` @ `fcab477`
+- **Base:** `main` @ `fcab477`
 - **Design:** [design.md](design.md) (shared seams, ADR list, decisions),
   [design-parity.md](design-parity.md) (W1–W18), [design-beyond.md](design-beyond.md)
   (W19–W26); [requirements.md](requirements.md) (R1–R26, gates G1–G3).
