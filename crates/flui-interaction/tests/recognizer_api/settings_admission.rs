@@ -1402,7 +1402,7 @@ fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
 
 /// The fling range the host reports is a touch's: a touch reads its slowest and fastest, in that
 /// order; a mouse and a pen keep the authored range.
-fn reported_fling_range_is_a_touchs_alone() {
+fn a_reported_fling_range_is_a_touch_contacts_alone() {
     let authored = GestureSettings::default()
         .try_with_fling_velocity(80.0, 7_000.0)
         .expect("a fling range in order");
@@ -1487,7 +1487,7 @@ fn admitted_gesture_settings_contract() {
         ("double tap candidate", double_tap_candidate_retains_policy),
         (
             "reported fling range is a touch's",
-            reported_fling_range_is_a_touchs_alone,
+            a_reported_fling_range_is_a_touch_contacts_alone,
         ),
         (
             "tap and drag candidate",
