@@ -2,7 +2,7 @@
 
 - **Status:** Approved by the owner on 2026-11-25 (the decisions in design.md stand as recommended); tasks in progress, see tasks.md
 - **Date:** 2026-11-25
-- **Base:** `claude/project-thread-03lo7m` @ `fcab477`
+- **Base:** `main` @ `fcab477`
 - **Requirements:** [requirements.md](requirements.md); tasks: [tasks.md](tasks.md)
 - **Work items:** [design-parity.md](design-parity.md) (W1–W18, Flutter parity),
   [design-beyond.md](design-beyond.md) (W19–W26, beyond Flutter, with what was deferred and

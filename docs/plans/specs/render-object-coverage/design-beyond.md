@@ -2,7 +2,7 @@
 
 - **Status:** Approved by the owner on 2026-11-25 (the decisions in design.md stand as recommended); tasks in progress, see tasks.md
 - **Date:** 2026-11-25
-- **Base:** `claude/project-thread-03lo7m` @ `fcab477`
+- **Base:** `main` @ `fcab477`
 - **Overview, shared seams, ADR list, decisions:** [design.md](design.md); requirements:
   [requirements.md](requirements.md) (R19–R26); tasks: [tasks.md](tasks.md)
 
