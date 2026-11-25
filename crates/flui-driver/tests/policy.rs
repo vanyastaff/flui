@@ -678,28 +678,35 @@ fn recording_via() -> (ScriptedAgent, Arc<Mutex<Vec<(String, Option<InputPolicy>
     (agent, asked)
 }
 
+fn a_long_press() -> flui_driver::protocol::input::LongPressParams {
+    serde_json::from_value(json!({ "target": { "locator": { "identifier": "row" } } }))
+        .expect("a long press reads")
+}
+
+fn a_scroll_until() -> flui_driver::protocol::input::ScrollUntilParams {
+    serde_json::from_value(json!({
+        "target": { "locator": { "identifier": "list" } },
+        "until": { "identifier": "row" },
+    }))
+    .expect("a scroll until reads")
+}
+
+/// The method the agent was asked last, and its `via`.
+fn last_asked(
+    asked: &Mutex<Vec<(String, Option<InputPolicy>)>>,
+) -> Option<(String, Option<InputPolicy>)> {
+    asked.lock().expect("the log").last().cloned()
+}
+
 /// The driver chooses a served gesture's path, and the agent, which knows no session, receives it
-/// as the gesture's `via`: a session that requires a path has it required in the app, one that
-/// prefers `os` with no lane falls back to synthetic and is the agent's, and a required path the
-/// gesture has no form on is refused before the agent hears of it.
+/// as the gesture's `via`: a session that requires the semantic path has it required in the app,
+/// and a gesture with no semantic form is refused before the agent hears of it, as the agent
+/// refuses it.
 #[test]
-fn the_session_policy_reaches_the_agent_as_the_path_the_driver_chose() {
+fn a_session_that_requires_a_path_has_it_required_by_the_agent() {
     let (agent, asked) = recording_via();
     let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
         .expect("the driver attaches");
-    let long_press = || -> flui_driver::protocol::input::LongPressParams {
-        serde_json::from_value(json!({ "target": { "locator": { "identifier": "row" } } }))
-            .expect("a long press reads")
-    };
-    let scroll_until = || -> flui_driver::protocol::input::ScrollUntilParams {
-        serde_json::from_value(json!({
-            "target": { "locator": { "identifier": "list" } },
-            "until": { "identifier": "row" },
-        }))
-        .expect("a scroll until reads")
-    };
-    let synthetic = Some(InputPolicy::prefer(InputPath::Synthetic));
-    let semantic_required = Some(InputPolicy::require(InputPath::Semantic));
     let refused_semantic = |answer: &Result<ActOutcome, Error>| {
         matches!(
             answer,
@@ -707,45 +714,54 @@ fn the_session_policy_reaches_the_agent_as_the_path_the_driver_chose() {
                 if capability == "semantic_input"
         )
     };
-    let last = |asked: &Mutex<Vec<(String, Option<InputPolicy>)>>| {
-        asked.lock().expect("the log").last().cloned()
-    };
 
     driver.set_input_policy(InputPolicy::require(InputPath::Semantic));
     driver
         .call::<method::ElementTap>(tap_increment())
         .expect("the agent answers the tap");
     assert_eq!(
-        last(&asked),
-        Some((method::ElementTap::NAME.to_owned(), semantic_required)),
+        last_asked(&asked),
+        Some((
+            method::ElementTap::NAME.to_owned(),
+            Some(InputPolicy::require(InputPath::Semantic))
+        )),
         "a tap has a semantic form: the session's requirement reaches the agent"
     );
     let before = asked.lock().expect("the log").len();
-    let pressed = driver.call::<method::ElementLongPress>(long_press());
+    let pressed = driver.call::<method::ElementLongPress>(a_long_press());
     assert!(refused_semantic(&pressed), "{pressed:?}");
-    let scrolled = driver.call::<method::ElementScrollUntil>(scroll_until());
+    let scrolled = driver.call::<method::ElementScrollUntil>(a_scroll_until());
     assert!(refused_semantic(&scrolled), "{scrolled:?}");
     assert_eq!(
         asked.lock().expect("the log").len(),
         before,
         "a gesture with no semantic form is refused before the agent is asked"
     );
+}
+
+/// A session that prefers `os` with no lane falls back to synthetic, as `choose_path` says, and a
+/// gesture the agent serves is then the agent's, which composes it with the window's own settings
+/// rather than the driver's windowless defaults.
+#[test]
+fn a_session_that_prefers_os_with_no_lane_has_the_agent_play_its_gestures() {
+    let (agent, asked) = recording_via();
+    let mut driver = Driver::attach(&agent.endpoint(), agent.token(), Duration::from_secs(10))
+        .expect("the driver attaches");
+    let synthetic = Some(InputPolicy::prefer(InputPath::Synthetic));
 
     driver.set_input_policy(InputPolicy::prefer(InputPath::Os));
     driver
-        .call::<method::ElementLongPress>(long_press())
+        .call::<method::ElementLongPress>(a_long_press())
         .expect("the agent answers the long press");
     assert_eq!(
-        last(&asked),
+        last_asked(&asked),
         Some((method::ElementLongPress::NAME.to_owned(), synthetic)),
-        "no lane: `os` falls back to synthetic, which the agent composes with the window's \
-         settings"
     );
     driver
-        .call::<method::ElementScrollUntil>(scroll_until())
+        .call::<method::ElementScrollUntil>(a_scroll_until())
         .expect("the agent answers the scroll");
     assert_eq!(
-        last(&asked),
+        last_asked(&asked),
         Some((method::ElementScrollUntil::NAME.to_owned(), synthetic))
     );
 }
