@@ -869,8 +869,6 @@ What is still unknown, and what would settle each. Nothing below is built on unr
 
 ## Found while reading, not this spec's work
 
-- `docs/testing.md` says the manifest holds "all 81 exported render types"; the list has 106
-  entries. W1 fixes it.
 - `crates/flui-view/src/element/notification.rs` defines seven notification types that no
   production code sends, beside the gap "No scroll notifications". They are a form with no
   users; whether they are deleted or built on is that gap's decision.
