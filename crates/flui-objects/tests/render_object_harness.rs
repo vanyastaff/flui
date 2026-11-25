@@ -13643,26 +13643,219 @@ fn harness_layout_builder_without_a_child_takes_its_smallest_size() {
 }
 
 // ============================================================================
-// Catalog guard — every exported render type must be exercised above
+// Catalog guard — every exported render type must be exercised in a row
 // ============================================================================
+
+/// Family modules of rows, each mounted from this root at column 0 with
+/// `#[path = "harness/<name>.rs"]` and `mod <name>;`. A file counts toward the
+/// catalog only when it is listed here and mounted
+/// (`family_files_are_mounted_and_listed`).
+const FAMILY_FILES: &[(&str, &str)] = &[];
+
+const FAMILY_DIRECTORY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/harness");
+
+fn is_identifier_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Whether `text` holds `name` as a whole identifier: neither neighbour is a
+/// letter, a digit or an underscore.
+fn names_whole_identifier(text: &str, name: &str) -> bool {
+    text.match_indices(name).any(|(start, _)| {
+        let before = text[..start].chars().next_back();
+        let after = text[start + name.len()..].chars().next();
+        !before.is_some_and(is_identifier_char) && !after.is_some_and(is_identifier_char)
+    })
+}
+
+/// Whether `line` opens a row: `fn harness_` at column 0 under any visibility.
+fn opens_row(line: &str) -> bool {
+    let rest = match line.strip_prefix("pub") {
+        Some(after_pub) if after_pub.starts_with('(') => after_pub
+            .split_once(") ")
+            .map_or(line, |(_, after_restriction)| after_restriction),
+        Some(after_pub) => after_pub.strip_prefix(' ').unwrap_or(line),
+        None => line,
+    };
+    rest.starts_with("fn harness_")
+}
+
+/// The mount lines the root must hold, at column 0, for the family file `name`.
+fn mount_lines(name: &str) -> [String; 2] {
+    [
+        format!("#[path = \"harness/{name}.rs\"]"),
+        format!("mod {name};"),
+    ]
+}
+
+fn is_mounted(root: &str, name: &str) -> bool {
+    mount_lines(name)
+        .iter()
+        .all(|wanted| root.lines().any(|line| line == wanted))
+}
+
+/// How many rows of the root and of the mounted family files name `type_name`.
+/// A row starts at a column-0 `fn harness_` under any visibility and ends at
+/// the first `}` at column 0.
+fn rows_naming(root: &str, families: &[(&str, &str)], type_name: &str) -> usize {
+    let mounted = families
+        .iter()
+        .filter(|(name, _)| is_mounted(root, name))
+        .map(|&(_, source)| source);
+    std::iter::once(root)
+        .chain(mounted)
+        .map(|source| {
+            let source = source.replace('\r', "");
+            let mut count = 0;
+            let mut offset = 0;
+            for line in source.split_inclusive('\n') {
+                if opens_row(line) {
+                    let rest = &source[offset..];
+                    let body = rest.split("\n}\n").next().unwrap_or(rest);
+                    if names_whole_identifier(body, type_name) {
+                        count += 1;
+                    }
+                }
+                offset += line.len();
+            }
+            count
+        })
+        .sum()
+}
+
+/// The stems of the `.rs` files in `directory`; a directory that does not
+/// exist holds none (git stores no empty directory).
+fn family_file_stems(directory: &std::path::Path) -> Vec<String> {
+    let entries = match std::fs::read_dir(directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) => panic!(
+            "{}: cannot read the family directory: {error}",
+            directory.display()
+        ),
+    };
+    let mut stems: Vec<String> = entries
+        .map(|entry| {
+            entry
+                .expect("the family directory lists its entries")
+                .path()
+        })
+        .filter(|path| path.extension().is_some_and(|extension| extension == "rs"))
+        .filter_map(|path| {
+            path.file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+        })
+        .collect();
+    stems.sort_unstable();
+    stems
+}
+
+/// What is wrong between the files on disk, `FAMILY_FILES`' names and the
+/// root's mount lines; empty when all three agree.
+fn mount_problems(root: &str, listed: &[&str], on_disk: &[String]) -> Vec<String> {
+    let mut problems = Vec::new();
+    for stem in on_disk {
+        if !listed.contains(&stem.as_str()) {
+            problems.push(format!("{stem}.rs is not listed in FAMILY_FILES"));
+        }
+    }
+    for &name in listed {
+        if !on_disk.iter().any(|stem| stem == name) {
+            problems.push(format!("FAMILY_FILES lists {name}, which has no file"));
+        }
+        if !is_mounted(root, name) {
+            problems.push(format!(
+                "{name} is not mounted: the root needs `{}` and `{}` at column 0",
+                mount_lines(name)[0],
+                mount_lines(name)[1],
+            ));
+        }
+    }
+    problems
+}
 
 #[test]
 fn catalog_covers_every_render_object_name() {
-    let source = include_str!("render_object_harness.rs").replace('\r', "");
+    let root = include_str!("render_object_harness.rs");
     for &type_name in RENDER_OBJECT_TYPES {
-        // A row body ends at the first closing brace in column 0; the family
-        // tables and these guards sit after the last row and must not count.
-        let covered = source.split("\nfn harness_").skip(1).any(|chunk| {
-            chunk
-                .split("\n}\n")
-                .next()
-                .is_some_and(|body| body.contains(type_name))
-        });
         assert!(
-            covered,
-            "{type_name} must appear in at least one `fn harness_*` family-table row",
+            rows_naming(root, FAMILY_FILES, type_name) > 0,
+            "{type_name} must appear as a whole identifier in at least one `fn harness_*` row",
         );
     }
+}
+
+#[test]
+fn family_files_are_mounted_and_listed() {
+    let root = include_str!("render_object_harness.rs");
+    let listed: Vec<&str> = FAMILY_FILES.iter().map(|&(name, _)| name).collect();
+    let on_disk = family_file_stems(std::path::Path::new(FAMILY_DIRECTORY));
+    let problems = mount_problems(root, &listed, &on_disk);
+    assert!(problems.is_empty(), "{problems:#?}");
+}
+
+#[test]
+fn the_guard_counts_a_pub_row_of_a_family_file() {
+    let root = "#[path = \"harness/shown.rs\"]\nmod shown;\n";
+    let family = "pub(super) fn harness_a() {\n    RenderShown::new();\n}\n\npub fn harness_b() {\n    RenderShown::new();\n}\n\npub(crate) fn harness_c() {\n    RenderOther::new();\n}\n\nfn helper() {\n    RenderShown::new();\n}\n";
+    assert_eq!(rows_naming(root, &[("shown", family)], "RenderShown"), 2);
+    assert_eq!(rows_naming(root, &[("shown", family)], "RenderOther"), 1);
+}
+
+#[test]
+fn the_guard_refuses_a_name_inside_a_longer_one() {
+    let root = "fn harness_a() {\n    RenderSliverFloatingHeaderBase::new();\n    my_RenderFloat();\n    RenderFloat2::new();\n}\n";
+    assert_eq!(rows_naming(root, &[], "RenderSliverFloatingHeader"), 0);
+    assert_eq!(rows_naming(root, &[], "RenderFloat"), 0);
+    assert_eq!(rows_naming(root, &[], "RenderSliverFloatingHeaderBase"), 1);
+}
+
+#[test]
+fn the_guard_refuses_a_family_file_that_is_not_mounted() {
+    let family = "pub fn harness_a() {\n    RenderShown::new();\n}\n";
+    let families = [("shown", family)];
+    let only_path = "#[path = \"harness/shown.rs\"]\n";
+    let only_mod = "mod shown;\n";
+    let indented = "    #[path = \"harness/shown.rs\"]\n    mod shown;\n";
+    let mounted = "#[path = \"harness/shown.rs\"]\nmod shown;\n";
+    for root in [only_path, only_mod, indented, ""] {
+        assert_eq!(rows_naming(root, &families, "RenderShown"), 0, "{root:?}");
+        let problems = mount_problems(root, &["shown"], &["shown".to_owned()]);
+        assert_eq!(problems.len(), 1, "{root:?}: {problems:?}");
+    }
+    assert_eq!(rows_naming(mounted, &families, "RenderShown"), 1);
+    assert_eq!(
+        mount_problems(mounted, &["shown"], &["shown".to_owned()]),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        mount_problems(
+            mounted,
+            &["shown"],
+            &["shown".to_owned(), "extra".to_owned()]
+        ),
+        ["extra.rs is not listed in FAMILY_FILES"],
+    );
+}
+
+#[test]
+fn the_mount_check_takes_a_missing_directory_as_no_files() {
+    let base =
+        std::env::temp_dir().join(format!("flui_objects_harness_guard_{}", std::process::id()));
+    let missing = base.join("harness");
+    std::fs::remove_dir_all(&base).ok();
+    assert_eq!(family_file_stems(&missing), Vec::<String>::new());
+    assert_eq!(
+        mount_problems("", &[], &family_file_stems(&missing)),
+        Vec::<String>::new()
+    );
+
+    std::fs::create_dir_all(&missing).expect("the temporary directory is writable");
+    std::fs::write(missing.join("shown.rs"), "").expect("the temporary directory is writable");
+    std::fs::write(missing.join("notes.txt"), "").expect("the temporary directory is writable");
+    let stems = family_file_stems(&missing);
+    std::fs::remove_dir_all(&base).ok();
+    assert_eq!(stems, ["shown"]);
 }
 
 #[test]

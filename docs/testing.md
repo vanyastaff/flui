@@ -1076,10 +1076,10 @@ catalog: every concrete `RenderBox` / `RenderSliver` type is mounted
 through `RenderTester`, laid out (or painted when hit-test / layer
 structure matters), and asserted via `Probe` + structured diagnostics
 queries. The file header lists a per-type coverage map; `RENDER_OBJECT_TYPES`
-is the manifest of all 81 exported render types (count it yourself —
-`RENDER_OBJECT_TYPES` in that file — if this drifts again); and
-`catalog_covers_every_render_object_name` fails CI if any type is missing
-from the harness file, and `render_object_types_match_exports` fails CI if
+is the [manifest of the exported render types](../crates/flui-objects/tests/render_object_harness.rs);
+`catalog_covers_every_render_object_name` fails CI if any type is not named, as a
+whole identifier, in a `fn harness_*` row of that file or of a mounted family file, and
+`render_object_types_match_exports` fails CI if
 the catalog and this crate's `pub use` exports diverge. Add a harness test
 when landing a new render object so layout, hit-test, and config/runtime
 diagnostics stay pinned without visual inspection.
