@@ -1,5 +1,5 @@
-//! [`Unanswered`]: the one owner of a script's unanswered requests and of
-//! its holds, with the one transition function, [`Unanswered::apply`],
+//! [`Pending`]: the one owner of a script's unanswered requests and of
+//! its holds, with the one transition function, [`Pending::apply`],
 //! every event goes through. The rules it carries out are stated once, on
 //! [`Script`](super::Script#held-requests).
 //!
@@ -68,24 +68,24 @@ pub(super) enum Event<K, T, D> {
     ClockReached(K),
 }
 
-/// What the script carries out after [`Unanswered::apply`].
+/// What the script carries out after [`Pending::apply`].
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Effect<K, T, D> {
     /// Nothing.
     None,
     /// Make this request's answer by the steps and the standing answer; it
-    /// stays unanswered, `Answering`, meanwhile.
+    /// stays pending, `Answering`, meanwhile.
     SendOn(K),
     /// The last hold went: send the kept requests on, one at a time, asking
     /// [`Event::DrainNext`] until it answers anything but `SendOn`.
     Drain,
     /// Answer this request with the scheduled answer `D`; it stays
-    /// unanswered, `Answering`, meanwhile.
+    /// pending, `Answering`, meanwhile.
     Due(K, D),
     /// A ticket withdrew this request while its answer was made: take the
     /// answer `D` scheduled for it off the timeline and drop it.
     Orphaned(K, D),
-    /// This request left the unanswered requests as the event asked
+    /// This request left the pending requests as the event asked
     /// (answered, released, abandoned, withdrawn), with what it was waiting
     /// for.
     Taken(K, T, Waits<D>),
@@ -102,13 +102,13 @@ struct Entry<K, T, D> {
 /// A script's unanswered requests, oldest first, its live holds and whether
 /// a drain is sending the kept requests on.
 #[derive(Debug)]
-pub(super) struct Unanswered<K, T, D> {
+pub(super) struct Pending<K, T, D> {
     entries: VecDeque<Entry<K, T, D>>,
     holds: usize,
     draining: bool,
 }
 
-impl<K, T, D> Default for Unanswered<K, T, D> {
+impl<K, T, D> Default for Pending<K, T, D> {
     fn default() -> Self {
         Self {
             entries: VecDeque::new(),
@@ -118,7 +118,7 @@ impl<K, T, D> Default for Unanswered<K, T, D> {
     }
 }
 
-impl<K: Copy + Eq, T, D> Unanswered<K, T, D> {
+impl<K: Copy + Eq, T, D> Pending<K, T, D> {
     /// Carry out `event` and say what the script does next.
     pub(super) fn apply(&mut self, event: Event<K, T, D>) -> Effect<K, T, D> {
         match event {
