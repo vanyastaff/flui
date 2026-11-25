@@ -14,12 +14,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use flui_protocol::endpoint::PolledStream;
 use flui_protocol::framing::{LineReader, MAX_LINE};
-use interprocess::local_socket::Listener;
 use interprocess::local_socket::traits::Listener as _;
+use interprocess::local_socket::{Listener, Stream};
 
-use super::super::listener::bind;
-use super::super::nonblocking::NonblockingStream;
+use super::super::listener::{bind, polled};
 use super::{
     BrowserLink, CLOSE_FUNCTION, LinkError, LinkEvent, Remote, SEND_FUNCTION, connect_function,
     read_report,
@@ -111,7 +111,7 @@ struct Turns {
 
 /// One client's connection and the page connection it is carried to.
 struct Client {
-    stream: NonblockingStream,
+    stream: PolledStream<Stream>,
     reader: LineReader,
     /// What is still to be written to the client.
     unwritten: Vec<u8>,
@@ -173,7 +173,7 @@ impl Turns {
                     return;
                 }
             };
-            let stream = match NonblockingStream::try_new(stream) {
+            let stream = match polled(stream) {
                 Ok(stream) => stream,
                 Err(error) => {
                     // Dropped: the client reads the end of its connection.
@@ -364,7 +364,7 @@ impl Client {
     fn write(&mut self) -> io::Result<bool> {
         while !self.unwritten.is_empty() {
             match (&self.stream).write(&self.unwritten) {
-                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+                Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
                 Ok(written) => {
                     self.unwritten.drain(..written);
                 }

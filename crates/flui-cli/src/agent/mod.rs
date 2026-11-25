@@ -28,7 +28,6 @@ pub(crate) mod client;
 pub(crate) mod forward;
 pub(crate) mod listener;
 pub(crate) mod mcp;
-pub(crate) mod nonblocking;
 pub(crate) mod record;
 pub(crate) mod supervisor;
 
