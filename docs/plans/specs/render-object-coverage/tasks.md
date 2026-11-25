@@ -174,7 +174,9 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 - **Owns:** `crates/flui-objects/tests/render_object_harness.rs` (the guards and the module
   list), the harness paragraph of `docs/testing.md`, `crates/flui-objects/README.md` (its
   copied counts and its Families table), the family list of `crates/flui-objects/src/lib.rs`
-  (its module docs). It creates no directory:
+  (its module docs), the `tempfile` dev-dependency in `crates/flui-objects/Cargo.toml` and its
+  line in `Cargo.lock`, and the header coverage map of the harness (a new render type adds its
+  row there: `coverage_map_lists_every_render_object_type` requires it). It creates no directory:
   `crates/flui-objects/tests/harness/` appears with RC1's first family file.
 - **Tests:** `the_guard_counts_a_pub_row_of_a_family_file`,
   `the_guard_ends_a_row_at_its_own_end`,
