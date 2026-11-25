@@ -164,16 +164,17 @@ The cheapest tasks are RC2, RC6, RC7 and RC33, then RC4 and RC34; RC5 and RC37 a
 
 - **What:** W1. The guard's matching moves into one function, `rows_naming`, with W1's three
   rules: a row is a column-0 `fn harness_` under any visibility with no attribute over it and
-  no block comment above it, and ends at its closing column-0 `}` (W1, rule 1); a type
-  counts only as a whole identifier; a family file counts only when its name is in `family_files![..]` and it is
-  mounted (W1, rule 3). `family_files_are_mounted_and_listed` reads `tests/harness/` and
+  no block comment opened above it, and ends at its closing column-0 `}` (W1, rule 1); a type
+  counts only as a whole identifier; a family file counts only when its name is in
+  `family_files![..]` and it is mounted (W1, rule 3). `family_files_are_mounted_and_listed` reads `tests/harness/` and
   takes a directory that does not exist as the empty set, which is what this task leaves. A
   type
   the substring match covered only through a longer name gets its own row here. No existing
   row moves. `docs/testing.md` links `RENDER_OBJECT_TYPES` instead of saying "81".
 - **Owns:** `crates/flui-objects/tests/render_object_harness.rs` (the guards and the module
   list), the harness paragraph of `docs/testing.md`, `crates/flui-objects/README.md` (its
-  copied counts and its Families table). It creates no directory:
+  copied counts and its Families table), the family list of `crates/flui-objects/src/lib.rs`
+  (its module docs). It creates no directory:
   `crates/flui-objects/tests/harness/` appears with RC1's first family file.
 - **Tests:** `the_guard_counts_a_pub_row_of_a_family_file`,
   `the_guard_ends_a_row_at_its_own_end`,

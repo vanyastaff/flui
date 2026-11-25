@@ -24,8 +24,9 @@ own it.
   alone and expands each to `(stringify!(name), include_str!("harness/<name>.rs"))`, so the text
   the guard counts is the file the name mounts. The expansion also imports the module
   (`use self::<name> as _`): a compile-time backstop, held by the compiler, for a mount the text
-  check reads as present but the compiler does not build (one inside a block comment opened
-  after code on an earlier line). No test reaches the import: a case that must not compile
+  check reads as present but the compiler does not build at the top level (a pair written at
+  column 0 inside a multi-line string, a macro invocation's body or a `#[rustfmt::skip]` item;
+  rule 3). A row has no such backstop. No test reaches the import: a case that must not compile
   needs a compile-fail suite, which `flui-objects` does not have, and a trybuild target for one
   macro defined inside a test file would need the macro moved out of it. Existing rows stay
   where they are; only new families use files of their own.
@@ -36,23 +37,32 @@ own it.
   sources and with literal text:
   1. *A row* starts at a column-0 line that opens `fn harness_` under any visibility (`pub`,
      `pub(crate)`, `pub(super)`) and that the compiler builds (`compiled_at_top_level`, the
-     rule a mount pair also meets, rule 3). A row whose opening line ends with `}` (a one-line
-     row such as `fn harness_x() {}`) is that line alone; any other row is its opening line and
-     the lines after it up to, not including, the first that starts at column 0 with `}`, so a
-     comment on the closing line is not read. Other column-0 lines in between belong to the
-     row: rustfmt puts the `{` of a signature too long for its line there. Line ends are read
-     without `\r`, so a CRLF source ends its rows where an LF source does.
+     rule a mount pair also meets, rule 3). A row whose opening line's code (read up to its
+     first `//`) ends with `}` (a one-line row such as `fn harness_x() {} // to come`) is that
+     line alone; any other row is its opening line and the lines after it up to, not
+     including, the first that starts at column 0 with `}`, so a comment on the closing line is
+     not read. When a signature leaves no room for its `{`, rustfmt puts the brace on the next
+     line, at column 0 when the signature fits its line and after one space when the signature
+     itself is longer; either line belongs to the row. Line ends are read without `\r`, so a
+     CRLF source ends its rows where an LF source does.
   2. *A name* counts only as a whole identifier (`names_whole_identifier`): not preceded or
      followed by a letter, a digit or an underscore. A row that names
      `RenderSliverFloatingHeaderBase` then does not cover `RenderSliverFloatingHeader`.
   3. *A file* counts only when it is mounted (`is_mounted`): its two mount lines are consecutive
-     at column 0 and the first is compiled (`compiled_at_top_level`). Column 0 is the top level
-     of the file, because rustfmt, which CI's format check holds, indents everything inside an
-     item. The rule, shared with rows, refuses an item whose nearest code above (lines read up
-     to their first `//`, blank ones skipped) does not end an item (`;` or `}`) or is an
-     attribute (starts with `#[`, a one-line `#[attr] item;` included), and an item below any
-     line that opens a block comment. The cut at `//` does not skip strings, so an item right
-     below a line whose string holds `//` may be refused too; it affects that one item only.
+     at column 0 and the first is compiled (`compiled_at_top_level`). The rule, shared with
+     rows, refuses an item whose nearest code above (lines read up to their first `//`, blank
+     ones skipped) does not end an item (`;` or `}`) or is an attribute (starts with `#[`, a
+     one-line `#[attr] item;` included), and every item below the first line whose code holds
+     `/*` anywhere (`first_block_comment`: at the start, after code, or closed on the line);
+     the catalog's failure names that line. The cut at `//` does not skip strings, so an item
+     right below a line whose string holds `//` may be refused too; it affects that one item
+     only. Column 0 is read as the top level of the file. rustfmt, which CI's format check
+     holds, indents the items inside an item, but not the contents of a string literal, a macro
+     invocation's body or a `#[rustfmt::skip]` item, so a row or mount line written at column 0
+     inside one of those is indistinguishable from code. This is the limit of a text guard:
+     literal guard input in a file the guard reads is written on one line with `\n` escapes,
+     and a `/*` inside it is spliced in from `BLOCK_COMMENT_OPENER`, as the guard's own tests
+     do.
      The directory is `FAMILY_DIRECTORY`, which `mount_lines` and `family_directory()` read
      and the default arm of `family_files!` spells as a literal for `include_str!`
      (`the_family_macro_reads_the_family_directory` holds the two equal).
@@ -66,12 +76,14 @@ own it.
      owning crate).
 - **The guard is tested on text**, so the change has tests that fail without it before any
   family file exists: `the_guard_counts_a_pub_row_of_a_family_file` (visibilities, CRLF),
-  `the_guard_ends_a_row_at_its_own_end` (one-line rows, a closing `}` with a comment or
-  trailing whitespace, rustfmt's column-0 `{` below a wrapped signature),
-  `the_guard_skips_a_row_the_compiler_does_not_build` (an attribute over it, a block comment),
+  `the_guard_ends_a_row_at_its_own_end` (one-line rows, with and without a comment after them,
+  a closing `}` with a comment or trailing whitespace, both of rustfmt's brace lines below a
+  wrapped signature),
+  `the_guard_skips_a_row_the_compiler_does_not_build` (an attribute over it, a block comment
+  opened at a line's start or after code),
   `the_guard_refuses_a_name_inside_a_longer_one`,
-  `the_guard_refuses_a_family_file_that_is_not_mounted` (every refused placement, and each
-  message of `mount_problems`), `the_mount_check_takes_a_missing_directory_as_no_files`,
+  `the_guard_refuses_a_family_file_that_is_not_mounted` (every refused placement, a block
+  comment opened after code among them, and each message of `mount_problems`), `the_mount_check_takes_a_missing_directory_as_no_files`,
   `the_mount_check_refuses_a_directory_it_cannot_list` (their scratch directories are
   `tempfile::tempdir()`, removed with their contents on drop), `the_mount_check_sorts_the_stems`
   (over an unsorted list, through `rs_stems`), `a_family_entry_is_the_file_its_name_mounts`

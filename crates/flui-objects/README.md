@@ -12,12 +12,12 @@ consumed by path (not published to crates.io).
 
 | Family | Contents |
 |--------|----------|
-| `layout` | sizing, alignment, flex, stack, transform, fitted-box, intrinsics, overflow, rotation, table |
-| `proxy` | paint-effect proxies: opacity, clips, decoration, color, repaint boundary, leader/follower, shader mask |
-| `interaction` | hit-test/visibility proxies: absorb/ignore pointer, offstage, mouse region, metadata |
+| `layout` | sizing, padding, alignment, baseline, aspect ratio, flex, wrap, flow, list body, stack, indexed stack, theater, table, transform, fractional translation, fitted box, intrinsics, overflow and limits, rotation, custom layout delegates, layout builder, container, toolbar items |
+| `proxy` | paint-effect and annotation proxies: opacity, clips, decoration, color, custom paint, backdrop filter, shader mask, physical model, repaint boundary, leader/follower, paint and subtree anchors (`RenderSliverSubtreeAnchor` among them), semantics annotations, annotated region, visibility, skeleton and shimmer mask, ignore baseline, error box |
+| `interaction` | hit-test/visibility proxies: absorb/ignore pointer, listener, mouse region, hit slop, content shape, input region, interactive, press pass-through, offstage, metadata |
 | `text` | `RenderEditable`, `RenderIcon`, `RenderParagraph` |
-| `image` | `RenderImage` |
-| `sliver` | the `RenderSliver*` family + `RenderViewport` |
+| `image` | `RenderImage`, `RenderTexture` |
+| `sliver` | the `RenderSliver*` objects other than `RenderSliverSubtreeAnchor` (in `proxy`), `RenderViewport` and `RenderShrinkWrappingViewport` |
 
 All types re-export flat from the crate root: `flui_objects::RenderPadding`.
 

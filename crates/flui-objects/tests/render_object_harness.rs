@@ -115,9 +115,14 @@
 //! [`catalog_covers_every_render_object_name`] guards the catalog: every type
 //! of `RENDER_OBJECT_TYPES` must appear, as a whole identifier, inside a row (a
 //! column-0 `fn harness_*` under any visibility, with no attribute over it and
-//! no block comment above it, up to its closing column-0 `}`) of this file or of a
-//! family file under `tests/harness/` that `FAMILY_FILES` lists and this file
-//! mounts, so a type with no row fails CI. `rows_naming` gives the whole rule.
+//! no block comment opened above it, up to its closing column-0 `}`) of this
+//! file or of a family file under `tests/harness/` that `FAMILY_FILES` lists
+//! and this file mounts, so a type with no row fails CI. `rows_naming` gives
+//! the whole rule. The guard reads text: a row or mount line written at column
+//! 0 inside a multi-line string literal is indistinguishable from code, so
+//! literal guard input in these files is written on one line with `\n`
+//! escapes, and a block-comment opener inside one is spliced in from
+//! `BLOCK_COMMENT_OPENER`.
 
 #![allow(
     clippy::disallowed_methods,
@@ -13660,8 +13665,11 @@ const FAMILY_DIRECTORY: &str = "harness";
 /// a path the compiler resolves beside this file, so the text the guard counts
 /// is always the file the name mounts. The expansion also imports the module
 /// `<name>`: a compile-time backstop, held by the compiler, for a mount that
-/// `is_mounted` reads as present but the compiler does not build, such as one
-/// inside a block comment opened after code on an earlier line. No test
+/// `is_mounted` reads as present but the compiler does not build at the top
+/// level, such as a pair written at column 0 inside a multi-line string, a
+/// macro invocation's body or a `#[rustfmt::skip]` item
+/// (`compiled_at_top_level` says why the text cannot tell). A row has no
+/// such backstop. No test
 /// reaches the import: a case that must not compile needs a compile-fail
 /// suite, which this crate does not have. The `@in` arm takes another
 /// directory, for the macro's own test.
@@ -13744,12 +13752,22 @@ fn code_of(line: &str) -> &str {
     line.split_once("//").map_or(line, |(code, _)| code).trim()
 }
 
+/// The two characters that open a block comment, spelled in two pieces so that
+/// this file, which the guard reads, holds no opener in its code.
+const BLOCK_COMMENT_OPENER: &str = concat!("/", "*");
+
+/// The index of the first line whose code (`code_of`) holds a block-comment
+/// opener anywhere: at its start, after code, or closed again on the line.
+fn first_block_comment(lines: &[&str]) -> Option<usize> {
+    lines
+        .iter()
+        .position(|line| code_of(line).contains(BLOCK_COMMENT_OPENER))
+}
+
 /// For each line of a source, whether an item that starts there at column 0
 /// is one the compiler builds, as far as the guard can tell from the text.
-/// Column 0 is the top level of the file: rustfmt, which CI's format check
-/// holds, indents everything inside an item. `is_mounted` and `rows_naming`
-/// both read this, so a mount pair and a row are seen as compiled by one rule.
-/// An item is refused when
+/// `is_mounted` and `rows_naming` both read this, so a mount pair and a row
+/// are seen as compiled by one rule. An item is refused when
 /// - the nearest code above it (`code_of` each line, blank ones skipped) is an
 ///   attribute (starts with `#[`) or does not end an item (with `;` or `}`): a
 ///   `#[cfg(..)]` or any other attribute over the item, on one line or over
@@ -13757,20 +13775,23 @@ fn code_of(line: &str) -> &str {
 ///   it; an item right below an inner attribute is refused too. `code_of` cuts
 ///   at the first `//` even inside a string, so an item right below a line
 ///   whose string holds `//` may be refused as well;
-/// - any line above it opens a block comment (`/*` after leading whitespace),
-///   closed or not.
+/// - it stands below the first line that opens a block comment
+///   (`first_block_comment`), closed or not.
 ///
-/// A block comment opened after code on an earlier line is not seen here; for
-/// a mount, the import `family_files!` expands to is the backstop.
+/// Column 0 is read as the top level of the file. rustfmt, which CI's format
+/// check holds, indents the items inside an item, but not the contents of a
+/// string literal, a macro invocation's body or a `#[rustfmt::skip]` item: a
+/// row or mount line written at column 0 inside one of those is
+/// indistinguishable from code. Guard input written as a string literal in a
+/// file the guard reads therefore goes on one line with `\n` escapes, as this
+/// file's tests write it.
 fn compiled_at_top_level(lines: &[&str]) -> Vec<bool> {
+    let block_comment = first_block_comment(lines);
     let mut compiled = Vec::with_capacity(lines.len());
-    let mut below_a_block_comment = false;
     let mut below_an_item_end = true;
-    for line in lines {
+    for (at, line) in lines.iter().enumerate() {
+        let below_a_block_comment = block_comment.is_some_and(|opener| opener < at);
         compiled.push(!below_a_block_comment && below_an_item_end);
-        if line.trim_start().starts_with("/*") {
-            below_a_block_comment = true;
-        }
         let code = code_of(line);
         if !code.is_empty() {
             below_an_item_end = !code.starts_with("#[") && code.ends_with([';', '}']);
@@ -13795,13 +13816,15 @@ fn is_mounted(root: &str, name: &str) -> bool {
 /// How many rows of the root and of the mounted family files name `type_name`.
 /// A row starts at a column-0 `fn harness_` under any visibility that the
 /// compiler builds (`compiled_at_top_level`: no attribute over it, no block
-/// comment above it). A row whose opening line ends with `}` (a one-line row
-/// such as `fn harness_x() {}`) is that line alone; any other row is its
-/// opening line and the lines after it up to, not including, its closing
-/// line, the first that starts at column 0 with `}`. The lines between may
-/// start at column 0 with something else: rustfmt puts the `{` of a signature
-/// too long for its line there. Lines are read without a `\r` before their
-/// `\n`, so a source saved with CRLF ends its rows where an LF source does.
+/// comment opened above it). A row whose opening line's code (`code_of`) ends
+/// with `}` (a one-line row such as `fn harness_x() {} // to come`) is that
+/// line alone; any other row is its opening line and the lines after it up
+/// to, not including, its closing line, the first that starts at column 0
+/// with `}`. When a signature does not leave room for its `{`, rustfmt puts
+/// the brace on the next line: at column 0 when the signature fits its line,
+/// after one space when the signature itself is longer; either line belongs
+/// to the row. Lines are read without a `\r` before their `\n`, so a source
+/// saved with CRLF ends its rows where an LF source does.
 fn rows_naming(root: &str, families: &[(&str, &str)], type_name: &str) -> usize {
     let mounted = families
         .iter()
@@ -13815,7 +13838,7 @@ fn rows_naming(root: &str, families: &[(&str, &str)], type_name: &str) -> usize 
             (0..lines.len())
                 .filter(|&start| compiled[start] && opens_row(lines[start]))
                 .filter(|&start| {
-                    let after = if lines[start].trim_end().ends_with('}') {
+                    let after = if code_of(lines[start]).ends_with('}') {
                         &[][..]
                     } else {
                         let after = &lines[start + 1..];
@@ -13897,11 +13920,21 @@ fn mount_problems(root: &str, listed: &[&str], on_disk: &[String]) -> Vec<String
 #[test]
 fn catalog_covers_every_render_object_name() {
     let root = include_str!("render_object_harness.rs");
+    // Where a block comment opens, every row below it stops counting, so the
+    // failure names those lines.
+    let block_comments: Vec<String> = std::iter::once(("render_object_harness", root))
+        .chain(FAMILY_FILES.iter().copied())
+        .filter_map(|(name, source)| {
+            let lines: Vec<&str> = source.lines().collect();
+            first_block_comment(&lines).map(|at| format!("{name}.rs:{}", at + 1))
+        })
+        .collect();
     for &type_name in RENDER_OBJECT_TYPES {
         assert!(
             rows_naming(root, FAMILY_FILES, type_name) > 0,
-            "{type_name} must appear as a whole identifier in at least one `fn harness_*` row \
-             (a row under an attribute or below a block comment does not count)",
+            "{type_name} must appear as a whole identifier in at least one `fn harness_*` row; \
+             a row under an attribute or below the first block comment of its file does not \
+             count (block comments open at {block_comments:?})",
         );
     }
 }
@@ -13966,6 +13999,10 @@ fn the_guard_ends_a_row_at_its_own_end() {
             "pub(super) fn harness_a() {}\n\nfn shown_node() {\n    RenderShown::new();\n}\n",
         ),
         (
+            "a one-line row with a comment after it",
+            "pub(super) fn harness_a() {} // the row to come\n\nfn shown_node() {\n    RenderShown::new();\n}\n",
+        ),
+        (
             "a row closed with a comment",
             "pub(super) fn harness_a() {\n    other();\n} // RenderShown\n\nfn shown_node() {\n    RenderShown::new();\n}\n",
         ),
@@ -13979,16 +14016,22 @@ fn the_guard_ends_a_row_at_its_own_end() {
         assert_eq!(rows_naming(root, &families, "RenderShown"), 0, "{form}");
         assert_eq!(rows_naming(family, &[], "RenderShown"), 0, "{form}");
     }
-    // A one-line row counts what it names, and a signature too long for its
-    // line keeps its body below the `{` rustfmt puts at column 0.
+    // A one-line row counts what it names, and a signature that leaves no
+    // room for its `{` keeps its body below the brace, which rustfmt puts at
+    // column 0 when the signature fits its line and after one space when the
+    // signature is longer than the line.
     let rows_naming_it = [
         (
             "a one-line row",
             "pub(super) fn harness_a() { RenderShown::new(); }\n",
         ),
         (
-            "a signature wrapped before its brace",
+            "a signature that fits its line, the brace at column 0",
             "pub(super) fn harness_a_with_a_name_too_long_for_its_line()\n{\n    RenderShown::new();\n}\n",
+        ),
+        (
+            "a signature longer than its line, the brace after one space",
+            "pub(super) fn harness_a_with_a_name_longer_than_the_line()\n {\n    RenderShown::new();\n}\n",
         ),
     ];
     for (form, family) in rows_naming_it {
@@ -14012,10 +14055,19 @@ fn the_guard_skips_a_row_the_compiler_does_not_build() {
             "under an attribute and a doc comment",
             format!("#[cfg(any())]\n/// Row.\n{row}"),
         ),
-        ("inside a block comment", format!("/*\n{row}*/\n")),
+        (
+            "inside a block comment",
+            format!("{BLOCK_COMMENT_OPENER}\n{row}*/\n"),
+        ),
         (
             "below a block comment",
-            format!("/* rows */\nconst A: u8 = 0;\n{row}"),
+            format!("{BLOCK_COMMENT_OPENER} rows */\nconst A: u8 = 0;\n{row}"),
+        ),
+        (
+            "inside a block comment opened after code, below a row",
+            format!(
+                "const A: u8 = 0; {BLOCK_COMMENT_OPENER}\npub(super) fn harness_b() {{}}\n{row}*/\n"
+            ),
         ),
     ];
     for (form, family) in &skipped {
@@ -14099,22 +14151,6 @@ fn the_guard_refuses_a_family_file_that_is_not_mounted() {
             "// #[path = \"harness/shown.rs\"]\n// mod shown;\n",
         ),
         (
-            "inside a block comment",
-            "/*\n#[path = \"harness/shown.rs\"]\nmod shown;\n*/\n",
-        ),
-        (
-            "inside a block comment, below an item",
-            "/*\nconst A: u8 = 0;\n#[path = \"harness/shown.rs\"]\nmod shown;\n*/\n",
-        ),
-        (
-            "inside an indented block comment, below an item",
-            "    /*\nconst A: u8 = 0;\n#[path = \"harness/shown.rs\"]\nmod shown;\n*/\n",
-        ),
-        (
-            "below a closed block comment",
-            "/* rows */\nconst A: u8 = 0;\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
-        ),
-        (
             "right below a line that does not end an item",
             "mod outer {\n#[path = \"harness/shown.rs\"]\nmod shown;\n}\n",
         ),
@@ -14127,9 +14163,38 @@ fn the_guard_refuses_a_family_file_that_is_not_mounted() {
             "#[cfg(any())] const A: u8 = 0;\n#[path = \"harness/shown.rs\"]\nmod shown;\n",
         ),
     ];
+    // The opener is spliced in: this file is guard input, and an opener in its
+    // code would stop every row below it from counting.
+    let pair = "#[path = \"harness/shown.rs\"]\nmod shown;\n";
+    let refused_below_a_block_comment = [
+        (
+            "inside a block comment",
+            format!("{BLOCK_COMMENT_OPENER}\n{pair}*/\n"),
+        ),
+        (
+            "inside a block comment, below an item",
+            format!("{BLOCK_COMMENT_OPENER}\nconst A: u8 = 0;\n{pair}*/\n"),
+        ),
+        (
+            "inside an indented block comment, below an item",
+            format!("    {BLOCK_COMMENT_OPENER}\nconst A: u8 = 0;\n{pair}*/\n"),
+        ),
+        (
+            "below a closed block comment",
+            format!("{BLOCK_COMMENT_OPENER} rows */\nconst A: u8 = 0;\n{pair}"),
+        ),
+        (
+            "inside a block comment opened after code, below an item",
+            format!("const A: u8 = 0; {BLOCK_COMMENT_OPENER}\nconst B: u8 = 0;\n{pair}*/\n"),
+        ),
+    ];
+    let refused = refused
+        .map(|(form, root)| (form, root.to_owned()))
+        .into_iter()
+        .chain(refused_below_a_block_comment);
     for (form, root) in refused {
-        assert_eq!(rows_naming(root, &families, "RenderShown"), 0, "{form}");
-        let problems = mount_problems(root, &["shown"], &["shown".to_owned()]);
+        assert_eq!(rows_naming(&root, &families, "RenderShown"), 0, "{form}");
+        let problems = mount_problems(&root, &["shown"], &["shown".to_owned()]);
         assert_eq!(problems.len(), 1, "{form}: {problems:?}");
     }
     let accepted = [
