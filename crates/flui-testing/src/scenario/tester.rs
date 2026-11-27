@@ -1128,3 +1128,41 @@ fn nearest(find: &Locator, tree: &Tree) -> Vec<String> {
     }
     found
 }
+
+#[cfg(test)]
+mod tests {
+    use flui_protocol::locator::STRICT_CANDIDATES;
+    use flui_view::{BoxedView, IntoView as _, ViewExt as _};
+    use flui_widgets::{Column, Text};
+
+    use super::super::find;
+    use super::super::headless::Headless;
+    use super::super::testing::RecordingConnection;
+    use super::super::window::TestWindow;
+    use super::{TestError, Tester};
+
+    /// A strict read asks the window for no more matches than an ambiguity names and counts the
+    /// rest from what the window left out; `find_all` asks for every match.
+    #[test]
+    fn a_strict_read_asks_for_no_more_matches_than_it_names() {
+        let rows: Vec<BoxedView> = (0..12)
+            .map(|_| Text::new("Row").into_view().boxed())
+            .collect();
+        let connection = Headless::mount(Column::new(rows), &TestWindow::default());
+        let window = connection.window_id();
+        let mut t = Tester::over(RecordingConnection::new(connection), window);
+        let ambiguous = t.try_read(&find::text("Row"));
+        assert!(
+            matches!(ambiguous, Err(TestError::Ambiguous { matched: 12, .. })),
+            "{ambiguous:?}"
+        );
+        drop(ambiguous);
+        assert_eq!(t.find_all(&find::text("Row").all()).len(), 12);
+        assert_eq!(
+            t.connection().located(),
+            [Some(STRICT_CANDIDATES), None],
+            "the strict read is bounded, the read of all is not"
+        );
+        t.finish();
+    }
+}

@@ -28,6 +28,8 @@ mod headless;
 pub mod matcher;
 mod report;
 mod tester;
+#[cfg(test)]
+mod testing;
 pub(crate) mod window;
 pub(crate) use headless::Windows;
 
