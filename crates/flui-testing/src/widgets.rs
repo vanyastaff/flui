@@ -1092,7 +1092,7 @@ impl LaidOut {
     ///
     /// Call [`pump`](Self::pump) afterward to run the rebuild. Paired with
     /// [`reassemble_render_tree`](Self::reassemble_render_tree) this is the
-    /// headless twin of production `PresentationState::apply_hot_reload`.
+    /// headless twin of production `Presentation::reassemble`.
     pub fn perform_reassemble(&mut self) {
         self.host
             .ui_runtime()

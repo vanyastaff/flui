@@ -6,8 +6,9 @@
 //! it, and every runner goes through the crate-private wrappers below:
 //!
 //! - `WorkerReload` (desktop and iOS): attaches the hook once per loop,
-//!   polls it at each UI runtime's frame boundary and applies a patch once to
-//!   every UI runtime;
+//!   polls it at each UI runtime's frame boundary and keeps the loop's record of
+//!   versions (`record`, ADR-0393 §3), which reassembles each UI runtime once
+//!   per version;
 //! - `ScenePlugin` (every native runner: desktop, iOS and Android): lets the
 //!   hook's scene plugin own a presentation's frame (ADR-0391). Every native
 //!   runner asks it the same way, at the start of each presentation's frame,
@@ -28,16 +29,17 @@
 //! panic too — and never called again; the frame that caught the panic
 //! continues, and the UI runtime is untouched.
 
-use rustc_hash::FxHashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{fmt, sync::Arc};
 
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+use flui_foundation::UiRuntimeId;
 use flui_view::dev_reload::DevReloadHook;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-use flui_view::dev_reload::ReloadEvent;
-#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use flui_view::dev_reload::ReloadWake;
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+use flui_view::dev_reload::{ReloadOutcome, RestartFailure};
 use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -46,18 +48,31 @@ use crate::app::AppConfig;
 use crate::app::runner::raster_host::RasterSlot;
 #[cfg(not(target_arch = "wasm32"))]
 use crate::app::ui_runtime::UiRuntime;
-use flui_foundation::UiRuntimeId;
 #[cfg(not(target_arch = "wasm32"))]
 use flui_foundation::panic::FirstPanic;
-use flui_runtime::reload::ReloadTier;
+
+// Only the desktop and iOS runners poll the hook, so the record is read
+// nowhere else.
+#[cfg_attr(
+    any(target_arch = "wasm32", target_os = "android"),
+    expect(
+        dead_code,
+        reason = "only the desktop and iOS runners poll the hook for ui_runtimes"
+    )
+)]
+mod record;
+
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+use record::Due;
+use record::Record;
 
 /// A development reload driver installed on an [`AppConfig`].
 ///
 /// Built by [`AppConfig::dev_reload`]. `Clone` shares the one hook and
 /// its bookkeeping, so every window opened with clones of the same
 /// configuration is driven by the same hook: attached once per loop, polled
-/// at each UI runtime's frame boundary, and each patch applied once to every
-/// ui_runtime.
+/// at each UI runtime's frame boundary, and each version applied once to every
+/// UI runtime through the one record of versions they share.
 #[derive(Clone)]
 pub struct DevReload(Arc<Mutex<Slot>>);
 
@@ -79,13 +94,9 @@ struct Slot {
     /// A `detach` arrived while the hook was lent; the lender runs it when
     /// the call returns.
     detach_owed: bool,
-    /// Advances once per `Patched` poll.
-    epoch: u64,
-    /// The epoch of the latest patch, and the tier it asks for.
-    patched_at: u64,
-    patched_tier: Option<ReloadTier>,
-    /// The epoch each UI runtime last caught up to. Cleared when the loop ends.
-    seen: FxHashMap<UiRuntimeId, u64>,
+    /// The loop's versions and what each UI runtime runs. Cleared when the
+    /// loop ends.
+    record: Record,
     /// Whether the log said once that a host whose executor turns on a raster
     /// thread asks the hook for no scene frame.
     unlent_noted: bool,
@@ -97,10 +108,7 @@ impl DevReload {
             hook: Some(Box::new(hook)),
             attached: false,
             detach_owed: false,
-            epoch: 0,
-            patched_at: 0,
-            patched_tier: None,
-            seen: FxHashMap::default(),
+            record: Record::default(),
             unlent_noted: false,
         })))
     }
@@ -178,6 +186,14 @@ impl DevReload {
         }
     }
 
+    /// Tell the hook what the host did with a version. A hook lent to another
+    /// call (it re-entered the host) misses the report; one that panics in
+    /// `applied` is disabled like in any call.
+    #[cfg(not(target_os = "android"))]
+    fn report(&self, outcome: &ReloadOutcome<'_>) {
+        let _reported = self.lend("applied", |hook| hook.applied(outcome));
+    }
+
     /// The loop ended: detach the hook and forget every UI runtime.
     #[cfg(not(target_os = "android"))]
     fn detach(&self) {
@@ -187,7 +203,7 @@ impl DevReload {
                 return;
             }
             slot.attached = false;
-            slot.seen.clear();
+            slot.record.clear();
         }
         if let Lent::Absent = self.lend("detach", DevReloadHook::detach) {
             // A call has the hook lent (or it is gone for good, where this
@@ -221,16 +237,6 @@ fn contain(body: impl FnOnce()) {
     )]
     if let Err(payload) = catch_unwind(AssertUnwindSafe(body)) {
         flui_foundation::panic::discard_payload(payload);
-    }
-}
-
-/// The UI runtime reload an event asks for. Exhaustive, so a new event does not
-/// compile until it is given a meaning here.
-#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-const fn reload_tier(event: ReloadEvent) -> Option<ReloadTier> {
-    match event {
-        ReloadEvent::Unchanged => None,
-        ReloadEvent::Patched => Some(ReloadTier::Reassemble),
     }
 }
 
@@ -294,59 +300,104 @@ impl WorkerReload {
         }
     }
 
-    /// Record a UI runtime the runner has just mounted as current with the latest
-    /// patch: its tree was built from the code loaded now, so it must apply
-    /// every later patch, including one another UI runtime's boundary polls
-    /// before this UI runtime's first frame. The runner calls this right after
-    /// the root attaches.
-    pub(crate) fn register_ui_runtime(&self, ui_runtime: &UiRuntime) {
-        let Some(reload) = &self.0 else {
-            return;
-        };
-        let mut slot = reload.0.lock();
-        let epoch = slot.epoch;
-        slot.seen.insert(ui_runtime.id(), epoch);
+    /// Record a UI runtime the runner has just mounted as running the code
+    /// loaded now, so it reassembles to every later version, including one
+    /// another UI runtime's boundary polls before this UI runtime's first
+    /// frame. The runner calls this right after the root attaches and keeps
+    /// the handle as long as the UI runtime: dropping it removes the UI
+    /// runtime from the record.
+    pub(crate) fn register_ui_runtime(&self, ui_runtime: &UiRuntime) -> RuntimeReload {
+        let runtime = ui_runtime.id();
+        if let Some(reload) = &self.0 {
+            reload.0.lock().record.mounted(runtime);
+        }
+        RuntimeReload {
+            reload: self.clone(),
+            runtime,
+        }
+    }
+}
+
+/// One UI runtime's place in the loop's record (ADR-0393 §3), which its frame
+/// driver holds as long as the UI runtime. Dropping it removes the UI runtime
+/// from the record.
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+#[must_use = "dropping the handle removes the UI runtime from the record"]
+pub(crate) struct RuntimeReload {
+    reload: WorkerReload,
+    runtime: UiRuntimeId,
+}
+
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+impl RuntimeReload {
+    /// The scene-plugin driver of the same hook.
+    pub(crate) fn scene_plugin(&self) -> ScenePlugin {
+        self.reload.scene_plugin()
     }
 
-    /// Poll the hook at `ui_runtime`'s frame boundary and reassemble the UI runtime
-    /// if a patch has arrived that it has not applied yet.
+    /// Poll the hook at the UI runtime's frame boundary, then do what the
+    /// record says the UI runtime owes and report it to the hook.
     ///
-    /// A patch reaches every UI runtime exactly once: the poll that sees it
-    /// advances an epoch, and each UI runtime applies the latest patch when its
-    /// own boundary finds it behind. A UI runtime the runner did not
-    /// [register](Self::register_ui_runtime) starts at the epoch of its first
-    /// poll, so it never replays a patch older than itself.
+    /// A version of the layout the application was composed from reaches
+    /// every UI runtime once: each reassembles to the latest such version when
+    /// its own boundary finds it on an older one. A version of another layout
+    /// needs a restart (ADR-0393 §4), which this host cannot do yet: it
+    /// reports [`RestartFailure::NoApplication`], and no later version
+    /// reassembles.
     pub(crate) fn poll_and_apply(&self, ui_runtime: &UiRuntime) {
-        let Some(reload) = &self.0 else {
+        let Some(reload) = &self.reload.0 else {
             return;
         };
-        let id = ui_runtime.id();
-        {
+        let id = self.runtime;
+        debug_assert_eq!(
+            ui_runtime.id(),
+            id,
+            "BUG: a handle polled for another UI runtime"
+        );
+        // After a detach cleared the record, a later loop's poll records the
+        // UI runtime again, at the code loaded then.
+        reload.0.lock().record.mounted(id);
+        let polled = reload.lend("poll", |hook| (hook.poll(), hook.reassemble_requested()));
+        let (restart, due) = {
             let mut slot = reload.0.lock();
-            let epoch = slot.epoch;
-            slot.seen.entry(id).or_insert(epoch);
-        }
-        let event = reload.lend("poll", DevReloadHook::poll);
-        let apply = {
-            let mut slot = reload.0.lock();
-            if let Lent::Returned(event) = event
-                && let Some(tier) = reload_tier(event)
-            {
-                slot.epoch += 1;
-                slot.patched_at = slot.epoch;
-                slot.patched_tier = Some(tier);
+            let restart = match polled {
+                Lent::Returned((event, rebuild)) => slot.record.report(event, rebuild),
+                Lent::Absent | Lent::Panicked => None,
+            };
+            if restart.is_some() {
+                slot.record.restart_failed();
             }
-            let epoch = slot.epoch;
-            let patched_at = slot.patched_at;
-            let behind = slot
-                .seen
-                .insert(id, epoch)
-                .is_some_and(|seen| seen < patched_at);
-            behind.then_some(slot.patched_tier).flatten()
+            (restart, slot.record.due(id))
         };
-        if let Some(tier) = apply {
-            tracing::info!(?tier, "hot reload: reassembling");
-            ui_runtime.perform_hot_reload_entered(tier);
+        if let Some(version) = restart {
+            tracing::warn!(
+                layout = version.layout.get(),
+                "hot reload: the new build changed the layout of kept values, and this host \
+                 cannot restart the application; restart it to run the new code"
+            );
+            reload.report(&ReloadOutcome::restart_failed(
+                version,
+                RestartFailure::NoApplication,
+            ));
+        }
+        if let Due::Reassemble(version) = due {
+            tracing::info!(
+                revision = version.map(|version| version.revision.get()),
+                "hot reload: reassembling"
+            );
+            ui_runtime.perform_reassemble_entered();
+            if let Some(version) = version {
+                reload.report(&ReloadOutcome::reassembled(version, id));
+            }
+        }
+    }
+}
+
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+impl Drop for RuntimeReload {
+    fn drop(&mut self) {
+        if let Some(reload) = &self.reload.0 {
+            reload.0.lock().record.retired(self.runtime);
         }
     }
 }

@@ -27,10 +27,17 @@
 //!   before the first window opens; [`DevReloadHook::detach`] runs once when
 //!   that loop ends. A hook is never attached twice without a detach between.
 //! - [`DevReloadHook::poll`] runs on the owner thread at each UI runtime's frame
-//!   boundary, before the frame's own work. A [`ReloadEvent::Patched`] it
-//!   returns is applied once to every UI runtime the host drives, each at its own
-//!   next boundary (an idle window applies it when it next draws), and never
-//!   to a UI runtime mounted after the poll.
+//!   boundary, before the frame's own work, and reports the newest version the
+//!   tool built ([`ReloadEvent::Loaded`]). The host keeps one record per loop
+//!   (ADR-0393 §3): a version of the layout the application was composed from
+//!   reassembles every UI runtime once, each at its own next boundary (an idle
+//!   window reassembles when it next draws, to the latest version). A version
+//!   of another layout needs a restart (ADR-0393 §4), which the host reports as
+//!   [`RestartFailure::NoApplication`] until it builds one. A version reported
+//!   twice changes nothing. The first version after `attach` is taken as the
+//!   one the application was composed from, so every UI runtime reassembles
+//!   to it once. Each result goes back through
+//!   [`DevReloadHook::applied`].
 //! - [`DevReloadHook::scene_frame`] runs on the owner thread at the start of
 //!   each window's frame, before the widget pipeline, with the window's
 //!   physical size: not while the window's frames are off, nor on a host whose
@@ -41,29 +48,156 @@
 //!
 //! The per-call seam ADR-0094 §1 also describes, which routes each framework
 //! call into user code through a patcher's jump table, arrives with a code
-//! patcher that needs it. [`ReloadEvent`] asks for a reassemble only; the
-//! version an event carries, and the methods through which a loop restarts
-//! and reports, are ADR-0393 §3.
+//! patcher that needs it.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, num::NonZeroU64, sync::Arc};
+
+use flui_foundation::UiRuntimeId;
 
 use flui_layer::Scene;
 
+/// The build a tree is made from (ADR-0393 §3). The tool that builds the application mints it,
+/// and the hook reads it from the build's manifest; the host compares it for equality and never
+/// orders or interprets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct CodeVersion {
+    /// Equal for two builds whose kept values the later build may read.
+    pub layout: LayoutEpoch,
+    /// Differs for every build.
+    pub revision: Revision,
+}
+
+impl CodeVersion {
+    /// The version of a build laid out as `layout`, its `revision` the build's own.
+    #[must_use]
+    pub const fn new(layout: LayoutEpoch, revision: Revision) -> Self {
+        Self { layout, revision }
+    }
+}
+
+/// Which builds may read each other's kept values: two are equal or they are not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LayoutEpoch(NonZeroU64);
+
+impl LayoutEpoch {
+    /// The epoch a tool wrote into a manifest; `None` for zero.
+    #[must_use]
+    pub const fn try_new(raw: u64) -> Option<Self> {
+        match NonZeroU64::new(raw) {
+            Some(raw) => Some(Self(raw)),
+            None => None,
+        }
+    }
+
+    /// The integer a manifest holds.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// One build: two are equal or they are not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Revision(NonZeroU64);
+
+impl Revision {
+    /// The revision a tool wrote into a manifest; `None` for zero.
+    #[must_use]
+    pub const fn try_new(raw: u64) -> Option<Self> {
+        match NonZeroU64::new(raw) {
+            Some(raw) => Some(Self(raw)),
+            None => None,
+        }
+    }
+
+    /// The integer a manifest holds.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
 /// What a development reload driver observed since its last poll.
 ///
-/// Deliberately exhaustive: a host maps every event to the reload it
-/// performs, and a new event must not compile until each host gives it one.
+/// Deliberately exhaustive: a host derives the reload from the version and its own record
+/// (ADR-0393 §3), and a new event must not compile until each host gives it a meaning.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[expect(
     clippy::exhaustive_enums,
-    reason = "a host maps every event to the reload it performs, so a new event must not compile until each host gives it one"
+    reason = "a host derives the reload from each event, so a new event must not compile until each host gives it one"
 )]
 pub enum ReloadEvent {
-    /// Nothing to apply.
+    /// No new code is loaded.
     Unchanged,
-    /// Code changed, or reloaded code asked for a rebuild: every UI runtime
-    /// reassembles — every element rebuilds, every `State` is kept.
-    Patched,
+    /// New code is loaded and this is its version.
+    Loaded(CodeVersion),
+}
+
+/// What the host did with a version, reported to [`DevReloadHook::applied`] after the turn
+/// that applied it.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ReloadOutcome<'a> {
+    /// One UI runtime reassembled to `version`: every element rebuilt with the code now loaded,
+    /// every `State` kept.
+    #[non_exhaustive]
+    Reassembled {
+        /// The version the UI runtime now runs.
+        version: CodeVersion,
+        /// The UI runtime that reassembled.
+        runtime: UiRuntimeId,
+    },
+    /// The application was composed again from `version`.
+    #[non_exhaustive]
+    Restarted {
+        /// The version the application was composed from.
+        version: CodeVersion,
+    },
+    /// The restart did not compose an application; the host has none until a later version
+    /// composes one.
+    #[non_exhaustive]
+    RestartFailed {
+        /// The version the restart was for.
+        version: CodeVersion,
+        /// Why it composed nothing.
+        reason: RestartFailure<'a>,
+    },
+}
+
+impl<'a> ReloadOutcome<'a> {
+    /// `runtime` reassembled to `version`.
+    #[must_use]
+    pub const fn reassembled(version: CodeVersion, runtime: UiRuntimeId) -> Self {
+        Self::Reassembled { version, runtime }
+    }
+
+    /// The application was composed again from `version`.
+    #[must_use]
+    pub const fn restarted(version: CodeVersion) -> Self {
+        Self::Restarted { version }
+    }
+
+    /// The restart for `version` composed no application, for `reason`.
+    #[must_use]
+    pub const fn restart_failed(version: CodeVersion, reason: RestartFailure<'a>) -> Self {
+        Self::RestartFailed { version, reason }
+    }
+}
+
+/// Why a restart composed no application.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum RestartFailure<'a> {
+    /// The application's entry panicked.
+    EntryPanicked,
+    /// The entry returned without handing an application over.
+    NoApplication,
+    /// The handed application is one the host's `run` refuses, or composing it failed; the
+    /// error is the host's.
+    Launch(&'a (dyn std::error::Error + 'static)),
+    /// User code that composing runs (a plugin's registration, a service's start) panicked.
+    ComposePanicked,
 }
 
 /// Asks the host for a frame, from any thread.
@@ -104,16 +238,23 @@ impl fmt::Debug for ReloadWake {
 /// # Example
 ///
 /// ```
-/// use flui_view::dev_reload::{DevReloadHook, ReloadEvent, ReloadWake};
+/// use flui_view::dev_reload::{
+///     CodeVersion, DevReloadHook, LayoutEpoch, ReloadEvent, ReloadWake, Revision,
+/// };
 ///
-/// /// Reports one patch after the host attaches it.
+/// fn first_build() -> CodeVersion {
+///     let layout = LayoutEpoch::try_new(1).expect("1 is not zero");
+///     CodeVersion::new(layout, Revision::try_new(1).expect("1 is not zero"))
+/// }
+///
+/// /// Reports one build after the host attaches it.
 /// #[derive(Default)]
-/// struct OnePatch {
+/// struct OneBuild {
 ///     wake: Option<ReloadWake>,
 ///     pending: bool,
 /// }
 ///
-/// impl DevReloadHook for OnePatch {
+/// impl DevReloadHook for OneBuild {
 ///     fn attach(&mut self, wake: ReloadWake) {
 ///         self.pending = true;
 ///         wake.wake();
@@ -126,16 +267,16 @@ impl fmt::Debug for ReloadWake {
 ///
 ///     fn poll(&mut self) -> ReloadEvent {
 ///         if std::mem::take(&mut self.pending) {
-///             ReloadEvent::Patched
+///             ReloadEvent::Loaded(first_build())
 ///         } else {
 ///             ReloadEvent::Unchanged
 ///         }
 ///     }
 /// }
 ///
-/// let mut hook = OnePatch::default();
+/// let mut hook = OneBuild::default();
 /// hook.attach(ReloadWake::new(|| {}));
-/// assert_eq!(hook.poll(), ReloadEvent::Patched);
+/// assert_eq!(hook.poll(), ReloadEvent::Loaded(first_build()));
 /// assert_eq!(hook.poll(), ReloadEvent::Unchanged);
 /// hook.detach();
 /// ```
@@ -151,6 +292,24 @@ pub trait DevReloadHook: Send + 'static {
 
     /// At each UI runtime's frame boundary: what changed since the last poll.
     fn poll(&mut self) -> ReloadEvent;
+
+    /// At the same frame boundary, after [`poll`](Self::poll): whether the code already loaded
+    /// asked every UI runtime to rebuild since the last poll (a worker's own rebuild request).
+    /// The host reassembles each UI runtime once at its next boundary, outside the version
+    /// record, and reports no outcome; as Flutter's `ext.flutter.reassemble`, it delivers no
+    /// code. The default asks for none.
+    fn reassemble_requested(&mut self) -> bool {
+        false
+    }
+
+    /// Restart: run the entry of the code now loaded, on the owner thread, while the host's
+    /// hand-over is open (ADR-0393 §4). The default runs nothing, for a mechanism that cannot
+    /// restart in the process.
+    fn run_entry(&mut self) {}
+
+    /// What the host did with a version, after the turn that applied it: once per UI runtime
+    /// that reassembled and once per restart, succeeded or failed. The default ignores it.
+    fn applied(&mut self, _outcome: &ReloadOutcome<'_>) {}
 
     /// Let a loaded scene plugin draw this frame instead of the widget tree
     /// (a scene plugin, on every native host). Returns `true` when `render`

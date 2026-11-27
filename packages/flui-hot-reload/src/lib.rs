@@ -147,7 +147,8 @@ pub mod env;
 #[cfg(not(target_arch = "wasm32"))]
 mod timing;
 
-mod engine;
+#[cfg(not(target_arch = "wasm32"))]
+mod manifest;
 
 mod abi;
 
@@ -249,6 +250,8 @@ pub use hook::{ScenePluginHook, WorkerReloadHook};
 #[cfg(not(target_arch = "wasm32"))]
 pub use host::{PluginKind, PluginScene, ScenePlugin};
 #[cfg(not(target_arch = "wasm32"))]
+pub use manifest::WorkerManifest;
+#[cfg(not(target_arch = "wasm32"))]
 pub use worker::{
     DEFAULT_FINGERPRINT, HostRequestRebuildFn, RegisterWorkerBuildFn, WorkerPlugin,
     WorkerPollOutcome, WorkerReloadDriver, get_worker_build_ptr, host_register_fn,
@@ -265,4 +268,3 @@ pub use dispatch::{
 #[cfg(all(not(target_arch = "wasm32"), feature = "app-plugin"))]
 #[doc(hidden)]
 pub use dispatch::forward_rebuild_requests_to as __private_forward_rebuild_requests_to;
-pub use engine::{HotReloadOutcome, HotReloadTier};

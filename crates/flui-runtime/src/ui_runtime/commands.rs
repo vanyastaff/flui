@@ -64,7 +64,7 @@ pub enum CommandSendError {
 pub enum UiCommand {
     /// Apply a hot-reload reassemble on the owner at the next Idle drain.
     #[cfg(feature = "hot-reload")]
-    HotReload(crate::reload::ReloadTier),
+    Reassemble,
     /// [`HostInput::Accessibility`](crate::HostInput::Accessibility) from the
     /// platform adapter's thread, or dispatched on the owner thread, addressed
     /// to the exact presentation that was live when the sender stamped it and
@@ -135,9 +135,7 @@ impl std::fmt::Debug for UiCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             #[cfg(feature = "hot-reload")]
-            UiCommand::HotReload(tier) => {
-                f.debug_tuple("UiCommand::HotReload").field(tier).finish()
-            }
+            UiCommand::Reassemble => f.write_str("UiCommand::Reassemble"),
             UiCommand::Accessibility {
                 presentation_id,
                 request,
@@ -298,7 +296,7 @@ impl std::fmt::Debug for UiCommandSender {
 }
 
 impl UiCommandSender {
-    /// Enqueue a hot-reload request for the UI runtime owner.
+    /// Enqueue a reassemble of every presentation for the UI runtime owner (ADR-0393 §1).
     ///
     /// Unlike direct platform dispatch, this capability is safe to call from
     /// any thread: delivery occurs at the owner's next Idle drain and the
@@ -308,11 +306,8 @@ impl UiCommandSender {
     ///
     /// [`CommandSendError`] when the inbox is full or the UI runtime is gone.
     #[cfg(feature = "hot-reload")]
-    pub fn request_hot_reload(
-        &self,
-        tier: crate::reload::ReloadTier,
-    ) -> Result<(), CommandSendError> {
-        self.send(UiCommand::HotReload(tier))
+    pub fn request_reassemble(&self) -> Result<(), CommandSendError> {
+        self.send(UiCommand::Reassemble)
     }
 
     /// Enqueue an assistive-technology request as host input for owner-local
@@ -620,14 +615,15 @@ impl UiRuntime {
             };
             match command {
                 #[cfg(feature = "hot-reload")]
-                UiCommand::HotReload(tier) => {
+                UiCommand::Reassemble => {
                     // A failed reassemble may already have changed a tree. Keep
                     // redraw demand and the accepted FIFO tail live before resuming.
                     #[expect(
                         clippy::disallowed_methods,
                         reason = "ADR-0287: a failed hot reload keeps redraw demand and the tail live"
                     )]
-                    let outcome = catch_unwind(AssertUnwindSafe(|| self.apply_hot_reload(tier)));
+                    let outcome =
+                        catch_unwind(AssertUnwindSafe(|| self.reassemble_presentations()));
                     match outcome {
                         Ok(changed) => {
                             if changed {

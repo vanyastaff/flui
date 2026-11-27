@@ -184,8 +184,8 @@ host.
   host type (the frame sink, the platform window) crosses as a trait this
   crate defines or one from `flui-platform`; a window's accessibility
   bridge is `flui_semantics::platform::PlatformAccessibility` (ADR-0082 §2,
-  amended), and the development reload tier is this crate's own
-  `reload::ReloadTier`, which the host translates from its hot-reload driver.
+  amended), and a development reload reaches a UI runtime as a reassemble
+  (`UiCommandSender::request_reassemble`), which the host applies per ADR-0393 §3.
 - **Every host runs one set of owner-turn steps.** The close, quit and
   session-end steps (`owner_turn`) and the built-in tier of an application's
   registry (`capability::BuiltIns`) live here, so `flui-app`'s runners and

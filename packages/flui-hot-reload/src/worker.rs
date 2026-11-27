@@ -11,8 +11,11 @@ use std::collections::BTreeMap;
 use std::mem::ManuallyDrop;
 use std::path::{Path, PathBuf};
 
+use flui_sdk::view::dev_reload::CodeVersion;
+
 use crate::LoadError;
 use crate::dynlib::{self, DynLib};
+use crate::manifest::WorkerManifest;
 
 /// Default fingerprint when the worker omits `flui_worker_fingerprint`.
 pub const DEFAULT_FINGERPRINT: u64 = 0;
@@ -319,8 +322,7 @@ pub enum WorkerPollOutcome {
     /// against, so the host must NOT call the newly registered build fns with
     /// its old-layout state. Lookups keyed by the host's compiled-in
     /// fingerprint miss the new registrations, degrading to "worker
-    /// unavailable" (this is the producer of the degradation
-    /// [`crate::HotReloadOutcome::Degraded`] names). Restart the host to pick
+    /// unavailable". Restart the host to pick
     /// up the new layout.
     Degraded {
         /// Fingerprint the previous worker reported.
@@ -333,24 +335,62 @@ pub enum WorkerPollOutcome {
     ReloadFailed,
 }
 
-/// Sidecar file written by `flui run` when staging worker builds on Windows.
-fn manifest_path_for(lib_path: &Path) -> PathBuf {
-    lib_path.parent().map_or_else(
-        || PathBuf::from(".flui_worker_plugin"),
-        |dir| dir.join(".flui_worker_plugin"),
-    )
+/// The image a worker loads, and the version `flui run` minted for it.
+struct Resolved {
+    path: PathBuf,
+    version: Option<CodeVersion>,
 }
 
-/// Resolve the dylib path to load — prefers the sidecar manifest when present.
-fn resolve_worker_path(lib_path: &Path) -> PathBuf {
-    let manifest = manifest_path_for(lib_path);
-    if let Ok(text) = std::fs::read_to_string(&manifest) {
-        let candidate = PathBuf::from(text.trim());
-        if candidate.is_file() {
-            return candidate;
+/// Why [`resolve_worker`] names no image: the caller keeps the one it has.
+enum Unresolved {
+    /// The manifest is not one this release reads (an older plain path, a
+    /// newer field): a `flui run` and a `flui-hot-reload` of different
+    /// releases.
+    Unreadable(std::io::Error),
+    /// The manifest names an image that is gone: `flui run` pruned it, and
+    /// its next manifest names the build that replaced it.
+    Missing(PathBuf),
+}
+
+impl Unresolved {
+    fn warn(&self) {
+        match self {
+            Self::Unreadable(error) => tracing::warn!(
+                %error,
+                "hot reload: the worker's `.flui_worker_plugin` manifest is not one this \
+                 flui-hot-reload reads; use a `flui run` of the same release. The loaded \
+                 worker stays."
+            ),
+            Self::Missing(path) => tracing::debug!(
+                path = %path.display(),
+                "hot reload: the worker manifest names an image that is gone; keeping the \
+                 loaded worker until the next manifest"
+            ),
         }
     }
-    lib_path.to_path_buf()
+}
+
+/// The image to load for the canonical library `lib_path`: the one its
+/// sidecar [`WorkerManifest`] names, else, with no manifest, `lib_path`
+/// itself with no version.
+fn resolve_worker(lib_path: &Path) -> Result<Resolved, Unresolved> {
+    match WorkerManifest::read(lib_path) {
+        Ok(Some(manifest)) if manifest.path().is_file() => Ok(Resolved {
+            version: manifest.version(),
+            path: manifest.path().to_path_buf(),
+        }),
+        Ok(Some(manifest)) => Err(Unresolved::Missing(manifest.path().to_path_buf())),
+        Ok(None) => Ok(Resolved {
+            path: lib_path.to_path_buf(),
+            version: None,
+        }),
+        Err(error) => Err(Unresolved::Unreadable(error)),
+    }
+}
+
+/// The path [`resolve_worker`] names, or `lib_path` when it names none.
+fn resolve_worker_path(lib_path: &Path) -> PathBuf {
+    resolve_worker(lib_path).map_or_else(|_| lib_path.to_path_buf(), |resolved| resolved.path)
 }
 
 /// Identify the artifact `lib_path` resolves to right now: the resolved path
@@ -385,6 +425,10 @@ pub struct WorkerReloadDriver {
     plugin: Option<WorkerPlugin>,
     /// Canonical path (used for manifest lookup).
     lib_path: PathBuf,
+    /// The last manifest could not be resolved, and a warning said so.
+    unresolved_noted: bool,
+    /// The version the manifest named for the loaded image, if any.
+    loaded_version: Option<CodeVersion>,
     /// Path the currently loaded plugin came from.
     loaded_path: PathBuf,
     poll_interval: std::time::Duration,
@@ -401,7 +445,16 @@ impl WorkerReloadDriver {
     /// Create a driver for `lib_path` and attempt an immediate load + init.
     pub fn new(lib_path: impl AsRef<Path>) -> Self {
         let lib_path = lib_path.as_ref().to_path_buf();
-        let load_path = resolve_worker_path(&lib_path);
+        let Resolved {
+            path: load_path,
+            version,
+        } = resolve_worker(&lib_path).unwrap_or_else(|unresolved| {
+            unresolved.warn();
+            Resolved {
+                path: lib_path.clone(),
+                version: None,
+            }
+        });
         let mut refusal = crate::dynlib::LoadRefusal::default();
         let plugin = refusal.load(&load_path, |path| WorkerPlugin::load(path));
         let last_fingerprint = plugin.as_ref().map_or(0, WorkerPlugin::fingerprint);
@@ -415,6 +468,8 @@ impl WorkerReloadDriver {
         }
 
         Self {
+            unresolved_noted: false,
+            loaded_version: version.filter(|_| plugin.is_some()),
             loaded_path: load_path,
             plugin,
             lib_path,
@@ -433,6 +488,13 @@ impl WorkerReloadDriver {
         self
     }
 
+    /// The version `flui run` minted for the image loaded now (ADR-0393 §2),
+    /// read from its sidecar manifest; `None` for an image no manifest named.
+    #[must_use]
+    pub fn loaded_version(&self) -> Option<CodeVersion> {
+        self.loaded_version
+    }
+
     /// Poll for worker updates. Call from the platform frame loop: the
     /// artifact is read at most once per poll interval.
     pub fn poll(&mut self) -> WorkerPollOutcome {
@@ -449,7 +511,19 @@ impl WorkerReloadDriver {
     pub(crate) fn poll_now(&mut self) -> WorkerPollOutcome {
         self.last_poll = std::time::Instant::now();
 
-        let load_path = resolve_worker_path(&self.lib_path);
+        let Ok(Resolved {
+            path: load_path,
+            version,
+        }) = resolve_worker(&self.lib_path).map_err(|unresolved| {
+            // Once until the manifest reads again: the host polls every frame.
+            if !std::mem::replace(&mut self.unresolved_noted, true) {
+                unresolved.warn();
+            }
+        })
+        else {
+            return WorkerPollOutcome::NoChange;
+        };
+        self.unresolved_noted = false;
 
         if self.plugin.is_some() {
             let path_changed = load_path != self.loaded_path;
@@ -471,6 +545,7 @@ impl WorkerReloadDriver {
                 .load(&load_path, |path| WorkerPlugin::load(path));
             if let Some(ref plugin) = self.plugin {
                 self.loaded_path = load_path;
+                self.loaded_version = version;
                 self.reload_count = self.reload_count.saturating_add(1);
                 let old_fingerprint = self.last_fingerprint;
                 self.last_fingerprint = plugin.fingerprint();
@@ -506,6 +581,8 @@ impl WorkerReloadDriver {
                 };
             }
 
+            // The old image is unloaded and nothing replaced it.
+            self.loaded_version = None;
             tracing::warn!("WorkerReloadDriver: reload failed");
             return WorkerPollOutcome::ReloadFailed;
         }
@@ -519,6 +596,7 @@ impl WorkerReloadDriver {
             return WorkerPollOutcome::NoChange;
         };
         self.loaded_path = load_path;
+        self.loaded_version = version;
         self.reload_count = self.reload_count.saturating_add(1);
         self.last_fingerprint = plugin.fingerprint();
         tracing::info!(

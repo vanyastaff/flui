@@ -6,7 +6,8 @@
 //!   the running app and replace it with the executable the build wrote, when
 //!   the build succeeded and changed it.
 //! - **Worker host** (`flui.toml` `[hot_reload]`): watch worker UI sources,
-//!   rebuild `cdylib` only; host applies `HotReloadTier::HotReload` in-process.
+//!   rebuild `cdylib` only, stage it and name it and its version in the
+//!   `.flui_worker_plugin` manifest; the host reassembles in-process.
 //!
 //! The loop multiplexes four event sources — file changes, hot-keys from the
 //! terminal (`r` reload, `R` restart, `c` clear, `h` help, `q` quit), Ctrl-C,
@@ -241,6 +242,7 @@ fn run_session(
                     verbose,
                     floor_env,
                     register_associations,
+                    versions: WorkerVersions::default(),
                 };
                 dev_loop(&mut strategy, None)?;
             }
@@ -2221,6 +2223,8 @@ struct WorkerHost {
     /// `--register-associations`: the host registers its URL schemes and file
     /// types with Windows.
     register_associations: bool,
+    /// The versions this session stamps its worker builds with.
+    versions: WorkerVersions,
 }
 
 impl WorkerHost {
@@ -2275,10 +2279,10 @@ impl WorkerHost {
     }
 
     /// Stage the freshly built worker and point the sidecar at it.
-    fn publish(&self) -> CliResult<PathBuf> {
+    fn publish(&mut self) -> CliResult<PathBuf> {
         let canonical = self.worker_path()?;
         let staged = stage_worker_artifact(&canonical, &canonical, true)?;
-        publish_worker_plugin(&canonical, &staged)?;
+        publish_worker_plugin(&canonical, &staged, self.versions.next()?)?;
         Ok(staged)
     }
 
@@ -2534,14 +2538,84 @@ fn prune_stale_staged_workers(parent: &Path, stem: &str, ext: &str, keep: &Path)
     }
 }
 
-/// Write `.flui_worker_plugin` next to the canonical dylib so the host loads
-/// the staged artifact without overwriting a locked file.
-fn publish_worker_plugin(canonical: &Path, load_path: &Path) -> CliResult<()> {
-    let manifest = worker_plugin_manifest_path(canonical);
-    if let Some(parent) = manifest.parent() {
-        std::fs::create_dir_all(parent).context("failed to create worker manifest directory")?;
+/// One staged build's version: a layout epoch and a revision, both non-zero,
+/// as `flui_view::dev_reload::CodeVersion` holds them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WorkerVersion {
+    layout: u64,
+    revision: u64,
+}
+
+/// The versions a session stamps its worker builds with (ADR-0393 §2).
+///
+/// One layout for the whole session: `flui run` does not place an edit by its
+/// shape yet ([gaps](../../../../docs/gaps.md)), so every worker build is one
+/// the running host reassembles, as it always has. Each staged build gets a
+/// revision of its own.
+#[derive(Debug, Default)]
+struct WorkerVersions {
+    last_revision: u64,
+}
+
+impl WorkerVersions {
+    const LAYOUT: u64 = 1;
+
+    /// The version of the next staged build.
+    fn next(&mut self) -> CliResult<WorkerVersion> {
+        let revision = self
+            .last_revision
+            .checked_add(1)
+            .ok_or_else(|| CliError::RunFailed {
+                details: "this session staged more worker builds than a revision can count"
+                    .to_owned(),
+            })?;
+        self.last_revision = revision;
+        Ok(WorkerVersion {
+            layout: Self::LAYOUT,
+            revision,
+        })
     }
-    std::fs::write(&manifest, load_path.as_os_str().as_encoded_bytes())
+}
+
+/// The sidecar `flui_hot_reload::WorkerManifest` reads, written here with a
+/// struct of the CLI's own because the CLI is published without that package;
+/// `the_worker_manifest_is_the_one_flui_hot_reload_reads` holds the two to one
+/// format.
+#[derive(serde::Serialize)]
+struct WorkerManifest<'a> {
+    path: &'a Path,
+    layout: u64,
+    revision: u64,
+}
+
+/// Write `.flui_worker_plugin` next to the canonical dylib, naming the staged
+/// image the host loads (so a locked canonical file is never overwritten) and
+/// the version minted for it. Written whole and renamed into place, so the
+/// host never reads half of it.
+fn publish_worker_plugin(
+    canonical: &Path,
+    load_path: &Path,
+    version: WorkerVersion,
+) -> CliResult<()> {
+    use std::io::Write as _;
+
+    let manifest = worker_plugin_manifest_path(canonical);
+    let dir = manifest.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(dir).context("failed to create worker manifest directory")?;
+    let json = serde_json::to_vec(&WorkerManifest {
+        path: load_path,
+        layout: version.layout,
+        revision: version.revision,
+    })
+    .context("the staged worker's path is not UTF-8")?;
+    let mut temporary =
+        tempfile::NamedTempFile::new_in(dir).context("failed to create the worker manifest")?;
+    temporary
+        .write_all(&json)
+        .context("failed to write the worker manifest")?;
+    temporary
+        .persist(&manifest)
+        .map_err(|failure| failure.error)
         .with_context(|| format!("failed to write {}", manifest.display()))?;
     Ok(())
 }
@@ -3079,6 +3153,7 @@ mod tests {
             verbose: false,
             floor_env: Vec::new(),
             register_associations: false,
+            versions: super::WorkerVersions::default(),
         };
         assert_eq!(
             host(Some("reload")).host_feature_args(),
@@ -3169,6 +3244,34 @@ mod tests {
     fn env_names_match_the_runtime() {
         assert_eq!(env::HOT_RELOAD, flui_hot_reload::env::HOT_RELOAD);
         assert_eq!(env::WORKER_PLUGIN, flui_hot_reload::env::WORKER_PLUGIN);
+    }
+
+    /// The manifest is written by a struct of the CLI's own, since the CLI
+    /// does not link the framework; this is the only place that proves
+    /// `flui_hot_reload::WorkerManifest` reads what it writes, and that each
+    /// staged build gets a revision of its own in one layout.
+    fn the_worker_manifest_is_the_one_flui_hot_reload_reads() {
+        let temp = tempfile::tempdir().expect("fixture dir");
+        let canonical = temp.path().join("libworker.so");
+        let staged = temp.path().join("libworker-hot-1.so");
+        let mut versions = super::WorkerVersions::default();
+        for revision in 1..=2 {
+            super::publish_worker_plugin(&canonical, &staged, versions.next().expect("a revision"))
+                .expect("the manifest is written");
+            let manifest = flui_hot_reload::WorkerManifest::read(&canonical)
+                .expect("the runtime reads the CLI's manifest")
+                .expect("beside the canonical library");
+            assert_eq!(manifest.path(), staged);
+            let version = manifest.version().expect("the CLI mints no zero");
+            assert_eq!(
+                (version.layout.get(), version.revision.get()),
+                (1, revision)
+            );
+        }
+        assert_eq!(
+            super::worker_plugin_manifest_path(&canonical),
+            flui_hot_reload::WorkerManifest::beside(&canonical)
+        );
     }
 
     /// `--register-associations` hands the application the variable it
@@ -3426,6 +3529,10 @@ mod tests {
                 staged_worker_content_identity_survives_reuse_and_pruning,
             ),
             ("env names match the runtime", env_names_match_the_runtime),
+            (
+                "the worker manifest is the one flui-hot-reload reads",
+                the_worker_manifest_is_the_one_flui_hot_reload_reads,
+            ),
             (
                 "register associations sets the application variable",
                 register_associations_sets_the_application_variable,

@@ -604,7 +604,8 @@ fn counter_build(config: AppConfig) -> (CounterBuild, AppConfig) {
 
 /// Default worker dylib path, used when `FLUI_WORKER_PLUGIN` is unset (a bare
 /// `cargo run -p __HOST_PACKAGE__ --no-default-features --features reload`
-/// without `flui run`).
+/// without `flui run`, which loads that worker at start and, with no manifest
+/// naming its version, reassembles none of its rebuilds).
 #[cfg(feature = "reload")]
 fn default_worker_path() -> std::path::PathBuf {
     let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".into());

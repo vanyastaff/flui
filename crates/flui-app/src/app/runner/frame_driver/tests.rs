@@ -1654,17 +1654,18 @@ fn a_desktop_window_draws_its_scene_plugins_frame_in_place_of_the_widget_frame()
             .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
             .expect("the root attaches");
         let window = crate::app::window_test_support::headless_test_window();
-        let mut installation =
-            super::super::owner_dispatch::prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
-        let dispatcher = installation.dispatcher();
-        attach_a_window(&shared, dispatcher.address, 1);
-        let first_reveal = Rc::new(FirstReveal::new());
         let asked = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let reload =
             WorkerReload::from_config(&crate::app::AppConfig::new().dev_reload(SceneHook {
                 answer,
                 asked: Arc::clone(&asked),
-            }));
+            }))
+            .register_ui_runtime(&runtime);
+        let mut installation =
+            super::super::owner_dispatch::prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
+        let dispatcher = installation.dispatcher();
+        attach_a_window(&shared, dispatcher.address, 1);
+        let first_reveal = Rc::new(FirstReveal::new());
         let frame = installation
             .frame_driver(FrameDriver::Desktop(DesktopFrameDriver {
                 deadlines: Rc::new(DesktopWakeDeadlines {

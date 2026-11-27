@@ -37,7 +37,8 @@ has no reload feature (ADR-0311 §6).
 `flui run` does not hand the host the raw `target/<profile>/lib<worker>.dylib`.
 It stages each build at a **content-addressed** path,
 `{stem}-hot-{fnv1a-hash}{ext}` (e.g. `libcounter_logic-hot-3f9a1c04.dylib`), and
-writes that path into a `.flui_worker_plugin` sidecar manifest next to the
+writes that path and the build's version into a `.flui_worker_plugin` sidecar
+manifest (JSON, `flui_hot_reload::WorkerManifest`) next to the
 canonical output. The host's `WorkerReloadDriver` resolves the sidecar first
 (`resolve_worker_path`), so it loads the staged copy.
 
@@ -102,10 +103,15 @@ Application::new().config(config).run(root)?;
 ```
 
 The loop attaches the hook once, before the first window, and detaches it when
-it ends. Every UI runtime polls it at its frame boundary, on the owner thread; a
-reload (or a worker's `request_rebuild`) is applied once to every UI runtime, as a
-reassemble that keeps `State`. A hook that panics is dropped and the app keeps
-running without reload. An idle window applies a reload when it next draws.
+it ends. Every UI runtime polls it at its frame boundary, on the owner thread.
+Each staged worker build carries the version `flui run` minted for it, in the
+`.flui_worker_plugin` manifest (`flui_hot_reload::WorkerManifest`), and the loop
+keeps one record of versions per loop (ADR-0393 §3): a new version reassembles
+every UI runtime once, keeping `State`, and an idle window reassembles to the
+latest version when it next draws. A worker's `request_rebuild` reassembles
+each UI runtime once too, without a version. A worker loaded without a manifest
+(not started through `flui run`) has no version and is not reassembled. A hook
+that panics is dropped and the app keeps running without reload.
 A scene plugin's host installs `flui_hot_reload::ScenePluginHook` the same
 way. Every native runner (Windows, macOS, Linux, iOS and Android) asks the hook
 for each window's frame before the widget pipeline, at the window's physical

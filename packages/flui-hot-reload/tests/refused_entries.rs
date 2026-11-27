@@ -189,19 +189,39 @@ pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
     };
     let first = worker("counted_first");
     let second = worker("counted_second");
+    let third = worker("counted_third");
     let refused = directory.path().join("counted_refused.so");
     std::fs::write(&refused, b"not a library").expect("write a file that is no library");
     // The sidecar manifest beside the watched path names the image to load,
     // as `flui run` stages each build under a path of its own.
     let watched = directory.path().join("worker.so");
-    let manifest = directory.path().join(".flui_worker_plugin");
-    let stage = |image: &Path| {
-        std::fs::write(&manifest, image.to_string_lossy().as_bytes()).expect("write the manifest");
+    let mut revision = 0;
+    let mut stage = |image: &Path| {
+        revision += 1;
+        let manifest = flui_hot_reload::WorkerManifest::new(
+            image.to_path_buf(),
+            flui_sdk::view::dev_reload::CodeVersion::new(
+                flui_sdk::view::dev_reload::LayoutEpoch::try_new(1).expect("not zero"),
+                flui_sdk::view::dev_reload::Revision::try_new(revision).expect("not zero"),
+            ),
+        );
+        std::fs::write(
+            flui_hot_reload::WorkerManifest::beside(&watched),
+            serde_json::to_vec(&manifest).expect("a manifest serializes"),
+        )
+        .expect("write the manifest");
     };
 
     stage(&first);
     let mut driver =
         WorkerReloadDriver::new(&watched).with_poll_interval(std::time::Duration::ZERO);
+    assert_eq!(
+        driver
+            .loaded_version()
+            .map(|version| version.revision.get()),
+        Some(1),
+        "the loaded image's version is the one its manifest named"
+    );
     stage(&refused);
     assert_eq!(driver.poll(), WorkerPollOutcome::ReloadFailed);
     stage(&second);
@@ -210,4 +230,40 @@ pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
         WorkerPollOutcome::Reloaded { reload_count: 2 },
         "the second image loaded is the second counted"
     );
+    assert_eq!(
+        driver
+            .loaded_version()
+            .map(|version| version.revision.get()),
+        Some(3),
+        "a reload reads the version of the image it loaded"
+    );
+    stage(&third);
+    assert_eq!(
+        driver.poll(),
+        WorkerPollOutcome::Reloaded { reload_count: 3 },
+        "a loaded image is replaced by the next"
+    );
+    assert_eq!(
+        driver
+            .loaded_version()
+            .map(|version| version.revision.get()),
+        Some(4),
+        "the replacing image's version"
+    );
+
+    // The hook a host installs reports the image loaded at `attach` once, so
+    // the host's record learns which layout it was composed from.
+    drop(driver);
+    #[cfg(feature = "host-hook")]
+    {
+        use flui_sdk::view::dev_reload::{DevReloadHook as _, ReloadEvent, ReloadWake};
+        let mut hook = flui_hot_reload::WorkerReloadHook::new(&watched);
+        hook.attach(ReloadWake::new(|| {}));
+        let ReloadEvent::Loaded(version) = hook.poll() else {
+            panic!("the first poll after attach reports the loaded image's version");
+        };
+        assert_eq!(version.revision.get(), 4);
+        assert_eq!(hook.poll(), ReloadEvent::Unchanged, "once");
+        hook.detach();
+    }
 }

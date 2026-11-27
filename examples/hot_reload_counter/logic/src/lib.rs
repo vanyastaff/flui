@@ -1,11 +1,14 @@
 //! Reloadable UI logic for the hot-reload counter example.
 //!
-//! Edit `INCREMENT_LABEL` below, rebuild this crate, and the host reloads the
-//! dylib while preserving the counter value in the host element tree.
+//! Edit `INCREMENT_LABEL` below and save while `flui run` runs the host: it
+//! rebuilds this crate, stages the dylib with its version in the
+//! `.flui_worker_plugin` manifest, and the host reassembles while preserving
+//! the counter value in the host element tree. A host run by hand loads the
+//! worker it finds at start, and without the manifest's version it reloads a
+//! rebuilt worker but reassembles nothing (ADR-0393 §3).
 //!
 //! ```bash
-//! cargo build -p hot-reload-counter-logic
-//! FLUI_WORKER_PLUGIN=target/debug/counter_logic.dll cargo run -p hot-reload-counter-host
+//! flui run
 //! ```
 
 use std::sync::{

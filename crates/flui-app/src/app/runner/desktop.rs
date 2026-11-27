@@ -1,4 +1,4 @@
-use crate::app::hot_reload::{ScenePlugin, WorkerReload};
+use crate::app::hot_reload::{RuntimeReload, ScenePlugin, WorkerReload};
 use flui_foundation::panic::FirstPanic;
 use flui_native::HostWindow;
 use flui_platform::PlatformWindow;
@@ -211,7 +211,7 @@ where
             source: Arc::new(e),
         });
     }
-    worker_reload.register_ui_runtime(&ui_runtime);
+    let worker_reload = worker_reload.register_ui_runtime(&ui_runtime);
     // The application's request to rebuild a given-up GPU device
     // (`AppHandle::retry_render_device`, ADR-0267) asks this window for a
     // frame, which acts on it.
@@ -442,7 +442,7 @@ where
 pub(super) struct DesktopFrameDriver {
     pub(super) deadlines: Rc<DesktopWakeDeadlines>,
     pub(super) raster: RasterSlot,
-    pub(super) worker_reload: WorkerReload,
+    pub(super) worker_reload: RuntimeReload,
     /// The same hook's scene plugin, which may draw this window's frame in
     /// place of the widget tree (ADR-0391).
     pub(super) scene_plugin: ScenePlugin,
