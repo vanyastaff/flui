@@ -170,13 +170,14 @@ pub(crate) fn push<V, A, R>(
                 .unwrap_or(RenderUpdateImpact::NONE)
         })
     });
-    finish_push(
-        core.state(),
-        owner,
-        TypeId::of::<V>(),
+    assert!(
         updated.is_some(),
-        caught,
+        "BUG: a render element's RenderId must resolve to a live node holding its render \
+         object type during update"
     );
+    if caught.held().is_some() {
+        push_failed(core.state(), owner, TypeId::of::<V>(), caught);
+    }
 }
 
 /// The render object [`push`] updates, or `None` when the element mounted
@@ -226,19 +227,16 @@ fn update_context<'a>(
     }
 }
 
+/// The failure half of [`push`], compiled once: records the update's panic
+/// and resumes it.
 #[inline(never)]
-fn finish_push(
+#[cold]
+fn push_failed(
     core: &CoreState,
     owner: &mut crate::ElementOwner<'_>,
     view_type: TypeId,
-    updated: bool,
     caught: FirstPanic,
 ) {
-    assert!(
-        updated,
-        "BUG: a render element's RenderId must resolve to a live node holding its render \
-         object type during update"
-    );
     if let Some(payload) = caught.held() {
         owner.record_armed_lifecycle_panic(
             core.self_id,

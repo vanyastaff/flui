@@ -99,29 +99,31 @@ pub(super) fn armed_state_hook<V, A>(
     let sink_start = lifecycle_sink_len(owner);
     let mut caught = FirstPanic::new();
     caught.contain(run);
-    finish_armed_hook(
-        core.state(),
-        owner,
-        TypeId::of::<V>(),
-        hook,
-        context,
-        sink_start,
-        caught,
-    );
+    mark_lifecycle_records(owner, sink_start);
+    if caught.held().is_some() {
+        armed_hook_failed(
+            core.state(),
+            owner,
+            TypeId::of::<V>(),
+            hook,
+            context,
+            caught,
+        );
+    }
 }
 
-/// The view-independent half of [`armed_state_hook`]: what follows the hook.
+/// The failure half of [`armed_state_hook`], compiled once: records the
+/// hook's panic and resumes it.
 #[inline(never)]
-fn finish_armed_hook(
+#[cold]
+fn armed_hook_failed(
     core: &CoreState,
     owner: &mut crate::ElementOwner<'_>,
     view_type: TypeId,
     hook: LifecycleHook,
     context: &'static str,
-    sink_start: Option<usize>,
     caught: FirstPanic,
 ) {
-    mark_lifecycle_records(owner, sink_start);
     if let Some(payload) = caught.held() {
         owner.record_armed_lifecycle_panic(
             core.self_id,
@@ -247,12 +249,16 @@ pub(super) fn publish_provided<V, A>(
     super::behavior_commons::begin_reactive_build(core, owner);
     let mut caught = FirstPanic::new();
     caught.contain(|| publication.publish(owner, provide));
-    finish_provided(core.state(), owner, TypeId::of::<V>(), caught);
+    if caught.held().is_some() {
+        provide_failed(core.state(), owner, TypeId::of::<V>(), caught);
+    }
 }
 
-/// The view-independent half of [`publish_provided`]: what follows `provide`.
+/// The failure half of [`publish_provided`], compiled once: disarms the build
+/// phase, records the hook's panic and resumes it.
 #[inline(never)]
-fn finish_provided(
+#[cold]
+fn provide_failed(
     core: &CoreState,
     owner: &mut crate::ElementOwner<'_>,
     view_type: TypeId,

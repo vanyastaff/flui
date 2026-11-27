@@ -190,90 +190,85 @@ where
     // here on both exits (the panic path below included).
     // A build panic is replaced by an ErrorView, not unwound.
     let mut caught = FirstPanic::new();
-    let built = caught.contain(build);
-    finish_build(
-        core.state(),
-        owner,
-        behavior_name,
-        TypeId::of::<V>(),
-        built,
-        caught,
-    )
-}
-
-/// The view-independent half of [`build_or_recover_begun`]: what follows the
-/// caught `build()`.
-#[inline(never)]
-fn finish_build(
-    state: &CoreState,
-    owner: &mut crate::ElementOwner<'_>,
-    behavior_name: &'static str,
-    view_type: TypeId,
-    built: Option<BoxedView>,
-    caught: FirstPanic,
-) -> BoxedView {
-    let building = state.self_id;
-    match built.ok_or_else(move || {
-        caught
-            .into_payload()
-            .expect("BUG: a build that returned no view holds its panic")
-    }) {
-        Ok(child_view) => {
-            if let Some(id) = building {
+    match caught.contain(build) {
+        Some(child_view) => {
+            if let Some(id) = core.self_id() {
                 owner.reactive.end_element_build(id, true);
             }
             child_view
         }
-        Err(payload) => {
-            // Classification borrows the original; retire it before recovery
-            // invokes user factories or diagnostics. Opaque aggregate drop glue
-            // could otherwise abort even after successful ErrorView substitution.
-            let Some(element) = building else {
-                let error = FrameworkError::from_panic(
-                    payload.as_ref(),
-                    format!("building {behavior_name}"),
-                );
-                flui_foundation::panic::discard_payload(payload);
-                // A panicking log is contained so ErrorView substitution
-                // proceeds.
-                FirstPanic::new().contain(|| {
-                    tracing::error!(
-                        behavior_name,
-                        panic_message = %error.message,
-                        "lifecycle hook panicked outside the slab; substituting ErrorView \
-                         (no element id to record)"
-                    );
-                });
-                return crate::view::ErrorView::build_error_view(
-                    &error,
-                    owner.capabilities.error_view_builder,
-                );
-            };
-            let panic = RecoveredPanic::from_payload(
-                RecoveredAt::Element {
-                    element,
-                    parent: None,
-                },
-                view_type,
-                LifecycleHook::Build,
-                payload.as_ref(),
-                format!("building {behavior_name}"),
-            )
-            .with_site(state.site);
+        None => recover_build(
+            core.state(),
+            owner,
+            behavior_name,
+            TypeId::of::<V>(),
+            caught,
+        ),
+    }
+}
+
+/// The failure half of [`build_or_recover_begun`], compiled once: records the
+/// build's panic and builds the `ErrorView` that replaces its child.
+#[inline(never)]
+#[cold]
+fn recover_build(
+    state: &CoreState,
+    owner: &mut crate::ElementOwner<'_>,
+    behavior_name: &'static str,
+    view_type: TypeId,
+    caught: FirstPanic,
+) -> BoxedView {
+    let building = state.self_id;
+    let payload = caught
+        .into_payload()
+        .expect("BUG: a build that returned no view holds its panic");
+    {
+        // Classification borrows the original; retire it before recovery
+        // invokes user factories or diagnostics. Opaque aggregate drop glue
+        // could otherwise abort even after successful ErrorView substitution.
+        let Some(element) = building else {
+            let error =
+                FrameworkError::from_panic(payload.as_ref(), format!("building {behavior_name}"));
             flui_foundation::panic::discard_payload(payload);
-            owner.reactive.end_element_build(element, false);
-            // A recovery factory failure retains its existing authority. No
-            // successful recovery record is published until it returns a view.
-            let error_view = crate::view::ErrorView::build_error_view(
-                &panic.error,
+            // A panicking log is contained so ErrorView substitution
+            // proceeds.
+            FirstPanic::new().contain(|| {
+                tracing::error!(
+                    behavior_name,
+                    panic_message = %error.message,
+                    "lifecycle hook panicked outside the slab; substituting ErrorView \
+                     (no element id to record)"
+                );
+            });
+            return crate::view::ErrorView::build_error_view(
+                &error,
                 owner.capabilities.error_view_builder,
             );
-            if let Some(flag) = owner.build_recovered {
-                flag.set(true);
-            }
-            owner.push_recovered_panic(panic);
-            error_view
+        };
+        let panic = RecoveredPanic::from_payload(
+            RecoveredAt::Element {
+                element,
+                parent: None,
+            },
+            view_type,
+            LifecycleHook::Build,
+            payload.as_ref(),
+            format!("building {behavior_name}"),
+        )
+        .with_site(state.site);
+        flui_foundation::panic::discard_payload(payload);
+        owner.reactive.end_element_build(element, false);
+        // A recovery factory failure retains its existing authority. No
+        // successful recovery record is published until it returns a view.
+        let error_view = crate::view::ErrorView::build_error_view(
+            &panic.error,
+            owner.capabilities.error_view_builder,
+        );
+        if let Some(flag) = owner.build_recovered {
+            flag.set(true);
         }
+        owner.push_recovered_panic(panic);
+        error_view
     }
 }
 
