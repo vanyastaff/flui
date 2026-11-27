@@ -34,6 +34,11 @@ default = []
 # is refused as not registered, and the application links no TLS stack.
 http = ["flui-native/http"]
 
+# The WebGL2 fallback on the web (ADR-0404): a browser that gives no WebGPU
+# adapter draws through WebGL2. The facade's `webgl2` forwards here, and
+# `flui-engine` owns it; no other target builds anything for it.
+webgl2 = ["flui-engine/webgl2"]
+
 # The image cache each UI runtime keeps for `Image::asset` and `Image::network`
 # (`flui_assets::ImageCacheCapability`, ADR-0387), which the runtime's built-ins
 # register and the runtime trims under memory pressure. The facade's `images`

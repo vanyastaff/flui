@@ -45,5 +45,5 @@ requires = [
 set-by = "the Rust target, wgpu, and the window and display protocols the backend binds"
 
 [web]
-requires = ["WebGPU or WebGL2"]
+requires = ["WebGPU, or WebGL2 where the application names the `webgl2` feature (ADR-0404)"]
 set-by = "the browser's graphics API, detected and never read from a browser version"

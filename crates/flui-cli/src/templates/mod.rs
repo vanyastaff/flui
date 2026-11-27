@@ -41,6 +41,19 @@ pub(super) fn main_rs(lib_name: &str) -> String {
     )
 }
 
+/// The facade features an application's `flui` dependency names: `webgl2`
+/// keeps the web build's WebGL2 fallback, so a generated application draws in
+/// a browser without WebGPU (ADR-0404). A library template names none: the
+/// application that links it chooses.
+pub(super) const APPLICATION_FEATURES: &[&str] = &["webgl2"];
+
+/// The comment above an application's `flui` dependency, saying what
+/// [`APPLICATION_FEATURES`] buys and what removing it saves.
+pub(super) const APPLICATION_FEATURES_COMMENT: &str = "\
+# `webgl2`: a browser without WebGPU draws through WebGL2. Remove it to ship
+# the web build on WebGPU only, about 2 MB smaller (ADR-0404).
+";
+
 /// The profiles every template's workspace root writes. Dependencies are
 /// optimized in debug builds too: wgpu and naga's shader translation, Parley's
 /// shaping and lyon's tessellation set a debug build's frame time, and a

@@ -461,7 +461,8 @@ impl WebFrameDriver {
                 Err(error) => {
                     if let Some(unsupported) = crate::app::UnsupportedSystem::from_renderer(&error)
                     {
-                        // Neither WebGPU nor WebGL2 gave a device: the page is
+                        // No web backend the build carries gave a device (WebGPU,
+                        // and WebGL2 under `webgl2`, ADR-0404): the page is
                         // below FLUI's floor, and asking again finds the same
                         // (ADR-0244 §3). The claim is settled, so no rebuild is
                         // owed and, with no slot, no frame runs.

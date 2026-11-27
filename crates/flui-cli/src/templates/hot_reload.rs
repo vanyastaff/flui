@@ -224,7 +224,8 @@ fn host_plan(
     worker_lib: &str,
     source: &DependencySource,
 ) -> ProjectPlan {
-    let facade_dep = source.dependency(FrameworkPackage::Facade, &[]);
+    let facade_dep = source.dependency(FrameworkPackage::Facade, super::APPLICATION_FEATURES);
+    let features_comment = super::APPLICATION_FEATURES_COMMENT;
     let reload_dep = source.dependency(FrameworkPackage::HotReload, &["app-plugin"]);
     let types_dep = member_dep(types_package);
     let worker_dep = optional_member_dep(worker_package);
@@ -253,7 +254,7 @@ linked = ["dep:{worker_package}"]
 {RELOAD_FEATURE} = ["flui-hot-reload/host-hook"]
 
 [dependencies]
-flui = {facade_dep}
+{features_comment}flui = {facade_dep}
 flui-hot-reload = {reload_dep}
 {types_package} = {types_dep}
 {worker_package} = {worker_dep}

@@ -363,7 +363,7 @@ its anchor: update the links and the `GapId` slug in the same pull request.
 - Android packages API 23; below API 24, or on a device without a working Vulkan driver, the renderer falls back to GLES 3.0, which no device has run yet.
 - The CLI writes no Windows application manifest (`supportedOS`), and an iOS app built through a hand-made Xcode project takes its deployment target from that project; only the start-up refusal holds the floor there.
 - Windows links a 1607 API unconditionally; the Linux release glibc is the runner's.
-- The GPU fallback (Vulkan to GLES 3.0, WebGPU to WebGL2, Direct3D 12 to WARP) is compiled and the engine's pixel suites pass on llvmpipe GL; only Linux has run it, and no browser has run WebGL2 or Windows WARP.
+- The GPU fallback (Vulkan to GLES 3.0, WebGPU to WebGL2 where the application names `webgl2` (ADR-0404), Direct3D 12 to WARP) is compiled and the engine's pixel suites pass on llvmpipe GL; only Linux has run it, and no browser has run WebGL2 or Windows WARP.
 
 ### No presentation feedback
 
