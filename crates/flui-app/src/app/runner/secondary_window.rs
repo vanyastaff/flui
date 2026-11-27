@@ -693,7 +693,7 @@ pub(super) fn drain_pending_secondary_window_completions(
             Some(std::task::Poll::Pending) | None => {}
             Some(std::task::Poll::Ready(Ok(opened))) => match super::opened_window(opened) {
                 Ok(window) => {
-                    request.routes.adopt(window.id());
+                    request.routes.adopt(&window);
                     PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {
                         queue.borrow_mut().push(PendingCompletion {
                             reply: None,
@@ -862,7 +862,7 @@ pub(super) fn open_secondary_window_impl(
 
     match open {
         WindowOpen::Ready(window) => {
-            routes.adopt(window.id());
+            routes.adopt(&window);
             finish_open_secondary_window(install_config, window)
         }
         WindowOpen::Pending(pending) => {
@@ -982,7 +982,7 @@ where
 
     match open {
         WindowOpen::Ready(window) => {
-            opening.adopt(window.id());
+            opening.adopt(&window);
             // Preparation consumes the captured root once. The completion then
             // retains the native window and liveness reservation until the
             // owner's publication receipt settles, including when this request
@@ -1000,7 +1000,16 @@ where
                 input_tap: config.input_tap.clone(),
                 dev_tree_observer: config.dev_tree_observer.clone(),
             };
-            let reload = crate::app::hot_reload::WorkerReload::from_config(&config);
+            // The loop's development reload drives every window it renders,
+            // whatever configuration the application opened the window with.
+            let reload = APP_RUNTIME
+                .with(|slot| {
+                    slot.borrow()
+                        .desktop_loop
+                        .as_ref()
+                        .map(|desktop| desktop.reload.reload())
+                })
+                .unwrap_or_default();
             let host = APP_RUNTIME.with(|slot| slot.borrow().main_host_lifecycle);
             let config_for_install = config;
             PENDING_SECONDARY_WINDOW_COMPLETIONS.with(|queue| {

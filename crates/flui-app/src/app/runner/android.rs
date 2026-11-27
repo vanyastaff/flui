@@ -149,7 +149,7 @@ where
                 return Err(anyhow::Error::from(error).context("Failed to create Android window"));
             }
         };
-        routes.adopt(host.id());
+        routes.adopt(&host);
         let presentation_window = super::presentation_window(std::rc::Rc::clone(&host))
             .with_pointer_resampling(config.pointer_resampling);
         let window = std::rc::Rc::clone(presentation_window.window());

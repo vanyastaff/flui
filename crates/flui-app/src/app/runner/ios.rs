@@ -233,7 +233,7 @@ where
         } = &event
             && let Some(routes) = adopting.borrow_mut().remove(session)
         {
-            routes.adopt(window.id());
+            routes.adopt(window);
         }
         if let IOSSceneEvent::Discarded { session } = &event {
             adopting.borrow_mut().remove(session);

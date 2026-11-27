@@ -128,7 +128,7 @@ impl OpeningWindow {
 
     /// The native window exists: the routes it was opened with are found by
     /// its id from now on.
-    pub(super) fn adopt(&self, window: flui_platform::WindowId) {
+    pub(super) fn adopt(&self, window: &Rc<dyn HostWindow>) {
         self.routes.adopt(window);
     }
 

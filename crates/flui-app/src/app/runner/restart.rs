@@ -46,7 +46,8 @@ impl Failure {
 }
 
 /// Run the restart a poll found due, at the end of the owner's turn, and
-/// report its outcome. Nothing when none is due, or while a UI runtime is
+/// report its outcome; in a loop where no UI runtime polls the hook, poll it
+/// here first. Nothing when none is due, or while a UI runtime is
 /// checked out (the turn is nested in one's code): the next turn runs it.
 pub(super) fn restart_if_due() {
     if super::owner_dispatch::any_runtime_checked_out() {
@@ -60,6 +61,7 @@ pub(super) fn restart_if_due() {
     }) else {
         return;
     };
+    reload.poll_without_ui_runtime();
     let Some(version) = reload.take_restart_due() else {
         return;
     };
@@ -176,7 +178,21 @@ fn retire_application() -> Option<KeptMain> {
         }
         None => kept,
     };
+    let kept_id = kept.as_ref().map(|kept| kept.window.id());
+    let opened: Vec<_> = APP_RUNTIME
+        .with(|slot| slot.borrow().open_windows())
+        .into_iter()
+        .filter(|window| Some(window.id()) != kept_id)
+        .collect();
     super::owner_dispatch::retire_installed_host(&mut first);
+    // Closed once their presentations are gone, so no close request reaches
+    // a handler of the earlier application.
+    for window in opened {
+        first.contain(|| {
+            super::discard_window(window.as_ref(), "a window of a retired application");
+        });
+        first.contain(|| drop(window));
+    }
     super::owner_dispatch::end_application_work(
         &mut first,
         std::time::Instant::now() + RETIRE_BOUND,

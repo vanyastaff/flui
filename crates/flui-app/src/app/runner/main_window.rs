@@ -352,7 +352,7 @@ impl MainController {
             .opening
             .take()
             .expect("BUG: a main window is installed once, by the open that carries its routes");
-        opening.adopt(window.id());
+        opening.adopt(&window);
         if !self.is_current() {
             contain(|| {
                 super::discard_window(window.as_ref(), "a main window nobody waits for");
@@ -1128,11 +1128,19 @@ where
                 // The loop takes the hooks and owns them until it ends
                 // (`shutdown_main_window`), across a development restart too.
                 super::dev_agents::start(&application.config);
-                // A restart a frame finds due runs in the owner turn this asks for.
+                // A restart a frame finds due runs in the owner turn this asks
+                // for. The hook's wake asks for one too, in which a loop with
+                // no UI runtime polls it.
                 let turn: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
                     let _ = proxy.wake();
                 });
-                let reload = LoopReload::attach(&application.config, runtime_wake_callback(), turn);
+                let frame = runtime_wake_callback();
+                let woken = Arc::clone(&turn);
+                let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                    frame();
+                    woken();
+                });
+                let reload = LoopReload::attach(&application.config, wake, turn);
                 APP_RUNTIME.with(|slot| {
                     slot.borrow_mut().desktop_loop = Some(DesktopLoop {
                         reload,

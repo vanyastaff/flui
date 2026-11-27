@@ -499,9 +499,9 @@ pub(crate) struct AppRuntime {
     /// What this host gives back on a memory-pressure notice: the receivers the
     /// run start installs, reclaimed by the owner's turn for the notice.
     pub(super) host_memory: Rc<super::host_memory::HostMemory>,
-    /// The handler each window this runner opened was opened with, by window
+    /// Every window this runner opened, with the handler it was opened with
     /// (`runner::window_routes`).
-    window_routes: super::runner::window_routes::RouteBook,
+    pub(super) window_routes: super::runner::window_routes::RouteBook,
 }
 
 impl AppRuntime {
@@ -616,13 +616,23 @@ impl AppRuntime {
         self.window_routes.find(window)
     }
 
-    /// Record the routes the window `window` was opened with.
+    /// Record `window`, opened with `routes`.
     pub(super) fn adopt_window_routes(
         &mut self,
-        window: flui_platform::WindowId,
+        window: Rc<dyn flui_native::HostWindow>,
         routes: std::rc::Weak<super::runner::window_routes::WindowRoutes>,
     ) {
         self.window_routes.adopt(window, routes);
+    }
+
+    /// Every window the runner opened that has not closed, in the order it
+    /// opened.
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+        expect(dead_code, reason = "only the desktop loop restarts its application")
+    )]
+    pub(super) fn open_windows(&self) -> Vec<Rc<dyn flui_native::HostWindow>> {
+        self.window_routes.open_windows()
     }
 
     /// Resolves and caches [`SharedEngineServices`] on first call; returns

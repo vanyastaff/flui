@@ -265,7 +265,8 @@ fn contain(body: impl FnOnce()) {
 
 /// The desktop and iOS driver: the configuration's hook, if any.
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-#[derive(Clone)]
+/// `Default` drives no hook.
+#[derive(Clone, Default)]
 pub(crate) struct WorkerReload(Option<DevReload>);
 
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
@@ -356,6 +357,30 @@ const RESTARTS_IN_PROCESS: bool = cfg!(not(target_os = "ios"));
     not(target_arch = "wasm32")
 ))]
 impl WorkerReload {
+    /// Poll the hook in an owner turn of a loop where no UI runtime polls it
+    /// at a frame boundary (ADR-0393 §3): no window draws, or the restart
+    /// that retired them composed nothing. A version of another layout is a
+    /// restart due now; one of the composed layout is recorded for the UI
+    /// runtimes built later.
+    pub(crate) fn poll_without_ui_runtime(&self) {
+        let Some(reload) = &self.0 else {
+            return;
+        };
+        {
+            let slot = reload.0.lock();
+            if !slot.attached || slot.record.holds_any() {
+                return;
+            }
+        }
+        let polled = reload.lend("poll", |hook| (hook.poll(), hook.reassemble_requested()));
+        if let Lent::Returned((event, rebuild)) = polled {
+            let mut slot = reload.0.lock();
+            if let Some(version) = slot.record.report(event, rebuild) {
+                slot.restart_due = Some(version);
+            }
+        }
+    }
+
     /// The restart a poll found due, taken; `None` when none is.
     pub(crate) fn take_restart_due(&self) -> Option<CodeVersion> {
         self.0.as_ref()?.0.lock().restart_due.take()

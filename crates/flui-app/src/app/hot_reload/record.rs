@@ -148,6 +148,16 @@ impl Record {
         self.runtimes.contains_key(&runtime)
     }
 
+    /// Whether any UI runtime is in the record: one polls the hook at its
+    /// frame boundary.
+    #[cfg_attr(
+        target_os = "ios",
+        expect(dead_code, reason = "only the desktop loop polls without a UI runtime")
+    )]
+    pub(super) fn holds_any(&self) -> bool {
+        !self.runtimes.is_empty()
+    }
+
     /// The loop ended: the next loop composes its application anew.
     pub(super) fn clear(&mut self) {
         *self = Self::default();
