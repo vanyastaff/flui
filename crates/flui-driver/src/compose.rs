@@ -3,7 +3,7 @@
 //! locate, check actionability, perform by the chosen input path, observe. A gesture the app's
 //! agent serves on a path other than `os` goes to the agent whole, from every entry here, carrying
 //! the path [`choose_path`] chose as its `via` ([`answered_by_agent`]); the sequence a composed
-//! gesture performs is [`gestures`](flui_protocol::input::gestures)'s, the one the agent plays.
+//! gesture performs is [`gestures`]'s, the one the agent plays.
 //!
 //! - **Locate.** A locator is resolved at the moment of the action, never cached (ADR-0238 §4):
 //!   strict with several matches is [`Error::Ambiguous`], counting every match and naming the

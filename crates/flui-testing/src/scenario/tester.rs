@@ -296,7 +296,7 @@ impl<C: Connection> Tester<C> {
                 find: Box::new(find.locator().clone()),
                 check: Some(ActionabilityCheck::Visible),
                 covered_by: None,
-                diagnosis: self.diagnosis(&step, Vec::new(), Vec::new()),
+                diagnosis: Box::new(self.diagnosis(&step, Vec::new(), Vec::new())),
             }),
         }
     }
@@ -600,7 +600,7 @@ impl<C: Connection> Tester<C> {
             condition: Box::new(condition),
             end: outcome.end,
             observation: Box::new(outcome.observation),
-            diagnosis: self.diagnosis(&step, seen, outcome.unsettled),
+            diagnosis: Box::new(self.diagnosis(&step, seen, outcome.unsettled)),
         })
     }
 
@@ -640,7 +640,7 @@ impl<C: Connection> Tester<C> {
         }
         Err(TestError::NotSettled {
             limit,
-            diagnosis: self.diagnosis(step, Vec::new(), outcome.unsettled),
+            diagnosis: Box::new(self.diagnosis(step, Vec::new(), outcome.unsettled)),
         })
     }
 
@@ -777,7 +777,7 @@ impl<C: Connection> Tester<C> {
             Err(ambiguity) => Err(TestError::Ambiguous {
                 find: Box::new(find.locator().clone()),
                 matched: u32::try_from(ambiguity.matched).unwrap_or(u32::MAX),
-                diagnosis: self.diagnosis(step, ambiguity.candidates, Vec::new()),
+                diagnosis: Box::new(self.diagnosis(step, ambiguity.candidates, Vec::new())),
             }),
         }
     }
@@ -790,7 +790,7 @@ impl<C: Connection> Tester<C> {
         let nearest = tree.map_or_else(Vec::new, |tree| nearest(find, &tree));
         TestError::NotFound {
             find: Box::new(find.clone()),
-            diagnosis: self.diagnosis(step, nearest, Vec::new()),
+            diagnosis: Box::new(self.diagnosis(step, nearest, Vec::new())),
         }
     }
 
@@ -806,7 +806,7 @@ impl<C: Connection> Tester<C> {
                 TestError::Unanswered {
                     may_have_run,
                     released,
-                    diagnosis: self.diagnosis(step, Vec::new(), Vec::new()),
+                    diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
                 }
             }
             CallError::Failed(object) => match (object.code, find) {
@@ -823,17 +823,21 @@ impl<C: Connection> Tester<C> {
                     TestError::Ambiguous {
                         find: Box::new(find.clone()),
                         matched: u32::try_from(matched).unwrap_or(u32::MAX),
-                        diagnosis: self.diagnosis(step, object.candidates.clone(), Vec::new()),
+                        diagnosis: Box::new(self.diagnosis(
+                            step,
+                            object.candidates.clone(),
+                            Vec::new(),
+                        )),
                     }
                 }
                 (ErrorCode::NotActionable, Some(find)) => TestError::NotActionable {
                     find: Box::new(find.clone()),
                     check: object.failed,
                     covered_by: object.covered_by.clone(),
-                    diagnosis: self.diagnosis(step, Vec::new(), Vec::new()),
+                    diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
                 },
                 _ => TestError::Agent {
-                    diagnosis: self.diagnosis(step, Vec::new(), Vec::new()),
+                    diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
                     error: object,
                 },
             },
@@ -842,7 +846,7 @@ impl<C: Connection> Tester<C> {
                     ErrorCode::Platform,
                     other.to_string(),
                 )),
-                diagnosis: self.diagnosis(step, Vec::new(), Vec::new()),
+                diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
             },
         }
     }
@@ -854,7 +858,7 @@ impl<C: Connection> Tester<C> {
         step: &Step,
         candidates: Vec<String>,
         unsettled: Vec<UnsettledCause>,
-    ) -> Box<Diagnosis> {
+    ) -> Diagnosis {
         let shown = match self
             .connection
             .call::<SemanticsRead>(ReadParams::new(self.window))
@@ -863,7 +867,7 @@ impl<C: Connection> Tester<C> {
             Err(error) => format!("(the semantics tree could not be read: {error})"),
         };
         let reading = self.connection.now();
-        Box::new(Diagnosis {
+        Diagnosis {
             step: step.number,
             verb: step.verb,
             caller: step.caller,
@@ -874,7 +878,7 @@ impl<C: Connection> Tester<C> {
             unsettled,
             journal: self.journal.before(step),
             registration: Some(self.report.register()),
-        })
+        }
     }
 }
 
