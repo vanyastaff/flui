@@ -33,6 +33,10 @@
   `envelope::Unread`) hold, for every server of the protocol, which
   calls a role may make, how a hello's token is compared and how a line that is not a request
   is refused.
+- **`flui-app`**: on the desktop, `Application::run` and `run_resident` called while a
+  development restart runs the application's entry hand the application to that restart and
+  return `Ok(())` without starting a loop (ADR-0393 §4). A second `run` in the same entry
+  returns the new `LaunchError::AlreadyHandedOver`. No host starts a restart yet.
 
 ### Changed
 

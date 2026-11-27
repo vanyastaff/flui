@@ -56,6 +56,15 @@ impl Application {
         V: View + Clone + 'static,
         F: FnMut(&AppHandle) -> V + 'static,
     {
+        // Inside a development restart the loop already runs: the entry hands
+        // its application over and the restart composes it (ADR-0393 §4).
+        if super::hot_reload::hand_over::is_open() {
+            let mut factory = factory;
+            return super::hot_reload::hand_over::hand(self.into_run(
+                Box::new(move |handle: &AppHandle| flui_view::BoxedView::new(factory(handle))),
+                StartupWindow::None,
+            ));
+        }
         super::runner::run_application(self.into_run(factory, StartupWindow::None))
     }
 

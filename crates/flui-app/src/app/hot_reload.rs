@@ -53,6 +53,19 @@ use flui_foundation::panic::FirstPanic;
 
 // Only the desktop and iOS runners poll the hook, so the record is read
 // nowhere else.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the restart that opens the hand-over (ADR-0393 §4 steps 1, 3 and 4) is the next change"
+    )
+)]
+pub(crate) mod hand_over;
 #[cfg_attr(
     any(target_arch = "wasm32", target_os = "android"),
     expect(
@@ -61,6 +74,12 @@ use flui_foundation::panic::FirstPanic;
     )
 )]
 mod record;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) use hand_over::HandOver;
 
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use record::Due;

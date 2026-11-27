@@ -205,6 +205,19 @@ impl Application {
     where
         V: View + Clone + 'static,
     {
+        // Inside a development restart the loop already runs: the entry hands
+        // its application over and the restart composes it (ADR-0393 §4).
+        #[cfg(all(
+            not(target_os = "android"),
+            not(target_os = "ios"),
+            not(target_arch = "wasm32")
+        ))]
+        if super::hot_reload::hand_over::is_open() {
+            return super::hot_reload::hand_over::hand(self.into_run(
+                Box::new(move |_: &super::AppHandle| flui_view::BoxedView::new(root.clone())),
+                super::application::StartupWindow::Open,
+            ));
+        }
         super::runner::run(self, root)
     }
 }
@@ -251,6 +264,19 @@ pub enum LaunchError {
     ))]
     #[error("initial main window failed: {0}")]
     InitialWindow(#[source] super::AppWindowError),
+    /// A development restart runs the entry again, and this entry called
+    /// `run` a second time: the application of its first call is the one the
+    /// restart composes (ADR-0393 §4). An entry runs one application.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    #[error(
+        "the entry already handed an application to the development restart; an entry calls \
+         `run` once"
+    )]
+    AlreadyHandedOver,
     /// The `on_ready` observer unwound before the first window was created.
     #[error("application on_ready callback panicked")]
     OnReadyPanicked,

@@ -270,7 +270,9 @@ kept. The host, at the end of the turn:
    on the owner thread hands its application and root to it and returns without starting a loop,
    and the entry's declarations (`#[flui::main]`'s `declare`) are recorded for the new scope. The
    loop holds no borrow of its own state across the call. An entry that panics, returns without
-   handing an application over, or hands one `run` refuses (`LaunchError`) fails the restart.
+   handing an application over, or hands one `run` refuses (`LaunchError`) fails the restart. A
+   second `run` in that entry is refused with `LaunchError::AlreadyHandedOver`, and the first
+   application is the one composed.
 3. **composes the handed application** as `run` composes it at the start: a new scope, and for
    each window the runner opened a new UI runtime, with a text context built from the kept system
    fonts and the application's registrations, that mounts the root and attaches to the window's

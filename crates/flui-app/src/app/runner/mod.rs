@@ -525,6 +525,18 @@ pub(in crate::app) fn swap_entry_declarations(
     })
 }
 
+/// Lend this thread's development hand-over (ADR-0393 §4 step 2) to `lend`;
+/// refused while this thread's loop state is borrowed.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(in crate::app) fn with_hand_over<R>(
+    lend: impl FnOnce(&mut crate::app::hot_reload::HandOver) -> R,
+) -> Result<R, std::cell::BorrowMutError> {
+    host::APP_RUNTIME.with(|slot| Ok(lend(&mut slot.try_borrow_mut()?.hand_over)))
+}
 /// What [`swap_entry_declarations`] recorded, while its entry runs.
 pub(in crate::app) fn entry_declarations() -> Option<flui_view::navigation::OpenDeclarations> {
     host::APP_RUNTIME.with(|slot| {
