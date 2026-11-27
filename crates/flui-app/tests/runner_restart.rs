@@ -797,11 +797,70 @@ fn a_restart_keeps_the_window_and_registers_the_fonts_again() {
     run.join().expect("the run ends");
 }
 
+/// §4: what the operating system opens after a restart reaches the later
+/// application's callback; the earlier application's is gone with it.
+fn opened_files_after_a_restart_reach_the_later_application() {
+    fn hears(
+        heard: &Arc<Mutex<Vec<&'static str>>>,
+        who: &'static str,
+    ) -> impl Fn(&[flui_platform::OpenedFile]) + 'static {
+        let heard = Arc::clone(heard);
+        move |files| {
+            heard
+                .lock()
+                .expect("the heard lock")
+                .extend(files.iter().map(|_| who));
+        }
+    }
+    fn open(run: &HeadlessRunHandle) {
+        run.open(
+            flui_platform::Opened::bounded(
+                [],
+                [flui_platform::OpenedFile::new("/a.note")],
+                flui_platform::OpenTarget::Application,
+                flui_platform::Launch::Running,
+            )
+            .0,
+        );
+        run.run_owner_turn();
+    }
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let hook = ScriptedReload::new();
+    {
+        let (heard, later) = (Arc::clone(&heard), note(&Lives::new()));
+        hook.entry(move || {
+            Application::new()
+                .on_open_files(hears(&heard, "later"))
+                .run(later.clone())
+                .expect("the run hands its application over");
+        });
+    }
+    let application = Application::new()
+        .config(development(&hook))
+        .on_open_files(hears(&heard, "earlier"));
+    let run = running_with(&hook, application, note(&Lives::new()));
+    open(&run);
+
+    hook.load(version(2, 2));
+    turns(&run);
+    assert_eq!(
+        hook.take_reports(),
+        [ReloadReport::Restarted(version(2, 2))]
+    );
+    open(&run);
+    assert_eq!(*heard.lock().expect("the heard lock"), ["earlier", "later"]);
+    run.join().expect("the run ends");
+}
+
 #[test]
 fn runner_restart() {
     crate::run_table(
         "runner_restart",
         &[
+            (
+                "opened_files_after_a_restart_reach_the_later_application",
+                opened_files_after_a_restart_reach_the_later_application,
+            ),
             (
                 "a_changed_layout_restarts_and_a_later_body_edit_reassembles",
                 a_changed_layout_restarts_and_a_later_body_edit_reassembles,

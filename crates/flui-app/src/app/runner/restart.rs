@@ -100,11 +100,13 @@ fn restart(reload: &WorkerReload) -> Result<(), Failure> {
              pools it started with until the process restarts"
         );
     }
-    // What the operating system opens is the loop's: its declarations are
-    // registered with the system at launch, and a process restart applies
-    // the later application's.
-    let opening = std::mem::take(&mut handed.opening);
-    contain(|| drop(opening));
+    // What the operating system opens is declared to it as the run starts,
+    // so the declarations stay the loop's until a process restart; the
+    // later application's callback is where opened files go from now on.
+    let mut opening = std::mem::take(&mut handed.opening);
+    let displaced = super::host::current_open_routing()
+        .and_then(|routing| routing.replace_open_files(opening.on_open_files.take()));
+    contain(|| drop((displaced, opening)));
     let capabilities = std::mem::take(&mut handed.capabilities);
     #[expect(
         clippy::disallowed_methods,
@@ -200,6 +202,11 @@ fn retire_application() -> Option<KeptMain> {
     );
     let scope = APP_RUNTIME.with(|slot| std::mem::take(&mut slot.borrow_mut().application));
     first.contain(|| drop(scope));
+    // Its callback for opened files goes with it: a file opened before the
+    // later application is composed is logged, as with no callback.
+    let open_files =
+        super::host::current_open_routing().and_then(|routing| routing.replace_open_files(None));
+    first.contain(|| drop(open_files));
     if let Some(payload) = first.into_payload() {
         tracing::error!(
             panic = payload_text(payload.as_ref()).unwrap_or("a panic without a message"),

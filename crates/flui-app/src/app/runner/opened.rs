@@ -154,6 +154,11 @@ impl std::fmt::Debug for OpenSettings {
 /// the main window at most.
 pub(crate) struct OpenRouting {
     settings: OpenSettings,
+    /// Where opened files go: the running application's callback, which a
+    /// development restart replaces with the later application's (ADR-0393
+    /// §4); the rest of the settings are registered with the operating system
+    /// as the run starts and stay the loop's.
+    on_open_files: RefCell<Option<OpenFilesCallback>>,
     /// The presentation of the main window whose UI runtime was built last:
     /// the installation a URL for the application is bound to while the
     /// main window is opening.
@@ -209,9 +214,11 @@ enum LoanEnd {
 }
 
 impl OpenRouting {
-    pub(crate) fn new(settings: OpenSettings) -> Self {
+    pub(crate) fn new(mut settings: OpenSettings) -> Self {
+        let on_open_files = RefCell::new(settings.on_open_files.take());
         Self {
             settings,
+            on_open_files,
             main_installing: Cell::new(None),
             held: RefCell::new(HeldUrls::default()),
             returned: RefCell::new(Vec::new()),
@@ -254,6 +261,20 @@ impl OpenRouting {
         if returned || held {
             self.request_turn();
         }
+    }
+
+    /// Send opened files to `callback` from now on, the running application's
+    /// own after a development restart; returns the one it replaces, which
+    /// the caller drops outside every borrow.
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+        expect(dead_code, reason = "only the desktop loop restarts its application")
+    )]
+    pub(crate) fn replace_open_files(
+        &self,
+        callback: Option<OpenFilesCallback>,
+    ) -> Option<OpenFilesCallback> {
+        self.on_open_files.replace(callback)
     }
 
     /// The URL schemes and domains the application opens, which every UI
@@ -492,7 +513,8 @@ impl OpenRouting {
         if files.is_empty() {
             return;
         }
-        if let Some(callback) = self.settings.on_open_files.clone() {
+        let callback = self.on_open_files.borrow().clone();
+        if let Some(callback) = callback {
             first.contain(|| callback(&files));
         } else {
             tracing::info!(
