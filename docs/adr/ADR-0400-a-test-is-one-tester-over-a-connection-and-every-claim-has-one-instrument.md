@@ -490,7 +490,10 @@ the `TestError`s still alive. Every exit reads it:
   runtime; run drops; release the agent's lease, which queues the release of what it holds, and
   the doubles; run turns until §3's list holds nothing the release or the unmount queued; check
   the `DropLedger`; check that §3's list is empty (a timer, a ticker or background work left
-  behind); close the window and retire the runtime; raise one `TestReport`. `Connection::finish`
+  behind); close the window and retire the runtime; raise one `TestReport`. A panic in a step
+  from the unmount on is held (`FirstPanic`) while the release steps still run; the checks after
+  it are skipped, what the earlier ones found is written to the test's output, and the held panic
+  is resumed as the test's failure. `Connection::finish`
   carries the part a connection can perform: a `Device` releases both owners of held input (§2)
   and checks nothing it cannot read (no ledger, no exact frame), so its report names those checks
   `cannot_verify` and a device scenario audits with `Tester::audit`.
