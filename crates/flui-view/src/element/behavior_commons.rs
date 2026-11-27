@@ -33,7 +33,10 @@ use std::any::TypeId;
 use flui_foundation::RenderId;
 use flui_foundation::panic::FirstPanic;
 
-use super::{arity::ElementArity, generic::ElementCore};
+use super::{
+    arity::ElementArity,
+    generic::{CoreState, ElementCore},
+};
 use crate::{
     owner::{LifecycleHook, RecoveredAt, RecoveredPanic},
     view::{BoxedView, FrameworkError, IntoView},
@@ -58,7 +61,12 @@ where
     V: Clone + 'static,
     A: ElementArity,
 {
-    if core.should_build() {
+    should_build_traced(core.state(), behavior_name)
+}
+
+#[inline(never)]
+fn should_build_traced(state: &CoreState, behavior_name: &'static str) -> bool {
+    if state.dirty.get() && state.lifecycle.can_build() {
         tracing::debug!("{}::perform_build starting", behavior_name);
         true
     } else {
@@ -180,10 +188,31 @@ where
     // graph — reads re-derive the reader set, writes and slot creations are
     // refused. The caller armed it (`begin_reactive_build`); it is disarmed
     // here on both exits (the panic path below included).
-    let building = core.self_id();
     // A build panic is replaced by an ErrorView, not unwound.
     let mut caught = FirstPanic::new();
     let built = caught.contain(build);
+    finish_build(
+        core.state(),
+        owner,
+        behavior_name,
+        TypeId::of::<V>(),
+        built,
+        caught,
+    )
+}
+
+/// The view-independent half of [`build_or_recover_begun`]: what follows the
+/// caught `build()`.
+#[inline(never)]
+fn finish_build(
+    state: &CoreState,
+    owner: &mut crate::ElementOwner<'_>,
+    behavior_name: &'static str,
+    view_type: TypeId,
+    built: Option<BoxedView>,
+    caught: FirstPanic,
+) -> BoxedView {
+    let building = state.self_id;
     match built.ok_or_else(move || {
         caught
             .into_payload()
@@ -225,12 +254,12 @@ where
                     element,
                     parent: None,
                 },
-                TypeId::of::<V>(),
+                view_type,
                 LifecycleHook::Build,
                 payload.as_ref(),
                 format!("building {behavior_name}"),
             )
-            .with_site(core.creation_site());
+            .with_site(state.site);
             flui_foundation::panic::discard_payload(payload);
             owner.reactive.end_element_build(element, false);
             // A recovery factory failure retains its existing authority. No
@@ -308,9 +337,15 @@ where
     R: IntoView,
 {
     let child = crate::view::ChildViews::one(child_view.into_view());
-    core.clear_dirty();
-    tracing::debug!("{}::build_into_views completed", behavior_name);
+    finish_child_views(core.state(), behavior_name);
     child
+}
+
+/// Clears the dirty flag once a build half is complete, and traces it.
+#[inline(never)]
+fn finish_child_views(state: &CoreState, behavior_name: &'static str) {
+    state.dirty.set(false);
+    tracing::debug!("{}::build_into_views completed", behavior_name);
 }
 
 /// Full `build_into_views` body for behaviors that delegate to a `child()`
@@ -345,8 +380,7 @@ where
     }
     let child_view = get_child(core.view());
     let child = crate::view::ChildViews::shared(child_view);
-    core.clear_dirty();
-    tracing::debug!("{}::build_into_views completed", behavior_name);
+    finish_child_views(core.state(), behavior_name);
     child
 }
 

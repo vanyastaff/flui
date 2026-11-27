@@ -241,12 +241,21 @@ where
     V: Clone + 'static,
     A: ElementArity,
 {
+    live_build_ctx(core.state(), owner)
+}
+
+/// The view-independent body of [`make_build_ctx`].
+#[inline(never)]
+fn live_build_ctx<'a>(
+    core: &super::generic::CoreState,
+    owner: &crate::ElementOwner<'a>,
+) -> LiveBuildContextChoice<'a> {
     let handle = owner.build_view.expect(
         "component build requires BuildOwner::build_scope live BuildHandle; \
          ElementBuildContext::new_minimal is not a production fallback",
     );
     let element_id = core
-        .self_id()
+        .self_id
         .expect("component build requires ElementCore::self_id stamped by ElementTree insertion");
 
     // The live context carries the element's tree depth read from its node,
@@ -257,7 +266,7 @@ where
     // stamped id; the preceding `expect`s catch the intended invariants.
     let tree_depth = match handle.tree.get(element_id) {
         Some(node) => node.depth(),
-        None => core.depth(),
+        None => usize::try_from(core.depth).expect("BUG: a 32-bit depth fits in usize"),
     };
     // The rebuild capability is minted from the element's own core,
     // which already holds the `ExternalBuildScheduler` installed at mount — the
@@ -284,7 +293,7 @@ where
             presentation: owner.capabilities,
             flush_registry: owner.flush_registry,
             hit_test_handle: owner.hit_test_handle,
-            pipeline_owner: core.pipeline_owner().cloned(),
+            pipeline_owner: core.pipeline_owner.clone(),
             keep_alive: owner.keep_alive.clone(),
             unmount_hooks: owner.unmount_hooks.clone(),
             reads: crate::reactive::ElementReads::new(owner.reactive.clone(), element_id),
