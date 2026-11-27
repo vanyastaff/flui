@@ -376,6 +376,11 @@ pub(crate) struct AppRuntime {
     pub(super) quit_notification: QuitNotification,
     #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
     pub(super) loop_identity: Arc<()>,
+    /// What the loop built from the running application (ADR-0393 §4), which
+    /// a development restart drops and builds again. Declared before the
+    /// raster host, the engine services and the execution pools, so a
+    /// teardown that leaves it installed drops it while they still live.
+    pub(super) application: ApplicationScope,
     /// Where this loop's windows get their renderers.
     pub(super) raster_host: super::runner::raster_host::SharedRasterHost,
     #[cfg(target_os = "ios")]
@@ -488,9 +493,6 @@ pub(crate) struct AppRuntime {
     /// The handler each window this runner opened was opened with, by window
     /// (`runner::window_routes`).
     window_routes: super::runner::window_routes::RouteBook,
-    /// What the loop built from the running application (ADR-0393 §4), which
-    /// a development restart drops and builds again.
-    pub(super) application: ApplicationScope,
 }
 
 impl AppRuntime {

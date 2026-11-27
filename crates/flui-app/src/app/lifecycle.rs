@@ -1344,9 +1344,9 @@ impl ServiceSlot {
 /// shutdown (stop admission → cancel all → deadline-bounded join →
 /// evidence).
 ///
-/// Loop-scoped like `ExecutionServices` itself: hot-restart reinstalls a
-/// UI runtime without touching running services; only full loop-exit teardown
-/// shuts them down.
+/// Held in the application scope (ADR-0393 §4), beside the rest of what the
+/// loop builds from the application; the pools its services run on are the
+/// loop's.
 pub(crate) struct ServiceRegistry {
     accepting: bool,
     services: Vec<ServiceSlot>,

@@ -18,32 +18,14 @@ use super::FontRegistrations;
 
 /// The loop's state built from the running application.
 ///
-/// The fields are declared in the reverse of the order a run's start builds
-/// them, so the scope drops them in reverse: the main window's controller
-/// before the ingress its handles send through, the services before the
-/// storage they write, the capability registry last.
+/// The fields are declared in the reverse of the order a desktop run's start
+/// builds them (`runner::main_window`), so the scope drops them in reverse:
+/// the services first, the main window's controller before the placements
+/// and the storage its windows write, the ingress its handles send through
+/// last. The fonts the application registers at any time drop beside the
+/// controller.
 #[derive(Default)]
 pub(crate) struct ApplicationScope {
-    /// The application's main window: its factory and installer, its
-    /// configuration and its observers.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    pub(in crate::app) main_controller: Option<crate::app::runner::main_window::MainController>,
-    /// The application-control ingress every `AppHandle` of this application
-    /// sends through.
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    pub(in crate::app) main_ingress:
-        Option<std::sync::Arc<crate::app::application_control::Ingress>>,
-    /// The fonts the application registered (`AppRuntime::register_font`),
-    /// and those still waiting for the loop's engine services.
-    pub(super) fonts: RefCell<FontRegistrations>,
     /// The running application services: the named owner of every
     /// application-lifetime unit of background work. Consulted by
     /// `AppRuntime::should_exit` (a running keep-alive service vetoes exit)
@@ -52,6 +34,17 @@ pub(crate) struct ApplicationScope {
     /// on them (ADR-0327 §3).
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) service_registry: ServiceRegistry,
+    /// The application's main window: its factory and installer, its
+    /// configuration and its observers.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(in crate::app) main_controller: Option<crate::app::runner::main_window::MainController>,
+    /// The fonts the application registered (`AppRuntime::register_font`),
+    /// and those still waiting for the loop's engine services.
+    pub(super) fonts: RefCell<FontRegistrations>,
     /// The run's window placements: where the host acquires the storage they
     /// are kept in, the windows that remember one and the writes still out
     /// (`runner::placement`).
@@ -74,4 +67,13 @@ pub(crate) struct ApplicationScope {
     /// before the loop starts, or the built-ins alone when a runner starts
     /// without an [`Application`](crate::Application).
     pub(in crate::app) capabilities: Option<flui_runtime::capability::CapabilityRegistry>,
+    /// The application-control ingress every `AppHandle` of this application
+    /// sends through.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(in crate::app) main_ingress:
+        Option<std::sync::Arc<crate::app::application_control::Ingress>>,
 }
