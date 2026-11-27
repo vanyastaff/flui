@@ -1,25 +1,51 @@
-//! The errors a `cargo build` run with `--message-format=json…` reports, read from its stdout
-//! while each message is written to the terminal as cargo would have written it.
+//! What a `cargo build` run with `--message-format=json…` reports on its stdout, read while
+//! each message is written to the terminal as cargo would have written it: the compiler's
+//! errors, the executable it built, and the library directories its build scripts link from.
 //!
 //! `flui run` reads them so the running app can show where its next build failed
-//! (`build.report`, ADR-0395). Only the compiler's errors are kept, at most
-//! [`MAX_DIAGNOSTICS`](flui_protocol::build::MAX_DIAGNOSTICS) of them, and the rest counted
-//! ([`Diagnostics`]).
+//! (`build.report`, ADR-0395), and so it starts the executable the build wrote, as `cargo run`
+//! would, without asking cargo to check the sources again. Only the compiler's errors are kept,
+//! at most [`MAX_DIAGNOSTICS`](flui_protocol::build::MAX_DIAGNOSTICS) of them, and the rest
+//! counted ([`Diagnostics`]).
 
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
 
 use cargo_metadata::Message;
 use cargo_metadata::diagnostic::DiagnosticLevel;
 use flui_protocol::build::{Diagnostic, Diagnostics, SourceLocation};
 
+/// What one build reported.
+#[derive(Debug, Default)]
+pub(crate) struct BuildMessages {
+    /// The compiler's errors.
+    pub(crate) errors: Diagnostics,
+    /// The executable the build wrote, when it selected one (`--bin`, `--example`).
+    pub(crate) executable: Option<Executable>,
+    /// The directories the build scripts link native libraries from, as cargo states them
+    /// (`native=…`, `dependency=…` or a bare path).
+    pub(crate) linked_paths: Vec<PathBuf>,
+}
+
+/// An executable a build wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Executable {
+    pub(crate) path: PathBuf,
+    /// Cargo did not build it again: it is the executable the previous build wrote.
+    pub(crate) fresh: bool,
+}
+
 /// Reads cargo's messages from `messages` to their end, writing each compiler message's rendered
-/// text, and each line that is not a message, to `terminal`, and answers the errors among them.
+/// text, and each line that is not a message, to `terminal`, and answers what they reported.
 ///
 /// # Errors
 ///
 /// Reading `messages` or writing `terminal` failed.
-pub(crate) fn read(messages: impl BufRead, terminal: &mut impl Write) -> io::Result<Diagnostics> {
-    let mut errors = Diagnostics::new();
+pub(crate) fn read(
+    messages: impl BufRead,
+    terminal: &mut impl Write,
+) -> io::Result<BuildMessages> {
+    let mut read = BuildMessages::default();
     for message in Message::parse_stream(messages) {
         match message? {
             Message::CompilerMessage(message) => {
@@ -28,14 +54,28 @@ pub(crate) fn read(messages: impl BufRead, terminal: &mut impl Write) -> io::Res
                     terminal.write_all(rendered.as_bytes())?;
                 }
                 if let Some(error) = compile_error(&diagnostic) {
-                    errors.push(error);
+                    read.errors.push(error);
                 }
             }
+            Message::CompilerArtifact(artifact) => {
+                if let Some(path) = artifact.executable {
+                    read.executable = Some(Executable {
+                        path: path.into_std_path_buf(),
+                        fresh: artifact.fresh,
+                    });
+                }
+            }
+            Message::BuildScriptExecuted(script) => read.linked_paths.extend(
+                script
+                    .linked_paths
+                    .into_iter()
+                    .map(cargo_metadata::camino::Utf8PathBuf::into_std_path_buf),
+            ),
             Message::TextLine(line) => writeln!(terminal, "{line}")?,
             _ => {}
         }
     }
-    Ok(errors)
+    Ok(read)
 }
 
 /// `diagnostic` as the app shows it, when it is an error the author can fix: not the compiler's
@@ -130,7 +170,9 @@ mod tests {
             ));
         }
         let mut terminal = Vec::new();
-        let errors = read(lines.join("\n").as_bytes(), &mut terminal).expect("read");
+        let errors = read(lines.join("\n").as_bytes(), &mut terminal)
+            .expect("read")
+            .errors;
 
         assert_eq!(
             errors.kept()[..2],
@@ -155,5 +197,57 @@ mod tests {
             "{terminal}"
         );
         assert!(terminal.contains("   Compiling app v0.1.0\n"), "{terminal}");
+    }
+
+    /// The executable is the one the build selected, with whether cargo built it again, and a
+    /// build script's link directories are kept as cargo states them.
+    #[test]
+    fn the_built_executable_and_the_link_directories_are_read() {
+        let target = serde_json::json!({
+            "kind": ["bin"], "crate_types": ["bin"], "name": "app",
+            "src_path": "/app/src/main.rs", "edition": "2024", "doc": true,
+            "doctest": false, "test": true
+        });
+        let artifact = |fresh: bool| {
+            serde_json::json!({
+                "reason": "compiler-artifact",
+                "package_id": "path+file:///app#0.1.0",
+                "manifest_path": "/app/Cargo.toml",
+                "target": target,
+                "profile": { "opt_level": "0", "debuginfo": 2, "debug_assertions": true,
+                             "overflow_checks": true, "test": false },
+                "features": [],
+                "filenames": ["/app/target/debug/app"],
+                "executable": "/app/target/debug/app",
+                "fresh": fresh
+            })
+            .to_string()
+        };
+        let script = serde_json::json!({
+            "reason": "build-script-executed",
+            "package_id": "path+file:///sys#0.1.0",
+            "linked_libs": ["sys"],
+            "linked_paths": ["native=/app/target/debug/build/sys-1/out"],
+            "cfgs": [], "env": [],
+            "out_dir": "/app/target/debug/build/sys-1/out"
+        })
+        .to_string();
+        for fresh in [false, true] {
+            let lines = [script.clone(), artifact(fresh)].join("\n");
+            let read = read(lines.as_bytes(), &mut Vec::new()).expect("read");
+            assert_eq!(
+                read.executable,
+                Some(Executable {
+                    path: PathBuf::from("/app/target/debug/app"),
+                    fresh
+                })
+            );
+            assert_eq!(
+                read.linked_paths,
+                [PathBuf::from("native=/app/target/debug/build/sys-1/out")]
+            );
+        }
+        let none = read(script.as_bytes(), &mut Vec::new()).expect("read");
+        assert_eq!(none.executable, None, "a build that selects no executable");
     }
 }
