@@ -15,8 +15,9 @@ use super::report::Registration;
 /// Why a verb failed. Each carries the [`Diagnosis`] of the step that failed.
 ///
 /// An error a `try_` verb returned is registered with its tester's report until it is dropped:
-/// while one is alive, the tester's end runs no checks, since the error is on its way to the
-/// caller (ADR-0400 §7). It is therefore neither `Clone` nor `Send`.
+/// while one is alive, a tester that drops runs no end checks, since the error may be on its way
+/// to the caller through `?`; an explicit [`Tester::finish`](super::Tester::finish) runs them
+/// (ADR-0400 §7). It is therefore neither `Clone` nor `Send`.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum TestError {

@@ -33,7 +33,7 @@ use super::error::{Diagnosis, OrRaise as _, TestError};
 use super::find::{Find, Many, One, Quantity};
 use super::headless::{FRAME, Headless, Observed, SETTLE_LIMIT};
 use super::matcher::Matcher;
-use super::report::{Report, TestReport};
+use super::report::{Exit, Report, TestReport};
 use super::window::TestWindow;
 use crate::drop_ledger::DropLedger;
 
@@ -64,7 +64,9 @@ const JOURNAL_KEPT: usize = 32;
 /// The tester's report owns the first failure, the soft failures, whether a call may have run
 /// and the errors its `try_` verbs returned that are still alive (ADR-0400 §7). [`finish`]
 /// and `Drop` run the end checks when the report is not poisoned (no verb unwound, no call went
-/// unanswered), no returned error is alive and the thread is not unwinding: the application is
+/// unanswered) and the thread is not unwinding, and `Drop` only when no returned error is alive
+/// (it may be on its way to the caller through `?`; a test that calls `finish` says it is
+/// done, an error it kept included): the application is
 /// settled, its frame audited, its root unmounted, its input lease released, the tester's
 /// [`ledger`](Tester::ledger) read, and what keeps the application busy after that (a timer, a
 /// ticker or background work left behind) fails the end. `finish` raises what did not pass;
@@ -689,7 +691,7 @@ impl<C: Connection> Tester<C> {
     ///
     /// The [`TestReport`] unless it is clean.
     pub fn try_finish(mut self) -> Result<(), TestReport> {
-        let report = self.end();
+        let report = self.end(Exit::Finish);
         if report.is_clean() {
             Ok(())
         } else {
@@ -707,10 +709,10 @@ impl<C: Connection> Tester<C> {
 
     /// The end of the test (ADR-0400 §7): the checks when the report lets them run, else the
     /// release alone, unless the thread is unwinding, when the fields' own drops release.
-    fn end(&mut self) -> TestReport {
+    fn end(&mut self, exit: Exit) -> TestReport {
         self.ended = true;
         let soft = self.report.take_soft();
-        if let Some(skipped) = self.report.skips_end_checks() {
+        if let Some(skipped) = self.report.skips_end_checks(exit) {
             if !std::thread::panicking() {
                 let _unpassed = self.connection.finish(&EndChecks::none());
             }
@@ -965,7 +967,7 @@ impl<C: Connection> Drop for Tester<C> {
         if self.ended {
             return;
         }
-        let report = self.end();
+        let report = self.end(Exit::Drop);
         write_report(&report);
     }
 }

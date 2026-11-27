@@ -13,8 +13,9 @@ use flui_interaction::focus::KeyEventResult;
 use flui_platform::input::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
 use flui_protocol::client::Connection as _;
 use flui_protocol::input::{ActionSequence, InputSource, KeyAction};
+use flui_testing::drop_ledger::DropSentinel;
 use flui_testing::log_capture::{CapturedLog, capture};
-use flui_testing::scenario::{TestError, Tester, find, matcher};
+use flui_testing::scenario::{TestError, TestReport, Tester, find, matcher};
 use flui_testing::widgets::SharedSignal;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
@@ -339,4 +340,245 @@ fn a_chord_after_a_gesture_that_left_a_key_down_sends_no_second_press() {
         .expect("the agent presses Shift");
     t.press_keys(&["Shift+Tab"]);
     assert_eq!(*log.borrow(), ["down Shift^", "down Tab^", "up Tab^"]);
+}
+
+/// The end-check names a [`TestReport`] lists.
+fn report_checks(report: &TestReport) -> Vec<String> {
+    report
+        .unpassed
+        .iter()
+        .map(|unpassed| unpassed.check().name.clone())
+        .collect()
+}
+
+/// An error a `try_` verb returned skips the end checks only while the tester drops, where it
+/// may be on its way out through `?`. An explicit finish is the test saying it is done: it runs
+/// the checks beside a kept error, and they find the ticker the root left.
+///
+/// Fails against an end that skips its checks for a kept error on every exit.
+#[test]
+fn a_kept_error_skips_the_end_checks_only_when_the_tester_drops() {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum End {
+        Finish,
+        Drop,
+    }
+    let rows = [
+        ("kept, finish", true, End::Finish, true),
+        ("kept, drop", true, End::Drop, false),
+        ("dropped, finish", false, End::Finish, true),
+        ("dropped, drop", false, End::Drop, true),
+    ];
+    for (row, keep, end, checked) in rows {
+        let kept = Rc::new(RefCell::new(Vec::new()));
+        let (checks, log) = capture(|| {
+            let mut t = Tester::mount(LeftTicking {
+                kept: Rc::clone(&kept),
+            });
+            let error = t
+                .try_read(&find::text("Missing"))
+                .expect_err("nothing is named so");
+            let held = keep.then_some(error);
+            let checks = match end {
+                End::Finish => {
+                    let report = t.try_finish().expect_err("the ticker fails the end");
+                    report_checks(&report)
+                }
+                End::Drop => {
+                    drop(t);
+                    Vec::new()
+                }
+            };
+            drop(held);
+            checks
+        });
+        let ran = match end {
+            End::Finish => checks.iter().any(|check| check == "left_behind"),
+            End::Drop => unpassed_checks(&log)
+                .iter()
+                .any(|check| check == "left_behind"),
+        };
+        assert_eq!(ran, checked, "{row}: whether the end checks ran");
+        assert_eq!(
+            skipped_because(&log).is_some(),
+            end == End::Drop && !checked,
+            "{row}: whether the end says it skipped"
+        );
+    }
+}
+
+/// Holds the [`DropSentinel`] the test hands it, and lets it go as it is disposed.
+#[derive(Clone, StatefulView)]
+struct Holding {
+    slot: Rc<RefCell<Option<DropSentinel>>>,
+}
+
+struct HoldingState {
+    slot: Rc<RefCell<Option<DropSentinel>>>,
+}
+
+impl StatefulView for Holding {
+    type State = HoldingState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        HoldingState {
+            slot: Rc::clone(&self.slot),
+        }
+    }
+}
+
+impl ViewState<Holding> for HoldingState {
+    fn build(&self, _view: &Holding, _ctx: &dyn BuildContext) -> impl IntoView {
+        Text::new("Holding")
+    }
+
+    fn dispose(&mut self) {
+        drop(self.slot.borrow_mut().take());
+    }
+}
+
+/// The end unmounts the root before it reads the ledger: a sentinel the tree holds until it is
+/// disposed is dropped by then, and one the test keeps is reported as not dropped.
+///
+/// Fails against an end that reads the ledger before it unmounts the root, or never unmounts it.
+#[test]
+fn the_end_reads_the_ledger_after_the_root_is_unmounted() {
+    for (row, test_keeps, clean) in [
+        ("the tree holds it", false, true),
+        ("the test keeps it", true, false),
+    ] {
+        let slot = Rc::new(RefCell::new(None));
+        let t = Tester::mount(Holding {
+            slot: Rc::clone(&slot),
+        });
+        let sentinel = t.ledger().plant();
+        let kept = if test_keeps {
+            Some(sentinel)
+        } else {
+            *slot.borrow_mut() = Some(sentinel);
+            None
+        };
+        let result = t.try_finish();
+        match result {
+            Ok(()) => assert!(clean, "{row}: the end passed"),
+            Err(report) => {
+                assert!(!clean, "{row}: {report}");
+                assert_eq!(report_checks(&report), ["drop_ledger"], "{row}: {report}");
+            }
+        }
+        drop(kept);
+    }
+}
+
+/// A test body that panics with a live tester unwinds through its `Drop`: the end checks do not
+/// run, the process does not abort, and the panic that reaches the test is the body's own. The
+/// body runs on a thread of its own, so the panic is a real unwind out of the body.
+///
+/// Fails against an end that runs its checks while the thread unwinds: it reports the ticker the
+/// body's root left.
+#[test]
+fn a_test_that_panics_with_a_live_tester_keeps_its_own_failure() {
+    let (message, skipped, unpassed) = std::thread::spawn(|| {
+        let (caught, log) = capture(|| {
+            catch_unwind(AssertUnwindSafe(|| {
+                let kept = Rc::new(RefCell::new(Vec::new()));
+                let _t = Tester::mount(LeftTicking {
+                    kept: Rc::clone(&kept),
+                });
+                panic!("the body's own failure");
+            }))
+        });
+        let payload = caught.expect_err("the body panics");
+        let message = payload_text(&*payload).unwrap_or_default().to_owned();
+        (message, skipped_because(&log), unpassed_checks(&log))
+    })
+    .join()
+    .expect("the thread ends without an abort or a second panic");
+    assert_eq!(message, "the body's own failure");
+    assert!(
+        skipped
+            .as_deref()
+            .is_some_and(|reason| reason.contains("unwinding")),
+        "{skipped:?}"
+    );
+    assert_eq!(unpassed, Vec::<String>::new());
+}
+
+/// `finish_unchecked` ends the test without its checks, saying why: the ticker its root left
+/// fails nothing.
+///
+/// Fails against a `finish_unchecked` that runs the checks.
+#[test]
+fn finish_unchecked_ends_without_the_checks_and_says_why() {
+    let kept = Rc::new(RefCell::new(Vec::new()));
+    let ((), log) = capture(|| {
+        let t = Tester::mount(LeftTicking {
+            kept: Rc::clone(&kept),
+        });
+        t.finish_unchecked("the widget keeps its ticker on purpose");
+    });
+    assert!(
+        log.records().iter().any(|record| {
+            record.message == "a test ended without its end checks"
+                && record.field("reason") == Some("the widget keeps its ticker on purpose")
+        }),
+        "{log}"
+    );
+    assert_eq!(unpassed_checks(&log), Vec::<String>::new());
+}
+
+/// A find nothing matches lists the elements whose text shares a word with the one sought:
+/// "Save draft" for "Save", not "e", whose letter merely occurs in the find's description.
+///
+/// Fails against candidates chosen by comparing names with the debug form of the find.
+#[test]
+fn a_missing_text_lists_the_elements_that_share_its_text() {
+    let mut t = Tester::mount(flui_widgets::Column::new((
+        Text::new("Save draft"),
+        Text::new("e"),
+    )));
+    let Err(TestError::NotFound { diagnosis, .. }) = t.try_read(&find::text("Save")) else {
+        panic!("nothing is named \"Save\"");
+    };
+    assert!(
+        diagnosis
+            .candidates
+            .iter()
+            .any(|line| line.contains("\"Save draft\"")),
+        "{:?}",
+        diagnosis.candidates
+    );
+    assert!(
+        !diagnosis
+            .candidates
+            .iter()
+            .any(|line| line.contains("\"e\"")),
+        "{:?}",
+        diagnosis.candidates
+    );
+    drop(diagnosis);
+    t.finish();
+}
+
+/// A strict read over more matches than it names reports how many match, though it asks the
+/// window for no more than it names. (The bound on what the window sends is not observable
+/// through the tester: a read without it names the same candidates.)
+///
+/// Fails against a strict read that counts only the matches reported.
+#[test]
+fn an_ambiguous_read_counts_every_match_and_names_ten() {
+    let rows: Vec<BoxedView> = (0..12)
+        .map(|_| Text::new("Row").into_view().boxed())
+        .collect();
+    let mut t = Tester::mount(flui_widgets::Column::new(rows));
+    let Err(TestError::Ambiguous {
+        matched, diagnosis, ..
+    }) = t.try_read(&find::text("Row"))
+    else {
+        panic!("twelve elements are named \"Row\"");
+    };
+    assert_eq!(matched, 12);
+    assert_eq!(diagnosis.candidates.len(), 10);
+    drop(diagnosis);
+    t.finish();
 }

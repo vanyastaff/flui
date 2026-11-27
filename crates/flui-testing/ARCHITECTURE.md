@@ -230,8 +230,10 @@ Its frame driver is `HeadlessHost`, which pumps a
   run and how many returned errors are alive. `finish` and `Drop` run
   `Connection::finish` with `EndChecks::default()` (settle, audit `Unnamed`,
   unmount the root, release the lease, run turns, the `DropLedger`, the list
-  of causes left behind) only when the report is not poisoned, no error is
-  alive and the thread is not unwinding. Otherwise the end checks nothing,
+  of causes left behind) only when the report is not poisoned and the thread
+  is not unwinding, and `Drop` only when no returned error is alive: an error
+  alive as the tester drops may be travelling to the caller through `?`, and
+  a test that calls `finish` says it is done. Otherwise the end checks nothing,
   says why, and releases: through `Connection::finish` with
   `EndChecks::none()`, or on an unwinding thread through the host's own drop.
   `Drop` writes what it found as `tracing` events and to stderr and raises

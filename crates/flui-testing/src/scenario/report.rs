@@ -12,6 +12,16 @@ use std::rc::Rc;
 
 use flui_protocol::report::{Outcome, UnpassedCheck};
 
+/// How a test ends: what decides whether an error a `try_` verb returned, still alive, skips the
+/// end checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Exit {
+    /// The test called `finish`: it says it is done, so an error it kept is one it expected.
+    Finish,
+    /// The tester dropped: an error still alive may be on its way to the caller through `?`.
+    Drop,
+}
+
 /// The shared report of one tester.
 #[derive(Clone, Default)]
 pub(crate) struct Report(Rc<RefCell<State>>);
@@ -73,10 +83,11 @@ impl Report {
         std::mem::take(&mut self.0.borrow_mut().soft)
     }
 
-    /// Why the end checks do not run now, or `None` when they do: the report is poisoned, an
-    /// error a `try_` verb returned is alive (it is travelling to the caller through `?`), or the
-    /// thread is unwinding.
-    pub(crate) fn skips_end_checks(&self) -> Option<String> {
+    /// Why the end checks do not run now, or `None` when they do: the report is poisoned, the
+    /// thread is unwinding, or, as the tester drops, an error a `try_` verb returned is alive (it
+    /// may be travelling to the caller through `?`). An explicit finish runs them beside a kept
+    /// error: the test says it is done.
+    pub(crate) fn skips_end_checks(&self, exit: Exit) -> Option<String> {
         let state = self.0.borrow();
         if let Some(poisoned) = &state.poisoned {
             let mut reason = format!("the tester is poisoned: {poisoned}");
@@ -92,7 +103,7 @@ impl Report {
             }
             return Some(reason);
         }
-        if state.live_errors > 0 {
+        if exit == Exit::Drop && state.live_errors > 0 {
             return Some(format!(
                 "{} error(s) a `try_` verb returned are still alive, on their way to the caller",
                 state.live_errors
