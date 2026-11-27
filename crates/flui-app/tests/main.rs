@@ -37,6 +37,15 @@ mod runner_frame_ordering;
 #[path = "runner_teardown.rs"]
 mod runner_teardown;
 
+// The development restart runs on the desktop loop.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[path = "runner_restart.rs"]
+mod runner_restart;
+
 // The same kit, with a main window that renders with its stand-in renderer.
 #[cfg(all(
     not(target_os = "android"),

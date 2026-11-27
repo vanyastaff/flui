@@ -78,14 +78,23 @@ impl Record {
         }
     }
 
-    /// A restart composed the application from a build of `layout`: later
-    /// versions of it reassemble.
+    /// A restart composed the application from a build of `layout`, from the
+    /// code loaded now: every UI runtime in the record was built by that
+    /// composition and runs that code, and later versions of the layout
+    /// reassemble.
     #[cfg_attr(
         target_os = "ios",
         expect(dead_code, reason = "only the desktop runner restarts in the process")
     )]
     pub(super) fn composed_from(&mut self, layout: LayoutEpoch) {
         self.composed = Composed::Layout(layout);
+        let current = self.current();
+        for runs in self.runtimes.values_mut() {
+            *runs = Runs {
+                revision: current,
+                rebuild_owed: false,
+            };
+        }
     }
 
     /// The restart for the version [`report`](Self::report) returned composed

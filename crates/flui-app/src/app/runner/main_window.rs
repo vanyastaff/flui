@@ -1105,6 +1105,7 @@ where
             opening,
             move |owner| {
                 let mut application = application;
+                let proxy = owner.proxy();
                 install_owner_platform(owner)?;
                 APP_RUNTIME.with(|slot| {
                     let mut runtime = slot.borrow_mut();
@@ -1127,7 +1128,11 @@ where
                 // The loop takes the hooks and owns them until it ends
                 // (`shutdown_main_window`), across a development restart too.
                 super::dev_agents::start(&application.config);
-                let reload = LoopReload::attach(&application.config, runtime_wake_callback());
+                // A restart a frame finds due runs in the owner turn this asks for.
+                let turn: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                    let _ = proxy.wake();
+                });
+                let reload = LoopReload::attach(&application.config, runtime_wake_callback(), turn);
                 APP_RUNTIME.with(|slot| {
                     slot.borrow_mut().desktop_loop = Some(DesktopLoop {
                         reload,

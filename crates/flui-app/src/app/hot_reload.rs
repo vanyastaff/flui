@@ -115,8 +115,9 @@ struct Slot {
     /// A version of another layout the loop is to restart to, from the poll
     /// that reported it until the owner turn after its frame (ADR-0393 §4).
     restart_due: Option<flui_view::dev_reload::CodeVersion>,
-    /// The wake the hook was attached with, which asks for that turn.
-    wake: Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Asks the loop for an owner turn, in which a due restart runs: set by
+    /// the loop that attached the hook (`LoopReload::attach`).
+    turn: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl DevReload {
@@ -128,7 +129,7 @@ impl DevReload {
             record: Record::default(),
             unlent_noted: false,
             restart_due: None,
-            wake: None,
+            turn: None,
         })))
     }
 }
@@ -224,7 +225,7 @@ impl DevReload {
             slot.attached = false;
             slot.record.clear();
             slot.restart_due = None;
-            slot.wake.take()
+            slot.turn.take()
         };
         drop(wake);
         if let Lent::Absent = self.lend("detach", DevReloadHook::detach) {
@@ -309,7 +310,6 @@ impl WorkerReload {
                 return None;
             }
             slot.attached = true;
-            slot.wake = Some(Arc::clone(&wake));
         }
         let wake = ReloadWake::new(move || wake());
         match reload.lend("attach", |hook| hook.attach(wake)) {
@@ -317,12 +317,7 @@ impl WorkerReload {
                 reload: reload.clone(),
             }),
             Lent::Absent | Lent::Panicked => {
-                let wake = {
-                    let mut slot = reload.0.lock();
-                    slot.attached = false;
-                    slot.wake.take()
-                };
-                drop(wake);
+                reload.0.lock().attached = false;
                 None
             }
         }
@@ -465,7 +460,7 @@ impl RuntimeReload {
                     Some(version)
                 }
             });
-            let wake = restart_owed.then(|| slot.wake.clone()).flatten();
+            let wake = restart_owed.then(|| slot.turn.clone()).flatten();
             (restart, slot.record.due(id), wake)
         };
         // The turn after this frame runs the restart; asked with no lock held.
@@ -541,10 +536,21 @@ pub(crate) struct LoopReload {
     not(target_arch = "wasm32")
 ))]
 impl LoopReload {
-    /// Attach the hook `config` installs, if any, handing it `wake`.
-    pub(crate) fn attach(config: &AppConfig, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+    /// Attach the hook `config` installs, if any, handing it `wake`, which
+    /// asks for a frame; `turn` asks for an owner turn, in which a restart a
+    /// frame found due runs.
+    pub(crate) fn attach(
+        config: &AppConfig,
+        wake: Arc<dyn Fn() + Send + Sync>,
+        turn: Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
         let reload = WorkerReload::from_config(config);
         let attached = reload.spawn_watcher(wake);
+        if attached.is_some()
+            && let Some(hook) = &reload.0
+        {
+            hook.0.lock().turn = Some(turn);
+        }
         Self {
             reload,
             _attached: attached,
