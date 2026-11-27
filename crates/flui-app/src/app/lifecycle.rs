@@ -2365,7 +2365,7 @@ mod tests {
     /// spawner refuses from then on.
     fn shutdown_ends_the_applications_tasks_and_workers() {
         let services = Arc::new(ExecutionServices::with_defaults());
-        let mut registry = ServiceRegistry::new();
+        let registry = ServiceRegistry::new();
         let spawner = TaskSpawner::new(&services, registry.work(&services));
         let worker = spawner
             .spawn_worker("held", |(): (), _: &TaskContext| ())
