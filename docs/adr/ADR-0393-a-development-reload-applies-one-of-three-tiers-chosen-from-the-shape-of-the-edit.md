@@ -273,7 +273,8 @@ that is kept. The host, at the end of the turn:
    logged. Each window the application opened is closed as the end of a run closes it: no close
    request is asked and no handler of the earlier application runs. Then the scope is dropped in
    the reverse of the order it was built in, its services cancelled and joined by the exit's
-   deadline as at the end of a run, the first panic kept.
+   deadline as at the end of a run, then the tasks and workers its services spawned, the first
+   panic kept.
 2. **runs the entry with the hand-over open.** The loop opens its hand-over, which belongs to this
    call: empty before it and drained after it on every exit. While it is open, `Application::run`
    on the owner thread hands its application and root to it and returns without starting a loop,
@@ -299,10 +300,12 @@ that is kept. The host, at the end of the turn:
   reports before that is tried.
 - Work the earlier application addressed through the framework is refused after it is retired: a
   retired `UiRuntimeId` is never issued again, the earlier ingress refuses every request an
-  `AppHandle` of it sends, and an accessibility action names a node of a tree that is gone. Tasks
-  the application spawned on the executors are dropped with its scope. A thread the application
-  spawned itself is its own: the framework cannot end it, and it keeps running code of the earlier
-  build.
+  `AppHandle` of it sends, and an accessibility action names a node of a tree that is gone. Every
+  task and worker the application's services spawned is cancelled, whoever holds its handle, the
+  running ones are waited for by the same deadline, and a `TaskSpawner` of the earlier
+  application refuses from then on; a compute job that never checks its cancellation runs on
+  past the deadline. A thread the application spawned itself is its own: the framework cannot
+  end it, and it keeps running code of the earlier build.
 - The later application's window description is not applied to a kept window. An author who
   changed it asks for a process restart.
 - The executor pools are the loop's, not the scope's: a host runs its own IO on them (ADR-0327
@@ -379,7 +382,7 @@ scripted hook from the testing kit. They replace ADR-0311's
 | §3 where the loop polls | `flui-app`: `an_idle_loop_restarts_on_the_wake_that_reported_the_version`, `a_loop_without_a_ui_runtime_polls_on_the_wake` |
 | §3 the outcome | `flui-app`: `each_reassembled_runtime_and_each_restart_is_reported_once`, `a_panicking_applied_retires_the_hook` |
 | §3 `ReloadEvent` is exhaustive | the compiler: a host that does not map `Loaded` does not compile |
-| §4 step 1 | `flui-app`: `a_restart_disposes_every_state_before_the_entry_runs`, `a_panicking_dispose_does_not_stop_a_restart`, `a_restart_closes_the_windows_the_application_opened_without_asking`, `a_restart_drops_the_earlier_scope`, `an_app_handle_of_the_earlier_application_is_refused` |
+| §4 step 1 | `flui-app`: `a_restart_disposes_every_state_before_the_entry_runs`, `a_panicking_dispose_does_not_stop_a_restart`, `a_restart_closes_the_windows_the_application_opened_without_asking`, `a_restart_drops_the_earlier_scope`, `a_restart_cancels_and_joins_the_earlier_applications_tasks`, `an_app_handle_of_the_earlier_application_is_refused`; `shutdown_ends_the_applications_tasks_and_workers` in `crates/flui-app/src/app/lifecycle.rs` |
 | §4 step 2 | `flui-app`: `a_panicking_entry_fails_the_restart_and_is_not_tried_again`, `an_entry_without_an_application_fails_the_restart`, `a_failed_restart_leaves_nothing_in_the_hand_over`, `a_second_run_in_one_entry_is_refused_and_the_first_is_composed` |
 | §4 step 3 | `flui-app`: `a_restart_composes_the_later_applications_capabilities`, `a_restart_keeps_the_window_and_registers_the_fonts_again`, `a_failed_composition_retires_what_it_built`, `a_panic_in_the_new_roots_mount_is_still_a_restart` |
 | §4 step 4 | `flui-app`: `a_resident_application_is_asked_to_exit_by_its_new_policy` |

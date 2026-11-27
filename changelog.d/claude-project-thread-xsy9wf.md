@@ -127,3 +127,8 @@
 - **`flui-cli`**: `flui mcp` no longer loses a call that acts (`flui_act`, `flui_motion`) on the
   first try after the app restarted: a connection whose app closed its end sends nothing and the
   call goes on a new one, where it used to fail with the closed connection's error.
+- **`flui-app`**: a development restart ends the earlier application's tasks and workers. Each
+  one its services spawned is cancelled, whoever holds its handle, the running ones are waited for
+  by the shutdown deadline, and a `TaskSpawner` the earlier application kept refuses with
+  `SpawnError::ShuttingDown`. They used to hang under the loop's pools, which a restart keeps, and
+  ran on into the later application. The end of a run waits for them the same way.

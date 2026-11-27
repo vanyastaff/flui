@@ -10,8 +10,8 @@
 //!
 //! | Class | Lifetime | Owner | Ends by |
 //! |---|---|---|---|
-//! | **Task** ([`TaskHandle`]) | one-shot | whoever holds the handle | completing, explicit [`TaskHandle::cancel`], or the handle dropping (cancel-on-drop) |
-//! | **Worker** ([`WorkerHandle`]) | recurring, submission-driven | whoever holds the handle | the handle dropping (cancel-on-drop) |
+//! | **Task** ([`TaskHandle`]) | one-shot | whoever holds the handle | completing, explicit [`TaskHandle::cancel`], the handle dropping (cancel-on-drop), or its application retiring |
+//! | **Worker** ([`WorkerHandle`]) | recurring, submission-driven | whoever holds the handle | the handle dropping (cancel-on-drop), or its application retiring |
 //! | **Service** ([`ServiceDefinition`]) | application-lifetime | the loop-scoped `AppRuntime` ([`ServiceRegistry`]) | staged registry shutdown at loop exit: cancel → bounded join → evidence |
 //!
 //! **There is no fire-and-forget spawn.** Every unit of work has a named
@@ -77,6 +77,10 @@ use web_time::{Duration, Instant};
 
 use flui_runtime::execution::{ExecutionServices, SpawnError};
 
+mod application_work;
+
+use application_work::{ApplicationWork, Running, WorkRef};
+
 // ============================================================================
 // Cancellation
 // ============================================================================
@@ -87,9 +91,11 @@ use flui_runtime::execution::{ExecutionServices, SpawnError};
 /// Wraps the runtime's internal cancellation machinery so the public
 /// lifecycle surface stays runtime-neutral (the same reason
 /// `HostExecutors` carries trait objects rather than executor types).
-/// Signals form a tree: every lifecycle signal is a child of the
-/// execution services' root, so full loop-exit shutdown reaches every
-/// outstanding unit of work without a registry walk.
+/// Signals form a tree under the execution services' root: a task's or a
+/// worker's signal is a child of its application's node, itself a child of
+/// the root, and a service's is a child of the root. The application's
+/// retirement reaches each of its tasks and workers, and full loop-exit
+/// shutdown every outstanding unit of work, without a registry walk.
 ///
 /// Cancellation is **level, not edge**: once cancelled, a signal stays
 /// cancelled forever, and observing it late is always safe.
@@ -346,20 +352,31 @@ impl<T> fmt::Debug for JoinTimeout<T> {
 /// services weakly, so a spawner outliving its loop refuses with
 /// [`SpawnError::ShuttingDown`] instead of keeping dead pools alive or
 /// silently dropping work.
+///
+/// Its work belongs to the application that was handed it: when that
+/// application retires (the loop's exit, a development restart), every task
+/// and worker it spawned is cancelled, whoever holds its handle, the running
+/// ones are waited for by the shutdown deadline, and the spawner refuses
+/// with [`SpawnError::ShuttingDown`] from then on.
 #[derive(Clone, Debug)]
 pub struct TaskSpawner {
     services: Weak<ExecutionServices>,
+    work: WorkRef,
 }
 
 impl TaskSpawner {
-    pub(crate) fn new(services: &Arc<ExecutionServices>) -> Self {
+    fn new(services: &Arc<ExecutionServices>, work: WorkRef) -> Self {
         Self {
             services: Arc::downgrade(services),
+            work,
         }
     }
 
-    fn services(&self) -> Result<Arc<ExecutionServices>, SpawnError> {
-        self.services.upgrade().ok_or(SpawnError::ShuttingDown)
+    /// The services and the new job's hold on the application's work.
+    fn admit(&self) -> Result<(Arc<ExecutionServices>, Running), SpawnError> {
+        let running = self.work.enter()?;
+        let services = self.services.upgrade().ok_or(SpawnError::ShuttingDown)?;
+        Ok((services, running))
     }
 
     /// Spawn a one-shot **compute** task (a pure, possibly multi-frame CPU
@@ -383,11 +400,13 @@ impl TaskSpawner {
         T: Send + 'static,
         F: FnOnce(&TaskContext) -> T + Send + 'static,
     {
-        let services = self.services()?;
-        let signal = CancellationSignal::child_of(services.cancellation_root());
+        let (services, running) = self.admit()?;
+        let signal = self.work.signal();
         let (report, completion) = mpsc::sync_channel(1);
         let task_signal = signal.clone();
         services.spawn_compute(Box::new(move || {
+            // Counted running until the job ends or is dropped unrun.
+            let _running = running;
             // Delivery point 1: cancelled before the body started.
             if task_signal.is_cancelled() {
                 let _ = report.try_send(TaskOutcome::Cancelled);
@@ -446,14 +465,15 @@ impl TaskSpawner {
         F: FnOnce(CancellationSignal) -> Fut,
         Fut: Future<Output = T> + Send + 'static,
     {
-        let services = self.services()?;
-        let signal = CancellationSignal::child_of(services.cancellation_root());
+        let (services, running) = self.admit()?;
+        let signal = self.work.signal();
         let (report, completion) = mpsc::sync_channel(1);
         // Boxed so `CatchUnwind`'s safe `Unpin` projection applies; the IO
         // lane takes a boxed future anyway.
         let future: Pin<Box<dyn Future<Output = T> + Send>> = Box::pin(make(signal.clone()));
         let task_signal = signal.clone();
         services.spawn_io(Box::pin(async move {
+            let _running = running;
             let raced = task_signal
                 .token
                 .run_until_cancelled(CatchUnwind {
@@ -502,8 +522,10 @@ impl TaskSpawner {
         O: Send + 'static,
         F: FnMut(I, &TaskContext) -> O + Send + 'static,
     {
-        let services = self.services()?;
-        let signal = CancellationSignal::child_of(services.cancellation_root());
+        // Nothing runs yet: the admission only refuses a retired
+        // application or a gone loop.
+        drop(self.admit()?);
+        let signal = self.work.signal();
         Ok(WorkerHandle {
             name,
             signal,
@@ -687,11 +709,12 @@ where
     /// mutex. Host execution is invoked outside that mutex. Refusal releases
     /// the reservation together with its pending input in the caller.
     fn ensure_pump(&self) -> Result<(), SpawnError> {
-        let services = self.spawner.services()?;
+        let (services, running) = self.spawner.admit()?;
         let shared = Arc::clone(&self.shared);
         let signal = self.signal.clone();
         let name = self.name;
         services.spawn_compute(Box::new(move || {
+            let _running = running;
             Self::pump(&shared, &signal, name);
         }))
     }
@@ -1366,6 +1389,10 @@ pub(crate) struct ServiceRegistry {
     exit_notifier: ExitNotifierSlot,
     /// The application's lifecycle, which each service's context watches.
     lifecycle: std::cell::RefCell<std::rc::Rc<ServiceLifecycle>>,
+    /// The node every task and worker of this application's services hangs
+    /// under, made under the loop's root when the first service is
+    /// prepared, closed and joined by [`Self::shutdown`].
+    work: std::cell::RefCell<Option<ApplicationWork>>,
 }
 
 /// The shared exit-notifier slot — see [`ServiceRegistry::exit_notifier`].
@@ -1378,6 +1405,7 @@ impl fmt::Debug for ServiceRegistry {
             .field("services", &self.services.len())
             .field("exit_notifier", &self.exit_notifier.lock().is_some())
             .field("lifecycle", &self.lifecycle)
+            .field("work", &self.work)
             .finish()
     }
 }
@@ -1411,6 +1439,20 @@ impl ServiceRegistry {
             services: Vec::new(),
             exit_notifier: Arc::new(parking_lot::Mutex::new(None)),
             lifecycle: std::cell::RefCell::new(std::rc::Rc::new(ServiceLifecycle::new())),
+            work: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// The application's work node, made under `services`' root when there
+    /// is none, or when the one there was closed (a later loop on this
+    /// thread reopened the registry).
+    fn work(&self, services: &ExecutionServices) -> WorkRef {
+        let mut work = self.work.borrow_mut();
+        match work.as_ref() {
+            Some(open) if !open.is_closed() => open.work_ref(),
+            _ => work
+                .insert(ApplicationWork::child_of(services.cancellation_root()))
+                .work_ref(),
         }
     }
 
@@ -1467,7 +1509,7 @@ impl ServiceRegistry {
         let signal = CancellationSignal::child_of(services.cancellation_root());
         let context = ServiceContext {
             signal,
-            spawner: TaskSpawner::new(services),
+            spawner: TaskSpawner::new(services, self.work(services)),
             lifecycle: self.lifecycle().watch(),
         };
         Ok(ServiceAdmission {
@@ -1666,9 +1708,11 @@ impl ServiceRegistry {
 
     /// The staged shutdown: stop admission, cancel **every** service
     /// first (so all flush windows overlap instead of serializing), then
-    /// join each against one shared deadline. Every wait is bounded; a
-    /// service that ignores cancellation costs at most the remaining
-    /// deadline and is reported, never waited on unboundedly.
+    /// join each against one shared deadline; then cancel every task and
+    /// worker the application spawned and join the running ones against
+    /// the same deadline. Every wait is bounded; work that ignores
+    /// cancellation costs at most the remaining deadline and is reported,
+    /// never waited on unboundedly.
     ///
     /// Runs BEFORE `ExecutionServices::shutdown` at loop-exit teardown —
     /// the pools' own cancellation hard-drops any future still running, so
@@ -1724,6 +1768,20 @@ impl ServiceRegistry {
                 outcome,
             });
         }
+        // After the services' flush windows, in which a service may still
+        // spawn: the application's tasks and workers end with it.
+        let work = self.work.borrow_mut().take();
+        if let Some(work) = work {
+            let unfinished = work.close_and_join(join_by);
+            if unfinished > 0 {
+                tracing::warn!(
+                    unfinished,
+                    ?join_by,
+                    "background jobs of the application ignored cancellation past the shutdown \
+                     deadline; they run on until they return"
+                );
+            }
+        }
         ServiceShutdownReport { entries }
     }
 }
@@ -1757,6 +1815,14 @@ mod tests {
         (services, deterministic)
     }
 
+    /// A spawner under an application node of its own, which no test closes.
+    fn spawner_for(services: &Arc<ExecutionServices>) -> TaskSpawner {
+        TaskSpawner::new(
+            services,
+            ApplicationWork::child_of(services.cancellation_root()).work_ref(),
+        )
+    }
+
     thread_local! {
         static AFTER_IDLE_HANDOFF: RefCell<Option<Box<dyn FnMut()>>> = const { RefCell::new(None) };
     }
@@ -1782,7 +1848,7 @@ mod tests {
     /// evidence rather than silence.
     fn task_panic_is_contained_and_reported() {
         let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
+        let spawner = spawner_for(&services);
         let handle = spawner
             .spawn_compute("panics", |_context| -> u32 {
                 panic!("task panic (expected by this test)")
@@ -1801,7 +1867,7 @@ mod tests {
     /// usable for the next one.
     fn worker_survives_a_panicking_job() {
         let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
+        let spawner = spawner_for(&services);
         let mut worker = spawner
             .spawn_worker("flaky", |input: u32, _context| {
                 assert!(input != 13, "worker panic (expected by this test)");
@@ -1835,7 +1901,7 @@ mod tests {
 
     fn worker_retirement_keeps_accepted_tail(reenter: bool, fail_diagnostics: bool) {
         let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
+        let spawner = spawner_for(&services);
         let owner = Arc::new(parking_lot::Mutex::new(
             None::<WorkerHandle<u32, RetiredOutput>>,
         ));
@@ -1943,7 +2009,7 @@ mod tests {
 
     fn outgoing_worker_input_failure_preserves_accepted_replacement() {
         let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
+        let spawner = spawner_for(&services);
         let mut worker = spawner
             .spawn_worker("input retirement", |input: RetiredOutput, _context| {
                 input.value
@@ -2061,7 +2127,7 @@ mod tests {
 
     fn task_reports_opaque_panic_before_retirement() {
         let (services, deterministic) = deterministic_services();
-        let spawner = TaskSpawner::new(&services);
+        let spawner = spawner_for(&services);
         let retired = Arc::new(AtomicBool::new(false));
         let payload = Arc::clone(&retired);
         let task = spawner
@@ -2086,7 +2152,7 @@ mod tests {
                 .spawn_compute(Box::new(|| {}))
                 .expect("fill compute admission");
         }
-        let spawner = TaskSpawner::new(&services);
+        let spawner = spawner_for(&services);
         let mut worker = spawner
             .spawn_worker(
                 "refusal",
@@ -2151,7 +2217,7 @@ mod tests {
             COMPUTE_ADMISSION,
             IO_ADMISSION,
         ));
-        let spawner = TaskSpawner::new(&services);
+        let spawner = spawner_for(&services);
         let executed = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let record = Arc::clone(&executed);
         let mut worker = spawner
@@ -2228,7 +2294,7 @@ mod tests {
     fn worker_handle_refuses_after_the_services_drop() {
         let (services, _deterministic) = deterministic_services();
         let gone = Arc::downgrade(&services);
-        let mut worker = TaskSpawner::new(&services)
+        let mut worker = spawner_for(&services)
             .spawn_worker("stale", |input: u32, _context| input)
             .expect("worker must be created");
         drop(services);
@@ -2293,6 +2359,57 @@ mod tests {
         services.shutdown(std::time::Instant::now() + Duration::from_secs(5));
     }
 
+    /// The application's work closes with the registry: its worker is
+    /// cancelled whoever holds the handle, a job that does not check its
+    /// cancellation is counted as running on past the deadline, and the
+    /// spawner refuses from then on.
+    fn shutdown_ends_the_applications_tasks_and_workers() {
+        let services = Arc::new(ExecutionServices::with_defaults());
+        let mut registry = ServiceRegistry::new();
+        let spawner = TaskSpawner::new(&services, registry.work(&services));
+        let worker = spawner
+            .spawn_worker("held", |(): (), _: &TaskContext| ())
+            .expect("the worker spawns");
+        let (release, released) = mpsc::channel::<()>();
+        let (started, running) = mpsc::channel::<()>();
+        let stubborn = spawner
+            .spawn_compute("ignores cancellation", move |_| {
+                let _ = started.send(());
+                let _ = released.recv();
+            })
+            .expect("the compute lane admits the job");
+        running
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the job started");
+
+        let work = registry
+            .work
+            .borrow_mut()
+            .take()
+            .expect("the registry made a node");
+        assert_eq!(
+            work.close_and_join(Instant::now() + Duration::from_millis(20)),
+            1,
+            "the job that ignores its cancellation is still running at the deadline"
+        );
+        assert!(worker.signal.is_cancelled(), "the held worker is cancelled");
+        assert!(
+            matches!(
+                spawner.spawn_compute("late", |_| ()),
+                Err(SpawnError::ShuttingDown)
+            ),
+            "the spawner refuses once its application's work closed"
+        );
+        release.send(()).expect("the job waits for its release");
+        assert_eq!(
+            work.close_and_join(Instant::now() + Duration::from_secs(10)),
+            0,
+            "a released job is waited for"
+        );
+        drop((stubborn, worker));
+        services.shutdown(std::time::Instant::now() + Duration::from_secs(5));
+    }
+
     #[test]
     fn service_lifecycle_matrix() {
         crate::table_test::run_table(
@@ -2353,6 +2470,10 @@ mod tests {
                 (
                     "shutdown_cancels_then_joins_and_the_flush_window_is_real",
                     shutdown_cancels_then_joins_and_the_flush_window_is_real as fn(),
+                ),
+                (
+                    "shutdown_ends_the_applications_tasks_and_workers",
+                    shutdown_ends_the_applications_tasks_and_workers as fn(),
                 ),
             ],
         );
