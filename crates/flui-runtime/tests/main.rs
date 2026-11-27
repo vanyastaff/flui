@@ -107,8 +107,18 @@ mod agent_wire;
 
 #[path = "contracts/agent_act.rs"]
 mod agent_act;
+#[path = "contracts/agent_gesture_composition.rs"]
+mod agent_gesture_composition;
+#[path = "contracts/agent_gesture_unwinding.rs"]
+mod agent_gesture_unwinding;
+#[path = "contracts/agent_gestures.rs"]
+mod agent_gestures;
 #[path = "contracts/agent_input.rs"]
 mod agent_input;
+#[path = "contracts/agent_perf.rs"]
+mod agent_perf;
+#[path = "contracts/agent_rig.rs"]
+mod agent_rig;
 #[path = "contracts/announce.rs"]
 mod announce;
 #[path = "contracts/close_vetoes.rs"]
@@ -160,6 +170,8 @@ mod recovered_panic_context;
 mod session_end_report;
 #[path = "contracts/session_end_steps.rs"]
 mod session_end_steps;
+#[path = "contracts/settledness.rs"]
+mod settledness;
 #[path = "../src/table_test.rs"]
 mod table_test;
 #[path = "contracts/text_frame.rs"]

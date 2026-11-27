@@ -1,8 +1,8 @@
 //! The [`Driver`]: one target, its connection, its session policy, and every method of the table.
 //!
 //! The agent's methods (`ServedBy::Agent`) go to the app as they are; the driver's own
-//! (`ServedBy::Driver`) are composed here from them ([`crate::compose`]); a lane's need one
-//! attached. [`Driver::call`] reaches all of them by type, [`Driver::call_value`] by wire name, so
+//! (`ServedBy::Driver`), and a gesture on the `os` path or one the app's agent does not answer,
+//! are composed here from them ([`crate::compose`]); a lane's need one attached. [`Driver::call`] reaches all of them by type, [`Driver::call_value`] by wire name, so
 //! every front end reaches the same set (ADR-0238 §1).
 
 use std::fmt;
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_protocol::error::HandleKind;
 use flui_protocol::events::Event;
-use flui_protocol::input::{InputParams, InputPath, InputPolicy, PointerDevice};
+use flui_protocol::input::{InputPath, InputPolicy, PointerDevice};
 use flui_protocol::method::{self, Method, MethodEffect, ServedBy};
 use flui_protocol::session::{
     AppDescription, Capabilities, Closed, Empty, HelloReply, Isolation, WindowList,
@@ -25,15 +25,15 @@ use serde_json::Value;
 
 use flui_foundation::panic::FirstPanic;
 
-use crate::connection::{Call, Connection, Events};
+use crate::connection::{Call, Events, Transport};
 use crate::error::{Error, Result};
 use crate::lane::{Lane, LaneWorker};
 use crate::launch::{AppProcess, Launch};
 use crate::os_input::OsInputLock;
-use crate::report::Report;
 use crate::scenario::Scenario;
 use crate::trace::{self, TraceOptions, TraceSummary, TraceWriter};
 use crate::window::Window;
+use flui_protocol::report::Report;
 
 /// How long past the agent's own reply bound a call over a socket waits before it calls the app
 /// unresponsive: the agent answers `timeout` itself after 5 s, so this fires only for a peer that
@@ -53,7 +53,7 @@ pub(crate) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 /// `Send` but not `Sync`: a front end that needs concurrency puts it behind a worker. Its methods
 /// are synchronous.
 pub struct Driver {
-    connection: Box<dyn Connection>,
+    connection: Box<dyn Transport>,
     /// The process a launch started, ended with the session.
     process: Option<AppProcess>,
     /// Whether the session launched the page it drives (a web build in a browser of its own),
@@ -79,6 +79,9 @@ pub struct Driver {
     command_depth: u32,
     /// Events a trace took from the connection that are the caller's to take.
     kept_events: Events,
+    /// The window the driver drives as a [`flui_protocol::client::Connection`], resolved at the
+    /// connection's first call and kept for the session.
+    connection_window: Option<WindowId>,
 }
 
 impl Driver {
@@ -224,7 +227,7 @@ impl Driver {
     }
 
     fn new(
-        connection: Box<dyn Connection>,
+        connection: Box<dyn Transport>,
         process: Option<AppProcess>,
         target_isolation: Isolation,
         reply_budget: Duration,
@@ -246,6 +249,7 @@ impl Driver {
             trace: None,
             command_depth: 0,
             kept_events: Events::default(),
+            connection_window: None,
         }
     }
 
@@ -347,6 +351,7 @@ impl Driver {
     #[must_use]
     pub fn capabilities(&self) -> Capabilities {
         let mut capabilities = self.hello().capabilities.clone().unwrap_or_default();
+        let listed = std::mem::take(&mut capabilities.pointers);
         let serves = |name: &str| capabilities.methods.iter().any(|method| method == name);
         let mut paths = Vec::new();
         if serves(method::SemanticsAct::NAME) {
@@ -355,7 +360,11 @@ impl Driver {
         if serves(method::InputInject::NAME) {
             paths.push(InputPath::Synthetic);
         }
-        let mut pointers = if serves(method::InputInject::NAME) {
+        // The devices the agent's hello says its injection delivers; an agent older than 0.32
+        // lists none and delivers a mouse, a touch contact and a pen.
+        let mut pointers = if !listed.is_empty() {
+            listed
+        } else if serves(method::InputInject::NAME) {
             vec![
                 PointerDevice::Mouse,
                 PointerDevice::Touch,
@@ -375,8 +384,10 @@ impl Driver {
         capabilities.paths = paths;
         capabilities.pointers = pointers;
         capabilities.isolation = Some(self.isolation());
+        // What the driver composes: its own methods, and the gestures an app's agent does not
+        // answer.
         for row in method::METHODS {
-            if row.served_by == ServedBy::Driver && crate::compose::composes(row.name) {
+            if crate::compose::composes(row.name) && !self.serves(row.name) {
                 capabilities.methods.push(row.name.to_owned());
             }
         }
@@ -430,6 +441,11 @@ impl Driver {
     /// Send `row`'s method to whoever serves it.
     fn dispatch_value(&mut self, row: &'static method::MethodRow, params: Value) -> Result<Value> {
         match row.served_by {
+            // A gesture's path is the driver's to choose: it hands the gesture to the agent with
+            // that path as its `via`, or composes it from the agent's methods and its lane.
+            ServedBy::Agent if crate::compose::decides_path(row.name) => {
+                crate::compose::call(self, row.name, params)
+            }
             ServedBy::Agent => {
                 if !self.serves(row.name) {
                     return Err(Error::not_supported(
@@ -822,6 +838,22 @@ impl Driver {
         std::mem::take(&mut self.announcements)
     }
 
+    /// Run `scenario` against this session as `report`'s check `name` ([`Report::run`]); the
+    /// session's OS-input announcements, isolation and lane join the report.
+    pub fn run_scenario(
+        &mut self,
+        report: &mut Report,
+        name: impl Into<String>,
+        scenario: impl FnOnce(&mut Self, &mut Report) -> Result<()>,
+    ) {
+        report.run(name, |report| scenario(self, report));
+        report.set_isolation(self.isolation());
+        report.set_lane(self.lane_name().map(str::to_owned));
+        for line in self.take_announcements() {
+            report.announce(line);
+        }
+    }
+
     /// End the session: the connection closes, a launched app exits on its driver's disconnect
     /// and is ended if it has not, and its exit code is answered. An attached app is never ended.
     #[must_use]
@@ -847,6 +879,23 @@ impl Driver {
     /// How long the session has run on the clock its waits are counted in.
     pub(crate) fn clock(&self) -> Duration {
         self.connection.clock()
+    }
+
+    /// Whether that clock is virtual: the in-process target's is the app's own, which only its
+    /// frames move; every other target's is the wall.
+    pub(crate) fn virtual_clock(&self) -> bool {
+        self.target_isolation == Isolation::InProcess
+    }
+
+    /// The window the connection drives: the first window with content when the connection is
+    /// first used, kept afterwards, so a window the app opens later never takes its place.
+    pub(crate) fn connection_window(&mut self) -> Result<WindowId> {
+        if let Some(window) = self.connection_window {
+            return Ok(window);
+        }
+        let window = self.main_window()?.id();
+        self.connection_window = Some(window);
+        Ok(window)
     }
 
     /// The OS lane the session's OS input goes through, when it has one.
@@ -911,20 +960,34 @@ pub(crate) fn decode<T: DeserializeOwned>(method: &str, output: Value) -> Result
 }
 
 /// How long the app may hold a request for `method` with `params` past serving it: a wait's
-/// timeout, an input sequence's span.
+/// timeout, an input sequence's span, a gesture's act timeout. A window method's own parameters
+/// say it ([`Addressed::holds_for`](flui_protocol::method::Addressed::holds_for)); a frame or
+/// settle wait holds for its timeout.
 fn holds_for(method: &str, params: &Value) -> Duration {
-    use flui_protocol::method::Addressed as _;
-    let read = |value: &Value| value.clone();
-    match method {
-        "wait.until" => serde_json::from_value::<WaitParams>(read(params)).map(|p| p.holds_for()),
-        "wait.frames" => serde_json::from_value::<FramesParams>(read(params))
-            .map(|p| Duration::from_millis(p.timeout_ms.unwrap_or(WaitParams::DEFAULT_TIMEOUT_MS))),
-        "wait.settled" => serde_json::from_value::<SettledParams>(read(params))
-            .map(|p| Duration::from_millis(p.timeout_ms.unwrap_or(WaitParams::DEFAULT_TIMEOUT_MS))),
-        "input.inject" => {
-            serde_json::from_value::<InputParams>(read(params)).map(|p| p.holds_for())
-        }
-        _ => return Duration::ZERO,
+    fn held<P: DeserializeOwned + flui_protocol::method::Addressed>(params: &Value) -> Duration {
+        serde_json::from_value::<P>(params.clone())
+            .map_or(Duration::ZERO, |params| params.holds_for())
     }
-    .unwrap_or(Duration::ZERO)
+    let timeout =
+        |ms: Option<u64>| Duration::from_millis(ms.unwrap_or(WaitParams::DEFAULT_TIMEOUT_MS));
+    match method {
+        "wait.frames" => {
+            return serde_json::from_value::<FramesParams>(params.clone())
+                .map_or(Duration::ZERO, |p| timeout(p.timeout_ms));
+        }
+        "wait.settled" => {
+            return serde_json::from_value::<SettledParams>(params.clone())
+                .map_or(Duration::ZERO, |p| timeout(p.timeout_ms));
+        }
+        _ => {}
+    }
+    macro_rules! window_methods {
+        ($($ty:ident = $name:literal, $effect:ident, $tier:ident, $params:ty => $output:ty;)+) => {
+            match method {
+                $($name => held::<$params>(params),)+
+                _ => Duration::ZERO,
+            }
+        };
+    }
+    flui_protocol::for_each_window_method!(window_methods)
 }

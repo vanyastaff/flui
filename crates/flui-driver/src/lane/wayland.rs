@@ -190,7 +190,7 @@ mod lane {
             let (pointer, device, regions) = session.interface::<ei::PointerAbsolute>()?;
             let (x, y) = mapping::ei_point(to, scale, &regions).ok_or_else(|| {
                 Error::outside_target(format!(
-                    "({}, {}) lies in no region the compositor's pointer covers; nothing was sent",
+                    "({}, {}) lies in no region the compositor's pointer covers: the event is not sent",
                     to.x, to.y
                 ))
             })?;
@@ -412,7 +412,7 @@ mod lane {
             Ok(tree)
         }
 
-        fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
+        fn invoke(&mut self, placement: &Placement, identifier: &str, _app: &Tree) -> Result<()> {
             let bus = A11yBus::connect(self.session_bus.as_deref(), LANE)?;
             bus.invoke(WindowTarget::of(self.pid, placement), identifier)
         }

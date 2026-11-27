@@ -49,6 +49,16 @@ filter = 'all()'
 setup = 'build-test-desktop'
 run-wrapper = 'test-desktop'
 
+# The hot-reload lifecycle tests load the fixture's cdylib from Cargo's artifact directory. The
+# setup script builds it there before those tests; which runs it serves, how the others build it
+# by hand and why it passes no `--locked`: docs/testing.md, "The reload-lifecycle fixture".
+[scripts.setup.build-hot-reload-fixture]
+command = "cargo build -p flui-hot-reload-lifecycle-fixture --lib --quiet"
+
+[[profile.default.scripts]]
+filter = 'package(flui-hot-reload-lifecycle-fixture)'
+setup = 'build-hot-reload-fixture'
+
 # Nested-cargo tests: each runs a real `cargo` of its own on a project it
 # generates. The trybuild suites push every compile_fail case through rustc;
 # the flui-cli template tests (`cli_create::generated_*`) build or test a

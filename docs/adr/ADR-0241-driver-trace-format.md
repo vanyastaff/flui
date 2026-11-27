@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-20)
 - **Date:** 2026-10-17
+- **Superseded-by:** [ADR-0403](ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
+  for the name `record.start` in the Consequences only: the method is `recording.start`.
 - **Related:** [ADR-0215](ADR-0215-input-recording-and-backend-conformance.md) (the input
   recording it embeds; its privacy rule and completeness rule are reused),
   [ADR-0238](ADR-0238-flui-driver-protocol.md),

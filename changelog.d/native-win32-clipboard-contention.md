@@ -9,9 +9,11 @@
   host's answer for a clipboard object no retry can reach.
 - **`flui-platform`**: `Script::on_answer`, which adds an observer that hears every answer a
   scenario script gives, however it is given, before the caller's completion settles.
-- **`flui-testing`**: `ScriptedClipboard::writes`, the script that answers writes (each a
-  `WriteRequest`), with `fail_writes_with`, `stop_failing_writes` and `hold_writes`, whose
-  `ClipboardWriteHold` holds writes while any hold lives; reads and writes keep one order,
+- **`flui-interaction`** (`testing`, re-exported by `flui_testing::host`):
+  `ScriptedClipboard::writes`, the script that answers writes (each a
+  `ClipboardWriteRequest`), with `fail_writes_with`, `stop_failing_writes` and `hold_writes`, whose
+  `ClipboardWriteHold` is one hold of the write script, so writes stay held while it or any other
+  hold of that script lives, a test's own included; reads and writes keep one order,
   whatever answers a write `Ok` or `ApplicationOnly` lands its text, and a write's completion
   settles only once its text has landed.
 - **`flui-native`**: `testing::clipboard::SettlingOwner`, `write_unobserved` and `read_within`, for

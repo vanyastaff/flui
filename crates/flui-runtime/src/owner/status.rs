@@ -155,7 +155,12 @@ impl OwnerHost {
         Ok(first)
     }
 
-    /// Earliest cached runtime-owned wall-clock deadline after all checkouts return.
+    /// Earliest cached runtime-owned wall-clock deadline after all checkouts return: the
+    /// minimum of each resident runtime's `UiRuntime::next_wake`, so a presentation's in-flight
+    /// floor counts only where that runtime's host owes it (its
+    /// `RuntimeHostServices::with_floor_owed` rule, the one its half of what keeps the
+    /// application from being idle reads too). That rule runs under the registry borrow, so it
+    /// reads its own state only and never reaches a runtime.
     /// Never reports an incomplete minimum by silently skipping an active runtime.
     /// Deadline extension queries and diagnostics run at owner execution frontiers;
     /// this observation never calls foreign code while holding the registry borrow.
@@ -163,20 +168,6 @@ impl OwnerHost {
     /// # Errors
     /// Returns `Busy` during runtime execution or a pure publication.
     pub fn next_wake(&self) -> Result<Option<web_time::Instant>, DispatchError> {
-        self.next_wake_owing_floors(&|_| true)
-    }
-
-    /// [`Self::next_wake`] with each presentation's in-flight floor only where `floor_owed`
-    /// holds for its address, as `UiRuntime::next_wake_owing_floors` folds them. `floor_owed` runs
-    /// under the registry borrow, so it reads its own state only and never reaches a runtime.
-    ///
-    /// # Errors
-    /// Returns `Busy` during runtime execution or a pure publication.
-    #[doc(hidden)]
-    pub fn next_wake_owing_floors(
-        &self,
-        floor_owed: &dyn Fn(PresentationAddress) -> bool,
-    ) -> Result<Option<web_time::Instant>, DispatchError> {
         let state = self
             .core
             .state
@@ -189,9 +180,7 @@ impl OwnerHost {
             .runtimes
             .iter()
             .filter_map(|entry| match &entry.residence {
-                Residence::Resident(runtime) if !state.closed => {
-                    runtime.next_wake_owing_floors(floor_owed)
-                }
+                Residence::Resident(runtime) if !state.closed => runtime.next_wake(),
                 _ => None,
             })
             .min())

@@ -2,8 +2,13 @@
 
 mod action_span;
 mod build_report;
+mod client;
+mod endpoint;
 mod envelope;
 mod framing;
+mod geometry;
+mod gestures;
+mod input_plan;
 mod method_table;
 mod native_recording_bounds;
 mod text_match;

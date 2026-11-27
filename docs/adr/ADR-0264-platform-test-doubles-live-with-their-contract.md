@@ -45,8 +45,12 @@ Chosen option: 1.
 
 1. A double of a `flui-platform` contract is an item of `flui_platform::testing`, compiled under
    the crate's `testing` feature (and its own unit tests). `FakeHaptics`, with `HapticCall` and
-   `HapticPlay`, is `flui_platform::testing::FakeHaptics`; `InMemoryClipboard`'s scripted half
-   follows when the capability seam moves it.
+   `HapticPlay`, is `flui_platform::testing::FakeHaptics`. A contract the capability seam moved
+   out of `flui-platform` takes its double with it: the clipboard's contract is
+   `ClipboardCapability` and `ClipboardBackend` in `flui-interaction::text_input` (ADR-0152), so
+   the scripted double that replaced `InMemoryClipboard`'s scripted half is
+   `flui_interaction::testing::ScriptedClipboard`, under `flui-interaction`'s `testing` feature,
+   and the primary selection's is `flui_interaction::testing::ScriptedPrimarySelection` beside it.
 2. A double built on policy that is no longer in the contract lives beside that policy:
    `InMemoryTextStore` drives `LockArbiter`, `CompositionLedger` and `EditGeneration`, which
    ADR-0151 §6 moves to `flui-interaction::text_input`, and `flui-platform` cannot depend on
@@ -57,7 +61,9 @@ Chosen option: 1.
    that asserts what played installs the kit's double.
 4. `flui-testing` enables the kits it builds on and re-exports their doubles where its own API
    hands them out, beside that API: `flui_testing::host` re-exports `FakeHaptics`, which
-   `HeadlessWindow::haptic_actuator` returns, and `ScriptedHttp`, which `HeadlessHost::http` returns.
+   `HeadlessWindow::haptic_actuator` returns, `ScriptedHttp`, which `HeadlessHost::http` returns,
+   and `ScriptedClipboard` and `ScriptedPrimarySelection`, which `HeadlessHost::clipboard` and
+   `HeadlessHost::primary_selection` return.
 
 ### Consequences
 
@@ -96,7 +102,3 @@ names it without the feature fails; `stale_haptic_source_plays_on_the_window_act
 
 - Good, because no feature is needed.
 - Bad, because test code ships in the Stable contract, which ADR-0151 removed for good reason.
-
-## More information
-
-- The platform-layer spec's D9 and its LY48 and LY50 tasks follow this ADR.

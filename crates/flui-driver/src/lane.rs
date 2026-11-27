@@ -18,19 +18,23 @@
 //! The lanes: [`windows`], [`macos`], [`x11`], [`wayland`] (its OS half with the `wayland`
 //! feature) and `chrome` (feature `chrome`); both Linux lanes read the app through [`atspi`].
 //! [`android`] drives a device or an emulator from any host, through `adb`, and [`ios_simulator`]
-//! an iOS Simulator through `xcrun simctl`, which sends no input. An input-method composition goes
-//! only to a lane that says it composes ([`LaneCapabilities::compositions`]), a rule
+//! an iOS Simulator through `xcrun simctl`, which sends no input and reads the app through the
+//! Mac's accessibility API on the Simulator's window. The macOS lane and the iOS Simulator lane
+//! share that API's rules and, on macOS, its client (`ax`); no lane imports another. An input-method composition
+//! goes only to a lane that says it composes ([`LaneCapabilities::compositions`]), a rule
 //! [`send_guarded`] holds.
 
 pub mod android;
 pub mod atspi;
+pub(crate) mod ax;
 #[cfg(feature = "chrome")]
 pub mod chrome;
+mod delivered;
 pub mod ios_simulator;
 pub mod macos;
 pub mod pacing;
 pub mod screen;
-mod tool;
+pub(crate) mod tool;
 pub mod walk;
 pub mod wayland;
 pub mod windows;
@@ -51,6 +55,8 @@ use crate::coordinates::WindowGeometry;
 use crate::error::{Error, Result};
 use crate::pixels::Image;
 use crate::steps::OsEvent;
+
+pub use self::delivered::{ActingInput, Delivered, OsInput, SendFailure};
 
 /// Which positions a lane reproduces exactly: what replay and golden holds compare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -76,14 +82,29 @@ pub enum AccessibilityApi {
     /// Android's accessibility nodes (`AccessibilityNodeInfo`, the tree TalkBack reads) as
     /// UI Automator dumps them: native roles are class names.
     UiAutomator,
+    /// The macOS Accessibility API (AX) on the iOS Simulator's window, under which the Simulator
+    /// bridges the iOS app's UIKit elements: native roles are the `AX` role strings the bridge
+    /// gives each element. Apple documents no part of the bridge, so it stands for VoiceOver on
+    /// iOS only as far as runs confirm it: the roles it gives each trait are inferred, not
+    /// measured, and whether it carries the app's identifier is unconfirmed (`docs/gaps.md`).
+    SimulatorAx,
 }
 
 impl AccessibilityApi {
-    /// Whether the API's tree names no identifier the app sets, so a lane reading it finds the
-    /// app's nodes by matching it to the app's own tree ([`Lane::read_tree`]'s `app`).
+    /// Whether the lane reading the API finds the app's nodes by matching the OS tree to the
+    /// app's own tree ([`Lane::read_tree`]'s `app`): Android's tree names no identifier the app
+    /// sets, and the Simulator's bridge carries one no run has confirmed, so both are matched by
+    /// role, name, state and bounds.
     #[must_use]
     pub fn matches_app_tree(self) -> bool {
-        matches!(self, Self::UiAutomator)
+        matches!(self, Self::UiAutomator | Self::SimulatorAx)
+    }
+
+    /// Whether the API performs an element's action, as a screen reader's activate command does
+    /// ([`Lane::invoke`]): every one but UI Automator, which reads the tree and acts on nothing.
+    #[must_use]
+    pub fn activates(self) -> bool {
+        !matches!(self, Self::UiAutomator)
     }
 }
 
@@ -223,18 +244,35 @@ pub trait Lane: Send {
         Ok(())
     }
 
-    /// Send one event; a pause waits.
+    /// Send one event; a pause waits. Said on its own, a failure is the lane's: what of a run went
+    /// out before it is the run's to say ([`send_guarded`], through [`Self::send_counted`]).
     ///
     /// # Errors
     ///
     /// When the OS refused it.
     fn send(&mut self, event: &OsEvent) -> Result<()>;
 
+    /// Send `event` as [`Self::send`] does, saying in `delivered` each input of it that reached
+    /// the device: what [`send_guarded`] says of a run that fails part way. The default sends the
+    /// event as one input, said where it acts, which holds for a lane that sends each event as
+    /// one; a lane that sends an event as none or several (typed keystrokes, Android's commands)
+    /// says each input itself ([`Delivered::send`], [`Delivered::took_command`]), so an event cut
+    /// part way is partly sent.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::send`].
+    fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
+        delivered
+            .send(event, || self.send(event))
+            .map_err(Error::from)
+    }
+
     /// The OS accessibility tree of the window `placement` describes, projected onto the wire's
     /// nodes (ADR-0095 §4): what a screen reader reads of the app. `app` is the window's tree as
     /// the app published it when the lane's API [matches the app's tree](AccessibilityApi::matches_app_tree)
-    /// (Android's, whose OS tree names no identifier), and an empty tree for the others, which read
-    /// without it.
+    /// (Android's and the iOS Simulator's), and an empty tree for the others, which read without
+    /// it.
     ///
     /// # Errors
     ///
@@ -248,17 +286,20 @@ pub trait Lane: Send {
         ))
     }
 
-    /// Activate the element of the window `placement` describes whose OS automation id is
-    /// `identifier` (an ADR-0240 identifier, as the adapter publishes it) through the OS
-    /// accessibility API, as a screen reader's activate command does.
+    /// Activate the element of the window `placement` describes whose identifier is `identifier`
+    /// (an ADR-0240 identifier, as the adapter publishes it) through the OS accessibility API, as
+    /// a screen reader's activate command does. `app` is handed as [`Self::read_tree`] is handed
+    /// it: a lane whose API [matches the app's tree](AccessibilityApi::matches_app_tree) finds the
+    /// element as the app node of that identifier matched; the others find it by the OS automation
+    /// id.
     ///
     /// # Errors
     ///
     /// [`Error::NotSupported`] naming `os_invoke` for a lane that acts through no accessibility
     /// API, which is the default, and for one that reads a tree but performs no action through it
     /// (Android's); [`Error::NotFound`] when no element has the identifier.
-    fn invoke(&mut self, placement: &Placement, identifier: &str) -> Result<()> {
-        let _ = (placement, identifier);
+    fn invoke(&mut self, placement: &Placement, identifier: &str, app: &Tree) -> Result<()> {
+        let _ = (placement, identifier, app);
         Err(Error::not_supported(
             "os_invoke",
             format!("the {} lane acts through no accessibility API", self.name()),
@@ -373,14 +414,25 @@ pub fn admit(lane: &mut dyn Lane) -> Result<()> {
 /// Send `events` through `lane`, asking its guard before each: on foreign input, stop before the
 /// next event, release everything and fail with [`Error::InterruptedByUser`]. Everything the lane
 /// pressed is released on every exit, a failed send included. When the release leaves input
-/// held, the run answers [`Error::ReleaseFailed`], so what stays down is always named; the
-/// failure that ended the run is its `first`, and the run's effect and verdict are that failure's
-/// ([`Error::effect`], [`Error::is_cannot_verify`]).
+/// held, the run names it in [`Error::ReleaseFailed`]: the failure that ended the run is its
+/// `first`, and the run's effect and verdict are that failure's ([`Error::effect`],
+/// [`Error::is_cannot_verify`]).
+///
+/// Whatever ends the run once an input of it reached the device ([`Lane::send_counted`]), a
+/// refusal, an interruption, a failed command or a release that fails after the last event, the
+/// run answers as [`Error::PartlySent`] around it, and no retry, which would send that input
+/// again. Its effect counts in events ([`Delivered`]): every event the lane took whole, a pause
+/// waited out and a move included, and the failing event where part of it reached the device;
+/// a lane that counts its commands names them in the effect's detail. A failure that names an
+/// effect of its own and invites no retry (a command that timed out) stays as it is. A release
+/// that fails after a run that ended for its own reason is that `ReleaseFailed`, the run's
+/// failure, partly sent or not, its `first`.
 ///
 /// # Errors
 ///
 /// As [`admit`] and [`Lane::check`], before any event, and [`Error::NotSupported`] naming
 /// `os_ime_composition` for a composition a lane that does not compose was handed;
+/// [`Error::PartlySent`] around what ended a run some of which went out;
 /// [`Error::ReleaseFailed`] naming what stays held, with the run's own failure as its `first`
 /// when there was one; [`Error::InterruptedByUser`]; the lane's own failure.
 pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
@@ -398,10 +450,16 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
     if let Some(guard) = lane.guard() {
         guard.arm()?;
     }
-    let sent = send_each(lane, &name, events);
+    let (delivered, sent) = send_each(lane, &name, events);
     if let Some(guard) = lane.guard() {
         guard.disarm();
     }
+    // Once an input of the run reached the device, whatever ends it says how much went out.
+    let partly = |failure: Error| match delivered.effect(events.len()) {
+        Some(effect) => failure.after_partly_sent(effect),
+        None => failure,
+    };
+    let sent = sent.map_err(partly);
     let released = lane.release_all();
     match (sent, released) {
         // The error names what stays down whatever ended the run, and keeps that first failure,
@@ -421,6 +479,7 @@ pub fn send_guarded(lane: &mut dyn Lane, events: &[OsEvent]) -> Result<()> {
             message: format!("{message}; the run had failed first: {failure}"),
             first: Some(Box::new(failure)),
         }),
+        (Ok(()), Err(release)) => Err(partly(release)),
         (sent, released) => sent.and(released),
     }
 }
@@ -434,25 +493,35 @@ pub(crate) fn no_composition(lane: &str) -> Error {
     )
 }
 
-fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> Result<()> {
-    for event in events {
-        if let Some(foreign) = lane.guard().and_then(ActivityGuard::foreign_input) {
-            return Err(Error::InterruptedByUser {
+/// Send `events` one at a time, asking the guard before each and after the last: what the
+/// device took of them, and what ended the run.
+fn send_each(lane: &mut dyn Lane, name: &str, events: &[OsEvent]) -> (Delivered, Result<()>) {
+    let interrupted = |lane: &mut dyn Lane| {
+        lane.guard()
+            .and_then(ActivityGuard::foreign_input)
+            .map(|foreign| Error::InterruptedByUser {
                 lane: name.to_owned(),
                 event: foreign.description,
-            });
+            })
+    };
+    let mut delivered = Delivered::default();
+    for event in events {
+        if let Some(interruption) = interrupted(lane) {
+            return (delivered, Err(interruption));
         }
-        lane.send(event)?;
+        delivered.begin_event();
+        let sent = lane.send_counted(event, &mut delivered);
+        delivered.end_event(sent.is_ok());
+        if let Err(failure) = sent {
+            return (delivered, Err(failure));
+        }
     }
     // Input that came during the last event still ends the run: it may have changed what the
     // last event did.
-    if let Some(foreign) = lane.guard().and_then(ActivityGuard::foreign_input) {
-        return Err(Error::InterruptedByUser {
-            lane: name.to_owned(),
-            event: foreign.description,
-        });
+    match interrupted(lane) {
+        Some(interruption) => (delivered, Err(interruption)),
+        None => (delivered, Ok(())),
     }
-    Ok(())
 }
 
 /// Release what `lane` holds where no caller is left to retry (the worker ending, a job that
@@ -502,18 +571,27 @@ impl LaneWorker {
             .spawn(move || {
                 let mut lane = lane;
                 while let Ok((state, job)) = inbox.recv() {
-                    if state
+                    let runs = state
                         .compare_exchange(QUEUED, RUNNING, Ordering::AcqRel, Ordering::Acquire)
-                        .is_ok()
-                    {
-                        job(&mut lane);
+                        .is_ok();
+                    // A job and what it holds are code the driver does not own: run, or dropped
+                    // when it was cancelled, it is under containment, its answer nobody receives
+                    // included, so a destructor's panic never ends the worker before the release
+                    // at its end. Nobody waits for that panic: it is destroyed here.
+                    let mut served = FirstPanic::new();
+                    if runs {
+                        served.contain(|| job(&mut lane));
+                    } else {
+                        served.retire(job);
                     }
+                    drop(served);
                 }
-                // The worker is ending: nothing may stay pressed. A panic of the lane or of a log
-                // subscriber here has no one left to be raised to, so it is destroyed under
-                // containment as the collector drops.
+                // The worker is ending: nothing may stay pressed. A panic of the lane, its
+                // destructor or a log subscriber here has no one left to be raised to, so it is
+                // destroyed under containment as the collector drops.
                 let mut ending = FirstPanic::new();
                 ending.contain(|| release_at_end(&mut lane));
+                ending.retire(lane);
                 drop(ending);
             })?;
         Ok(Self {
@@ -605,8 +683,11 @@ impl LaneWorker {
 impl Drop for LaneWorker {
     fn drop(&mut self) {
         drop(self.jobs.take());
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        // No payload reaches the join while the thread contains every job, every job it drops
+        // and its own end (`ending.retire(lane)`); this arm is kept so a panic that ever escapes
+        // that containment is destroyed here, never raised from a destructor (ADR-0281).
+        if let Some(Err(payload)) = self.thread.take().map(JoinHandle::join) {
+            discard_payload(payload);
         }
     }
 }

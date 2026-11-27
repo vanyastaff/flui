@@ -109,11 +109,16 @@ const DEFAULT_COMMAND_CAPACITY: usize = 256;
 const MAX_NOT_SHOWN_RETRIES: u32 = 128;
 
 mod agent;
+mod agent_audit;
 mod agent_events;
+mod agent_gesture;
+mod agent_held;
 mod agent_input;
 mod agent_inspect;
 mod agent_journal;
+mod agent_perf;
 mod agent_record;
+mod agent_scroll;
 mod agent_serve;
 mod agent_side;
 mod agent_stability;
@@ -130,11 +135,14 @@ mod pump;
 mod recording;
 mod sampling;
 mod settlement;
+mod unsettled;
 
 pub use crate::runtime_services::RuntimeHostServices;
 pub(crate) use agent::AgentError;
 pub(crate) use agent::{DevAgentSlot, PendingActRead};
 pub(crate) use agent_events::EventHub;
+pub(crate) use agent_held::{HeldAct, HeldActs};
+pub(crate) use agent_input::injected_pointers;
 pub(crate) use agent_input::{Abandoned as AbandonedInput, AgentInput};
 pub(crate) use agent_inspect::{PendingLayerRead, StagedLayerRead, deliver_each};
 pub use agent_record::{NativeForms, NativeLines};
@@ -294,6 +302,14 @@ pub struct UiRuntime {
     /// The development agent's owner side, once [`Self::dev_agent_window`] vended a window here:
     /// until then nothing of the agent's exists to serve (ADR-0402).
     agent_side: Cell<Option<&'static dyn agent_side::AgentSide>>,
+    /// Whether the host answers settledness after each of its turns
+    /// ([`RuntimeHostServices::composes_host_half`]); fixed at construction, so no order of
+    /// events answers a settled wait from the runtime's half on a host that composes one.
+    composes_host_half: bool,
+    /// Which in-flight floors the host owes ([`RuntimeHostServices::with_floor_owed`]); every
+    /// floor without it. Read by the wake and by the runtime's half of what keeps the
+    /// application from being idle alike.
+    floor_owed: Option<std::rc::Rc<dyn Fn(flui_foundation::PresentationAddress) -> bool>>,
     /// The fan-out of the host's native journal, once the host attached one: the recordings of
     /// the `native` layer join it.
     native_lines: RefCell<Option<agent_record::NativeLines>>,

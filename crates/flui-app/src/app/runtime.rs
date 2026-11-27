@@ -1083,17 +1083,13 @@ impl AppRuntime {
     #[must_use]
     pub(super) fn next_wake(&self) -> Option<web_time::Instant> {
         // A floor whose window the raster thread has settled and asked for
-        // its frame is that window's to serve (`RasterHost::floor_owed`).
-        // While the host is turning the floor stands: that turn answers it.
-        let floor_owed = |address| {
-            self.raster_host
-                .try_read(|host| host.floor_owed(address))
-                .unwrap_or(true)
-        };
+        // its frame is that window's to serve: each runtime reads the rule its
+        // builder installed (`build_lending_ui_runtime`), as its half of what
+        // keeps the application from being idle does.
         let runtime = self
             .installed_host
             .logical()
-            .next_wake_owing_floors(&floor_owed)
+            .next_wake()
             .expect("BUG: wake deadline read before owner checkout returned");
         #[cfg(all(
             not(target_os = "android"),

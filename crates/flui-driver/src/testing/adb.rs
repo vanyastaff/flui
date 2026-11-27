@@ -4,23 +4,29 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use flui_protocol::act::{Effect, EffectKind};
-use flui_protocol::error::ErrorCode;
-
 use crate::error::{Error, Result};
-use crate::lane::android::adb::{Adb, AdbCommand, AdbReply, AdbStream, Framing};
+use crate::lane::android::adb::{
+    Adb, AdbCommand, AdbReply, AdbStream, Framing, RunFailure, over_limit, timed_out, unavailable,
+};
 
 /// How a rule answers.
 #[derive(Debug, Clone)]
 enum Answer {
     Reply(AdbReply),
     Timeout,
+    /// `adb` does not start, so the command never reaches the device.
+    NotStarted,
+    /// The command unwinds, as a device binding the driver does not own may.
+    Unwind,
 }
 
 #[derive(Debug, Clone)]
 struct Rule {
     prefix: String,
     answer: Answer,
+    /// How long the command runs before it answers: a slow device. One that runs to its
+    /// deadline or past it is ended there, as the host ends it.
+    taking: Duration,
     once: bool,
 }
 
@@ -55,6 +61,8 @@ struct StreamState {
     timed: VecDeque<(std::time::Instant, String)>,
     ended: Option<String>,
     responder: Option<Responder>,
+    /// Whether the stream's binding unwinds as it is dropped.
+    unwinds_on_drop: bool,
 }
 
 impl StreamState {
@@ -101,25 +109,53 @@ impl ScriptedAdb {
     /// `prefix` with `reply`, once the rules added before it pass.
     #[must_use]
     pub fn reply(self, prefix: impl Into<String>, reply: AdbReply) -> Self {
-        self.rule(prefix.into(), Answer::Reply(reply), false)
+        self.rule(prefix.into(), Answer::Reply(reply), Duration::ZERO, false)
     }
 
     /// Answer the next command starting with `prefix` with `reply`, before any lasting rule.
     #[must_use]
     pub fn reply_once(self, prefix: impl Into<String>, reply: AdbReply) -> Self {
-        self.rule(prefix.into(), Answer::Reply(reply), true)
+        self.rule(prefix.into(), Answer::Reply(reply), Duration::ZERO, true)
+    }
+
+    /// Answer the next command starting with `prefix` with `reply` once it has run for `taking`,
+    /// as a device whose command is slow does, before any lasting rule. A command whose deadline
+    /// comes first is ended at it, and times out as the host's does.
+    #[must_use]
+    pub fn reply_once_after(
+        self,
+        prefix: impl Into<String>,
+        reply: AdbReply,
+        taking: Duration,
+    ) -> Self {
+        self.rule(prefix.into(), Answer::Reply(reply), taking, true)
     }
 
     /// Let the next command starting with `prefix` outlive its deadline.
     #[must_use]
     pub fn timeout_once(self, prefix: impl Into<String>) -> Self {
-        self.rule(prefix.into(), Answer::Timeout, true)
+        self.rule(prefix.into(), Answer::Timeout, Duration::ZERO, true)
     }
 
-    fn rule(self, prefix: String, answer: Answer, once: bool) -> Self {
+    /// Let `adb` fail to start for the next command starting with `prefix`, so that command never
+    /// reaches the device.
+    #[must_use]
+    pub fn not_started_once(self, prefix: impl Into<String>) -> Self {
+        self.rule(prefix.into(), Answer::NotStarted, Duration::ZERO, true)
+    }
+
+    /// Let the next command starting with `prefix` unwind, as an [`Adb`] the driver does not own
+    /// may; the payload is the command's text.
+    #[must_use]
+    pub fn unwind_once(self, prefix: impl Into<String>) -> Self {
+        self.rule(prefix.into(), Answer::Unwind, Duration::ZERO, true)
+    }
+
+    fn rule(self, prefix: String, answer: Answer, taking: Duration, once: bool) -> Self {
         lock(&self.script).rules.push(Rule {
             prefix,
             answer,
+            taking,
             once,
         });
         self
@@ -236,6 +272,20 @@ impl ScriptedAdb {
         self
     }
 
+    /// Let every open stream whose command starts with `prefix` unwind as it is dropped, as a
+    /// binding the driver does not own may.
+    pub fn unwind_streams_on_drop(&self, prefix: &str) {
+        let script = lock(&self.script);
+        for (command, state) in &script.open {
+            if command.starts_with(prefix) {
+                state
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .unwinds_on_drop = true;
+            }
+        }
+    }
+
     /// End every open stream whose command starts with `prefix`, as a program that exits does.
     pub fn end_stream(&self, prefix: &str) {
         let script = lock(&self.script);
@@ -251,6 +301,13 @@ impl ScriptedAdb {
     #[must_use]
     pub fn device(&self) -> Box<dyn Adb> {
         Box::new(self.clone())
+    }
+
+    /// The device, for the lane, its binding unwinding when the lane drops it, as a binding the
+    /// driver does not own may.
+    #[must_use]
+    pub fn device_unwinding_on_drop(&self) -> Box<dyn Adb> {
+        Box::new(UnwindsOnDrop(self.clone()))
     }
 
     /// Every command run and stream opened, as its text, and every line written to a stream, as
@@ -271,7 +328,12 @@ impl ScriptedAdb {
 }
 
 impl Adb for ScriptedAdb {
-    fn run(&mut self, command: &AdbCommand, limit: usize, timeout: Duration) -> Result<AdbReply> {
+    fn run(
+        &mut self,
+        command: &AdbCommand,
+        limit: usize,
+        timeout: Duration,
+    ) -> std::result::Result<AdbReply, RunFailure> {
         let text = command.to_string();
         let mut script = lock(&self.script);
         script.log.push(text.clone());
@@ -316,17 +378,24 @@ impl Adb for ScriptedAdb {
         } else {
             script.rules[index].clone()
         };
+        // A slow command runs with the script let go of, as the device's command runs apart from
+        // the host's other commands, and no longer than its deadline, where the host ends it.
+        drop(script);
+        if !rule.taking.is_zero() {
+            std::thread::sleep(rule.taking.min(timeout));
+        }
+        if !rule.taking.is_zero() && rule.taking >= timeout {
+            return Err(RunFailure::Unanswered(timed_out(command, timeout)));
+        }
         match rule.answer {
-            Answer::Timeout => Err(Error::Timeout {
-                effect: Some(Effect::new(EffectKind::MayHaveRun)),
-                message: format!("`adb {text}` did not end within {} ms", timeout.as_millis()),
-                retry: ErrorCode::Timeout.default_retry(),
-            }),
-            Answer::Reply(reply) if reply.stdout.len() > limit => Err(Error::Lane {
-                lane: "android".to_owned(),
-                unavailable: false,
-                message: format!("`adb {text}` printed more than {limit} bytes"),
-            }),
+            Answer::Unwind => std::panic::resume_unwind(Box::new(text)),
+            Answer::Timeout => Err(RunFailure::Unanswered(timed_out(command, timeout))),
+            Answer::NotStarted => Err(RunFailure::NotStarted(unavailable(format!(
+                "scripted adb: `adb` did not start for `{text}`"
+            )))),
+            Answer::Reply(reply) if reply.stdout.len() > limit => {
+                Err(RunFailure::Unanswered(over_limit(command, limit)))
+            }
             Answer::Reply(reply) => Ok(reply),
         }
     }
@@ -354,6 +423,7 @@ impl Adb for ScriptedAdb {
             timed: VecDeque::new(),
             ended: rule.ends.then(|| format!("`adb {text}` ended")),
             responder: rule.responder,
+            unwinds_on_drop: false,
         }));
         script.open.push((text.clone(), Arc::clone(&state)));
         Ok(Box::new(ScriptedStream {
@@ -361,6 +431,34 @@ impl Adb for ScriptedAdb {
             state,
             script: Arc::clone(&self.script),
         }))
+    }
+}
+
+/// A [`ScriptedAdb`] whose binding unwinds as it is dropped: see
+/// [`ScriptedAdb::device_unwinding_on_drop`].
+struct UnwindsOnDrop(ScriptedAdb);
+
+impl Adb for UnwindsOnDrop {
+    fn run(
+        &mut self,
+        command: &AdbCommand,
+        limit: usize,
+        timeout: Duration,
+    ) -> std::result::Result<AdbReply, RunFailure> {
+        self.0.run(command, limit, timeout)
+    }
+
+    fn open(&mut self, command: &AdbCommand, framing: Framing) -> Result<Box<dyn AdbStream>> {
+        self.0.open(command, framing)
+    }
+}
+
+impl Drop for UnwindsOnDrop {
+    fn drop(&mut self) {
+        lock(&self.0.script)
+            .log
+            .push("the device's binding unwound as it was dropped".to_owned());
+        std::panic::resume_unwind(Box::new("the scripted device's binding unwound on drop"));
     }
 }
 
@@ -435,9 +533,18 @@ impl AdbStream for ScriptedStream {
 
 impl Drop for ScriptedStream {
     fn drop(&mut self) {
-        let mut script = lock(&self.script);
-        script.log.push(format!("{} ended", self.command));
-        let state = Arc::clone(&self.state);
-        script.open.retain(|(_, open)| !Arc::ptr_eq(open, &state));
+        let unwinds = {
+            let mut script = lock(&self.script);
+            script.log.push(format!("{} ended", self.command));
+            let state = Arc::clone(&self.state);
+            script.open.retain(|(_, open)| !Arc::ptr_eq(open, &state));
+            self.state().unwinds_on_drop
+        };
+        if unwinds {
+            std::panic::resume_unwind(Box::new(format!(
+                "the scripted stream `{}` unwound as it was dropped",
+                self.command
+            )));
+        }
     }
 }

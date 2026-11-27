@@ -14,8 +14,7 @@ use flui_protocol::{
     tree::outline, wire::ActionName,
 };
 use flui_semantics::{
-    AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner,
-    SemanticsRole,
+    SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsRole,
 };
 use flui_view::Signal;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow};
@@ -150,8 +149,7 @@ pub(super) fn find(tree: &Tree, name: &str) -> flui_protocol::tree::Node {
 }
 
 fn element(render_id: RenderId) -> ElementId {
-    ElementId::from_u64(AccessibilityNodeId::from(render_id).as_u64())
-        .expect("an accessibility id is non-zero")
+    flui_semantics::element_id_of(render_id)
 }
 
 /// Installs a hand-built semantics tree of one node on the primary

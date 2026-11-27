@@ -8,7 +8,10 @@
   `Scenario::verify` lists what the run left undone as `ScenarioFailure`s, a script dropped with
   debts hands them to the scenario, and a scenario that drops with a failure no `verify`
   returned panics (a failure recorded after `verify` is new, even if it repeats one). Only the
-  scenario's one `ScenarioDriver` holds and moves its clock.
+  scenario's one `ScenarioDriver` holds and moves its clock. `Script::hold` hands out a counted
+  `ScriptHold`, which `release`, a drop or `leave_held` lets go; what a held request waits for
+  (a hold or the test), the drain the last hold starts, what `verify` and a ticket do to it and
+  what a release counts are the "Held requests" rules of `Script`'s docs.
 - `HeadlessHost::with_scenario`, `try_with_scenario`, `scenario` and `advance`: a host that
   drives a scenario's clock, applies its due changes whenever time moves, and waits for its
   scheduled changes in `time_to_next_frame` and `pump_until_settled`. A second host on the same
@@ -17,9 +20,11 @@
   and advances only through the host's scenario driver.
 - `ScriptedHttp::report_to`: a request for a URL nobody scripted is also the scenario's failure
   (bounded by `MAX_REPORTS`); the headless host's own client reports to its scenario.
-- `ScriptedLauncher::on`/`script`, `ScriptedFileDialogs::on`/`open_script`/`save_script`,
-  `ScriptedSystem::on`/`launcher`/`dialogs`, `ScriptedClipboard::on`/`reads`/`service` and
-  `ScriptedPrimarySelection::on`/`reads`/`service`.
+- `ScriptedLauncher::on`/`script`, `ScriptedFileDialogs::on`/`open_script`/`save_script` and
+  `ScriptedSystem::on`/`launcher`/`dialogs`; `ScriptedLauncher::hold` and
+  `ScriptedFileDialogs::hold` return the holds of their scripts.
+- `flui_interaction::testing` (re-exported by `flui_testing::host`):
+  `ScriptedClipboard::on`/`reads`/`service` and `ScriptedPrimarySelection::on`/`reads`/`service`.
 
 ### Changed
 

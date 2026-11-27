@@ -62,6 +62,8 @@ mod serve;
 mod templates;
 #[cfg(test)]
 mod test_cases;
+#[cfg(test)]
+mod testing;
 mod types;
 mod ui;
 mod watch;

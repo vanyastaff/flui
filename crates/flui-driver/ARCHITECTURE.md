@@ -14,10 +14,17 @@ app's trees, frames and input, and this crate composes that with what only the O
   `onLine`, each line a `script.message`, each request a `send` through `script.callFunction`),
   and the headless target runs the agent's own `flui_runtime::agent::Session` through
   `flui_testing::agent_service::HeadlessAgentService`, so the in-process answers are the ones a socket carries.
-  The `Connection` trait is private.
+  The transport trait, `connection::Transport`, is private. The driver is a
+  `flui_protocol::client::Connection` (`client.rs`, ADR-0400 §1) over the window that had content
+  when the connection was first used, kept for the session: every call, wait, input and end
+  addresses it, a call whose parameters name no window is sent to it and one naming another is
+  refused (`invalid_argument`), and once it closes each operation answers `gone`, the end's
+  release counting a closed window as holding nothing.
 - **Virtual time on the headless target.** The headless app's host runs on a thread of its own and
   pumps no frame by itself: a call that waits asks for one frame at a time, each 16 ms of the
-  host's clock, and the call's budget is counted in that time. A run is the same on every host.
+  host's clock unless the launch names a longer period (`Launch::frame_period`, a window
+  presenting more slowly),
+  and the call's budget is counted in that time. A run is the same on every host.
 - **The headless app keeps a native app's edges.** A failure a frame contained is dropped and the
   app serves on; the frame that closes its window ends it, and what the agent had not written goes
   with it; the call waiting and every later one fail as the process gone.
@@ -33,15 +40,37 @@ app's trees, frames and input, and this crate composes that with what only the O
   send that finds the thread ended keeps the lines it
   reads to learn why.
 - **A timed-out act is never resent.** A call with no answer in its budget is `timeout`, with
-  `may_have_run` for a method that acts; a late answer is passed over by its id.
+  `may_have_run` for a method that acts; a late answer is passed over by its id. `Error::Timeout`
+  says what it awaited (`Awaited`): only the app's agent leaving a call unanswered is a
+  `Connection`'s `CallError::Unanswered`, which releases the input of the connection's
+  window; a tool on the host that hung is the lane's failure, `CallError::Failed` with its
+  message.
+- **A gesture the app's agent serves is the agent's, whole; its path is the driver's.** Every
+  entry to a gesture, the method table's dispatch and the `Window`, `Element` and `ElementLocator`
+  handles alike, asks `compose::choose_path` over the call's `via`, the session's policy, the
+  gesture's forms and the lane, and refuses there what the policy requires and the gesture or the
+  session lacks. When the agent's hello lists the gesture and the path chosen is not `os`, the
+  gesture goes to the agent with that path as its `via`, required when the policy requires it
+  (`compose::agent_via`): the agent knows nothing of the session's policy, and one that receives
+  no `via` takes the synthetic path. The agent then locates, holds for actionability and injects
+  in the application (ADR-0400 §2); a call that prefers `os` with no lane falls back as
+  `choose_path` says and is the agent's too. The driver composes a gesture only on the `os` path
+  or for an app that does not serve it, and the sequence it performs is
+  `flui_protocol::input::gestures`'s, the one the agent plays. `scroll_into_view` is a semantics
+  action alone and `scroll_until` the agent's synthetic input alone, so a call that requires
+  another path is refused by the same rule. A gesture composed here reads its
+  target over the wire, so it takes its extent from the element's whole bounds and what the call
+  leaves unnamed from `gestures::Defaults::WINDOWLESS`; the agent aims at the part the window shows
+  and takes the window's own gesture settings.
 - **OS input rules are held at the seam, not by each lane.** `compose::choose_path` never falls
   back to the OS path; `lane::admit` (over `os_input::admit`, the guard's one source being
   `Lane::guard`) refuses OS input in process, and on the shared desktop or a physical device
   without a guard, before the run is announced and again at every `lane::send_guarded`, which
-  asks the guard before every event and releases everything on every exit, answering
-  `ReleaseFailed` when the release leaves input held, whatever ended the run: the run's own
+  asks the guard before every event and releases everything on every exit, naming what the
+  release leaves held in `ReleaseFailed`: after a run that ended for its own reason, that
   failure is its `first`, whose effect and verdict it answers with (`Error::effect`,
-  `Error::is_cannot_verify`); an input-method composition reaches only a lane whose capabilities
+  `Error::is_cannot_verify`); after a run that went out whole, it comes inside `PartlySent`, as
+  below; an input-method composition reaches only a lane whose capabilities
   say it composes (`LaneCapabilities::compositions`, the Chrome lane alone), refused before the
   desktop is locked or the run announced, at `send_guarded`, and by every other lane's own `send`;
   `OsInputLock` holds one session per user's desktop (a headless browser, the session's own,
@@ -51,14 +80,32 @@ app's trees, frames and input, and this crate composes that with what only the O
   handle holds the OS file lock (a lock file this user may only read is opened for reading, one
   it cannot open is `Error::Io`, never retried); the first OS
   event of a session is announced once; once OS input went out, a failed read of what it did is
-  `may_have_run`, never not run.
+  `may_have_run`, never not run. Whatever ends a run once an input of it reached the device, a
+  refusal, the guard's interruption, a failed command, a release that fails after the last
+  event, `send_guarded` answers as `Error::PartlySent` around it, on every lane, read from one
+  record (`lane::Delivered`): the lane says each input of an event that reached the device
+  (`Lane::send_counted`, through `Delivered::send`, whose input's type says whether it acts
+  (`lane::OsInput`), so a move, a pen's hover and a lane's housekeeping, the X11 keymap change
+  and its settle, are never said; a send that put part of its input out, a `SendInput` that
+  inserted some of its events, a macOS text run posted without its release, says that part
+  (`lane::SendFailure`), and the held record keeps what that part left down for the release (a
+  Windows packet's unit, released with that packet's own key-up; a macOS run's key), until a
+  release or a later stroke that lets it up (a whole packet, a whole run) clears it. By
+  default an event sent whole is one input where it acts; the held parts of Windows, X11 and
+  macOS say each keystroke, button and click of the wheel, and Android each command, an `input`
+  line or a pen report, taken or unanswered, by the same type rule), the
+  run counts every event taken whole, a pause and a move included, and the failing event where
+  part of it went out (`Effect::partial`, in events; Android's commands taken and unanswered in
+  its detail), and no retry is invited, which would send them again; a failure with an effect of
+  its own that invites no retry (a timed-out command) stays as it is.
 - **A person's interruption followed by a failed release is cannot-verify, the held input
   named.** When the guard sees the person's input, the run stops and is cannot-verify: the input
   that reached the app is no longer the scenario's, so neither a pass nor a failure of the app can
   be read from it. A release that then fails does not turn that into a failure of the app, which
   did nothing wrong; nor may it go unsaid, since input stays down on the person's desktop.
   `send_guarded` answers `Error::ReleaseFailed` with the keys, buttons and contacts still held in
-  `held` and the interruption as `first`, from which `Error::is_cannot_verify` and
+  `held` and the interruption as `first` (inside `PartlySent` once an input of the run reached
+  the device), from which `Error::is_cannot_verify` and
   `Error::effect` answer: the report says cannot-verify, and the error says what to release by
   hand. The same holds for any first failure: a timed-out act stays `may_have_run`.
 - **What a lane cannot send is refused before anything is sent.** `lane::send_guarded` asks
@@ -66,10 +113,12 @@ app's trees, frames and input, and this crate composes that with what only the O
   device or button it lacks, a chord the OS shell takes. Nothing is pressed, so nothing is
   released.
 - **A lane imports no other lane.** What more than one lane uses is a module of `lane`:
-  `lane::walk` (the bounded accessibility walk), `lane::pacing` (the guard-watched slices of a
-  pause and the echo deadline), `lane::screen` (a window's geometry from its device origin) and
-  `lane::tool` (a host tool, `adb` or `xcrun`, run to its end within a deadline and a bound on
-  what it prints).
+  `lane::walk` (the bounded accessibility walk), `lane::ax` (the macOS accessibility API's rules,
+  such as an element's label, on every host, and its client on macOS, which the macOS lane and
+  the iOS Simulator lane read through),
+  `lane::pacing` (the guard-watched slices of a pause and the echo deadline), `lane::screen` (a
+  window's geometry from its device origin) and `lane::tool` (a host tool, `adb` or `xcrun`, run
+  to its end within a deadline and a bound on what it prints).
 - **A lane's OS code builds on its OS only; its tables build everywhere.** `lane::windows` keeps
   the key, role, coordinate and activity tables, the safety rules and the contact frames pure, so
   Linux CI runs them; the modules that call Windows (`win32`, `guard`, `uia`, `capture`, `job`)
@@ -81,13 +130,18 @@ app's trees, frames and input, and this crate composes that with what only the O
   server, AT-SPI or libei are Linux only (libei with the `wayland` feature). `lane::android` is
   host code that drives `adb`, so all of it builds on every host, and its tests script the device
   (`testing::ScriptedAdb`); `lane::ios_simulator` drives `xcrun` the same way
-  (`testing::ScriptedXcrun`), and only starting an app needs a Unix host, whose socket the
+  (`testing::ScriptedXcrun`) and reads the Simulator's window through `HostAccessibility`
+  (`testing::ScriptedSimulatorScreen`; the Mac's `MacAccessibility` alone is
+  `cfg(target_os = "macos")`), and only starting an app needs a Unix host, whose socket the
   simulator reaches. `lane::chrome` (feature `chrome`) is host code on every desktop: its
   keys, actions, input-method steps and screenshot decoding are pure tables, and what reaches a
   browser goes through its session.
 - **The Android lane reaches the device through one door.** Every `adb` command runs through
-  `lane::android::adb::Adb` with a deadline and a bound on its output, a timed-out command being
-  `timeout` with `may_have_run`; a stream (`getevent`, `uinput`) hands over bounded records, at
+  `lane::android::adb::Adb` with a deadline and a bound on its output, and its failure says
+  whether the command reached the device (`adb::RunFailure`: never started, or its answer lost).
+  A timed-out command that acts is `timeout` with `may_have_run`, and one that reads
+  (`Printed::Data`: the windows, the settings, a dump, a capture) keeps no effect, since it sends
+  nothing that acts on the app; a stream (`getevent`, `uinput`) hands over bounded records, at
   most a fixed number waiting; a value from outside the lane enters a device shell line only
   through `adb::quote`. What the device prints is read as untrusted input: sizes checked before
   decoding (`screencap`, `uiautomator dump`), node, depth and device counts bounded.
@@ -95,28 +149,57 @@ app's trees, frames and input, and this crate composes that with what only the O
   between commands, so `lane::android::held::HeldInput` sends a key at its release (alone, or as
   one `keycombination` with the modifiers held) and holds only the one `motionevent` contact and
   the pen's range and touch, each recorded when its command returned (the pen's when its `uinput`
-  device answered a sync); a timed-out press is held and cancelled at the release, and a key a
-  timed-out command may have left down is named in `Error::ReleaseFailed`, never pressed again.
+  device answered a sync); a press whose answer was lost (a timeout, a bound, a pipe) is held and
+  cancelled at the release, and a key a command whose answer was lost may have left down is
+  named in `Error::ReleaseFailed`, never pressed again; a command whose `adb` never started holds
+  nothing.
   It refuses a second contact, a sequence that ends with a key down (which would never be sent),
   the keys and chords that leave the app or change the device (the fallbacks of AOSP's
   `Virtual.kcm` and `Generic.kcm` among them, `safety::FALLBACKS`), and a press of any pointer,
-  the mouse included, going down at the display's edge; before each press, key and text the
-  app's window must hold the focus.
+  the mouse included, going down at the display's edge; before each press, key, text and scroll
+  one `dumpsys window -a` must show the window the lane located holding the focus, compared by
+  its hash, frame and rotation, on the display holding the device's focus: another display, or
+  the app's window on another display, is `android_default_display`, another window of the
+  app's title is `NotForeground`, the same window moved or turned is `Busy` until the lane
+  locates it again. The whole dump runs under the window manager's lock, which every window
+  change on the device waits for, once a locate and once before each such command; `-a` is what
+  prints the frames. A window that takes no focus over the press point is not checked
+  (`docs/gaps.md`). A contact going down is recorded before its command goes out, so a send that
+  times out, loses its answer or unwinds leaves it for the release to cancel.
 - **The Android lane takes no device nobody named.** `adb::HostAdb` has no constructor without a
   serial, so every command it runs names one; `lane::android::host_device` builds it from
   `FLUI_ANDROID_SERIAL` and asks `adb` nothing without it. What the lane leaves on the device is
-  its own: a window dump at a path of the session's, and a forward from a loopback port the lane
-  picked, asked for with `--no-rebind` (a port another session holds is refused and another
-  picked) and removed by that port at its end once `adb` made it or may have.
+  its own: each window dump at a path of its own, removed with the earlier ones by every dump that
+  runs to its end (never a later dump's) and with all of the session's by the lane's end, and a
+  forward from a loopback port the lane picked, asked for with `--no-rebind` (a port another
+  session holds is refused and another picked) and removed by that port at its end once `adb`
+  made it or may have (its answer lost). Each step of the lane's end, and the destructors of its
+  device and streams (the binding's code), runs under one `FirstPanic`; a destructor has no
+  caller to raise to, so the first panic is logged and destroyed. The lane worker runs every job,
+  drops every job it skips and every answer nobody receives, and retires the lane, each under
+  containment, so no destructor's panic ends it before its release; its join destroys a payload
+  that ever escaped that.
 - **The Android lane finds the app's nodes by matching, never by guessing.** `accesskit_android`
   sets no `viewIdResourceName`, so `Lane::read_tree` is handed the app's own tree and
-  `lane::android::tree` matches the dump to it: a node fits an app node by structure, the class
-  `lane::android::roles` gives its AccessKit role, its content description, its checked and
-  enabled state and its bounds at the surface's origin; two candidates alike are
-  `Error::Ambiguous`, and bounds off the display place a node nowhere. Only a matched node carries
-  the app's role and identifier. No dump runs while a screen reader does
-  (`safety::check_dump`): the dump suspends the accessibility services. `invoke` is refused,
-  since UI Automator performs no accessibility action.
+  `lane::android::tree` matches the dump to it: the root is the child of the decor view that fits
+  the app's root, where `FluiView.install` puts it, and a node fits an app node by structure and
+  the order the adapter adds children in (those `accesskit_consumer`'s filter keeps), the class
+  `lane::android::roles` gives its AccessKit role, its content description, its toggled state
+  where the app's read reports it (a radio button's selection included; a grid cell's, and that
+  of a list item, list box option, menu list option, tab or tree item publishing a selection, it
+  does not report, and the match does not read the dump's: `tree::Unobservable::UnreportedToggle`)
+  and enabled state, and its bounds at the surface's origin; two candidates the order does not
+  tell apart are `Error::Ambiguous`, and bounds off the display place a node nowhere. Only a
+  matched node carries the app's role and identifier; what a dump cannot show
+  (`tree::Unobservable`) projects as the app published it. Only the read of the tree dumps: the
+  window is located from `dumpsys window` (`device::parse_windows`): the focused window by its
+  hash, on the default display, located again after the dump, which a replaced or moved window
+  or another turn makes `Busy`; so input and capture pause no accessibility service, and no dump runs while
+  any service does (`safety::check_dump`). `invoke` is refused, since UI Automator performs no
+  accessibility action.
+- **The OS tree is compared with the app's tree of its own revision, on every lane:**
+  `Window::compare_projection` reads the app's tree again while it moves, by the rule its
+  rustdoc states, and answers `Busy` when it never held still.
 - **The iOS Simulator lane sends no input** until a supported channel exists (the flui-driver
   spec's rule; `lane::ios_simulator::xcode` has the evidence): `Lane::check` refuses every input
   event as `not_supported` naming `ios_simulator_hid`, with the Xcode and runtime, before anything
@@ -128,6 +211,69 @@ app's trees, frames and input, and this crate composes that with what only the O
   nothing runs as an app that already exited. The launch values reach the app as
   `SIMCTL_CHILD_` variables in `simctl`'s environment, never in a command's text or debug form,
   and no such variable inherited from the driver's environment reaches it.
+- **The iOS Simulator lane reads what the Simulator serves the Mac, and matches it.** The
+  Simulator vends the iOS app's elements to AppKit as elements of the device's window (Apple's
+  private translation framework), which the public `AXUIElement` API reads; the lane takes no
+  private framework. Apple documents none of it: the roles the bridge gives each trait are
+  inferred, whether it carries the app's identifier is unconfirmed, and until runs on a Mac pin
+  both the read stands for VoiceOver on iOS only as far as they confirm it (`docs/gaps.md`).
+  The read hands back the elements as served (`accessibility::ScreenElement`), and everything
+  after it is pure code both the Mac and the scripted window go through (`ios_simulator::tree`).
+  The window is one on screen titled `<device> – <runtime>`, found without looking the
+  Simulator's process up by name, and taken by an allow-list that every host goes through, the
+  scripted window included (`tree::choose_window`): the one window naming the device's UDID is
+  taken, whatever the others name; else the one naming no UUID, only while no other listed
+  simulator, in any state, shares the title; one naming any other UUID never; two naming the
+  UDID, or two naming none when none names it, are refused. A device renamed or removed since
+  the lane connected is refused (`accessibility::screen_title`). The screen's elements are read
+  by a pure walk over a source (`accessibility::walk_screen`): a level the node budget or a
+  vanished element cuts is marked unread on its parent, the screen included. Both reads of a
+  tree, `lane::walk::read` and this walk, hold one rule with its cause (`lane::walk::Cut`): a
+  bound, the list gone (a step to a next child that finds an element gone; `ax::child_at`
+  answers `kAXErrorInvalidUIElement`, the parent gone, as that), or one element gone while read,
+  left out of a list read on to its end. Each marks its level unread and the read truncated, and
+  a press refuses a lone match on a short read with a retry unless a bound cut it
+  (`Cut::repeats`). The projection leaves FLUI's announcers out only of the list that holds
+  them (a lifted container's, else the screen's) read whole, since a gap may have taken one of
+  them. The searches (`walk::find_by`, the screen search) keep
+  their own record of a cut, the screen search's retry by the same two causes
+  (`tree::SearchReach`). Every element the read asks is given the
+  client's deadline and carries it, so a timeout, a press's included, names the deadline of the
+  element its call was asked of, or says that element refused it. A window's identity texts are
+  read whole up to `accessibility::IDENTITY_TEXT_LIMIT` by the pure `window_identity`, every
+  host's, and a longer one names something else, so a window that names the UDID is still taken
+  beside it. No run has recorded either Simulator window's tree yet (vanyastaff/flui#3152), so
+  the screen search holds for both shapes a plain group can take, the screen or a wrapper of the
+  `iOSContentGroup` (`tree::find_screen`): it reads the window's chrome first, breadth first
+  within ten levels, each element's children listed by the bounded listing the screen's walk
+  shares (`accessibility::list_children`), then goes into each plain group of the app window's
+  shape with what is left of the budget to look for an `iOSContentGroup` under it, never into an
+  `iOSContentGroup`. What cuts the search inside a plain candidate is the candidate's; a cut of
+  the chrome (an element gone, or the budget) is the search's (`tree::SearchReach`). The choice
+  is `tree::choose_screen`: an `iOSContentGroup` wherever it was found, else the shallowest plain
+  group, refused when the chrome was cut, with no retry offered when the budget cut it. The read
+  as a whole is `tree::read_screen`, the Mac's and the tests' over their own trees: the search,
+  the walk, and the screen's frame alone read again after it, a screen moved or gone meanwhile
+  answering `Error::Busy`. An element gone anywhere in the read (the search, the walk, the
+  frame) goes through one trust check, the source's failure asked twice at most: once before
+  the search answers, and once for the walk and the frame read again together. While the
+  process is no longer trusted it is the permission refused, never a cut, a short read or a busy
+  screen; while it is trusted, an element gone in the walk leaves its level unread and the read
+  truncated, so a press does not take a lone match it could have been the twin of. The scripted window
+  (`testing::ScriptedSimulatorScreen`) serves a screen already read and shares only
+  `tree::choose_window` and `tree::locate`.
+  `Lane::read_tree` and `Lane::invoke` are handed
+  the app's own tree, and each element is matched among the descendants of the node its nearest
+  matched ancestor fits (the bridge serves only the elements VoiceOver reads), an app node once,
+  by the role `lane::ios_simulator::roles` gives `accesskit_ios`'s trait, its label (a static
+  text's from its value, the rule `lane::ax::label` the macOS lane shares), its checked and
+  enabled state, an identifier it carries, and its frame on the window; two candidates alike are
+  `Error::Ambiguous`. A press finds its element again by the facts the read gave, refusing none,
+  two, and one on a read that stopped short (`tree::locate`), and presses it through `AXPress`
+  with the answer the macOS lane's press gives too (`lane::ax::pressed`). A failure while the
+  process is no longer trusted answers the Accessibility permission, wherever it comes, except a
+  press already sent: one not answered, or whose element went away, keeps `may_have_run` and
+  names the permission in its message.
 - **The X11 lane rechecks the server before every event,** as the Windows lane does the desktop:
   the window is the app's (by the process X-Resource reports for its client, or its
   `_NET_WM_PID`) and mapped, it has the keyboard focus, the window under the point is its own, and
@@ -261,12 +407,16 @@ app's trees, frames and input, and this crate composes that with what only the O
   backend reports.
 - **Mapping refuses, never clamps.** `coordinates::to_device` maps in `f64` with every step checked
   and refuses a point outside the surface; `steps::os_events` hands a lane single-step moves, each
-  followed by a pause, at most `steps::MAX_STEPS` per move; the moving sources of a tick share
+  followed by a pause, at most `flui_protocol::input::MAX_STEPS` per move, as
+  `flui_protocol::input::plan` lays them; the moving sources of a tick share
   one timeline, each split by its own duration, so they move together and each keeps its own
-  speed, as on the synthetic path. Steps due within one millisecond go out together, so every
+  speed. Steps due within one millisecond go out together, so every
   pause is whole milliseconds, none under one, and a tick's pauses add up to its length exactly.
   A wheel source carries the part of a device pixel each scroll leaves into the next, and a scroll
-  that adds up to no whole pixel yet sends nothing.
+  that adds up to no whole pixel yet sends nothing. A scroll by lines is refused: an OS event
+  scrolls by device pixels, and no lane knows the line height the app scrolls a line by. What no
+  lane sends and what the plan refuses (`steps::admit`, which needs no window) are refused before
+  the desktop is locked, the window located or the run announced.
 - **A hung app costs one timeout.** Reading a UI Automation, AX or AT-SPI element stops at the
   first property read that times out or finds the element gone
   (`lane::walk::Properties`, which all three readers walk through), and the walk ends
@@ -318,11 +468,15 @@ app's trees, frames and input, and this crate composes that with what only the O
   `TextMatch` kept as the caller's own; `trace::every_text_field_of_the_wire_is_redacted_or_named_as_kept`
   holds every free string field of the protocol's schema to one side of the list. A replay never
   sends redacted text: a redacted row ends it, refused there.
+- **A trace replays against the protocol it was recorded at.** A replay compares each result
+  field by field, so `trace::replay` refuses a trace whose header names another protocol than the
+  app speaks (`Error::Version`), before any command.
 - **A replay reads handles only where the method's schema has one** (`trace::handles` walks
   each value along the protocol's own schema of its method, made with `schemars`): a text, a
   locator's name or an input source's id shaped like `e1` is text, though a node's `id` is a
   handle. `trace::no_field_the_trace_redacts_holds_a_handle` keeps the redaction, which goes by
   name, off every name that is a handle anywhere.
-- **The verdict rule is one function.** `Report::verdict`: `fail` when a check failed, else
-  `cannot_verify` when a check could not be made or nothing was checked, else `pass`.
+- **The verdict rule is one function.** `flui_protocol::report::Report::verdict`: `fail` when a
+  check failed, else `cannot_verify` when a check could not be made or nothing was checked, else
+  `pass`.
   `Error::is_cannot_verify` decides which failures cannot be verified.

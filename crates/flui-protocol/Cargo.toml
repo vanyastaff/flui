@@ -21,12 +21,15 @@ serde = ["dep:serde"]
 # JSON schemas for the wire vocabulary and schema. Implies `serde`, because
 # schemars reads serde's `rename_all` to name the variants.
 schemars = ["dep:schemars", "serde"]
+# Test support (ADR-0243): `testing::ScriptedPipe`, a scripted local-endpoint stream.
+testing = []
 
 [dependencies]
 serde = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 
 [dev-dependencies]
+flui-protocol = { path = ".", features = ["testing"] }
 serde_json = { workspace = true }
 
 [[test]]

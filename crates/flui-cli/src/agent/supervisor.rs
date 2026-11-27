@@ -14,13 +14,14 @@
 //! run; only the answer is lost.
 
 use std::collections::BTreeMap;
-use std::io::{self, Read as _, Write as _};
+use std::io::{self, Read as _};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use flui_protocol::endpoint::PolledStream;
 use flui_protocol::envelope::{Greeting, Request, RequestId, ServerLine, Unread};
 use flui_protocol::error::{ErrorCode, ErrorObject, Retry};
 use flui_protocol::framing::{LineReader, MAX_LINE};
@@ -33,7 +34,8 @@ use interprocess::local_socket::traits::Listener as _;
 use interprocess::local_socket::{Listener, Stream};
 use serde_json::Value;
 
-use super::listener::bind;
+use super::listener::{bind, polled};
+use super::unwritten::Unwritten;
 use crate::error::{CliResult, ResultExt as _};
 
 /// The longest pause between two turns of the endpoint.
@@ -165,14 +167,26 @@ struct Admission {
 }
 
 struct Client {
-    stream: Stream,
+    stream: PolledStream<Stream>,
     reader: LineReader,
-    unwritten: Vec<u8>,
+    unwritten: Unwritten,
     phase: Phase,
     /// The reload the client waits for, and the id that answers it.
     waiting: Option<(RequestId, Receiver<ReloadReport>)>,
-    /// The client is closed once what it was sent is written.
-    ending: bool,
+    service: Service,
+}
+
+/// Whether the endpoint still serves a client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Service {
+    /// Read, answered and written.
+    Open,
+    /// Read no more, and closed once what it was sent is written.
+    Ending,
+    /// Closed at its turn with nothing more written: it fell further behind than
+    /// [`MAX_UNWRITTEN`], what it was owed is dropped, and a line written after that gap would
+    /// read as one that follows what it read last, or as the rest of a line cut short.
+    GivenUp,
 }
 
 enum Phase {
@@ -216,6 +230,14 @@ impl Turns {
                 // Dropped: the client reads the end of its connection.
                 continue;
             }
+            let stream = match polled(stream) {
+                Ok(stream) => stream,
+                Err(error) => {
+                    // Dropped, as one past the most clients is.
+                    crate::ui::debug(format!("the run endpoint could not poll a client: {error}"));
+                    continue;
+                }
+            };
             let Some(next) = self.next_id.checked_add(1) else {
                 // Refused: an id is never used twice.
                 continue;
@@ -227,12 +249,12 @@ impl Turns {
                 Client {
                     stream,
                     reader: LineReader::new(MAX_LINE),
-                    unwritten: Vec::new(),
+                    unwritten: Unwritten::default(),
                     phase: Phase::Greeting {
                         since: Instant::now(),
                     },
                     waiting: None,
-                    ending: false,
+                    service: Service::Open,
                 },
             );
         }
@@ -255,7 +277,7 @@ impl Turns {
 impl Client {
     /// Reads, answers and writes; `false` once the client is to be dropped.
     fn turn(&mut self, admission: &Admission) -> bool {
-        if !self.ending {
+        if self.service == Service::Open {
             if !self.read(admission) {
                 return false;
             }
@@ -280,8 +302,11 @@ impl Client {
                 self.send(&ServerLine::answer(request, outcome));
             }
         }
+        if self.service == Service::GivenUp {
+            return false;
+        }
         match self.write() {
-            Ok(true) => !self.ending,
+            Ok(true) => self.service == Service::Open,
             Ok(false) => true,
             Err(_) => false,
         }
@@ -306,7 +331,7 @@ impl Client {
                             Phase::Greeting { .. } => self.greet(&line, &admission.token),
                             Phase::Open { role } => self.request(&line, role, &admission.handed),
                         }
-                        if self.ending {
+                        if self.service != Service::Open {
                             return true;
                         }
                     }
@@ -319,11 +344,11 @@ impl Client {
 
     fn greet(&mut self, line: &[u8], token: &str) {
         let Ok(Greeting { hello, .. }) = serde_json::from_slice::<Greeting>(line) else {
-            self.ending = true;
+            self.service = Service::Ending;
             return;
         };
         if !same_token(hello.token.as_bytes(), token.as_bytes()) {
-            self.ending = true;
+            self.service = Service::Ending;
             return;
         }
         if !PROTOCOL_VERSION.serves(hello.protocol) {
@@ -331,7 +356,7 @@ impl Client {
                 PROTOCOL_VERSION,
                 hello.protocol,
             )));
-            self.ending = true;
+            self.service = Service::Ending;
             return;
         }
         let mut capabilities = Capabilities::default();
@@ -424,16 +449,16 @@ impl Client {
         }
     }
 
-    /// Queues `line` for the client; one that does not read is closed.
+    /// Queues `line` for the client; one that does not read is given up on.
     fn send(&mut self, line: &ServerLine<ReloadReport>) {
         let Ok(mut bytes) = serde_json::to_vec(line) else {
-            self.ending = true;
+            self.service = Service::Ending;
             return;
         };
         bytes.push(b'\n');
         if self.unwritten.len() + bytes.len() > MAX_UNWRITTEN {
             self.unwritten.clear();
-            self.ending = true;
+            self.service = Service::GivenUp;
             return;
         }
         self.unwritten.extend_from_slice(&bytes);
@@ -441,18 +466,7 @@ impl Client {
 
     /// Writes what it can; `true` once all of it is written.
     fn write(&mut self) -> io::Result<bool> {
-        while !self.unwritten.is_empty() {
-            match (&self.stream).write(&self.unwritten) {
-                Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
-                Ok(written) => {
-                    self.unwritten.drain(..written);
-                }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(true)
+        self.unwritten.write_to(&self.stream)
     }
 }
 
@@ -462,6 +476,7 @@ mod tests {
     use std::time::Duration;
 
     use flui_protocol::build::Diagnostics;
+    use flui_protocol::endpoint::PolledStream;
     use flui_protocol::reload::{ReloadReport, ReloadTier, Reloaded};
     use flui_protocol::session::ClientRole;
     use interprocess::local_socket::Stream;
@@ -470,7 +485,9 @@ mod tests {
 
     use super::RunEndpoint;
     use crate::agent::client::{Connection, Failure, name};
+    use crate::agent::listener::polled;
     use crate::agent::{Credentials, Endpoint};
+    use crate::testing::ready_within;
 
     const TOKEN: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
     const WAIT: Duration = Duration::from_secs(10);
@@ -587,15 +604,16 @@ mod tests {
         );
     }
 
-    /// Whether the endpoint ends `stream` (it reads the end of the stream) within `within`.
-    fn closed_within(stream: &Stream, within: Duration) -> bool {
+    /// Whether the endpoint ends `stream` (it reads the end of the stream) within `within`. A
+    /// named pipe takes no read timeout, so the stream is polled.
+    fn closed_within(stream: &PolledStream<Stream>, within: Duration) -> bool {
         use std::io::Read as _;
 
-        stream
-            .set_recv_timeout(Some(within))
-            .expect("a read timeout");
         let mut byte = [0_u8; 1];
-        matches!((&*stream).read(&mut byte), Ok(0))
+        matches!(
+            ready_within(within, || (&*stream).read(&mut byte)),
+            Some(Ok(0))
+        )
     }
 
     /// What bounds a client: a hello in a schema the run does not serve is refused `version`;
@@ -618,17 +636,20 @@ mod tests {
             serde_json::from_str(&BufReader::new(&newer).lines().next().unwrap().unwrap()).unwrap();
         assert_eq!(refused["error"]["code"], "version", "{refused}");
 
-        let silent = connect();
+        let silent = polled(connect()).expect("non-blocking");
         assert!(
             closed_within(&silent, Duration::from_secs(5)),
             "a client that sends no hello is closed"
         );
 
         let endpoint = RunEndpoint::start(TOKEN.to_owned()).expect("the endpoint starts");
-        let connect = || Stream::connect(name(endpoint.address()).unwrap()).expect("connect");
+        let connect = || {
+            polled(Stream::connect(name(endpoint.address()).unwrap()).expect("connect"))
+                .expect("non-blocking")
+        };
         let held = (0..super::MAX_CLIENTS)
             .map(|_| connect())
-            .collect::<Vec<Stream>>();
+            .collect::<Vec<PolledStream<Stream>>>();
         let past = connect();
         assert!(
             closed_within(&past, Duration::from_secs(5)),
@@ -757,6 +778,79 @@ mod tests {
         assert!(
             endpoint.next_request().is_none(),
             "nothing reached the loop"
+        );
+    }
+
+    /// A client that falls further behind than the endpoint keeps for it is dropped with nothing
+    /// more written, the answer to its reload included. Fails if that answer is written after
+    /// the lines that were dropped: the client would read it as following what it read last, or
+    /// as the rest of a line cut short.
+    #[test]
+    fn a_client_too_far_behind_is_closed_with_nothing_more_written() {
+        use std::io::Read as _;
+        use std::sync::mpsc;
+
+        use flui_protocol::envelope::{RequestId, ServerLine};
+        use flui_protocol::error::{ErrorCode, ErrorObject};
+        use flui_protocol::framing::{LineReader, MAX_LINE};
+        use interprocess::local_socket::traits::Listener as _;
+
+        use super::{Admission, Client, Phase, Service, bind};
+        use crate::agent::unwritten::Unwritten;
+        use crate::testing::until_ready;
+
+        let (_dir, address) = crate::agent::private_endpoint("behind").expect("an endpoint");
+        let listener = bind(&address).expect("bind");
+        let peer = Stream::connect(name(&address).expect("a name")).expect("connect");
+        let served = until_ready(WAIT, "accepted client", || listener.accept()).expect("accept");
+        let (answer, answered) = mpsc::channel::<ReloadReport>();
+        let mut client = Client {
+            stream: polled(served).expect("non-blocking"),
+            reader: LineReader::new(MAX_LINE),
+            unwritten: Unwritten::default(),
+            phase: Phase::Open {
+                role: ClientRole::Driver,
+            },
+            waiting: Some((RequestId::from(1), answered)),
+            service: Service::Open,
+        };
+        // Refusals the client never reads, until one is past what the endpoint keeps.
+        let refusal = ServerLine::<ReloadReport>::answer(
+            RequestId::from(2),
+            Err(ErrorObject::new(ErrorCode::Busy, "one reload at a time")),
+        );
+        while client.service == Service::Open {
+            client.send(&refusal);
+        }
+        assert_eq!(client.service, Service::GivenUp);
+        answer
+            .send(ReloadReport::new(
+                Reloaded::applied(ReloadTier::ProcessRestart),
+                1,
+            ))
+            .expect("the client waits for the answer");
+        let (handed, _requests) = mpsc::sync_channel(1);
+        let admission = Admission {
+            token: TOKEN.to_owned(),
+            greeting_wait: WAIT,
+            handed,
+        };
+        assert!(!client.turn(&admission), "the client is dropped");
+        drop(client);
+        let peer = polled(peer).expect("non-blocking");
+        let mut rest = Vec::new();
+        let mut chunk = [0_u8; 4 << 10];
+        loop {
+            match until_ready(WAIT, "the end", || (&peer).read(&mut chunk)) {
+                Ok(0) => break,
+                Ok(read) => rest.extend_from_slice(&chunk[..read]),
+                Err(error) => panic!("the peer could not read: {error}"),
+            }
+        }
+        assert!(
+            rest.is_empty(),
+            "written after the gap: {}",
+            String::from_utf8_lossy(&rest)
         );
     }
 

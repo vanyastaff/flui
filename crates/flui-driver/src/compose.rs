@@ -1,18 +1,25 @@
-//! The driver's methods (`ServedBy::Driver`), composed from the agent's: locate, check
-//! actionability, perform by the chosen input path, observe (ADR-0238 §5, §6).
+//! The methods the driver composes from the agent's (ADR-0238 §5, §6): its own (`ServedBy::Driver`),
+//! and every gesture on the `os` path or for an app whose agent does not answer it (ADR-0400 §2):
+//! locate, check actionability, perform by the chosen input path, observe. A gesture the app's
+//! agent serves on a path other than `os` goes to the agent whole, from every entry here, carrying
+//! the path [`choose_path`] chose as its `via` ([`answered_by_agent`]); the sequence a composed
+//! gesture performs is [`gestures`](flui_protocol::input::gestures)'s, the one the agent plays.
 //!
 //! - **Locate.** A locator is resolved at the moment of the action, never cached (ADR-0238 §4):
-//!   strict with several matches is [`Error::Ambiguous`] with the first ten as outline lines;
+//!   strict with several matches is [`Error::Ambiguous`], counting every match and naming the
+//!   first ten as outline lines, by the one rule the agent follows too
+//!   (`flui_protocol::locator::resolve_strict`);
 //!   none waits once on the app's timeline for one to appear (`wait.until`), then is
 //!   [`Error::NotFound`].
 //! - **Actionability.** Pointer input waits, frame by frame, for the element to be attached,
 //!   visible, stable, enabled and to receive the pointer at its point; past the timeout it is
 //!   [`Error::NotActionable`] naming the check that never held and what covered the point. `force`
 //!   skips every check but attached.
-//! - **Path.** The call's policy, or the session's, chooses the path. A path the target lacks is
-//!   refused when the policy requires it, and otherwise falls back to synthetic, then semantic; a
-//!   fallback never takes the OS path, so a session that did not ask for OS input never gets it.
-//!   The answer names the path taken.
+//! - **Path.** The call's policy, or the session's, chooses the path, in one place for a gesture
+//!   the driver composes and one it hands to the agent ([`choose_path`]). A path the gesture or the
+//!   session lacks is refused when the policy requires it, and otherwise falls back to synthetic,
+//!   then semantic; a fallback never takes the OS path, so a session that did not ask for OS input
+//!   never gets it. The answer names the path taken.
 //! - **OS input** is admitted by the isolation rule, takes the desktop's lock, is announced before
 //!   its first event, is sent through the lane's guard, and is `ran` only when the app's input
 //!   journal saw it; otherwise `may_have_run`.
@@ -24,18 +31,19 @@ use flui_protocol::act::{
 };
 use flui_protocol::error::{ErrorCode, HandleKind};
 use flui_protocol::geometry::{LogicalPoint, LogicalRect};
+use flui_protocol::input::gestures::{self, Aim as Landing, Defaults};
 use flui_protocol::input::{
-    ActionSequence, Direction, DragParams, GestureOptions, InputKind, InputParams, InputPath,
-    InputPolicy, InputSource, Journal, JournalParams, KeyAction, LongPressParams, PinchParams,
-    PointerAction, PointerButton, PointerDevice, PressKeysParams, ScrollIntoViewParams,
-    SwipeParams, TapParams, TypeTextParams,
+    ActionSequence, DragParams, GestureOptions, InputKind, InputParams, InputPath, InputPolicy,
+    InputSource, Journal, JournalParams, LongPressParams, PinchParams, PointerButton,
+    PointerDevice, PressKeysParams, ScrollIntoViewParams, ScrollUntilParams, SwipeParams,
+    TapParams, TypeTextParams,
 };
 use flui_protocol::locator::{LocateParams, Locator, Matches, Pick, Target};
-use flui_protocol::method::{self, Method};
+use flui_protocol::method::{self, Addressed, Method};
 use flui_protocol::session::{Empty, Isolation, Placement, WindowParams};
 use flui_protocol::snapshot::Snapshot;
 use flui_protocol::tree::{ElementRef, WindowId};
-use flui_protocol::wait::{Condition, WaitOutcome, WaitParams};
+use flui_protocol::wait::{Condition, WaitEnd, WaitOutcome, WaitParams};
 use flui_protocol::wire::ActionName;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -45,27 +53,6 @@ use crate::driver::Driver;
 use crate::error::{Error, Result};
 use crate::os_input::{Announcement, OsDevice};
 use crate::steps::{self, OsEvent};
-
-/// The id of the pointer a composed gesture moves.
-const POINTER: &str = "driver.pointer";
-
-/// How long a long press holds when the call names no duration: the long-press delay (500 ms)
-/// and a margin.
-const LONG_PRESS_MS: u64 = 800;
-
-/// The gap between the two taps of a double tap.
-const DOUBLE_TAP_GAP_MS: u64 = 60;
-
-/// How long a drag's and a pinch's move lasts.
-const STROKE_MS: u64 = 300;
-
-/// A fling's speed, in logical pixels a second, when the call names none: well above the
-/// platform's fling velocity.
-const FLING_VELOCITY: f64 = 2_500.0;
-
-/// How long a swipe holds still before it lifts, so its release velocity is under the fling
-/// velocity whatever speed it moved at.
-const SWIPE_SETTLE_MS: u64 = 120;
 
 /// The wire names of the methods composed here.
 const COMPOSED: &[&str] = &[
@@ -88,9 +75,148 @@ pub(crate) fn composes(name: &str) -> bool {
     COMPOSED.contains(&name)
 }
 
+/// Whether the driver decides the input path of the agent's method `name` before the agent hears
+/// of it: every gesture it composes, and `element.scroll_until`, which only the agent plays.
+pub(crate) fn decides_path(name: &str) -> bool {
+    composes(name) || name == method::ElementScrollUntil::NAME
+}
+
+/// The input paths a gesture has a form on.
+#[derive(Debug, Clone, Copy)]
+struct Forms {
+    synthetic: bool,
+    semantic: bool,
+    os: bool,
+}
+
+impl Forms {
+    /// Pointer or key input, which an OS lane sends too, and a semantics action that does the same
+    /// where `semantic`.
+    const fn input(semantic: bool) -> Self {
+        Self {
+            synthetic: true,
+            semantic,
+            os: true,
+        }
+    }
+
+    /// A semantics action alone: `element.scroll_into_view`.
+    const SEMANTIC: Self = Self {
+        synthetic: false,
+        semantic: true,
+        os: false,
+    };
+
+    /// Synthetic input the app's agent plays a step at a frame, reading the tree between steps,
+    /// which no lane sends: `element.scroll_until`.
+    const AGENT_INPUT: Self = Self {
+        synthetic: true,
+        semantic: false,
+        os: false,
+    };
+}
+
+/// Who plays a gesture's synthetic or semantic path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Player {
+    /// The app's agent, which serves the gesture whole and has both paths of its own.
+    Agent,
+    /// The driver, through the agent's `input.inject` and `semantics.act`, when it serves them.
+    Driver,
+}
+
+/// A gesture's parameters, whose options carry the path it takes.
+trait GestureParams: Serialize + Addressed + Clone {
+    fn options(&self) -> &GestureOptions;
+    fn options_mut(&mut self) -> &mut GestureOptions;
+}
+
+macro_rules! gesture_params {
+    ($($params:ty),* $(,)?) => {
+        $(impl GestureParams for $params {
+            fn options(&self) -> &GestureOptions {
+                &self.options
+            }
+
+            fn options_mut(&mut self) -> &mut GestureOptions {
+                &mut self.options
+            }
+        })*
+    };
+}
+
+gesture_params!(
+    TapParams,
+    LongPressParams,
+    DragParams,
+    SwipeParams,
+    PinchParams,
+    ScrollIntoViewParams,
+    ScrollUntilParams,
+    TypeTextParams,
+    PressKeysParams,
+);
+
+/// The policy the app's agent plays the gesture `name` by, when it answers it (ADR-0400 §2): it
+/// serves the method, and [`choose_path`] chose a path other than `os`, which the driver composes
+/// with its lane. The policy names the chosen path and requires it when the call or the session
+/// does, so the agent applies the requirement the driver read: an agent that receives no `via`
+/// takes the synthetic path and knows nothing of the session. `None` for a gesture composed here.
+fn agent_via(
+    driver: &Driver,
+    name: &str,
+    requested: Option<InputPolicy>,
+    forms: Forms,
+) -> Result<Option<InputPolicy>> {
+    if !driver.serves(name) {
+        return Ok(None);
+    }
+    let policy = requested.unwrap_or_else(|| driver.input_policy());
+    let path = choose_path(driver, Some(policy), forms, Player::Agent)?;
+    Ok((path != InputPath::Os).then(|| {
+        if policy.require {
+            InputPolicy::require(path)
+        } else {
+            InputPolicy::prefer(path)
+        }
+    }))
+}
+
+/// The app's agent's answer to the gesture `M` with `params`, when it answers it ([`agent_via`]),
+/// asked with the chosen path as its `via`; `None` for a gesture composed here.
+fn answered_by_agent<M>(
+    driver: &mut Driver,
+    params: &M::Params,
+    forms: Forms,
+) -> Result<Option<ActOutcome>>
+where
+    M: Method<Output = ActOutcome>,
+    M::Params: GestureParams,
+{
+    let Some(via) = agent_via(driver, M::NAME, params.options().via, forms)? else {
+        return Ok(None);
+    };
+    let mut params = params.clone();
+    params.options_mut().via = Some(via);
+    let value = serde_json::to_value(&params).map_err(|error| {
+        Error::invalid_argument(format!(
+            "the parameters of `{}` did not serialize: {error}",
+            M::NAME
+        ))
+    })?;
+    let output = driver.agent_value(M::NAME, M::EFFECT, value, params.holds_for())?;
+    crate::driver::decode::<ActOutcome>(M::NAME, output).map(Some)
+}
+
+/// Whether `target` is a point, which names no element a semantics action could reach.
+fn is_point(target: &Target) -> bool {
+    matches!(target, Target::Point { .. })
+}
+
 /// Run the driver's method `name` with `params`.
 pub(crate) fn call(driver: &mut Driver, name: &'static str, params: Value) -> Result<Value> {
     match name {
+        method::ElementScrollUntil::NAME => run(name, params, |p| scroll_until(driver, p)),
         method::ElementTap::NAME => run(name, params, |p| tap(driver, p)),
         method::ElementDoubleTap::NAME => run(name, params, |p| double_tap(driver, p)),
         method::ElementLongPress::NAME => run(name, params, |p| long_press(driver, p)),
@@ -164,10 +290,17 @@ fn resolve_locator(
     timeout: Duration,
 ) -> Result<ElementRef> {
     let mut waited = false;
+    // A strict pick needs only the candidates it names reported: the rest it counts from
+    // `truncated`, so a locator matching thousands answers `ambiguous`, not a reply past the line.
+    let mut params = LocateParams::new(locator.clone());
+    if locator.pick == Pick::Strict {
+        params.max_matches = Some(flui_protocol::locator::STRICT_CANDIDATES);
+    }
     loop {
-        let found = driver
-            .agent::<method::SemanticsLocate>(LocateParams::new(locator.clone()), Duration::ZERO)?;
-        let Matches { matches, .. } = found;
+        let found = driver.agent::<method::SemanticsLocate>(params.clone(), Duration::ZERO)?;
+        let Matches {
+            matches, truncated, ..
+        } = found;
         match matches.as_slice() {
             [] if !waited => {
                 waited = true;
@@ -177,33 +310,25 @@ fn resolve_locator(
                 };
                 let outcome =
                     wait_until(driver, window, Condition::Appears(locator.clone()), timeout)?;
-                if !outcome.satisfied {
+                if outcome.end != WaitEnd::Satisfied {
                     return Err(not_found(locator));
                 }
             }
             [] => return Err(not_found(locator)),
-            [only] => return Ok(only.element),
             [first, ..] if locator.pick != Pick::Strict => return Ok(first.element),
-            several => {
-                let candidates = several
-                    .iter()
-                    .take(10)
-                    .map(|found| {
-                        flui_protocol::tree::outline(std::slice::from_ref(&found.node))
-                            .lines()
-                            .next()
-                            .unwrap_or_default()
-                            .to_owned()
-                    })
-                    .collect();
-                return Err(Error::Ambiguous {
-                    message: format!(
-                        "{} elements match a strict locator; narrow it, or pick first, last or nth",
-                        several.len()
-                    ),
-                    candidates,
-                    retry: ErrorCode::Ambiguous.default_retry(),
-                });
+            reported => {
+                return match flui_protocol::locator::resolve_strict(reported.iter(), truncated) {
+                    Ok(Some(only)) => Ok(only.element),
+                    Ok(None) => Err(not_found(locator)),
+                    Err(ambiguity) => Err(Error::Ambiguous {
+                        message: format!(
+                            "{} elements match a strict locator; narrow it, or pick first, last or nth",
+                            ambiguity.matched
+                        ),
+                        candidates: ambiguity.candidates,
+                        retry: ErrorCode::Ambiguous.default_retry(),
+                    }),
+                };
             }
         }
     }
@@ -280,18 +405,24 @@ fn actionable(
                         .map_or_default(|cover| format!("; the point reached {cover}"))
                 ),
                 covered_by,
+                effect: None,
                 retry: ErrorCode::NotActionable.default_retry(),
             });
         }
         let left = deadline.saturating_sub(driver.clock());
         let presented = !left.is_zero()
-            && wait_until(driver, element.window, Condition::Frames(1), left)?.satisfied;
+            && wait_until(driver, element.window, Condition::Frames(1), left)?.end
+                == WaitEnd::Satisfied;
         // Past the deadline, or no frame to wait for: the next reading is the last.
         expired = !presented || driver.clock() >= deadline;
     }
 }
 
-/// Where `target` lands, after the checks its options ask for.
+/// Where `target` lands, after the checks its options ask for. The driver reads the element over
+/// the wire, which carries its whole bounds and not the part the window shows, so a composed
+/// gesture takes its extent from the whole bounds; the agent in the application aims at the shown
+/// part. A composed gesture also takes the windowless [`Defaults`]: the driver does not read the
+/// window's gesture settings.
 fn aim(driver: &mut Driver, target: &Target, options: &GestureOptions) -> Result<Aim> {
     let timeout = timeout_of(driver, options);
     if let Target::Point { window, at } = target {
@@ -311,6 +442,7 @@ fn aim(driver: &mut Driver, target: &Target, options: &GestureOptions) -> Result
             failed: Some(flui_protocol::act::ActionabilityCheck::Visible),
             covered_by: None,
             message: format!("{element} shows no point to aim at"),
+            effect: None,
             retry: ErrorCode::NotActionable.default_retry(),
         })?;
     Ok(Aim {
@@ -321,24 +453,33 @@ fn aim(driver: &mut Driver, target: &Target, options: &GestureOptions) -> Result
     })
 }
 
-fn timeout_of(driver: &Driver, options: &GestureOptions) -> Duration {
+/// How long a composed act locates and checks: the timeout it names, as
+/// [`GestureOptions::named_timeout_ms`] bounds it, or the session's.
+pub(crate) fn timeout_of(driver: &Driver, options: &GestureOptions) -> Duration {
     options
-        .timeout_ms
+        .named_timeout_ms()
         .map_or(driver.timeout, Duration::from_millis)
 }
 
-/// The path an action takes under `requested` (the session's policy when `None`), when the
-/// semantic path can carry it where `semantic`.
-pub(crate) fn choose_path(
+/// The path an action with `forms`, played by `player`, takes under `requested` (the session's
+/// policy when `None`). The one rule for every gesture: one the driver composes asks it before it
+/// performs, one it hands to the app's agent before it is sent ([`agent_via`]).
+fn choose_path(
     driver: &Driver,
     requested: Option<InputPolicy>,
-    semantic: bool,
+    forms: Forms,
+    player: Player,
 ) -> Result<InputPath> {
     let policy = requested.unwrap_or_else(|| driver.input_policy());
+    let by_agent = player == Player::Agent;
     let available = |path: InputPath| match path {
-        InputPath::Semantic => semantic && driver.serves(method::SemanticsAct::NAME),
-        InputPath::Synthetic => driver.serves(method::InputInject::NAME),
-        InputPath::Os => driver.lane().is_some(),
+        InputPath::Semantic => {
+            forms.semantic && (by_agent || driver.serves(method::SemanticsAct::NAME))
+        }
+        InputPath::Synthetic => {
+            forms.synthetic && (by_agent || driver.serves(method::InputInject::NAME))
+        }
+        InputPath::Os => forms.os && driver.lane().is_some(),
         _ => false,
     };
     if available(policy.prefer) {
@@ -350,7 +491,7 @@ pub(crate) fn choose_path(
             format!(
                 "the target takes no {} input{}",
                 policy.prefer.name(),
-                if policy.prefer == InputPath::Os {
+                if policy.prefer == InputPath::Os && forms.os {
                     "; attach an OS lane"
                 } else {
                     ""
@@ -380,7 +521,8 @@ fn act(
     let path = choose_path(
         driver,
         options.via,
-        semantic.is_some() && aim.element.is_some(),
+        Forms::input(semantic.is_some() && aim.element.is_some()),
+        Player::Driver,
     )?;
     let mut outcome = match (path, semantic, aim.element) {
         (InputPath::Semantic, Some(action), Some(element)) => driver
@@ -406,7 +548,7 @@ fn inject(
 ) -> Result<ActOutcome> {
     let mut params = InputParams::new(window, sequence);
     params.snapshot = snapshot;
-    let holds = params.actions.span();
+    let holds = params.holds_for();
     driver.agent::<method::InputInject>(params, holds)
 }
 
@@ -429,8 +571,10 @@ fn perform_os(
             )
         })
         .ok_or_else(no_lane)?;
-    // A composition the lane cannot send is refused before the desktop is locked or the run
-    // announced, as `send_guarded` refuses it again before any event.
+    // What no lane sends, and a composition this lane cannot send, are refused before the desktop
+    // is locked, the window located or the run announced, as `send_guarded` refuses a
+    // composition again before any event.
+    let admitted = steps::admit(&sequence)?;
     let composition = sequence
         .sources
         .iter()
@@ -446,12 +590,12 @@ fn perform_os(
     let placement: Placement =
         driver.agent::<method::WindowPlacement>(WindowParams::new(window), Duration::ZERO)?;
     let geometry = lane_run(driver, move |lane| lane.locate_window(&placement))??;
-    let events = steps::os_events(&sequence, &geometry)?;
+    let events = steps::events_of(&admitted, &geometry)?;
     let announcement = match driver.scenario() {
         Some(scenario) if !scenario.devices().is_empty() => {
             Announcement::new(scenario.devices().to_vec(), scenario.duration(), isolation)
         }
-        _ => Announcement::new(devices_of(&events), sequence.span(), isolation),
+        _ => Announcement::new(devices_of(&events), played(&events), isolation),
     };
     driver.announce_once(|| announcement.to_string());
     let before = journal(driver, window, None)?;
@@ -519,6 +663,17 @@ fn observed(events: &[OsEvent], journal: &Journal) -> ActOutcome {
     outcome
 }
 
+/// How long sending `events` takes: the sum of their pauses, which end at the plan's end.
+fn played(events: &[OsEvent]) -> Duration {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            OsEvent::Pause(pause) => Some(*pause),
+            _ => None,
+        })
+        .fold(Duration::ZERO, Duration::saturating_add)
+}
+
 fn devices_of(events: &[OsEvent]) -> Vec<OsDevice> {
     let mut devices = Vec::new();
     for event in events {
@@ -544,88 +699,58 @@ fn devices_of(events: &[OsEvent]) -> Vec<OsDevice> {
     devices
 }
 
-fn pointer(device: PointerDevice, id: &str, actions: Vec<PointerAction>) -> InputSource {
-    InputSource::Pointer {
-        id: id.to_owned(),
-        device,
-        actions,
+impl Aim {
+    /// Where the gesture lands, as [`gestures`] builds it.
+    fn landing(&self) -> Landing {
+        Landing::new(self.point, self.rect)
     }
 }
 
-fn move_to(to: LogicalPoint, duration_ms: u64) -> PointerAction {
-    PointerAction::Move {
-        to,
-        duration_ms,
-        pressure: None,
-    }
-}
-
-fn down(button: PointerButton) -> PointerAction {
-    PointerAction::Down {
-        button,
-        pressure: None,
-    }
-}
-
-fn up(button: PointerButton) -> PointerAction {
-    PointerAction::Up { button }
-}
-
-fn pause(duration_ms: u64) -> PointerAction {
-    PointerAction::Pause { duration_ms }
+/// `params` refused as a gesture's parameters.
+fn invalid_gesture(error: &gestures::GestureError) -> Error {
+    Error::invalid_argument(error.to_string())
 }
 
 /// `element.tap`.
 pub(crate) fn tap(driver: &mut Driver, params: TapParams) -> Result<ActOutcome> {
+    let semantic = gestures::tap_action(params.button);
+    let forms = Forms::input(semantic.is_some() && !is_point(&params.target));
+    if let Some(answer) = answered_by_agent::<method::ElementTap>(driver, &params, forms)? {
+        return Ok(answer);
+    }
     let aim = aim(driver, &params.target, &params.options)?;
-    let button = params.button;
-    let sequence = ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        POINTER,
-        vec![move_to(aim.point, 0), down(button), up(button)],
-    )]);
-    let semantic = (button == PointerButton::Primary).then_some(ActionName::Invoke);
+    let sequence = gestures::tap(aim.point, params.button, &Defaults::WINDOWLESS);
     act(driver, aim, &params.options, sequence, semantic)
 }
 
 /// `element.double_tap`.
 pub(crate) fn double_tap(driver: &mut Driver, params: TapParams) -> Result<ActOutcome> {
+    let forms = Forms::input(false);
+    if let Some(answer) = answered_by_agent::<method::ElementDoubleTap>(driver, &params, forms)? {
+        return Ok(answer);
+    }
     let aim = aim(driver, &params.target, &params.options)?;
-    let button = params.button;
-    let sequence = ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        POINTER,
-        vec![
-            move_to(aim.point, 0),
-            down(button),
-            up(button),
-            pause(DOUBLE_TAP_GAP_MS),
-            down(button),
-            up(button),
-        ],
-    )]);
+    let sequence = gestures::double_tap(aim.point, params.button, &Defaults::WINDOWLESS);
     act(driver, aim, &params.options, sequence, None)
 }
 
 /// `element.long_press`.
 pub(crate) fn long_press(driver: &mut Driver, params: LongPressParams) -> Result<ActOutcome> {
+    let forms = Forms::input(false);
+    if let Some(answer) = answered_by_agent::<method::ElementLongPress>(driver, &params, forms)? {
+        return Ok(answer);
+    }
     let aim = aim(driver, &params.target, &params.options)?;
-    let hold = params.duration_ms.unwrap_or(LONG_PRESS_MS);
-    let sequence = ActionSequence::new(vec![pointer(
-        PointerDevice::Touch,
-        POINTER,
-        vec![
-            move_to(aim.point, 0),
-            down(PointerButton::Primary),
-            pause(hold),
-            up(PointerButton::Primary),
-        ],
-    )]);
+    let sequence = gestures::long_press(aim.point, params.duration_ms, &Defaults::WINDOWLESS);
     act(driver, aim, &params.options, sequence, None)
 }
 
 /// `element.drag_to`.
 pub(crate) fn drag_to(driver: &mut Driver, params: DragParams) -> Result<ActOutcome> {
+    let forms = Forms::input(false);
+    if let Some(answer) = answered_by_agent::<method::ElementDragTo>(driver, &params, forms)? {
+        return Ok(answer);
+    }
     let from = aim(driver, &params.target, &params.options)?;
     let to = aim(driver, &params.to, &params.options)?;
     if from.window != to.window {
@@ -634,99 +759,61 @@ pub(crate) fn drag_to(driver: &mut Driver, params: DragParams) -> Result<ActOutc
             from.window, to.window
         )));
     }
-    let sequence = ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        POINTER,
-        vec![
-            move_to(from.point, 0),
-            down(PointerButton::Primary),
-            move_to(to.point, STROKE_MS),
-            up(PointerButton::Primary),
-        ],
-    )]);
+    let sequence = gestures::drag(from.point, to.point, &Defaults::WINDOWLESS)
+        .map_err(|error| invalid_gesture(&error))?;
     act(driver, from, &params.options, sequence, None)
 }
 
 /// `element.swipe` (`fling` false) and `element.fling`.
 pub(crate) fn swipe(driver: &mut Driver, params: SwipeParams, fling: bool) -> Result<ActOutcome> {
-    let aim = aim(driver, &params.target, &params.options)?;
-    let (dx, dy) = match params.direction {
-        Direction::Up => (0.0, -1.0),
-        Direction::Down => (0.0, 1.0),
-        Direction::Left => (-1.0, 0.0),
-        _ => (1.0, 0.0),
+    let forms = Forms::input(false);
+    let answered = if fling {
+        answered_by_agent::<method::ElementFling>(driver, &params, forms)?
+    } else {
+        answered_by_agent::<method::ElementSwipe>(driver, &params, forms)?
     };
-    let extent = aim.rect.map_or(
-        100.0,
-        |rect| if dx == 0.0 { rect.height } else { rect.width },
-    );
-    let distance = params.distance.unwrap_or(extent * 0.8);
-    let velocity = params.velocity.unwrap_or(FLING_VELOCITY);
-    if !(distance.is_finite() && distance > 0.0 && velocity.is_finite() && velocity > 0.0) {
-        return Err(Error::invalid_argument(format!(
-            "a stroke of {distance} px at {velocity} px/s goes nowhere"
-        )));
+    if let Some(answer) = answered {
+        return Ok(answer);
     }
-    let end = LogicalPoint::new(aim.point.x + dx * distance, aim.point.y + dy * distance);
-    let stroke_ms = ((distance / velocity) * 1_000.0).clamp(1.0, 10_000.0);
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "clamped to 1..=10000 just above"
-    )]
-    let stroke_ms = stroke_ms as u64;
-    let mut actions = vec![
-        move_to(aim.point, 0),
-        down(PointerButton::Primary),
-        move_to(end, stroke_ms),
-    ];
-    if !fling {
-        actions.push(pause(SWIPE_SETTLE_MS));
-    }
-    actions.push(up(PointerButton::Primary));
-    let sequence = ActionSequence::new(vec![pointer(PointerDevice::Touch, POINTER, actions)]);
+    let aim = aim(driver, &params.target, &params.options)?;
+    let sequence = gestures::swipe(
+        aim.landing(),
+        params.direction,
+        params.distance,
+        params.velocity,
+        fling,
+        &Defaults::WINDOWLESS,
+    )
+    .map_err(|error| invalid_gesture(&error))?;
     act(driver, aim, &params.options, sequence, None)
 }
 
 /// `element.pinch`.
 pub(crate) fn pinch(driver: &mut Driver, params: PinchParams) -> Result<ActOutcome> {
-    if !(params.scale.is_finite() && params.scale > 0.0) {
-        return Err(Error::invalid_argument(format!(
-            "a pinch to scale {} is not one",
-            params.scale
-        )));
+    let forms = Forms::input(false);
+    if let Some(answer) = answered_by_agent::<method::ElementPinch>(driver, &params, forms)? {
+        return Ok(answer);
     }
     let aim = aim(driver, &params.target, &params.options)?;
-    let radius = aim
-        .rect
-        .map_or(50.0, |rect| rect.width.min(rect.height) / 4.0)
-        .max(4.0);
-    let contact = |id: &str, side: f64| {
-        let at = |r: f64| LogicalPoint::new(aim.point.x + side * r, aim.point.y);
-        pointer(
-            PointerDevice::Touch,
-            id,
-            vec![
-                move_to(at(radius), 0),
-                down(PointerButton::Primary),
-                move_to(at(radius * params.scale), STROKE_MS),
-                up(PointerButton::Primary),
-            ],
-        )
-    };
-    let sequence = ActionSequence::new(vec![
-        contact("driver.pinch.a", -1.0),
-        contact("driver.pinch.b", 1.0),
-    ]);
+    let sequence =
+        gestures::pinch(aim.landing(), params.scale).map_err(|error| invalid_gesture(&error))?;
     act(driver, aim, &params.options, sequence, None)
 }
 
 /// `element.scroll_into_view`: the semantics action that scrolls each scrollable ancestor; the
-/// element need not be actionable, since it may be out of view.
+/// element need not be actionable, since it may be out of view. It has no other path, so a call
+/// that requires one is refused by [`choose_path`], whoever plays it.
 pub(crate) fn scroll_into_view(
     driver: &mut Driver,
     params: ScrollIntoViewParams,
 ) -> Result<ActOutcome> {
+    let forms = Forms::SEMANTIC;
+    if let Some(answer) =
+        answered_by_agent::<method::ElementScrollIntoView>(driver, &params, forms)?
+    {
+        return Ok(answer);
+    }
+    choose_path(driver, params.options.via, forms, Player::Driver)?;
     let timeout = timeout_of(driver, &params.options);
     let element = resolve(driver, &params.target, timeout)?;
     let mut outcome = driver.agent::<method::SemanticsAct>(
@@ -739,30 +826,43 @@ pub(crate) fn scroll_into_view(
 
 /// `element.type_text`: tap the field to focus it, then commit the text.
 pub(crate) fn type_text(driver: &mut Driver, params: TypeTextParams) -> Result<ActOutcome> {
+    // The focus has a semantic form; the text has none, and the agent refuses a call that
+    // requires the semantic path for it, as the composition below does.
+    let forms = Forms::input(!is_point(&params.target));
+    if let Some(answer) = answered_by_agent::<method::ElementTypeText>(driver, &params, forms)? {
+        return Ok(answer);
+    }
     let aim = aim(driver, &params.target, &params.options)?;
     focus(driver, aim, &params.options)?;
-    let text = ActionSequence::new(vec![InputSource::Text { text: params.text }]);
-    act(driver, aim, &params.options, text, None)
+    act(
+        driver,
+        aim,
+        &params.options,
+        gestures::text(&params.text),
+        None,
+    )
 }
 
 /// Tap `aim` to focus it, reading nothing back.
 fn focus(driver: &mut Driver, aim: Aim, options: &GestureOptions) -> Result<ActOutcome> {
     let mut quiet = *options;
     quiet.snapshot = Snapshot::None;
-    let sequence = ActionSequence::new(vec![pointer(
-        PointerDevice::Mouse,
-        POINTER,
-        vec![
-            move_to(aim.point, 0),
-            down(PointerButton::Primary),
-            up(PointerButton::Primary),
-        ],
-    )]);
+    let sequence = gestures::tap(aim.point, PointerButton::Primary, &Defaults::WINDOWLESS);
     act(driver, aim, &quiet, sequence, Some(ActionName::Focus))
 }
 
 /// `element.press_keys`: focus the target when there is one, then each chord in turn.
 pub(crate) fn press_keys(driver: &mut Driver, params: PressKeysParams) -> Result<ActOutcome> {
+    let forms = Forms::input(
+        params
+            .target
+            .as_ref()
+            .is_some_and(|target| !is_point(target)),
+    );
+    if let Some(answer) = answered_by_agent::<method::ElementPressKeys>(driver, &params, forms)? {
+        return Ok(answer);
+    }
+    let sequence = gestures::chords(&params.keys).map_err(|error| invalid_gesture(&error))?;
     let aim = if let Some(target) = &params.target {
         let aim = aim(driver, target, &params.options)?;
         focus(driver, aim, &params.options)?;
@@ -780,32 +880,23 @@ pub(crate) fn press_keys(driver: &mut Driver, params: PressKeysParams) -> Result
             rect: None,
         }
     };
-    let mut actions = Vec::new();
-    for chord in &params.keys {
-        let keys: Vec<&str> = chord.split('+').filter(|key| !key.is_empty()).collect();
-        if keys.is_empty() {
-            return Err(Error::invalid_argument(format!(
-                "the chord {chord:?} names no key"
-            )));
-        }
-        actions.extend(keys.iter().map(|key| KeyAction::Down {
-            key: (*key).to_owned(),
-        }));
-        actions.extend(keys.iter().rev().map(|key| KeyAction::Up {
-            key: (*key).to_owned(),
-        }));
-    }
-    let sequence = ActionSequence::new(vec![InputSource::Keys {
-        id: "driver.keys".to_owned(),
-        actions,
-    }]);
     act(driver, aim, &params.options, sequence, None)
+}
+
+/// `element.scroll_until`: played by the app's agent alone, a step at a frame, so it takes the path
+/// [`choose_path`] chooses among the synthetic one it has; the driver composes none of it.
+pub(crate) fn scroll_until(driver: &mut Driver, params: ScrollUntilParams) -> Result<ActOutcome> {
+    let name = method::ElementScrollUntil::NAME;
+    answered_by_agent::<method::ElementScrollUntil>(driver, &params, Forms::AGENT_INPUT)?
+        .ok_or_else(|| {
+            Error::not_supported(name, format!("the app's agent does not serve `{name}`"))
+        })
 }
 
 /// `input.perform`: an action sequence by the path the policy chooses; an action sequence has no
 /// semantic form.
 pub(crate) fn perform(driver: &mut Driver, params: InputParams) -> Result<ActOutcome> {
-    match choose_path(driver, params.via, false)? {
+    match choose_path(driver, params.via, Forms::input(false), Player::Driver)? {
         InputPath::Os => perform_os(driver, params.window, params.actions),
         _ => inject(driver, params.window, params.actions, params.snapshot),
     }

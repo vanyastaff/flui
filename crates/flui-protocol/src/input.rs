@@ -8,9 +8,17 @@
 
 use std::time::Duration;
 
+pub mod gestures;
+mod planning;
+
+pub use planning::{
+    MAX_COORDINATE, MAX_INPUTS, MAX_SOURCES, MAX_SPAN, MAX_STEPS, MAX_TICKS, Plan, PlanError,
+    PlannedInput, PlannedSource, STEP, SourceKind, TimedInput, plan,
+};
+
 use crate::act::JournalSpan;
 use crate::geometry::LogicalPoint;
-use crate::locator::Target;
+use crate::locator::{Locator, Target};
 use crate::snapshot::Snapshot;
 use crate::tree::WindowId;
 
@@ -92,6 +100,10 @@ vocabulary! {
         Touch => "touch",
         /// A pen or stylus.
         Pen => "pen",
+        /// A pointer with no physical contact: a gamepad-driven cursor, a dwell or switch device,
+        /// UI automation. It hovers, presses and releases as a mouse does, and routing treats
+        /// every contactless pointer alike (ADR-0216 §3).
+        Virtual => "virtual",
     }
 }
 
@@ -446,9 +458,13 @@ impl ActionSequence {
             .unwrap_or(0)
     }
 
-    /// How long playing the sequence takes: the ticks play one after another, and each lasts as
-    /// long as its longest pause or move. Saturates at [`Duration::MAX`]. Linear in the number of
+    /// How long the durations the sequence names last: the ticks one after another, each as long
+    /// as its longest pause or move. Saturates at [`Duration::MAX`]. Linear in the number of
     /// actions, however many sources the ticks are spread over.
+    ///
+    /// A [`plan`] lays each move that names no duration over one [`STEP`], so its [`Plan::span`]
+    /// is never less than this; a window plays a tick at a frame, so it plays the sequence within
+    /// [`Self::plays_within`].
     #[must_use]
     pub fn span(&self) -> Duration {
         let mut lasts = vec![Duration::ZERO; self.ticks()];
@@ -458,6 +474,16 @@ impl ActionSequence {
         lasts
             .into_iter()
             .fold(Duration::ZERO, Duration::saturating_add)
+    }
+
+    /// How long a window at 60 Hz takes to play the sequence: its span, and a frame ([`STEP`])
+    /// for each tick, since a window plays a tick at a frame and a tick that names no duration
+    /// still takes one. What a server bounding an injection's reply adds; what a slower cadence
+    /// takes past it comes out of the reply's own timeout. Saturates at [`Duration::MAX`].
+    #[must_use]
+    pub fn plays_within(&self) -> Duration {
+        let ticks = u32::try_from(self.ticks()).unwrap_or(u32::MAX);
+        self.span().saturating_add(STEP.saturating_mul(ticks))
     }
 }
 
@@ -562,7 +588,12 @@ impl InputParams {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct GestureOptions {
-    /// Which input path; the session's when absent.
+    /// Which input path. A caller of the driver names it, or leaves it to the session's policy;
+    /// the driver chooses the path from both, and what it hands the app's agent carries that
+    /// path, required when the call or the session requires it. The agent knows no session: it
+    /// plays the path this names, falls back to the gesture's other path unless this requires
+    /// one, refuses `os`, which the driver composes with its lane, and takes synthetic input when
+    /// it is absent.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -574,7 +605,11 @@ pub struct GestureOptions {
         serde(default, skip_serializing_if = "std::ops::Not::not")
     )]
     pub force: bool,
-    /// How long locating and actionability may take, in milliseconds; 5000 when absent.
+    /// How long locating and actionability may take, in milliseconds; 5000 when absent and at
+    /// most 24 hours ([`Self::named_timeout_ms`]). A window that serves the gesture holds the act
+    /// this long at most, then plays it, and the conversation counts both in the reply's deadline
+    /// (ADR-0288 §4); the driver composing a gesture on the `os` path locates and checks
+    /// actionability for this long.
     #[cfg_attr(
         feature = "serde",
         serde(default, skip_serializing_if = "Option::is_none")
@@ -586,6 +621,29 @@ pub struct GestureOptions {
         serde(default, skip_serializing_if = "crate::skip::is_default")
     )]
     pub snapshot: Snapshot,
+}
+
+impl GestureOptions {
+    /// How long an act holds out for actionability when it names no timeout, in milliseconds.
+    pub const DEFAULT_TIMEOUT_MS: u64 = 5_000;
+
+    /// The longest an act holds out, in milliseconds (24 hours), as a wait does: a longer timeout
+    /// is this long.
+    pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1_000;
+
+    /// The timeout the act names, in milliseconds, at most [`Self::MAX_TIMEOUT_MS`]; `None` when
+    /// it names none, for the caller's own default.
+    #[must_use]
+    pub fn named_timeout_ms(&self) -> Option<u64> {
+        self.timeout_ms.map(|ms| ms.min(Self::MAX_TIMEOUT_MS))
+    }
+
+    /// How long the window may hold the act, in milliseconds: the timeout named, at most
+    /// [`Self::MAX_TIMEOUT_MS`], or [`Self::DEFAULT_TIMEOUT_MS`].
+    #[must_use]
+    pub fn effective_timeout_ms(&self) -> u64 {
+        self.named_timeout_ms().unwrap_or(Self::DEFAULT_TIMEOUT_MS)
+    }
 }
 
 /// `element.tap` and `element.double_tap`.
@@ -731,6 +789,44 @@ pub struct ScrollIntoViewParams {
     pub options: GestureOptions,
 }
 
+/// `element.scroll_until`: scroll a scrollable a viewport at a time, at frame boundaries, until a
+/// locator resolves inside it or its scroll extent ends (Flutter's `scrollUntilVisible`).
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[non_exhaustive]
+pub struct ScrollUntilParams {
+    /// The scrollable; a point is refused.
+    pub target: Target,
+    /// What to scroll to: the element it names must resolve, strictly, under the scrollable.
+    pub until: Locator,
+    /// Which way to scroll. When absent the agent reads no axis: it scrolls down, and turns
+    /// right, once, when its first step down moves nothing, so a horizontal scrollable, or a
+    /// vertical one already at its end, is searched rightwards; a search that has moved and then
+    /// stops ends there.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub direction: Option<Direction>,
+    /// How.
+    #[cfg_attr(feature = "serde", serde(flatten))]
+    pub options: GestureOptions,
+}
+
+impl ScrollUntilParams {
+    /// Scroll `target` until `until` resolves inside it.
+    #[must_use]
+    pub fn new(target: impl Into<Target>, until: Locator) -> Self {
+        Self {
+            target: target.into(),
+            until,
+            direction: None,
+            options: GestureOptions::default(),
+        }
+    }
+}
+
 /// `element.type_text`: focus the target, then commit text into it.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -746,7 +842,10 @@ pub struct TypeTextParams {
     pub options: GestureOptions,
 }
 
-/// `element.press_keys`: press chords in turn, each `+`-joined (`"Control+a"`, `"Enter"`).
+/// `element.press_keys`: press chords in turn. A chord is its keys joined by `+`, each a W3C key
+/// name or the text the key types (`"Control+a"`, `"Enter"`); a `+` where a key stands is the plus
+/// key (`"+"`, `"Control++"`), and a key name has no space around it (`" "` is the space key).
+/// [`gestures::chord_keys`] is the one reading.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]

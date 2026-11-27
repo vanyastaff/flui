@@ -54,11 +54,12 @@
 //! with work left undone.
 
 mod events;
+mod requests;
 mod script;
 mod track;
 
 pub use events::{EventSubscription, Events, StreamEnd, StreamItem};
-pub use script::{Answer, Expect, MAX_RECORDED_REQUESTS, RequestTicket, Script};
+pub use script::{Answer, Expect, MAX_RECORDED_REQUESTS, RequestTicket, Script, ScriptHold};
 pub use track::{ServiceState, Track};
 
 use std::borrow::Cow;
@@ -246,7 +247,9 @@ impl Scenario {
     /// Every failure of the run so far, or `Ok` when there is none. What it
     /// returns is acknowledged: the scenario does not panic over it when it
     /// drops. A failure recorded after this call is not, even when it equals
-    /// one this call returned.
+    /// one this call returned. A held request it reports waits for the test
+    /// from then on, so no later drain of a hold answers it
+    /// ([held requests](Script#held-requests)).
     ///
     /// # Errors
     ///

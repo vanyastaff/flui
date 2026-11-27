@@ -1,5 +1,8 @@
-//! What `uiautomator dump` shows of the screen, read as untrusted input: where the app's window
-//! is, how the display is turned, and the accessibility nodes the app serves.
+//! What `uiautomator dump` shows of the screen, read as untrusted input: the accessibility nodes
+//! the app serves, and the display's turn when it dumped, which the lane compares with the turn
+//! `dumpsys window` gave it. The lane reads it only for the tree: where the app's window is and
+//! how the display is turned come from `dumpsys window` (`super::device::WINDOWS`), which pauses
+//! no accessibility service.
 //!
 //! The dump is the active window's view hierarchy as accessibility reads it:
 //! `<hierarchy rotation="N">` and its `<node>`s, each with its `package`, its `class`, its `text`
@@ -21,22 +24,125 @@ pub const MAX_NODES: u32 = 100_000;
 /// The deepest a node of a dump may sit.
 pub const MAX_DEPTH: usize = 256;
 
-/// Where a session has its dumps written on the device: a directory the shell may write, a file
-/// named for the session (`session` is lowercase hex), so two sessions on one device never read
-/// each other's dump.
-#[must_use]
-pub fn dump_path(session: &str) -> String {
-    format!("/data/local/tmp/flui-driver-{session}.xml")
+/// The directory the lane's dumps go to on the device: one the shell may write.
+pub const DUMP_DIRECTORY: &str = "/data/local/tmp";
+
+/// Where a session's window dumps live: one file per dump, `<directory>/flui-driver-<session>-<n>.xml`,
+/// numbered from 1, with what the dump said on its error stream beside it at `.err`. Two sessions
+/// on one device never read each other's dumps, and no dump reads a file an earlier one left.
+/// Every shell line it makes holds the directory and the session as one quoted word
+/// ([`super::adb::quote`]), whatever they hold, with only the dump's number and the globs outside
+/// the quotes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DumpFiles {
+    /// The part of every path before the dump's number, as it is on the device.
+    stem: String,
 }
 
-/// The line that dumps the active window to `path` and prints the dump: the file is removed
-/// whatever the dump's outcome.
-///
-/// The dump connects to accessibility as `UiAutomation` does, which suspends the accessibility
-/// services running (TalkBack among them) until it ends.
-#[must_use]
-pub fn dump_line(path: &str) -> String {
-    format!("uiautomator dump {path} >/dev/null 2>&1 && cat {path}; rm -f {path}")
+impl DumpFiles {
+    /// The dumps of the session `session` (lowercase hex) in [`DUMP_DIRECTORY`].
+    #[must_use]
+    pub fn of_session(session: &str) -> Self {
+        Self::in_directory(DUMP_DIRECTORY, session)
+    }
+
+    /// The dumps of the session `session` in `directory`.
+    #[must_use]
+    pub fn in_directory(directory: &str, session: &str) -> Self {
+        Self {
+            stem: format!("{directory}/flui-driver-{session}-"),
+        }
+    }
+
+    /// The stem as one word of the device's shell.
+    fn quoted_stem(&self) -> String {
+        super::adb::quote(&self.stem)
+    }
+
+    /// The file of dump number `dump` as words of the device's shell.
+    fn quoted_path(&self, dump: u64) -> String {
+        format!("{}{dump}.xml", self.quoted_stem())
+    }
+
+    /// The shell line that removes the files of dump number `dump` and of every earlier dump of
+    /// the session, never a later one's: a dump the host ended at its deadline whose line still
+    /// runs on the device removes nothing a newer dump wrote.
+    #[must_use]
+    pub fn removal_through(&self, dump: u64) -> String {
+        let stem = self.quoted_stem();
+        format!(
+            "for f in {stem}*.xml {stem}*.xml.err; do n=${{f#{stem}}}; n=${{n%%.*}}; case $n in \
+             ''|*[!0-9]*) ;; *) if [ \"$n\" -le {dump} ]; then rm -f \"$f\"; fi ;; esac; done"
+        )
+    }
+
+    /// The shell line that removes every file of the session's dumps, as the lane's end does.
+    #[must_use]
+    pub fn removal(&self) -> String {
+        let stem = self.quoted_stem();
+        format!("rm -f {stem}*.xml {stem}*.xml.err")
+    }
+
+    /// The line that dumps the active window to dump number `dump` and prints it, or, where the
+    /// dump wrote no file, what it said on its error stream ([`DumpFailure`]). Each dump has a path
+    /// of its own, so a file an earlier dump left (one whose command the host ended at its
+    /// deadline, before its removal ran) is never printed as this dump's; and the line ends by
+    /// removing its own files and the earlier dumps' ([`Self::removal_through`]), so what dumps
+    /// the host ended left goes with the next that runs to its end.
+    ///
+    /// The dump connects to accessibility as `UiAutomation` does, which suspends the
+    /// accessibility services running (TalkBack among them) until it ends.
+    #[must_use]
+    pub fn dump_line(&self, dump: u64) -> String {
+        let path = self.quoted_path(dump);
+        format!(
+            "uiautomator dump {path} >/dev/null 2>{path}.err; cat {path} 2>/dev/null || cat \
+             {path}.err; {}",
+            self.removal_through(dump)
+        )
+    }
+}
+
+/// Why a `uiautomator dump` wrote no file, where it says so: each a state of the device that
+/// passes, so the read is busy rather than failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DumpFailure {
+    /// The window never went idle within the dump's wait (AOSP `DumpCommand`'s
+    /// `waitForIdle(1000, 10000)`, which prints `ERROR: could not get idle state.`): the app
+    /// changes its tree all the time.
+    NotIdle,
+    /// Another `UiAutomation` client holds accessibility (`UiAutomationService … already
+    /// registered!`), as a test runner or a second dump does.
+    AnotherClient,
+}
+
+impl DumpFailure {
+    /// The failure the dump's error text `printed` names, if any.
+    pub(crate) fn of(printed: &str) -> Option<Self> {
+        if printed.contains("could not get idle state") {
+            Some(Self::NotIdle)
+        } else if printed.contains("already registered") {
+            Some(Self::AnotherClient)
+        } else {
+            None
+        }
+    }
+}
+
+impl std::fmt::Display for DumpFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::NotIdle => {
+                "`uiautomator dump` wrote no window: the window never went idle within its \
+                 wait, as an app that changes its tree on every frame keeps it; read again once \
+                 it settles"
+            }
+            Self::AnotherClient => {
+                "`uiautomator dump` wrote no window: another `UiAutomation` client holds the \
+                 device's accessibility; read again once it lets go"
+            }
+        })
+    }
 }
 
 /// A rectangle in display pixels.
@@ -117,8 +223,9 @@ pub struct UiNode {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct UiDump {
-    /// The display's rotation from its natural orientation, in quarter turns counter-clockwise
-    /// (`Surface.ROTATION_0` to `ROTATION_270`).
+    /// The display's rotation from its natural orientation when it dumped, in quarter turns
+    /// counter-clockwise (`Surface.ROTATION_0` to `ROTATION_270`): the lane reads the tree only
+    /// when it is the rotation `dumpsys window` gave it before and after the dump.
     pub rotation: u8,
     /// The window's top nodes.
     pub roots: Vec<UiNode>,
@@ -159,39 +266,6 @@ impl UiDump {
             .ok_or_else(|| "the dump names no rotation from 0 to 3".to_owned())?;
         let roots = nodes_of(hierarchy, 0)?;
         Ok(Self { rotation, roots })
-    }
-
-    /// The first node, outermost first, that `package` shows at the size `size` within
-    /// `tolerance` pixels on each side: the app's surface among its window's views.
-    #[must_use]
-    pub fn surface_of(&self, package: &str, size: (f64, f64), tolerance: f64) -> Option<Bounds> {
-        let fits = |node: &UiNode| {
-            node.package == package
-                && node.bounds.is_some_and(|bounds| {
-                    (f64::from(bounds.width()) - size.0).abs() <= tolerance
-                        && (f64::from(bounds.height()) - size.1).abs() <= tolerance
-                })
-        };
-        let mut pending: Vec<&UiNode> = self.roots.iter().rev().collect();
-        while let Some(node) = pending.pop() {
-            if fits(node) {
-                return node.bounds;
-            }
-            pending.extend(node.children.iter().rev());
-        }
-        None
-    }
-
-    /// The applications whose nodes the window holds at its top, for people.
-    #[must_use]
-    pub fn packages(&self) -> Vec<&str> {
-        let mut packages: Vec<&str> = Vec::new();
-        for root in &self.roots {
-            if !packages.contains(&root.package.as_str()) {
-                packages.push(&root.package);
-            }
-        }
-        packages
     }
 }
 

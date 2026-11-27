@@ -142,6 +142,21 @@ fn capability_seam() {
                     as fn(),
             ),
             (
+                "capability_seam::a_tests_script_hold_and_the_clipboards_hold_share_one_count",
+                capability_seam::a_tests_script_hold_and_the_clipboards_hold_share_one_count
+                    as fn(),
+            ),
+            (
+                "capability_seam::the_primary_selections_held_reads_share_the_scripts_count",
+                capability_seam::the_primary_selections_held_reads_share_the_scripts_count
+                    as fn(),
+            ),
+            (
+                "capability_seam::a_double_torn_down_with_its_reads_held_answers_none_of_them",
+                capability_seam::a_double_torn_down_with_its_reads_held_answers_none_of_them
+                    as fn(),
+            ),
+            (
                 "capability_seam::a_concealed_write_reaches_the_host_marked",
                 capability_seam::a_concealed_write_reaches_the_host_marked as fn(),
             ),
@@ -309,6 +324,8 @@ mod scenario;
 mod scripts;
 #[path = "self_rescheduling_local_post_frame.rs"]
 mod self_rescheduling_local_post_frame;
+#[path = "settledness.rs"]
+mod settledness;
 #[path = "tester.rs"]
 mod tester;
 #[path = "text_store_kit.rs"]

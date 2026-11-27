@@ -12,15 +12,18 @@ mod apps;
 mod chrome_browser;
 mod chrome_host;
 mod chrome_lane;
+mod connection;
 mod coordinates;
 mod failure_matrix;
 mod fixtures;
+mod gesture_conformance;
 #[cfg(unix)]
 mod ios_simulator;
 #[cfg(unix)]
 mod ios_simulator_host;
 mod ios_simulator_lane;
-#[cfg(unix)]
+mod ios_simulator_tree;
+#[cfg(any(unix, windows))]
 mod launch;
 #[cfg(target_os = "macos")]
 mod macos_desktop;

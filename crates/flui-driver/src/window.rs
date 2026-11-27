@@ -4,7 +4,7 @@
 //! gesture method on a locator or an element is the table's `element.<gesture>`, with the options
 //! the builder set.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use flui_protocol::act::{ActOutcome, Actionability, ActionabilityParams};
 use flui_protocol::geometry::LogicalPoint;
@@ -26,6 +26,16 @@ use crate::error::Result;
 use crate::lane::AccessibilityApi;
 use crate::projection::Projection;
 use crate::scenario::WindowSpec;
+
+/// How long [`Window::os_tree`] and [`Window::compare_projection`] read the OS tree against the
+/// app's again while the app's tree moves between the two reads, before they report it busy,
+/// counted from the end of the first reading: a bound in time, since an app that republishes
+/// every frame moves on any count of readings, and counted after one, since one reading through
+/// a device's lane (a `uiautomator dump`) can take longer than the bound.
+const TREE_SETTLE: Duration = Duration::from_secs(2);
+
+/// The fewest readings made before a moving tree is reported busy, however long they took.
+const MIN_TREE_READINGS: usize = 3;
 
 /// What reading the OS accessibility tree answers in a session without an OS lane.
 fn no_tree_lane() -> crate::Error {
@@ -96,14 +106,78 @@ impl<'d> Window<'d> {
     /// # Errors
     ///
     /// As [`Self::read`]; [`Error::NotSupported`](crate::Error::NotSupported) naming
-    /// `os_accessibility_tree` without a lane that reads one; the lane's failures.
+    /// `os_accessibility_tree` without a lane that reads one; the lane's failures;
+    /// [`Error::Busy`](crate::Error::Busy) when the app's tree kept changing while the OS tree was
+    /// read against it, as [`Self::compare_projection`] states.
     pub fn os_tree(&mut self) -> Result<Tree> {
-        let app = if self.lane_matches_app_tree()? {
-            self.read()?
-        } else {
-            Tree::new(Vec::new(), false)
-        };
-        self.os_tree_against(app)
+        if self.lane_matches_app_tree()? {
+            return self.read_against().map(|(_, os)| os);
+        }
+        self.os_tree_against(Tree::new(Vec::new(), false))
+    }
+
+    /// The app's tree of the window and its OS tree read against it, both of one revision, as
+    /// [`Self::compare_projection`] states: [`MIN_TREE_READINGS`] and [`TREE_SETTLE`] are its
+    /// numbers.
+    ///
+    /// A tree that never holds still for one reading is reported busy rather than compared: the
+    /// OS tree was taken at an unknown moment between two app trees, and matching or comparing it
+    /// against either would credit the OS with the app's own change, or hide a difference behind
+    /// it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::read`] and [`Self::os_tree_against`]; [`Error::Busy`](crate::Error::Busy)
+    /// naming the revisions when the tree moved on every one of those readings.
+    fn read_against(&mut self) -> Result<(Tree, Tree)> {
+        // Only a lane that matches the app's tree can fail to match one the app no longer shows.
+        let matches_app_tree = self.lane_matches_app_tree()?;
+        let mut settle_from: Option<Instant> = None;
+        let mut readings = 0_usize;
+        loop {
+            let app = self.read()?;
+            let os = self.os_tree_against(app.clone());
+            readings += 1;
+            let Some(before) = app.revision else {
+                return os.map(|os| (app, os));
+            };
+            let unmatched = |error: &crate::Error| {
+                matches_app_tree
+                    && matches!(
+                        error,
+                        crate::Error::NotFound { .. } | crate::Error::Ambiguous { .. }
+                    )
+            };
+            if let Err(error) = &os
+                && !unmatched(error)
+            {
+                return os.map(|os| (app, os));
+            }
+            let after = self.read_with(ReadQuery::new().max_depth(0))?.revision;
+            if after == Some(before) {
+                return os.map(|os| (app, os));
+            }
+            // The bound starts once the first reading is over.
+            let settling = *settle_from.get_or_insert_with(Instant::now);
+            if readings >= MIN_TREE_READINGS && settling.elapsed() >= TREE_SETTLE {
+                let moved = after.map_or_else(
+                    || format!("revision {before} became one that reports none"),
+                    |after| format!("revision {before} became {after}"),
+                );
+                let last = os.err().map_or_else(String::new, |error| {
+                    format!("; the lane's last answer: {error}")
+                });
+                // `Retry::Soon`, the busy code's own: the app kept changing for the bound, which
+                // says nothing of whether it settles a moment later.
+                return Err(crate::Error::busy(format!(
+                    "the app's tree changed while the OS tree was read against it, on each of \
+                     {readings} readings over more than {} ms after the first (last, {moved}): \
+                     the OS tree is not compared with a tree the app no longer shows; read again \
+                     once the app settles{last}",
+                    TREE_SETTLE.as_millis()
+                )));
+            }
+        }
     }
 
     /// Whether the session's lane finds the app's nodes by matching the app's own tree, which it
@@ -125,30 +199,61 @@ impl<'d> Window<'d> {
 
     /// Activate the element whose identifier is `identifier` through the OS accessibility API, as
     /// a screen reader does ([`Lane::invoke`](crate::Lane::invoke)): proof that assistive
-    /// technology can act on it, not only read it.
+    /// technology can act on it, not only read it. The lane is handed the app's own tree of the
+    /// window, read first, when it matches against it and its API acts at all
+    /// ([`AccessibilityApi::activates`]): a lane that refuses is not preceded by a read whose
+    /// failure would stand in for its refusal.
     ///
     /// # Errors
     ///
     /// [`Error::NotSupported`](crate::Error::NotSupported) naming `os_invoke` without a lane that
     /// acts through one; the lane's and the app's failures.
     pub fn os_invoke(&mut self, identifier: &str) -> Result<()> {
+        let no_lane = || crate::Error::not_supported("os_invoke", "the session has no OS lane");
+        let matches = self
+            .driver
+            .lane()
+            .ok_or_else(no_lane)?
+            .capabilities()
+            .accessibility
+            .is_some_and(|api| api.matches_app_tree() && api.activates());
+        let app = if matches {
+            self.read()?
+        } else {
+            Tree::new(Vec::new(), false)
+        };
         let placement = self.placement()?;
-        let lane = self.driver.lane().ok_or_else(|| {
-            crate::Error::not_supported("os_invoke", "the session has no OS lane")
-        })?;
+        let lane = self.driver.lane().ok_or_else(no_lane)?;
         let identifier = identifier.to_owned();
-        lane.run(move |lane| lane.invoke(&placement, &identifier))?
+        lane.run(move |lane| lane.invoke(&placement, &identifier, &app))?
     }
 
     /// The window's semantics tree and its OS accessibility tree, each as its normalized outline
     /// (ADR-0095 §4): whether assistive technology reads what the app published.
     ///
+    /// # One revision
+    ///
+    /// The two trees are of one revision of the app's tree, on every lane. The app's tree is read,
+    /// then the OS tree, then the app's revision again; a tree that moved in between is read
+    /// again, and so is, through a lane that matches against the app's tree
+    /// ([`AccessibilityApi::matches_app_tree`]), a match it could not make (`NotFound`,
+    /// `Ambiguous`) while the tree moved; any other failure of the lane (a refusal, its own
+    /// `Busy`, a `NotFound` of a lane that matches nothing against the app's tree) is the answer,
+    /// after one reading. The reading is made at least three times and until two seconds have
+    /// passed since the first reading ended, since one reading through a device's lane can take
+    /// longer than that; a tree that moved on every one of them answers
+    /// [`Error::Busy`](crate::Error::Busy) with the busy code's own
+    /// [`Retry::Soon`](flui_protocol::error::Retry::Soon), the lane's last answer in its message:
+    /// the app kept changing, and the same call holds once it settles, while an app that
+    /// republishes every frame (a running clock, a progress bar) answers the same on every call.
+    /// A read that reports no revision is taken as it is. [`Self::os_tree`] reads the same way
+    /// through a lane that matches against the app's tree.
+    ///
     /// # Errors
     ///
-    /// As [`Self::read`] and [`Self::os_tree`].
+    /// As [`Self::read`] and [`Self::os_tree`]; [`Error::Busy`](crate::Error::Busy) as above.
     pub fn compare_projection(&mut self) -> Result<Projection> {
-        let app = self.read()?;
-        let os = self.os_tree_against(app.clone())?;
+        let (app, os) = self.read_against()?;
         Ok(Projection::of(&app, &os))
     }
 
@@ -163,7 +268,7 @@ impl<'d> Window<'d> {
     }
 
     /// Hold out for `condition` on the window's frame and event timeline, at most `timeout` of
-    /// the app's clock; a wait that runs out is an answer, `satisfied: false`, with why the window
+    /// the app's clock; a wait that runs out is an answer, `unsatisfied`, with why the window
     /// had not settled.
     ///
     /// # Errors
@@ -464,10 +569,7 @@ impl<'a> ElementLocator<'a> {
     /// [`Error::Ambiguous`](crate::Error::Ambiguous) and
     /// [`Error::NotFound`](crate::Error::NotFound) after waiting for one to appear.
     pub fn resolve(self) -> Result<Element<'a>> {
-        let timeout = self
-            .options
-            .timeout_ms
-            .map_or(self.driver.timeout, Duration::from_millis);
+        let timeout = compose::timeout_of(self.driver, &self.options);
         let handle = compose::resolve(self.driver, &self.target(), timeout)?;
         Ok(Element {
             driver: self.driver,

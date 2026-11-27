@@ -10,7 +10,8 @@
 //! - [`ScriptedAdb`]: a device scripted for the Android lane.
 //! - [`ScriptedXcrun`]: a Simulator scripted for the iOS Simulator lane; [`host_xcrun_with`], the
 //!   host's `xcrun` door in an environment a test names, and [`simulator_lock_in`], a hold on a
-//!   simulator whose lock file is in a test's own directory.
+//!   simulator whose lock file is in a test's own directory; [`ScriptedSimulatorScreen`], the
+//!   Simulator's window as the Mac's accessibility API shows it, for the lane's tree read.
 //! - `ScriptedBrowser` (with the `chrome` feature): a stand-in for a ChromeDriver's WebDriver BiDi session on
 //!   a loopback WebSocket, playing a page whose agent a [`Script`] answers, so the Chrome lane and
 //!   the page's connection run without a browser, and `chrome`, the lane's host side (the page's
@@ -25,9 +26,11 @@ pub mod chrome;
 pub use browser::{BrowserLog, BrowserReply, BrowserScript, ScriptedBrowser};
 
 mod adb;
+mod simulator_screen;
 mod xcrun;
 
 pub use adb::{Responder, ScriptedAdb};
+pub use simulator_screen::ScriptedSimulatorScreen;
 pub use xcrun::{ScriptedXcrun, host_xcrun_with, simulator_lock_in};
 
 use std::io::{self, Read, Write};
@@ -36,17 +39,22 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use flui_protocol::act::{Effect, EffectKind};
 use flui_protocol::envelope::{Greeting, Request, ServerLine};
-use flui_protocol::error::ErrorObject;
+use flui_protocol::error::{ErrorObject, Retry};
 use flui_protocol::framing::LineReader;
 use flui_protocol::input::PointerDevice;
 use flui_protocol::session::{AppDescription, Capabilities, HelloReply, Isolation, Placement};
+use flui_protocol::tree::Tree;
 use flui_protocol::version::PROTOCOL_VERSION;
 use serde_json::Value;
 
 use crate::coordinates::WindowGeometry;
 use crate::error::{Error, Result};
-use crate::lane::{ActivityGuard, ForeignInput, Lane, LaneCapabilities, PositionFidelity};
+use crate::lane::{
+    AccessibilityApi, ActingInput, ActivityGuard, Delivered, ForeignInput, Lane, LaneCapabilities,
+    PositionFidelity,
+};
 use crate::pixels::Image;
 use crate::steps::OsEvent;
 
@@ -131,10 +139,43 @@ pub struct ScriptedLane {
     refuses: Option<String>,
     /// How many of its next releases fail, as an OS that refuses them does.
     failing_releases: usize,
+    /// Whether its sends time out, as a tool on the host that stops answering does.
+    hanging_sends: bool,
+    /// How many keystrokes of text it types before the window loses the focus, typing text one
+    /// keystroke per character; it types text as one input without one.
+    keystrokes_before_focus_lost: Option<usize>,
     /// Whether its releases panic, as a lane's code or a log subscriber can.
     panicking_releases: bool,
+    /// Whether it panics as it is dropped, with a payload whose own destructor panics too.
+    panicking_drop: bool,
     /// What its captures show; it captures nothing without one.
     screen: Option<Screen>,
+    /// The API it reads the OS tree through, and how it answers each read; it reads none
+    /// without one.
+    tree: Option<(AccessibilityApi, TreeRead)>,
+}
+
+/// How a [`ScriptedLane`] answers a read of the OS tree, from the app's tree it is handed.
+pub type TreeRead = Box<dyn FnMut(&Tree) -> Result<Tree> + Send>;
+
+impl Drop for ScriptedLane {
+    fn drop(&mut self) {
+        if self.panicking_drop {
+            std::panic::panic_any(UnwindingPayload);
+        }
+    }
+}
+
+/// The payload a [`ScriptedLane`] that panics as it is dropped unwinds with: its own destructor
+/// panics too, as a payload the driver does not own may.
+struct UnwindingPayload;
+
+impl Drop for UnwindingPayload {
+    fn drop(&mut self) {
+        std::panic::resume_unwind(Box::new(
+            "the scripted lane's panic payload panics as it drops",
+        ));
+    }
 }
 
 impl std::fmt::Debug for ScriptedLane {
@@ -162,7 +203,11 @@ impl ScriptedLane {
                 refuses: None,
                 failing_releases: 0,
                 panicking_releases: false,
+                panicking_drop: false,
+                hanging_sends: false,
+                keystrokes_before_focus_lost: None,
                 screen: None,
+                tree: None,
             },
             log,
         )
@@ -185,10 +230,36 @@ impl ScriptedLane {
         self
     }
 
+    /// Which panics as it is dropped, as a lane's code can, with a payload whose own destructor
+    /// panics too: what a lane's owner must destroy under containment.
+    #[must_use]
+    pub fn panicking_on_drop(mut self) -> Self {
+        self.panicking_drop = true;
+        self
+    }
+
     /// Whose next `count` releases fail, each still counted in the log.
     #[must_use]
     pub fn failing_releases(mut self, count: usize) -> Self {
         self.failing_releases = count;
+        self
+    }
+
+    /// Whose every send times out, as a tool on the host that stops answering does: the event
+    /// may have reached the OS.
+    #[must_use]
+    pub fn hanging_sends(mut self) -> Self {
+        self.hanging_sends = true;
+        self
+    }
+
+    /// Typing text one keystroke per character, as a desktop lane types it, and losing the
+    /// window's focus after `keystrokes` of them: text cut part way, each keystroke typed said to
+    /// the run ([`Lane::send_counted`]). A text cut part way is not logged as sent, since it did
+    /// not go out whole; a hanging send answers before any keystroke.
+    #[must_use]
+    pub fn losing_focus_after_keystrokes(mut self, keystrokes: usize) -> Self {
+        self.keystrokes_before_focus_lost = Some(keystrokes);
         self
     }
 
@@ -197,6 +268,14 @@ impl ScriptedLane {
     #[must_use]
     pub fn refusing(mut self, capability: impl Into<String>) -> Self {
         self.refuses = Some(capability.into());
+        self
+    }
+
+    /// Reading the OS tree through `api`, each read answered by `read` from the app's tree the
+    /// driver hands it ([`Lane::read_tree`]).
+    #[must_use]
+    pub fn reading_tree(mut self, api: AccessibilityApi, read: TreeRead) -> Self {
+        self.tree = Some((api, read));
         self
     }
 
@@ -212,6 +291,32 @@ impl ScriptedLane {
     pub fn foreign_input_after(mut self, events: usize, description: impl Into<String>) -> Self {
         self.guard = Some(self.make_guard(Some((events, description.into()))));
         self
+    }
+
+    /// Whether the scripted OS answers a send of `event` at all: a composition is refused, as
+    /// `capabilities` says, and every send times out with `hanging_sends`.
+    fn answers(&self, event: &OsEvent) -> Result<()> {
+        if matches!(event, OsEvent::Composition(_)) {
+            return Err(crate::lane::no_composition(self.name()));
+        }
+        if self.hanging_sends {
+            return Err(Error::Timeout {
+                awaited: crate::error::Awaited::Host,
+                effect: Some(Effect::new(EffectKind::MayHaveRun)),
+                message: "the scripted OS did not answer the send".into(),
+                retry: Retry::Never,
+            });
+        }
+        Ok(())
+    }
+
+    /// Log `event` as sent whole.
+    fn log_sent(&self, event: &OsEvent) {
+        self.log
+            .sent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(event.clone());
     }
 
     fn make_guard(&self, after: Option<(usize, String)>) -> ScriptedGuard {
@@ -231,12 +336,27 @@ impl Lane for ScriptedLane {
     }
 
     fn capabilities(&self) -> LaneCapabilities {
-        LaneCapabilities::new(
+        let capabilities = LaneCapabilities::new(
             vec![PointerDevice::Mouse, PointerDevice::Touch],
             true,
             self.isolation,
             PositionFidelity::Exact,
-        )
+        );
+        match &self.tree {
+            Some((api, _)) => capabilities.accessibility(*api),
+            None => capabilities,
+        }
+    }
+
+    fn read_tree(&mut self, placement: &Placement, app: &Tree) -> Result<Tree> {
+        let _ = placement;
+        match self.tree.as_mut() {
+            Some((_, read)) => read(app),
+            None => Err(Error::not_supported(
+                "os_accessibility_tree",
+                "the scripted lane was given no tree to read",
+            )),
+        }
     }
 
     fn guard(&mut self) -> Option<&mut dyn ActivityGuard> {
@@ -265,16 +385,40 @@ impl Lane for ScriptedLane {
     }
 
     fn send(&mut self, event: &OsEvent) -> Result<()> {
-        // A scripted lane composes nothing, as `capabilities` says.
-        if matches!(event, OsEvent::Composition(_)) {
-            return Err(crate::lane::no_composition(self.name()));
-        }
-        self.log
-            .sent
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(event.clone());
+        self.answers(event)?;
+        self.log_sent(event);
         Ok(())
+    }
+
+    fn send_counted(&mut self, event: &OsEvent, delivered: &mut Delivered) -> Result<()> {
+        // Typed one keystroke per character: the OS answers before any keystroke, and one budget
+        // across the lane's events is spent where it is held.
+        if matches!(event, OsEvent::Text(_)) && self.keystrokes_before_focus_lost.is_some() {
+            self.answers(event)?;
+        }
+        if let (OsEvent::Text(text), Some(left)) =
+            (event, self.keystrokes_before_focus_lost.as_mut())
+        {
+            for _ in text.chars() {
+                delivered.send(&ActingInput, || {
+                    if *left == 0 {
+                        return Err(Error::NotForeground {
+                            message: "the scripted window lost the focus: the input is not sent \
+                                      there"
+                                .into(),
+                            retry: flui_protocol::error::ErrorCode::NotForeground.default_retry(),
+                        });
+                    }
+                    *left -= 1;
+                    Ok(())
+                })?;
+            }
+            self.log_sent(event);
+            return Ok(());
+        }
+        delivered
+            .send(event, || self.send(event))
+            .map_err(Error::from)
     }
 
     fn capture_window(&mut self, placement: &Placement) -> Result<Image> {

@@ -62,7 +62,7 @@ png = "0.18"
 # the Chrome lane records a fetched ChromeDriver's, and checks a kept one's
 # before it runs.
 sha2 = { workspace = true }
-# The Android lane, which runs on every host: the window `uiautomator dump` describes.
+# The Android lane, which runs on every host: the accessibility nodes `uiautomator dump` writes.
 roxmltree = { workspace = true }
 # The Chrome lane (`chrome`): the BiDi WebSocket to a ChromeDriver on the loopback, so the client
 # handshake alone and no TLS (the version `flui-cli`'s browser relay speaks); a screenshot's base64;
@@ -193,6 +193,8 @@ objc2-core-graphics = { workspace = true, features = [
 [dev-dependencies]
 flui-driver = { path = ".", features = ["chrome", "headless", "testing", "wayland"] }
 flui-foundation = { workspace = true }
+# `testing::ScriptedPipe` for the test of how a line is written to the app.
+flui-protocol = { workspace = true, features = ["serde", "schemars", "testing"] }
 # The platform a headless scenario follows the conventions of (`PlatformConvention`).
 flui-platform = { workspace = true }
 flui-view = { workspace = true }

@@ -85,6 +85,13 @@ impl ScriptedXcrun {
         self.rule(prefix.into(), Answer::Reply(reply), false)
     }
 
+    /// Answer the next command whose text starts with `prefix` with `reply`, ahead of every rule
+    /// [`Self::reply`] adds; the commands after it fall back to those.
+    #[must_use]
+    pub fn reply_once(self, prefix: impl Into<String>, reply: XcrunReply) -> Self {
+        self.rule(prefix.into(), Answer::Reply(reply), true)
+    }
+
     /// Let the next command starting with `prefix` outlive its deadline.
     #[must_use]
     pub fn timeout_once(self, prefix: impl Into<String>) -> Self {
@@ -157,6 +164,7 @@ impl Xcrun for ScriptedXcrun {
         };
         match rule.answer {
             Answer::Timeout => Err(Error::Timeout {
+                awaited: crate::error::Awaited::Host,
                 effect: Some(Effect::new(EffectKind::MayHaveRun)),
                 message: format!(
                     "`xcrun {text}` did not end within {} ms",

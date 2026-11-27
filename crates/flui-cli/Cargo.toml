@@ -170,6 +170,8 @@ flui-foundation = { path = "../flui-foundation" }
 flui-platform = { path = "../flui-platform" }
 # Goldens of the generated Android manifest and the scaffolded Gradle script.
 insta = { workspace = true }
+# `testing::ScriptedPipe` for the tests of what the served endpoints write.
+flui-protocol = { workspace = true, features = ["serde", "testing"] }
 
 # Consolidated integration-test binary (see `autotests = false` above).
 # All five suites drive the built `flui` binary in subprocesses via

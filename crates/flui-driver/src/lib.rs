@@ -34,8 +34,9 @@
 //!   guarded against the user's own input, isolated where it can be, and one session at a time on
 //!   a host ([`os_input`]).
 //! - **Failures** are typed ([`Error`]), one variant per wire code, and a check that could not be
-//!   made is `cannot_verify` in the [`Report`], never a pass.
+//!   made is `cannot_verify` in the [`Report`](protocol::report::Report), never a pass.
 
+mod client;
 mod compose;
 mod connection;
 pub mod coordinates;
@@ -47,7 +48,6 @@ mod launch;
 pub mod os_input;
 pub mod pixels;
 pub mod projection;
-pub mod report;
 pub mod scenario;
 pub mod steps;
 #[cfg(all(feature = "testing", any(unix, windows)))]
@@ -58,7 +58,7 @@ mod window;
 #[cfg(any(unix, windows))]
 pub use connection::socket::Endpoint;
 pub use driver::Driver;
-pub use error::{Error, Result};
+pub use error::{Awaited, Error, Result};
 pub use expect::{Expect, SoftExpect, expect, expect_soft};
 pub use flui_protocol::input::{InputPath, InputPolicy};
 pub use flui_protocol::locator::{Locator, Pick, StateFilter, TextMatch};
@@ -66,7 +66,6 @@ pub use flui_protocol::session::Isolation;
 pub use flui_protocol::wire::Role;
 pub use lane::Lane;
 pub use launch::{Artifact, Launch};
-pub use report::{Check, Outcome, Report, Verdict};
 pub use scenario::{Scenario, WindowSpec};
 pub use window::{Element, ElementLocator, Window};
 

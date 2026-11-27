@@ -43,6 +43,9 @@
 //!   and the [`FrameOutcome`](pump::FrameOutcome) the host paces from;
 //! - `reload` (with the `hot-reload` feature): the development reload tier a
 //!   UI runtime applies, translated from the host's hot-reload driver;
+//! - [`settledness`]: what keeps an application from being idle at one instant, the one list a
+//!   host's loop wakes for, a settle reads and the agent's settled waits are answered from
+//!   (ADR-0400 §3);
 //! - [`sink`]: the [`FrameSink`](sink::FrameSink) a frame is submitted
 //!   through, and the [`SubmitVerdict`](sink::SubmitVerdict) the UI runtime
 //!   classifies;
@@ -89,6 +92,7 @@ pub mod reload;
 pub mod renderer_binding;
 mod runtime_services;
 mod semantics_host;
+pub mod settledness;
 pub mod sink;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

@@ -120,7 +120,8 @@ impl ViewState<Notes> for NotesState {
     }
 }
 
-/// One node of each role the Windows lane's role table lists, named after its role.
+/// One node of each role the Windows lane's role table lists, named after its role and
+/// identified by it.
 #[derive(Clone, StatelessView)]
 pub struct Roles;
 
@@ -133,6 +134,7 @@ impl StatelessView for Roles {
                     Semantics::new()
                         .role(row.role)
                         .label(role_label(row.role))
+                        .identifier(role_identifier(row.role))
                         .child(SizedBox::new(40.0, 4.0))
                         .boxed()
                 })
@@ -171,4 +173,10 @@ impl StatelessView for Insets {
 /// The label of the [`Roles`] node of `role`.
 pub fn role_label(role: flui_driver::protocol::semantics::SemanticsRole) -> String {
     format!("{} fixture", role.name())
+}
+
+/// The identifier of the [`Roles`] node of `role`: what a lane that matches the OS tree to the
+/// app's carries over to the node it matched.
+pub fn role_identifier(role: flui_driver::protocol::semantics::SemanticsRole) -> String {
+    format!("role.{}", role.name())
 }

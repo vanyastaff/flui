@@ -390,6 +390,7 @@ impl Xcrun for HostXcrun {
                 tool::Failure::Start(error) => self.started(&error),
                 tool::Failure::Io(error) => Error::Io(error),
                 tool::Failure::Timeout => Error::Timeout {
+                    awaited: crate::error::Awaited::Host,
                     effect: Some(Effect::new(EffectKind::MayHaveRun).detail(format!(
                         "`xcrun {command}` was ended after {} ms; the Simulator may have done it",
                         timeout.as_millis()

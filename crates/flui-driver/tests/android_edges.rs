@@ -4,7 +4,9 @@
 use std::time::{Duration, Instant};
 
 use flui_driver::coordinates::DevicePoint;
-use flui_driver::lane::android::adb::{AdbCommand, AdbReply, Framing, Printed, Splitter};
+use flui_driver::lane::android::adb::{
+    AdbCommand, AdbReply, Framing, Printed, RunFailure, Splitter,
+};
 use flui_driver::lane::android::device;
 use flui_driver::lane::android::getevent::{self, Line, Watch};
 use flui_driver::lane::android::guard::GeteventGuard;
@@ -21,11 +23,11 @@ use flui_driver::lane::{self, ActivityGuard, Lane as _};
 use flui_driver::protocol::input::{PointerButton, PointerDevice};
 use flui_driver::steps::OsEvent;
 use flui_driver::testing::ScriptedAdb;
-use flui_driver::{Error, Isolation};
+use flui_driver::{Awaited, Error, Isolation};
 
 use crate::android_lane::{
-    FOCUSED, GETEVENT, PACKAGE, PROBED, USAGE, WINDOW, abilities, answer_syncs, capability,
-    connected, inputs, png_of, raw_capture, scripted, scripted_with, tap,
+    FOCUSED, GETEVENT, PACKAGE, PROBED, USAGE, WINDOWS, abilities, answer_syncs, capability,
+    connected, focus_of, inputs, placement, png_of, raw_capture, scripted, scripted_with, tap,
 };
 
 const AT: DevicePoint = DevicePoint::new(300, 600);
@@ -249,27 +251,29 @@ fn the_dump_is_bounded_in_size_depth_and_rotation_and_reads_no_dtd() {
 }
 
 #[test]
-fn the_surface_is_matched_within_its_tolerance_and_each_package_named_once() {
-    let dump = UiDump::parse(
-        "<hierarchy rotation=\"0\">\
-         <node package=\"a\" bounds=\"[0,0][100,50]\"/>\
-         <node package=\"a\" bounds=\"[0,0][10,10]\"/>\
-         <node package=\"b\" bounds=\"[0,0][1,1]\"/></hierarchy>",
-    )
-    .expect("a dump");
-    assert_eq!(dump.packages(), vec!["a", "b"]);
-    let surface = |size: (f64, f64), tolerance: f64| dump.surface_of("a", size, tolerance);
-    assert!(surface((100.0, 50.0), 0.0).is_some(), "an exact size");
-    assert!(
-        surface((102.0, 50.0), 2.0).is_some(),
-        "the tolerance itself"
-    );
-    assert!(
-        surface((100.0, 52.0), 2.0).is_some(),
-        "the tolerance itself, in height"
-    );
-    assert!(surface((102.5, 50.0), 2.0).is_none());
-    assert!(surface((100.0, 52.5), 2.0).is_none());
+fn the_window_is_matched_within_its_tolerance() {
+    let adb = scripted(true, true);
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    let window: flui_driver::protocol::tree::WindowId = "w1".parse().expect("a window");
+    // The fixture's window is 1080 by 2340 pixels.
+    for (width, height, found) in [
+        (1080.0, 2340.0, true),
+        (1082.0, 2340.0, true),
+        (1080.0, 2338.0, true),
+        (1082.5, 2340.0, false),
+        (1080.0, 2342.5, false),
+    ] {
+        let placement = flui_driver::protocol::session::Placement::new(
+            window,
+            flui_driver::protocol::geometry::LogicalSize::new(width, height),
+            1.0,
+        );
+        assert_eq!(
+            lane.locate_window(&placement).is_ok(),
+            found,
+            "{width} x {height}"
+        );
+    }
 }
 
 #[test]
@@ -398,6 +402,51 @@ fn the_guard_waits_for_getevent_to_name_a_device_and_stops_with_it() {
     }
 }
 
+/// A slow scripted command answers once it has run, within its deadline; past it, it is ended at
+/// the deadline and times out with a `may_have_run` effect, as the host's `adb` does.
+#[test]
+fn a_slow_scripted_command_answers_within_its_deadline_and_times_out_past_it() {
+    let adb = ScriptedAdb::new()
+        .reply_once_after(
+            "shell slow",
+            AdbReply::new(0, "done"),
+            Duration::from_secs(5),
+        )
+        .reply_once_after(
+            "shell quick",
+            AdbReply::new(0, "done"),
+            Duration::from_millis(20),
+        );
+    let mut device = adb.device();
+    let started = Instant::now();
+    let refused = device
+        .run(
+            &AdbCommand::Shell("slow".to_owned()),
+            64,
+            Duration::from_millis(50),
+        )
+        .expect_err("the command outlives its deadline");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the deadline ends the command, not the device"
+    );
+    match &refused {
+        RunFailure::Unanswered(Error::Timeout { effect, .. }) => assert_eq!(
+            effect.as_ref().map(|effect| effect.kind),
+            Some(flui_driver::protocol::act::EffectKind::MayHaveRun)
+        ),
+        other => panic!("{other:?}"),
+    }
+    let reply = device
+        .run(
+            &AdbCommand::Shell("quick".to_owned()),
+            64,
+            Duration::from_secs(5),
+        )
+        .expect("the command answers within its deadline");
+    assert_eq!(reply.text(), "done");
+}
+
 #[test]
 fn a_guard_that_hears_no_device_within_its_wait_cannot_arm() {
     let adb = ScriptedAdb::new().stream("shell -tt getevent", Vec::new(), None);
@@ -448,18 +497,22 @@ fn device_output_at_its_edges() {
     assert!(device::check_component(&name(255), "id").is_ok());
     assert!(device::check_component(&name(256), "id").is_err());
     assert_eq!(device::INPUT_USAGE, "input help 2>&1");
+    assert_eq!(focus_of("  mCurrentFocus=Window{1 u0 }\n"), None);
     assert_eq!(
-        device::FOCUS,
-        "dumpsys window windows | grep -m1 'mCurrentFocus='"
-    );
-    assert_eq!(device::parse_focus("  mCurrentFocus=Window{1 u0 }\n"), None);
-    assert_eq!(
-        device::parse_focus("  mCurrentFocus=Window{9e u0 Application Error: x}\n").as_deref(),
+        focus_of("  mCurrentFocus=Window{9e u0 Application Error: x}\n")
+            .map(|focus| focus.title)
+            .as_deref(),
         Some("Application Error: x"),
         "a title with spaces is read whole"
     );
     assert_eq!(
-        device::parse_focus(FOCUSED).as_deref(),
+        focus_of("  mCurrentFocus=Window{4f u0 a/.B} 0x1\n")
+            .map(|focus| (focus.hash.to_string(), focus.title)),
+        Some(("4f".to_owned(), "a/.B".to_owned())),
+        "what follows the window's name is not its title"
+    );
+    assert_eq!(
+        focus_of(FOCUSED).map(|focus| focus.title).as_deref(),
         Some("dev.flui.scenario/android.app.NativeActivity")
     );
 }
@@ -1135,7 +1188,9 @@ fn a_late_answer_to_an_earlier_sync_does_not_answer_the_next() {
     let failed = lane
         .send(&tap(PointerDevice::Pen, AT)[0])
         .expect_err("no answer to the second sync");
-    assert!(matches!(failed, Error::Lane { .. }), "{failed}");
+    // The pen's report was written and never confirmed: it may have been injected.
+    assert!(matches!(failed, Error::Timeout { .. }), "{failed}");
+    assert!(failed.may_have_run(), "{failed}");
 }
 
 #[test]
@@ -1153,12 +1208,93 @@ fn a_probe_whose_command_ends_at_once_finds_no_uinput() {
     );
 }
 
+/// A subscriber whose every error event panics, as a log subscriber the driver does not own may.
+struct PanickingOnErrors;
+
+impl tracing::Subscriber for PanickingOnErrors {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() == tracing::Level::ERROR
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, _: &tracing::Event<'_>) {
+        panic!("the subscriber panics on an error event");
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+/// A panic of the `Adb` (a binding the driver does not own) at one step of the lane's end leaves
+/// the steps after it to run, and the destructors after it (the guard's and the pen's streams,
+/// then the device) panicking too are competing failures; the log of the first panic, whose
+/// subscriber panics, is contained as well. Nothing aborts, everything is destroyed under
+/// containment, and the lane's end raises nothing to its caller, which has no one to raise it to.
+#[test]
+fn a_panic_at_one_step_of_the_lanes_end_leaves_the_others_to_run() {
+    // A device in someone's hands, so the lane watches it through a guard's stream.
+    let adb = scripted(false, true)
+        .reply("shell 'am'", AdbReply::new(0, ""))
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .reply_once(
+            "forward --no-rebind",
+            AdbReply::new(0, "x".repeat(70 * 1024)),
+        )
+        .unwind_once("shell rm -f");
+    let app = AndroidApp::try_new(PACKAGE, "a.B").expect("an app");
+    let mut lane =
+        AndroidLane::connect(adb.device_unwinding_on_drop(), PACKAGE).expect("the lane connects");
+    lane.locate_window(&placement())
+        .expect("the window is found");
+    assert!(lane.start(&app).is_err(), "the forward's answer was lost");
+    let empty = flui_driver::protocol::tree::Tree::new(Vec::new(), false);
+    let _ = lane.read_tree(&placement(), &empty);
+    // The pen comes into range, so its device's stream is open.
+    let pen = tap(PointerDevice::Pen, AT);
+    lane.check(&pen).expect("a pen");
+    lane.send(&pen[0]).expect("the pen enters");
+    adb.unwind_streams_on_drop("shell -tt getevent");
+    adb.unwind_streams_on_drop("shell uinput -");
+    tracing::subscriber::with_default(PanickingOnErrors, || drop(lane));
+    assert_eq!(adb.commands("shell rm -f").len(), 1);
+    assert_eq!(
+        adb.commands("forward --remove").len(),
+        1,
+        "the forward is removed after the panic"
+    );
+    let log = adb.log();
+    let at = |line: &str| {
+        log.iter()
+            .rposition(|logged| logged.starts_with(line))
+            .unwrap_or_else(|| panic!("{line} is logged: {log:?}"))
+    };
+    let device = at("the device's binding unwound");
+    assert!(
+        at("shell -tt getevent -l ended") < device,
+        "the guard's stream first"
+    );
+    assert!(
+        at("shell uinput - ended") < device,
+        "the pen's stream first"
+    );
+}
+
 #[test]
 fn a_lane_that_started_no_app_stops_nothing_when_it_ends() {
     let adb = scripted(true, true);
     drop(connected(&adb));
     assert_eq!(adb.commands("shell 'am'"), Vec::<String>::new());
     assert_eq!(adb.commands("forward"), Vec::<String>::new());
+    // A lane that never read the tree left no dump to remove.
+    assert_eq!(adb.commands("shell rm -f"), Vec::<String>::new());
     // A forward `adb` refused for another reason is no rule of the lane's: nothing is removed, and
     // the app it started is still stopped.
     let adb = scripted(true, true)
@@ -1182,13 +1318,44 @@ fn a_lane_that_started_no_app_stops_nothing_when_it_ends() {
         .reply("forward --remove", AdbReply::new(0, ""))
         .timeout_once("forward --no-rebind");
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
-    assert!(matches!(lane.start(&app), Err(Error::Timeout { .. })));
+    assert!(matches!(
+        lane.start(&app),
+        Err(Error::Timeout {
+            awaited: Awaited::Host,
+            ..
+        })
+    ));
     let local = local_spec(&adb.commands("forward --no-rebind")[0]);
     drop(lane);
     assert_eq!(
         adb.commands("forward --remove"),
         vec![format!("forward --remove {local}")]
     );
+    // A forward whose answer was lost otherwise (more output than its bound) may have been made
+    // too; one whose `adb` never started was not.
+    let adb = scripted(true, true)
+        .reply("shell 'am'", AdbReply::new(0, ""))
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .reply_once(
+            "forward --no-rebind",
+            AdbReply::new(0, "x".repeat(70 * 1024)),
+        );
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    assert!(lane.start(&app).is_err());
+    let local = local_spec(&adb.commands("forward --no-rebind")[0]);
+    drop(lane);
+    assert_eq!(
+        adb.commands("forward --remove"),
+        vec![format!("forward --remove {local}")]
+    );
+    let adb = scripted(true, true)
+        .reply("shell 'am'", AdbReply::new(0, ""))
+        .reply("forward --remove", AdbReply::new(0, ""))
+        .not_started_once("forward --no-rebind");
+    let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
+    assert!(lane.start(&app).is_err());
+    drop(lane);
+    assert_eq!(adb.commands("forward --remove"), Vec::<String>::new());
 }
 
 /// The local spec (`tcp:N`) of a logged `forward --no-rebind tcp:N localabstract:…`.
@@ -1254,12 +1421,17 @@ fn a_forward_never_takes_over_another_sessions_port() {
 
 #[test]
 fn a_rotated_display_turns_the_gesture_edges_with_it() {
-    let turned = WINDOW
-        .replace("rotation=\"0\"", "rotation=\"1\"")
-        .replace("[0,0][1080,2400]", "[0,0][2400,1080]")
-        .replace("[0,60][1080,2400]", "[0,0][2340,1080]")
-        .replace("[0,60][1080,2399]", "[0,0][2340,1079]");
-    let adb = scripted(true, true).reply_once("exec-out uiautomator", AdbReply::new(0, turned));
+    let turned = WINDOWS
+        .replace("mRotation=0", "mRotation=1")
+        .replace("frame=[0,60][1080,2400]", "frame=[0,0][2340,1080]");
+    assert_ne!(turned, WINDOWS);
+    // Turned when the lane locates the window and still when it checks the press.
+    let adb = scripted(true, true)
+        .reply_once(
+            "shell dumpsys window -a |",
+            AdbReply::new(0, turned.clone()),
+        )
+        .reply_once("shell dumpsys window -a |", AdbReply::new(0, turned));
     let mut lane = AndroidLane::connect(adb.device(), PACKAGE).expect("connects");
     let window: flui_driver::protocol::tree::WindowId = "w1".parse().expect("a window");
     let placement = flui_driver::protocol::session::Placement::new(

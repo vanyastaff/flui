@@ -18,6 +18,7 @@ pub(crate) mod launch;
 pub(crate) mod relay;
 mod socket;
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::time::{Duration, Instant};
 
@@ -25,6 +26,11 @@ use flui_protocol::launch::{PAGE_EXPORT_VERSION, PAGE_LAUNCH_GLOBAL};
 
 /// How long the browser has to answer one command of the link.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the browser has to answer a command the relay makes for its own upkeep (an abandon,
+/// the release of a late answer's page object) while no client waits on it: the relay's one
+/// thread serves no client while it waits.
+const HOUSEKEEPING_TIMEOUT: Duration = Duration::from_millis(300);
 
 /// The global a page's app defines its agent's export as: the endpoint its launch names.
 pub(crate) const PAGE_EXPORT: &str = "__flui_agent";
@@ -113,12 +119,18 @@ pub(crate) trait BrowserLink: Send {
     /// Calls `function`, a function declaration, in the tab's document with `args` and, last, a
     /// function that reports the string it is given as a [`LinkEvent::Report`]. Awaits the
     /// promise it returns, if it returns one, and keeps what it gives in the page: `None` when
-    /// that is `null` or `undefined`.
+    /// that is `null` or `undefined`. Waits for the answer no later than `deadline`.
     ///
     /// # Errors
     ///
-    /// [`LinkError::Threw`] when it throws or its promise rejects.
-    fn call(&mut self, function: &str, args: &[&str]) -> Result<Option<Remote>, LinkError>;
+    /// [`LinkError::Threw`] when it throws or its promise rejects, [`LinkError::Timeout`] once
+    /// `deadline` passes unanswered.
+    fn call(
+        &mut self,
+        function: &str,
+        args: &[&str],
+        deadline: Instant,
+    ) -> Result<Option<Remote>, LinkError>;
 
     /// Calls `function` with `remote` as `this` and `args`, awaiting the promise it returns.
     ///
@@ -130,7 +142,9 @@ pub(crate) trait BrowserLink: Send {
     /// Lets the page drop `remote`. A failure only leaves it to the document's end.
     fn release(&mut self, remote: Remote);
 
-    /// The tab's next event, waiting no later than `deadline`; `None` once it has passed.
+    /// The tab's next event, waiting no later than `deadline`; `None` once it has passed. What
+    /// late answers hold in the page is released first, as far as `deadline` allows
+    /// ([`release_late`]).
     ///
     /// # Errors
     ///
@@ -154,13 +168,26 @@ pub(crate) fn preload(values: &[(&str, &str)]) -> String {
     )
 }
 
+/// The page's record of the relay's connections, made on first use: the connections open, by
+/// the relay's ID, and the IDs the relay abandoned ([`ABANDON_FUNCTION`]). An expression every
+/// function below reads it through; it lives as long as the document.
+macro_rules! relay_record {
+    () => {
+        "(globalThis[Symbol.for('flui.agent.relay')] ??= { open: new Map(), abandoned: new Set() })"
+    };
+}
+
 /// Connects to the page's export: called with the export's name, the connection's ID and the
-/// report function. `null` while the page defines no export yet; it throws when the export
-/// refuses the connection or speaks another version. Every line of the connection is reported
-/// as `[id, line]`, and its end as `[id, null]`.
+/// report function. `null` while the page defines no export yet, and for an ID the relay
+/// abandoned; it throws when the export refuses the connection or speaks another version. Every
+/// line of the connection is reported as `[id, line]`, and its end as `[id, null]`.
 pub(crate) fn connect_function() -> String {
     format!(
         "(name, id, report) => {{
+            const relay = {relay};
+            if (relay.abandoned.has(id)) {{
+                return null;
+            }}
             const page = globalThis[name];
             if (page === undefined || page === null || typeof page.connect !== 'function') {{
                 return null;
@@ -169,16 +196,87 @@ pub(crate) fn connect_function() -> String {
                 throw new Error(`the page's agent speaks version ${{page.version}} of its export, \
                                  not {PAGE_EXPORT_VERSION}`);
             }}
-            return page.connect((line) => report(JSON.stringify([id, line])));
-        }}"
+            // A connection the page ends during `connect` reports its end, which deletes its
+            // entry, before the entry is set: it is then never set.
+            let ended = false;
+            const connection = page.connect((line) => {{
+                if (line === null) {{
+                    ended = true;
+                    relay.open.delete(id);
+                }}
+                report(JSON.stringify([id, line]));
+            }});
+            if (!ended) {{
+                relay.open.set(id, connection);
+            }}
+            return connection;
+        }}",
+        relay = relay_record!(),
     )
 }
 
 /// Sends its argument on the connection it is called on.
 pub(crate) const SEND_FUNCTION: &str = "function (line) { this.send(line); }";
 
-/// Ends the connection it is called on.
-pub(crate) const CLOSE_FUNCTION: &str = "function () { this.close(); }";
+/// Ends the connection it is called on, given the connection's ID. Closing a connection the page
+/// already ended does nothing.
+pub(crate) const CLOSE_FUNCTION: &str = concat!(
+    "function (id) { ",
+    relay_record!(),
+    ".open.delete(id); this.close(); }"
+);
+
+/// Abandons the connections whose IDs it is given, as a JSON array of strings, for connect calls
+/// the page did not answer in time: the page may still run them. Every ID is marked abandoned
+/// first, so no call that has not run yet opens a connection, and then each connection a call
+/// opened is closed, each close caught on its own so that one that throws skips none of the
+/// rest. A close that throws has still ended its connection in the export, which marks it closed
+/// before it tells the application, so every ID is settled when the function returns; it then
+/// throws, naming the IDs whose close threw. Called as [`connect_function`] is, so a report
+/// function follows the IDs; it takes none.
+pub(crate) const ABANDON_FUNCTION: &str = concat!(
+    "(ids) => { const relay = ",
+    relay_record!(),
+    "; const owed = JSON.parse(ids); for (const id of owed) { relay.abandoned.add(id); } \
+     const threw = []; for (const id of owed) { const connection = relay.open.get(id); \
+     relay.open.delete(id); if (connection !== undefined) { try { connection.close(); } \
+     catch (error) { threw.push(id); } } } \
+     if (threw.length > 0) { throw new Error(`closing ${threw.join(', ')} threw`); } }"
+);
+
+/// The page object a command's answer holds, at `field` of its result's value (`objectId` in
+/// the DevTools protocol, `handle` in WebDriver BiDi): what a link releases of an answer that
+/// came after its command timed out, which nothing else holds.
+fn held_by(answer: &serde_json::Value, field: &str) -> Option<Remote> {
+    answer
+        .pointer(&format!("/result/result/{field}"))
+        .and_then(serde_json::Value::as_str)
+        .map(|held| Remote(held.to_owned()))
+}
+
+/// Releases through `release` the page objects `late` answers hold at `field`, oldest first, as
+/// far as `deadline` allows: an answer that holds nothing is dropped, and one whose release does
+/// not fit before `deadline`, or times out, stays at the front of `late` for the next call.
+fn release_late(
+    late: &mut VecDeque<serde_json::Value>,
+    field: &str,
+    deadline: Instant,
+    mut release: impl FnMut(Remote, Instant) -> Result<(), LinkError>,
+) {
+    while let Some(answer) = late.pop_front() {
+        let Some(remote) = held_by(&answer, field) else {
+            continue;
+        };
+        if Instant::now() >= deadline {
+            late.push_front(answer);
+            return;
+        }
+        if let Err(LinkError::Timeout) = release(remote, deadline) {
+            late.push_front(answer);
+            return;
+        }
+    }
+}
 
 /// What a report of [`connect_function`]'s says: the connection's ID and the line, or `None`
 /// when the app ended the connection. `None` for a report it did not make.

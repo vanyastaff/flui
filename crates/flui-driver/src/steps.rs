@@ -1,38 +1,28 @@
-//! What an OS lane sends: an action sequence turned into device-pixel events, one at a time, with
-//! every pointer move a single step to its destination followed by an explicit pause
-//! (ADR-0238 §11).
+//! What an OS lane sends: an action sequence's plan ([`flui_protocol::input::plan`]) turned into
+//! device-pixel events, one at a time, with every pointer move a single step to its destination
+//! followed by an explicit pause (ADR-0238 §11, ADR-0400 §2). The runtime's agent plays the same
+//! plan for `input.inject` and the gestures it answers, lowered into the events its window takes.
 //!
 //! A lane never interpolates, and the OS or browser is never left to: Chrome interpolates a
-//! multi-step move, which made recordings differ between runs. A move that lasts (`duration_ms`)
-//! is split here into single steps, one per [`STEP`] of its duration, each followed by a pause of
-//! its share, so the path is the driver's and the same on every run.
+//! multi-step move, which made recordings differ between runs. The plan splits a move that lasts
+//! (`duration_ms`) into single steps, one per [`STEP`](flui_protocol::input::STEP) of its duration, each at the whole
+//! millisecond it is due in, so the path is the driver's and the same on every run.
 //!
-//! The sources of a tick move together, each at its own speed: within one tick, the presses,
-//! releases, keys and text come first, in the order the sources are listed, and then the moves
-//! share one timeline. Each is split by its own duration, and the steps due within one
-//! millisecond go out together before the pause to the next, so two contacts of a pinch spread at
-//! once rather than one after the other, a jump stays a jump beside a stroke, and a short stroke
-//! is not slowed to a long one's pace, as on the synthetic path. Every pause is whole
-//! milliseconds, none shorter than one, which an OS timer can wait; a tick lasts exactly as long
-//! as its longest move or pause.
+//! The events go out in the plan's order, and the time between two instants is an explicit pause:
+//! so two contacts of a pinch spread at once rather than one after the other, a jump stays a jump
+//! beside a stroke, and a short stroke is not slowed to a long one's pace. Every pause is whole
+//! milliseconds, none shorter than one, which an OS timer can wait; the events end with the pause
+//! to the plan's end.
 
 use std::time::Duration;
 
-use flui_protocol::geometry::LogicalPoint;
 use flui_protocol::input::{
-    ActionSequence, ImeAction, InputSource, KeyAction, PointerAction, PointerButton, PointerDevice,
-    WheelAction,
+    ActionSequence, ImeAction, Plan, PlannedInput, PointerButton, PointerDevice, ScrollUnit,
+    SourceKind,
 };
 
 use crate::coordinates::{self, DevicePoint, WindowGeometry};
 use crate::error::{Error, Result};
-
-/// How long one step of a split move lasts, and the pause after a move that names no duration:
-/// one frame at 60 Hz, so the app's frames see each step.
-pub const STEP: Duration = Duration::from_millis(16);
-
-/// The most single steps one move is split into; a longer move takes longer steps.
-pub const MAX_STEPS: u32 = 1024;
 
 /// One event an OS lane sends.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,21 +78,14 @@ pub enum OsEvent {
     Pause(Duration),
 }
 
-/// A move one source makes in a tick, before it is split into steps.
-struct Stroke<'a> {
-    pointer: &'a str,
-    device: PointerDevice,
-    from: LogicalPoint,
-    to: LogicalPoint,
-    duration: Duration,
-}
-
-/// What one tick holds: the events that happen at once, the moves, and the longest pause.
-#[derive(Default)]
-struct Tick<'a> {
-    instant: Vec<OsEvent>,
-    strokes: Vec<Stroke<'a>>,
-    pause: Duration,
+impl OsEvent {
+    /// Whether the event acts on the app, so sending it again repeats what it did: a press, a
+    /// lift, a key, text, a scroll, a composition's step. A pointer's move and a pause do not:
+    /// a move puts the pointer where it already is when played again.
+    #[must_use]
+    pub fn acts(&self) -> bool {
+        !matches!(self, Self::PointerMove { .. } | Self::Pause(_))
+    }
 }
 
 /// The events an OS lane sends for `sequence` into the window `geometry` places: see the
@@ -110,192 +93,128 @@ struct Tick<'a> {
 ///
 /// # Errors
 ///
-/// As [`coordinates::to_device`] for a point outside the window; [`Error::NotSupported`] for a
-/// source no OS lane sends (a trackpad gesture, a pointer's cancel), naming it. Either is answered
-/// before any event is handed over. An input-method composition becomes its steps
-/// ([`OsEvent::Composition`]), one per tick, which only a lane that composes takes.
+/// [`Error::InvalidArgument`] for a sequence the plan refuses (its bounds and ranges);
+/// [`Error::NotSupported`] for input no OS lane sends (a trackpad gesture, a pointer's cancel, a
+/// virtual pointer, a scroll by lines), naming it; as
+/// [`coordinates::to_device`] for a point outside the window. Each is answered before any event is
+/// handed over. An input-method composition becomes its steps ([`OsEvent::Composition`]), one
+/// per tick, which only a lane that composes takes.
 pub fn os_events(sequence: &ActionSequence, geometry: &WindowGeometry) -> Result<Vec<OsEvent>> {
-    let mut states: Vec<SourceState> = sequence
-        .sources
-        .iter()
-        .map(|_| SourceState::default())
-        .collect();
+    events_of(&admit(sequence)?, geometry)
+}
+
+/// A sequence's plan that an OS lane can send: only [`admit`] makes one.
+pub(crate) struct Admitted(Plan);
+
+/// `sequence`'s plan, refused for everything no OS lane sends. It needs no window, so the OS
+/// path asks it before the desktop is locked or the window located.
+///
+/// # Errors
+///
+/// [`Error::InvalidArgument`] for a sequence the plan refuses (its bounds and ranges);
+/// [`Error::NotSupported`] for input no OS lane sends (a trackpad gesture, a pointer's cancel, a
+/// virtual pointer, a scroll by lines), naming it.
+pub(crate) fn admit(sequence: &ActionSequence) -> Result<Admitted> {
+    let plan = flui_protocol::input::plan(sequence)
+        .map_err(|error| Error::invalid_argument(error.to_string()))?;
+    for source in plan.sources() {
+        match source.kind {
+            SourceKind::Trackpad => return Err(unsent("trackpad_gesture")),
+            SourceKind::Pointer(PointerDevice::Virtual) => return Err(unsent("virtual_pointer")),
+            _ => {}
+        }
+    }
+    for planned in plan.inputs() {
+        match &planned.input {
+            PlannedInput::PointerCancel { .. } => return Err(unsent("pointer_cancel")),
+            // An OS event scrolls by device pixels, and no lane knows the line height the app
+            // scrolls a line by: a line scroll goes the synthetic path, which the app sizes.
+            PlannedInput::Scroll { unit, .. } if *unit != ScrollUnit::Pixel => {
+                return Err(unsent(&format!("{}_scroll", unit.name())));
+            }
+            _ => {}
+        }
+    }
+    Ok(Admitted(plan))
+}
+
+/// The events of an admitted plan, into the window `geometry` places.
+pub(crate) fn events_of(admitted: &Admitted, geometry: &WindowGeometry) -> Result<Vec<OsEvent>> {
+    let Admitted(plan) = admitted;
+    let sources = plan.sources();
+    let mut states: Vec<SourceState> = sources.iter().map(|_| SourceState::default()).collect();
     let mut events = Vec::new();
-    for index in 0..sequence.ticks() {
-        let mut tick = Tick::default();
-        for (source, state) in sequence.sources.iter().zip(states.iter_mut()) {
-            source_tick(source, index, geometry, state, &mut tick)?;
+    let mut now = Duration::ZERO;
+    for planned in plan.inputs() {
+        if let Some(pause) = planned.at.checked_sub(now).filter(|pause| !pause.is_zero()) {
+            events.push(OsEvent::Pause(pause));
+            now = planned.at;
         }
-        tick.emit(geometry, &mut events)?;
-    }
-    Ok(events)
-}
-
-impl Tick<'_> {
-    /// The tick's events, in order: what happens at once, then the strokes' steps on one timeline,
-    /// each stroke split by its own duration, so it keeps its own speed. The steps due within one
-    /// millisecond go out together, in the order the sources are listed, then a pause until the
-    /// next millisecond a step is due in, or until the tick ends: at its longest stroke, its
-    /// longest pause, or one [`STEP`] after a stroke that names no duration.
-    fn emit(self, geometry: &WindowGeometry, events: &mut Vec<OsEvent>) -> Result<()> {
-        events.extend(self.instant);
-        // Every step of every stroke, at the whole millisecond it is due in from the tick's start:
-        // steps due within one millisecond go out together, so no pause is shorter than one, and
-        // each instant is counted from the tick's start, so the pauses add up to its length
-        // exactly. One stroke's steps are at least a millisecond apart, so none of them merge.
-        let mut steps: Vec<(Duration, usize, LogicalPoint)> = Vec::new();
-        let mut end = self.pause;
-        for (order, stroke) in self.strokes.iter().enumerate() {
-            let count = split(stroke.duration);
-            let share = stroke.duration.checked_div(count).unwrap_or(Duration::ZERO);
-            for step in 1..=count {
-                let fraction = f64::from(step) / f64::from(count);
-                let at = LogicalPoint::new(
-                    stroke.from.x + (stroke.to.x - stroke.from.x) * fraction,
-                    stroke.from.y + (stroke.to.y - stroke.from.y) * fraction,
-                );
-                steps.push((whole_millis(share.saturating_mul(step - 1)), order, at));
-            }
-            end = end.max(if stroke.duration.is_zero() {
-                STEP
-            } else {
-                stroke.duration
-            });
-        }
-        // By instant, then by source: a stable order on every run.
-        steps.sort_by_key(|&(due, order, _)| (due, order));
-        let mut now = Duration::ZERO;
-        for (index, &(due, order, at)) in steps.iter().enumerate() {
-            let stroke = &self.strokes[order];
-            events.push(OsEvent::PointerMove {
-                pointer: stroke.pointer.to_owned(),
-                device: stroke.device,
-                to: coordinates::to_device(geometry, at)?,
-            });
-            now = due;
-            let next = steps.get(index + 1).map_or(end, |&(next, ..)| next);
-            let gap = next.saturating_sub(now);
-            if !gap.is_zero() {
-                events.push(OsEvent::Pause(gap));
-                now = next;
-            }
-        }
-        let rest = end.saturating_sub(now);
-        if !rest.is_zero() {
-            events.push(OsEvent::Pause(rest));
-        }
-        Ok(())
-    }
-}
-
-fn source_tick<'a>(
-    source: &'a InputSource,
-    index: usize,
-    geometry: &WindowGeometry,
-    state: &mut SourceState,
-    tick: &mut Tick<'a>,
-) -> Result<()> {
-    let position = &mut state.position;
-    let wait = |tick: &mut Tick<'a>, duration_ms: u64| {
-        tick.pause = tick.pause.max(Duration::from_millis(duration_ms));
-    };
-    match source {
-        InputSource::Pointer {
-            id,
-            device,
-            actions,
-        } => match actions.get(index) {
-            Some(PointerAction::Move {
-                to, duration_ms, ..
-            }) => {
-                tick.strokes.push(Stroke {
-                    pointer: id,
-                    device: *device,
-                    from: position.unwrap_or(*to),
-                    to: *to,
-                    duration: Duration::from_millis(*duration_ms),
-                });
-                *position = Some(*to);
-            }
-            Some(PointerAction::Down { button, .. }) => tick.instant.push(OsEvent::PointerDown {
-                pointer: id.clone(),
-                device: *device,
+        let source = &sources[planned.source];
+        let pointer = || source.id.clone().unwrap_or_default();
+        let device = match source.kind {
+            SourceKind::Pointer(device) => device,
+            _ => PointerDevice::Mouse,
+        };
+        let event = match &planned.input {
+            PlannedInput::PointerMove { to, .. } => Some(OsEvent::PointerMove {
+                pointer: pointer(),
+                device,
+                to: coordinates::to_device(geometry, *to)?,
+            }),
+            PlannedInput::PointerDown { button, .. } => Some(OsEvent::PointerDown {
+                pointer: pointer(),
+                device,
                 button: *button,
             }),
-            Some(PointerAction::Up { button }) => tick.instant.push(OsEvent::PointerUp {
-                pointer: id.clone(),
-                device: *device,
+            PlannedInput::PointerUp { button, .. } => Some(OsEvent::PointerUp {
+                pointer: pointer(),
+                device,
                 button: *button,
             }),
-            Some(PointerAction::Pause { duration_ms }) => wait(tick, *duration_ms),
-            Some(PointerAction::Cancel) => return Err(unsent("pointer_cancel")),
-            Some(_) => return Err(unsent("pointer_action")),
-            None => {}
-        },
-        InputSource::Wheel { actions, .. } => match actions.get(index) {
-            Some(WheelAction::Scroll {
+            PlannedInput::PointerCancel { .. } => {
+                unreachable!("BUG: `admit` refuses a pointer's cancel")
+            }
+            PlannedInput::Scroll {
                 at,
                 delta_x,
                 delta_y,
-                ..
-            }) => {
+                unit: _,
+            } => {
+                // `admit` refused a scroll by lines: this one is in logical pixels.
                 let at = coordinates::to_device(geometry, *at)?;
+                let state = &mut states[planned.source];
                 let (asked_x, asked_y) = &mut state.scrolled;
                 let (sent_x, sent_y) = &mut state.sent;
                 let delta_x = SourceState::delta(asked_x, sent_x, *delta_x, geometry.scale)?;
                 let delta_y = SourceState::delta(asked_y, sent_y, *delta_y, geometry.scale)?;
                 // A scroll that adds up to no whole pixel yet is carried, not sent.
-                if delta_x != 0 || delta_y != 0 {
-                    tick.instant.push(OsEvent::Scroll {
-                        at,
-                        delta_x,
-                        delta_y,
-                    });
-                }
+                (delta_x != 0 || delta_y != 0).then_some(OsEvent::Scroll {
+                    at,
+                    delta_x,
+                    delta_y,
+                })
             }
-            Some(WheelAction::Pause { duration_ms }) => wait(tick, *duration_ms),
-            _ => {}
-        },
-        InputSource::Keys { actions, .. } => match actions.get(index) {
-            Some(KeyAction::Down { key }) => tick.instant.push(OsEvent::KeyDown(key.clone())),
-            Some(KeyAction::Up { key }) => tick.instant.push(OsEvent::KeyUp(key.clone())),
-            Some(KeyAction::Pause { duration_ms }) => wait(tick, *duration_ms),
-            _ => {}
-        },
-        InputSource::Text { text } => {
-            if index == 0 {
-                tick.instant.push(OsEvent::Text(text.clone()));
-            }
-        }
-        InputSource::Ime { actions } => {
-            if let Some(action) = actions.get(index) {
-                tick.instant.push(OsEvent::Composition(action.clone()));
-            }
-        }
-        InputSource::Trackpad { .. } => return Err(unsent("trackpad_gesture")),
-        _ => return Err(unsent("input_source")),
+            PlannedInput::KeyDown(key) => Some(OsEvent::KeyDown(key.clone())),
+            PlannedInput::KeyUp(key) => Some(OsEvent::KeyUp(key.clone())),
+            PlannedInput::Text(text) => Some(OsEvent::Text(text.clone())),
+            PlannedInput::Ime(action) => Some(OsEvent::Composition(action.clone())),
+            _ => return Err(unsent("input")),
+        };
+        events.extend(event);
     }
-    Ok(())
+    let rest = plan.span().saturating_sub(now);
+    if !rest.is_zero() {
+        events.push(OsEvent::Pause(rest));
+    }
+    Ok(events)
 }
 
-/// `instant` cut to the whole millisecond it falls in.
-fn whole_millis(instant: Duration) -> Duration {
-    Duration::new(instant.as_secs(), instant.subsec_millis() * 1_000_000)
-}
-
-/// How many single steps a move of `duration` takes: one per [`STEP`], at least one, at most
-/// [`MAX_STEPS`].
-fn split(duration: Duration) -> u32 {
-    let steps = duration.as_millis().div_ceil(STEP.as_millis()).max(1);
-    u32::try_from(steps).map_or(MAX_STEPS, |steps| steps.min(MAX_STEPS))
-}
-
-/// What one source has done so far: where its pointer is, and how far its wheel has turned in
+/// How far one wheel source has turned in
 /// device pixels, asked for and sent, so the part of a pixel one scroll leaves is carried into the
 /// next and small scrolls add up instead of each rounding to nothing.
 #[derive(Default)]
 struct SourceState {
-    position: Option<LogicalPoint>,
     scrolled: (f64, f64),
     sent: (i64, i64),
 }

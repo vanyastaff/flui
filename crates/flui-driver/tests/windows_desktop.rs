@@ -28,21 +28,24 @@ use flui_driver::lane::windows::{
 use flui_driver::lane::{ActivityGuard, Lane};
 use flui_driver::os_input::OsDevice;
 use flui_driver::protocol::input::{DeviceClass, InputKind, PointerButton, PointerDevice};
+use flui_driver::protocol::report::Report;
+use flui_driver::protocol::verdict::Verdict;
 use flui_driver::protocol::wire::Role;
 use flui_driver::steps::OsEvent;
 use flui_driver::{
-    Driver, Error, InputPath, InputPolicy, Launch, Locator, Report, Scenario, Verdict, WindowSpec,
-    expect,
+    Driver, Error, InputPath, InputPolicy, Launch, Locator, Scenario, WindowSpec, expect,
 };
 
 use crate::private_desktop::{self, LiveDesktop};
 use crate::scenarios;
 
 /// The scenario app `app`, built from this crate's example in its debug profile, which carries
-/// the agent.
+/// the agent. A build queued behind the other tests' cargo locks fails the test as a timeout
+/// naming the build, well inside nextest's own limit.
 fn scenario_app(app: &str) -> Launch {
     Launch::cargo_example("scenario_app")
         .package("flui-driver")
+        .build_wait(Duration::from_secs(300))
         .env("FLUI_DRIVER_SCENARIO_APP", app)
         .connect_wait(Duration::from_secs(60))
 }
@@ -167,7 +170,7 @@ fn every_role_reads_back_as_its_control_type_through_ui_automation() {
         .to_have_count(1)
         .expect("the roles page shows");
     let mut report = Report::new();
-    report.run_scenario("roles", &mut driver, scenarios::roles);
+    driver.run_scenario(&mut report, "roles", scenarios::roles);
     assert_eq!(
         report.verdict(),
         Verdict::Pass,
@@ -431,9 +434,10 @@ fn a_launched_app_ends_with_its_session() {
     );
 }
 
-/// The LY99 conformance row: the scenario the headless target runs in CI
+/// The conformance scenario, which the headless target runs in CI
 /// (`scenarios::the_conformance_scenario_passes_on_the_headless_target`), here through the OS
-/// lane, as its certification run.
+/// lane, as its certification run. The run on the desktop that takes the user's input is owed
+/// by a quality row of `crates/flui-native/platform-parity.toml`.
 #[test]
 fn the_conformance_scenario_runs_through_the_os_lane() {
     let live = private_desktop::require();
@@ -459,7 +463,7 @@ fn the_conformance_scenario_runs_through_the_os_lane() {
         .expect("the window is the scenario's");
     assert_eq!(driver.input_policy(), InputPolicy::require(InputPath::Os));
     let mut report = Report::new();
-    report.run_scenario("conformance", &mut driver, scenarios::conformance);
+    driver.run_scenario(&mut report, "conformance", scenarios::conformance);
     assert_eq!(report.lane(), Some("windows"));
     assert!(
         !report.announcements().is_empty(),
@@ -477,8 +481,9 @@ fn the_conformance_scenario_runs_through_the_os_lane() {
     assert_eq!(report.verdict(), Verdict::Pass, "{report:#?}");
 }
 
-/// The certification runs of the device checks, through the OS lane: `cannot_verify` off the
-/// input desktop, and passing on it.
+/// The certification runs of the device checks, through the OS lane: passing on the input
+/// desktop; off it the scenarios that send OS input are `cannot_verify` without being launched,
+/// and the accessibility scenario, which sends none, still runs and passes.
 #[test]
 fn the_device_check_scenarios_run_through_the_os_lane() {
     let live = private_desktop::require();
@@ -523,6 +528,14 @@ fn the_device_check_scenarios_run_through_the_os_lane() {
     ];
     let on_input_desktop = input_desktop_for("the_device_check_scenarios_run_through_the_os_lane");
     for (name, app, scenario, devices, sends_input) in rows {
+        // Off the input desktop a scenario that sends OS input is `cannot_verify` before it
+        // starts: the lane refuses its first event, as the conformance scenario's run above shows
+        // naming the lane. Launching its app anyway buys no evidence and costs a build and a
+        // window per row.
+        if sends_input && !on_input_desktop {
+            eprintln!("CANNOT_VERIFY {name}: it sends OS input");
+            continue;
+        }
         let dir = tempfile::tempdir().expect("a temporary directory");
         let mut driver = session(&live, app, &dir);
         let scale = driver
@@ -543,13 +556,8 @@ fn the_device_check_scenarios_run_through_the_os_lane() {
             )
             .expect("the window is the scenario's");
         let mut report = Report::new();
-        report.run_scenario(name, &mut driver, scenario);
-        let expected = if on_input_desktop || !sends_input {
-            Verdict::Pass
-        } else {
-            Verdict::CannotVerify
-        };
-        assert_eq!(report.verdict(), expected, "{name}: {report:#?}");
+        driver.run_scenario(&mut report, name, scenario);
+        assert_eq!(report.verdict(), Verdict::Pass, "{name}: {report:#?}");
     }
 }
 
@@ -576,7 +584,7 @@ fn a_foreign_mouse_move_mid_run_ends_it_and_releases_its_input() {
         .long_press(Some(Duration::from_secs(2)));
     intruder.join().expect("the intruder moved the mouse");
     assert!(
-        matches!(held, Err(Error::InterruptedByUser { .. })),
+        matches!(&held, Err(Error::PartlySent { first, .. }) if matches!(**first, Error::InterruptedByUser { .. })),
         "the run ended on the foreign move: {held:?}"
     );
     // The contact the lane put down was lifted: the app's journal ends it.

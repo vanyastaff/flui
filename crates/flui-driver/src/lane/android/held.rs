@@ -13,7 +13,7 @@
 //! - **Recorded once taken.** [`HeldInput::plan`] turns an event into commands and changes only
 //!   what is held here alone (the keys, where each pointer is); what is held on the device changes
 //!   with [`HeldInput::took`], once the device took a command (a `motionevent` returns once the
-//!   app finished with it), or [`HeldInput::unsure`] when the command timed out and may have
+//!   app finished with it), or [`HeldInput::unsure`] when its answer was lost and it may have
 //!   happened: a press that may have gone down is held, so it is released.
 //! - **Released on every exit, part by part.** [`HeldInput::release_plan_of`] is what releases a
 //!   [`Part`]: the contact cancelled where it is (`motionevent CANCEL`, which acts on nothing),
@@ -33,6 +33,7 @@ use super::device::InputCommands;
 use super::keys::{self, KeyName, Keycode, TextStroke};
 use super::safety::{self, Display, Refusal};
 use crate::coordinates::DevicePoint;
+use crate::lane::OsInput;
 use crate::steps::OsEvent;
 
 /// How many device pixels of a scroll turn the wheel one detent; the app turns a detent into a
@@ -143,6 +144,19 @@ pub enum Command {
     },
 }
 
+impl OsInput for Command {
+    /// A press, a lift, a cancel, a key, a chord, text and a scroll act on the app; a contact's or
+    /// the pen's move and the pen coming into or leaving range are where it goes, as a move is on
+    /// every lane ([`OsEvent::acts`]).
+    fn acts(&self) -> bool {
+        match self {
+            Self::Motion { action, .. } => !matches!(action, MotionAction::Move),
+            Self::Pen { change, .. } => matches!(change, PenChange::Press | PenChange::Lift),
+            Self::Key(_) | Self::Chord(_) | Self::Text(_) | Self::Scroll { .. } => true,
+        }
+    }
+}
+
 impl Command {
     /// The device shell line of an `input` command; `None` for the pen, whose reports go to its
     /// `uinput` device.
@@ -189,6 +203,20 @@ impl Command {
             Self::Pen { change, .. } => *change == PenChange::Press,
             Self::Key(_) | Self::Chord(_) | Self::Text(_) | Self::Scroll { .. } => true,
         }
+    }
+
+    /// Whether the command puts a touch or mouse contact down through `input`: what the release
+    /// must undo even when the command's answer never came (the pen's contacts go with its
+    /// device).
+    #[must_use]
+    pub fn puts_contact_down(&self) -> bool {
+        matches!(
+            self,
+            Self::Motion {
+                action: MotionAction::Down,
+                ..
+            }
+        )
     }
 }
 
@@ -306,7 +334,7 @@ impl HeldInput {
                     })
                     .collect())
             }
-            // The lane waits a pause out itself (`AndroidLane::send`).
+            // The lane waits a pause out itself (`AndroidLane::send_counted`).
             OsEvent::Pause(_) => Ok(Vec::new()),
             // `send_guarded` refuses it first; a caller that plans or sends directly hears the
             // same.
@@ -571,8 +599,8 @@ impl HeldInput {
         }
     }
 
-    /// `command` timed out: it may have happened. What it may have pressed is held; what it may
-    /// have released stays held.
+    /// `command`'s answer was lost (it timed out, or its output passed its bound or broke off): it
+    /// may have happened. What it may have pressed is held; what it may have released stays held.
     pub fn unsure(&mut self, command: &Command) {
         match command {
             Command::Motion {
@@ -631,6 +659,14 @@ impl HeldInput {
         self.modifiers.clear();
         self.pending = None;
         self.modifier_used = false;
+    }
+
+    /// `command` changed nothing on the device (`adb` never started, or the device answered by
+    /// refusing it): a contact recorded before its press went out is not down.
+    pub fn refused(&mut self, command: &Command) {
+        if command.puts_contact_down() {
+            self.contact = None;
+        }
     }
 
     /// The pen's device is gone, and with it everything it held: the kernel removes a device's

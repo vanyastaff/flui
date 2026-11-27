@@ -212,6 +212,7 @@ mod platform {
     use std::task::Waker;
     use std::time::Duration;
 
+    use flui_protocol::endpoint::PolledStream;
     use flui_runtime::agent::{Session, Status};
     use interprocess::local_socket::Stream;
     use interprocess::local_socket::traits::Stream as _;
@@ -225,11 +226,6 @@ mod platform {
 
     /// How long a write that made no progress waits before it tries again.
     const WRITE_RETRY: Duration = Duration::from_millis(1);
-
-    /// The most one write offers the pipe. A non-blocking named pipe takes a write whole or not
-    /// at all, so a write larger than the pipe's free buffer would never go through; small
-    /// writes go through as the client reads.
-    const WRITE_CHUNK: usize = 512;
 
     /// What wakes a connection's thread from another: its thread, unparked.
     pub(in super::super) type Closer = std::thread::Thread;
@@ -249,6 +245,8 @@ mod platform {
         if stream.set_nonblocking(true).is_err() {
             return;
         }
+        // Read and written by the one rule a local endpoint's pipe is polled by.
+        let stream = PolledStream::new(stream);
         let Some(_open) = transport.open(std::thread::current()) else {
             return;
         };
@@ -257,7 +255,7 @@ mod platform {
             let now = Instant::now();
             let mut received = false;
             loop {
-                match read_some(&stream, &mut chunk) {
+                match (&stream).read(&mut chunk) {
                     Ok(0) => {
                         session.peer_closed();
                         break;
@@ -292,13 +290,15 @@ mod platform {
     /// Write `bytes`, a whole line with its newline. Gives up when the agent stops, so a
     /// client that stops reading never holds up a detach, and after [`WRITE_TIMEOUT`] without
     /// progress.
-    fn write_bytes(stream: &Stream, bytes: &[u8], transport: &Transport) -> io::Result<()> {
+    fn write_bytes(
+        stream: &PolledStream<Stream>,
+        bytes: &[u8],
+        transport: &Transport,
+    ) -> io::Result<()> {
         let mut progress = Instant::now();
         let mut written = 0;
         while written < bytes.len() {
-            let end = bytes.len().min(written + WRITE_CHUNK);
-            match (&*stream).write(&bytes[written..end]) {
-                Ok(0) => {}
+            match (&*stream).write(&bytes[written..]) {
                 Ok(count) => {
                     written += count;
                     progress = Instant::now();
@@ -309,32 +309,16 @@ mod platform {
                 Err(error) => return Err(error),
             }
             if transport.is_stopping() {
-                return Err(io::ErrorKind::ConnectionAborted.into());
+                return Err(io::Error::from(io::ErrorKind::ConnectionAborted));
             }
             if progress.elapsed() >= WRITE_TIMEOUT {
-                return Err(io::ErrorKind::TimedOut.into());
+                return Err(io::Error::from(io::ErrorKind::TimedOut));
             }
             std::thread::park_timeout(WRITE_RETRY);
         }
         // No flush: it waits until the client has read everything, which a client that stops
         // reading never lets happen. What is written is delivered before the pipe closes.
         Ok(())
-    }
-
-    /// A non-blocking read: `Ok(0)` only once the peer has closed, `WouldBlock` while no data
-    /// has come.
-    ///
-    /// A non-blocking named pipe answers an empty read the way it answers a closed one
-    /// (`ERROR_NO_DATA`, which reads as end of file), so an empty read is told apart by an empty
-    /// write, which fails only on a closed pipe.
-    fn read_some(stream: &Stream, buffer: &mut [u8]) -> io::Result<usize> {
-        match (&*stream).read(buffer) {
-            Ok(0) => match (&*stream).write(&[]) {
-                Ok(_) => Err(io::ErrorKind::WouldBlock.into()),
-                Err(_) => Ok(0),
-            },
-            other => other,
-        }
     }
 }
 

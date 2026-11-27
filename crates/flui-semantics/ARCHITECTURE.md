@@ -898,9 +898,10 @@ is user code, under the pipeline's borrows.
 **Rule.** A `Locator` resolves over the filtered tree the adapters see, reading the same wire
 `Node` as `semantics.read`, so a locator matches what the outline shows. `within` and `has` are
 scopes over that tree: an unlabelled container that is lifted away is no ancestor. A strict
-locator lists every match in `locate_wire`; `resolve_wire_locator` is where one element is needed
-and answers `Ambiguous` (the first ten outline lines) or `NotFound` (the ten nearest by held
-criteria, then name distance). Actionability is two calls with the caller's hit-test between them:
+locator lists every match in `locate_wire`, `max_matches` keeping the first and counting the rest;
+where one element is needed, the list read with `max_matches` of `STRICT_CANDIDATES` goes to
+`flui_protocol::locator::resolve_strict`, the one strict-locator rule, which counts every match and
+names the first ten as outline lines. Actionability is two calls with the caller's hit-test between them:
 `actionability_point` says where a pointer would land, `actionability_wire` takes the render
 objects the hit-test found there, most specific first. A path maps to the first render object
 whose node the filtered tree shows, because a published node's id is its render object's id.
@@ -915,6 +916,57 @@ assembly already applies and adds only the window region: a second clip computat
 a second place to be wrong.
 
 **Test.** `locate.rs` and `actionability.rs` in `tests/`.
+
+### Accessibility rules read the published tree and name its elements
+
+**Rule.** `SemanticsOwner::audit_unnamed` and `audit_target_size` walk the nodes an agent reads
+(the agent filter, past a scroll view's edge included) and answer the protocol's `AuditFinding`s
+with each element's `ElementRef`. An element is interactive when it advertises `invoke`,
+`toggle`, `set_value`, `select`, `expand` or `collapse`; `unnamed` reports one whose wire name is
+empty. `target_size` judges an element's bounds inside the window and every clip that does not
+scroll, against a `MinimumTarget` the caller passes. A scrollable is a node that clips its
+children (`clips_children`) and publishes a scroll position or extent along an axis (`scroll_x`,
+`scroll_y` and their minimum and maximum). Along the axis it scrolls, its clip does not shrink a
+target: the target counts its whole extent there, up to what the scrollable itself shows. Across
+that axis its clip stays put and cuts like any other. An element the window does not show at all
+is not judged, nor is a `link` beside a named sibling that operates nothing (a link inline in the
+regions a paragraph publishes), nor a target inside an interactive ancestor whose own hit region
+meets the minimum. A target a fixed clip cuts is judged by what the clip leaves, and its finding
+names the bounds it was cut from.
+
+**Why.** WCAG 2.5.8 exempts a target set in a sentence or held to the line-height of the text
+around it, which is what a paragraph's link region is: no change to the link fixes a height the
+line sets. A pointer that misses a small target inside a larger interactive ancestor lands on
+that ancestor, which Android's Accessibility Test Framework demotes to a warning; an
+`AuditFinding` has no severity to say so ([gaps](../../docs/gaps.md#accepted-adr-sections-not-built-yet)),
+so the case is not judged rather than reported as a defect. The framework's two other exemptions
+are built above or kept: the scrollable edge is the
+revealed extent, and a target clipped by an ancestor, which the framework also reports as a
+warning naming the unclipped size, stays a finding naming its bounds, because only the part shown
+can be reached. WCAG's spacing exception (an undersized target whose 24 px circle meets no other
+target) applies to its 24 px minimum alone and is not built.
+
+The rules live with the tree they read (ADR-0400 §5); the development agent's
+`audit.a11y` is their caller. Scrolling reveals the rest of a row a viewport cuts, so the part it
+shows now says nothing about the target's size: judging it is the defect Flutter's tracker
+records for `MinimumTapTargetGuideline`, which fails a row partly scrolled under a pinned app bar
+(flutter/flutter#144121). A clip that never moves (a clip rect, the window's edge) leaves a
+sliver for good, so that sliver is judged. The assembly folds every clip that does not scroll
+into the bounds of the nodes below it and keeps a node's whole bounds under a scrollable, which
+publishes that it clips: a clipping node that publishes no scroll position or extent cuts on both
+axes, and a scrollable only across its axis. This is not the region `visible` reads
+(`shown_bounds`): a pointer cannot reach what a viewport hides now. The minimum belongs to the
+presentation's gesture settings in `flui-interaction`, a crate above this one, so it is a
+parameter, finite and positive by construction, and the caller picks the pointer it judges for:
+the agent the platform's primary pointer, the testing kit's gesture-alternatives check a finger
+(its own minimum, judged by the same `MinimumTarget::admits`). `admits` refuses a non-finite
+extent, and meets the minimum to within half a hundredth of a logical pixel: a published extent
+is scaled to device pixels and back, and at a ratio that is not a power of two (1.1, 1.3, 1.4)
+the round trip leaves a target laid out at exactly the minimum a few ulps under it. The
+tolerance is far above that round-off and a fiftieth of the smallest device pixel a platform
+draws, and a target that fails prints, at a finding's two decimals, under its minimum.
+
+**Test.** `audit.rs` in `tests/`.
 
 ## Numeric and directional input
 

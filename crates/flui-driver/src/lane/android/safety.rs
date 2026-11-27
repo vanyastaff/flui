@@ -15,16 +15,22 @@
 //!   the navigation bar's buttons there, back from the sides). The rule reads where the press
 //!   goes down, since that is where the system decides.
 //!
-//! Before every press, key and text the app's window must hold the input focus
+//! Before every press, key, text and scroll the app's window must hold the input focus
 //! ([`check_focus`]): a press with the shade, the lock screen or another app in front lands
-//! there. Before every `uiautomator dump`, no screen reader may run ([`check_dump`]): the dump
-//! suspends the accessibility services while it runs, TalkBack among them.
+//! there. The lane also holds it to the window it located, compared by hash, frame and rotation:
+//! another window of the app's title is not in front, and the same window moved or turned is
+//! busy until the lane locates it again; after part of the sequence went out, either refusal
+//! comes as [`crate::Error::PartlySent`], which says that part may have run and invites no
+//! retry. The read of the tree takes a `uiautomator dump`, which
+//! suspends every accessibility service while it runs (TalkBack, Voice Access and Switch Access
+//! among them), so it is refused while one runs ([`check_dump`]); locating the window, input and
+//! capture take no dump.
 
 use flui_protocol::error::{ErrorCode, HandleKind};
 use flui_protocol::session::Isolation;
 
 use super::LANE;
-use super::device::{ScreenReader, parse_screen_reader};
+use super::device::{EnabledServices, parse_enabled_services};
 use super::keys::{self, Keycode};
 use crate::coordinates::DevicePoint;
 use crate::error::Error;
@@ -106,22 +112,21 @@ pub enum Refusal {
         /// The mode.
         isolation: Isolation,
     },
-    /// A screen reader runs, which `uiautomator dump` would suspend while it dumps.
-    ScreenReaderOn {
+    /// An accessibility service runs, which `uiautomator dump` would suspend while it dumps.
+    ServicesOn {
         /// What is on.
-        reader: ScreenReader,
+        services: EnabledServices,
     },
     /// The accessibility settings printed no reply the lane reads, so it cannot tell whether a
-    /// screen reader runs.
+    /// service runs.
     SettingsUnread {
         /// What is wrong with the reply.
         why: String,
     },
 }
 
-/// The capability a refused dump names: a window located, or the tree read, through
-/// `uiautomator dump`.
-pub const WINDOW_DUMP: &str = "android_window_dump";
+/// The capability a refused read of the tree names: the `uiautomator dump` it takes.
+pub const TREE_DUMP: &str = "android_tree_dump";
 
 /// The capability a device without root `uinput` lacks, which its pen and touchpad rows name.
 pub const UINPUT_DEVICE: &str = "uinput_device";
@@ -133,7 +138,7 @@ impl Refusal {
         match self {
             Self::NotForeground { focus } => Error::NotForeground {
                 message: format!(
-                    "the app's window does not hold the input focus ({}); nothing was sent",
+                    "the app's window does not hold the input focus ({}): the command is not sent",
                     focus.as_deref().unwrap_or("no window holds it")
                 ),
                 retry: ErrorCode::NotForeground.default_retry(),
@@ -209,36 +214,37 @@ impl Refusal {
                 "{} is no isolation mode of an Android device: it is an emulator or a device",
                 isolation.name()
             )),
-            Self::ScreenReaderOn { reader } => Error::not_supported(
-                WINDOW_DUMP,
+            Self::ServicesOn { services } => Error::not_supported(
+                TREE_DUMP,
                 format!(
-                    "{} is on, and `uiautomator dump` suspends the accessibility services while it \
-                     dumps: the lane neither locates the window nor reads the tree while a screen \
-                     reader reads; locate the window before the screen reader is turned on",
-                    reader.describe()
+                    "{} is on, and the read of the tree takes a `uiautomator dump`, which suspends \
+                     every accessibility service while it dumps: the lane reads no tree while one \
+                     runs; it still locates the window, sends input and captures",
+                    services.describe()
                 ),
             ),
             Self::SettingsUnread { why } => Error::not_supported(
-                WINDOW_DUMP,
+                TREE_DUMP,
                 format!(
-                    "{why}, so the lane cannot tell whether a screen reader runs, and \
-                     `uiautomator dump` would suspend one: no dump is sent"
+                    "{why}, so the lane cannot tell whether an accessibility service runs, and the \
+                     tree's `uiautomator dump` would suspend one: no dump is sent"
                 ),
             ),
         }
     }
 }
 
-/// Whether the lane may dump the window: no screen reader runs, as `settings` printed it.
+/// Whether the lane may dump the window for its tree: no accessibility service runs, as
+/// `settings` printed it, on an emulator as on a device.
 ///
 /// # Errors
 ///
-/// [`Refusal::ScreenReaderOn`] naming the screen reader, [`Refusal::SettingsUnread`] for a reply
-/// that shows neither way.
+/// [`Refusal::ServicesOn`] naming every service on, [`Refusal::SettingsUnread`] for a reply that
+/// shows neither way.
 pub fn check_dump(settings: &str) -> Result<(), Refusal> {
-    match parse_screen_reader(settings) {
-        Ok(Some(reader)) => Err(Refusal::ScreenReaderOn { reader }),
-        Ok(None) => Ok(()),
+    match parse_enabled_services(settings) {
+        Ok(services) if services.is_empty() => Ok(()),
+        Ok(services) => Err(Refusal::ServicesOn { services }),
         Err(why) => Err(Refusal::SettingsUnread { why }),
     }
 }

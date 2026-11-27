@@ -12,12 +12,21 @@
 //!
 //! Objects are grouped into six domain families:
 //!
-//! - `layout` — sizing, alignment, flex, stack, transform, fitted-box, intrinsic, overflow, rotation
-//! - `proxy` — paint-effect proxies (opacity, clip, decoration, color, repaint boundary)
-//! - `interaction` — hit-test and visibility proxies (absorb/ignore pointer, offstage, metadata)
+//! - `layout` — sizing, padding, alignment, baseline, aspect ratio, flex, wrap, flow, list body,
+//!   stack, indexed stack, theater, table, transform, fractional translation, fitted box,
+//!   intrinsics, overflow and limits, rotation, custom layout delegates, layout builder,
+//!   container, toolbar items
+//! - `proxy` — paint-effect and annotation proxies (opacity, clips, decoration, color, custom
+//!   paint, backdrop filter, shader mask, physical model, repaint boundary, leader/follower,
+//!   paint and subtree anchors including [`RenderSliverSubtreeAnchor`], semantics annotations,
+//!   annotated region, visibility, skeleton and shimmer mask, ignore baseline, error box)
+//! - `interaction` — hit-test and visibility proxies (absorb/ignore pointer, listener, mouse
+//!   region, hit slop, content shape, input region, interactive, press pass-through, offstage,
+//!   metadata)
 //! - `text` — [`RenderEditable`], [`RenderIcon`], [`RenderParagraph`]
-//! - `image` — [`RenderImage`]
-//! - `sliver` — all `RenderSliver*` objects and [`RenderViewport`] (the Box viewport that drives them)
+//! - `image` — [`RenderImage`], [`RenderTexture`]
+//! - `sliver` — the `RenderSliver*` objects other than [`RenderSliverSubtreeAnchor`], and
+//!   [`RenderViewport`] and [`RenderShrinkWrappingViewport`] (the Box viewports that drive them)
 //!
 //! # Flat public surface
 //!

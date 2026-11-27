@@ -8,7 +8,8 @@ use flui_foundation::ManualClock;
 use flui_protocol::method;
 use flui_protocol::{
     error::ErrorCode, error::HandleKind, error::Retry, locator::Locator, tree::WindowId,
-    wait::Condition, wait::UnsettledReason, wait::WaitOutcome, wait::WaitParams, wire::ActionName,
+    wait::ClearedBy, wait::Condition, wait::SettleScope, wait::UnsettledReason, wait::WaitEnd,
+    wait::WaitOutcome, wait::WaitParams, wire::ActionName,
 };
 
 use flui_view::dev_agent::{AgentAnswer, AgentWindow};
@@ -80,7 +81,7 @@ fn a_wait_is_satisfied_at_the_frame_its_condition_first_holds() {
         .try_take()
         .expect("the frame that committed the new count answered")
         .expect("the wait ran");
-    assert!(outcome.satisfied);
+    assert_eq!(outcome.end, WaitEnd::Satisfied);
     assert_eq!(outcome.frames, 1);
     let names: Vec<_> = outcome
         .observation
@@ -101,7 +102,7 @@ fn a_condition_that_holds_already_answers_at_the_drain() {
         .try_take()
         .expect("nothing to wait for")
         .expect("the wait ran");
-    assert!(outcome.satisfied);
+    assert_eq!(outcome.end, WaitEnd::Satisfied);
     assert_eq!(outcome.frames, 0);
 }
 
@@ -127,7 +128,7 @@ fn a_frame_count_keeps_frames_coming_and_counts_the_ones_after_the_request() {
         .try_take()
         .expect("the second frame answered")
         .expect("the wait ran");
-    assert!(outcome.satisfied);
+    assert_eq!(outcome.end, WaitEnd::Satisfied);
     assert_eq!(outcome.frames, 2);
 }
 
@@ -153,7 +154,7 @@ fn a_wait_that_runs_out_answers_unsatisfied_at_its_deadline_without_a_frame() {
         .try_take()
         .expect("the wake at the deadline answered")
         .expect("running out is an answer, not an error");
-    assert!(!outcome.satisfied);
+    assert_eq!(outcome.end, WaitEnd::Unsatisfied);
     assert_eq!(outcome.frames, 0);
     assert_eq!(outcome.observation.count, 0);
     assert_eq!(
@@ -178,18 +179,35 @@ fn a_timeout_names_why_the_window_had_not_settled() {
         Condition::All(vec![Condition::Settled, appears("Missing")]),
         Some(0),
     );
-    let _report = ui_runtime.drain_commands();
+    let _ = ui_runtime.drain_owner_inbox();
 
     let outcome = reply
         .try_take()
-        .expect("a zero timeout is up at once")
+        .expect("a zero timeout is up at the end of the turn that parked it")
         .expect("running out is an answer");
-    assert!(!outcome.satisfied);
+    assert_eq!(outcome.end, WaitEnd::Unsatisfied);
+    assert_eq!(
+        outcome.scope,
+        SettleScope::RuntimeOnly,
+        "a runtime whose host composes no half answers from its own"
+    );
     let reasons: Vec<_> = outcome.unsettled.iter().map(|cause| cause.reason).collect();
     assert!(
         reasons.contains(&UnsettledReason::NeedsRedraw),
         "a frame was still wanted: {reasons:?}"
     );
+    for cause in &outcome.unsettled {
+        assert_eq!(
+            cause.cleared_by,
+            if cause.reason == UnsettledReason::Timer {
+                ClearedBy::Deadline
+            } else {
+                ClearedBy::NextFrame
+            },
+            "a redraw, a scheduled frame and queued work are the next turn's, a timer its \
+             deadline's: {cause:?}"
+        );
+    }
 }
 
 #[test]
@@ -201,18 +219,25 @@ fn a_parked_wait_is_not_a_reason_the_window_has_not_settled() {
         .expect("the primary presentation is hosted")
         .clock()
         .now();
-    let before = ui_runtime.unsettled_causes(now);
+    let gathered = || {
+        let mut unsettled = crate::settledness::Unsettled::new(now);
+        ui_runtime.unsettled(&mut unsettled);
+        unsettled
+    };
+    let before = gathered();
 
     let _parked = wait(&ui_runtime, &window, appears("Missing"), Some(10));
     let _report = ui_runtime.drain_commands();
 
-    assert!(
-        ui_runtime.next_wake() < ui_runtime.next_wake_excluding_agent_waits(),
+    let after = gathered();
+    assert_eq!(
+        after.next_deadline(),
+        Some(now + Duration::from_millis(10)),
         "the parked wait's deadline is the earliest wake"
     );
     assert_eq!(
-        ui_runtime.unsettled_causes(now),
-        before,
+        after.causes().collect::<Vec<_>>(),
+        before.causes().collect::<Vec<_>>(),
         "what a wait itself holds out for is not why the window is busy"
     );
 }
@@ -308,13 +333,13 @@ fn a_timer_the_window_waits_on_is_named_with_when_it_is_due() {
     // The test window cannot answer the native gesture-geometry query, so the owner keeps
     // its retry as a timer: a window with one is not settled.
     let mut reply = wait(&ui_runtime, &window, Condition::Settled, Some(0));
-    let _report = ui_runtime.drain_commands();
+    let _ = ui_runtime.drain_owner_inbox();
 
     let outcome = reply
         .try_take()
-        .expect("a zero timeout is up at once")
+        .expect("a zero timeout is up at the end of the turn that parked it")
         .expect("running out is an answer");
-    assert!(!outcome.satisfied);
+    assert_eq!(outcome.end, WaitEnd::Unsatisfied);
     let timer = outcome
         .unsettled
         .iter()
@@ -323,5 +348,10 @@ fn a_timer_the_window_waits_on_is_named_with_when_it_is_due() {
     assert!(
         timer.due_in_ms.is_some(),
         "when it is due is part of the cause: {timer:?}"
+    );
+    assert_eq!(
+        timer.cleared_by,
+        ClearedBy::Deadline,
+        "a turn at its deadline discharges a timer: {timer:?}"
     );
 }

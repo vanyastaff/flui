@@ -2313,6 +2313,7 @@ dependencies = [
  "insta",
  "serde",
  "static_assertions",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
 ]
@@ -2383,6 +2384,7 @@ dependencies = [
 name = "flui-protocol"
 version = "0.2.0-dev"
 dependencies = [
+ "flui-protocol",
  "schemars",
  "serde",
  "serde_json",

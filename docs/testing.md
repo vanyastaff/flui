@@ -32,6 +32,7 @@ the same bug found by a whole-demo snapshot names a demo.
 |------|--------|-------------|------------|
 | Inspection | Typed self-description of any node | `flui_foundation::inspect::{Inspect, SnapshotNode}` | always |
 | Waker | A `Waker` that counts its wakes, runs an action, drops its captures when it retires, or panics | `flui_foundation::testing::{CountingWaker, panicking_waker}` | `flui-foundation/testing` |
+| Local endpoint | A pipe that answers each read and write from a script, recording what the writes took | `flui_protocol::testing::{ScriptedPipe, PipeAnswer}` | `flui-protocol/testing` |
 | Painting | A `DisplayList`, no canvas boilerplate | `flui_painting::testing::{record, command_count, bounds}` | `flui-painting/testing` |
 | Layer | Structural walkers over a `LayerTree` (built with `push_child`, or a scene's `SceneVersion::flatten`) | `flui_layer::testing::inspect` | `flui-layer/testing` |
 | Render object | A real `PipelineOwner` — layout, paint, hit-test, intrinsics | `flui_rendering::testing::{RenderTester, Probe}` | `flui-rendering/testing` |
@@ -142,12 +143,33 @@ cargo fmt --all --check; typos; taplo fmt --check   # formatting, spelling, TOML
 cargo nextest run -p flui-platform -p flui-testing -p flui-material -p flui-cli -p flui-painting -p flui-native -p flui-system   # the generated files (key and recording vocabularies, Material icon constants, platform floors, font assets, Android dex digests) against their sources; FLUI_BLESS=1 rewrites what a generator wrote (not the font or dex checks, which compare)
 ```
 
-The reload-lifecycle fixture is a real plugin image. The `test` job
-builds its library before selecting its tests, so Cargo publishes the cdylib to
-the artifact directory on the runner's dynamic-library search path. For a direct
-run, use `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked` before
-`cargo nextest run -p flui-hot-reload-lifecycle-fixture --locked`. The tests do not
-infer private Cargo build directories or choose a cached DLL by modification time.
+### The reload-lifecycle fixture
+
+The reload-lifecycle tests (`examples/hot_reload_lifecycle_fixture`) load a real
+plugin image: the fixture's cdylib, from Cargo's artifact directory on the
+runner's dynamic-library search path. Cargo puts it there only for a build that
+names the library; built as the tests' dependency, it stays in the build
+directory, at a path of Cargo's own, which the tests do not infer.
+
+nextest's setup script `build-hot-reload-fixture` (`.config/nextest.toml`) runs
+`cargo build -p flui-hot-reload-lifecycle-fixture --lib` before those tests, on
+every host. Nothing tells a setup script the run's profile, target or target
+directory (`NEXTEST_PROFILE` is nextest's own profile), so it builds the dev
+profile, for the host target, into the target directory Cargo resolves without
+`--target-dir`: `target/`, or `CARGO_TARGET_DIR`, which the script inherits. It
+passes no `--locked`: by the time it runs, the run's own build has held the
+lockfile to `--locked` or resolved it without, and the script builds against
+that lockfile either way.
+
+Any other run builds the fixture first, by hand, with the run's flags:
+`cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`, adding
+`--release`, `--target <triple>` or `--target-dir <dir>` as the run has them,
+and `--profile <name>` for nextest's `--cargo-profile <name>`. That holds for
+every run under `cargo test` too. Otherwise the tests find no fixture, or load
+one an earlier build left in that directory and test that build's code. The
+tests do not check the image's age: the test binary is relinked by a change to
+the test alone, which leaves an up-to-date fixture older than it, so a fixture
+older than the test binary is not a stale one.
 
 The `checks` job's test-reachability step takes each test target's root file from Cargo
 metadata (an implicit path included) and reads its `mod` and `#[path]` lines with a shell
@@ -1044,7 +1066,7 @@ is the one-node snapshot.
 A `Probe::dump()` is what a failing assertion should print to show *why*.
 
 ```bash
-cargo test -p flui-rendering --test render_object_harness
+cargo test -p flui-objects --test render_object_harness
 ```
 
 ### Render-object harness catalog
@@ -1053,11 +1075,21 @@ cargo test -p flui-rendering --test render_object_harness
 catalog: every concrete `RenderBox` / `RenderSliver` type is mounted
 through `RenderTester`, laid out (or painted when hit-test / layer
 structure matters), and asserted via `Probe` + structured diagnostics
-queries. The file header lists a per-type coverage map; `RENDER_OBJECT_TYPES`
-is the manifest of all 81 exported render types (count it yourself —
-`RENDER_OBJECT_TYPES` in that file — if this drifts again); and
-`catalog_covers_every_render_object_name` fails CI if any type is missing
-from the harness file, and `render_object_types_match_exports` fails CI if
+queries. The file header lists a per-type coverage map, which
+`coverage_map_lists_every_render_object_type` holds to `RENDER_OBJECT_TYPES`, the
+[manifest of the exported render types](../crates/flui-objects/tests/render_object_harness.rs);
+`catalog_covers_every_render_object_name` fails CI if any type is not named, as a
+whole identifier in code (a comment does not count, a string does), in a row (a
+column-0 `fn harness_*` under any visibility, with no attribute over it and no
+block comment opened above it) of that file or of a family file under
+`tests/harness/` that its `FAMILY_FILES` lists and that it mounts. The guard reads
+text, and those files keep to its limits: a row or mount line written at column 0
+inside a multi-line string literal is indistinguishable from code, so literal guard
+input is written on one line with `\n` escapes; and strings are not told apart
+from code, so no string in a code line holds a `/*` its line does not close (it is
+spelled through `BLOCK_COMMENT_OPENER`), and none holds `//` followed later on its
+line by a block comment. `family_files_are_mounted_and_listed` fails CI if those three
+disagree; and `render_object_types_match_exports` fails CI if
 the catalog and this crate's `pub use` exports diverge. Add a harness test
 when landing a new render object so layout, hit-test, and config/runtime
 diagnostics stay pinned without visual inspection.
@@ -1159,8 +1191,10 @@ Anything else is built per device — `TouchScript`, `MouseScript`, `PenScript`,
 down and never came up. A `frame()` step is a frame, so a script states which
 events share one. `HeadlessHost::run_script` delivers a script to a UI runtime,
 `HeadlessHost::find_center` finds its target by semantics role and label, and
-`HeadlessHost::pump_until_settled` runs frames until nothing is left to do,
-bounded by a frame limit.
+`HeadlessHost::pump_until_settled` runs frames until the host's list of what keeps the
+application from being idle (`HeadlessHost::unsettled`, ADR-0400 §3) names no cause, bounded by a
+frame limit; `time_to_next_frame` is that list's wake, and the agent's `wait.settled` is answered
+from the same list.
 
 ### Input recordings
 
@@ -1438,7 +1472,7 @@ needs. One row per job:
 | `checks` | `cargo fmt --all --check`, `typos`, `taplo fmt --check`, the lychee line, the steps "Changelog fragments", "The MSRV everywhere is the toolchain's", "Every tests/*.rs of an autotests = false crate compiles" and "No two ADRs share a number", `actionlint`, `zizmor .` | each step runs even when one before it failed; CI installs every tool, so none is skipped |
 | `plan` | — | CI only: a shell step over the pull request's changed files decides the lane |
 | `clippy` | `cargo clippy --workspace --all-targets --locked -- -D warnings`, `cargo clippy -p flui-engine --all-targets --locked --features testing -- -D warnings`, then, on main only, `cargo clippy -p flui-native --locked --no-default-features [--features x11\|wayland\|testing] [--all-targets] -- -D warnings` | the last lints flui-native with default features off, once each for none, `x11`, `wayland` and `testing`, with and without `--all-targets`; from a Windows or macOS checkout add `--target x86_64-unknown-linux-gnu` |
-| `test` | after `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`: the workspace nextest run above; `WAYLAND_DISPLAY='' FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild) \| test(/^wayland_window::/))'`; the same without `xvfb-run` and with `-E 'test(/^wayland_window::/)'` against a Weston; `-E 'test(/^wayland_window::optional::/)'` with `--test-threads 1` under a headless sway (`FLUI_REQUIRE_COMPOSITOR`); with `FLUI_REQUIRE_GPU=1` and `WGPU_BACKEND=vulkan`, then `gl` (main only), `cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1` and `cargo nextest run -p flui --no-default-features --run-ignored all --test facade_it -E 'test(/^composited_layer_update_readback::/)' --locked --no-fail-fast --test-threads 1`; then `cargo build --workspace --exclude flui-native --all-targets --locked --features flui/material,flui/cupertino,flui/native` (main only) | the GPU steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native legs need `xvfb-run`, Weston and sway (Linux) |
+| `test` | the workspace nextest run above; `WAYLAND_DISPLAY='' FLUI_HEADLESS=1 xvfb-run -a -s '-screen 0 1280x1024x24 -noreset' cargo nextest run -p flui-native --locked --all-features --no-fail-fast -E 'not (group(trybuild) \| test(/^wayland_window::/))'`; the same without `xvfb-run` and with `-E 'test(/^wayland_window::/)'` against a Weston; `-E 'test(/^wayland_window::optional::/)'` with `--test-threads 1` under a headless sway (`FLUI_REQUIRE_COMPOSITOR`); with `FLUI_REQUIRE_GPU=1` and `WGPU_BACKEND=vulkan`, then `gl` (main only), `cargo nextest run -p flui-engine --features testing --lib --test painter_warm_path_allocation --locked --no-fail-fast --test-threads 1` and `cargo nextest run -p flui --no-default-features --run-ignored all --test facade_it -E 'test(/^composited_layer_update_readback::/)' --locked --no-fail-fast --test-threads 1`; then `cargo build --workspace --exclude flui-native --all-targets --locked --features flui/material,flui/cupertino,flui/native` (main only) | the GPU steps render on Mesa's lavapipe and llvmpipe, which the job installs; the all-targets build uses the test scope's packages and features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-native legs need `xvfb-run`, Weston and sway (Linux) |
 | `test-nested` | the nested-cargo nextest line above | generated projects and facade consumers, beside `test` and `test-trybuild`; main only |
 | `test-trybuild` | `cargo nextest run --workspace --exclude flui-native --locked --no-fail-fast --features flui/material,flui/cupertino,flui/native -E 'group(trybuild)'`, then `cargo nextest run -p flui-native --test compiler_guards --locked --no-fail-fast` | compile-fail suites in three shards (`facade`, `core`, `view`) on three runners, because every trybuild project builds under Cargo's lock on `target/tests/trybuild` and suites on one runner wait for each other; a shard adds its `--test` list and its binaries' `binary_id` filter from the job's matrix, so it builds only its own test targets with the whole run's features; locally the command above runs every suite |
 | `test-features` | the job's `cargo nextest run` lines | — |
@@ -1464,8 +1498,9 @@ Vulkan and once on GL, and locally on the host's adapter with the same two
 `cargo nextest run` lines and `FLUI_REQUIRE_GPU=1`.
 
 A scheduled `weekly.yml` workflow (Mondays, or manually via
-`workflow_dispatch`) builds and tests against a fresh `cargo update` — early
-warning for upstream semver breakage. It is not a merge gate. New RustSec
+`workflow_dispatch`) builds and tests against a fresh `cargo update`, which
+moves every dependency to its newest compatible version at least 7 days old
+(`.cargo/config.toml`) — early warning for upstream semver breakage. It is not a merge gate. New RustSec
 advisories have a daily workflow of their own, `advisories.yml`: it runs the
 `deps` job's advisories step against main and keeps the "RustSec advisory on
 main" issue open while a finding stands. `fuzz.yml` runs the fuzz targets every

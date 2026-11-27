@@ -3,7 +3,7 @@
 - **Status:** approved by the owner (2026-10-20). FD27 (#1773), FD1 (#1782), FD4 (#1796), FD31
   (#1804), FD2 (#1809, #1814) and FD3 (#1890) have merged; FD5 is in progress in steps (the
   locate and actionability jobs (#1968), the snapshot delta (#1980) and the waits (#1995) have
-  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 has merged (#2948), FD11 is built and under review (its runs on the input desktop owed), FD12 is built and under review (its runs in a real headless Chrome owed), FD14 has merged (#2927; its runs on a Mac owed), FD15 is built and under review (its HID spike answered no-go, so the lane sends no input under D23's rule and an input channel is the owner's decision; neither Done-when item is met: the HID probe was not built and its runs on a Simulator are owed), FD16 is built and under review (its runs in a real Linux session owed), FD13 is built and under review (its runs on an emulator and a device owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
+  merged, the events (#2139) have merged, the inspect jobs (#2148) and layers (#2153) have merged, FD9 has merged (#2902), FD10 has merged (#2948), FD11 is built and under review (its runs on the input desktop owed), FD12 is built and under review (its runs in a real headless Chrome owed), FD14 has merged (#2927; its runs on a Mac owed), FD15 is built and under review (its HID spike answered no-go, so the lane sends no input under D23's rule and an input channel is the owner's decision; it reads the app's accessibility tree through the Mac's accessibility API on the Simulator's window; neither Done-when item is met: the HID probe was not built and its runs on a Simulator are owed), FD16 is built and under review (its runs in a real Linux session owed), FD13 is built and under review (its runs on an emulator and a device owed), FD28 has merged (#2163, #2168), FD29 has merged in two parts (#2184 and #2189), FD30 is under way: `CreationSite`, `TreeError` at the pipeline owner and the frame failure report, creation sites in the layout, clip, paint, flex, text, image, icon and semantics widgets (#2229, #2235, #2244), and the ancestor path and site on contained build panics have landed; sites in the other widget families, the macros without a `site` form, and the context in the driver's error details and trace rows follow.
   `interaction/completeness` has merged
   (#1733), so the IC tasks are unblocked.
   `flui run --agent` and `flui mcp` exist on the ADR-0095 endpoint (#1769); the tasks that replace
@@ -39,6 +39,11 @@
   - added design checks (FD23 layout facts, assertions and lint; FD24 layout snapshot and annotated
     capture) and parity coverage (FD25), after the owner asked that the driver serve interface
     design and prove the whole parity matrix
+
+- **Names:** the methods, tiers and tools here are spelled as
+  [ADR-0403](../../../adr/ADR-0403-a-protocol-method-is-named-for-its-subject-or-its-instrument.md)
+  decides them. The code keeps the names it had until the changes `docs/gaps.md` lists for that
+  record land, so a test or a type cited as evidence below is spelled as the code spells it.
 
 ## Execution rules
 
@@ -101,14 +106,14 @@ graph LR
 | FD14 | macOS lane: CGEvent, AX, ScreenCaptureKit, event-tap guard; `macos-*` scenarios; `tools/device-checks` macOS scripts deleted | R14a, R17, R32, R33, R35 | FD9 | [P] | L (types), M | 5 | — |
 | FD15 | iOS Simulator lane: HID spike with go/no-go, then the lane, `simctl` capture and process, `ios-*` scenarios | R32, R33, R35 | FD9 | — | L (types), S | 6 | — |
 | FD16 | Linux lanes: X11 (XTEST, AT-SPI, capture, XInput2 guard) and Wayland (libei, portals, isolated compositor only); `live-smoke` migrated | R14a, R14b, R17, R32, R32a, R33, R35 | FD9 | — | L, X, WL | 5 | — |
-| FD17 | Front ends: `flui drive` CLI with session file, announcement and `call`; `flui mcp` adapter (MCP 2026-07-28) with the core tool set and `--caps` groups | R28–R30, R28a | FD9, FD10 | — | L | 5 | — |
+| FD17 | Front ends: `flui drive` CLI with session file, announcement and `call`; `flui mcp` adapter (MCP 2026-07-28) with the core tool set and `--caps` groups; preceded by the decision record its card asks for | R28–R30, R28a | FD9, FD10 | — | L | 5 | — |
 | FD18 | Inspector app (`tools/flui-inspector`) and `flui inspect`; its own scenario suite; baseline Review view; documented CLI fallback | R25, R31 | FD17, FD26 | — | L, W | 7 | — |
 | FD19 | `interaction_gallery` scenario suite on every target; delete desktop-mcp, xtask drivers, probes, device-check scripts; documentation | R35, R36, R36a, R45 | FD11–FD17, FD20–FD30 | — | all | 4 | IC |
 | FD20 | (Runtime part in testing-platform TP2, ADR-0400.) Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9, FD29 | [P] | L, W, A | 5 | — |
-| FD21 | (Runtime part in testing-platform TP2, ADR-0400.) Accessibility audit: `flui-semantics::audit` rules, `audit.a11y`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
+| FD21 | (Runtime part in testing-platform TP2, ADR-0400.) Accessibility audit: `flui-semantics::audit` rules, `audit.accessibility`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
 | FD22 | Exploration: seeded `explore.run` with invariants, delta-debugging `explore.shrink`, replay | R39, F12 | FD10 | — | L | 5 | — |
 | FD23 | Layout facts (boxes, clips, text ink bounds, baselines, styles, painted and background colours), `layout.expect` assertions, `audit.layout` lint with finding outcomes, `audit.text_scale`, `audit.screen` with checked and not-checked lists, the layout-defect benchmark | R40, R41, R41a, R41b, R44 | FD4, FD9, FD28 | [P] | L, W | 8 | — |
-| FD24 | Layout snapshot golden and `capture.annotated` | R42, R43 | FD10, FD23 | — | L, W | 4 | — |
+| FD24 | Layout snapshot golden and `layout.annotated_screenshot` | R42, R43 | FD10, FD23 | — | L, W | 4 | — |
 | FD25 | Parity coverage: scenario `proves` rows, `flui drive report --parity`, the `cargo xtask parity` gate in `checks`, gaps entries naming their scenarios | R45 | FD9 | [P] | L | 3 | — |
 | FD26 | Self-contained: baseline review (CLI and inspector), HTML, JUnit and SARIF reports, device management moved into the lanes, `--repeat` flake triage, `--offline` and the no-network-client test | R46–R49 | FD10, FD13, FD15 | [P] | L, W, A | 6 | — |
 | FD27 | `Inspect` core (ADR-0242): trait, `Value`, `Meta`, `Sink`, `InspectTree`, `Link`, derive with SDK path, owned snapshot in `flui-protocol`, typed accessors, structural diff, tree renderer, compact geometry `Display` | R50, R51 | — | [P] | L | 6 | — |
@@ -129,17 +134,17 @@ graph LR
 - **Done when:**
   - `tests/schema/protocol-0.5.json` is golden;
   - a containment test passes for 0.4 → 0.5 except the listed renames;
-  - a `METHODS` test checks unique names, `group.verb` spelling, a deterministic order, exactly one
+  - a `METHODS` test checks unique names, `group.member` spelling, a deterministic order, exactly one
     tier per method and at most 13 `Core` methods;
   - a wire spelling table covers every new enum;
   - nothing upstream appears in a signature (ADR-0089 gate).
 - **Evidence (2026-10-20):**
   - `METHODS` has 40 methods, 13 of them `Core`. The rest of the design's table joins with the
-    task that brings its types: the OS lanes (`os.*`, `input.os`, `capture.os`), baselines,
+    task that brings its types: the OS lanes (`os.*`, `os.perform_actions`, `os.screenshot`), baselines,
     recording and traces, layout, the other audits, reports, devices and exploration.
   - Every tier but `core` is a `--caps` group. `session` was added for session control beyond
-    the core (attach, capabilities, window placement, frame and settle waits, `motion.set`), and
-    ADR-0238 §9, R28a and the front-end list name it.
+    the core (attach, capabilities, window placement, frame and settle waits, the animation
+    clock). ADR-0403 §3 renames that tier `control`; R28a and the front-end list name it so.
   - The table reaches consumers through `for_each_method!` with concrete types, so no serde or
     schemars bound sits in a signature (ADR-0089 §2).
   - The ADR-0095 endpoint in `flui-devtools` still answers `windows`, `read`, `act` and `motion`
@@ -239,7 +244,7 @@ graph LR
       `a_match_carries_the_node_and_the_revision_it_was_read_on`,
       `resolving_a_strict_locator_with_several_matches_is_ambiguous`,
       `ambiguity_lists_at_most_ten_candidates`, `a_choice_made_with_pick_resolves`,
-      `a_miss_lists_the_nearest_elements`, `a_handle_is_not_rebound_when_a_slot_is_reused`;
+      `a_handle_is_not_rebound_when_a_slot_is_reused`;
     - `actionability::the_first_failed_check_names_why_an_element_cannot_be_acted_on`, one table
       of not in the tree, outside the window, no size, hidden, no earlier reading, moved, a disabled
       ancestor, covered and nothing hit; `what_covers_the_point_is_named_by_its_outline`,
@@ -254,11 +259,11 @@ graph LR
     `pick last`, the ancestor rule for disabled, the stable comparison, the self-or-under rule, the
     window intersection, the path walk and the visible centre in turn, and each broke a row.
   - As built:
-    - `SemanticsOwner::locate_wire` lists matches and `resolve_wire_locator` answers the one element
-      or `WireLocateError::{NotFound, Ambiguous}` with outline lines; the agent turns those into the
-      protocol's errors (FD5). Strictness is applied by `resolve_wire_locator` only: a strict
-      `semantics.locate` lists every match, so a caller can see what is ambiguous (`LocateParams`
-      said otherwise and is reworded; the schema golden holds no prose).
+    - `SemanticsOwner::locate_wire` lists matches; one element is resolved by
+      `flui_protocol::locator::resolve_strict` over a list read with `max_matches` of
+      `STRICT_CANDIDATES`, in the agent and in the driver alike. A strict `element.locate` lists
+      every match, so a caller can see what is ambiguous (`LocateParams` said otherwise and is
+      reworded; the schema golden holds no prose).
     - The actionability check is two pure calls, `actionability_point` and `actionability_wire`,
       with the render hit-test in between run by the caller, so no hit-test (user code) runs under
       a semantics borrow. There is no separate render-to-semantics index: a published node's id is
@@ -311,7 +316,7 @@ graph LR
     bounds-only changes left out unless asked);
   - a wait-condition registry evaluated after semantics publish and after input delivery, with
     unsettled causes from the runtime's own predicates;
-  - an event fan-out with bounded per-subscriber queues (`gap` on overflow).
+  - an event fan-out with bounded per-subscriber queues (`events.gap` on overflow).
   - every node id it answers is a `NodeRef` (`flui-foundation::inspect`): the presentation and
     the tree-local `Link`, printed `p3/v12.4`. The trees below the presentation keep `Link`; a
     ref to another or a closed presentation answers `UnknownPresentation`.
@@ -403,7 +408,7 @@ graph LR
     close and the emission after a frame each fails a test.
   - As built: `AgentWindow::subscribe` and the same on `SemanticsAgent`, answering an
     `EventStream` / `AgentEvents` with `try_next`, `recv_timeout` and `is_finished`. Left for
-    FD6: `input` events (the journal). Left for the announcement fan-out: `announcement` events.
+    FD6: `input.entry_added` events (the journal). Left for the announcement fan-out: `window.announcement_added` events.
     `frame.time_us` is not filled.
 - **Evidence, inspect (2026-10-31):**
   - `flui-foundation`'s `inspect::a_node_reference_prints_and_parses_as_one_text`.
@@ -416,7 +421,7 @@ graph LR
     `a_window_parks_a_bounded_number_of_layer_reads`,
     `a_window_that_closed_answers_gone`.
   - As built: `AgentWindow::inspect(InspectTarget, InspectParams)` answering `InspectReading`.
-    `inspect.layers` parks on the window and is answered from the next scene it shows; the wire
+    `inspect.layer_tree` parks on the window and is answered from the next scene it shows; the wire
     ids stay tree-local.
 
 ### FD6. Synthetic input, journal, recording (IC)
@@ -426,7 +431,7 @@ graph LR
     (`flui-app` `OwnerHost`, `HeadlessHost::dispatch`), with ticks mapped to frame boundaries and
     driver device classes;
   - the journal as an `InputTap`;
-  - `record.start/stop` over the ADR-0215 tap and the native capture hook;
+  - `recording.start/stop` over the ADR-0215 tap and the native capture hook;
   - injected contacts and keys released on close.
 - **Done when:**
   - every built-in gesture recognized identically through `synthetic` and through
@@ -452,9 +457,9 @@ graph LR
   - **Seam.** `flui-runtime` holds the fan-out and takes the capture's lines from `flui-app`
     through a trait whose values are `flui_protocol::native_recording`'s, so no crate edge is
     added.
-  - **Wire.** `RecordLayer::Native`; a native line goes as its own `record_native` event
+  - **Wire.** `RecordLayer::Native`; a native line goes as its own `recording.native_line` event
     `{recording, window, stream, line}`, a line being a stream's header, one of its rows, or a
-    `gap` naming the rows that stream lost, so `record` events stay as 0.9 sent them. A recording
+    `gap` naming the rows that stream lost, so the input layer's row events keep their shape. A recording
     of `native` records `input` too, and ends with the input layer's `end` row; `RecordSummary`
     counts the native losses apart (`native_lost_rows`).
   - **Bounds.** One 1024-row queue per recording; native rows take at most 768 of it, so input
@@ -576,9 +581,9 @@ graph LR
   - a send that panics skips `disarm`, so the guard watches until the next `arm` or the lane's
     drop, and its pending `foreign_input` survives; the worker's panicked-job path, which already
     releases, is where it would be disarmed;
-  - after a send that went through, `Error::ReleaseFailed` has no `first`, so it carries no
-    effect and reads as not run (`may_have_run` false) although the input went out, and its doc
-    says a retry does not cure it while the next sequence's release retries what stays held.
+  - after a send that went through, a release that fails comes inside `Error::PartlySent`
+    (may have run, no retry); what stays open is that `ReleaseFailed`'s doc says a retry does
+    not cure it while the next sequence's release retries what stays held.
 - **Evidence (2026-11-19):**
   - `flui-driver`'s `driver_it`:
     - `failure_matrix::every_failure_row_holds_on_every_fixture`: every failure scenario on the
@@ -719,13 +724,13 @@ graph LR
     `codegen_writes_the_checked_in_test_from_a_trace` with `trace_generated::a_generated_test_taps_the_counter`
     compiled and run in the same suite,
     `a_trace_holds_the_apps_native_recording_and_reads_it_back_without_the_core` (over a scripted
-    agent's socket: `record.start{input, native}`, `input.jsonl`, `native/0.jsonl` read back through
+    agent's socket: `recording.start{input, native}`, `input.jsonl`, `native/0.jsonl` read back through
     `flui-protocol`, the stream's `gap` in place), `a_native_recording_past_its_bounds_or_of_a_newer_version_is_refused`.
   - After the review of `f45a3b4b`, each with its test failing with the fix taken out by hand:
     `trace_bounds::scripted::events_lost_mid_trace_mark_every_stream_and_the_callers_count`
     (a `gap` in `input.jsonl` and in every native stream, and the caller's dropped count),
     `trace_bounds::scripted::a_trace_that_cannot_start_leaves_the_app_recording_nothing`
-    (the trace's files before `record.start`, `record.stop` after a hold that fails),
+    (the trace's files before `recording.start`, `recording.stop` after a hold that fails),
     `trace_bounds::a_redacted_trace_replay_refuses_the_row_that_would_type_the_redaction`,
     `trace_bounds::scripted::a_replay_maps_handles_where_the_schema_has_them_only` (an input
     source's `id` of `e1` stays text, a node's `id` pairs),
@@ -741,13 +746,13 @@ graph LR
     (deltas worked out by hand from pixelmatch 5's published formula, the arithmetic in the test),
     a `cannot_verify` run keeping its trace in
     `trace::a_trace_kept_on_failure_goes_with_a_passing_run_and_stays_with_a_failing_one`, and the
-    codegen golden marking `capture.os` as not generated and sending a control character as a
+    codegen golden marking `os.screenshot` as not generated and sending a control character as a
     Rust literal. The reader's running byte bound (a file that grows as it is read) and the
     linear `Trace::steps` have no test of their own: the first needs a file past 1 GiB, the
     second changes no answer.
 - **As built:**
   - `flui_driver::pixels` and `flui_driver::trace`, as the Rust API; their protocol rows
-    (`capture.os`, `pixels.*`, `trace.*`) join the method table with the front ends (FD17), as
+    (`os.screenshot`, `pixels.*`, `trace.*`) join the method table with the front ends (FD17), as
     FD11's `os.*` rows do, so a replay lists a pixel command as skipped rather than compare it.
   - One image type: `lane::OsCapture` became `pixels::Image`, and `Window::capture_os` became
     `Window::capture(CaptureSource::Os)`.
@@ -775,7 +780,7 @@ graph LR
   - `retain_on_failure` writes the trace in place and removes it when the report passes (a `cannot_verify` run keeps it, as a failing one does).
   - Left for later tasks: blessing `flui-native`'s native goldens through the driver in place of
     `FLUI_NATIVE_RECORDING_BLESS` (R26) comes with the scenarios that record through
-    `record.start{native}` on each OS (FD11, FD14, FD16, FD19); `flui drive trace replay`,
+    `recording.start{native}` on each OS (FD11, FD14, FD16, FD19); `flui drive trace replay`,
     `trace codegen`, `trace pack` and the inspector's player (R25) are FD17's and FD18's.
 
 ### FD11. Windows lane
@@ -797,7 +802,7 @@ graph LR
   **`cargo xtask device windows-gallery` is ported first** (IC). It is the gallery scenario the
   integration branch is building, here on `flui-driver`, synthetic by default, with OS input as its
   certification variant and the gallery's ADR-0240 identifiers as selectors. Then `windows-a11y`,
-  `windows-input` (with native goldens through `record.start{native}`) and `windows-notes` replace
+  `windows-input` (with native goldens through `recording.start{native}`) and `windows-notes` replace
   the xtask drivers.
 - **Done when:**
   - `windows-gallery` passes on W with every check of the integration-branch version;
@@ -845,8 +850,8 @@ graph LR
     `each_role_publishes_the_wire_role_ui_automation_folds_it_to` (the role table against
     `flui-semantics`' own fold, through the agent), `the_input_scenario_passes_on_the_headless_target`,
     `the_notes_scenario_passes_on_the_headless_target`,
-    `the_conformance_scenario_passes_on_the_headless_target` (the conformance row the platform-layer
-    spec names).
+    `the_conformance_scenario_passes_on_the_headless_target` (the conformance scenario the quality
+    rows of `crates/flui-native/platform-parity.toml` name).
   - On W, a nextest desktop of its own (Windows 11 build 26300): `windows_desktop::ui_automation_reads_and_invokes_the_app_as_a_screen_reader_does`
     (the scenario app's UI Automation tree projects equal to its semantics, `AutomationId` is the
     identifier, an `InvokePattern` invoke acts, an unknown id is `not_found`),
@@ -904,7 +909,7 @@ graph LR
   - `Lane` gains `check` (asked by `send_guarded` before the guard arms), `read_tree`, `invoke` and
     `capture_window`, each `not_supported` by default; the Rust API reaches them as
     `Window::os_tree`, `compare_projection`, `os_invoke` and `capture(CaptureSource::Os)` (FD10's
-    `os` source). The protocol rows `os.tree`, `os.compare_projection` and `capture.os` are not in
+    `os` source). The protocol rows `os.snapshot`, `os.compare_projection` and `os.screenshot` are not in
     `flui_protocol::method` yet: they join it with the front ends.
   - ADR-0095 §4's projection is `flui_protocol::tree::normalized_outline`; it leaves out the
     window node, a title bar and the framework's own identifiers (`flui:`, the announcer's live
@@ -924,7 +929,7 @@ graph LR
     the gallery (`windows-gallery`), the accessibility checks with the roles page
     (`windows-a11y`, on a page of every role of the table instead of `a11y_probe`), `windows-input`
     and `windows-notes` (on a note field instead of `two_screens`). DPI after a resize and native
-    goldens through `record.start{native}` are not checked: the driver resizes no window, and its
+    goldens through `recording.start{native}` are not checked: the driver resizes no window, and its
     trace records the native layer (FD10) only from an app built with the `native-capture`
     journal, which no scenario run on Windows has made yet.
   - The headless target's window offers text input (`HeadlessWindow::with_text_input`): without it
@@ -1075,7 +1080,7 @@ graph LR
   names them. Of the Done-when items: the scenario is written and passes on the headless target,
   and has not run on A (no device or emulator was taken: the owner runs them); the device
   recordings are not re-recorded through the driver, which records no native input yet
-  (`record.start{native}`, FD10), and the existing hold
+  (`recording.start{native}`, FD10), and the existing hold
   (`android_device_recordings_decode_to_their_host_input` in `flui-native`) already compares their
   order; a device without root `uinput` reports `uinput_device` missing and its pen row
   cannot-verify, held on every host against a scripted device; the touchpad row is cannot-verify on
@@ -1089,7 +1094,7 @@ graph LR
     `a_stream_is_cut_into_lines_and_json_objects_and_a_record_is_bounded`,
     `a_command_fails_on_its_exit_code_or_on_what_the_device_printed`,
     `the_devices_listing_is_read_and_only_a_named_ready_device_is_taken`,
-    `what_the_device_prints_reads_into_its_facts`, `the_dump_gives_the_rotation_and_the_apps_surface`,
+    `what_the_device_prints_reads_into_its_facts`, `the_windows_give_the_rotation_and_the_focused_apps_frame`,
     `a_raw_capture_is_read_in_both_header_forms_and_refused_when_it_lies`,
     `a_png_capture_decodes_and_a_window_is_cut_from_it`,
     `getevent_lines_tell_the_lanes_devices_from_everyone_elses`,
@@ -1144,7 +1149,16 @@ graph LR
     `uinput` probe and the pen's hover, press and leave on a device that allows it, and the probe's
     refusal on one that does not; the pen's axes at each rotation and under a `wm size` override;
     `getevent -l` over `adb shell -tt` seeing the person's touch and not the lane's `input`
-    commands; `uiautomator dump` answering while the app animates; `screencap`'s raw header and
+    commands; the window's frame and rotation as the device's `dumpsys window` prints them (the
+    window's `mDisplayId=` and `frame=` or `mFrame=`, the default display's `mRotation=`); the
+    reply's `WINDOW MANAGER` part headers and where the focus is printed on each Android version
+    (the default display's section from Android 10, the windows' part before), with a `LAST ANR`
+    part in the reply; the windows' frames present in the one `dumpsys window -a` reading, its
+    `mTopFocusedDisplayId=`, and what that dump under the window manager's lock costs before each
+    press; whether every dump, not only a session's first, finds the app's view still building
+    its tree after the previous dump turned its accessibility off; touch, mouse and pen input sent
+    and read back by the app with TalkBack's touch exploration on;
+    `uiautomator dump` answering while the app animates, and its `could not get idle state`; `screencap`'s raw header and
     format on the device; the gesture margin (48 dp) against the device's bars and back inset; the
     endpoint forward and the app's exit when the session ends; which window is under the point
     before a press (a heads-up notification, the input method, an overlay), which the lane does
@@ -1175,28 +1189,44 @@ graph LR
     report confirmed by the command's sync answer; `input stylus` is not used, so a device without
     `uinput` refuses the pen. The design's touchpad `uinput` script is not built: no OS lane sends a
     touchpad gesture, and adding one is a change to `steps::os_events` and every lane's check.
-  - Where the app's window is and how the display is turned come from `uiautomator dump`; before
-    every press, key, text and scroll the app's window must hold the input focus (`dumpsys window`).
+  - Where the app's window is and how the display is turned come from `dumpsys window` (the
+    focused window's frame, which the app's view covers, and `DisplayRotation`'s rotation), which
+    pauses no accessibility service; before every press, key, text and scroll the app's window
+    must hold the input focus (`dumpsys window`).
   - A device is someone's: `os_input::admit` admits it only with a guard, as the shared desktop.
   - The capture reads `screencap` raw first and falls back to `-p` for a pixel format it does not
     read raw; the driver's own PNG reader (`pixels::codec`) decodes the PNG within its bounds, and the capture is a `pixels::Image`; `roxmltree` reads the dump.
   - The lane never picks a device: `adb::HostAdb` cannot be built without a serial, and
     `lane::android::host_device` takes the one `FLUI_ANDROID_SERIAL` names and asks `adb` nothing
-    without it; AVD lifecycle stays with FD26. A session's window dumps go to a path of its own,
-    and its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
+    without it; AVD lifecycle stays with FD26. Each window dump of a session goes to a path of its
+    own, and the session's dump files are removed by every dump that runs to its end and by the
+    lane's end; its forward from a loopback port the lane picked, asked for with `--no-rebind` and another
     port tried when one is taken, is removed by that port once `adb` made it or may have.
-  - `uiautomator dump` suspends the accessibility services running while it dumps, so the lane
-    refuses every dump while a screen reader runs (a TalkBack service in
-    `enabled_accessibility_services`, or touch exploration on), naming `android_window_dump`, and a
-    TalkBack run locates the window before TalkBack is on (`docs/gaps.md`).
+  - `uiautomator dump` suspends every accessibility service running while it dumps, so only the
+    read of the tree takes one, and on a device or an emulator it is refused while any service is
+    on (`enabled_accessibility_services`, a list never set or emptied being none) or touch
+    exploration is, naming `android_tree_dump` and the services (`docs/gaps.md`). Input and
+    capture take no dump. The window is the focused one by its hash, on the default display, read
+    with the rotation from one `dumpsys window -a`; the focus check before each press, key, text
+    and scroll reads it again and compares hash, frame and rotation (another focused display
+    `android_default_display`, another window `NotForeground`, the same one moved or turned
+    `Busy`, any of them after part of the sequence went out `PartlySent`); a read of the tree
+    locates the window again after the
+    dump, and a window replaced, moved or turned in between answers `Busy`.
   - The lane reads the tree TalkBack reads (`AccessibilityApi::UiAutomator`): `accesskit_android`
     sets no `viewIdResourceName`, so `lane::android::tree` matches the dump to the app's own tree,
-    which `Lane::read_tree` is handed, by structure, role (the class `accesskit_android` gives the
-    node's AccessKit role, `lane::android::roles`), content description, checked and enabled
-    state and bounds placed at the surface's origin; two candidates alike are `Ambiguous`, and
-    bounds off the display place a node nowhere. `invoke` is refused naming `os_invoke`: UI
-    Automator performs no action. Held by `android_tree::*` and, through the lane on a scripted
-    emulator serving the headless app's tree, by
+    which `Lane::read_tree` is handed, of one revision with the OS tree: the root is the decor
+    view's child where `FluiView.install` puts it, and the children are matched in the order the
+    adapter adds them, those `accesskit_consumer`'s filter keeps under a clipping parent first, by
+    role (the class `accesskit_android` gives the node's AccessKit role, `lane::android::roles`),
+    content description, toggled state where the app's read reports it (a radio button's
+    selection included; a grid cell's and another selection role's it does not), enabled state and
+    bounds placed at the surface's origin; two candidates the order does not tell apart are
+    `Ambiguous`, bounds off the display place a node nowhere, and what a dump cannot show or the
+    read does not report (a range's value, the announcers, a selection role's toggled state) is no
+    difference (`tree::Unobservable`). `invoke` is refused
+    naming `os_invoke`: UI Automator performs no action. Held by `android_tree::*` and, through
+    the lane on a scripted emulator answering with literal dumps of the headless app's pages, by
     `scenarios::the_android_roles_scenario_passes_through_the_lane_on_the_headless_app` and
     `scenarios::the_android_accessibility_scenario_passes_through_the_lane_but_its_activation`; the
     device runs are `android_device::the_android_roles_scenario_runs_through_the_os_lane` and
@@ -1343,6 +1373,12 @@ graph LR
     runtime (`every_input_is_refused_naming_the_xcode_and_the_runtime_before_anything_is_sent`),
     which is the rule D23 states, not this item.
   - **The scenarios on S: not met.** No Mac was at hand; the runs are owed (below).
+  - **The accessibility read (2026-11-24): built, not run on S.** The Simulator bridges the iOS
+    app's elements into the Mac's accessibility API on the device's window (Apple's
+    `AccessibilityPlatformTranslation`, which `idb` reads through the framework and which
+    Simulator.app serves to any public `AXUIElement` client, as `ldomaradzki/xctree` and
+    `mgcrea/cupertino` read it), so the lane reads the app's tree there and presses through
+    `AXPress`, and the `ios-roles` and `ios-a11y` scenarios exist with their headless halves.
 - **Spike (2026-11-20), no-go.** No Mac was at hand, so the spike read `idb`'s record rather than
   run a prototype; D23 gives the evidence and its scope (Indigo suppressed from Xcode 27, DTUHID the
   default there; no loss recorded before it, where the lane refuses all the same). Besides it:
@@ -1370,12 +1406,63 @@ graph LR
     (`ios_simulator_host::*`: the launch values in `simctl`'s environment alone and no inherited
     `SIMCTL_CHILD_` one, the screenshot read back from its file and refused past its bound by its
     length or as it grows, the output bound, the deadline, a host without `xcrun`).
+  - The accessibility read on every host (`driver_it`, Windows 11 and WSL Ubuntu 24.04,
+    2026-11-24): `ios_simulator_tree::each_accesskit_role_takes_the_trait_accesskit_ios_sets`,
+    `each_trait_reads_as_the_bridges_role_and_folds_back`,
+    `the_role_table_covers_the_vocabulary_once`,
+    `the_window_is_titled_by_the_device_and_its_runtime`,
+    `every_simulator_sharing_the_title_counts`, `each_read_lists_the_simulators_again`,
+    `the_window_is_chosen_by_what_each_window_names`,
+    `a_target_renamed_or_removed_since_connecting_is_refused`,
+    `a_window_naming_any_other_uuid_is_not_the_devices`,
+    `a_level_read_short_is_marked_whatever_stopped_it`,
+    `a_gap_that_took_an_announcer_leaves_the_text_before_it`,
+    `the_walk_reads_its_depth_and_marks_what_lies_past_it`,
+    `the_walk_reads_its_budget_and_leaves_out_a_gone_element`,
+    `a_child_list_is_cut_only_past_its_bound_or_by_its_parent_gone`,
+    `the_search_keeps_to_its_budget_and_depth`,
+    `the_search_refuses_only_a_cut_in_the_chrome`,
+    `the_screen_is_chosen_in_every_shape_its_group_can_take`,
+    `a_facts_read_that_fails_fails_the_search`,
+    `a_screen_moved_or_gone_during_the_read_is_read_again`,
+    `an_element_gone_while_untrusted_is_the_permission_taken_back`,
+    `a_press_refuses_a_lone_match_beside_an_element_gone_in_the_walk`,
+    `a_screen_holds_still_only_with_the_frame_it_was_found_at`,
+    `a_group_gone_mid_search_cuts_the_search_short`,
+    `the_search_reaches_devicehubs_screen_seven_levels_down`,
+    `the_search_reaches_a_screen_inside_simulator_apps_bezel`,
+    `the_search_refuses_two_windows_and_finds_none_in_none`,
+    `the_screen_is_the_group_with_the_windows_shape`,
+    `an_elements_points_land_on_the_windows_pixels`, `a_static_texts_label_is_its_value`,
+    `the_screen_projects_to_the_apps_tree`,
+    `the_elements_of_a_container_voiceover_skips_find_their_nodes`,
+    `an_app_node_is_matched_once`, `an_app_past_the_budget_projects_as_truncated`,
+    `an_element_fits_only_the_node_whose_facts_it_shows`, `an_ambiguous_match_is_refused`,
+    `a_press_refuses_an_element_it_cannot_tell_apart`,
+    `a_permission_taken_back_mid_read_is_named`, `a_press_names_its_own_elements_deadline`,
+    `the_lane_reads_and_presses_through_the_simulators_window`,
+    `the_lane_presses_nothing_it_cannot_match`,
+    `the_lane_refuses_a_window_it_cannot_see_and_a_read_it_was_not_handed`,
+    `the_roles_page_has_a_row_for_each_role`; through the lane on a scripted Simulator window
+    answering with the headless app's pages written out by hand from `accesskit_ios` 0.2.2's
+    rules, `scenarios::the_ios_roles_scenario_passes_through_the_lane_on_the_headless_app`,
+    `scenarios::an_ios_role_row_fails_when_the_bridge_serves_another_role` and
+    `scenarios::the_ios_accessibility_scenario_passes_through_the_lane_but_the_activations_effect`
+    (the press reaches the scripted window, not the headless app); and the shared walk's level
+    cut by an element gone, `windows_lane::an_element_gone_mid_walk_cuts_its_level_short`. Each
+    fix of the review's rounds taken out by hand fails one of them. The Mac's half
+    (`accessibility::MacAccessibility`, the shared client `lane::ax`) type-checks for
+    aarch64-apple-darwin (WSL, nightly `cargo check --lib`); its clippy is CI's cross-typecheck.
   - The scenarios on the headless target (CI): `scenarios::the_ios_input_scenario_passes_on_the_headless_target`,
     `the_safe_area_scenario_measures_a_padded_window_on_the_headless_target` (the headless window's
     own safe area, `Launch::window_insets`),
     `the_safe_area_scenario_fails_a_portrait_window_that_reports_no_inset`.
   - Owed on S (`FLUI_IOS_SIMULATOR_UDID`, `FLUI_IOS_SCENARIO_APP`, `FLUI_IOS_SCENARIO_BUNDLE`,
-    `FLUI_REQUIRE_IOS_SIMULATOR=1`): `ios_simulator::the_ios_scenarios_run_on_a_simulator`, which
+    `FLUI_REQUIRE_IOS_SIMULATOR=1`, Accessibility granted to the process running the tests, the
+    device's window on screen): `ios_simulator::the_ios_accessibility_scenario_runs_through_the_simulators_window`
+    and `ios_simulator::the_ios_roles_scenario_runs_through_the_simulators_window`, which pin the
+    bridge's roles for `accesskit_ios`'s traits, whether it serves `AXIdentifier`, and the screen's
+    place in Simulator.app and in DeviceHub; `ios_simulator::the_ios_scenarios_run_on_a_simulator`, which
     needs the scenario apps packaged for the simulator first (`examples/scenario_app.rs` builds
     for the desktops alone); the app reaching the host's socket through `SIMCTL_CHILD_` values;
     `simctl io screenshot`'s size against the window, upright and turned; `simctl launch`'s output
@@ -1406,7 +1493,27 @@ graph LR
     tried and dropped: an output form the lane did not know skipped the terminate and leaked the
     app.
   - The `adb` and `xcrun` doors run their tools through one bounded runner, `lane::tool`.
-  - The `ios-*` scenarios are `ios_input` (the tap on the pad and the press beside it) and
+  - The accessibility read is `lane::ios_simulator::accessibility` (`HostAccessibility`, the
+    Mac's `MacAccessibility` on macOS, handed to the lane by `IosSimulatorLane::read_through`),
+    `tree` and `roles`. The read hands back the elements as served; naming, placing and matching
+    them is pure code the scripted window goes through too. The Simulator's process is not looked
+    up by name (AppKit reports DeviceHub's pid as -1): every owner of a window on screen is asked
+    within a second for its windows titled `<device> – <runtime>`, taken by an allow-list every
+    host goes through (`tree::choose_window`: the one naming the device's UDID, whatever the
+    others name; else the one naming no UUID, only while no other listed simulator shares the
+    title; any other UUID never; two naming the UDID, or two naming none, refused), and the
+    device looked up by its UDID in the listing read before each read, renamed or removed
+    refused. The screen is found by reading the window's chrome within ten levels, then going
+    into each plain group of the app window's shape to look for an `iOSContentGroup` under it:
+    an `iOSContentGroup` (DeviceHub) wherever it is, else the shallowest group of the app's
+    window's shape (Simulator.app, inside its bezel or not), refused when the chrome was cut; a
+    cut inside a plain candidate is the candidate's. Which shape each window has waits on a
+    recorded tree (vanyastaff/flui#3152).
+    `accesskit_ios` serves the elements VoiceOver reads, so an element is matched among the
+    descendants of the node its nearest matched ancestor fits. The client is shared with the macOS
+    lane as `lane::ax`, and `Lane::invoke` is handed the app's tree as `read_tree` is.
+  - The `ios-*` scenarios are `ios_input` (the tap on the pad and the press beside it),
+    `accessibility` and `roles` through the lane (`ios-a11y`, `ios-roles`) and
     `safe_area` (a `SafeArea`'s child inset by the padding the window reports, the `Insets` app);
     Home and return need a button the lane cannot press, and the old `ios-execution` delegate
     cases drove a probe binary's own protocol, which is no driver scenario.
@@ -1528,21 +1635,92 @@ graph LR
 ### FD17. CLI and MCP
 
 - **Changes:**
-  - `flui-cli`: `flui drive <group> <verb>` with typed flags and `flui drive call`;
+  - `flui-cli`: `flui drive <group> <member>` with typed flags and `flui drive call`;
   - the session file plus a `0600` token file;
   - human and `--json` output, exit codes 0, 1 and 2;
   - `flui drive trace replay|codegen|pack`;
   - the OS-input announcement with its grace period and `--yes`;
   - `flui mcp` over the `flui-driver` `mcp` feature (`rmcp`), with the 13-tool core set listed by
-    default and `--caps input,inspect,pixels,record,perf,audit,explore,layout,vision`, `isError` errors,
-    snapshot deltas after acts and image content for captures.
+    default and `--caps control,input,inspect,pixels,record,perf,audit,explore,layout,vision`,
+    each tool named for its method (ADR-0403 §7), `isError` errors, snapshot deltas after acts
+    and image content for screenshots;
+  - the seven hand-written `flui_*` tools are deleted.
 - **Done when:**
+  - the record "Open design" below asks for is accepted, and this card states what it decided;
   - coverage tests show every method has a typed subcommand and is reachable as an MCP tool under
     some tier;
   - `tools/list` without `--caps` lists only the core set;
   - an MCP stdio round trip (the client moved from desktop-mcp's `tests/support`) launches a
     headless-capable example, locates, taps and asserts;
+  - `rg` finds no `flui_windows`, `flui_read`, `flui_locate`, `flui_act`, `flui_wait`,
+    `flui_motion` or `flui_reload` outside `docs/adr/`;
   - CLI calls across invocations reuse handles.
+- **Open design.** ADR-0403 names the methods and does not say how a front end whose connection
+  can end before its caller's next call serves them. That is one decision record, written
+  before this card's adapter and its `flui drive` are built, and read as a design. Two designs
+  of it were read with ADR-0403 and did not hold; the questions they leave, with the findings
+  of those reads each comes from (first read 1 to 19, second read 1 to 28, in the pull request
+  that added ADR-0403):
+  1. **Who owns what a call leaves.** Held input goes with its connection (ADR-0288 §9); the
+     clock's rate and the build banner stay in the window. Should everything a development
+     client sets end with it, and through what: the connection's lease, a holder the state
+     itself names, a session process the CLI keeps? What orders a release against a call
+     queued through the same lease, and two holders whose lives overlap? (first read 7, 8;
+     second read 1, 2, 3, 15, 20)
+  2. **What a row says of it.** A column for what a call leaves, or a split of the rows that
+     leave it only for some parameters (`clock.set` with a rate, a step or neither)? Which
+     timeouts are retried and which calls sent again on a new connection, as one rule over the
+     runtime, the driver and the CLI, with ADR-0238 §5, ADR-0288 §4 and ADR-0395 §4 restated
+     whole? (first read 5; second read 5, 6, 9)
+  3. **A front end that redials.** `flui mcp` dials again inside a call
+     (`crates/flui-cli/src/agent/mcp.rs`). What does it say when the connection that held
+     state is gone, from what record of live holds, and how does it keep a reference minted by
+     a process that was replaced from naming something else in the next? (first read 1;
+     second read 4, 10, 14)
+  4. **A front end that connects for each command.** What does `flui drive` do with a row that
+     takes or releases state, with `flui drive call` for such a row, and with the one driver's
+     seat a holding command occupies? (first read 1; second read 12, 13)
+  5. **Events and recordings over MCP.** Rows arrive with no reader and queue without a bound
+     (`crates/flui-cli/src/agent/client.rs`). Which medium delivers them: a file the server
+     writes, the revision's `subscriptions/listen`, polled journals? What marks a listened
+     resource after a redial or an `events.gap`? Should the app refuse a filter for an event it
+     sends unasked or never emits? Are resources and prompts wanted at all before a client
+     opens such a stream? (first read 2; second read 11, 16, 27)
+  6. **What a model may cause.** Which rows start a process, open another endpoint or send
+     input through the operating system, given that the OS path is a parameter (`via`) of core
+     rows and that `app.reload` runs a build? Which of them a server lists with no flag, and
+     under which tier? Does `recording.start` keep text for a model? (first read 6; second
+     read 7, 8)
+  7. **Hints.** From which facts of a row each MCP hint follows, and that all four are always
+     written, since an omitted one reads as true. (first read 5; second read 19)
+  8. **Revisions.** The shipped server speaks the handshake revisions; R29 asks for
+     2026-07-28. Which does the adapter serve, and what does a client of the other get?
+     (first read 13)
+  9. **Observers.** How many recordings observers may hold beside the driver, and who counts
+     them: the runtime, which owns the bound, or the service, which knows the role? (first
+     read 5; second read 26)
+  10. **The schema.** Whatever the record adds to a closed union of the wire (a handle kind, a
+      kind of held state) is a break (ADR-0342): it is weighed there, with ADR-0403's 0.33 if
+      it can be, or as a second break if not. (second read 17)
+- **Tracked from ADR-0403's last read.** Each is owed by the change that builds the part it
+  names, and is not decided in ADR-0403:
+  1. A Restart reload and the agent's service: which service outlives the composition, and
+     where in a composition `app.config`'s reading is taken, so that `installed` names the dev
+     agent that serves the call. With ADR-0393's Restart. (third read 4)
+  2. A connection's hello after `Service::describe`: its `app` and its method list are a copy
+     from the handshake; whether a client is told, by an event or a stamp. With `app.build`
+     and `app.config`. (third read 5)
+  3. `recording.start`, `perf.start` and `events.subscribe` are read-only rows that leave
+     state: a start that timed out is answered retry `soon` and a retry starts a second. With
+     question 2 of "Open design"; until then the rows keep their effect. (third read 7)
+  4. The audits have no bound: `AuditParams` gains a `max_findings` and `AuditReport` an
+     `omitted`, or the reads are shown to be bounded another way. With the audit tasks.
+     (third read 13)
+  5. `StorageDir` and `InstalledHook` are closed unions on the wire: each hook stated later is
+     a break unless the reader has a fallback for an unknown one. With `app.config`. (third
+     read 15)
+  6. The performance overlay's live state has no read; `app.config` answers what was
+     configured. With the `overlay` rows. (third read 16)
 
 ### FD18. Inspector
 
@@ -1589,7 +1767,7 @@ graph LR
   - a headless table over a known animation checks frame counts and phase work;
   - on W and A a scroll budget passes over 5 iterations (median of p95), and a build with an
     injected busy frame fails it;
-  - dropped and janky frames are counted apart, and latency splits into its three phases with
+  - dropped and janky frames are reported apart, and latency splits into its three phases with
     tagged states;
   - an unknown refresh period reports that jank cannot be judged.
 
@@ -1599,7 +1777,7 @@ graph LR
 - **Changes:**
   - `flui-semantics::audit` rules (unnamed, focus order with text direction, target size by
     `GestureSettings::min_target`, no alternative from the arena's recognizer registry);
-  - `audit.a11y` in the agent;
+  - `audit.accessibility` in the agent;
   - `audit.alternatives` composed in the driver (gesture vs alternative, compared by snapshot
     delta);
   - the `a11y-audit` scenario.
@@ -1627,13 +1805,16 @@ graph LR
 
 ### FD23. Layout facts, assertions and lint
 
+- **Status:** WCAG text contrast (`flui-rendering::audit`, the background read from the scene's
+  paints) was built with docs/plans/specs/testing-platform/tasks.md TP2 (ADR-0400 §5); the rest of
+  this task stays open here.
 - **Changes:**
   - `flui-rendering::inspect` gains geometry facts: window-logical box after transforms, clip,
     parent layout kind and alignment;
   - `RenderParagraph` exposes ink bounds, line boxes, baselines, resolved style, alignment,
     ellipsis and line overflow, and painted colour as data;
-  - the background colour beneath text comes from the layer tree's opaque paints, sampled from a
-    `rendered` capture only when it cannot be determined, and marked so;
+  - the background colour beneath text comes from the scene's paints, and a text whose background
+    they do not determine is not checked (ADR-0400 §5);
   - `flui-rendering::audit` holds the geometry rules: off centre, near-miss alignment, uneven gap,
     overlap, clipped and truncated text, outside window or safe area, WCAG contrast;
   - `layout.facts`, `layout.expect` (the CLI and MCP method; the Rust handle `expect(..)` is
@@ -1642,7 +1823,7 @@ graph LR
   - `audit.screen`, and `checked` and `not_checked` in `Report` with the verdict clause;
   - finding outcomes (`error`, `warning`, `needs_review`, `suppressed`);
   - the per-platform target-size profiles with the ATF exemptions;
-  - contrast at the WCAG large-text thresholds (24 px, 18.66 px bold) with a 0.01 tolerance;
+  - contrast at the WCAG large-text thresholds (24 px, 18.66 px bold), the ratio compared exactly;
   - `hit_region`, `duplicate_bounds`, `duplicate_name`, optional `non_text_contrast`;
   - `audit.text_scale` through the preferences override;
   - `benches/layout_defects/` with `cargo xtask layout-benchmark`.
@@ -1663,7 +1844,7 @@ graph LR
     baseline, font, colours, truncation);
   - `layout.expect_snapshot`, with geometric and ΔE tolerances, a numeric per-node diff, and
     baselines `<name>/<backend>-<os>.layout.json` under the explicit-update rule;
-  - `capture.annotated`, drawing boxes, centre lines, baselines, gaps and findings over a capture.
+  - `layout.annotated_screenshot`, drawing boxes, centre lines, baselines, gaps and findings over a capture.
 - **Done when:**
   - a 1 px glyph shift within tolerance passes, and a 6 px move fails with the diff naming the
     node and the delta;
@@ -1687,12 +1868,12 @@ graph LR
 ### FD26. Self-contained
 
 - **Changes:**
-  - `baselines.list|accept|reject` and `flui drive baselines review` (list-only under `CI`); the
+  - `baseline.list|accept|reject` and `flui drive baselines review` (list-only under `CI`); the
     inspector's Review view (built in FD18 on these methods);
   - `report.write`: a self-contained `report.html` with inline assets under a size cap,
     `junit.xml` (`cannot_verify` as `skipped` with its reason, `flaky` marked), and
     `findings.sarif` with rule ids, node refs and creation sites where recorded;
-  - `devices.*`: AVD and simulator lifecycle in the Android and iOS lanes, with
+  - `device.*`: AVD and simulator lifecycle in the Android and iOS lanes, with
     `flui-cli/src/commands/emulators.rs` reduced to a front end on them, and named device profiles
     in scenario matrices;
   - `--repeat N` with per-check pass rates and worst-outcome verdicts;

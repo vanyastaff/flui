@@ -2467,14 +2467,26 @@ fn a_window_wake_settles_what_the_raster_thread_finished() {
 /// its host delivers once the window can take one, and its floor would only
 /// wake the loop to ask the other window for frames it does not owe
 /// (ADR-0305 §5). The window whose frame the thread holds keeps its floor,
-/// and the settled window's wake still settles its frame.
+/// and the settled window's wake still settles its frame. While the raster
+/// host is turning, its rule cannot read the host and owes every floor.
 ///
-/// Red-check: answer `true` from `RasterHost::floor_owed` and the settled
-/// window's runtime wakes at its floor.
+/// Both runtimes are built as every runner builds one
+/// (`host::build_ui_runtime`, over `build_lending_ui_runtime`), over the
+/// loop's raster host, so the rule their wakes read is the one the builder
+/// installs. Red-check: leave `with_floor_owed` out of
+/// `build_lending_ui_runtime`, answer `true` from `RasterHost::floor_owed`,
+/// or answer `false` from `SharedRasterHost::floor_owed` while the host is
+/// turning, and the test fails.
 #[test]
 fn a_window_the_raster_thread_settled_owes_no_floor_beside_one_it_renders() {
+    let (shared, slots) = unattached_threaded_host();
+    let _loop_host = LoopRasterHost::swap_in(&shared);
     let runtime = || {
-        let ui_runtime = crate::app::ui_runtime::UiRuntime::for_test();
+        let ui_runtime = crate::app::runner::host::build_ui_runtime(
+            crate::app::window_test_support::headless_test_window(),
+            1.0,
+        )
+        .expect("the runner builds a runtime");
         ui_runtime
             .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 20.0))
             .expect("the root attaches");
@@ -2486,20 +2498,7 @@ fn a_window_the_raster_thread_settled_owes_no_floor_beside_one_it_renders() {
     };
     let (mut drawn, drawn_at) = runtime();
     let (mut settled, settled_at) = runtime();
-    let (shared, slots, wakes) = threaded_host_at(settled_at, None);
-    shared
-        .try_with(|host| {
-            host.attach_target(
-                Arc::new(FakeWindow::new(2)),
-                None,
-                drawn_at,
-                &crate::app::AppConfig::default(),
-                None,
-                None,
-            )
-        })
-        .expect("the host is idle")
-        .expect("the scripted backend attaches any window");
+    let wakes = attach_two(&shared, settled_at, drawn_at);
     let slot = |address| RasterSlot {
         host: shared.clone(),
         address,
@@ -2528,31 +2527,26 @@ fn a_window_the_raster_thread_settled_owes_no_floor_beside_one_it_renders() {
     let render = slots.hold_next_render();
     frame(&mut drawn_slot, &mut drawn);
     assert!(render.began_within(THREAD_WAIT), "the thread renders it");
-    let floor_owed = |address| {
-        shared
-            .try_read(|host| host.floor_owed(address))
-            .expect("the host is idle")
-    };
-    // Each runtime's wake with every floor, with none, and with the floors
-    // the host owes.
+    // Each runtime's wake while the raster host turns, when every floor is
+    // owed, and as the loop reads it, with the floors the host owes.
     let wakes_of = |ui_runtime: &crate::app::ui_runtime::UiRuntime| {
         (
+            shared
+                .try_with(|_| ui_runtime.next_wake())
+                .expect("the host is idle"),
             ui_runtime.next_wake(),
-            ui_runtime.next_wake_owing_floors(&|_| false),
-            ui_runtime.next_wake_owing_floors(&floor_owed),
         )
     };
-    let (with_floor, without, owed) = wakes_of(&settled);
+    let (with_floor, owed) = wakes_of(&settled);
     assert!(
-        with_floor.is_some_and(|floor| without.is_none_or(|other| floor < other)),
-        "the settled window's runtime holds its frame pending, its floor first: \
-         {with_floor:?} before {without:?}"
+        with_floor.is_some_and(|floor| owed.is_none_or(|other| floor < other)),
+        "the settled window's runtime holds its frame pending, whose floor stands while the \
+         host turns and is owed nowhere else: {with_floor:?} before {owed:?}"
     );
-    assert_eq!(owed, without, "the settled window owes no floor");
-    let (with_floor, without, owed) = wakes_of(&drawn);
+    let (with_floor, owed) = wakes_of(&drawn);
     assert!(
-        with_floor.is_some_and(|floor| without.is_none_or(|other| floor < other)),
-        "the rendered window's floor comes first: {with_floor:?} before {without:?}"
+        with_floor.is_some(),
+        "the rendered window's frame is pending"
     );
     assert_eq!(
         owed, with_floor,
@@ -2563,9 +2557,9 @@ fn a_window_the_raster_thread_settled_owes_no_floor_beside_one_it_renders() {
     let (verdict, caught) = settled_slot.settle(&mut settled);
     assert!(caught.into_payload().is_none(), "nothing panicked");
     assert_eq!(verdict, ThreadSettled::Presented, "its frame presented");
+    let (with_floor, owed) = wakes_of(&settled);
     assert_eq!(
-        settled.next_wake(),
-        settled.next_wake_owing_floors(&|_| false),
+        owed, with_floor,
         "no frame is left in flight, nor its floor"
     );
 }
@@ -3030,34 +3024,69 @@ fn quarantine_one_window(wedged_here: bool, busy: bool) {
     render.release();
 }
 
-/// A raster thread drawing two windows, `first`'s woken through the counter
-/// it answers and `second`'s through none. For the frame drivers' wake tests,
-/// which read the in-flight floors through the loop's wake
-/// (`AppRuntime::next_wake`).
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(in crate::app::runner) fn threaded_host_for_two(
+/// The loop's raster host while a test has put another in its place
+/// ([`LoopRasterHost::swap_in`]), put back as the guard drops.
+pub(in crate::app::runner) struct LoopRasterHost(Option<SharedRasterHost>);
+
+impl LoopRasterHost {
+    /// Make `shared` the loop's raster host until the answer drops: the host
+    /// whose floor rule a runtime the runner's builder builds afterwards reads
+    /// (`host::build_ui_runtime`), and whose raster work the loop's wake folds.
+    pub(in crate::app::runner) fn swap_in(shared: &SharedRasterHost) -> Self {
+        Self(Some(crate::app::runner::host::APP_RUNTIME.with(|slot| {
+            std::mem::replace(&mut slot.borrow_mut().raster_host, shared.clone())
+        })))
+    }
+}
+
+impl Drop for LoopRasterHost {
+    fn drop(&mut self) {
+        if let Some(host) = self.0.take() {
+            crate::app::runner::host::APP_RUNTIME.with(|slot| slot.borrow_mut().raster_host = host);
+        }
+    }
+}
+
+/// A threaded host over scripted slots with no window attached.
+pub(in crate::app::runner) fn unattached_threaded_host() -> (SharedRasterHost, ScriptedSlots) {
+    let slots = ScriptedSlots::new();
+    let shared = SharedRasterHost::new(
+        RasterFactory::Scripted(slots.clone()),
+        RasterPlacement::Threaded,
+    );
+    (shared, slots)
+}
+
+/// Attach two windows to `shared`, `first`'s woken through the counter this
+/// answers and `second`'s through none. For the wake tests that read the
+/// in-flight floors of a window the raster thread settled beside one it
+/// renders.
+pub(in crate::app::runner) fn attach_two(
+    shared: &SharedRasterHost,
     first: PresentationAddress,
     second: PresentationAddress,
-) -> (
-    SharedRasterHost,
-    ScriptedSlots,
-    Arc<std::sync::atomic::AtomicUsize>,
-) {
-    let (shared, slots, wakes) = threaded_host_at(first, None);
-    shared
-        .try_with(|host| {
-            host.attach_target(
-                Arc::new(FakeWindow::new(2)),
-                None,
-                second,
-                &crate::app::AppConfig::default(),
-                None,
-                None,
-            )
-        })
-        .expect("the host is idle")
-        .expect("the scripted backend attaches any window");
-    (shared, slots, wakes)
+) -> Arc<std::sync::atomic::AtomicUsize> {
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    let redraw: Arc<dyn flui_platform::RedrawRequester> = Arc::new(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    for (at, window, redraw) in [(first, 1, Some(redraw)), (second, 2, None)] {
+        shared
+            .try_with(|host| {
+                host.attach_target(
+                    Arc::new(FakeWindow::new(window)),
+                    redraw,
+                    at,
+                    &crate::app::AppConfig::default(),
+                    None,
+                    None,
+                )
+            })
+            .expect("the host is idle")
+            .expect("the scripted backend attaches any window");
+    }
+    wakes
 }
 
 /// An inline host's device request answers on its worker, which asks the

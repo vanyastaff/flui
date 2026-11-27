@@ -1,13 +1,13 @@
-//! How long an action sequence plays: its ticks one after another, each as long as its longest
-//! pause or move across the sources, which is what a server adds to an `input.inject` reply's
-//! deadline.
+//! How long an action sequence lasts: its ticks one after another, each as long as its longest
+//! pause or move across the sources; and what a server adds to an `input.inject` reply's
+//! deadline, that span and a frame for each tick.
 
 use std::time::Duration;
 
 use flui_protocol::method::Addressed;
 use flui_protocol::{
     geometry::LogicalPoint, input::ActionSequence, input::InputParams, input::InputSource,
-    input::KeyAction, input::PointerAction, input::PointerDevice, tree::WindowId,
+    input::KeyAction, input::PointerAction, input::PointerDevice, input::STEP, tree::WindowId,
 };
 
 fn pointer(actions: Vec<PointerAction>) -> InputSource {
@@ -89,10 +89,14 @@ fn a_sequence_lasts_the_sum_of_its_ticks_longest_pause_or_move() {
         let sequence = ActionSequence::new(sources);
         assert_eq!(sequence.ticks(), ticks, "{case}");
         assert_eq!(sequence.span(), span, "{case}");
+        // A window plays a tick at a frame, so the reply waits for a frame a tick on top of the
+        // span, a tick that names no duration included.
+        let plays = span.saturating_add(STEP.saturating_mul(u32::try_from(ticks).expect("few")));
+        assert_eq!(sequence.plays_within(), plays, "{case}");
         let params = InputParams::new(WindowId::from_u64(1).expect("non-zero"), sequence);
         assert_eq!(
             params.holds_for(),
-            span,
+            plays,
             "{case}: the reply waits for the input"
         );
     }

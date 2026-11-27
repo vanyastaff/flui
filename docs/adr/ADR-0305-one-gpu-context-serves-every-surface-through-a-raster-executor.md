@@ -377,7 +377,8 @@ impl UiRuntime { pub fn settle_frame(&mut self, settlement: FrameSettlement) -> 
   never settles wakes the owner once per interval. The floor guards a settlement the raster side
   has not written: once it has settled every frame it holds of a window, its wake, which follows
   the settlement, has asked that window for the frame that drains them, and the window owes the
-  loop no floor (`RasterHost::floor_owed`, `UiRuntime::next_wake_owing_floors`). Its host
+  loop no floor (`RasterHost::floor_owed`, the rule `RuntimeHostServices::with_floor_owed`
+  installs in each runtime, which `UiRuntime::next_wake` reads). Its host
   delivers that frame once the window can take one, as it does for a window drawn inline: a
   window its compositor does not draw, or has occluded, waits for its frame callback or its
   return, and the loop is not woken at the floor's pace to ask the other windows for frames

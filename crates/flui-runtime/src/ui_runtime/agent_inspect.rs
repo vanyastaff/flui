@@ -99,28 +99,30 @@ impl UiRuntime {
                 return;
             }
         };
-        {
-            let mut parked = state.agent_layer_reads.borrow_mut();
-            // Reads staged with a frame whose settlement has not arrived still owe a reply.
-            if parked.len() + state.staged_agent_layer_read_count() >= MAX_PARKED_LAYER_READS {
-                drop(parked);
-                send_reply(
-                    &reply,
-                    None,
-                    Err(AgentError::TreeBusy(
-                        "the window parks as many layer reads as it admits",
-                    )),
-                );
-                return;
-            }
-            parked.push(PendingLayerRead { query, reply });
+        // Reads staged with a frame whose settlement has not arrived still owe a reply.
+        let parked = state.agent_layer_reads.borrow().len();
+        if parked + state.staged_agent_layer_read_count() >= MAX_PARKED_LAYER_READS {
+            send_reply(
+                &reply,
+                None,
+                Err(AgentError::TreeBusy(
+                    "the window parks as many layer reads as it admits",
+                )),
+            );
+            return;
         }
         state.pipeline().with_mut(|pipeline| {
             if let Some(root) = pipeline.root_id() {
                 pipeline.mark_needs_paint(root);
             }
         });
+        // The repaint is asked for before the read is parked: the wake reaches the platform, user
+        // code, and one that panics has parked nothing, so the serving turn's answer is true.
         self.request_redraw_for(state);
+        state
+            .agent_layer_reads
+            .borrow_mut()
+            .push(PendingLayerRead { query, reply });
     }
 }
 

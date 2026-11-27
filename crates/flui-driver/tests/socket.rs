@@ -11,7 +11,7 @@ use flui_driver::protocol::act::EffectKind;
 use flui_driver::protocol::error::{ErrorCode, ErrorObject, HandleKind, Retry};
 use flui_driver::protocol::events::Event;
 use flui_driver::protocol::geometry::LogicalPoint;
-use flui_driver::protocol::input::{ActionSequence, InputSource};
+use flui_driver::protocol::input::{ActionSequence, InputSource, TapParams};
 use flui_driver::protocol::method::{self, Method};
 use flui_driver::protocol::tree::{ElementRef, WindowId};
 use flui_driver::steps::OsEvent;
@@ -397,7 +397,7 @@ fn an_element_that_turns_actionable_on_the_last_frame_is_acted_on() {
                 let timeout_ms = params["timeout_ms"].as_u64().unwrap_or(5_000).min(2_000);
                 std::thread::sleep(Duration::from_millis(timeout_ms + 1));
                 Reply::Result(json!({
-                    "satisfied": true,
+                    "end": "satisfied",
                     "frames": 1,
                     "observation": { "revision": 2, "count": 0 },
                 }))
@@ -426,6 +426,66 @@ fn an_element_that_turns_actionable_on_the_last_frame_is_acted_on() {
     );
 }
 
+/// A gesture that names a timeout past a day is composed within a day: its actionability waits
+/// are asked for at most that long, and its failure names the bound.
+#[test]
+fn a_composed_gesture_waits_no_longer_than_a_day_whatever_its_timeout() {
+    let asked = Arc::new(std::sync::Mutex::new(Vec::<u64>::new()));
+    let log = Arc::clone(&asked);
+    let agent = ScriptedAgent::start(
+        &[
+            method::WindowsList::NAME,
+            method::ElementActionability::NAME,
+            method::WaitUntil::NAME,
+        ],
+        Box::new(move |name, params| match name {
+            "element.actionability" => Reply::Result(json!({
+                "attached": true,
+                "rect": { "x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0 },
+                "visible": true,
+                "stable": true,
+                "enabled": false,
+                "receives": true,
+                "point": { "x": 5.0, "y": 5.0 },
+                "revision": 1,
+            })),
+            "wait.until" => {
+                log.lock()
+                    .expect("the log")
+                    .push(params["timeout_ms"].as_u64().unwrap_or(u64::MAX));
+                Reply::Result(json!({
+                    "end": "unsatisfied",
+                    "frames": 0,
+                    "observation": { "revision": 1, "count": 0 },
+                }))
+            }
+            _ => Reply::Result(json!({ "windows": ["w1"] })),
+        }),
+    )
+    .expect("the stand-in binds its endpoint");
+    let mut driver = attach(&agent);
+    let element: ElementRef = "w1/e1".parse().expect("an element handle");
+    let mut tap = TapParams::new(element);
+    tap.options.timeout_ms = Some(u64::MAX);
+    let refused = driver
+        .call::<method::ElementTap>(tap)
+        .expect_err("the element never turns enabled");
+    let day = Duration::from_hours(24).as_millis();
+    assert!(
+        matches!(&refused, Error::NotActionable { message, .. }
+            if message.contains(&format!("within {day} ms"))),
+        "{refused:?}"
+    );
+    let asked = asked.lock().expect("the log");
+    assert!(
+        !asked.is_empty()
+            && asked
+                .iter()
+                .all(|&timeout_ms| u128::from(timeout_ms) <= day),
+        "each wait is asked for at most a day: {asked:?}"
+    );
+}
+
 #[test]
 fn actionability_is_waited_for_by_the_clock_on_a_window_that_draws_nothing() {
     let agent = ScriptedAgent::start(
@@ -451,7 +511,7 @@ fn actionability_is_waited_for_by_the_clock_on_a_window_that_draws_nothing() {
                 let timeout_ms = params["timeout_ms"].as_u64().unwrap_or(5_000).min(2_000);
                 std::thread::sleep(Duration::from_millis(timeout_ms));
                 Reply::Result(json!({
-                    "satisfied": false,
+                    "end": "unsatisfied",
                     "frames": 0,
                     "observation": { "revision": 1, "count": 0 },
                 }))
@@ -825,4 +885,62 @@ fn a_lane_worker_tries_once_more_to_release_when_it_ends() {
             "{failing} failing releases: one release, and one more when it failed"
         );
     }
+}
+
+/// A value whose destructor panics, as what a job captures or answers may.
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("a job's value panics as it drops");
+    }
+}
+
+/// A cancelled job's capture, and an answer nobody receives, are dropped on the lane's thread
+/// under containment: their destructors' panics end nothing, the worker serves on, and its
+/// release at its end still runs.
+#[test]
+fn a_lane_worker_serves_past_job_values_that_panic_as_they_drop() {
+    let (lane, log) = ScriptedLane::new(Isolation::Xvfb);
+    let worker = LaneWorker::start(lane).expect("the worker starts");
+    let gate = Arc::new(Barrier::new(2));
+    let held = Arc::clone(&gate);
+    let running = worker
+        .submit(move |_| {
+            held.wait();
+        })
+        .expect("the first job is queued");
+    let bomb = PanicsOnDrop;
+    let cancelled = worker
+        .submit(move |_| {
+            let _kept = &bomb;
+        })
+        .expect("the second job is queued");
+    assert!(
+        cancelled.cancel(),
+        "a job that has not started is cancelled"
+    );
+    drop(cancelled);
+    drop(
+        worker
+            .submit(|_| PanicsOnDrop)
+            .expect("the third job is queued"),
+    );
+    gate.wait();
+    running.wait().expect("the first job ran");
+    assert_eq!(worker.run(|_| 7).expect("the worker serves on"), 7);
+    drop(worker);
+    assert_eq!(log.releases(), 1, "the worker's release at its end ran");
+}
+
+/// A lane whose destructor panics, with a payload whose own destructor panics too, ends its
+/// worker quietly: the worker destroys the lane under containment, and nothing is raised from
+/// the worker's own destructor.
+#[test]
+fn a_lane_that_panics_as_it_drops_ends_its_worker_quietly() {
+    let (lane, log) = ScriptedLane::new(Isolation::Xvfb);
+    let worker = LaneWorker::start(lane.panicking_on_drop()).expect("the worker starts");
+    assert_eq!(worker.run(|_| 7).expect("the worker serves"), 7);
+    drop(worker);
+    assert_eq!(log.releases(), 1, "the worker's release at its end ran");
 }

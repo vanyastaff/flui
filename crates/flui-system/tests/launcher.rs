@@ -546,7 +546,7 @@ fn a_held_request_answers_when_released() {
     let plugin = ScriptedSystem::new(launcher.clone(), ScriptedFileDialogs::new());
     let (mut host, handle) = acquire::<LauncherCapability>(&plugin);
     let handle = handle.expect("the scripted plugin provides a launcher");
-    launcher.hold();
+    let _held = launcher.hold();
 
     let answered = outcome_slot::<Result<LaunchResult, Abandoned>>();
     let slot = Rc::clone(&answered);

@@ -80,9 +80,11 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   reports one, and FLUI never sets it.
 - **No live pixels.** `flui-engine` reads back only offscreen (`HeadlessRenderer`). A presented
   window can be captured only through the OS, and only on Windows and macOS.
-- **No iOS or web accessibility tree the driver reads.** UIKit serves `accesskit_ios`'s tree only
-  inside the simulator, where no public host API reads it, and the Chrome lane reads none of a
-  page's; on those targets only the agent reads FLUI's semantics.
+- **No web accessibility tree the driver reads, and iOS's only on a Simulator.** The Chrome lane
+  reads none of a page's. UIKit serves `accesskit_ios`'s tree inside the simulator, and the
+  Simulator bridges it into the Mac's accessibility API on the device's window, which the iOS
+  Simulator lane reads; a device's tree no host API reads. Elsewhere only the agent reads FLUI's
+  semantics.
 
 ## Requirements
 
@@ -244,18 +246,26 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   server. All three expose the same operations, with the same names, parameters, results and
   errors, generated from one method table. None can do what the others cannot.
 - **R28a.** MCP lists a **core tool set** by default, 13 tools enough to launch, read,
-  locate, act, type, wait, capture and audit a screen. The other methods are grouped into capability sets the client
-  enables with `--caps <group>`: `session` (attach, capabilities, window placement, frame and settle waits, the animation clock), `input`, `inspect`, `pixels`, `record`, `perf`, `audit`,
-  `explore`, `vision`, `layout`. Every method stays reachable from MCP; tiering only changes what is listed by
+  locate, act, type, wait, take a screenshot and audit a screen. The other methods are grouped
+  into capability sets the client enables with `--caps <group>`: `control` (attach,
+  capabilities, reload, window placement, frame and settle waits, the animation clock, the
+  build status), `input`, `inspect`, `pixels`, `record`, `perf`, `audit`, `explore`, `vision`,
+  `layout`. Every method stays reachable from MCP; tiering only changes what is listed by
   default, so a model does not choose among 50 tools. `--tools` and `--exclude-tools` filter by
   name. A test measures the token size of the listed schemas, since context cost is the point of
   tiering. Reads take `format: concise | detailed`.
-- **R29.** The MCP server follows MCP revision 2026-07-28. Each tool has an input and output
-  schema and honest `readOnlyHint`/`destructiveHint`, and tool failures come back as `isError`
-  results with ADR-0080's error object. Handles are explicit and expiring, never session state
-  inside the MCP connection. Tools are listed in a deterministic order. The adapter implements
-  the revision's per-request versioning and discovery, checked against the revision's spec text
-  when the adapter is built, and refuses an older revision with its version.
+- **R29.** The MCP server follows MCP revision 2026-07-28. Each tool is named for its method
+  (ADR-0403 §7), has an input and output schema and honest `readOnlyHint`/`destructiveHint`,
+  and tool failures come back as `isError` results with ADR-0080's error object. Handles are
+  explicit and expiring, never session state inside the MCP connection. Tools are listed in a
+  deterministic order. The adapter implements the revision's per-request versioning and
+  discovery, checked against the revision's spec text when the adapter is built, and refuses
+  an older revision with its version.
+- **R29a.** R28, R28a and R29 are the requirements; the adapter's design that meets them is
+  open. Nothing yet says what a front end does with state a call leaves on a connection that
+  ends before that state does, what a model may cause by default, or which revisions a client
+  in use needs. The record that decides those is written with the CLI and MCP task (tasks.md,
+  "Open design"), and may change these three requirements.
 - **R30.** The CLI works across invocations without a daemon. `launch` writes a session file that
   later commands read; handles stay valid across commands because the app owns them.
 - **R31.** The inspector is a FLUI desktop app built on `flui-driver`. It shows the live trees, a
@@ -278,7 +288,9 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
     probed per device and reported as a capability, never assumed; `uiautomator` for system UI
     such as the soft keyboard; `screencap`;
   - iOS Simulator: no OS input until a supported channel exists, each input refused as
-    `not_supported` naming `ios_simulator_hid` (D23); `simctl` capture and process;
+    `not_supported` naming `ios_simulator_hid` (D23); the app's accessibility tree through the
+    Mac's AX API on the Simulator's window, matched to the app's tree, and `AXPress`; `simctl`
+    capture and process;
   - Chrome: WebDriver BiDi `input.performActions`, CDP IME composition, `captureScreenshot`.
 - **R32a.** OS-lane runs are **deterministic by rule**:
   - a scenario fixes its window size (logical size and scale factor), and the run refuses when the
@@ -312,8 +324,9 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 - **R37.** The driver measures performance from the app's frame events and input journal over a
   marked span (`perf.start` … `perf.stop`):
   - frame times: p50, p90, p95, p99 and the worst frame;
-  - **dropped** frames, a missed present deadline, kept separate from **janky** frames, whose work
-    exceeded a multiple of the refresh period (default 2×, JankStats' default, configurable);
+  - **dropped** frames, a missed present deadline, and **janky** frames, the dropped frames whose work
+    also exceeded a multiple of the refresh period (default 2×, JankStats' default, configurable),
+    reported in their own count and included in the dropped one;
   - input-to-present latency: from an input's journal timestamp to the presentation of the first
     frame that consumed it, split into input delay, processing and presentation delay (INP's three
     phases);
@@ -328,7 +341,7 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 
 ### Accessibility audit
 
-- **R38.** `audit.a11y` is a driver method and a standard scenario. It checks:
+- **R38.** `audit.accessibility` is a driver method and a standard scenario. It checks:
   - every interactive node has a name; siblings do not share a name or identical bounds unless the
     app waives it (ATF's duplicate-text and duplicate-clickable-bounds checks);
   - focus order visits every focusable node once, in reading order (direction-aware), with no
@@ -396,8 +409,8 @@ of guessing from pixels.
   - clipped, ellipsized or overflowing text;
   - content outside the window or the safe area;
   - text contrast below WCAG 2.2 AA: 4.5, or 3 for large text. Large text is 24 logical px, or
-    18.66 logical px bold (WCAG's 18 pt and 14 pt, with a logical px taken as a CSS px). A 0.01
-    ratio tolerance absorbs rounding, as in Flutter and ATF. Disabled controls are skipped and
+    18.66 logical px bold (WCAG's 18 pt and 14 pt, with a logical px taken as a CSS px). The
+    ratio is compared exactly, since the colours come from the scene. Disabled controls are skipped and
     listed under `not_checked`. Non-text contrast (WCAG 1.4.11, 3:1 for control boundaries and
     focus indicators) is an optional rule;
   - interactive targets below the minimum size, shared with R38;
@@ -405,8 +418,8 @@ of guessing from pixels.
 
   Each finding carries the node refs, the measured numbers, the rule and an **outcome**: `error`,
   `warning`, `needs_review` or `suppressed`, as in ATF's result types and axe's "incomplete".
-  `needs_review` is where judgement-dependent results land: a contrast whose background was
-  sampled from pixels, or a ratio within the tolerance band. A waived finding is reported as
+  `needs_review` is where judgement-dependent results land, such as a near-miss pair in a wrap
+  that reflows; a text whose background the scene does not determine is not checked. A waived finding is reported as
   `suppressed` with its reason, never dropped. The thresholds are configurable per app, and an app
   can waive a finding on a node by identifier and rule, with a reason.
 - **R41a.** **`audit.text_scale`** re-lays out a window at larger text scales (default 1.0, 1.5
@@ -696,7 +709,7 @@ corrected three draft errors:
 It also added, from shipped tools:
 - finding outcomes (`needs_review`, `suppressed`) and a text-scale audit (R41, R41a);
 - partial layout templates and Playwright's update modes (R22, R42);
-- dropped and janky frames kept separate, with INP's phases and iteration rules (R37, R37a);
+- dropped and janky frames reported apart, with INP's phases and iteration rules (R37, R37a);
 - token budgets and narrowing hints for agents (R15, R16, R28a);
 - Windows isolation candidates that must pass a spike (R14b);
 - the honest limit of the activity guard (R14a);

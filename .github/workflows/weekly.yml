@@ -78,18 +78,28 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
-      - name: cargo update --workspace (fresh lockfile in-memory only)
-        run: cargo update --workspace
+      # Plain `cargo update`: every locked package moves to its newest
+      # SemVer-compatible version that `.cargo/config.toml`'s 7-day
+      # `global-min-publish-age` lets through. `--workspace` would refresh
+      # only the members' own entries and leave every dependency where
+      # Cargo.lock has it, so the job would test the locked versions.
+      - name: cargo update (a fresh lockfile, never committed)
+        run: cargo update
 
       - name: cargo build --workspace
         run: cargo build --workspace --all-targets
 
-      # ci.yml's `test` job scope without `--locked`, which the fresh
-      # lockfile above would fail. The trybuild suites (test group
+      # ci.yml's `test` job scope, against the lockfile `cargo update` rewrote
+      # on disk above, so no step here needs `--locked` (nor does the fixture
+      # build nextest's setup script runs, which follows the lockfile the run
+      # leaves). The trybuild suites (test group
       # `trybuild`, .config/nextest.toml) stay out: they compare rustc's
       # diagnostics against checked-in `.stderr` files, which track the
       # locked dependency versions, so against a fresh lockfile they report
-      # wording changes, not breakage.
+      # wording changes, not breakage. The `*_the_locked_*` tests stay out for
+      # the same reason: each asserts that Cargo.lock holds the accesskit
+      # release a role table was transcribed from, so a newer accesskit fails
+      # them as a reminder to re-read the table, not as breakage.
       - name: cargo nextest run (lib + integration)
         run: >
           cargo nextest run
@@ -97,7 +107,7 @@ jobs:
           --lib --bins --tests
           --features flui/material,flui/cupertino,flui/native
           --no-fail-fast
-          -E 'not (group(trybuild))'
+          -E 'not (group(trybuild) | test(/_the_locked_/))'
 
   nightly-canary:
     name: nightly canary (check + clippy + future-incompat, advisory)

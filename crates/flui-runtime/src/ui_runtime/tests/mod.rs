@@ -279,9 +279,12 @@ pub(crate) fn dropping_ui_runtime_a_cannot_wake_ui_runtime_b() {
 // (ADR-0095 §3).
 // ========================================================================
 mod agent_act_read;
+mod agent_audit;
 mod agent_events;
 mod agent_inspect;
 mod agent_locate;
+mod agent_perf;
+mod agent_placement;
 mod agent_semantics;
 mod agent_stability;
 mod agent_wait;
