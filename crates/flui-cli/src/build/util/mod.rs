@@ -1,5 +1,7 @@
 /// Cargo package selection and artifact protocol.
 pub(crate) mod cargo;
+/// The cargo configuration files a cargo command reads
+pub(crate) mod cargo_config;
 /// The compiler errors of a `cargo build`.
 pub(crate) mod cargo_messages;
 /// Environment variable resolution and validation

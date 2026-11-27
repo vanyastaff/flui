@@ -289,7 +289,7 @@ pub(crate) fn rust_target_support(dir: &Path, triple: &str) -> BuildResult<Targe
     if !build_std_configured(
         dir,
         env::var_os("CARGO_UNSTABLE_BUILD_STD"),
-        cargo_home(dir),
+        super::cargo_config::cargo_home(dir),
     ) {
         return Ok(TargetSupport::of(false, BuildStd::NotConfigured));
     }
@@ -312,9 +312,9 @@ pub(crate) fn rust_target_support(dir: &Path, triple: &str) -> BuildResult<Targe
 }
 
 /// Whether cargo builds `std` for a project in `dir`: `CARGO_UNSTABLE_BUILD_STD`
-/// (`build_std_env`) is set, or a cargo configuration file it reads (each
-/// `.cargo/config.toml` or `.cargo/config` from `dir` up, then the one in
-/// `cargo_home`) states `[unstable] build-std`.
+/// (`build_std_env`) is set, or a cargo configuration table it reads
+/// ([`tables_by_precedence`](super::cargo_config::tables_by_precedence), its
+/// includes too) states `[unstable] build-std`.
 pub(crate) fn build_std_configured(
     dir: &Path,
     build_std_env: Option<std::ffi::OsString>,
@@ -323,37 +323,9 @@ pub(crate) fn build_std_configured(
     if build_std_env.is_some_and(|value| !value.is_empty()) {
         return true;
     }
-    cargo_configs(dir, cargo_home).iter().any(states_build_std)
-}
-
-/// The cargo home a cargo command run in `dir` reads, as cargo's
-/// `home::cargo_home_with_cwd`: `CARGO_HOME`, read against `dir` when relative
-/// and unset when empty, else `.cargo` in the user's home directory.
-pub(crate) fn cargo_home(dir: &Path) -> Option<PathBuf> {
-    env::var_os("CARGO_HOME")
-        .filter(|home| !home.is_empty())
-        .map(|home| dir.join(home))
-        .or_else(|| env::home_dir().map(|home| home.join(".cargo")))
-}
-
-/// The cargo configuration files a cargo command run in `dir` reads, nearest
-/// first, each parsed: in each `.cargo` from `dir` up, then in `cargo_home`,
-/// the file `config`, which cargo reads before `config.toml`, or else
-/// `config.toml`. A file
-/// that is not TOML is left out, since cargo refuses it before it builds.
-pub(crate) fn cargo_configs(dir: &Path, cargo_home: Option<PathBuf>) -> Vec<toml::Table> {
-    dir.ancestors()
-        .map(|ancestor| ancestor.join(".cargo"))
-        .chain(cargo_home)
-        .filter_map(|cargo_dir| {
-            ["config", "config.toml"]
-                .iter()
-                .map(|file| cargo_dir.join(file))
-                .find(|file| file.is_file())
-        })
-        .filter_map(|file| std::fs::read_to_string(file).ok())
-        .filter_map(|text| text.parse::<toml::Table>().ok())
-        .collect()
+    super::cargo_config::tables_by_precedence(dir, cargo_home)
+        .iter()
+        .any(states_build_std)
 }
 
 /// The cfgs rustc gives `triple` in the toolchain the project in `dir`

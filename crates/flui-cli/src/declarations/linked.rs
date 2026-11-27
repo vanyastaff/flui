@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use cargo_metadata::{Metadata, Node, Package, PackageId};
 
 use crate::build::error::{BuildError, BuildResult};
+use crate::build::util::cargo_config;
 
 /// The dependency edges the built artifact links its crates by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,7 +367,7 @@ impl<'a> Listed<'a> {
 /// of `.cargo/config.toml` (or `.cargo/config`, which cargo prefers when
 /// both are there) in that directory and in each above it, the nearest
 /// first, then of the one in `$CARGO_HOME`, each with the files it
-/// `include`s ([`registries_of`]).
+/// `include`s ([`cargo_config::layers`]).
 #[derive(Debug, Default)]
 struct Registries {
     /// Each variable's index, by the name part of the variable
@@ -411,33 +412,22 @@ impl Registries {
     /// `env`. A file that is not TOML is skipped: cargo refused it before it
     /// listed anything.
     fn configured_at(dir: &Path, env: CargoEnv) -> Self {
-        // As cargo's `home::cargo_home_with_cwd_env`: an empty `CARGO_HOME` is
-        // unset, and a relative one is read against the directory cargo runs
-        // in.
-        let cargo_home = env
-            .cargo_home
-            .filter(|home| !home.is_empty())
-            .map(|home| dir.join(home))
-            .or_else(|| env.home.map(|home| home.join(".cargo")));
-        let variables = env.registry_indexes;
+        let cargo_home = cargo_config::cargo_home_with(dir, env.cargo_home, env.home);
         let mut files = BTreeMap::new();
-        for cargo_dir in dir
-            .ancestors()
-            .map(|dir| dir.join(".cargo"))
-            .chain(cargo_home)
-        {
-            let Some(file) = ["config", "config.toml"]
-                .iter()
-                .map(|file| cargo_dir.join(file))
-                .find(|file| file.is_file())
-            else {
-                continue;
-            };
-            for (name, index) in registries_of(&file, &mut BTreeSet::new(), 0) {
+        for file in cargo_config::files(dir, cargo_home) {
+            // A file's layers, a later one over an earlier.
+            let mut registries = BTreeMap::new();
+            for layer in cargo_config::layers(&file) {
+                registries.extend(registries_in(&layer));
+            }
+            for (name, index) in registries {
                 files.entry(name).or_insert(index);
             }
         }
-        Self { variables, files }
+        Self {
+            variables: env.registry_indexes,
+            files,
+        }
     }
 
     /// The index of the registry configured as `name`.
@@ -449,51 +439,9 @@ impl Registries {
     }
 }
 
-/// How deep `include`s nest before the rest is not read.
-const INCLUDE_DEPTH: usize = 16;
-
-/// The `[registries.<name>] index` values one cargo configuration file sets,
-/// its `include`s merged as cargo merges them (stable since cargo 1.93; the
-/// `include` key of cargo's configuration reference and `load_includes` in
-/// cargo's `src/context/mod.rs`): each included file first, left to right,
-/// a later one over an earlier, then the file's own values over them all.
-/// An include is a path ending in `.toml`, or a table with its `path` and
-/// `optional`, relative to the including file's directory. A file already
-/// being read (a cycle, which cargo refuses) or deeper than
-/// [`INCLUDE_DEPTH`] adds nothing; so does a file that cannot be read or is
-/// not TOML, which cargo refused before it listed anything.
-fn registries_of(
-    file: &Path,
-    reading: &mut BTreeSet<PathBuf>,
-    depth: usize,
-) -> BTreeMap<String, String> {
-    let mut registries = BTreeMap::new();
-    if depth > INCLUDE_DEPTH || !reading.insert(file.to_path_buf()) {
-        return registries;
-    }
-    let Some(table) = std::fs::read_to_string(file)
-        .ok()
-        .and_then(|text| text.parse::<toml::Table>().ok())
-    else {
-        return registries;
-    };
-    let base = file.parent().unwrap_or(Path::new(""));
-    let includes = table
-        .get("include")
-        .and_then(toml::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|include| match include {
-            toml::Value::String(path) => Some(path.as_str()),
-            toml::Value::Table(include) => include.get("path").and_then(toml::Value::as_str),
-            _ => None,
-        })
-        // As cargo checks it: the extension exactly `toml`.
-        .filter(|path| Path::new(path).extension() == Some(std::ffi::OsStr::new("toml")));
-    for include in includes {
-        registries.extend(registries_of(&base.join(include), reading, depth + 1));
-    }
-    let own = table
+/// The `[registries.<name>] index` values one configuration table sets.
+fn registries_in(table: &toml::Table) -> impl Iterator<Item = (String, String)> + '_ {
+    table
         .get("registries")
         .and_then(toml::Value::as_table)
         .into_iter()
@@ -501,10 +449,7 @@ fn registries_of(
         .filter_map(|(name, registry)| {
             let index = registry.get("index").and_then(toml::Value::as_str)?;
             Some((name.clone(), index.to_owned()))
-        });
-    registries.extend(own);
-    reading.remove(file);
-    registries
+        })
 }
 
 #[cfg(test)]

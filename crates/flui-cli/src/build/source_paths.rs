@@ -31,7 +31,7 @@ use cargo_metadata::Metadata;
 use cargo_platform::{Cfg, Platform};
 
 use crate::build::error::{BuildError, BuildResult};
-use crate::build::util::environment;
+use crate::build::util::{cargo_config, environment};
 
 /// The separator cargo puts between the flags of `CARGO_ENCODED_RUSTFLAGS`.
 const ENCODED_SEPARATOR: char = '\x1f';
@@ -58,9 +58,8 @@ impl Remap {
     }
 }
 
-/// The rewrites of one project's build: rustc applies the last one that
-/// matches a path, so a directory inside another (a target directory in the
-/// workspace) comes after it.
+/// The rewrites of one project's build, a directory after every directory
+/// that holds it, since rustc applies the last one that matches a path.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct SourcePathRemap {
     remaps: Vec<Remap>,
@@ -69,8 +68,9 @@ pub(crate) struct SourcePathRemap {
 impl SourcePathRemap {
     /// The rewrites of the project in `dir`: each registry source directory
     /// of `cargo_home` (its crates are named `<name>-<version>/`), its git
-    /// checkouts, every package of the resolved graph that is a path outside
-    /// the workspace, the workspace root and the target directory.
+    /// checkouts, the workspace root, every package of the resolved graph whose
+    /// directory none of those holds (a path dependency elsewhere, a vendored
+    /// source), the target directory and a separate build directory.
     ///
     /// # Errors
     ///
@@ -98,40 +98,67 @@ impl SourcePathRemap {
         registries: &[PathBuf],
         git_checkouts: Option<PathBuf>,
     ) -> Self {
+        let root = metadata.workspace_root.as_std_path();
         let mut remaps: Vec<Remap> = registries
             .iter()
             .map(|index| Remap {
                 from: index.clone(),
                 to: String::new(),
             })
+            .chain(git_checkouts.map(|from| Remap {
+                from,
+                to: format!("git{MAIN_SEPARATOR}"),
+            }))
+            .chain([Remap {
+                from: root.to_path_buf(),
+                to: String::new(),
+            }])
             .collect();
-        remaps.extend(git_checkouts.map(|from| Remap {
-            from,
-            to: format!("git{MAIN_SEPARATOR}"),
-        }));
-        let root = metadata.workspace_root.as_std_path();
-        remaps.push(Remap {
-            from: root.to_path_buf(),
-            to: String::new(),
-        });
-        let mut outside: Vec<Remap> = metadata
+        // A package whose directory no prefix above holds: a path
+        // dependency elsewhere on the machine, a vendored source.
+        let packages: Vec<Remap> = metadata
             .packages
             .iter()
-            .filter(|package| package.source.is_none())
             .filter_map(|package| {
                 let dir = package.manifest_path.parent()?.as_std_path();
-                (!dir.starts_with(root)).then(|| Remap {
+                let held = remaps.iter().any(|remap| dir.starts_with(&remap.from));
+                (!held).then(|| Remap {
                     from: dir.to_path_buf(),
                     to: format!("{}-{}{MAIN_SEPARATOR}", package.name, package.version),
                 })
             })
             .collect();
-        outside.sort_by(|a, b| a.from.cmp(&b.from));
-        remaps.extend(outside);
+        remaps.extend(packages);
+        // Generated files: the target directory, and the build directory
+        // where `build.build-dir` puts the intermediate outputs apart from it.
+        let target = metadata.target_directory.as_std_path();
         remaps.push(Remap {
-            from: metadata.target_directory.as_std_path().to_path_buf(),
+            from: target.to_path_buf(),
             to: format!("target{MAIN_SEPARATOR}"),
         });
+        if let Some(build) = metadata
+            .build_directory
+            .as_ref()
+            .map(|build| build.as_std_path())
+            .filter(|build| *build != target)
+        {
+            remaps.push(Remap {
+                from: build.to_path_buf(),
+                to: format!("build{MAIN_SEPARATOR}"),
+            });
+        }
+        // rustc takes the last rewrite that matches, so a directory comes
+        // after every directory that holds it (a registry or a target
+        // directory inside the workspace), and the order is the same on every
+        // run.
+        remaps.sort_by(|a, b| {
+            a.from
+                .components()
+                .count()
+                .cmp(&b.from.components().count())
+                .then_with(|| a.from.cmp(&b.from))
+        });
+        remaps.dedup_by(|a, b| a.from == b.from);
         Self { remaps }
     }
 
@@ -193,9 +220,9 @@ impl SourcePathRemap {
 /// When `cargo metadata` fails for the project, or `rustc` cannot list the
 /// target's cfgs that a `target.'cfg(…)'` table needs.
 pub(crate) fn release_rustflags(dir: &Path, triple: &str) -> BuildResult<CargoRustflags> {
-    let cargo_home = environment::cargo_home(dir);
+    let cargo_home = cargo_config::cargo_home(dir);
     let remap = SourcePathRemap::of_project(dir, cargo_home.as_deref())?;
-    let configs = environment::cargo_configs(dir, cargo_home);
+    let configs = cargo_config::tables_by_precedence(dir, cargo_home);
     let source = RustflagsSource::of_build(
         triple,
         |name| std::env::var(name).ok(),
