@@ -7,7 +7,7 @@
 # that job's log, with the reason in the pull request.
 
 [size]
-counter_element_bytes = 202357
+counter_element_bytes = 202258
 counter_release_bytes = 20572784
 counter_wasm_bytes = 12803927
 crates_android = 222
