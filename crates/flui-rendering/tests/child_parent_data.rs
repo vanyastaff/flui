@@ -282,3 +282,27 @@ fn a_sliver_list_child_keeps_the_layout_offset_its_list_wrote() {
         assert_eq!(data.layout_offset, offset, "child {index}'s layout offset");
     }
 }
+
+#[test]
+fn a_boxed_parent_data_clones_into_a_copy_of_its_own_type() {
+    let original: Box<dyn flui_rendering::parent_data::ParentData> =
+        Box::new(BoxParentData { offset: SEEDED });
+
+    let mut copy = original.clone();
+
+    assert_eq!(
+        copy.downcast_ref::<BoxParentData>().map(|data| data.offset),
+        Some(SEEDED),
+        "the copy is the concrete type with its value, not a box of the box"
+    );
+    copy.downcast_mut::<BoxParentData>()
+        .expect("the copy is a BoxParentData")
+        .offset = written(1, 0);
+    assert_eq!(
+        original
+            .downcast_ref::<BoxParentData>()
+            .map(|data| data.offset),
+        Some(SEEDED),
+        "writing the copy leaves the original alone"
+    );
+}
