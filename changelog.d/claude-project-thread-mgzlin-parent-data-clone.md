@@ -1,5 +1,10 @@
 ### Changed
 
-- `ParentData`'s supertrait for copying a `&dyn ParentData` is `flui_rendering::parent_data::CloneParentData`
-  (`data.clone_box()`), implemented for every `ParentData + Clone` type, in place of `dyn_clone::DynClone`;
-  `flui-rendering` no longer depends on `dyn-clone`.
+- `ParentData` no longer names `dyn_clone::DynClone` as a supertrait; `flui-rendering` no longer
+  depends on `dyn-clone`. A parent data type is still any `Debug + Clone + 'static` type with
+  `impl ParentData for T {}`, and `Box<dyn ParentData>` is still `Clone`.
+
+### Removed
+
+- `Clone` for `Box<dyn ParentData + Send>`, `Box<dyn ParentData + Sync>` and
+  `Box<dyn ParentData + Send + Sync>`, which `dyn-clone`'s macro added and nothing used.

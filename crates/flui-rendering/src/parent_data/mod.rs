@@ -27,7 +27,8 @@ mod sliver_parent_data;
 mod sliver_variants;
 mod table_text;
 
-pub use base::{CloneParentData, ParentData};
+pub use base::ParentData;
+pub(crate) use base::sealed::CloneParentData;
 pub use box_parent_data::BoxParentData;
 pub use box_variants::{
     FlexFit, FlexParentData, HorizontalInsets, MultiChildLayoutParentData, StackParentData,

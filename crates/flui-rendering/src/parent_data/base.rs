@@ -21,11 +21,10 @@ use std::any::Any;
 ///
 /// # Cloning
 ///
-/// `ParentData` requires [`CloneParentData`], which every `Clone` type gets
-/// from its blanket implementation, so `data.clone_box()` copies a
-/// `&dyn ParentData` into a `Box<dyn ParentData>`. The intrinsic and dry query
-/// walks read a child's parent data through that copy; the layout walk lends
-/// it instead of copying it.
+/// A parent data type is `Clone`, and `Box<dyn ParentData>` is `Clone`
+/// through it: the copy is the concrete type's own `clone`. The intrinsic and
+/// dry query walks read a child's parent data through such a copy; the layout
+/// walk lends it instead of copying it.
 ///
 /// # Example
 ///
@@ -56,7 +55,7 @@ use std::any::Any;
     label = "missing `impl ParentData for {Self}`",
     note = "`impl ParentData for {Self} {{}}` is enough (every method has a default) provided `{Self}` is `Debug + Clone + 'static`"
 )]
-pub trait ParentData: Debug + Any + CloneParentData {
+pub trait ParentData: Debug + Any + sealed::CloneParentData {
     /// Called when render object is removed from tree.
     ///
     /// Override to clean up resources (listeners, subscriptions, etc).
@@ -84,20 +83,25 @@ impl dyn ParentData {
     }
 }
 
-/// Copies a `&dyn ParentData` into a box of its own: std's `Clone` is not
-/// object safe, so the copy goes through this supertrait of [`ParentData`].
+/// The copy behind `Box<dyn ParentData>: Clone`: std's `Clone` is not object
+/// safe, so a `&dyn ParentData` copies itself through this supertrait.
 ///
-/// Every `ParentData + Clone` type implements it through the blanket
-/// implementation below; a parent data type never implements it by hand.
-pub trait CloneParentData {
-    /// A boxed copy of `self`.
-    #[must_use]
-    fn clone_box(&self) -> Box<dyn ParentData>;
-}
+/// The trait is sealed: its module is private, so no type outside this crate
+/// names it, and the blanket implementation is the only one. A type is parent
+/// data only if it is `Clone`, and its copy is its `Clone`.
+pub(crate) mod sealed {
+    use super::ParentData;
 
-impl<T: ParentData + Clone> CloneParentData for T {
-    fn clone_box(&self) -> Box<dyn ParentData> {
-        Box::new(self.clone())
+    pub trait CloneParentData {
+        /// A boxed copy of `self`.
+        #[must_use]
+        fn clone_box(&self) -> Box<dyn ParentData>;
+    }
+
+    impl<T: ParentData + Clone> CloneParentData for T {
+        fn clone_box(&self) -> Box<dyn ParentData> {
+            Box::new(self.clone())
+        }
     }
 }
 
