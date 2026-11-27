@@ -2588,6 +2588,7 @@ dependencies = [
  "syn 3.0.10",
  "thiserror 2.0.21",
  "tracing",
+ "trybuild",
  "web-time",
 ]
 
