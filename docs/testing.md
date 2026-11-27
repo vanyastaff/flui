@@ -1298,13 +1298,16 @@ whose composition decision a subscriber is, not at the DAG's bottom.
 (or a human, working the same way) can discover the public API, build a UI, inspect it two ways,
 drive an interaction through it, and assert the result, using only `flui::…`, the surface a
 consumer of the published crate has. It is `flui`'s own `tests/`, not `flui-testing`'s, for that
-reason.
+reason. It still drives the deprecated `flui::testing::Tester`: the
+`flui::testing::scenario::Tester` that replaces it (ADR-0400) has no render-tree read yet, and
+the suite moves when it has ([gaps](gaps.md#accepted-adr-sections-not-built-yet)). A new test is
+written against `scenario::Tester`, as the top of this page shows.
 
 The tree is a Material counter (`Center` → `Column` → prompt `Text` / count `Text` /
 `ElevatedButton`, a `Signal` created in `create_state`), the CLI `counter` template's shape with
 Material in place of its `RawButton`.
 
-| Step | What it does | API |
+| Step | What it does | API (the deprecated tester) |
 |------|--------------|-----|
 | 1. Mount | Mount the tree as `run_app` does | `flui::testing::Tester::mount` |
 | 2. Inspect structure | Read the render tree, check a known node is there | `Tester::inspect_render`, the agent's `inspect.render` |
