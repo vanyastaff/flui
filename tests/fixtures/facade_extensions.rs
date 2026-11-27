@@ -1,8 +1,4 @@
 #![cfg(test)]
-#![expect(
-    deprecated,
-    reason = "ADR-0400: the scenario tester has no `draw_commands`, no timed long press and no render-tree read yet (docs/gaps.md)"
-)]
 
 use flui::animation::Animation;
 use flui::geometry::{Offset, Point, Rect, Size};
@@ -12,7 +8,8 @@ use flui::rendering::{
     BoxConstraints, BoxDryLayoutContext, BoxLayoutContext, BoxParentData, BoxProtocol, Leaf, PaintContext,
     RenderBox, RenderUpdateImpact, Single,
 };
-use flui::testing::{Tester, find};
+use flui::testing::scenario::gesture::{Gesture, Pointer};
+use flui::testing::scenario::{Tester, find};
 use flui::view::{RenderObjectContext, RenderView};
 use flui::widgets::AnimatedBuilder;
 use std::cell::Cell;
@@ -147,7 +144,8 @@ impl ViewState<MotionCard> for MotionCardState {
 #[test]
 fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
     fn sample(t: &mut Tester) -> (Rect, Color) {
-        let rectangles: Vec<_> = t.draw_commands(&find::id("card")).into_iter().filter_map(|command| {
+        let drawn = t.frame().draw_commands(&find::id("card")).expect("the card paints");
+        let rectangles: Vec<_> = drawn.into_iter().filter_map(|command| {
             match command.op {
                 DrawOp::Rect { rect, paint } => Some((rect, paint.color)),
                 _ => None,
@@ -170,9 +168,9 @@ fn nested_custom_motion_repaints_and_retargets_through_the_facade() {
         Appearance { position: Offset::new(20.0, 40.0), color: Color::rgba(0, 0, 255, 0) },
         1.0,
     )).expect("first custom motion");
-    // A read runs the frame the motion asked for at once, which anchors the
-    // run before the presentation's time advances.
-    let _ = sample(&mut t);
+    // The run starts at the frame after it was asked for: a read runs no
+    // frame, so a pump anchors it before the measured half second.
+    t.pump();
     t.pump_for(Duration::from_millis(500));
     assert_eq!(card.builds.get(), builds, "custom motion only invalidates paint");
     let seam = sample(&mut t);
@@ -433,9 +431,11 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     ));
     // The long-press deadline runs on the test's clock: a press released
     // before 500 ms of it is no long press, one held past it is.
-    t.long_press(&find::id("press"), Duration::from_millis(300));
+    let at = t.rect(&find::id("press")).center();
+    let press = |hold| Gesture::new().pointer(Pointer::touch(at).down().hold(hold).up()).build();
+    t.perform(&press(Duration::from_millis(300)));
     assert_eq!(fired.get(), 0);
-    t.long_press(&find::id("press"), Duration::from_millis(550));
+    t.perform(&press(Duration::from_millis(550)));
     assert_eq!(fired.get(), 1);
 }
 
@@ -600,7 +600,12 @@ fn downstream_custom_recognizer_competes_in_the_arena() {
     // Past the near recognizer's threshold and short of the far one's: the
     // near one claims the contact and the arena rejects the far one, though
     // the far one is the member a sweep would award.
-    t.drag(&find::id("arena"), 15.0, 0.0, Duration::from_millis(100));
+    let at = t.rect(&find::id("arena")).center();
+    t.perform(
+        &Gesture::new()
+            .pointer(Pointer::touch(at).down().move_by(15.0, 0.0, Duration::from_millis(100)).up())
+            .build(),
+    );
     let recognizers = probe.recognizers.borrow();
     let [far, near] = &recognizers[..] else {
         panic!("the state built two recognizers");
@@ -883,7 +888,12 @@ impl ViewState<LifecycleProbe> for LifecycleProbeState {
 }
 
 #[test]
+#[expect(
+    deprecated,
+    reason = "ADR-0400: moves to Tester; the scenario tester has no window control yet (docs/gaps.md)"
+)]
 fn presentation_lifecycle_subscription_runs_through_the_facade() {
+    use flui::testing::Tester;
     use flui::view::{AppLifecycleState, LifecycleClosed};
     let view = LifecycleProbe {
         captured: Rc::default(),

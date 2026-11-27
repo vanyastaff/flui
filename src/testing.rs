@@ -8,7 +8,10 @@
 //! [`scenario::find`] builds the `Find`s it looks with, over the window's
 //! semantics tree, an action goes through the window's own input path, a
 //! read runs no frame, and [`scenario::Tester::expect`] waits while the
-//! application works for a [`scenario::matcher`] to hold.
+//! application works for a [`scenario::matcher`] to hold. [`scenario::gesture`]
+//! builds multi-pointer, keyed and timed input that `Tester::perform` sends, and [`frame`]
+//! reads the presented frame in process, through types: a render object's
+//! geometry or field, the draw commands under an element, the layer outline.
 //!
 //! ```
 //! use flui::prelude::*;
@@ -23,6 +26,7 @@
 
 pub use flui_testing::drop_ledger::{DropLedger, DropSentinel};
 pub use flui_testing::find;
+pub use flui_testing::frame;
 pub use flui_testing::host::HostClock;
 pub use flui_testing::scenario;
 pub use flui_testing::storage::{CommitBarrier, CopyHold, MemoryStorage, ReadHold, WriteHold};
