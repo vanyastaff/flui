@@ -11,6 +11,6 @@ counter_wasm_bytes = 12803927
 crates_android = 223
 crates_linux = 274
 crates_macos = 206
-crates_wasm32 = 179
+crates_wasm32 = 174
 crates_windows = 205
 hot_reload_host_release_bytes = 20743272

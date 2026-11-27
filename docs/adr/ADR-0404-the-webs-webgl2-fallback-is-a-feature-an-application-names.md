@@ -23,7 +23,7 @@ On wasm32 `flui-engine` turned on wgpu's `webgpu`, `gles` and `webgl` for every 
 
 | Fact | Evidence |
 |---|---|
-| WebGPU on the web is the browser's own API: wgpu forwards to it and links neither `wgpu-core` nor a HAL backend. `webgl` links `wgpu-core`, `wgpu-hal`'s GL backend and the GLSL path of `naga` into the module | the wgpu and wgpu-core manifests (Sources); `cargo update` drops `wgpu-core-deps-wasm` from the lock graph once `webgl` is off |
+| WebGPU on the web is the browser's own API: wgpu forwards to it and links neither `wgpu-core` nor a HAL backend. `webgl` links `wgpu-core`, `wgpu-hal`'s GL backend and the GLSL path of `naga` into the module | the wgpu and wgpu-core manifests (Sources); `cargo tree --package flui --target wasm32-unknown-unknown` counts 179 packages with `webgl2` and 174 without (`crates_wasm32` in `perf/size.toml`) |
 | Built as CI's `size` job builds it, the generated counter's wasm32 module is 12,803,927 bytes with the fallback and 10,680,923 without (2,123,004, 16.6%); brotli at quality 11 takes them to 2,994,272 and 2,517,093 (477,179, 16%), what a page transfers; native binaries are unchanged | local builds with the `size` job's commands, 2026-11-24 and 2026-11-27; `counter_wasm_bytes` in `perf/size.toml` |
 | WebGPU ships in Chrome and Edge on Windows, macOS, ChromeOS and Android 12+, Safari 26 and Firefox on Windows and Apple-silicon macOS. It does not yet in Chrome or Firefox on Linux, Firefox on Android or Intel Macs, or on Android before 12 | Sources (web.dev, 2025-11) |
 | No browser has run the WebGL2 fallback; the pixel suites pass on llvmpipe GL only | `docs/gaps.md`, "Version floors and the GPU fallback not run on devices" |
@@ -84,20 +84,30 @@ whose manifest is not generated names it as it names any other feature.
   counter: 10,680,923 bytes against 12,803,927).
 - Good, because a generated application draws where it did, and its author sees the trade in
   their manifest.
-- Good, because native builds and the facade's defaults are unchanged.
+- Good, because native builds are unchanged and the facade turns no feature on by default; its
+  default wasm32 graph loses the five packages of wgpu's GL path (`crates_wasm32`, 179 to 174).
 - Bad, because a hand-written manifest that omits `webgl2` refuses a browser without WebGPU, which
   it would have drawn in before. The refusal names WebGPU as the backend tried.
 - Bad, because the `size` job builds the generated counter, which names `webgl2`, so it does not
-  measure the WebGPU-only module, and the workspace's own wasm32 builds (`examples/web_counter`,
-  `wasm-check`) name no `webgl2` and carry no GL backend.
+  measure the WebGPU-only module, and the workspace's own wasm32 builds (`wasm-check`,
+  `flui-web-demo`, `flui-painting-demo`) name no `webgl2` and carry no GL backend: only the
+  `size` job, on `main`, compiles a wasm32 module with it, so a wasm32 break under `webgl2` shows
+  there first.
+- Bad, because a web bundle built without `webgl2` is refused by a browser that offers only
+  WebGL, such as the headless Chrome of `flui-driver`'s Chrome lane (SwiftShader): a bundle
+  made for that lane names the feature.
 - Neutral, because the WebGL2 path is as unproven in a browser as it was (`docs/gaps.md`).
 
 ### Confirmation
 
 - `gpu_backend_fallback_order` (`flui-engine`, `device::backend`) holds both web orders: WebGL2
-  after WebGPU with `webgl2`, WebGPU alone without it, and `Family::Web` taking the build's.
+  after WebGPU with `webgl2`, WebGPU alone without it, and `Family::Web` asking WebGL2 exactly
+  where the build names the feature: wired to `true` it fails the default run, wired to `false` a
+  run with `--features webgl2`.
+- CI's `deps` job holds `crates_wasm32` to the facade's default wasm32 graph, which has no GL path.
 - `flui-cli`'s `generated_*_project_compiles` check that each application template names
-  `webgl2` and says what removing it does, and that the `widget` template names none.
+  `webgl2` and says what removing it does, and that the `widget` template and a `--hot-reload`
+  project's types and logic crates name none.
 - `flui-cli`'s `platform_floor` holds `docs/version-map.md` to `platform-support.toml`.
 
 ## Pros and cons of the options

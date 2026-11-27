@@ -281,12 +281,18 @@ mod tests {
                 Some(WebGl2),
             ),
             case(web_order(false), None, &[WebGl2], &[WebGpu], None),
+            // The web order this build takes: WebGL2 is asked only where the
+            // build names `webgl2`.
             case(
                 Family::Web.order(),
                 None,
-                &[WebGpu],
-                &[WebGpu],
-                Some(WebGpu),
+                &[],
+                if cfg!(feature = "webgl2") {
+                    &[WebGpu, WebGl2]
+                } else {
+                    &[WebGpu]
+                },
+                None,
             ),
             case(
                 Family::Windows.order(),

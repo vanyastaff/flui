@@ -6,7 +6,7 @@
   typed checks become the single style below, are compared against a declared floor, and the floor
   is enforced at build and at start. Its Android refresh-rate behaviour (decision 9's API 30 hint)
   stays in force as a gate of this shape.
-- **Superseded-by in part:** [ADR-0404](ADR-0404-the-webs-webgl2-fallback-is-a-feature-an-application-names.md),
+- **Superseded-by:** [ADR-0404](ADR-0404-the-webs-webgl2-fallback-is-a-feature-an-application-names.md) for
   decision 1's Web fallback only: WebGL2 is tried after WebGPU where the application names the
   `webgl2` feature, which `flui create` writes; without it the Web's floor is a WebGPU browser.
 - **Related:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (where OS types live),
@@ -107,7 +107,8 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
    - a **requirement** floor (the Linux drivers and protocols, the Web's graphics API, and a GPU
      adapter anywhere), which has no value to compare: the probe that finds it missing returns
      `PlatformError::MissingRequirement { environment, requirement }` naming what was looked for (the
-     `xdg_wm_base` global, RandR 1.5, a WebGPU or WebGL2 adapter), and the renderer's
+     `xdg_wm_base` global, RandR 1.5, a WebGPU adapter, or a WebGL2 one where the build names
+     `webgl2` (ADR-0404)), and the renderer's
      `EngineError::NoSupportedGpu` is reported the same way.
 
    A native app runner prints either error and exits non-zero. On the Web, where a page has no exit
@@ -222,7 +223,8 @@ Apple `OsVersion::since`, Android `NdkFn`, Web `WebFeature`), bare comparisons
 
 ## Consequences
 
-- `flui-engine` enables `gles` on Android and Linux and `webgl` on the Web, and `select_backend`
+- `flui-engine` enables `gles` on Android and Linux, and `webgl` on the Web where the application
+  names `webgl2` (ADR-0404), and `select_backend`
   returns the preferred backend with GL behind it; today the Web branch already names `GL` without
   the `webgl` feature, so its "WebGL fallback" is never compiled. On GL wgpu ignores
   `desired_maximum_frame_latency`, so the clock-side in-flight bound is the only one there.
