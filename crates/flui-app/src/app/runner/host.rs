@@ -95,7 +95,7 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
 /// `APP_RUNTIME` must not be mutably borrowed when this is called.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn host_storage() -> Option<Arc<dyn flui_platform::Storage>> {
-    APP_RUNTIME.with(|slot| slot.borrow().host_storage.current())
+    APP_RUNTIME.with(|slot| slot.borrow().application.host_storage.current())
 }
 
 /// The directory the run's storage lives in under the data roots: the one
@@ -776,7 +776,7 @@ fn flush_for_session_end(
     let flush = APP_RUNTIME.with(|slot| {
         slot.try_borrow()
             .ok()
-            .and_then(|state| state.flush_host.clone())
+            .and_then(|state| state.application.flush_host.clone())
     })?;
     let report = flush.flush_within(deadline);
     if report.is_complete() {
@@ -1322,7 +1322,7 @@ pub(super) fn main_window() -> MainWindow {
         let ingress = APP_RUNTIME.try_with(|slot| {
             slot.try_borrow()
                 .ok()
-                .map(|state| state.main_ingress.clone())
+                .map(|state| state.application.main_ingress.clone())
         });
         match ingress {
             Ok(Some(Some(ingress))) => {
@@ -1368,6 +1368,7 @@ pub(super) fn main_window_failures() -> u64 {
             .try_with(|slot| {
                 slot.try_borrow()
                     .ok()?
+                    .application
                     .main_ingress
                     .as_ref()
                     .map(|ingress| ingress.failed_openings())
@@ -1580,7 +1581,7 @@ pub(super) fn install_exit_policy_hook(policy: ExitPolicy) {
             not(target_arch = "wasm32")
         ))]
         if should_exit {
-            let ingress = APP_RUNTIME.with(|slot| slot.borrow().main_ingress.clone());
+            let ingress = APP_RUNTIME.with(|slot| slot.borrow().application.main_ingress.clone());
             if let Some(ingress) = ingress {
                 return ingress.try_auto_quit();
             }
@@ -1952,7 +1953,7 @@ impl Drop for OwnerHostClearGuard {
                 (
                     runtime.owner_platform.take(),
                     runtime.owner_turn_wake.take(),
-                    runtime.host_storage.take(),
+                    runtime.application.host_storage.take(),
                 )
             } else {
                 (None, None, None)

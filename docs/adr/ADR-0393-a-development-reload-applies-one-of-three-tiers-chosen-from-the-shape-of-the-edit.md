@@ -252,8 +252,8 @@ pub enum RestartFailure<'a> {
 
 §4. **A restart retires the application and composes it again.** The loop holds what it builds
 from an `Application` (the capability registry, plugins, handlers, services, the exit policy, the
-main-window factory and its installer, the placement registry, the opening handler, the executors
-and their tasks, the application-control ingress, the application's font registrations, every UI
+main-window factory and its installer, the placement registry, the opening handler, the tasks
+on the executors, the application-control ingress, the application's font registrations, every UI
 runtime) in one value, the *application scope*, which a restart drops and builds again. What the
 loop holds outside it is what the host made before any application code ran, and only that is
 kept. The host, at the end of the turn:
@@ -291,10 +291,14 @@ kept. The host, at the end of the turn:
 - Work the earlier application addressed through the framework is refused after it is retired: a
   retired `UiRuntimeId` is never issued again, the earlier ingress refuses every request an
   `AppHandle` of it sends, and an accessibility action names a node of a tree that is gone. Tasks
-  on the scope's executors are dropped with it. A thread the application spawned itself is its
-  own: the framework cannot end it, and it keeps running code of the earlier build.
+  the application spawned on the executors are dropped with its scope. A thread the application
+  spawned itself is its own: the framework cannot end it, and it keeps running code of the earlier
+  build.
 - The later application's window description is not applied to a kept window. An author who
   changed it asks for a process restart.
+- The executor pools are the loop's, not the scope's: a host runs its own IO on them (ADR-0327
+  §3), started before any application code. A later application's `AppConfig::executors` is not
+  applied, and the restart's outcome says that a process restart applies them.
 
 `flui_runtime::reload::ReloadTier` is deleted, and the runtime's reload command loses its
 argument: a UI runtime reassembles, and the two higher tiers are not operations on a UI runtime.

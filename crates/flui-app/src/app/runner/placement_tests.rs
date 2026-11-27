@@ -54,10 +54,13 @@ fn start_on_manual_clock(application: Application) -> (HeadlessRunHandle, Manual
     let clock = ManualClock::new();
     let placement_clock = clock.clone();
     APP_RUNTIME.with(|slot| {
-        slot.borrow().placement.set_clock(Rc::new(placement_clock));
+        slot.borrow()
+            .application
+            .placement
+            .set_clock(Rc::new(placement_clock));
     });
     let ingress = APP_RUNTIME
-        .with(|slot| slot.borrow().main_ingress.clone())
+        .with(|slot| slot.borrow().application.main_ingress.clone())
         .expect("a running loop has its main window's ingress");
     assert!(
         ingress.request_native_show(),
@@ -82,7 +85,15 @@ fn turn_at(run: &HeadlessRunHandle, clock: &ManualClock) {
 }
 
 fn recording() -> usize {
-    APP_RUNTIME.with(|slot| slot.borrow().placement.shared().live.borrow().len())
+    APP_RUNTIME.with(|slot| {
+        slot.borrow()
+            .application
+            .placement
+            .shared()
+            .live
+            .borrow()
+            .len()
+    })
 }
 
 /// A configured position is whole logical pixels of the primary display: the
@@ -330,7 +341,7 @@ fn the_host_acquires_the_storage_once_per_window() {
 fn a_close_that_finds_the_state_busy_is_carried_over() {
     let storage = MemoryStorage::new();
     let (run, _clock) = start_on_manual_clock(remembering(&storage));
-    let shared = APP_RUNTIME.with(|slot| slot.borrow().placement.shared());
+    let shared = APP_RUNTIME.with(|slot| slot.borrow().application.placement.shared());
     let address = shared.live.borrow()[0].address;
     let close = super::PlacementClose::of(Rc::clone(&shared), address);
 
