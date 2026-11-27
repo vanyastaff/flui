@@ -39,7 +39,7 @@ use flui_view::dev_reload::DevReloadHook;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use flui_view::dev_reload::ReloadWake;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-use flui_view::dev_reload::{CodeVersion, ReloadOutcome, RestartFailure};
+use flui_view::dev_reload::{CodeVersion, ReloadOutcome, RestartFailure, Unapplied};
 use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -407,13 +407,13 @@ impl WorkerReload {
     }
 
     /// The restart to `version` composed the application (§4 step 4): later
-    /// versions of its layout reassemble.
-    pub(crate) fn restarted(&self, version: CodeVersion) {
+    /// versions of its layout reassemble, and `unapplied` is reported.
+    pub(crate) fn restarted(&self, version: CodeVersion, unapplied: Unapplied) {
         let Some(reload) = &self.0 else {
             return;
         };
         reload.0.lock().record.composed_from(version.layout);
-        reload.report(&ReloadOutcome::restarted(version));
+        reload.report(&ReloadOutcome::restarted(version, unapplied));
     }
 
     /// The restart to `version` composed nothing, for `reason`: no version

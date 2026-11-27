@@ -153,6 +153,9 @@ pub enum ReloadOutcome<'a> {
     Restarted {
         /// The version the application was composed from.
         version: CodeVersion,
+        /// What the later application configured that the restart left as
+        /// the process started it: a process restart applies it.
+        unapplied: Unapplied,
     },
     /// The restart did not compose an application; the host has none until a later version
     /// composes one.
@@ -172,16 +175,37 @@ impl<'a> ReloadOutcome<'a> {
         Self::Reassembled { version, runtime }
     }
 
-    /// The application was composed again from `version`.
+    /// The application was composed again from `version`; `unapplied` is what
+    /// the later application configured that the restart did not apply.
     #[must_use]
-    pub const fn restarted(version: CodeVersion) -> Self {
-        Self::Restarted { version }
+    pub const fn restarted(version: CodeVersion, unapplied: Unapplied) -> Self {
+        Self::Restarted { version, unapplied }
     }
 
     /// The restart for `version` composed no application, for `reason`.
     #[must_use]
     pub const fn restart_failed(version: CodeVersion, reason: RestartFailure<'a>) -> Self {
         Self::RestartFailed { version, reason }
+    }
+}
+
+/// What a later application configured that a restart leaves as the process
+/// started it (ADR-0393 §4): the loop's own parts, made before any
+/// application code ran. A process restart applies each.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Unapplied {
+    /// The application configures its executors: the loop keeps the pools it
+    /// started with, on which the host runs its own work.
+    pub executors: bool,
+}
+
+impl Unapplied {
+    /// `self`, with the executors left unapplied when `executors` holds.
+    #[must_use]
+    pub const fn executors(mut self, executors: bool) -> Self {
+        self.executors = executors;
+        self
     }
 }
 

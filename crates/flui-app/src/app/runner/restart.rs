@@ -11,7 +11,7 @@
 use std::rc::Rc;
 
 use flui_foundation::panic::{FirstPanic, payload_text};
-use flui_view::dev_reload::RestartFailure;
+use flui_view::dev_reload::{RestartFailure, Unapplied};
 
 use super::host::APP_RUNTIME;
 use super::main_window::{KeptMain, compose};
@@ -70,7 +70,7 @@ pub(super) fn restart_if_due() {
         "hot reload: the new build changed the layout of kept values; restarting the application"
     );
     match restart(&reload) {
-        Ok(()) => reload.restarted(version),
+        Ok(unapplied) => reload.restarted(version, unapplied),
         Err(failure) => {
             let reason = failure.reason();
             tracing::warn!(?reason, "hot reload: the restart composed no application");
@@ -83,9 +83,10 @@ pub(super) fn restart_if_due() {
 }
 
 /// Retire the running application, run the entry and compose what it hands
-/// over (§4 steps 1 to 3). A failure after step 1 leaves the loop with its
+/// over (§4 steps 1 to 3), and say what of it the loop did not apply. A
+/// failure after step 1 leaves the loop with its
 /// kept windows and no application.
-fn restart(reload: &WorkerReload) -> Result<(), Failure> {
+fn restart(reload: &WorkerReload) -> Result<Unapplied, Failure> {
     // The loop holds the kept window from here: whatever fails after this,
     // it stays open for the next restart.
     keep(retire_application());
@@ -94,7 +95,8 @@ fn restart(reload: &WorkerReload) -> Result<(), Failure> {
         contain(|| drop(handed));
         return Err(Failure::Launch(error));
     }
-    if handed.config.executors.is_some() {
+    let unapplied = Unapplied::default().executors(handed.config.executors.is_some());
+    if unapplied.executors {
         tracing::warn!(
             "hot reload: the later application configures its executors; the loop keeps the \
              pools it started with until the process restarts"
@@ -121,7 +123,7 @@ fn restart(reload: &WorkerReload) -> Result<(), Failure> {
         compose(handed, registry)
     }));
     let failure = match composed {
-        Ok(Ok(())) => return Ok(()),
+        Ok(Ok(())) => return Ok(unapplied),
         Ok(Err(error)) => Failure::Launch(error),
         Err(payload) => {
             tracing::error!(

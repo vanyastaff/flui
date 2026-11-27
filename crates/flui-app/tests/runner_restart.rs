@@ -14,13 +14,19 @@ use flui_app::{
     AppConfig, AppHandle, Application, CloseRequestHandler, CloseResponse, ExitPolicy, LaunchError,
     ServiceDefinition, ServiceLifetime, WindowPolicy, open_secondary_window,
 };
-use flui_view::dev_reload::{CodeVersion, LayoutEpoch, Revision};
+use flui_view::dev_reload::{CodeVersion, LayoutEpoch, Revision, Unapplied};
 
 fn version(layout: u64, revision: u64) -> CodeVersion {
     CodeVersion::new(
         LayoutEpoch::try_new(layout).expect("a test layout is not zero"),
         Revision::try_new(revision).expect("a test revision is not zero"),
     )
+}
+
+/// A restart to `version` that applied everything the application
+/// configured.
+fn restarted(version: CodeVersion) -> ReloadReport {
+    ReloadReport::Restarted(version, Unapplied::default())
 }
 
 /// How many states of one [`Note`] were created and disposed.
@@ -176,10 +182,7 @@ fn a_restart_disposes_every_state_before_the_entry_runs() {
     hook.load(version(2, 2));
     turns(&run);
 
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     assert_eq!(hook.entries_run(), 1);
     assert_eq!(
         disposed_when_entered.load(Ordering::SeqCst),
@@ -214,10 +217,7 @@ fn a_panicking_dispose_does_not_stop_a_restart() {
 
     hook.load(version(2, 2));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     assert_eq!(first.disposed(), 2, "both earlier states were disposed");
     assert_eq!(later.created(), 1);
     assert!(
@@ -255,10 +255,7 @@ fn a_restart_closes_the_windows_the_application_opened_without_asking() {
 
     hook.load(version(2, 2));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     let main = window_ids(&run);
     assert_eq!(main.len(), 1, "only the main window is kept: {main:?}");
     assert!(opened.contains(&main[0]));
@@ -315,10 +312,7 @@ fn a_restart_drops_the_earlier_scope() {
 
     hook.load(version(2, 2));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     assert!(
         stopped_when_entered.load(Ordering::SeqCst),
         "the earlier service was stopped before the entry ran"
@@ -344,10 +338,7 @@ fn an_app_handle_of_the_earlier_application_is_refused() {
 
     hook.load(version(2, 2));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     let handle = earlier
         .lock()
         .expect("the test's lock is not poisoned")
@@ -396,10 +387,7 @@ fn a_panicking_entry_fails_the_restart_and_is_not_tried_again() {
     hook.entry(runs(note(&later)));
     hook.load(version(3, 3));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(3, 3))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(3, 3))]);
     assert_eq!(later.created(), 1);
     assert_eq!(window_ids(&run), window, "into the kept window");
     run.join().expect("the run ends");
@@ -445,10 +433,7 @@ fn a_second_run_in_one_entry_is_refused_and_the_first_is_composed() {
     let run = running(&hook, note(&Lives::new()));
     hook.load(version(2, 2));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     assert!(matches!(
         second
             .lock()
@@ -497,10 +482,7 @@ fn a_failed_composition_retires_what_it_built() {
     hook.entry(runs(note(&after)));
     hook.load(version(3, 3));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(3, 3))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(3, 3))]);
     assert_eq!(after.created(), 1, "a later version restarts into it");
     run.join().expect("the run ends");
 }
@@ -517,10 +499,7 @@ fn a_panic_in_the_new_roots_mount_is_still_a_restart() {
     let run = running(&hook, note(&Lives::new()));
     hook.load(version(2, 2));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     assert!(run.is_running());
     assert_eq!(run.open_windows().len(), 1);
     run.join().expect("the run ends");
@@ -553,10 +532,7 @@ fn a_resident_application_is_asked_to_exit_by_its_new_policy() {
 
     hook.load(version(2, 2));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     assert!(
         !run.is_running(),
         "the later application, with no window, exits by its policy"
@@ -576,7 +552,7 @@ fn a_changed_layout_restarts_and_a_later_body_edit_reassembles() {
     turns(&run);
     assert_eq!(
         hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))],
+        [restarted(version(2, 2))],
         "nothing reassembles across layouts"
     );
 
@@ -605,10 +581,7 @@ fn a_restart_tier_save_then_a_body_save_restart_once() {
     hook.load(version(2, 3));
     turns(&run);
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 3))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 3))]);
     assert_eq!(hook.entries_run(), 1);
     assert_eq!(later.created(), 1);
     run.join().expect("the run ends");
@@ -624,10 +597,7 @@ fn an_idle_loop_restarts_on_the_wake_that_reported_the_version() {
 
     hook.load(version(2, 2));
     run.run_owner_turn();
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     assert_eq!(later.created(), 1);
     run.join().expect("the run ends");
 }
@@ -668,10 +638,7 @@ fn a_loop_without_a_ui_runtime_polls_on_the_wake() {
     );
     hook.load(version(2, 2));
     run.run_owner_turn();
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     assert!(
         later_ready.load(Ordering::SeqCst),
         "the later application is ready"
@@ -739,10 +706,7 @@ fn a_restart_composes_the_later_applications_capabilities() {
 
     hook.load(version(2, 2));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     assert_eq!(
         *answers.lock().expect("the answers lock"),
         [Some(1), Some(2)],
@@ -784,10 +748,7 @@ fn a_restart_keeps_the_window_and_registers_the_fonts_again() {
 
     hook.load(version(2, 2));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     assert_eq!(window_ids(&run), window, "the restart kept the window");
     assert_eq!(
         *outcomes.lock().expect("the outcomes lock"),
@@ -843,12 +804,42 @@ fn opened_files_after_a_restart_reach_the_later_application() {
 
     hook.load(version(2, 2));
     turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Restarted(version(2, 2))]
-    );
+    assert_eq!(hook.take_reports(), [restarted(version(2, 2))]);
     open(&run);
     assert_eq!(*heard.lock().expect("the heard lock"), ["earlier", "later"]);
+    run.join().expect("the run ends");
+}
+
+/// §4: the executor pools are the loop's: a later application that
+/// configures its own is composed on the loop's, and the outcome says a
+/// process restart applies them.
+fn a_restart_reports_the_executors_it_did_not_apply() {
+    let later = Lives::new();
+    let hook = ScriptedReload::new();
+    {
+        let later = note(&later);
+        hook.entry(move || {
+            Application::new()
+                .config(
+                    AppConfig::new()
+                        .executors(flui_app::DeterministicExecutors::new().host_executors()),
+                )
+                .run(later.clone())
+                .expect("the run hands its application over");
+        });
+    }
+    let run = running(&hook, note(&Lives::new()));
+
+    hook.load(version(2, 2));
+    turns(&run);
+    assert_eq!(
+        hook.take_reports(),
+        [ReloadReport::Restarted(
+            version(2, 2),
+            Unapplied::default().executors(true)
+        )]
+    );
+    assert_eq!(later.created(), 1, "composed on the loop's pools");
     run.join().expect("the run ends");
 }
 
@@ -857,6 +848,10 @@ fn runner_restart() {
     crate::run_table(
         "runner_restart",
         &[
+            (
+                "a_restart_reports_the_executors_it_did_not_apply",
+                a_restart_reports_the_executors_it_did_not_apply,
+            ),
             (
                 "opened_files_after_a_restart_reach_the_later_application",
                 opened_files_after_a_restart_reach_the_later_application,

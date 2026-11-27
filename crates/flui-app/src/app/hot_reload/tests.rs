@@ -439,7 +439,7 @@ fn a_changed_layout_is_a_due_restart_and_nothing_reassembles() {
     );
     assert_eq!(reload.take_restart_due(), Some(version(1, 3)));
 
-    reload.restarted(version(1, 3));
+    reload.restarted(version(1, 3), Unapplied::default());
     assert_eq!(hook.applied(), [Applied::Restarted(version(1, 3))]);
     hook.then(ReloadEvent::Loaded(version(1, 4)));
     frame_boundary(&handle_b, &b);
@@ -473,7 +473,7 @@ fn each_reassembled_runtime_and_each_restart_is_reported_once() {
         "a restart the loop has not run yet is not reported"
     );
     assert_eq!(reload.take_restart_due(), Some(version(2, 2)));
-    reload.restarted(version(2, 2));
+    reload.restarted(version(2, 2), Unapplied::default());
     assert_eq!(hook.applied(), [Applied::Restarted(version(2, 2))]);
 }
 

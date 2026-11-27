@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use flui_view::dev_reload::{
-    CodeVersion, DevReloadHook, ReloadEvent, ReloadOutcome, ReloadWake, RestartFailure,
+    CodeVersion, DevReloadHook, ReloadEvent, ReloadOutcome, ReloadWake, RestartFailure, Unapplied,
 };
 use parking_lot::Mutex;
 
@@ -135,7 +135,9 @@ impl DevReloadHook for ScriptedReload {
     fn applied(&mut self, outcome: &ReloadOutcome<'_>) {
         let report = match outcome {
             ReloadOutcome::Reassembled { version, .. } => ReloadReport::Reassembled(*version),
-            ReloadOutcome::Restarted { version, .. } => ReloadReport::Restarted(*version),
+            ReloadOutcome::Restarted {
+                version, unapplied, ..
+            } => ReloadReport::Restarted(*version, *unapplied),
             ReloadOutcome::RestartFailed {
                 version, reason, ..
             } => ReloadReport::RestartFailed(*version, RestartReason::of(reason)),
@@ -167,8 +169,9 @@ impl Drop for Restore<'_> {
 pub enum ReloadReport {
     /// A UI runtime reassembled to the version.
     Reassembled(CodeVersion),
-    /// The application was composed again from the version.
-    Restarted(CodeVersion),
+    /// The application was composed again from the version, leaving what
+    /// the restart did not apply.
+    Restarted(CodeVersion, Unapplied),
     /// The restart to the version composed no application.
     RestartFailed(CodeVersion, RestartReason),
     /// An outcome this kit does not name yet.
