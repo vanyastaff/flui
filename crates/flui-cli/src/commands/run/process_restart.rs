@@ -283,7 +283,11 @@ fn library_path(
 fn strip_link_kind(path: &Path) -> PathBuf {
     let stripped = path.to_str().and_then(|text| {
         let (kind, rest) = text.split_once('=')?;
-        matches!(kind, "native" | "dependency" | "crate" | "framework" | "all").then_some(rest)
+        matches!(
+            kind,
+            "native" | "dependency" | "crate" | "framework" | "all"
+        )
+        .then_some(rest)
     });
     stripped.map_or_else(|| path.to_path_buf(), PathBuf::from)
 }

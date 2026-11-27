@@ -41,10 +41,7 @@ pub(crate) struct Executable {
 /// # Errors
 ///
 /// Reading `messages` or writing `terminal` failed.
-pub(crate) fn read(
-    messages: impl BufRead,
-    terminal: &mut impl Write,
-) -> io::Result<BuildMessages> {
+pub(crate) fn read(messages: impl BufRead, terminal: &mut impl Write) -> io::Result<BuildMessages> {
     let mut read = BuildMessages::default();
     for message in Message::parse_stream(messages) {
         match message? {
