@@ -1,6 +1,6 @@
 # testing-platform: задачи
 
-- **Статус:** утверждено владельцем 2026-11-24. Сделано: ADR-0400, эта спека, TP1, TP2; у TP3 сделано ядро, переход не начат. Следующая: переход TP3.
+- **Статус:** утверждено владельцем 2026-11-24. Сделано: ADR-0400, эта спека, TP1, TP2; TP3 — ядро (на `main`, #3189), шаблоны `flui-cli` и часть перехода (`facade_smoke`, `dialogs`, `self_rescheduling_local_post_frame`, книга, `agent_workflow` без чтений дерева рендера). Следующая: остаток перехода TP3 (`flui-cupertino`, `perf.rs` двух крейтов, фикстуры фасада, `tests/tester.rs`).
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md); решение:
   [ADR-0400](../../../adr/ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md)
 - **База:** `main` @ `aa45aa8`. Числа сняты поиском по именам; перед правкой сверить.
@@ -231,16 +231,28 @@
   ADR-0400 про `Drop` (паника, ошибка через `?`, ожидаемая ошибка до утёкшего тикера, клавиша,
   нажатая в конце теста); аккорд после `Gesture`, оставившего клавишу нажатой, не шлёт второго
   нажатия; compile-fail на `tap(&Find<Many>)`.
-- **Состояние:** ядро сделано на ветке `claude/project-thread-5mrv8h`, переход не начат.
-  Построено: `flui_testing::scenario` (`Tester<C: Connection>`, `Headless<Observed>` с
-  `VirtualClock`, `Find<One>`/`Find<Many>`, `matcher`, `TestError` и `Diagnosis`, отчёт и
-  `TestReport`), `flui::testing::scenario` в фасаде; `held_keys` удалён из старого `Tester`, его
-  `press_keys` идёт актом `element.press_keys`, а агент не нажимает и не отпускает клавишу,
-  которую аренда держала к началу акта. Старые `tester::{Tester, Expectation, TestError}` и
-  функции `find`, возвращающие `Locator`, помечены `#[deprecated]` и остаются до перехода (их
-  пользователи перечислены в пункте ADR-0400 в `docs/gaps.md`). Не сделано: переход 16 файлов,
-  `book/src/tutorial`, `book/src/mapping.md` и шаблонов `flui-cli`; поэтому `rg` выше даёт 95,
-  а не 0.
+- **Состояние:** ядро на `main` (#3189), шаблоны `flui-cli` перешли там же. Построено:
+  `flui_testing::scenario` (`Tester<C: Connection>`, `Headless<Observed>` с `VirtualClock`,
+  `Find<One>`/`Find<Many>`, `matcher`, `TestError` и `Diagnosis`, отчёт и `TestReport`),
+  `flui::testing::scenario` в фасаде; `held_keys` удалён из старого `Tester`, его `press_keys`
+  идёт актом `element.press_keys`, а агент не нажимает и не отпускает клавишу, которую аренда
+  держала к началу акта. Старые `tester::{Tester, Expectation, TestError}` и функции `find`,
+  возвращающие `Locator`, помечены `#[deprecated]` (их пользователи перечислены в пункте
+  ADR-0400 в `docs/gaps.md`). Этим изменением перешли: `tests/facade_smoke.rs`,
+  `crates/flui-system/tests/dialogs.rs`,
+  `crates/flui-testing/tests/self_rescheduling_local_post_frame.rs` (простой кадров проверяется
+  через `connection_mut().advance(FRAME)`), все файлы `book/src/tutorial`,
+  `book/src/cookbook/testing.md` и `book/src/mapping.md`, а `tests/agent_workflow.rs` — всё,
+  кроме чтений дерева рендера. Остаётся на старом `Tester`: модуль `render_tree` в
+  `agent_workflow.rs` (`inspect_render`, у `scenario::Tester` нет чтения дерева рендера),
+  `flui-cupertino` (`tests/button.rs`, `tests/route.rs`), `perf.rs` у `flui-widgets` и
+  `flui-material`, фикстуры `tests/fixtures/facade_extensions.rs` и
+  `tests/fixtures/acceptance_app/testing.rs` (им нужны чтения, которых у `scenario` нет) и
+  собственный набор старого `Tester` `crates/flui-testing/tests/tester.rs` (уходит вместе с ним).
+  `rg '\.to_(exist|be_|have_)' --glob '!crates/flui-driver/**' crates packages src tests book`
+  даёт 53 строки вместо 95: из них около 38 — старый `Tester` (`src/tester.rs`, `tests/tester.rs`,
+  `perf.rs`, `flui-cupertino`), остальное — другие методы с тем же префиксом (`to_be_bytes` и
+  подобные), которые поиск не отделяет; ноль наступит, когда уйдёт старый `Tester`.
 - **Доказательства:** модуль `tester_scenario` в `tests/main.rs` `flui-testing`:
   `a_read_leaves_the_frame_number_unchanged`, `a_caught_panic_then_drop_skips_the_end_checks`,
   `an_error_through_the_question_mark_then_drop_skips_the_end_checks`,
