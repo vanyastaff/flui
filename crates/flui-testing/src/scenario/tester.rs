@@ -46,7 +46,7 @@ const JOURNAL_KEPT: usize = 32;
 
 /// One test of an application over a connection (ADR-0400 §1).
 ///
-/// Over a [`Connection`](flui_protocol::client::Connection), its verbs find with a [`Find`], act
+/// Over a [`Connection`], its verbs find with a [`Find`], act
 /// through the window's agent and expect with a [`Matcher`], so each is evaluated once, in the
 /// application's runtime, on every connection. Every verb has a `try_` twin returning
 /// [`TestError`]; the plain form panics at its caller. The tester keeps no copy of the
