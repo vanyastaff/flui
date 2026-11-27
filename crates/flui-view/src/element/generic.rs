@@ -329,8 +329,8 @@ where
         }
     }
 
-    /// The view-independent state, for the helpers that are compiled once
-    /// rather than once per view type.
+    /// The view-independent state, for the helpers that do not name `V`
+    /// (ADR-0405).
     pub(crate) fn state(&self) -> &CoreState {
         &self.state
     }

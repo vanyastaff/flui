@@ -64,7 +64,6 @@ where
     should_build_traced(core.state(), behavior_name)
 }
 
-#[inline(never)]
 fn should_build_traced(state: &CoreState, behavior_name: &'static str) -> bool {
     if state.dirty.get() && state.lifecycle.can_build() {
         tracing::debug!("{}::perform_build starting", behavior_name);
@@ -337,7 +336,6 @@ where
 }
 
 /// Clears the dirty flag once a build half is complete, and traces it.
-#[inline(never)]
 fn finish_child_views(state: &CoreState, behavior_name: &'static str) {
     state.dirty.set(false);
     tracing::debug!("{}::build_into_views completed", behavior_name);

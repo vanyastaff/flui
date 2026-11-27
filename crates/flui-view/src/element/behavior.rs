@@ -213,6 +213,7 @@ pub(super) fn contained_state_hook<V, A>(
 }
 
 #[inline(never)]
+#[cold]
 fn record_contained_hook(
     core: &CoreState,
     owner: &mut crate::ElementOwner<'_>,
@@ -298,7 +299,6 @@ where
 }
 
 /// The view-independent body of [`make_build_ctx`].
-#[inline(never)]
 fn live_build_ctx<'a>(
     core: &CoreState,
     owner: &crate::ElementOwner<'a>,
@@ -1418,9 +1418,8 @@ where
     fn on_update(&mut self, _core: &ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {}
 }
 
-/// Whether a render element's build half runs, traced; compiled once rather
-/// than once per render view type.
-#[inline(never)]
+/// Whether a render element's build half runs, traced. It names no view type,
+/// so the optimizer may keep one copy of it (ADR-0405 §2).
 fn should_build_render(core: &CoreState, render_id: Option<RenderId>) -> bool {
     if core.dirty.get() && core.lifecycle.can_build() {
         tracing::info!(
@@ -1438,7 +1437,6 @@ fn should_build_render(core: &CoreState, render_id: Option<RenderId>) -> bool {
 }
 
 /// Clears a render element's dirty flag once its build half is complete.
-#[inline(never)]
 fn finish_render_build(core: &CoreState, render_id: Option<RenderId>, children: usize) {
     core.dirty.set(false);
     tracing::debug!(

@@ -58,6 +58,7 @@ pub(crate) fn mount<V, A, R, P>(
 }
 
 #[inline(never)]
+#[cold]
 fn mounted_without_pipeline_owner() {
     tracing::warn!("a render element mounted without a PipelineOwner");
 }
@@ -182,7 +183,6 @@ pub(crate) fn push<V, A, R>(
 
 /// The render object [`push`] updates, or `None` when the element mounted
 /// with no `PipelineOwner` and so owns none.
-#[inline(never)]
 fn push_target(render_id: Option<RenderId>, core: &CoreState) -> Option<(RenderId, &PipelineCell)> {
     match (render_id, core.pipeline_owner.as_ref()) {
         (Some(render_id), Some(owner)) => Some((render_id, owner)),
@@ -204,7 +204,6 @@ fn push_target(render_id: Option<RenderId>, core: &CoreState) -> Option<(RenderI
 
 /// The context [`push`] lends `update`: the borrowed tree inside a drain,
 /// tree-less outside one.
-#[inline(never)]
 fn update_context<'a>(
     core: &CoreState,
     owner: &crate::ElementOwner<'a>,

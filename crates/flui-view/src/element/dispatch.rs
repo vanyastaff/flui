@@ -139,7 +139,6 @@ where
 /// `view` with every `BoxedView` layer stripped, and the shared allocation of
 /// the innermost layer when there was one. Each hop downcasts to the wrapper
 /// to unwrap it, not to the concrete view type.
-#[inline(never)]
 fn unwrap_boxed(view: &dyn View) -> (&dyn View, Option<&Rc<dyn View>>) {
     let mut effective = view;
     let mut shared = None;
@@ -150,7 +149,6 @@ fn unwrap_boxed(view: &dyn View) -> (&dyn View, Option<&Rc<dyn View>>) {
     (effective, shared)
 }
 
-#[inline(never)]
 fn trace_skipped(view_type: TypeId) {
     tracing::debug!(
         ?view_type,
@@ -158,7 +156,6 @@ fn trace_skipped(view_type: TypeId) {
     );
 }
 
-#[inline(never)]
 fn trace_replaced(view_type: TypeId) {
     tracing::debug!(
         "dispatch_view_update succeeded for view_type={:?}",

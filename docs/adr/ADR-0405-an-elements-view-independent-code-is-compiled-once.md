@@ -20,7 +20,7 @@ methods call that names `V`. What bears on it:
 
 | Fact | Evidence |
 |---|---|
-| The generated counter links 33 element types. Their `ElementBase` methods take 325,983 bytes of machine code, 9,878 bytes per type: `build_into_views` 172,248, `update` 56,021, `unmount` 31,945, `mount` 29,605 | `nm -S` of the counter built with the template's release profile, unstripped, v0 symbols, at `641799f6a` |
+| The generated counter links 33 element types. Their `ElementBase` methods take 210,225 bytes of machine code, 6,370 bytes per type: `build_into_views` 117,934, `update` 35,381, `mount` 22,491, `unmount` 11,036 | `nm -S` of the counter as the CI `size` job builds it (the template's release profile, `flui/release-max-level-info`), unstripped, at `641799f6a` |
 | Most of that copy does not depend on the view: the dirty check and its trace, building the `BuildContext`, recording a caught panic and substituting the `ErrorView`, inserting and adopting the render object, the `BoxedView` unwrap of an update. Of those bodies only `view.build(ctx)`, `create_render_object`, `update_render_object`, the downcast to `V` and `should_skip_rebuild` name `V`; the rest needs `TypeId::of::<V>()` at most, as a value | `behavior.rs`, `behavior_commons.rs`, `render_custody.rs`, `dispatch.rs` |
 | `CoreState` already took the cold lifecycle transitions (`mount`, `activate`, `set_pipeline_owner`) out of the generic core for this reason; the build, update and render-custody helpers still took `&ElementCore<V, A>` and were inlined into each copy | `crates/flui-view/src/element/generic.rs` |
 | Per view type is where a FLUI application grows faster than a Flutter one: the Material counter links 135 element types and the notes example 166 | the size audit (counter, Material counter, notes), 2026-11-23 |
@@ -63,15 +63,26 @@ the rest to such a helper.
 
 ### §2. A body that runs after user code is its own function
 
-The half that runs after a caught hook (recording the panic, `ErrorView` substitution, the render
-object's insertion and adoption, its removal) and the traces of the build and update paths are
-functions marked `#[inline(never)]`. A function the release profile's optimizer would inline into
-each caller is copied again into every view type's code, so the attribute is what keeps it once.
-They are `finish_build`, `finish_child_views`, `should_build_traced`, `live_build_ctx`,
-`finish_armed_hook`, `record_contained_hook`, `finish_provided`, `should_build_render`,
-`finish_render_build`, `adopt`, `push_target`, `update_context`, `finish_push`,
-`finish_unmount`, `remove_render_object_from_tree`, `unwrap_boxed` and the dispatch's traces.
-`adopt` is generic over the render protocol alone, so it is compiled once per protocol.
+The half that runs after a caught hook and the render custody's insertion and removal are
+functions marked `#[inline(never)]`: a function the release profile's optimizer inlines into each
+caller is copied again into every view type's code, so the attribute is what keeps it once. A
+half that runs only when a hook panicked is also `#[cold]`, and its generic caller tests
+`FirstPanic::held` before the call, so a build that does not panic makes no call:
+
+| Function | Runs |
+|---|---|
+| `recover_build`, `armed_hook_failed`, `record_contained_hook`, `provide_failed`, `push_failed` | only after a hook panicked (`#[cold]`) |
+| `adopt`, `finish_unmount`, `remove_render_object_from_tree` | once per mount and unmount |
+
+`adopt` is generic over the render protocol alone, so it is compiled once per protocol. The
+helpers on the build and update path that run for every element built (`should_build_traced`,
+`finish_child_views`, `live_build_ctx`, `should_build_render`, `finish_render_build`,
+`push_target`, `update_context`, `unwrap_boxed` and the dispatch's traces) take `CoreState` too
+(§1) and carry no attribute: forced out of line they cost about 0.3% of the instructions of
+`filter_3000_keyed_rows` for 12 KB of the counter's code, so the optimizer decides.
+
+`FirstPanic`'s `Drop` is `#[inline]`, so the empty collector a hook that did not panic leaves is
+dropped by one test in its caller rather than by a call.
 
 ### §3. What stays generic
 
@@ -81,23 +92,29 @@ its `build`.
 
 ### Consequences
 
-- Good, because the counter's element code falls from 325,983 to 196,598 bytes (9,878 to 5,958 per
-  type, 40%), for 8,685 bytes of helpers compiled once, and its stripped binary from 21,347,096 to
-  21,219,328 bytes. At the counter's 3,920 bytes per type, an application with 135 element
-  types (the Material counter) would save about 0.5 MB; that is an estimate, not a build.
+- Good, because the counter's element code falls from 210,225 to 178,814 bytes (6,370 to 5,419
+  per type, 15%: `build_into_views` 117,934 to 98,949, `mount` 22,491 to 9,916), for 5,488 more
+  bytes of helpers compiled once; its `.text` falls by 21,136 bytes. At 951 bytes per type, an
+  application with 135 element types (the Material counter) would save about 128 KB; that is an
+  estimate, not a build.
 - Good, because no author-facing signature changes, and a build or an update makes the same calls
   in the same order.
-- Bad, because a helper call that was inlined is now a call: a dirty check and a trace on each
-  element built. They run once per element per build, against the author's `build`.
-- Neutral, because what remains per type (5,958 bytes) is the view's own `build`, `update`'s
+- Neutral, because the frame path's cost is unchanged: against `main` with the same `Drop`, the
+  perf scenarios' instructions (callgrind, CI feature set, local) move by at most +0.43%
+  (`filter_3000_keyed_rows`, which mounts and unmounts 1,500 rows) and by +0.07% or less on a
+  frame that only updates; with the `Drop` they are below `main` in every scenario but
+  `filter_3000_memo_rows` (+0.01%).
+- Neutral, because what remains per type (5,419 bytes) is the view's own `build`, `update`'s
   downcast and comparison, and each behavior's hooks; option 3 could not remove the first two.
 
 ### Confirmation
 
-- The CI `size` job's counter bytes (`perf/size.toml`), lowered from `main`'s measurement once
-  this lands, hold the total.
+- The CI `size` job holds `counter_element_bytes` in `perf/size.toml`: the bytes of the
+  counter's `Element<V, A, B>` methods. A change that inlines a half back into each view type
+  moves it past its 2% tolerance on `main`. The counter's total bytes, lowered from `main`'s
+  measurement once this lands, hold the rest.
 - A reader of "Before a merge" checks that a new helper in `element/` that does not name `V`
-  takes `CoreState`, and that a body after a caught hook is `#[inline(never)]`.
+  takes `CoreState`, and that a body after a caught hook is `#[inline(never)]` and `#[cold]`.
 - `flui-view`'s suite holds the behavior: build recovery, lifecycle records and render custody
   are unchanged by it.
 
@@ -106,7 +123,7 @@ its `build`.
 ### 1. Keep the element generic and inlined
 
 - Good, because nothing changes.
-- Bad, because each view type copies about 10 KB of framework code, so an application's binary
+- Bad, because each view type copies about 6 KB of framework code, so an application's binary
   grows with the number of its view types faster than with its own code.
 
 ### 2. View-independent halves compiled once

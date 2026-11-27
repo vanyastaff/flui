@@ -31,10 +31,11 @@ The behavior families, each at one arity:
 
 An element's code is compiled once per view type, so only what names `V` stays generic
 (ADR-0405). `CoreState`, the core's view-independent state, is what the build, update, hook and
-render-custody helpers take, with the view's `TypeId` as a value. The half of each that runs
-after the author's hook (panic records, `ErrorView` substitution, the render object's insertion,
-adoption and removal, the traces) is an `#[inline(never)]` function, since one the optimizer
-inlines is copied into every view type again.
+render-custody helpers take, with the view's `TypeId` as a value. The half that runs after a hook
+panicked (panic records, `ErrorView` substitution) is an `#[inline(never)]` `#[cold]` function
+the generic caller reaches only when `FirstPanic::held` says so, and the render object's
+insertion, adoption and removal are `#[inline(never)]`, since a function the optimizer inlines is
+copied into every view type again.
 
 `Leaf` and `Optional` are render-object arity (`flui_foundation::Arity`), not
 element arity: no element instantiates them. The type aliases in `element/mod.rs`
