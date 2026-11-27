@@ -189,6 +189,7 @@ pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
     };
     let first = worker("counted_first");
     let second = worker("counted_second");
+    let third = worker("counted_third");
     let refused = directory.path().join("counted_refused.so");
     std::fs::write(&refused, b"not a library").expect("write a file that is no library");
     // The sidecar manifest beside the watched path names the image to load,
@@ -233,5 +234,18 @@ pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
             .map(|version| version.revision.get()),
         Some(3),
         "a reload reads the version of the image it loaded"
+    );
+    stage(&third);
+    assert_eq!(
+        driver.poll(),
+        WorkerPollOutcome::Reloaded { reload_count: 3 },
+        "a loaded image is replaced by the next"
+    );
+    assert_eq!(
+        driver
+            .loaded_version()
+            .map(|version| version.revision.get()),
+        Some(4),
+        "the replacing image's version"
     );
 }

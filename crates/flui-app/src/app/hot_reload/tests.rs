@@ -399,6 +399,13 @@ fn a_changed_layout_reports_a_failed_restart_and_nothing_reassembles() {
         [Applied::RestartFailed(version(2, 2))],
         "this host cannot restart yet, and says so once"
     );
+    hook.then(ReloadEvent::Loaded(version(2, 2)));
+    frame_boundary(&handle_a, &a);
+    assert_eq!(
+        hook.applied(),
+        [],
+        "a failed restart is not tried again for the same version"
+    );
 
     hook.then(ReloadEvent::Loaded(version(1, 3)));
     frame_boundary(&handle_a, &a);
@@ -475,6 +482,25 @@ fn a_retired_ui_runtime_leaves_the_record() {
     assert!(record_holds(ui_runtime.id()));
     drop(handle);
     assert!(!record_holds(ui_runtime.id()), "the window closed");
+}
+
+fn a_window_kept_across_loops_reassembles_to_the_next_loops_first_version() {
+    let hook = Scripted::default();
+    let reload = installed(&hook);
+    let (ui_runtime, handle) = registered(&reload);
+    let first_loop = reload.spawn_watcher(no_wake()).expect("attaches");
+    hook.then(ReloadEvent::Loaded(version(1, 1)));
+    frame_boundary(&handle, &ui_runtime);
+    drain(&ui_runtime);
+    drop(first_loop);
+
+    let _second_loop = reload.spawn_watcher(no_wake()).expect("attaches again");
+    hook.then(ReloadEvent::Loaded(version(1, 2)));
+    frame_boundary(&handle, &ui_runtime);
+    assert!(
+        ui_runtime.widgets().has_pending_builds(),
+        "the window was built from code older than the new loop's first version"
+    );
 }
 
 fn a_panicking_applied_retires_the_hook() {
@@ -671,6 +697,10 @@ fn dev_reload_hook_matrix() {
             (
                 "a_retired_ui_runtime_leaves_the_record",
                 a_retired_ui_runtime_leaves_the_record as fn(),
+            ),
+            (
+                "a_window_kept_across_loops_reassembles_to_the_next_loops_first_version",
+                a_window_kept_across_loops_reassembles_to_the_next_loops_first_version as fn(),
             ),
             (
                 "a_panicking_applied_retires_the_hook",
