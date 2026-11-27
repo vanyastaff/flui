@@ -18,8 +18,11 @@
 //! one source cargo reads them (its order: `CARGO_ENCODED_RUSTFLAGS`, then
 //! `RUSTFLAGS`, then every `target.<triple>` and matching `target.<cfg>`
 //! table's `rustflags`, then `build.rustflags`), so a build keeps its linker
-//! and CPU flags. They are a function of the directories alone, so two builds
-//! of one project pass the same flags and cargo's cache holds.
+//! and CPU flags. A configuration file that gives them as a string, which
+//! cargo refuses to merge with a `--config` array, is read here and its flags
+//! passed whole in `CARGO_ENCODED_RUSTFLAGS`. The rewrites are a function of
+//! the directories alone, so two builds of one project pass the same flags and
+//! cargo's cache holds.
 
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::str::FromStr as _;
@@ -174,6 +177,9 @@ impl SourcePathRemap {
                 CargoRustflags::config(&format!("target.{}.rustflags", toml_key(triple)), &flags)
             }
             RustflagsSource::Build => CargoRustflags::config("build.rustflags", &flags),
+            // `CARGO_ENCODED_RUSTFLAGS` comes before every configuration, so
+            // it carries the configured flags themselves.
+            RustflagsSource::Configured(author) => encoded(author.clone()),
         }
     }
 }
@@ -208,17 +214,23 @@ pub(crate) enum RustflagsSource {
     /// `RUSTFLAGS`, as given.
     Plain(String),
     /// A `target.<triple>` or matching `target.<cfg>` table, in a file or
-    /// `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`: the build's triple.
+    /// `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, each file's value an array: the
+    /// build's triple.
     Target(String),
-    /// `build.rustflags` or `CARGO_BUILD_RUSTFLAGS`, or none at all.
+    /// `build.rustflags` or `CARGO_BUILD_RUSTFLAGS`, each file's value an
+    /// array, or none at all.
     Build,
+    /// A configuration whose source gives the flags as a string in a file,
+    /// which cargo refuses to merge with a `--config` array: the flags it
+    /// gives, in cargo's order.
+    Configured(Vec<String>),
 }
 
 impl RustflagsSource {
     /// The source of a build for `triple` with the variables `var` answers,
-    /// the cargo configuration files `configs` (each parsed), and the cfgs of
-    /// the target, asked of `target_cfg` only when a file has a
-    /// `target.'cfg(…)'.rustflags` table.
+    /// the cargo configuration files `configs` (each parsed, nearest first),
+    /// and the cfgs of the target, asked of `target_cfg` only when a file has
+    /// a `target.'cfg(…)'.rustflags` table.
     ///
     /// # Errors
     ///
@@ -235,11 +247,7 @@ impl RustflagsSource {
         if let Some(flags) = var("RUSTFLAGS") {
             return Ok(Self::Plain(flags));
         }
-        let variable = format!(
-            "CARGO_TARGET_{}_RUSTFLAGS",
-            triple.to_ascii_uppercase().replace(['-', '.'], "_")
-        );
-        let tables = || {
+        let target_tables = || {
             configs
                 .iter()
                 .filter_map(|config| config.get("target")?.as_table())
@@ -247,24 +255,80 @@ impl RustflagsSource {
                 .filter(|(_, table)| table.get("rustflags").is_some())
                 .map(|(key, _)| key.as_str())
         };
-        if var(&variable).is_some() || tables().any(|key| key == triple) {
-            return Ok(Self::Target(triple.to_owned()));
-        }
-        let cfg_keys: Vec<Platform> = tables()
+        let mut keys: Vec<&str> = target_tables()
+            .filter(|key| *key == triple)
+            .take(1)
+            .collect();
+        let cfg_keys: Vec<&str> = target_tables()
             .filter(|key| key.starts_with("cfg("))
-            .filter_map(|key| Platform::from_str(key).ok())
             .collect();
         if !cfg_keys.is_empty() {
             let cfgs = target_cfg()?;
-            if cfg_keys
-                .iter()
-                .any(|platform| platform.matches(triple, &cfgs))
-            {
-                return Ok(Self::Target(triple.to_owned()));
+            for key in cfg_keys {
+                let matches =
+                    Platform::from_str(key).is_ok_and(|platform| platform.matches(triple, &cfgs));
+                if matches && !keys.contains(&key) {
+                    keys.push(key);
+                }
             }
         }
-        Ok(Self::Build)
+        let target_variable = format!(
+            "CARGO_TARGET_{}_RUSTFLAGS",
+            triple.to_ascii_uppercase().replace(['-', '.'], "_")
+        );
+        let target_variable = var(&target_variable);
+        // Each key's values, nearest file first.
+        let (per_key, variable, source): (Vec<Vec<&toml::Value>>, Option<String>, Self) =
+            if target_variable.is_some() || !keys.is_empty() {
+                let per_key = keys
+                    .iter()
+                    .map(|key| {
+                        configs
+                            .iter()
+                            .filter_map(|config| config.get("target")?.get(*key)?.get("rustflags"))
+                            .collect()
+                    })
+                    .collect();
+                (per_key, target_variable, Self::Target(triple.to_owned()))
+            } else {
+                let values = configs
+                    .iter()
+                    .filter_map(|config| config.get("build")?.get("rustflags"))
+                    .collect();
+                (vec![values], var("CARGO_BUILD_RUSTFLAGS"), Self::Build)
+            };
+        if !per_key.iter().flatten().any(|value| value.is_str()) {
+            return Ok(source);
+        }
+        let mut flags: Vec<String> = per_key
+            .iter()
+            .flat_map(|values| key_flags(values))
+            .collect();
+        flags.extend(
+            variable
+                .iter()
+                .flat_map(|value| value.split_whitespace().map(str::to_owned)),
+        );
+        Ok(Self::Configured(flags))
     }
+}
+
+/// The flags cargo reads from one key's values, nearest file first: the
+/// nearest string, split at whitespace, where one gives a string (a nearer
+/// string replaces a farther one, and cargo refuses a string and an array
+/// together), else every array, farthest first.
+fn key_flags(values: &[&toml::Value]) -> Vec<String> {
+    if let Some(flags) = values.iter().find_map(|value| value.as_str()) {
+        return flags.split_whitespace().map(str::to_owned).collect();
+    }
+    values
+        .iter()
+        .rev()
+        .filter_map(|value| value.as_array())
+        .flatten()
+        .filter_map(toml::Value::as_str)
+        .map(str::to_owned)
+        .collect()
 }
 
 /// The arguments and variables a cargo command takes on top of its own so

@@ -296,6 +296,28 @@ feature that carries it (`toml_edit`, the file's formatting kept) or, without th
 whose crate states no plugin is undone with its lockfile
 (`add_links_a_capability_and_shows_its_registration`).
 
+### A release binary names no directory of the build machine
+
+rustc writes the path of each source file a panic can name into the binary, absolute for a
+registry crate, a path dependency outside the workspace and a generated file in the target
+directory. A release build of every platform (`build/source_paths.rs`) rewrites those prefixes
+with `--remap-path-prefix`: a registry crate's file reads `<name>-<version>/src/…`, a path
+dependency's the same, a git checkout's `git/…`, a generated file's `target/…`. A debug build
+keeps the full paths, which debuggers and editors open. Cargo's `trim-paths` does this but is
+unstable in the pinned toolchain.
+
+The flags join the author's rustflags in the one source cargo reads them from
+(`CARGO_ENCODED_RUSTFLAGS`, then `RUSTFLAGS`, then the target's tables in the cargo
+configuration, `cfg(…)` keys matched against `rustc --print cfg`, then `build.rustflags`), so a
+project's linker and CPU flags stay; a file that gives them as a string, which cargo will not
+merge with a `--config` array, is read and passed whole in `CARGO_ENCODED_RUSTFLAGS`
+(`the_rustflags_source_is_the_one_cargo_reads`,
+`the_rewrites_join_the_authors_flags`). They depend only on the directories, so two release
+builds of one project pass the same flags and cargo's cache holds. A release binary of a
+fixture with a path dependency elsewhere on the machine holds neither that directory nor the
+fixture's, and names the dependency by package
+(`a_release_binary_names_no_directory_of_the_build_machine`).
+
 ### Local source dependencies are explicit Cargo paths
 
 `flui create NAME --local` selects the current working directory as the source

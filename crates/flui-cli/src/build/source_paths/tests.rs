@@ -110,6 +110,32 @@ fn the_rustflags_source_is_the_one_cargo_reads() {
             vec![linker_only, build],
             RustflagsSource::Build,
         ),
+        SourceCase::new(
+            "a string in the nearest file replaces a farther one",
+            &[],
+            vec![
+                table("[build]\nrustflags = \"-Ca  -Cb\"\n"),
+                table("[build]\nrustflags = \"-Cfar\"\n"),
+            ],
+            RustflagsSource::Configured(vec!["-Ca".into(), "-Cb".into()]),
+        ),
+        SourceCase::new(
+            "a string, then the variable",
+            &[("CARGO_BUILD_RUSTFLAGS", "-Cvar")],
+            vec![table("[build]\nrustflags = \"-Ca\"\n")],
+            RustflagsSource::Configured(vec!["-Ca".into(), "-Cvar".into()]),
+        ),
+        SourceCase::new(
+            "a target's string beside another table's arrays, farthest first",
+            &[],
+            vec![
+                table(&format!(
+                    "[target.{TRIPLE}]\nrustflags = \"-Ct\"\n[target.'cfg(unix)']\nrustflags = [\"-Cnear\"]\n"
+                )),
+                table("[target.'cfg(unix)']\nrustflags = [\"-Cfar\"]\n"),
+            ],
+            RustflagsSource::Configured(vec!["-Ct".into(), "-Cfar".into(), "-Cnear".into()]),
+        ),
     ];
     let mut failures = Vec::new();
     for SourceCase {
@@ -204,6 +230,10 @@ fn the_rewrites_join_the_authors_flags() {
             config(&format!("target.\"{TRIPLE}\".rustflags")),
         ),
         (RustflagsSource::Build, config("build.rustflags")),
+        (
+            RustflagsSource::Configured(vec!["-Ca".into(), "-Cb".into()]),
+            encoded(&["-Ca", "-Cb", FLAGS[0], FLAGS[1]]),
+        ),
     ];
     let mut failures = Vec::new();
     for (source, expected) in cases {
