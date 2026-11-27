@@ -919,9 +919,9 @@ impl RenderBox for RenderEditable {
     }
 
     /// The field's text as runs, with its selection, for the field node the
-    /// enclosing semantics boundary forms: the value itself is the
-    /// boundary's to declare, so a field that hides its input publishes the
-    /// mask its render object holds and nothing else.
+    /// `Semantics` above it declares: the value itself is that annotation's
+    /// to declare, so a field that hides its input publishes the mask its
+    /// render object holds and nothing else.
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
         if let Some(content) = self.semantics_text_content() {
             config.set_text_content(content);

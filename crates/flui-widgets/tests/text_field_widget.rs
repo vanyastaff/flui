@@ -108,3 +108,45 @@ pub(crate) fn the_return_key_submits_a_single_line_field_without_a_line_break() 
     assert_eq!(*submitted.borrow(), ["sent"], "Return submitted once");
     assert_eq!(controller.text(), "sent", "no line break went in");
 }
+
+/// A `Semantics` label above a field names the field's own node, as one above
+/// Flutter's `EditableText` does: the field is not a semantics boundary, so the
+/// label and the field's role, value and actions are one node. The scenario
+/// tester's end checks then find no unnamed input.
+#[test]
+fn a_semantics_label_above_a_field_names_it() {
+    use flui_testing::scenario::{Tester, find, matcher};
+    use flui_testing::tester::Role;
+    use flui_widgets::{Column, Semantics};
+
+    let mut t = Tester::mount(Column::new((Semantics::new()
+        .label("New note")
+        .identifier("new-note")
+        .child(RawTextField::new(TextEditingController::new())),)));
+    t.expect(&find::role(Role::TextInput), matcher::name("New note"));
+    t.expect(&find::id("new-note"), matcher::name("New note"));
+    // The named node is still the field: it takes text and shows it as its value.
+    t.type_text(&find::id("new-note"), "Groceries");
+    t.expect(
+        &find::role(Role::TextInput),
+        matcher::all([matcher::name("New note"), matcher::value("Groceries")]),
+    );
+    t.finish();
+}
+
+/// The end checks read the field: one nobody named fails them, so the case
+/// above passes because the label reached the field.
+#[test]
+fn a_field_nobody_names_fails_the_end_checks() {
+    use flui_testing::scenario::Tester;
+
+    let t = Tester::mount(RawTextField::new(TextEditingController::new()));
+    let report = t
+        .try_finish()
+        .expect_err("an unnamed text input fails the end checks");
+    let report = report.to_string();
+    assert!(
+        report.contains("has no accessible name"),
+        "the report names the unnamed field: {report}"
+    );
+}
