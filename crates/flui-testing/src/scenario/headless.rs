@@ -277,18 +277,19 @@ impl<S> Headless<S> {
     }
 
     /// The end checks of ADR-0400 §7 from the unmount on, in order; the settle and the audit
-    /// are the caller's.
+    /// are the caller's, contained in `first`.
     ///
-    /// The unmount and the turns after it run the application's code (a `dispose`, a `Drop`): a
-    /// panic there is held while `lease`'s release still runs, and it is handed back, the first
-    /// failure, with the checks that would read the tree it left half unmounted not made.
+    /// The settle, the audit, the unmount and the turns after it run the application's code (a
+    /// timer, a `dispose`, a `Drop`): a panic in any of them is held in `first` while the unmount
+    /// and `lease`'s release still run, and it is handed back, the first failure, with the checks
+    /// that would read the tree it left half unmounted not made.
     fn teardown(
         &mut self,
+        mut first: FirstPanic,
         lease: Option<InputLease>,
         checks: &EndChecks,
         unpassed: &mut Vec<UnpassedCheck>,
     ) -> FirstPanic {
-        let mut first = FirstPanic::new();
         // Unmount the root, keeping the window and the runtime, and run what it dropped.
         if let Some(host) = self.host.as_mut() {
             first.contain(|| {
@@ -482,21 +483,25 @@ impl Connection for Headless<Observed> {
         if self.host.is_none() {
             return unpassed;
         }
+        // The settle and the audit run frames, so the application's timers and callbacks: a panic
+        // in one is held, and the unmount and the lease's release still run.
+        let mut first = FirstPanic::new();
         if checks.settle {
             // A cause that repeats keeps the frame at the limit: the checks after it read that
             // frame, and what the unmount does not clear fails `left_behind`.
-            if let Err(error) = self.wait(&Condition::Settled, SETTLE_LIMIT) {
+            if let Some(Err(error)) = first.contain(|| self.wait(&Condition::Settled, SETTLE_LIMIT))
+            {
                 unpassed.extend(UnpassedCheck::try_from_check(Check::new(
                     "settle",
                     Outcome::of_failure(&error),
                 )));
             }
         }
-        if !checks.audit.is_empty() {
-            audit(self, &checks.audit, &mut unpassed);
+        if !checks.audit.is_empty() && !first.is_held() {
+            first.contain(|| audit(self, &checks.audit, &mut unpassed));
         }
         let lease = self.attached.lease.take();
-        let first = self.teardown(lease, checks, &mut unpassed);
+        let first = self.teardown(first, lease, checks, &mut unpassed);
         let agent = self.attached.agent.take();
         self.conclude(first, agent, unpassed)
     }
@@ -516,7 +521,14 @@ impl Ends for Headless<Unobserved> {
         let Some(host) = self.host.as_mut() else {
             return unpassed;
         };
-        if checks.settle && host.pump_until_settled(FRAME, SETTLE_FRAMES).is_err() {
+        // The settle runs the application's frames: a panic in one is held, and the unmount
+        // still runs.
+        let mut first = FirstPanic::new();
+        let settled = !checks.settle
+            || first
+                .contain(|| host.pump_until_settled(FRAME, SETTLE_FRAMES).is_ok())
+                .unwrap_or(true);
+        if !settled {
             let check = Check::new(
                 "settle",
                 Outcome::Failed {
@@ -528,7 +540,7 @@ impl Ends for Headless<Unobserved> {
                 host.unsettled().causes(),
             )));
         }
-        let first = self.teardown(None, checks, &mut unpassed);
+        let first = self.teardown(first, None, checks, &mut unpassed);
         self.conclude(first, None, unpassed)
     }
 

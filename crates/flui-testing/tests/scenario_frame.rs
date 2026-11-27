@@ -348,3 +348,46 @@ fn measure_unobserved_matches_pump_report() {
     assert_eq!(measured.counters(), expected.counters());
     t.finish();
 }
+
+/// Keeps the handle of the window it is mounted in, so the test closes the window as the
+/// application would.
+#[derive(Clone, StatefulView)]
+struct WindowKeeper(Rc<std::cell::RefCell<Option<flui_view::WindowHandle>>>);
+
+struct WindowKept;
+
+impl StatefulView for WindowKeeper {
+    type State = WindowKept;
+
+    fn create_state(&self, ctx: &dyn LifecycleContext) -> Self::State {
+        *self.0.borrow_mut() = ctx.window();
+        WindowKept
+    }
+}
+
+impl ViewState<WindowKeeper> for WindowKept {
+    fn build(&self, _view: &WindowKeeper, _ctx: &dyn BuildContext) -> impl IntoView {
+        Text::new("open")
+    }
+}
+
+/// A pump after the application closed its last window runs no frame and reports none: the
+/// frame in which the window closes and every pump after it return, they do not panic.
+///
+/// Fails if a pump reads the retired runtime, or if the report of a frame with no window keeps
+/// an earlier frame's counts.
+#[test]
+fn a_pump_after_the_last_window_closed_runs_no_frame_and_reports_none() {
+    let kept = Rc::new(std::cell::RefCell::new(None));
+    let mut t = Tester::mount(WindowKeeper(Rc::clone(&kept)));
+    t.pump();
+    let window = kept
+        .borrow()
+        .clone()
+        .expect("the view was built in a window");
+    window.request_close().expect("the window is open");
+    t.pump();
+    t.pump_for(Duration::from_millis(50));
+    assert_eq!(t.frame().report(), &FrameReport::default());
+    t.finish_unchecked("the application closed its window");
+}

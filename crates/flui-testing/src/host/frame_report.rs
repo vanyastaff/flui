@@ -14,11 +14,18 @@ impl HeadlessHost {
     /// scene patch cost. Counts, not timings, so a perf scenario compares them exactly against a
     /// checked-in baseline.
     ///
+    /// A host whose last window closed runs no frame and reports none. The frame in which the
+    /// window closes reports its pipeline work; its build and its scene went with the window.
+    ///
     /// # Panics
     ///
-    /// As [`pump`](Self::pump) does, and once the host's last window closed.
+    /// As [`pump`](Self::pump) does.
     pub(crate) fn pump_reported(&mut self, dt: Duration) -> FrameReport {
-        let widgets = self.ui_runtime().widgets();
+        let Some(runtime) = self.try_ui_runtime() else {
+            let _outcome = self.pump(dt);
+            return FrameReport::default();
+        };
+        let widgets = runtime.widgets();
         let pipeline = widgets
             .pipeline_owner()
             .expect("BUG: a ui_runtime's presentation installs its pipeline");
@@ -32,24 +39,32 @@ impl HeadlessHost {
             flui_view::__runtime::BuildOwner::clear_frame_build_report_for_test,
         );
         let _outcome = self.pump(dt);
-        let pipeline_after = pipeline.with(PipelineOwner::counters);
-        let scene_after = self.scene_totals();
-        let build = self
-            .ui_runtime()
+        let pipeline = pipeline
+            .with(PipelineOwner::counters)
+            .since(pipeline_before);
+        let (Some(runtime), Some(scene_before)) = (self.try_ui_runtime(), scene_before) else {
+            return FrameReport {
+                pipeline,
+                ..FrameReport::default()
+            };
+        };
+        let build = runtime
             .widgets()
             .with_build_owner_mut(|owner| owner.last_frame_build_report());
+        let scene = self
+            .scene_totals()
+            .map(|after| SceneReport::between(&scene_before, &after))
+            .unwrap_or_default();
         FrameReport {
             build,
-            pipeline: pipeline_after.since(pipeline_before),
-            scene: SceneReport::between(&scene_before, &scene_after),
+            pipeline,
+            scene,
         }
     }
 
-    /// The window's retained-scene totals between frames.
-    fn scene_totals(&self) -> flui_runtime::testing::SceneTotals {
-        let runtime = self.ui_runtime();
-        runtime
-            .presentation_scene_totals_for_test(runtime.presentation_id())
-            .expect("BUG: between frames the window's scene is in its slot")
+    /// The window's retained-scene totals between frames, while the host has a window.
+    fn scene_totals(&self) -> Option<flui_runtime::testing::SceneTotals> {
+        let runtime = self.try_ui_runtime()?;
+        runtime.presentation_scene_totals_for_test(runtime.presentation_id())
     }
 }
