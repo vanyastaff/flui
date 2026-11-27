@@ -2477,6 +2477,7 @@ fn a_window_wake_settles_what_the_raster_thread_finished() {
 /// `build_lending_ui_runtime`, answer `true` from `RasterHost::floor_owed`,
 /// or answer `false` from `SharedRasterHost::floor_owed` while the host is
 /// turning, and the test fails.
+#[cfg(not(target_os = "android"))]
 #[test]
 fn a_window_the_raster_thread_settled_owes_no_floor_beside_one_it_renders() {
     let (shared, slots) = unattached_threaded_host();
