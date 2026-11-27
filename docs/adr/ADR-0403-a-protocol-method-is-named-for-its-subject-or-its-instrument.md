@@ -218,7 +218,7 @@ group.member          lower snake case; the group is one word with no underscore
 
 ### §3. The names
 
-Protocol 0.33 respells 20 methods, respells
+Protocol 0.35 respells 20 methods, respells
 the events (§5) and adds `window.environment` (§6). `METHODS` after it and after the two reads
 of §6 that join it later, in its order:
 
@@ -389,7 +389,7 @@ Break {
 }
 ```
 
-Everything the entry lists is in the change that makes version 0.33: the renames, the events,
+Everything the entry lists is in the change that makes version 0.35: the renames, the events,
 `Matches::omitted`, `window.environment` and the field `Placement` loses to it. `app.build` and
 `app.config` add a method and optional fields and may follow in a later, additive version.
 
@@ -745,7 +745,7 @@ shipped server have it until the record named in "Context" decides it.
 - Bad, because 20 names, 8 event names, 4 `Tester` verbs and a tier's name change at once:
   several hundred mentions across `crates/` and `docs/`, most of them in `flui-protocol`,
   `flui-cli`, `flui-runtime` and `flui-driver`, the schema's next golden and the golden trace.
-- Bad, because an app that speaks 0.33 refuses every older client, and a `flui` tool older than
+- Bad, because an app that speaks 0.35 refuses every older client, and a `flui` tool older than
   the app it finds says `version` and nothing more helpful.
 - Bad, because the table test tells an examination's row and an overlay's from the rest, and a
   lane's when one exists, but not an instrument's row from a subject's: that placement is the
@@ -765,7 +765,7 @@ shipped server have it until the record named in "Context" decides it.
 ### Confirmation
 
 Two changes build this record: the names, events, conventions and `window.environment` with
-protocol 0.33, and `app.build` and `app.config` in that version or a later additive one.
+protocol 0.35, and `app.build` and `app.config` in that version or a later additive one.
 `docs/gaps.md` has a bullet for §1 to §5, one for §6 and one for §7.
 
 | Rule | Held by |
@@ -774,7 +774,7 @@ protocol 0.33, and `app.build` and `app.config` in that version or a later addit
 | Every row's group is in `GROUPS`; an examination group's rows share one output type, and a row with that output type is in that group; an annotating row is in `overlay` and `overlay` has no other; a lane's row is in a lane group and a lane group has no other | `every_row_fits_the_kind_of_its_group`, over `for_each_method!` with each row's output type |
 | The rows that change the app are exactly a list | `only_these_rows_change_the_app`, which replaces `what_ends_the_app_is_destructive_and_reads_never_act`: the acting and destructive rows by name, and the destructive ones `app.reload` and `session.close`, so a read declared to act is a line of the diff |
 | A name `BREAKING` respelled is a method under the last name its chain reaches, and under no earlier one | `every_respelled_method_is_a_method_under_its_latest_name`, over every entry of `BREAKING`. It replaces the assertions of `the_ops_protocol_0_5_renamed_are_methods_now` and `protocol_0_5_renames_every_0_4_operation_into_the_method_table` that `windows.list`, `semantics.read`, `semantics.act` and `motion.set` are methods; the second test keeps its check that every 0.4 operation is listed |
-| The schema is 0.33's golden, and differs from 0.32's only by what `BREAKING` lists | `the_wire_schema_is_the_one_its_version_published`, `every_published_schema_is_additive_to_the_next` |
+| The schema is 0.35's golden, and differs from 0.34's only by what `BREAKING` lists | `the_wire_schema_is_the_one_its_version_published`, `every_published_schema_is_additive_to_the_next` |
 | What a break lists as removed or respelled is gone from its version's schema | `nothing_a_break_removed_is_in_its_schema`, over every entry of `BREAKING` and its golden: a listed path or old name still present fails, so a field left in place is not passed by the entry that permits its removal |
 | Every wire name is lower snake case | `every_wire_name_is_lower_snake_case`, over the schema's property names and enumerated strings; `every_vocabulary_enum_is_spelled_as_it_is_named` |
 | A duration or a time names its unit | `a_duration_or_a_time_names_its_unit`, over the schema: a numeric property named for a time word ends `_s`, `_ms`, `_us` or `_ns`. The fields §4 names (`ms`, `t`, `arrival`, `at`) are not named for a time word and stay as they are. The test renames nothing: a shipped field it flags joins the exceptions §4 names, with its unit, in the change that adds the test. It sees a field by its name, so a time under another word is not seen |
@@ -792,7 +792,7 @@ protocol 0.33, and `app.build` and `app.config` in that version or a later addit
 | A trace recorded under the old names is not replayed | `flui-driver`'s `a_trace_of_another_protocol_is_refused_before_any_command`, which exists: replay refuses a trace of any other protocol than the app's |
 | A read links nothing into a release binary | the `size` job, and the reader of a change to `ui_runtime` (ADR-0402) |
 
-No name is left under an alias. After the change that makes 0.33, `rg` of each old method name
+No name is left under an alias. After the change that makes 0.35, `rg` of each old method name
 of §3's table, each old event name of §5's and each old `Tester` verb, across `crates/`,
 `packages/`, `src/`, `tests/`, `examples/`, `tools/`, `.github/` and `docs/`, finds them only
 in `docs/adr/`, in `crates/flui-protocol/src/version.rs`, under
