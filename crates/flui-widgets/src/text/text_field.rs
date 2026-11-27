@@ -10,7 +10,7 @@
 //! decorate from. Prefer `flui_material::TextField` whenever a `Theme` is
 //! available.
 //!
-//! With no label slot, a `Semantics` label above the field gives it its
+//! With no label slot, a `Semantics` label wrapping the field gives it its
 //! accessible name, as one above Flutter's `EditableText` does:
 //! `Semantics::new().label("New note").child(RawTextField::new(controller))`
 //! is one text input named "New note".

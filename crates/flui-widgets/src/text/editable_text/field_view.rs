@@ -198,9 +198,14 @@ pub(super) fn build_field_view(
     // outside the inner anchor so the IME loop still finds the editable as that anchor's first child. The
     // value is the text the render object shows — the mask when obscured.
     // The node is no semantics boundary, as Flutter's `RenderEditable` is none
-    // (flutter/flutter@3.50.1 packages/flutter/lib/src/rendering/editable.dart:1323-1338):
-    // a `Semantics` that annotates the field from above (a label, a hint)
-    // absorbs it, so the field and its name are one node.
+    // for an editable field (flutter/flutter@3.50.1
+    // packages/flutter/lib/src/rendering/editable.dart:1323-1338 makes one
+    // only for read-only text whose spans have recognizers, which FLUI
+    // publishes as runs, ADR-0204): a `Semantics` that annotates the field
+    // from above (a label, a hint) absorbs it, so the field and its name are
+    // one node. An ancestor whose own states or actions conflict with the
+    // field's (an annotated `Focus`) is refused and keeps a node of its own,
+    // as Flutter's `isCompatibleWith` refuses it.
     let mut semantics = Semantics::new()
         .role(if appearance.obscure_text {
             flui_semantics::SemanticsRole::PasswordInput

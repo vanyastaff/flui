@@ -226,7 +226,9 @@ impl TextField {
     }
 
     /// Names the field's node for tests and automation (ADR-0240): exported
-    /// as UI Automation's `AutomationId`, never announced.
+    /// as UI Automation's `AutomationId`, never announced. Under a
+    /// `Semantics` that annotates the field the identifier goes on that
+    /// `Semantics`, as `EditableText::identifier` says.
     #[must_use]
     pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
         self.identifier = Some(identifier.into());

@@ -125,6 +125,12 @@ fn a_semantics_label_above_a_field_names_it() {
         .child(RawTextField::new(TextEditingController::new())),)));
     t.expect(&find::role(Role::TextInput), matcher::name("New note"));
     t.expect(&find::id("new-note"), matcher::name("New note"));
+    // The named node is still the field: it takes text and shows it as its value.
+    t.type_text(&find::id("new-note"), "Groceries");
+    t.expect(
+        &find::role(Role::TextInput),
+        matcher::all([matcher::name("New note"), matcher::value("Groceries")]),
+    );
     t.finish();
 }
 
