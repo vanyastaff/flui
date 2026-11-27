@@ -86,14 +86,7 @@ where
     // (the inner type) — so without this unwrap such a rebuild is neither
     // updated (type mismatch here) nor replaced (`can_update` said reuse),
     // leaving the element silently stale.
-    let mut effective: &dyn View = new_view;
-    let mut shared: Option<&Rc<dyn View>> = None;
-    // Each hop strips one `BoxedView` layer: this downcasts to the wrapper to
-    // unwrap it, not to the concrete view type.
-    while let Some(boxed) = (effective as &dyn Any).downcast_ref::<BoxedView>() {
-        shared = Some(boxed.shared());
-        effective = boxed.as_view();
-    }
+    let (effective, shared) = unwrap_boxed(new_view);
     // The upcast of the trait object itself reads the concrete type from its
     // vtable; `View::view_type_id` is overridable and is not consulted.
     let Some(new_ref) = (effective as &dyn Any).downcast_ref::<V>() else {
@@ -118,10 +111,7 @@ where
     // Memoization equality-bail (`should_skip_rebuild`), evaluated on the
     // borrow before the element takes anything, so a skip costs no clone.
     if new_ref.should_skip_rebuild(core.view()) {
-        tracing::debug!(
-            view_type = ?TypeId::of::<V>(),
-            "dispatch_view_update: skip rebuild (configs equal)",
-        );
+        trace_skipped(TypeId::of::<V>());
         return ViewUpdate::Equal;
     }
 
@@ -139,14 +129,41 @@ where
         Some(next) => {
             let previous = core.replace_view_for_dispatch(next);
             core.mark_dirty_for_dispatch();
-            tracing::debug!(
-                "dispatch_view_update succeeded for view_type={:?}",
-                TypeId::of::<V>()
-            );
+            trace_replaced(TypeId::of::<V>());
             ViewUpdate::Replaced { previous }
         }
         None => ViewUpdate::Mismatch,
     }
+}
+
+/// `view` with every `BoxedView` layer stripped, and the shared allocation of
+/// the innermost layer when there was one. Each hop downcasts to the wrapper
+/// to unwrap it, not to the concrete view type.
+#[inline(never)]
+fn unwrap_boxed(view: &dyn View) -> (&dyn View, Option<&Rc<dyn View>>) {
+    let mut effective = view;
+    let mut shared = None;
+    while let Some(boxed) = (effective as &dyn Any).downcast_ref::<BoxedView>() {
+        shared = Some(boxed.shared());
+        effective = boxed.as_view();
+    }
+    (effective, shared)
+}
+
+#[inline(never)]
+fn trace_skipped(view_type: TypeId) {
+    tracing::debug!(
+        ?view_type,
+        "dispatch_view_update: skip rebuild (configs equal)",
+    );
+}
+
+#[inline(never)]
+fn trace_replaced(view_type: TypeId) {
+    tracing::debug!(
+        "dispatch_view_update succeeded for view_type={:?}",
+        view_type
+    );
 }
 
 /// What offering a view to an element did.

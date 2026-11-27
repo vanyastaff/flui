@@ -12,7 +12,7 @@ use flui_foundation::{ElementId, Listenable, RenderId};
 
 use super::{
     arity::ElementArity,
-    generic::ElementCore,
+    generic::{CoreState, ElementCore},
     provided::{Provided, Publication},
 };
 use crate::{
@@ -99,12 +99,34 @@ pub(super) fn armed_state_hook<V, A>(
     let sink_start = lifecycle_sink_len(owner);
     let mut caught = FirstPanic::new();
     caught.contain(run);
+    finish_armed_hook(
+        core.state(),
+        owner,
+        TypeId::of::<V>(),
+        hook,
+        context,
+        sink_start,
+        caught,
+    );
+}
+
+/// The view-independent half of [`armed_state_hook`]: what follows the hook.
+#[inline(never)]
+fn finish_armed_hook(
+    core: &CoreState,
+    owner: &mut crate::ElementOwner<'_>,
+    view_type: TypeId,
+    hook: LifecycleHook,
+    context: &'static str,
+    sink_start: Option<usize>,
+    caught: FirstPanic,
+) {
     mark_lifecycle_records(owner, sink_start);
     if let Some(payload) = caught.held() {
         owner.record_armed_lifecycle_panic(
-            core.self_id(),
-            core.creation_site(),
-            TypeId::of::<V>(),
+            core.self_id,
+            core.site,
+            view_type,
             hook,
             payload,
             context,
@@ -176,15 +198,29 @@ pub(super) fn contained_state_hook<V, A>(
     // elements still leave.
     let mut caught = FirstPanic::new();
     caught.contain(run);
-    if let Some(payload) = caught.held() {
-        owner.record_hook_panic(
-            core.self_id(),
-            core.creation_site(),
+    if caught.held().is_some() {
+        record_contained_hook(
+            core.state(),
+            owner,
             TypeId::of::<V>(),
             hook,
-            payload,
             context,
+            &caught,
         );
+    }
+}
+
+#[inline(never)]
+fn record_contained_hook(
+    core: &CoreState,
+    owner: &mut crate::ElementOwner<'_>,
+    view_type: TypeId,
+    hook: LifecycleHook,
+    context: &'static str,
+    caught: &FirstPanic,
+) {
+    if let Some(payload) = caught.held() {
+        owner.record_hook_panic(core.self_id, core.site, view_type, hook, payload, context);
     }
 }
 
@@ -211,14 +247,25 @@ pub(super) fn publish_provided<V, A>(
     super::behavior_commons::begin_reactive_build(core, owner);
     let mut caught = FirstPanic::new();
     caught.contain(|| publication.publish(owner, provide));
+    finish_provided(core.state(), owner, TypeId::of::<V>(), caught);
+}
+
+/// The view-independent half of [`publish_provided`]: what follows `provide`.
+#[inline(never)]
+fn finish_provided(
+    core: &CoreState,
+    owner: &mut crate::ElementOwner<'_>,
+    view_type: TypeId,
+    caught: FirstPanic,
+) {
     if let Some(payload) = caught.held() {
-        if let Some(id) = core.self_id() {
+        if let Some(id) = core.self_id {
             owner.reactive.end_element_build(id, false);
         }
         owner.record_armed_lifecycle_panic(
-            core.self_id(),
-            core.creation_site(),
-            TypeId::of::<V>(),
+            core.self_id,
+            core.site,
+            view_type,
             LifecycleHook::Provide,
             payload,
             "publishing the element's values",
@@ -247,7 +294,7 @@ where
 /// The view-independent body of [`make_build_ctx`].
 #[inline(never)]
 fn live_build_ctx<'a>(
-    core: &super::generic::CoreState,
+    core: &CoreState,
     owner: &crate::ElementOwner<'a>,
 ) -> LiveBuildContextChoice<'a> {
     let handle = owner.build_view.expect(
@@ -1368,7 +1415,7 @@ where
 /// Whether a render element's build half runs, traced; compiled once rather
 /// than once per render view type.
 #[inline(never)]
-fn should_build_render(core: &super::generic::CoreState, render_id: Option<RenderId>) -> bool {
+fn should_build_render(core: &CoreState, render_id: Option<RenderId>) -> bool {
     if core.dirty.get() && core.lifecycle.can_build() {
         tracing::info!(
             "RenderBehavior::build_into_views START render_id={:?}",
@@ -1386,11 +1433,7 @@ fn should_build_render(core: &super::generic::CoreState, render_id: Option<Rende
 
 /// Clears a render element's dirty flag once its build half is complete.
 #[inline(never)]
-fn finish_render_build(
-    core: &super::generic::CoreState,
-    render_id: Option<RenderId>,
-    children: usize,
-) {
+fn finish_render_build(core: &CoreState, render_id: Option<RenderId>, children: usize) {
     core.dirty.set(false);
     tracing::debug!(
         "RenderBehavior::build_into_views completed render_id={:?} children={}",
