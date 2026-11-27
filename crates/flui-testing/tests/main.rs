@@ -338,6 +338,8 @@ mod settledness;
 mod tester;
 #[path = "tester_scenario.rs"]
 mod tester_scenario;
+#[path = "tester_verbs.rs"]
+mod tester_verbs;
 #[path = "text_store_kit.rs"]
 mod text_store_kit;
 #[path = "timer.rs"]
