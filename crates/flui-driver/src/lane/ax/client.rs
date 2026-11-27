@@ -89,7 +89,7 @@ fn prefix(value: &CFString, units: usize) -> String {
     // SAFETY: the range starts at the string's first unit and ends inside it, since the string
     // is longer than `limit` units.
     let cut = unsafe { CFString::with_substring(None, Some(value), CFRange::new(0, limit)) };
-    cut.map(|cut| cut.to_string()).unwrap_or_default()
+    cut.map_or_default(|cut| cut.to_string())
 }
 
 /// The first [`OUTLINE_TEXT_LIMIT`] characters of `value`, copied only that far; `None` for an

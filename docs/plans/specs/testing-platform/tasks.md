@@ -1,6 +1,6 @@
 # testing-platform: задачи
 
-- **Статус:** утверждено владельцем 2026-11-24. Сделано: ADR-0400, эта спека, TP1, TP2. Следующая: TP3.
+- **Статус:** утверждено владельцем 2026-11-24. Сделано: ADR-0400, эта спека, TP1, TP2; у TP3 сделано ядро, переход не начат. Следующая: переход TP3.
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md); решение:
   [ADR-0400](../../../adr/ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md)
 - **База:** `main` @ `aa45aa8`. Числа сняты поиском по именам; перед правкой сверить.
@@ -147,7 +147,7 @@
     `AgentSide`, когда кончается внешний ход (`runtime_only`, никогда `idle`). Ожидание, читающее
     устойчивость, таймаут любого ожидания и конец `Idle` отвечаются только из `answer_settled`.
     Предел 10 000 ходов считает каждое ожидание в рантайме; цикл хоста
-    `HeadlessHost::run_until_answered` останавливается на нём же и до TP3 не имеет вызывающего.
+    `HeadlessHost::run_until_answered` останавливается на нём же; его вызывает `Headless` (TP3).
   - Чья причина. Перерисовка, запланированный кадр, работа дерева и движение указателя названы
     окном, работу которого обслужит следующий кадр; скрытое окно, окно с полной очередью кадров и
     окно с потерянным устройством не названы ни в одной причине. Повтор упавшего кадра держит
@@ -231,13 +231,33 @@
   ADR-0400 про `Drop` (паника, ошибка через `?`, ожидаемая ошибка до утёкшего тикера, клавиша,
   нажатая в конце теста); аккорд после `Gesture`, оставившего клавишу нажатой, не шлёт второго
   нажатия; compile-fail на `tap(&Find<Many>)`.
+- **Состояние:** ядро сделано на ветке `claude/project-thread-5mrv8h`, переход не начат.
+  Построено: `flui_testing::scenario` (`Tester<C: Connection>`, `Headless<Observed>` с
+  `VirtualClock`, `Find<One>`/`Find<Many>`, `matcher`, `TestError` и `Diagnosis`, отчёт и
+  `TestReport`), `flui::testing::scenario` в фасаде; `held_keys` удалён из старого `Tester`, его
+  `press_keys` идёт актом `element.press_keys`, а агент не нажимает и не отпускает клавишу,
+  которую аренда держала к началу акта. Старые `tester::{Tester, Expectation, TestError}` и
+  функции `find`, возвращающие `Locator`, помечены `#[deprecated]` и остаются до перехода (их
+  пользователи перечислены в пункте ADR-0400 в `docs/gaps.md`). Не сделано: переход 16 файлов,
+  `book/src/tutorial`, `book/src/mapping.md` и шаблонов `flui-cli`; поэтому `rg` выше даёт 95,
+  а не 0.
+- **Доказательства:** модуль `tester_scenario` в `tests/main.rs` `flui-testing`:
+  `a_read_leaves_the_frame_number_unchanged`, `a_caught_panic_then_drop_skips_the_end_checks`,
+  `an_error_through_the_question_mark_then_drop_skips_the_end_checks`,
+  `an_expected_error_dropped_before_a_leaked_ticker_reports_the_ticker`,
+  `a_test_that_ends_holding_a_key_passes_its_end_checks`,
+  `a_chord_after_a_gesture_that_left_a_key_down_sends_no_second_press` (жест здесь — `perform`
+  через `connection_mut`, `Gesture` строит TP4); trybuild `scenario_ui` (`tap_on_many`). Каждый
+  падает с откатом своей строки; тест про клавишу в конце слушает окно глобальным обработчиком
+  клавиш, который переживает снятие корня, и падает, если конец не отпускает аренду или не
+  проигрывает поставленное ею отпускание.
 
 ### TP4. `Frame`, жесты, `Unobserved`, `measure`; пилот на `flui-cupertino`
 
 - **Что:** `Frame` и типизированные чтения, `Gesture`, `fixture::Constrain`, `WindowSpec`,
   `VirtualClock` с `pump`, `pump_for`, `settle` и `freeze_at`, `Headless<Unobserved>` с
-  `perform`; `flui_testing::perf::measure` по ADR-0396 §1 с окном `perf_measured` под прежним
-  именем, и `Tester::measure` над ней (пункт ADR-0396 в `docs/gaps.md` теряет эту часть);
+  `perform`; `Tester::measure` над `flui_testing::perf::measure` (ADR-0396 §1, уже на `main`, с
+  окном сбора `flui_perf_collected_window`);
   `input::plan` понижается в строки `HostInput`, которые воспроизводит таблица соответствия
   (ADR-0400 §2), одной функцией для них, инъекции и пути ОС;
   `scenarios!` с `each`; старые формы из списка правил помечены устаревшими, пункт ADR-0400 в
@@ -274,8 +294,8 @@
 
 ### TP15. Цель `perf` в `flui-widgets`
 
-- **Что:** сценарии на `measure` с вводом через `perform`; `perf_measured` остаётся окном сбора,
-  `FRAME` удалён.
+- **Что:** сценарии на `measure` с вводом через `perform`; окно сбора — `flui_perf_collected_window`
+  из `flui_testing::perf::measure`, `FRAME` удалён.
 - **Проверка:** все 13 файлов под `check` по правилу E2; полный прогон `gh workflow run CI --ref`
   с заданием `perf-gates`, ссылка в теле PR.
 

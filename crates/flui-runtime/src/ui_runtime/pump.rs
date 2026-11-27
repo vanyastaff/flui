@@ -357,7 +357,7 @@ impl UiRuntime {
     ///
     /// The wake's frame, when a window draws, comes after this drain: the development agent's
     /// overdue obligations in such a window are that frame's to answer, and this drain answers
-    /// only those of a window that draws no frame ([`Frameless::BeforeFrame`]).
+    /// only those of a window that draws no frame (`Frameless::BeforeFrame`).
     pub fn drain_owner_inbox(&self) -> bool {
         self.drain_inbox(Frameless::BeforeFrame)
     }

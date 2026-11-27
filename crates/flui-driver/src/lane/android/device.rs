@@ -600,8 +600,8 @@ impl WindowsReading {
 /// The windows the [`WINDOWS`] line printed as `printed`: see [`Windows`].
 ///
 /// The reply is read by its parts, each opened by a header as the window manager prints one
-/// ([`PartName::of_header`]): the live displays' part and the live windows' part, which
-/// [`LiveParts`] finds by counting the headers against the shape the window manager prints, and
+/// (`PartName::of_header`): the live displays' part and the live windows' part, which
+/// `LiveParts` finds by counting the headers against the shape the window manager prints, and
 /// refuses a reply a window's title forged a header into. No other part is read. In the displays'
 /// part, the rotation is the first `mRotation=` of the default display's section
 /// ([`DEFAULT_DISPLAY`]) and the focus its first `mCurrentFocus=`, which wins, a `null` one
@@ -609,7 +609,7 @@ impl WindowsReading {
 /// part's. A window's frame is the first `frame=` or `mFrame=` after its header. The display
 /// holding the device's focus is a line of its own in the windows' part,
 /// `mTopFocusedDisplayId=<id>` whole, printed once after the window list
-/// ([`WindowsReading::focused_display`]). A reply that heads no part is read whole, and a line
+/// (`WindowsReading::focused_display`). A reply that heads no part is read whole, and a line
 /// the parser does not know is skipped.
 ///
 /// # Errors

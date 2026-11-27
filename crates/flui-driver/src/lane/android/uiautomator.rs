@@ -84,7 +84,7 @@ impl DumpFiles {
     }
 
     /// The line that dumps the active window to dump number `dump` and prints it, or, where the
-    /// dump wrote no file, what it said on its error stream ([`DumpFailure`]). Each dump has a path
+    /// dump wrote no file, what it said on its error stream (`DumpFailure`). Each dump has a path
     /// of its own, so a file an earlier dump left (one whose command the host ended at its
     /// deadline, before its removal ran) is never printed as this dump's; and the line ends by
     /// removing its own files and the earlier dumps' ([`Self::removal_through`]), so what dumps

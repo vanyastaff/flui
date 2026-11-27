@@ -82,7 +82,7 @@ impl From<SendFailure> for Error {
     }
 }
 
-/// What a run put on the device: see the [module docs](self).
+/// What a run put on the device, counted as the `delivered` module says.
 #[derive(Debug, Default)]
 pub struct Delivered {
     /// The events counted as sent: each taken whole, and the failing one where part of it went

@@ -7,6 +7,7 @@ mod endpoint;
 mod envelope;
 mod framing;
 mod geometry;
+mod gesture_params;
 mod gestures;
 mod input_plan;
 mod method_table;

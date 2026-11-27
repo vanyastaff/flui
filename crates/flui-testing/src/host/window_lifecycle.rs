@@ -241,6 +241,44 @@ impl HeadlessHost {
             .attach_root_widget_to(window.0, &flui_widgets::app_root(view.clone()))
     }
 
+    /// Attach `view` as the primary window's root, as [`attach`](Self::attach)
+    /// does, taking the view by value: the root the host builds owns it, so the
+    /// view need not be `Clone`.
+    pub(crate) fn attach_root(
+        &self,
+        view: impl flui_view::IntoView,
+    ) -> Result<(), flui_view::__runtime::AttachError> {
+        let window = self.primary_window();
+        let _open = self.open_window_of(window);
+        self.ui_runtime()
+            .attach_root_widget_to(window.0, &flui_widgets::app_root(view))
+    }
+
+    /// Unmount the primary window's root view, keeping the window and the UI
+    /// runtime: every element below it is unmounted and every state disposed,
+    /// in the runtime's scope, and a frame is asked for so the next
+    /// [`pump`](Self::pump) presents the empty window. A retired host does
+    /// nothing.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic of a `dispose` or a destructor the unmount runs.
+    pub(crate) fn unmount_root(&self) {
+        let Some(runtime) = self.try_ui_runtime() else {
+            return;
+        };
+        let window = self.primary_window();
+        if self.is_closed(window) {
+            return;
+        }
+        runtime.enter(|runtime| {
+            runtime
+                .presentation_widgets_for_test(window.0)
+                .detach_root_widget();
+        });
+        runtime.request_redraw();
+    }
+
     /// Hand `intent` to `window`'s URL owner, the outermost `Router` of its
     /// tree, as a runner hands it a URL the platform opened for that window
     /// (ADR-0330 §5). The Router's edit is built by the next

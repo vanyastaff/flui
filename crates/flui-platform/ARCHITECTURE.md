@@ -542,7 +542,7 @@ it a double makes a `Script<R, A>` per request type, a `Track<T>` per value the 
   `ScenarioDriver`'s, which `Scenario::drive` hands out once (a second is `AlreadyDriven`, so
   two hosts never move each other's time). `ScenarioDriver::advance` moves the clock and applies
   what fell due in one call, and nothing else can move it: `HeadlessHost::clock()` and
-  `Tester::clock()` hand out a `HostClock` that reads the time and advances only through the
+  the deprecated `flui_testing::tester::Tester::clock()` hand out a `HostClock` that reads the time and advances only through the
   driver, and every path of the host that moves time (`pump`, `advance`, a replayed recording or
   pointer script) goes through it. `Scenario::next_due` is a deadline of the host's loop like a
   gesture's: `time_to_next_frame` and `pump_until_settled` wait for it.

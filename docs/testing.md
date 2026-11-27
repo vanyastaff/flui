@@ -9,10 +9,16 @@ This page documents the test, lint, format, and benchmark commands enforced for 
 An application can use the framework's test support without depending on its
 implementation crates. Add `features = ["testing"]` to the `flui` entry in
 `[dev-dependencies]`, using the same source/version as the normal dependency.
-Write the test with `flui::testing::{Tester, find}`: `Tester::mount` mounts the view as
-`run_app` does, `find` builds the `Locator`s the driver and an agent use, actions go through the
-window's own input path, and `Tester::expect` waits while the application has a frame or work
-due ([cookbook](../book/src/cookbook/testing.md)). `flui::testing::rendering::{RenderTester,
+Write the test with `flui::testing::scenario::{Tester, find, matcher}` (ADR-0400):
+`Tester::mount` mounts the view as `run_app` does, `find` builds the `Find`s over the `Locator`s
+the driver and an agent use (`Find<One>` for a verb aimed at one element, `Find<Many>` for a
+count), a read is a turn that runs no frame, an act goes through the window's own input path and
+ends with an owner turn, and `Tester::expect(&find, matcher)` waits on the virtual clock until the
+matcher holds. The end of the test (`finish`, or `Drop`) settles, audits, unmounts and checks that
+nothing was left behind, unless a failure is already on its way to the caller. The
+`flui::testing::{Tester, find}` at the module's root are the tester this replaces, deprecated
+until their users move ([gaps](gaps.md#accepted-adr-sections-not-built-yet); the
+[cookbook](../book/src/cookbook/testing.md) still teaches them). `flui::testing::rendering::{RenderTester,
 BoxQueryRun}` tests a render object of one's own. The framework's own harnesses
 (`flui_testing::widgets::lay_out`, `HeadlessHost`, gesture replay and the
 accessibility reader) stay in `flui-testing` and out of the facade.
@@ -49,10 +55,11 @@ Two structural rules hold across the stack:
 - **Test-only APIs live in the kit of their layer** (ADR-0243, ADR-0400 §8). From the frame layer
   up that kit is `flui-testing`: it sits above the frame runtime and the widget catalog, so
   the widget harness lives there too and drives the product frame
-  transaction: `Tester::mount` mounts its tree in the headless host, whose frames are
+  transaction: `scenario::Tester::mount` mounts its tree in the headless host, whose frames are
   `UiRuntime::pump` (ADR-0083 §4). ADR-0400 §1 replaces `lay_out`, `LaidOut`, `Harness` and a
   public `HeadlessHost`, which the rest of this page describes as the code has them today, with
-  `Tester`; they are not deprecated yet ([gaps](gaps.md#accepted-adr-sections-not-built-yet)).
+  `scenario::Tester`; they are not deprecated yet, and the older `tester::Tester` is
+  ([gaps](gaps.md#accepted-adr-sections-not-built-yet)).
   A crate below it exposes its own kit behind a
   feature named `testing`, never `test-support` or `test-utils`.
 - **A test's frames are the UI runtime's.** A tree mounts through `Tester::mount` (today
@@ -1292,13 +1299,16 @@ whose composition decision a subscriber is, not at the DAG's bottom.
 (or a human, working the same way) can discover the public API, build a UI, inspect it two ways,
 drive an interaction through it, and assert the result, using only `flui::…`, the surface a
 consumer of the published crate has. It is `flui`'s own `tests/`, not `flui-testing`'s, for that
-reason.
+reason. It still drives the deprecated `flui::testing::Tester`: the
+`flui::testing::scenario::Tester` that replaces it (ADR-0400) has no render-tree read yet, and
+the suite moves when it has ([gaps](gaps.md#accepted-adr-sections-not-built-yet)). A new test is
+written against `scenario::Tester`, as the top of this page shows.
 
 The tree is a Material counter (`Center` → `Column` → prompt `Text` / count `Text` /
 `ElevatedButton`, a `Signal` created in `create_state`), the CLI `counter` template's shape with
 Material in place of its `RawButton`.
 
-| Step | What it does | API |
+| Step | What it does | API (the deprecated tester) |
 |------|--------------|-----|
 | 1. Mount | Mount the tree as `run_app` does | `flui::testing::Tester::mount` |
 | 2. Inspect structure | Read the render tree, check a known node is there | `Tester::inspect_render`, the agent's `inspect.render` |

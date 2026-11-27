@@ -1,0 +1,15 @@
+error[E0308]: mismatched types
+ --> tests/scenario_ui/tap_on_many.rs:8:11
+  |
+8 |     t.tap(&find::text("Item").all());
+  |       --- ^^^^^^^^^^^^^^^^^^^^^^^^^ expected `&Find`, found `&Find<Many>`
+  |       |
+  |       arguments to this method are incorrect
+  |
+  = note: expected reference `&Find<One>`
+             found reference `&Find<Many>`
+note: method defined here
+ --> src/scenario/tester.rs
+  |
+  |     pub fn tap(&mut self, find: &Find<One>) {
+  |            ^^^

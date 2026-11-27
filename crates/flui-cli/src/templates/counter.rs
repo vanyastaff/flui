@@ -115,16 +115,16 @@ impl ViewState<CounterView> for CounterState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui::testing::{TestWindow, Tester, find};
+    use flui::testing::scenario::{TestWindow, Tester, find, matcher::exists};
 
     #[test]
     fn counter_increments() {
         let mut t = Tester::mount(CounterView);
-        t.expect(find::text("0")).to_exist();
+        t.expect(&find::text("0"), exists());
         t.tap(&find::button("Increment"));
-        t.expect(find::text("1")).to_exist();
+        t.expect(&find::text("1"), exists());
         t.tap(&find::button("Increment"));
-        t.expect(find::text("2")).to_exist();
+        t.expect(&find::text("2"), exists());
     }
 
     #[test]
@@ -132,7 +132,7 @@ mod tests {
         let mut first = Tester::mount(CounterView);
         first.tap(&find::button("Increment"));
         let mut second = Tester::mount(CounterView);
-        second.expect(find::text("0")).to_exist();
+        second.expect(&find::text("0"), exists());
     }
 
     /// The counter is centred on the surface, not merely wrapped in a

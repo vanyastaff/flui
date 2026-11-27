@@ -1,4 +1,8 @@
 #![cfg(test)]
+#![expect(
+    deprecated,
+    reason = "ADR-0400: the scenario tester has no `draw_commands`, no timed long press and no render-tree read yet (docs/gaps.md)"
+)]
 
 use flui::animation::Animation;
 use flui::geometry::{Offset, Point, Rect, Size};

@@ -340,6 +340,7 @@ pub fn a_rebuild_that_adds_or_removes_the_long_press_reshapes_the_press() {
 /// Tab focuses an enabled button and Enter presses it, as the activation
 /// intent of Flutter's `FocusableActionDetector` does; a disabled button
 /// takes no focus, so Tab leaves it unfocused.
+#[expect(deprecated, reason = "ADR-0400: this case moves to `scenario::Tester`")]
 pub fn the_activation_key_presses_a_focused_button_and_a_disabled_one_takes_no_focus() {
     use std::cell::Cell;
     use std::rc::Rc;

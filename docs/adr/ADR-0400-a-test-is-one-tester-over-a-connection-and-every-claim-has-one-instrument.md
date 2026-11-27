@@ -482,14 +482,18 @@ the `TestError`s still alive. Every exit reads it:
   travelling to the caller through `?` is still alive when the `Tester` drops.
 - `Tester::checks(|c| ..)` adds its soft failures to the report's list and raises the list once
   when the closure returns, then clears it.
-- `Tester::finish` and `Drop` on a report that is not poisoned, with no `TestError` alive and a
-  thread that is not panicking, run the end checks. On a `VirtualClock` connection, in this order:
+- `Tester::finish` on a report that is not poisoned, and `Drop` on one that is not poisoned with
+  no `TestError` alive and a thread that is not panicking, run the end checks: an explicit
+  `finish` is the test saying it is done, so an error it kept does not skip them. On a `VirtualClock` connection, in this order:
   settle (bounded as §3; a repeating cause freezes the frame at the limit and names it); audit
   that frame (`AuditRule::Unnamed` by default); unmount the root view, keeping the window and the
   runtime; run drops; release the agent's lease, which queues the release of what it holds, and
   the doubles; run turns until §3's list holds nothing the release or the unmount queued; check
   the `DropLedger`; check that §3's list is empty (a timer, a ticker or background work left
-  behind); close the window and retire the runtime; raise one `TestReport`. `Connection::finish`
+  behind); close the window and retire the runtime; raise one `TestReport`. A panic in a step
+  from the unmount on is held (`FirstPanic`) while the release steps still run; the checks after
+  it are skipped, what the earlier ones found is written to the test's output, and the held panic
+  is resumed as the test's failure. `Connection::finish`
   carries the part a connection can perform: a `Device` releases both owners of held input (§2)
   and checks nothing it cannot read (no ledger, no exact frame), so its report names those checks
   `cannot_verify` and a device scenario audits with `Tester::audit`.
