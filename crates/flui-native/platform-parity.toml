@@ -193,6 +193,12 @@ status = { windows = "na", macos = "yes", wayland = "na", x11 = "na", ios = "na"
 note = "a manual macOS run; headless can't drive it"
 
 [[group.section.row]]
+id = "development-restart-keeps-the-window"
+feature = 'Development restart in the process: the main window and its surface kept'
+status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "missing", android = "missing", web = "missing", headless = "yes" }
+note = "A version of another layout retires the application and composes the one its entry hands over into the main window the loop kept ([ADR-0393](adr/ADR-0393-a-development-reload-applies-one-of-three-tiers-chosen-from-the-shape-of-the-edit.md) §4): headless runs it (`runner_restart`, in CI). The desktop runner is the same code on every desktop host, and none has run it on a real surface: owed on each, a restart in which the window does not close or flash, the surface and the GPU pipelines are not built again, and the first frame of the later application is drawn in full. No mechanism implements `run_entry` yet, so outside the tests a restart fails as `NoApplication`. iOS, Android and the web have no hand-over ([gaps](gaps.md#accepted-adr-sections-not-built-yet))."
+
+[[group.section.row]]
 id = "focus-and-active-state"
 feature = 'Focus and active state'
 status = { windows = "partial", macos = "partial", wayland = "partial", x11 = "partial", ios = "partial", android = "partial", web = "partial", headless = "yes" }
