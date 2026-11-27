@@ -409,8 +409,8 @@ the contract crate `flui-protocol`: the launch variables and the shortest token
   neither is refused. It creates a `Session`: a `0700` temp directory holding
   the socket (a pipe name on Windows), `MIN_TOKEN_LEN` random bytes as hex for
   the token, and the session file written `0600` and removed with the session
-  unless a newer run replaced it. The same feature goes to `cargo build` and
-  `cargo run`, or cargo would build twice. The token is in the app's
+  unless a newer run replaced it. Every cargo command of the run gets the same
+  feature, or cargo would build twice. The token is in the app's
   environment and the file, never in the `--json` stream.
 - **Android.** The app binds the abstract socket `@flui-agent-<hex>` (ADR-0288
   §6), which only the device reaches, so the session holds an

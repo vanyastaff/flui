@@ -31,6 +31,10 @@ fn field(line: &str, key: &str) -> Option<String> {
 
 fn main() {
     println!("FIXTURE_DRIVER {}", flui::DRIVER);
+    // `cargo run` names the package it runs to the process; the run that starts the built
+    // executable names none.
+    println!("FIXTURE_PACKAGE {}", std::env::var("CARGO_PKG_NAME").unwrap_or_default());
+    println!("FIXTURE_LIBRARY_PATH {}", std::env::var("LD_LIBRARY_PATH").unwrap_or_default());
     if std::env::var_os("FIXTURE_EXIT").is_some() {
         return;
     }
@@ -196,8 +200,9 @@ fn an_optimized_agent_build_turns_on_the_driver_feature_and_a_debug_one_needs_no
 }
 
 /// `flui_reload` reaches the `flui run --agent` that started the app, at the run endpoint its
-/// session file names (ADR-0401): a reload the run places restarts the app's process, and one
-/// of a broken build answers the compiler's errors. The answer is the report the run writes as
+/// session file names (ADR-0401): a reload of the build the app runs leaves it running, a save
+/// restarts it once on the executable its build wrote, and a reload of a broken build
+/// answers the compiler's errors. The answer is the report the run writes as
 /// its `run.reload` event.
 #[cfg(unix)]
 #[test]
@@ -212,6 +217,7 @@ fn an_agent_reloads_the_app_through_the_run_that_started_it() {
         .current_dir(&app)
         .env("CARGO_TARGET_DIR", &target)
         .env("CARGO_NET_OFFLINE", "true")
+        .env_remove("CARGO_PKG_NAME")
         .args(["--json", "run", "--agent", "--no-build-overlay"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -281,8 +287,26 @@ fn an_agent_reloads_the_app_through_the_run_that_started_it() {
             )
         };
 
-    // The app's connection opens before the reload, so the call after the restart has a dead
-    // one to replace.
+    // The events up to the next `run.reload`, that report among them.
+    let until_reload = || -> (serde_json::Value, Vec<serde_json::Value>) {
+        let deadline = Instant::now() + Duration::from_secs(300);
+        let mut seen = Vec::new();
+        loop {
+            let event = events
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("a `run.reload` in time");
+            if event["event"] == "run.reload" {
+                return (event, seen);
+            }
+            seen.push(event);
+        }
+    };
+    let stopped = |seen: &[serde_json::Value]| seen.iter().any(|e| e["event"] == "run.app.stop");
+    let unchanged = serde_json::json!("unchanged");
+    let restarted = serde_json::json!({ "applied": { "tier": "process_restart" } });
+
+    // The app's connection opens before the restart, so the call after it has a dead one to
+    // replace.
     let (failed, windows) = tool(1, "flui_windows", serde_json::json!({}));
     assert!(!failed, "{windows}");
     // The run idles before it is asked: a report counts from the call, not from the last event.
@@ -295,41 +319,105 @@ fn an_agent_reloads_the_app_through_the_run_that_started_it() {
         report["elapsed_ms"].as_u64().is_some_and(|ms| ms <= took),
         "the reload took at most the {took} ms of its call: {report}"
     );
-    assert_eq!(
-        report["outcome"],
-        serde_json::json!({ "applied": { "tier": "process_restart" } }),
-        "{report}"
-    );
-    let reported = next("run.reload");
+    // Nothing was edited since the app started: the build is the one it runs.
+    assert_eq!(report["outcome"], unchanged, "{report}");
+    let (reported, seen) = until_reload();
     assert_eq!(reported["outcome"], report["outcome"], "{reported}");
     assert_eq!(reported["elapsed_ms"], report["elapsed_ms"], "{reported}");
+    assert!(!stopped(&seen), "an unchanged build leaves the app running");
 
-    // The restarted app is up before the edit: `cargo run` checks the sources again as it
-    // starts the binary, and would fail on the broken ones.
+    // A save rebuilds and restarts the app, which runs the executable the build wrote, started
+    // by the run itself rather than by a `cargo run` that would build again.
+    let source = app.join("src/main.rs");
+    let mut edited = std::fs::read_to_string(&source).unwrap();
+    edited.push_str("\n// edited\n");
+    std::fs::write(&source, edited).unwrap();
+    let (saved, seen) = until_reload();
+    assert_eq!(saved["outcome"], restarted, "{saved}");
+    assert!(stopped(&seen), "the save's build replaced the app");
     let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
+    let mut package = None;
+    let library_path = loop {
         let event = events
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .expect("the restarted app");
-        if event["event"] == "run.app.log"
-            && event["line"]
-                .as_str()
-                .is_some_and(|line| line.starts_with("FIXTURE_DRIVER"))
-        {
-            break;
+        let line = event["line"].as_str().unwrap_or_default();
+        if let Some(name) = line.strip_prefix("FIXTURE_PACKAGE ") {
+            package = Some(name.to_owned());
+        } else if let Some(path) = line.strip_prefix("FIXTURE_LIBRARY_PATH ") {
+            break path.to_owned();
         }
+    };
+    assert_eq!(
+        package.as_deref(),
+        Some(""),
+        "the run starts the built executable itself, not `cargo run`"
+    );
+    if cfg!(target_os = "linux") {
+        // The loader searches the build's own libraries, as under `cargo run`.
+        let deps = target.join("debug/deps");
+        assert!(
+            std::env::split_paths(&library_path).any(|dir| dir == deps),
+            "{library_path}"
+        );
     }
+    // The save and a reload of the same edit restart the app once.
+    let (failed, report) = tool(3, "flui_reload", serde_json::json!({}));
+    assert!(!failed, "{report}");
+    assert_eq!(report["outcome"], unchanged, "{report}");
+    let (_, seen) = until_reload();
+    assert!(!stopped(&seen), "the reload after the save kept the app");
+
+    // An executable written since the app started, by a build cargo did not report to this run,
+    // is a change: the reload starts it.
+    std::fs::File::open(target.join("debug/app"))
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() + Duration::from_secs(5))
+        .unwrap();
+    let (failed, report) = tool(7, "flui_reload", serde_json::json!({}));
+    assert!(!failed, "{report}");
+    assert_eq!(report["outcome"], restarted, "{report}");
+    let (_, seen) = until_reload();
+    assert!(stopped(&seen), "the reload replaced the app");
+    // An app that is gone runs no build: the reload starts the one cargo did not redo.
+    let started = seen
+        .iter()
+        .find(|event| event["event"] == "run.app.start")
+        .and_then(|event| event["pid"].as_u64())
+        .expect("the replaced app's start");
+    assert!(
+        Command::new("kill")
+            .arg(started.to_string())
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while events
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .expect("the killed app's exit")["event"]
+        != "run.app.exit"
+    {}
+    let (failed, report) = tool(8, "flui_reload", serde_json::json!({}));
+    assert!(!failed, "{report}");
+    assert_eq!(report["outcome"], restarted, "{report}");
+    let (_, seen) = until_reload();
+    assert!(
+        seen.iter().any(|event| event["event"] == "run.app.start"),
+        "the reload started the app again"
+    );
+
     // A call that acts, which is never sent twice, reaches the restarted app, not the dead
     // connection to the one the reload stopped: the fixture answers `motion.set` with its own
     // error. A named window keeps the call from reading the windows first.
-    let (_, motion) = tool(3, "flui_motion", serde_json::json!({ "window": "w1" }));
+    let (_, motion) = tool(4, "flui_motion", serde_json::json!({ "window": "w1" }));
     assert_eq!(
         motion["error"]["code"], "invalid_argument",
         "the restarted app answers: {motion}"
     );
     std::fs::write(app.join("src/main.rs"), "fn main() { this is not rust }\n").unwrap();
     let (failed, report) = tool(
-        4,
+        5,
         "flui_reload",
         serde_json::json!({ "at_least": "restart" }),
     );
@@ -344,19 +432,19 @@ fn an_agent_reloads_the_app_through_the_run_that_started_it() {
     );
     // A restart stops the app before it builds, as `R` does; the rebuild a save starts keeps
     // it running through a failed build.
-    let mut stopped = false;
+    let mut stopped_first = false;
     loop {
         let event = events
             .recv_timeout(Duration::from_secs(60))
             .expect("the restart's report");
-        stopped |= event["event"] == "run.app.stop";
+        stopped_first |= event["event"] == "run.app.stop";
         if event["event"] == "run.reload" && event["elapsed_ms"] == report["elapsed_ms"] {
             break;
         }
     }
-    assert!(stopped, "the restart stopped the app first");
+    assert!(stopped_first, "the restart stopped the app first");
 
-    let (failed, refused) = tool(5, "flui_reload", serde_json::json!({ "at_least": "hot" }));
+    let (failed, refused) = tool(6, "flui_reload", serde_json::json!({ "at_least": "hot" }));
     assert!(failed, "an unknown tier is refused: {refused}");
     assert_eq!(refused["error"]["code"], "invalid_argument", "{refused}");
 

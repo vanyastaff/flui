@@ -80,7 +80,7 @@ impl ProtocolVersion {
 }
 
 /// The schema this build of the crate speaks.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 33);
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion::new(0, 34);
 
 /// A published version that is not additive to the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -235,6 +235,15 @@ pub const BREAKING: &[Break] = &[
             "/$defs/WaitOutcome/required/end",
         ],
     },
+    Break {
+        version: ProtocolVersion::new(0, 34),
+        adr: "ADR-0401",
+        // A reload whose build is the one the app runs is `unchanged`, a value `Reloaded` had
+        // no fallback for: an older client would refuse the whole report.
+        renamed: &[],
+        removed: &[],
+        required: &[],
+    },
 ];
 
 impl fmt::Display for ProtocolVersion {
@@ -318,8 +327,8 @@ mod tests {
 
     #[test]
     fn a_version_is_spelled_major_dot_minor_and_parses_back() {
-        assert_eq!(PROTOCOL_VERSION.to_string(), "0.33");
-        assert_eq!("0.33".parse(), Ok(PROTOCOL_VERSION));
+        assert_eq!(PROTOCOL_VERSION.to_string(), "0.34");
+        assert_eq!("0.34".parse(), Ok(PROTOCOL_VERSION));
         assert_eq!("0.1".parse(), Ok(ProtocolVersion::new(0, 1)));
         assert_eq!("12.30".parse(), Ok(ProtocolVersion::new(12, 30)));
         for refused in ["", "1", "0.01", "+0.1", "0.1.2", "0.x", " 0.1", "00.1"] {
@@ -341,10 +350,10 @@ mod tests {
     fn a_version_serializes_as_its_string() {
         assert_eq!(
             serde_json::to_value(PROTOCOL_VERSION).ok(),
-            Some(serde_json::json!("0.33"))
+            Some(serde_json::json!("0.34"))
         );
         assert_eq!(
-            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.33")).ok(),
+            serde_json::from_value::<ProtocolVersion>(serde_json::json!("0.34")).ok(),
             Some(PROTOCOL_VERSION)
         );
         assert!(serde_json::from_value::<ProtocolVersion>(serde_json::json!(0.1)).is_err());

@@ -24,7 +24,7 @@ endpoint, which a process restart closes.
 |---|---|
 | `flui mcp` reaches the app at the endpoint `target/flui-agent.json` names, with its token | ADR-0239; `flui-cli`'s `agent::Credentials` |
 | The app cannot rebuild itself, and a process restart ends every connection to it | `flui-cli`'s `commands::run`, `ProcessRestart` |
-| `flui run` already reads cargo's errors for a desktop build (`Diagnostics`, at most 8) | ADR-0395 §2; `build::util::compile_errors` |
+| `flui run` already reads cargo's errors for a desktop build (`Diagnostics`, at most 8) | ADR-0395 §2; `build::util::cargo_messages` |
 | Each reload strategy wrote its own `run.reload` event (`{"kind": …, "ok": …}`), with no errors and no time | `commands::run`, before this record |
 | An observer may call only what leaves the app as it was | ADR-0288 §8, ADR-0395 §1; `ClientRole::may_call` |
 | `flutter run --machine` serves `app.restart {appId, fullRestart}` itself, the process that started the app; a request made before the first compile waits for it, and one reload runs at a time | `flutter/flutter@3.50.1`, `packages/flutter_tools/lib/src/commands/daemon.dart:840`, `:1085-1120` |
@@ -54,8 +54,8 @@ the app and rebuilds it. Protocol 0.31 adds `run.reload { at_least? }`, served b
 effect `destructive` (a restart loses the app's state), tier `session`. `at_least` is the
 cheapest `ReloadTier` (`reassemble`, `restart`, `process_restart`) the reload may apply; absent,
 the run places it. The answer is a `ReloadReport { outcome, elapsed_ms }`, its outcome
-`applied { tier }` or `failed(Diagnostics)`. No agent serves the method, and `flui-driver`
-refuses it `not_supported`, naming the run endpoint.
+`applied { tier }`, `unchanged` or `failed(Diagnostics)`. No agent serves the method, and
+`flui-driver` refuses it `not_supported`, naming the run endpoint.
 
 §2. **The run endpoint.** A `flui run --agent` that rebuilds on saves (a desktop application,
 an Android device or a browser, with hot reload and without `--release`; `--agent` refuses a
@@ -92,7 +92,13 @@ a worker build handed to the running host. Until ADR-0393 §3–§4 are built no
 in the process, so `at_least: restart` is applied as `process_restart` (ADR-0393 §2), and a
 request at `restart` or above takes `R`'s path: the app stops, then builds. A failed build
 leaves the running app as it was unless the reload stopped it first: a restart does, and on
-Windows and Android every rebuild does.
+Windows and Android every rebuild does. A build that succeeded and is the one the app runs is
+`unchanged`: the desktop process restart starts the executable cargo wrote (with the library
+path `cargo run` sets, not its `CARGO_*` variables, `[env]` or runner) and starts it again only
+when cargo built it anew or the file changed since the app started, so a save and a call for the
+same edit restart the app once. On Windows the app stops before every build, so there no reload
+is `unchanged`. Protocol 0.34 adds the outcome as a break `BREAKING` lists: `Reloaded` has no
+fallback an older client could read it with.
 
 §4. **`flui mcp`'s `flui_reload`.** The tool calls `run.reload` over a connection of its own to
 the run endpoint, kept beside the app's, and waits up to 600 s: a build whose dependencies
@@ -120,7 +126,8 @@ first call after a restart reaches the new app.
 
 ### Confirmation
 
-- `flui-protocol`'s schema golden `protocol-0.31.json` (the method, its types and `supervisor`)
+- `flui-protocol`'s schema goldens `protocol-0.31.json` (the method, its types and
+  `supervisor`) and `protocol-0.34.json` (`unchanged`)
   and `what_ends_the_app_is_destructive_and_reads_never_act`.
 - `flui-cli`'s `a_reload_reaches_the_loop_and_its_client_reads_the_report`,
   `a_reload_the_run_drops_is_answered_shutting_down`,
@@ -132,10 +139,15 @@ first call after a restart reaches the new app.
   `a_reload_goes_to_the_run_the_session_file_names` and
   `a_request_after_the_app_closed_the_connection_is_unsent` (§4).
 - `an_agent_reloads_the_app_through_the_run_that_started_it`, end to end: `flui run --agent`
-  names the endpoint in the file and in `run.agent.ready`; `flui_reload` restarts the app with
-  the report the `run.reload` event carries, timed within the call; the first call that acts
-  after it reaches the new app; a broken build answers its compiler error; a restart stops the
-  app before it builds; and an unknown tier is refused.
+  names the endpoint in the file and in `run.agent.ready`; a `flui_reload` of the build the app
+  runs is `unchanged` and leaves it running, with the report the `run.reload` event carries,
+  timed within the call; a save restarts the app once, on the executable its build wrote (no
+  `cargo run` names the package to it) with the build's `deps` on its library path, and a
+  `flui_reload` after it is `unchanged`; an executable changed since the app started, and an
+  app that exited, are started again; the first call that acts after a restart reaches the new
+  app; a broken build answers its compiler error; a restart stops the app before it builds; and
+  an unknown tier is refused. `the_app_searches_the_libraries_cargo_run_would` and
+  `an_example_runs_from_below_its_profile_output` hold the library path `cargo run` sets.
   `a_restart_replaces_the_running_build_only_with_one_that_succeeded` reads the report a save
   writes, and `an_agent_reads_and_taps_the_app_run_with_agent_through_mcp` that a run with
   `--no-hot-reload` names no run endpoint.

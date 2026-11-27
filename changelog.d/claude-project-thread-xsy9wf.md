@@ -56,8 +56,15 @@
   overwrite a running executable, still stops the application first, and `R` still stops,
   rebuilds and starts.
 - **`flui-cli`**: `flui run --json`'s `run.reload` event is the report `flui_reload` answers
-  with, `{"outcome": {"applied": {"tier": …}} | {"failed": {"diagnostics": […], "omitted": n}},
+  with, `{"outcome": {"applied": {"tier": …}} | "unchanged" | {"failed": {"diagnostics": […], "omitted": n}},
   "elapsed_ms": …}`, for every reload whatever started it, in place of `{"kind": …, "ok": …}`.
+- **`flui-cli`**: `flui run` of a desktop application starts the executable its build wrote, with
+  the library path `cargo run` sets (not its `CARGO_*` variables, `[env]` or runner), instead of
+  running `cargo run`, which checked the sources again and could start a build nobody reported.
+  A rebuild that produced the build the app already runs leaves the app running, so a save and a
+  `flui_reload` of the same edit restart it once (not on Windows, which stops the app before
+  each build). The reload's outcome is `"unchanged"` (protocol 0.34, which refuses older
+  clients), and the `r` key reads "Rebuild, and restart if it changed".
 
 ### Removed
 

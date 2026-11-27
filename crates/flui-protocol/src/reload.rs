@@ -72,7 +72,8 @@ impl ReloadReport {
 
 /// What a reload came to.
 ///
-/// `{"applied": {"tier": "reassemble"}}`, `{"failed": {"diagnostics": [ … ], "omitted": 0}}`.
+/// `{"applied": {"tier": "reassemble"}}`, `"unchanged"`,
+/// `{"failed": {"diagnostics": [ … ], "omitted": 0}}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(
     feature = "serde",
@@ -88,6 +89,9 @@ pub enum Reloaded {
         /// The tier applied: the one asked for or a higher one.
         tier: ReloadTier,
     },
+    /// The build succeeded with nothing new to apply: it is the build the running application
+    /// was started from, so the application runs on as it was.
+    Unchanged,
     /// The build failed with these errors. A reload that stops the application before it
     /// builds (a restart, or a platform that cannot replace a running build) leaves none
     /// running; any other leaves the running application as it was. A tool that does not read
@@ -100,11 +104,5 @@ impl Reloaded {
     #[must_use]
     pub const fn applied(tier: ReloadTier) -> Self {
         Self::Applied { tier }
-    }
-
-    /// Whether the build was applied.
-    #[must_use]
-    pub const fn is_applied(&self) -> bool {
-        matches!(self, Self::Applied { .. })
     }
 }
