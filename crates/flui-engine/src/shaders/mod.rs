@@ -312,6 +312,9 @@ mod tests {
 
     /// Stripping removes nothing a shader needs: each text still parses, on a
     /// host with no GPU to compile it.
+    /// The texts are the same on every target, and naga's WGSL front is not in a wasm32
+    /// build, whose WebGPU backend hands the browser the text.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn every_shader_text_parses_as_wgsl() {
         for (name, text) in compiled_texts() {

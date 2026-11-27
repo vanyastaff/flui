@@ -365,9 +365,8 @@ the signal, which rebuilds the element that read it in `build`; `build` only
 describes the current count, and there is no message type.
 
 The generated tests (`GENERATED_COUNTER_TESTS` in `tests/cli_create.rs`) mount
-the view with the deprecated `flui::testing::Tester` and locate widgets with its
-`find` (they move to `flui::testing::scenario::Tester` with the templates;
-[gaps](../../docs/gaps.md#accepted-adr-sections-not-built-yet)):
+the view with `flui::testing::scenario::Tester`, locate widgets with its `find` and
+check them with its matchers (`t.expect(&find::text("1"), exists())`):
 `counter_increments` taps `find::button("Increment")` and checks the text from
 0 to 1 to 2, `each_app_owns_its_state` checks that a second mount starts at 0,
 and `counter_content_is_centred` measures the content on a 480 by 320 surface.

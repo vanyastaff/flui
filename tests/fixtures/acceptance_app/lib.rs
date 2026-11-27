@@ -8,6 +8,10 @@
 pub mod app;
 
 #[cfg(test)]
+#[expect(
+    deprecated,
+    reason = "ADR-0400: the run reads locators, the inspection tree and focus, which the scenario tester does not expose yet (docs/gaps.md)"
+)]
 pub mod testing;
 
 #[cfg(test)]
