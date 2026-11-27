@@ -377,7 +377,10 @@ impl EditableText {
     }
 
     /// Names the field's node for tests and automation (ADR-0240): exported
-    /// as UI Automation's `AutomationId`, never announced.
+    /// as UI Automation's `AutomationId`, never announced. A `Semantics` that
+    /// annotates the field from above, a label naming it for instance, takes
+    /// the field into its own node and keeps only its own identifier: name the
+    /// field on that `Semantics` then.
     #[must_use]
     pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
         self.field_semantics.identifier = Some(identifier.into());

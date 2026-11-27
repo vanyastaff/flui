@@ -10,6 +10,11 @@
 //! decorate from. Prefer `flui_material::TextField` whenever a `Theme` is
 //! available.
 //!
+//! With no label slot, a `Semantics` label above the field gives it its
+//! accessible name, as one above Flutter's `EditableText` does:
+//! `Semantics::new().label("New note").child(RawTextField::new(controller))`
+//! is one text input named "New note".
+//!
 //! # Name
 //!
 //! Named `RawTextField`, not `TextField` — `flui::prelude` (the facade)
@@ -152,7 +157,8 @@ impl RawTextField {
     }
 
     /// Names the field's node for tests and automation (ADR-0240). Forwards
-    /// to [`EditableText::identifier`].
+    /// to [`EditableText::identifier`], whose doc says where the identifier
+    /// goes when a `Semantics` above names the field.
     #[must_use]
     pub fn identifier(mut self, identifier: impl Into<std::sync::Arc<str>>) -> Self {
         self.identifier = Some(identifier.into());

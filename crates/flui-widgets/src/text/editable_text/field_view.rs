@@ -197,8 +197,11 @@ pub(super) fn build_field_view(
     // The field's node for assistive technology (text field, obscured, value),
     // outside the inner anchor so the IME loop still finds the editable as that anchor's first child. The
     // value is the text the render object shows — the mask when obscured.
+    // The node is no semantics boundary, as Flutter's `RenderEditable` is none
+    // (flutter/flutter@3.50.1 packages/flutter/lib/src/rendering/editable.dart:1323-1338):
+    // a `Semantics` that annotates the field from above (a label, a hint)
+    // absorbs it, so the field and its name are one node.
     let mut semantics = Semantics::new()
-        .container(true)
         .role(if appearance.obscure_text {
             flui_semantics::SemanticsRole::PasswordInput
         } else {
