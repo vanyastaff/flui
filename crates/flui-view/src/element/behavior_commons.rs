@@ -186,7 +186,7 @@ where
     // is where "an element is building" is armed for the ui_runtime's reactive
     // graph — reads re-derive the reader set, writes and slot creations are
     // refused. The caller armed it (`begin_reactive_build`); it is disarmed
-    // here on both exits (the panic path below included).
+    // on both exits: here on success, in `recover_build` on a panic.
     // A build panic is replaced by an ErrorView, not unwound.
     let mut caught = FirstPanic::new();
     match caught.contain(build) {

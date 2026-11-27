@@ -1335,16 +1335,17 @@ jobs:
             artifact=$(artifact_of "$@")
             stat -c %s "$artifact"
           }
-          # element_bytes <project> <binary>: the machine code of the element
-          # methods, `<flui_view::element::unified::Element<…> as …>::…`,
-          # compiled once per view type, while their view-independent halves
-          # are compiled once (ADR-0405). The same build linked again
-          # unstripped: the strip setting changes the link alone, not the code.
+          # element_bytes <project> <binary>: the machine code whose symbol
+          # names `flui_view::element::`: the element's methods, compiled once
+          # per view type, and the helpers compiled once (ADR-0405), so a helper
+          # that names `V` again counts once per view type whether or not it is
+          # inlined. The same build linked again unstripped: the strip setting
+          # changes the link alone, so only the final fat-LTO link runs again.
           element_bytes() {
             local artifact
             artifact=$(CARGO_PROFILE_RELEASE_STRIP=none artifact_of "$@")
             nm --defined-only --demangle --print-size --radix=d "$artifact" \
-              | awk '$3 ~ /^[tT]$/ && index($0, "<flui_view::element::unified::Element<") \
+              | awk '$3 ~ /^[tT]$/ && index($0, "flui_view::element::") \
                   { sum += $2 } END { print sum + 0 }'
           }
           create perf-counter

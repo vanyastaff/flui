@@ -955,8 +955,9 @@ profile the templates write and the facade's `release-max-level-info`
 `flui build --release` adds (about 70 KB on the counter). A counter
 for the host and for wasm32, and the host of a `--hot-reload` project, which
 links the logic crate and installs no reload hook. Beside them it sums the counter's
-element methods (`counter_element_bytes`: the code `Element<V, A, B>` compiles once per view
-type, read with `nm` from the same build linked unstripped), so a change that moves
+element code (`counter_element_bytes`: every symbol under `flui_view::element::`, the methods
+`Element<V, A, B>` compiles once per view type and the helpers compiled once, read with `nm`
+from the same build linked again unstripped), so a change that moves
 view-independent element code back into every view type fails there (ADR-0405). A binary grows with every
 change to the code it links, so a size fails only past 2% over its line, and
 warns past 2% under it so the line follows a fall; the job's summary lists
@@ -1492,7 +1493,7 @@ needs. One row per job:
 | `test-features` | the job's `cargo nextest run` lines | — |
 | `doc` | `RUSTDOCFLAGS=-D warnings cargo doc --workspace --no-deps --locked --document-private-items --features <every package's testing feature>` | the job reads the feature list from `cargo metadata`; its step shows how |
 | `perf-gates` | the job's callgrind loop over the `perf_scaling_` scenarios of flui-widgets' `perf` target | main only; needs valgrind (Linux); the baseline files are checked by `test` |
-| `size` | the job's step: `flui create --local` twice, three `cargo build --release` runs with the facade's release ceiling (the build `flui build --release` makes, less its rewrites of the build machine's source paths) and their binaries' bytes, and the counter's element-method bytes from `nm` of the same build linked unstripped, against `perf/size.toml` | main only, CI only: three cold release builds on Linux x86_64, the baseline's host |
+| `size` | the job's step: `flui create --local` twice, three `cargo build --release` runs with the facade's release ceiling (the build `flui build --release` makes, less its rewrites of the build machine's source paths) and their binaries' bytes, and the counter's element code bytes from `nm` of the same build linked again unstripped, against `perf/size.toml` | main only, CI only: three cold release builds and one more fat-LTO link on Linux x86_64, the baseline's host |
 | `deps` | `cargo deny --workspace --locked check bans licenses sources`, `cargo deny --workspace --locked check advisories`, then for each triple `cargo tree --locked --quiet --edges normal --prefix none --package flui --target <triple> \| awk 'NF >= 2 { print $1, $2 }' \| LC_ALL=C sort -u \| wc -l` against `perf/size.toml` | an unused or misplaced dependency is not this job's: cargo's `unused_dependencies` lint fails every build under `CARGO_BUILD_WARNINGS=deny`; every lane but `docs` runs it; the advisories step blocks on main and only reports on a pull request, because a new RustSec entry can fail a commit that passed the day before; `advisories.yml` runs the same step against main every day |
 | `doc-test` | `cargo test --workspace --locked --doc --features flui/testing,flui/material,flui/cupertino` | — |
 | `miri` | the `cargo +nightly miri test -p …` lines above | nightly + miri; ci.yml lists every one |

@@ -2,12 +2,12 @@
 # facade's default graph on that target, which the `deps` job fails on when
 # they differ. `*_bytes`: the release sizes of a `flui create` counter (host and
 # wasm32) and of a `flui create --hot-reload` host, and `counter_element_bytes`
-# the host counter's element methods (ADR-0405), which the `size` job fails
+# the host counter's element code (ADR-0405), which the `size` job fails
 # on past 2% over and warns on past 2% under. Each line is edited by hand from
 # that job's log, with the reason in the pull request.
 
 [size]
-counter_element_bytes = 178814
+counter_element_bytes = 202357
 counter_release_bytes = 20572784
 counter_wasm_bytes = 12803927
 crates_android = 222

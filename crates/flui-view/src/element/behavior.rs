@@ -100,7 +100,7 @@ pub(super) fn armed_state_hook<V, A>(
     let mut caught = FirstPanic::new();
     caught.contain(run);
     mark_lifecycle_records(owner, sink_start);
-    if caught.held().is_some() {
+    if caught.is_held() {
         armed_hook_failed(
             core.state(),
             owner,
@@ -200,7 +200,7 @@ pub(super) fn contained_state_hook<V, A>(
     // elements still leave.
     let mut caught = FirstPanic::new();
     caught.contain(run);
-    if caught.held().is_some() {
+    if caught.is_held() {
         record_contained_hook(
             core.state(),
             owner,
@@ -250,7 +250,7 @@ pub(super) fn publish_provided<V, A>(
     super::behavior_commons::begin_reactive_build(core, owner);
     let mut caught = FirstPanic::new();
     caught.contain(|| publication.publish(owner, provide));
-    if caught.held().is_some() {
+    if caught.is_held() {
         provide_failed(core.state(), owner, TypeId::of::<V>(), caught);
     }
 }

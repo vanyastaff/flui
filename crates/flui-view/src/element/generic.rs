@@ -334,6 +334,8 @@ where
     pub(crate) fn state(&self) -> &CoreState {
         &self.state
     }
+
+    /// Set this element's own `ElementId`. Called by
     /// [`crate::tree::ElementTree`] immediately after slab insertion
     /// via [`crate::view::ElementBase::set_self_id`].
     pub(crate) fn set_self_id(&mut self, id: ElementId) {

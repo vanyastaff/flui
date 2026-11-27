@@ -176,7 +176,7 @@ pub(crate) fn push<V, A, R>(
         "BUG: a render element's RenderId must resolve to a live node holding its render \
          object type during update"
     );
-    if caught.held().is_some() {
+    if caught.is_held() {
         push_failed(core.state(), owner, TypeId::of::<V>(), caught);
     }
 }
