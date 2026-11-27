@@ -482,8 +482,9 @@ the `TestError`s still alive. Every exit reads it:
   travelling to the caller through `?` is still alive when the `Tester` drops.
 - `Tester::checks(|c| ..)` adds its soft failures to the report's list and raises the list once
   when the closure returns, then clears it.
-- `Tester::finish` and `Drop` on a report that is not poisoned, with no `TestError` alive and a
-  thread that is not panicking, run the end checks. On a `VirtualClock` connection, in this order:
+- `Tester::finish` on a report that is not poisoned, and `Drop` on one that is not poisoned with
+  no `TestError` alive and a thread that is not panicking, run the end checks: an explicit
+  `finish` is the test saying it is done, so an error it kept does not skip them. On a `VirtualClock` connection, in this order:
   settle (bounded as §3; a repeating cause freezes the frame at the limit and names it); audit
   that frame (`AuditRule::Unnamed` by default); unmount the root view, keeping the window and the
   runtime; run drops; release the agent's lease, which queues the release of what it holds, and
