@@ -893,6 +893,13 @@ http = ["flui-app/http", "flui-testing?/http"]
 # links no image decoder and keeps no decoded-image cache.
 images = ["dep:flui-assets", "flui-widgets/asset-images", "flui-app/images", "flui-testing?/images"]
 
+# === The WebGL2 fallback on the web (ADR-0404) ===
+# A browser that gives no WebGPU adapter draws through WebGL2. `flui create`
+# names it in the projects it writes; without it the web build ships WebGPU
+# only, about 2 MB smaller, and a browser without WebGPU is refused at start.
+# No other target builds anything for it.
+webgl2 = ["flui-app/webgl2"]
+
 # === One instance per user session ===
 # `Application::single_instance` (ADR-0254 §4): on Linux and Windows a later
 # launch hands the running instance what it opens, and an application that

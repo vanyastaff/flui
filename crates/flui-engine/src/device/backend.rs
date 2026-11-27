@@ -1,10 +1,11 @@
 //! Which GPU backend the renderer draws with, and the order it tries them in
-//! (ADR-0244 §1).
+//! (ADR-0244 §1, ADR-0404).
 //!
 //! The GPU API is a probe, not a floor: whether a device has a working Vulkan
 //! driver or a browser a WebGPU adapter depends on the device, so the renderer
 //! asks for the preferred backend and falls back to GLES 3.0 (WebGL2 on the
-//! web) when no adapter answers. Each attempt has an instance of its own for
+//! web, where the build names the `webgl2` feature) when no adapter answers.
+//! Each attempt has an instance of its own for
 //! that one backend, because a combined backend mask does not retry: on the
 //! web, wgpu commits to its WebGPU context as soon as `navigator.gpu` exists,
 //! so a browser that exposes it but returns no adapter reaches WebGL2 only
@@ -134,20 +135,27 @@ impl Family {
                     software: false,
                 },
             ],
-            Self::Web => &[
-                Attempt {
-                    backend: GpuBackend::WebGpu,
-                    backends: wgpu::Backends::BROWSER_WEBGPU,
-                    software: false,
-                },
-                Attempt {
-                    backend: GpuBackend::WebGl2,
-                    backends: wgpu::Backends::GL,
-                    software: false,
-                },
-            ],
+            Self::Web => web_order(cfg!(feature = "webgl2")),
         }
     }
+}
+
+/// The web's order: WebGPU, then WebGL2 in an instance of its own where the
+/// build names the `webgl2` feature (ADR-0404). Without it wgpu links no GL
+/// backend on the web, so the order asks WebGPU alone and a browser that gives
+/// no WebGPU adapter is refused with that one failure.
+const fn web_order(webgl2: bool) -> &'static [Attempt] {
+    const WEBGPU: Attempt = Attempt {
+        backend: GpuBackend::WebGpu,
+        backends: wgpu::Backends::BROWSER_WEBGPU,
+        software: false,
+    };
+    const WEBGL2: Attempt = Attempt {
+        backend: GpuBackend::WebGl2,
+        backends: wgpu::Backends::GL,
+        software: false,
+    };
+    if webgl2 { &[WEBGPU, WEBGL2] } else { &[WEBGPU] }
 }
 
 /// The first of `attempts` that `try_one` gets a device from, with the
@@ -191,18 +199,20 @@ pub(crate) fn attempts(order: &[Attempt], forced: Option<wgpu::Backends>) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use super::{Attempt, BackendFailure, Family, GpuBackend, attempts, first_answering};
+    use super::{
+        Attempt, BackendFailure, Family, GpuBackend, attempts, first_answering, web_order,
+    };
 
     /// Answers the attempts in `answering` with a device and fails the rest,
     /// recording the order it was asked in.
     fn run(
-        family: Family,
+        order: &[Attempt],
         forced: Option<wgpu::Backends>,
         answering: &[GpuBackend],
     ) -> (Vec<GpuBackend>, Result<GpuBackend, Vec<BackendFailure>>) {
         let mut asked = Vec::new();
         let result = pollster::block_on(first_answering(
-            &attempts(family.order(), forced),
+            &attempts(order, forced),
             |attempt: Attempt| {
                 asked.push(attempt.backend);
                 let answers = answering.contains(&attempt.backend);
@@ -219,11 +229,11 @@ mod tests {
         (asked, result)
     }
 
-    /// One row: a family, the backend `WGPU_BACKEND` forces, the backends
+    /// One row: an order, the backend `WGPU_BACKEND` forces, the backends
     /// that answer, then the order they must be asked in and the one chosen
     /// (`None` when none answers).
     struct Case {
-        family: Family,
+        order: &'static [Attempt],
         forced: Option<wgpu::Backends>,
         answering: &'static [GpuBackend],
         asked: &'static [GpuBackend],
@@ -231,51 +241,66 @@ mod tests {
     }
 
     /// The preferred backend first, then GL in an instance of its own (WebGL2
-    /// on the web), WARP after hardware Direct3D 12; a forced backend keeps
+    /// on the web, where the build names `webgl2`), WARP after hardware
+    /// Direct3D 12; a forced backend keeps
     /// only its attempts; when none answers, every attempt is named with its
     /// reason.
     #[test]
     fn gpu_backend_fallback_order() {
         use GpuBackend::{Dx12, Dx12Warp, Gl, Metal, Vulkan, WebGl2, WebGpu};
 
-        let case = |family, forced, answering, asked, chosen| Case {
-            family,
+        let case = |order: &'static [Attempt], forced, answering, asked, chosen| Case {
+            order,
             forced,
             answering,
             asked,
             chosen,
         };
         let cases = [
-            case(Family::Vulkan, None, &[Vulkan, Gl], &[Vulkan], Some(Vulkan)),
-            case(Family::Vulkan, None, &[Gl], &[Vulkan, Gl], Some(Gl)),
             case(
-                Family::Vulkan,
+                Family::Vulkan.order(),
+                None,
+                &[Vulkan, Gl],
+                &[Vulkan],
+                Some(Vulkan),
+            ),
+            case(Family::Vulkan.order(), None, &[Gl], &[Vulkan, Gl], Some(Gl)),
+            case(
+                Family::Vulkan.order(),
                 Some(wgpu::Backends::GL),
                 &[Vulkan, Gl],
                 &[Gl],
                 Some(Gl),
             ),
-            case(Family::Vulkan, None, &[], &[Vulkan, Gl], None),
+            case(Family::Vulkan.order(), None, &[], &[Vulkan, Gl], None),
             case(
-                Family::Web,
+                web_order(true),
                 None,
                 &[WebGl2],
                 &[WebGpu, WebGl2],
                 Some(WebGl2),
             ),
+            case(web_order(false), None, &[WebGl2], &[WebGpu], None),
             case(
-                Family::Windows,
+                Family::Web.order(),
+                None,
+                &[WebGpu],
+                &[WebGpu],
+                Some(WebGpu),
+            ),
+            case(
+                Family::Windows.order(),
                 None,
                 &[Dx12Warp],
                 &[Dx12, Dx12Warp],
                 Some(Dx12Warp),
             ),
-            case(Family::Apple, None, &[Metal], &[Metal], Some(Metal)),
-            case(Family::Apple, None, &[], &[Metal], None),
+            case(Family::Apple.order(), None, &[Metal], &[Metal], Some(Metal)),
+            case(Family::Apple.order(), None, &[], &[Metal], None),
         ];
         let mut failures = Vec::new();
         for (index, case) in cases.iter().enumerate() {
-            let (asked, result) = run(case.family, case.forced, case.answering);
+            let (asked, result) = run(case.order, case.forced, case.answering);
             if asked != case.asked {
                 failures.push(format!("case {index}: asked {asked:?}"));
             }

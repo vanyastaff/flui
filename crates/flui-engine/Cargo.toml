@@ -32,6 +32,12 @@ dx12 = ["wgpu/dx12", "wgpu/wgsl"]
 webgpu = ["wgpu/webgpu", "wgpu/wgsl"]
 gles = ["wgpu/gles", "wgpu/wgsl"]
 
+# The WebGL2 fallback on the web (ADR-0404): wgpu builds its GL backend for
+# wasm32 and `device::backend` asks WebGL2 after WebGPU. Off, a browser that
+# gives no WebGPU adapter is refused, and the module is about 2 MB smaller.
+# wgpu gates its `webgl` on wasm32, so this changes nothing on another target.
+webgl2 = ["wgpu/webgl"]
+
 
 # testing: the GPU readback/oracle suites (`cargo nextest run -p flui-engine
 # --features testing`, the GPU readback steps of CI's `test` job) and the bench scaffolding they share
@@ -121,13 +127,10 @@ pollster = { workspace = true }
 # is sound only while the wasm build has no threads (no atomics target
 # features). Still required where the engine hands a wgpu value to a
 # Send-bounded position (the device domain's submitted-work callbacks, the
-# `GpuContext` its `Arc` shares); docs/gaps.md tracks its removal. `webgl`
-# is the WebGL2 fallback (ADR-0244 §1): `gles` alone builds no GL backend on
-# wasm32.
+# `GpuContext` its `Arc` shares); docs/gaps.md tracks its removal. The
+# WebGL2 fallback is the `webgl2` feature above.
 wgpu = { workspace = true, default-features = false, features = [
     "webgpu",
-    "gles",
-    "webgl",
     "fragile-send-sync-non-atomic-wasm",
 ] }
 

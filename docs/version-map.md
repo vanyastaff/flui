@@ -16,4 +16,4 @@ behind a typed gate rather than raising the floor.
 | iOS | 13.0 | UIScene and UIWindowScene, through which the backend gets its window |
 | Android | API 23 (Android 6.0) | the backend's own NDK use (`__system_property_get`, the API level read) and `View.getRootWindowInsets` for the safe area; Vulkan or GLES 3.0 |
 | Linux | glibc 2.17; a Vulkan 1.0 or GLES 3.0 driver; Wayland with `xdg_wm_base` 1, or X11 with RandR 1.5 | the Rust target, wgpu, and the window and display protocols the backend binds |
-| Web | WebGPU or WebGL2 | the browser's graphics API, detected and never read from a browser version |
+| Web | WebGPU, or WebGL2 where the application names the `webgl2` feature (ADR-0404) | the browser's graphics API, detected and never read from a browser version |
