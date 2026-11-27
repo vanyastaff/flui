@@ -4,7 +4,7 @@
 //! builds three heap collections:
 //!   1. `child_ids: Vec<RenderId>` — N child IDs.
 //!   2. `child_parent_data_owned: Vec<Option<Box<dyn ParentData>>>` — N
-//!      `dyn_clone::clone_box` heap allocations.
+//!      `CloneParentData::clone_box` heap allocations.
 //!   3. `child_parent_data_refs: Vec<Option<&dyn ParentData>>` — N fat-pointer
 //!      refs that borrow from (2).
 //!

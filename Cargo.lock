@@ -2398,7 +2398,6 @@ dependencies = [
  "bitflags",
  "criterion",
  "crossbeam-channel",
- "dyn-clone",
  "flui-animation",
  "flui-foundation",
  "flui-interaction",

@@ -540,7 +540,6 @@ parley = { version = "0.13.0", default-features = false, features = ["std"] }
 # the Parley layout (ADR-0092 §10 step 5): the copy Parley already builds and
 # marks its clusters with, so no second one, and no dictionary or LSTM data.
 icu_segmenter = { version = "2.1.2", default-features = false, features = ["compiled_data"] }
-dyn-clone = "1.0"
 static_assertions = "1.1"
 # Compile-fail suites (flui-painting, flui-view, flui-engine, flui-rendering):
 # each drives `tests/<dir>/*.rs` fixtures and pins the diagnostic text a
