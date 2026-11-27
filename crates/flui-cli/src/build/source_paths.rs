@@ -5,7 +5,7 @@
 //! being compiled is absolute: the cargo registry under `CARGO_HOME`, a path
 //! dependency, the target directory's generated files. Shipped, those name the
 //! build machine's user and folders, and cost bytes (in a `flui create`
-//! counter on Linux, about 45 KB of 126 KB of paths are those prefixes).
+//! counter on Linux, its release binary is about 70 KB smaller without them).
 //!
 //! A release build of `flui build` rewrites each prefix with rustc's
 //! `--remap-path-prefix`, so a registry crate's file reads

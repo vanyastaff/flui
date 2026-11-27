@@ -1311,7 +1311,7 @@ jobs:
           # build is the one `flui build --release` makes, with the facade's
           # release ceiling (ADR-0398 §2), except the rewrites of the build
           # machine's source paths it adds (flui-cli's `build::source_paths`),
-          # which make its binary about 45 KB smaller than the one measured.
+          # which make its binary about 70 KB (0.35%) smaller than the one measured.
           size_of() {
             local artifact
             artifact=$(cd "$projects/$1" \
