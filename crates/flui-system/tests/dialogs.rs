@@ -154,25 +154,24 @@ impl flui_sdk::view::ViewState<Picker> for PickerState {
 /// agent, the path a driver takes; on the headless host the scripted system
 /// answers in the operating system's place, and the widget shows the answer.
 #[test]
-#[expect(deprecated, reason = "ADR-0400: this case moves to `scenario::Tester`")]
 fn a_dialog_a_tap_through_the_agent_opens_is_answered_by_the_script() {
+    use flui_testing::scenario::matcher::exists;
+    use flui_testing::scenario::{TestWindow, Tester, find};
+
     let (dialogs, plugin) = scripted();
     dialogs.answer_next_open(Ok(Some(picks(&["a.png"]))));
-    let mut t = flui_testing::tester::Tester::mount_in(
-        Picker,
-        flui_testing::tester::TestWindow::default().plugin(plugin),
-    );
-    t.expect(flui_testing::find::text("nothing picked"))
-        .to_exist();
+    let mut t = Tester::mount_in(Picker, TestWindow::default().plugin(plugin));
+    t.expect(&find::text("nothing picked"), exists());
 
-    t.tap(&flui_testing::find::button("Open"));
+    t.tap(&find::button("Open"));
 
-    t.expect(flui_testing::find::text("picked 1")).to_exist();
+    t.expect(&find::text("picked 1"), exists());
     let requests = dialogs.requests();
     assert!(
         matches!(requests.as_slice(), [DialogRequest::Open { .. }]),
         "the tap asked for one open dialog: {requests:?}"
     );
+    t.finish();
 }
 
 #[test]

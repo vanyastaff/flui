@@ -45,13 +45,13 @@ impl StatelessView for SaveHint {
         Text::new(format!("{chord} saves"))
     }
 }
-# use flui::testing::{TestWindow, Tester, find};
+# use flui::testing::scenario::{TestWindow, Tester, find, matcher::exists};
 # let on = |platform| TestWindow::new(800, 600).platform(platform);
-# Tester::mount_in(SaveHint, on(TargetPlatform::MacOS)).expect(find::text("⌘S saves")).to_exist();
-# Tester::mount_in(SaveHint, on(TargetPlatform::Windows)).expect(find::text("Ctrl+S saves")).to_exist();
+# Tester::mount_in(SaveHint, on(TargetPlatform::MacOS)).expect(&find::text("⌘S saves"), exists());
+# Tester::mount_in(SaveHint, on(TargetPlatform::Windows)).expect(&find::text("Ctrl+S saves"), exists());
 # // A subtree that names a platform follows it, whatever the window's.
 # let mac = PlatformConvention::new(TargetPlatform::MacOS, SaveHint);
-# Tester::mount_in(mac, on(TargetPlatform::Windows)).expect(find::text("⌘S saves")).to_exist();
+# Tester::mount_in(mac, on(TargetPlatform::Windows)).expect(&find::text("⌘S saves"), exists());
 ```
 
 The convention is the platform the application runs on, unless a test or a subtree names

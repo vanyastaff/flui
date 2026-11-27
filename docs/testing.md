@@ -17,8 +17,8 @@ ends with an owner turn, and `Tester::expect(&find, matcher)` waits on the virtu
 matcher holds. The end of the test (`finish`, or `Drop`) settles, audits, unmounts and checks that
 nothing was left behind, unless a failure is already on its way to the caller. The
 `flui::testing::{Tester, find}` at the module's root are the tester this replaces, deprecated
-until their users move ([gaps](gaps.md#accepted-adr-sections-not-built-yet); the
-[cookbook](../book/src/cookbook/testing.md) still teaches them). `flui::testing::rendering::{RenderTester,
+until their users move ([gaps](gaps.md#accepted-adr-sections-not-built-yet)).
+`flui::testing::rendering::{RenderTester,
 BoxQueryRun}` tests a render object of one's own. The framework's own harnesses
 (`flui_testing::widgets::lay_out`, `HeadlessHost`, gesture replay and the
 accessibility reader) stay in `flui-testing` and out of the facade.
@@ -1303,24 +1303,24 @@ whose composition decision a subscriber is, not at the DAG's bottom.
 (or a human, working the same way) can discover the public API, build a UI, inspect it two ways,
 drive an interaction through it, and assert the result, using only `flui::…`, the surface a
 consumer of the published crate has. It is `flui`'s own `tests/`, not `flui-testing`'s, for that
-reason. It still drives the deprecated `flui::testing::Tester`: the
-`flui::testing::scenario::Tester` that replaces it (ADR-0400) has no render-tree read yet, and
-the suite moves when it has ([gaps](gaps.md#accepted-adr-sections-not-built-yet)). A new test is
-written against `scenario::Tester`, as the top of this page shows.
+reason. Its mount, semantics read, tap and assertion run on `flui::testing::scenario::Tester`; the
+render-tree reads of steps 2 and 5 stay in a `render_tree` module on the deprecated
+`flui::testing::Tester`, because the scenario tester has no render-tree read yet
+([gaps](gaps.md#accepted-adr-sections-not-built-yet)).
 
 The tree is a Material counter (`Center` → `Column` → prompt `Text` / count `Text` /
 `ElevatedButton`, a `Signal` created in `create_state`), the CLI `counter` template's shape with
 Material in place of its `RawButton`.
 
-| Step | What it does | API (the deprecated tester) |
+| Step | What it does | API |
 |------|--------------|-----|
-| 1. Mount | Mount the tree as `run_app` does | `flui::testing::Tester::mount` |
-| 2. Inspect structure | Read the render tree, check a known node is there | `Tester::inspect_render`, the agent's `inspect.render` |
+| 1. Mount | Mount the tree as `run_app` does | `scenario::Tester::mount` |
+| 2. Inspect structure | Read the render tree, check a known node is there | the deprecated `Tester::inspect_render`, the agent's `inspect.render` |
 | 3. Inspect semantics | Find the button by role and label | `Tester::read(&find::button("Increment"))` |
 | 4. Drive | Tap it through the window's input path, after the actionability checks | `Tester::tap` |
-| 5. Assert | The rendered count advanced | `Tester::expect(find::text("1")).to_exist()` and each `RenderParagraph`'s `text` field |
+| 5. Assert | The shown count advanced | `Tester::expect(&find::text("1"), exists())`, and each `RenderParagraph`'s `text` field through `inspect_render` |
 
-Steps 1 to 4 are the driver's own path: `Tester` asks the window's development agent
+Steps 1, 3 and 4 are the driver's own path: `Tester` asks the window's development agent
 (`semantics.locate`, `element.actionability`, `input.inject` through the input lease), so a
 scenario written against it runs unchanged where the driver supplies the target. The tree carries
 no explicit `Semantics` node: `RenderParagraph` publishes its text as a label, and every button

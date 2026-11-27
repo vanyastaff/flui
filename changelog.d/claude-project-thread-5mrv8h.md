@@ -80,6 +80,9 @@
 - An act of the development agent leaves a key its input lease held as the act started as it
   was: a chord naming it sends no second press and no release. `flui_testing::tester::Tester`'s
   `press_keys` is now that act, and the tester keeps no record of held keys of its own.
+- The book's tutorial chapters, the testing cookbook page and the `Tester` row of the Flutter
+  mapping teach `flui::testing::scenario::Tester`: `find` builds a `Find` that names one element,
+  and `t.expect(&find, exists())` takes a matcher.
 
 ### Deprecated
 

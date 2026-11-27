@@ -323,10 +323,6 @@ mod scenario;
 #[path = "scripts.rs"]
 mod scripts;
 #[path = "self_rescheduling_local_post_frame.rs"]
-#[expect(
-    deprecated,
-    reason = "ADR-0400: its text-field cases move to `scenario::Tester`"
-)]
 mod self_rescheduling_local_post_frame;
 #[path = "settledness.rs"]
 mod settledness;

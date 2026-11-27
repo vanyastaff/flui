@@ -85,17 +85,17 @@ impl StatelessView for NotePage {
         ))
     }
 }
-# use flui::testing::{Tester, find};
+# use flui::testing::scenario::{Tester, find, matcher::{exists, gone}};
 # let mut t = Tester::mount(app());
 # t.tap(&find::button("Open Talk outline"));
-# t.expect(find::text("Talk outline")).to_exist();
+# t.expect(&find::text("Talk outline"), exists());
 # t.tap(&find::button("Delete"));
-# t.expect(find::text("Delete this note?")).to_exist();
+# t.expect(&find::text("Delete this note?"), exists());
 # t.tap(&find::button("Delete note"));
-# t.pump_and_settle();
-# t.expect(find::text("Delete this note?")).to_be_gone();
-# t.expect(find::button("Back")).to_be_gone();
-# t.expect(find::button("Open Groceries")).to_exist();
+# let _settled = t.settle();
+# t.expect(&find::text("Delete this note?"), gone());
+# t.expect(&find::button("Back"), gone());
+# t.expect(&find::button("Open Groceries"), exists());
 ```
 
 - A page finds its router with `Router::<R>::of(ctx)` and its own route with `PageHandle::of(ctx)`,

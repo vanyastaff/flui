@@ -42,12 +42,13 @@ impl ViewState<NotesScreen> for NotesState {
         ))
     }
 }
-# let mut t = flui::testing::Tester::mount(NotesScreen);
-# t.expect(flui::testing::find::text("Notes: 0")).to_exist();
-# t.tap(&flui::testing::find::button("Add note"));
-# t.tap(&flui::testing::find::button("Add note"));
-# t.expect(flui::testing::find::text("Notes: 2")).to_exist();
-# t.expect(flui::testing::find::text("Note 2")).to_exist();
+# use flui::testing::scenario::{Tester, find, matcher::exists};
+# let mut t = Tester::mount(NotesScreen);
+# t.expect(&find::text("Notes: 0"), exists());
+# t.tap(&find::button("Add note"));
+# t.tap(&find::button("Add note"));
+# t.expect(&find::text("Notes: 2"), exists());
+# t.expect(&find::text("Note 2"), exists());
 ```
 
 - The signal is created in `create_state`, so the state is born with it; `ctx.signal` is not
