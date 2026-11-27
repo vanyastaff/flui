@@ -61,27 +61,30 @@ hidden above it:
 #         ))
 #     }
 # }
-use flui::testing::{TestWindow, Tester, find};
+use flui::testing::scenario::matcher::{exists, value};
+use flui::testing::scenario::{TestWindow, Tester, find};
 
 // In an application this is the body of a `#[test] fn adds_a_note()`.
 let mut t = Tester::mount_in(NotesScreen, TestWindow::new(360, 640));
-t.expect(find::text("Notes: 0")).to_exist();
+t.expect(&find::text("Notes: 0"), exists());
 
-t.enter_text(&find::id("new-note"), "Groceries");
+t.type_text(&find::id("new-note"), "Groceries");
 t.tap(&find::button("Add note"));
 
-t.expect(find::text("Groceries")).to_exist();
-t.expect(find::text("Notes: 1")).to_exist();
-t.expect(find::id("new-note")).to_have_value("");
+t.expect(&find::text("Groceries"), exists());
+t.expect(&find::text("Notes: 1"), exists());
+t.expect(&find::id("new-note"), value(""));
 ```
 
 - `Tester::mount` mounts a view as `run_app` does, in an 800 by 600 window on a manual clock;
   `mount_in` takes a `TestWindow` of another size. No window opens and no GPU is needed.
-- `find` builds locators over what the screen exposes to assistive technology: `find::text` for
+- `find` builds a `Find` over what the screen exposes to assistive technology: `find::text` for
   a label, `find::button` for a button by its name, `find::id` for an element's `identifier`.
-- `tap` and `enter_text` act through the window's input path, after checking that the element
+  It names exactly one element: two matches fail the step with both listed, and `.first()`,
+  `.nth(n)` or `.all()` says which one or how many you mean.
+- `tap` and `type_text` act through the window's input path, after checking that the element
   is visible and enabled, as a user would find it.
-- `expect(…).to_exist()` waits while the application has a frame or work due, then fails at once
+- `expect(&find, exists())` waits while the application has a frame or work due, then fails at once
   with the window's outline if what it expects is not there.
 
 A screen that finds nothing for a locator is usually one whose widget publishes no label; the

@@ -52,23 +52,23 @@ impl ViewState<NotesScreen> for NotesState {
         ))
     }
 }
-# use flui::testing::{Tester, find};
+# use flui::testing::scenario::{Tester, find, matcher::{exists, value}};
 # let mut t = Tester::mount(NotesScreen);
-# t.enter_text(&find::id("new-note"), "Groceries");
+# t.type_text(&find::id("new-note"), "Groceries");
 # t.tap(&find::button("Add note"));
-# t.expect(find::text("Groceries")).to_exist();
-# t.expect(find::id("new-note")).to_have_value("");
+# t.expect(&find::text("Groceries"), exists());
+# t.expect(&find::id("new-note"), value(""));
 # // A blank title adds nothing.
-# t.enter_text(&find::id("new-note"), "   ");
+# t.type_text(&find::id("new-note"), "   ");
 # t.tap(&find::button("Add note"));
-# t.expect(find::text("Notes: 1")).to_exist();
-# t.expect(find::id("new-note")).to_have_value("");
+# t.expect(&find::text("Notes: 1"), exists());
+# t.expect(&find::id("new-note"), value(""));
 # // Enter in the field adds what it holds.
-# t.enter_text(&find::id("new-note"), "Talk outline");
+# t.type_text(&find::id("new-note"), "Talk outline");
 # t.press_keys(&["Enter"]);
-# t.expect(find::text("Talk outline")).to_exist();
-# t.expect(find::text("Notes: 2")).to_exist();
-# t.expect(find::id("new-note")).to_have_value("");
+# t.expect(&find::text("Talk outline"), exists());
+# t.expect(&find::text("Notes: 2"), exists());
+# t.expect(&find::id("new-note"), value(""));
 ```
 
 - The controller is created with the state and shared by clone: the field edits it, the button's

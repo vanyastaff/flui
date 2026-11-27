@@ -29,9 +29,9 @@ fn app(mode: ThemeMode) -> MaterialApp {
         .dark_theme(ThemeData::dark())
         .theme_mode(mode)
 }
-# use flui::testing::{Tester, find};
-# Tester::mount(app(ThemeMode::Light)).expect(find::text("Notes (light)")).to_exist();
-# Tester::mount(app(ThemeMode::Dark)).expect(find::text("Notes (dark)")).to_exist();
+# use flui::testing::scenario::{Tester, find, matcher::exists};
+# Tester::mount(app(ThemeMode::Light)).expect(&find::text("Notes (light)"), exists());
+# Tester::mount(app(ThemeMode::Dark)).expect(&find::text("Notes (dark)"), exists());
 ```
 
 - `Theme::of(ctx)` reads the nearest theme above the view and makes the view depend on it, so a

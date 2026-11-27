@@ -39,11 +39,12 @@ impl StatelessView for NotesScreen {
         ))
     }
 }
-# let mut t = flui::testing::Tester::mount(NotesScreen);
+# use flui::testing::scenario::{Tester, find};
+# let mut t = Tester::mount(NotesScreen);
 # // The window is 800 wide: both counts end 16 from its right edge, whatever
 # // the length of the title beside them.
-# let short = t.rect(&flui::testing::find::text("12 words"));
-# let long = t.rect(&flui::testing::find::text("240 words"));
+# let short = t.rect(&find::text("12 words"));
+# let long = t.rect(&find::text("240 words"));
 # assert_eq!(short.x + short.width, 784.0);
 # assert_eq!(long.x + long.width, 784.0);
 ```

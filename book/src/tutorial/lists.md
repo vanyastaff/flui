@@ -109,17 +109,17 @@ impl ViewState<NoteRow> for NoteRowState {
         ))
     }
 }
-# use flui::testing::{Tester, find};
+# use flui::testing::scenario::{Tester, find, matcher::{exists, gone}};
 # let mut t = Tester::mount(NotesScreen);
 # for title in ["Groceries", "Talk outline"] {
-#     t.enter_text(&find::id("new-note"), title);
+#     t.type_text(&find::id("new-note"), title);
 #     t.tap(&find::button("Add note"));
 # }
 # t.tap(&find::button("Talk outline"));
-# t.expect(find::text("Talk outline (open)")).to_exist();
+# t.expect(&find::text("Talk outline (open)"), exists());
 # t.tap(&find::button("Delete Groceries"));
-# t.expect(find::text("Groceries")).to_be_gone();
-# t.expect(find::text("Talk outline (open)")).to_exist();
+# t.expect(&find::text("Groceries"), gone());
+# t.expect(&find::text("Talk outline (open)"), exists());
 ```
 
 - The builder returns `None` past the end of the data, and `?` on `items.get(index)` says so.
