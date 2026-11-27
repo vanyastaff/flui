@@ -241,7 +241,7 @@ fn tools() -> Value {
         },
         {
             "name": "flui_reload",
-            "description": "Rebuild the app from its sources and apply the build, through the `flui run --agent` that started it. Absent `at_least`, the run places the reload; `restart` and `process_restart` start the app again, losing its state. The reply is the outcome, `applied` with the tier or `failed` with the compiler's errors, and `elapsed_ms`. A failed build leaves the running app as it was, unless the reload stopped it first: a restart does. Read the app again after it: handles from before a restart are gone.",
+            "description": "Rebuild the app from its sources and apply the build, through the `flui run --agent` that started it. Absent `at_least`, the run places the reload; `restart` and `process_restart` start the app again, losing its state. The reply is the outcome, `applied` with the tier, `unchanged` when the build is the one the app already runs (the app keeps running and its handles stay valid), or `failed` with the compiler's errors, and `elapsed_ms`. A failed build leaves the running app as it was, unless the reload stopped it first: a restart does. Read the app again after it: handles from before a restart are gone.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

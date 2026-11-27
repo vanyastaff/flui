@@ -31,11 +31,9 @@ fn field(line: &str, key: &str) -> Option<String> {
 
 fn main() {
     println!("FIXTURE_DRIVER {}", flui::DRIVER);
-    // What started the process: `flui` when the run starts the built executable, `cargo` under
-    // `cargo run`. Empty where `/proc` is not.
-    let parent = std::fs::read_to_string(format!("/proc/{}/comm", std::os::unix::process::parent_id()))
-        .unwrap_or_default();
-    println!("FIXTURE_PARENT {}", parent.trim());
+    // `cargo run` names the package it runs to the process; the run that starts the built
+    // executable names none.
+    println!("FIXTURE_PACKAGE {}", std::env::var("CARGO_PKG_NAME").unwrap_or_default());
     println!("FIXTURE_LIBRARY_PATH {}", std::env::var("LD_LIBRARY_PATH").unwrap_or_default());
     if std::env::var_os("FIXTURE_EXIT").is_some() {
         return;
@@ -219,6 +217,7 @@ fn an_agent_reloads_the_app_through_the_run_that_started_it() {
         .current_dir(&app)
         .env("CARGO_TARGET_DIR", &target)
         .env("CARGO_NET_OFFLINE", "true")
+        .env_remove("CARGO_PKG_NAME")
         .args(["--json", "run", "--agent", "--no-build-overlay"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -337,24 +336,24 @@ fn an_agent_reloads_the_app_through_the_run_that_started_it() {
     assert_eq!(saved["outcome"], restarted, "{saved}");
     assert!(stopped(&seen), "the save's build replaced the app");
     let deadline = Instant::now() + Duration::from_secs(120);
-    let mut parent = None;
+    let mut package = None;
     let library_path = loop {
         let event = events
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .expect("the restarted app");
         let line = event["line"].as_str().unwrap_or_default();
-        if let Some(name) = line.strip_prefix("FIXTURE_PARENT ") {
-            parent = Some(name.to_owned());
+        if let Some(name) = line.strip_prefix("FIXTURE_PACKAGE ") {
+            package = Some(name.to_owned());
         } else if let Some(path) = line.strip_prefix("FIXTURE_LIBRARY_PATH ") {
             break path.to_owned();
         }
     };
+    assert_eq!(
+        package.as_deref(),
+        Some(""),
+        "the run starts the built executable itself, not `cargo run`"
+    );
     if cfg!(target_os = "linux") {
-        assert_eq!(
-            parent.as_deref(),
-            Some("flui"),
-            "the run starts the built executable itself"
-        );
         // The loader searches the build's own libraries, as under `cargo run`.
         let deps = target.join("debug/deps");
         assert!(

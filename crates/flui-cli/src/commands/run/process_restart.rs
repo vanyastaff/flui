@@ -146,8 +146,9 @@ impl ReloadStrategy for ProcessRestart {
 
 impl ProcessRestart {
     /// Whether `child` runs the executable `built` names, as that build left it: cargo did not
-    /// build it again, and it is the file the child was started from. A build of another
-    /// terminal's that replaced it is a change.
+    /// build it again, and it is the file the child was started from, so a build of another
+    /// terminal's that replaced it is a change. Both are read: a file system that keeps
+    /// modification times to the second can give a build in the same second the same stamp.
     fn runs(&self, built: &Built, child: Option<&AppChild>) -> bool {
         child.is_some()
             && built.executable.fresh

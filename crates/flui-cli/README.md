@@ -192,7 +192,10 @@ Hot reload works in two modes, chosen automatically:
 - **Process restart**: `src/` and `Cargo.toml` are watched; on change the app
   is rebuilt while it keeps running and replaced only by a build that
   succeeded (on Windows, which cannot overwrite a running executable, it is
-  stopped first). The changes saved while a build runs are one rebuild.
+  stopped first). The run starts the executable the build wrote, as `cargo run`
+  would, and leaves the app running when cargo built nothing new, so a save and a
+  `flui_reload` of the same edit restart it once. The changes saved while a build
+  runs are one rebuild.
 - **Worker host** (projects created with `--hot-reload`): the host keeps
   running and only the worker `cdylib` is rebuilt, so widget state survives a
   reload. A change to the shared types crate triggers a host restart.
@@ -274,7 +277,7 @@ runs. Tools:
 | `flui_act` | Perform an action a node advertises (`invoke`, `toggle`, `set_value`, …). |
 | `flui_wait` | Hold out until an element appears, goes or matches, the window settles or frames present (`timeout_ms`). |
 | `flui_motion` | Read, pause or step the animation clock. |
-| `flui_reload` | Rebuild the app and apply the build (`at_least`: `reassemble`, `restart`, `process_restart`); answers the outcome with the compiler's errors when the build failed, and `elapsed_ms`. |
+| `flui_reload` | Rebuild the app and apply the build (`at_least`: `reassemble`, `restart`, `process_restart`); answers the outcome (`applied` with the tier, `unchanged` when the app already runs the build, or `failed` with the compiler's errors) and `elapsed_ms`. |
 
 `flui_reload` is answered by the `flui run --agent` that started the app, not
 by the app: a run that rebuilds on each save serves it at a run endpoint of its
@@ -435,7 +438,7 @@ object with an `event` field; human text, if any, goes to stderr.
 | `device`, `devices.summary` | `devices` |
 | `emulator`, `emulators.summary`, `emulator.launch` | `emulators` |
 | `create.start`, `create.file`, `create.done` | `create` (also with `--dry-run`) |
-| `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.watch {paths}`, `run.change`, `run.reload {outcome, elapsed_ms}` (the report `flui_reload` answers with: `{"applied": {"tier": …}}` or `{"failed": {"diagnostics": […], "omitted": n}}`), `run.app.stop`, `run.stop` | `run` |
+| `run.start`, `run.build.start`, `run.build.done`, `run.app.start`, `run.app.log`, `run.app.exit`, `run.watch {paths}`, `run.change`, `run.reload {outcome, elapsed_ms}` (the report `flui_reload` answers with: `{"applied": {"tier": …}}`, `"unchanged"` or `{"failed": {"diagnostics": […], "omitted": n}}`), `run.app.stop`, `run.stop` | `run` |
 | `run.web.serve {url, dir}`, `run.web.open {browser, url, agent?}` | `run --device browser:…` |
 | `run.agent.ready {endpoint, session, forwarded?, relayed?, run?}` | `run --agent` (`forwarded` on Android, `relayed` in a browser, `run` where it serves reloads) |
 | `build.start`, `build.phase`, `build.done` | `build` |
