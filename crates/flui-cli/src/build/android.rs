@@ -441,13 +441,17 @@ impl AndroidBuilder {
         for target in targets {
             crate::ui::debug(format!("Building for Android target: {target}"));
 
-            let mode = ctx.mode_args(&package.framework);
+            let triple = rust_target(target);
+            let rustflags = ctx.rustflags(triple)?;
+            let mut mode = ctx.mode_args(&package.framework);
+            mode.extend(rustflags.args);
             let args = app_build_args(&package.package, target, &platform, jni_libs_str, &mode);
 
             process::run(
                 self.cargo_ndk()
                     .args(&args)
-                    .envs(ctx.floors.cargo_env(rust_target(target))),
+                    .envs(ctx.floors.cargo_env(triple))
+                    .envs(rustflags.env),
             )
             .await?;
 

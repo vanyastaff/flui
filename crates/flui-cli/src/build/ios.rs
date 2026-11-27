@@ -76,12 +76,16 @@ impl IosBuilder {
             let mut args = cargo_args_for(target);
             args.extend(selected.cargo_args());
             args.extend(ctx.mode_args(selected.framework()));
+            let rustflags = ctx.rustflags(target)?;
+            args.extend(rustflags.args);
+            let mut env = ctx.floors.cargo_env(target);
+            env.extend(rustflags.env);
             outputs.push(
                 crate::build::util::cargo::build_artifact(
                     &ctx.workspace_root,
                     &args,
                     &selected,
-                    &ctx.floors.cargo_env(target),
+                    &env,
                 )
                 .await?,
             );

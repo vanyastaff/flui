@@ -64,6 +64,7 @@ pkg-fmt = "zip"
 # Build pipeline: cargo metadata for artifact selection, staging
 # directories, and `process`/`io-util` for the async builders.
 cargo_metadata = { workspace = true }
+cargo-platform = { workspace = true }
 tempfile = { workspace = true }
 sha2 = { workspace = true }
 
