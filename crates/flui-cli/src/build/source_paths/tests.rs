@@ -3,7 +3,7 @@ use std::str::FromStr as _;
 
 use cargo_platform::Cfg;
 
-use super::{CargoRustflags, Remap, RustflagsSource, SourcePathRemap};
+use super::{BuildDirs, CargoRustflags, Remap, RustflagsSource, SourcePathRemap};
 
 const TRIPLE: &str = "x86_64-unknown-linux-gnu";
 
@@ -285,4 +285,60 @@ fn no_rewrite_adds_nothing() {
     ] {
         assert_eq!(none.onto(&source), CargoRustflags::default());
     }
+}
+
+/// A cargo home and a target directory inside the workspace, a path
+/// dependency elsewhere, a package of the workspace and one of a registry, and
+/// a build directory that is the target directory: each directory gets its
+/// one rewrite, after every directory that holds it.
+#[cfg(unix)]
+#[test]
+fn each_directory_is_rewritten_after_the_directories_that_hold_it() {
+    let path = PathBuf::from;
+    let registry = path("/work/app/.cargo-home/registry/src/index.crates.io-1949cf8c6b5b557f");
+    let remap = SourcePathRemap::of_dirs(BuildDirs {
+        root: path("/work/app"),
+        target: path("/work/app/target"),
+        build: Some(path("/work/app/target")),
+        packages: vec![
+            (path("/work/app"), "app-0.1.0".into()),
+            (path("/work/app/crates/member"), "member-0.1.0".into()),
+            (registry.join("serde-1.0.0"), "serde-1.0.0".into()),
+            (path("/work/elsewhere/far-dep"), "far-dep-0.3.1".into()),
+            (path("/work/elsewhere/far-dep"), "far-dep-0.3.1".into()),
+        ],
+        registries: vec![registry.clone()],
+        git_checkouts: Some(path("/work/app/.cargo-home/git/checkouts")),
+    });
+    assert_eq!(
+        remap.flags(),
+        [
+            "--remap-path-prefix=/work/app/=".to_owned(),
+            "--remap-path-prefix=/work/app/target/=target/".to_owned(),
+            "--remap-path-prefix=/work/elsewhere/far-dep/=far-dep-0.3.1/".to_owned(),
+            "--remap-path-prefix=/work/app/.cargo-home/git/checkouts/=git/".to_owned(),
+            format!("--remap-path-prefix={}/=", registry.display()),
+        ],
+    );
+}
+
+/// A build directory apart from the target directory gets its own rewrite.
+#[cfg(unix)]
+#[test]
+fn a_separate_build_directory_is_rewritten() {
+    let path = PathBuf::from;
+    let remap = SourcePathRemap::of_dirs(BuildDirs {
+        root: path("/work/app"),
+        target: path("/work/app/target"),
+        build: Some(path("/scratch/build-dir")),
+        ..BuildDirs::default()
+    });
+    assert_eq!(
+        remap.flags(),
+        [
+            "--remap-path-prefix=/scratch/build-dir/=build/",
+            "--remap-path-prefix=/work/app/=",
+            "--remap-path-prefix=/work/app/target/=target/",
+        ],
+    );
 }

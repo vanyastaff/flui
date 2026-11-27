@@ -302,8 +302,10 @@ rustc writes the path of each source file a panic can name into the binary, abso
 registry crate, a path dependency outside the workspace and a generated file in the target or
 build directory. A release build of `flui build`, on every platform it builds
 (`build/source_paths.rs`), rewrites those prefixes with `--remap-path-prefix`: a registry crate's
-file reads `<name>-<version>/src/…`, a path dependency's or a vendored source's the same, a git
-checkout's `git/…`, a generated file's `target/…` or `build/…`. A directory's rewrite comes after
+file reads `<name>-<version>/src/…`, a path dependency's or a vendored source's outside the
+workspace the same (one inside it reads its path from the workspace root,
+`vendor/<name>-<version>/…`), a git checkout's `git/…`, a generated file's `target/…` or
+`build/…`. A directory's rewrite comes after
 that of every directory holding it, since rustc applies the last that matches. A debug build
 keeps the full paths, which debuggers and editors open, and so does the scene plugin `flui run`
 builds for an Android device, which ships in no package. Cargo's `trim-paths` does this but is

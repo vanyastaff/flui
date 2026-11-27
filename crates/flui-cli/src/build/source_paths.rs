@@ -27,7 +27,6 @@
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::str::FromStr as _;
 
-use cargo_metadata::Metadata;
 use cargo_platform::{Cfg, Platform};
 
 use crate::build::error::{BuildError, BuildResult};
@@ -58,6 +57,22 @@ impl Remap {
     }
 }
 
+/// The directories of one build that rustc may name a source file in.
+#[derive(Debug, Clone, Default)]
+struct BuildDirs {
+    /// The workspace root; its members are compiled with paths relative to it.
+    root: PathBuf,
+    target: PathBuf,
+    /// `build.build-dir`, where it differs from the target directory.
+    build: Option<PathBuf>,
+    /// Each package of the resolved graph: its directory and
+    /// `<name>-<version>`.
+    packages: Vec<(PathBuf, String)>,
+    /// Each index directory of the registry sources under the cargo home.
+    registries: Vec<PathBuf>,
+    git_checkouts: Option<PathBuf>,
+}
+
 /// The rewrites of one project's build, a directory after every directory
 /// that holds it, since rustc applies the last one that matches a path.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -70,7 +85,8 @@ impl SourcePathRemap {
     /// of `cargo_home` (its crates are named `<name>-<version>/`), its git
     /// checkouts, the workspace root, every package of the resolved graph whose
     /// directory none of those holds (a path dependency elsewhere, a vendored
-    /// source), the target directory and a separate build directory.
+    /// source outside the workspace), the target directory and a separate
+    /// build directory.
     ///
     /// # Errors
     ///
@@ -86,23 +102,39 @@ impl SourcePathRemap {
             })?;
         let registries =
             cargo_home.map_or_default(|home| registry_sources(&home.join("registry").join("src")));
-        Ok(Self::from_parts(
-            &metadata,
-            &registries,
-            cargo_home.map(|home| home.join("git").join("checkouts")),
-        ))
+        Ok(Self::of_dirs(BuildDirs {
+            root: metadata.workspace_root.clone().into_std_path_buf(),
+            target: metadata.target_directory.clone().into_std_path_buf(),
+            build: metadata
+                .build_directory
+                .clone()
+                .map(cargo_metadata::camino::Utf8PathBuf::into_std_path_buf),
+            packages: metadata
+                .packages
+                .iter()
+                .filter_map(|package| {
+                    let dir = package.manifest_path.parent()?.as_std_path().to_path_buf();
+                    Some((dir, format!("{}-{}", package.name, package.version)))
+                })
+                .collect(),
+            registries,
+            git_checkouts: cargo_home.map(|home| home.join("git").join("checkouts")),
+        }))
     }
 
-    fn from_parts(
-        metadata: &Metadata,
-        registries: &[PathBuf],
-        git_checkouts: Option<PathBuf>,
-    ) -> Self {
-        let root = metadata.workspace_root.as_std_path();
+    fn of_dirs(dirs: BuildDirs) -> Self {
+        let BuildDirs {
+            root,
+            target,
+            build,
+            packages,
+            registries,
+            git_checkouts,
+        } = dirs;
         let mut remaps: Vec<Remap> = registries
-            .iter()
-            .map(|index| Remap {
-                from: index.clone(),
+            .into_iter()
+            .map(|from| Remap {
+                from,
                 to: String::new(),
             })
             .chain(git_checkouts.map(|from| Remap {
@@ -110,43 +142,33 @@ impl SourcePathRemap {
                 to: format!("git{MAIN_SEPARATOR}"),
             }))
             .chain([Remap {
-                from: root.to_path_buf(),
+                from: root,
                 to: String::new(),
             }])
             .collect();
-        // A package whose directory no prefix above holds: a path
-        // dependency elsewhere on the machine, a vendored source.
-        let packages: Vec<Remap> = metadata
-            .packages
-            .iter()
-            .filter_map(|package| {
-                let dir = package.manifest_path.parent()?.as_std_path();
-                let held = remaps.iter().any(|remap| dir.starts_with(&remap.from));
-                (!held).then(|| Remap {
-                    from: dir.to_path_buf(),
-                    to: format!("{}-{}{MAIN_SEPARATOR}", package.name, package.version),
-                })
+        // A package whose directory no prefix above holds: a path dependency
+        // elsewhere on the machine, a vendored source outside the workspace.
+        let packages: Vec<Remap> = packages
+            .into_iter()
+            .filter(|(dir, _)| !remaps.iter().any(|remap| dir.starts_with(&remap.from)))
+            .map(|(from, package)| Remap {
+                from,
+                to: format!("{package}{MAIN_SEPARATOR}"),
             })
             .collect();
         remaps.extend(packages);
         // Generated files: the target directory, and the build directory
         // where `build.build-dir` puts the intermediate outputs apart from it.
-        let target = metadata.target_directory.as_std_path();
-        remaps.push(Remap {
-            from: target.to_path_buf(),
-            to: format!("target{MAIN_SEPARATOR}"),
-        });
-        if let Some(build) = metadata
-            .build_directory
-            .as_ref()
-            .map(|build| build.as_std_path())
-            .filter(|build| *build != target)
-        {
+        if let Some(build) = build.filter(|build| *build != target) {
             remaps.push(Remap {
-                from: build.to_path_buf(),
+                from: build,
                 to: format!("build{MAIN_SEPARATOR}"),
             });
         }
+        remaps.push(Remap {
+            from: target,
+            to: format!("target{MAIN_SEPARATOR}"),
+        });
         // rustc takes the last rewrite that matches, so a directory comes
         // after every directory that holds it (a registry or a target
         // directory inside the workspace), and the order is the same on every
@@ -158,7 +180,7 @@ impl SourcePathRemap {
                 .cmp(&b.from.components().count())
                 .then_with(|| a.from.cmp(&b.from))
         });
-        remaps.dedup_by(|a, b| a.from == b.from);
+        remaps.dedup_by(|later, earlier| later.from == earlier.from);
         Self { remaps }
     }
 

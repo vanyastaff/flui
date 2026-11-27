@@ -62,7 +62,10 @@ pub(crate) fn layers(file: &Path) -> Vec<toml::Table> {
 }
 
 fn layers_into(file: &Path, reading: &mut Vec<PathBuf>, layers: &mut Vec<toml::Table>) {
-    if reading.len() > INCLUDE_DEPTH || reading.iter().any(|open| open == file) {
+    // Compared as the file it names, so that `../.cargo/a.toml` from a file
+    // in `.cargo` is the file being read.
+    let canonical = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf());
+    if reading.len() > INCLUDE_DEPTH || reading.contains(&canonical) {
         return;
     }
     let Some(table) = std::fs::read_to_string(file)
@@ -71,7 +74,7 @@ fn layers_into(file: &Path, reading: &mut Vec<PathBuf>, layers: &mut Vec<toml::T
     else {
         return;
     };
-    reading.push(file.to_path_buf());
+    reading.push(canonical);
     let base = file.parent().unwrap_or(Path::new(""));
     let includes: Vec<PathBuf> = table
         .get("include")
@@ -103,3 +106,6 @@ pub(crate) fn tables_by_precedence(dir: &Path, cargo_home: Option<PathBuf>) -> V
         .flat_map(|file| layers(file).into_iter().rev())
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
