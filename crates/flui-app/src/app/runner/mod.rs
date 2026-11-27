@@ -525,6 +525,18 @@ pub(in crate::app) fn swap_entry_declarations(
     })
 }
 
+/// Lend this thread's development hand-over (ADR-0393 §4 step 2) to `lend`;
+/// refused while this thread's loop state is borrowed.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(in crate::app) fn with_hand_over<R>(
+    lend: impl FnOnce(&mut crate::app::hot_reload::EntrySlot) -> R,
+) -> Result<R, std::cell::BorrowMutError> {
+    host::APP_RUNTIME.with(|slot| Ok(lend(&mut slot.try_borrow_mut()?.hand_over)))
+}
 /// What [`swap_entry_declarations`] recorded, while its entry runs.
 pub(in crate::app) fn entry_declarations() -> Option<flui_view::navigation::OpenDeclarations> {
     host::APP_RUNTIME.with(|slot| {
@@ -565,7 +577,8 @@ pub(in crate::app) fn install_capabilities(
         .map_err(LaunchError::CapabilityConflict)?;
     // A displaced registry's providers are user code too: they drop after the
     // borrow is released.
-    let displaced = host::APP_RUNTIME.with(|slot| slot.borrow_mut().capabilities.replace(registry));
+    let displaced =
+        host::APP_RUNTIME.with(|slot| slot.borrow_mut().application.capabilities.replace(registry));
     drop(displaced);
     Ok(())
 }
@@ -574,7 +587,8 @@ pub(in crate::app) fn install_capabilities(
 /// platform failed to start and no teardown will run.
 #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
 fn discard_capabilities() {
-    let installed = host::APP_RUNTIME.with(|slot| slot.borrow_mut().capabilities.take());
+    let installed =
+        host::APP_RUNTIME.with(|slot| slot.borrow_mut().application.capabilities.take());
     drop(installed);
 }
 

@@ -217,6 +217,7 @@ where
     // frame, which acts on it.
     let device_retry = APP_RUNTIME.with(|slot| {
         slot.borrow()
+            .application
             .main_ingress
             .as_ref()
             .map(|ingress| ingress.device_retry().watch(&ui_runtime.wake_handle()))

@@ -32,7 +32,7 @@ fn start() -> (HeadlessRunHandle, ManualClock) {
 /// The clipboard as a widget acquires it, from the run's registry.
 fn clipboard() -> (ClipboardHandle, HostCapabilities) {
     let registry = APP_RUNTIME
-        .with(|slot| slot.borrow().capabilities.clone())
+        .with(|slot| slot.borrow().application.capabilities.clone())
         .expect("a running loop holds its registry");
     let host = HostCapabilities::new(registry, || {});
     let handle = host

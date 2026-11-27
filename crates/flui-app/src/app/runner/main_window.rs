@@ -551,12 +551,13 @@ impl Drop for ControllerLease {
             let mut runtime = slot.borrow_mut();
             if Arc::ptr_eq(&runtime.loop_identity, &self.identity)
                 && runtime
+                    .application
                     .main_ingress
                     .as_ref()
                     .is_some_and(|ingress| ingress.accepting())
-                && runtime.main_controller.is_none()
+                && runtime.application.main_controller.is_none()
             {
-                runtime.main_controller = controller.take();
+                runtime.application.main_controller = controller.take();
             }
         });
         if let Some(mut controller) = controller {
@@ -577,6 +578,7 @@ pub(super) fn drive_main_window() {
             return None;
         }
         runtime
+            .application
             .main_controller
             .take()
             .map(|controller| ControllerLease {
@@ -614,6 +616,7 @@ pub(super) fn drive_program_quit() {
     let Some((ingress, router)) = APP_RUNTIME.with(|slot| {
         let runtime = slot.borrow();
         runtime
+            .application
             .main_ingress
             .clone()
             .map(|ingress| (ingress, runtime.close_requests()))
@@ -644,7 +647,7 @@ pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress)
         if !runtime.installed_host.native().contains_address(address) {
             return None;
         }
-        if let Some(controller) = runtime.main_controller.as_mut()
+        if let Some(controller) = runtime.application.main_controller.as_mut()
             && controller
                 .open
                 .as_ref()
@@ -652,7 +655,7 @@ pub(super) fn main_window_closing(address: flui_foundation::PresentationAddress)
         {
             controller.closing = true;
         }
-        runtime.main_ingress.clone()
+        runtime.application.main_ingress.clone()
     });
     if let Some(ingress) = ingress {
         ingress.begin_close(address);
@@ -666,18 +669,22 @@ pub(super) fn main_window_closed(address: flui_foundation::PresentationAddress) 
         if runtime.installed_host.native().contains_address(address) {
             return (None, None);
         }
-        let removed = runtime.main_controller.as_mut().and_then(|controller| {
-            if !controller
-                .open
-                .as_ref()
-                .is_some_and(|open| open.address == address)
-            {
-                return None;
-            }
-            controller.closing = false;
-            controller.open.take()
-        });
-        (removed, runtime.main_ingress.clone())
+        let removed = runtime
+            .application
+            .main_controller
+            .as_mut()
+            .and_then(|controller| {
+                if !controller
+                    .open
+                    .as_ref()
+                    .is_some_and(|open| open.address == address)
+                {
+                    return None;
+                }
+                controller.closing = false;
+                controller.open.take()
+            });
+        (removed, runtime.application.main_ingress.clone())
     });
     contain(|| drop(removed));
     if let Some(ingress) = ingress {
@@ -694,8 +701,8 @@ pub(super) fn shutdown_main_window() {
     let (controller, ingress, dev_agent) = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
         (
-            runtime.main_controller.take(),
-            runtime.main_ingress.take(),
+            runtime.application.main_controller.take(),
+            runtime.application.main_ingress.take(),
             runtime.loop_dev_agent.end(),
         )
     });
@@ -1107,8 +1114,8 @@ where
                 install_owner_platform(owner)?;
                 APP_RUNTIME.with(|slot| {
                     let mut runtime = slot.borrow_mut();
-                    runtime.main_ingress = Some(Arc::clone(&ingress));
-                    runtime.capabilities = Some(registry);
+                    runtime.application.main_ingress = Some(Arc::clone(&ingress));
+                    runtime.application.capabilities = Some(registry);
                     runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
                     runtime.raster_host =
                         super::raster_host::SharedRasterHost::new(renderers, placement);
@@ -1195,7 +1202,7 @@ where
                     )
                 });
                 APP_RUNTIME.with(|slot| {
-                    slot.borrow_mut().main_controller = Some(MainController {
+                    slot.borrow_mut().application.main_controller = Some(MainController {
                         ingress: Arc::clone(&ingress),
                         identity,
                         installer: Some(installer),
@@ -1217,6 +1224,7 @@ where
                     if let Err(error) = super::host::start_service(service) {
                         let fatal = APP_RUNTIME.with(|slot| {
                             slot.borrow()
+                                .application
                                 .main_controller
                                 .as_ref()
                                 .map(|controller| Rc::clone(&controller.fatal))
@@ -1240,7 +1248,8 @@ where
                 {
                     flui_foundation::panic::discard_payload(payload);
                     APP_RUNTIME.with(|slot| {
-                        if let Some(controller) = slot.borrow().main_controller.as_ref() {
+                        if let Some(controller) = slot.borrow().application.main_controller.as_ref()
+                        {
                             controller
                                 .fatal
                                 .borrow_mut()
@@ -1292,8 +1301,8 @@ mod tests {
         let handle = ingress.handle();
         APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
-            runtime.main_ingress = Some(Arc::clone(&ingress));
-            runtime.main_controller = Some(MainController {
+            runtime.application.main_ingress = Some(Arc::clone(&ingress));
+            runtime.application.main_controller = Some(MainController {
                 identity: Arc::clone(&runtime.loop_identity),
                 ingress,
                 installer: Some(installer),
@@ -1759,7 +1768,7 @@ mod tests {
             error,
             LaunchError::InitialWindow(AppWindowError::FactoryPanicked { .. })
         ));
-        assert!(APP_RUNTIME.with(|slot| slot.borrow().main_ingress.is_none()));
+        assert!(APP_RUNTIME.with(|slot| slot.borrow().application.main_ingress.is_none()));
     }
 
     /// A panic that unwinds out of `Platform::run` after the loop was set up
@@ -1809,7 +1818,8 @@ mod tests {
         APP_RUNTIME.with(|slot| {
             let runtime = slot.borrow();
             assert!(
-                runtime.main_controller.is_none() && runtime.main_ingress.is_none(),
+                runtime.application.main_controller.is_none()
+                    && runtime.application.main_ingress.is_none(),
                 "the unwind retired the main window"
             );
         });
@@ -1907,6 +1917,7 @@ mod tests {
             assert!(
                 APP_RUNTIME.with(|slot| slot
                     .borrow()
+                    .application
                     .main_controller
                     .as_ref()
                     .expect("controller installed")

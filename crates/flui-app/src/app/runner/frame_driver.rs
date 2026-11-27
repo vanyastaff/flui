@@ -190,7 +190,7 @@ impl FrameDriver {
             let ingress = super::host::APP_RUNTIME.with(|slot| {
                 slot.try_borrow()
                     .ok()
-                    .and_then(|state| state.main_ingress.clone())
+                    .and_then(|state| state.application.main_ingress.clone())
             });
             for step in flui_runtime::owner_turn::settled_steps(settled, runtime.id(), &session_end)
             {
@@ -567,6 +567,7 @@ fn settle_flush_registry() -> Vec<std::task::Waker> {
         .with(|slot| {
             slot.try_borrow().ok().and_then(|state| {
                 state
+                    .application
                     .flush_host
                     .as_ref()
                     .map(flui_view::__runtime::FlushHost::settle)
