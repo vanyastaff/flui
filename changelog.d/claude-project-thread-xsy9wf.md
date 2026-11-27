@@ -65,11 +65,27 @@
   `flui_reload` of the same edit restart it once (not on Windows, which stops the app before
   each build). The reload's outcome is `"unchanged"` (protocol 0.34, which refuses older
   clients), and the `r` key reads "Rebuild, and restart if it changed".
+- **`flui-view`**: a development reload hook reports the version of the code it loaded,
+  `ReloadEvent::Loaded(CodeVersion)` with a `LayoutEpoch` and a `Revision`, in place of
+  `ReloadEvent::Patched` (ADR-0393 §3). `DevReloadHook` gains `applied`, which the host calls
+  with a `ReloadOutcome` once per UI runtime that reassembled and once per restart,
+  `reassemble_requested` for the loaded code's own rebuild request, and `run_entry`. The loop
+  keeps one record of versions: a version is applied once to each UI runtime, an idle window
+  reassembles to the latest one, and a version reported twice changes nothing. A version of
+  another layout is reported as `RestartFailure::NoApplication`, since nothing restarts yet.
+- **`flui-cli`**, **`flui-hot-reload`**: `flui run` writes the worker's `.flui_worker_plugin`
+  manifest as JSON, `{"path", "layout", "revision"}`, with a new revision for each staged build
+  (`flui_hot_reload::WorkerManifest`). A worker loaded without a manifest has no version and is
+  not reassembled, and `WorkerReloadDriver::loaded_version` reads the version of the loaded image.
 
 ### Removed
 
 - **`flui-hot-reload`**: `timing::SOURCE_DEBOUNCE` and `timing::ANDROID_SCENE_DEBOUNCE`. Source
   watching is `flui run`'s, which keeps its own debounce; nothing read these.
+- **`flui-hot-reload`**: `HotReloadTier` and `HotReloadOutcome`, which nothing read; the tiers
+  are ADR-0393's and the host derives them. **`flui-runtime`**: `reload::ReloadTier`;
+  `UiRuntime::request_hot_reload(tier)` is `request_reassemble()`, the one reload a UI runtime
+  runs.
 
 ### Fixed
 

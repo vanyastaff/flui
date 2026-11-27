@@ -183,6 +183,12 @@ pub trait DevReloadHook: 'static {
 
     /// What the loop did with a version, after the turn that applied it.
     fn applied(&mut self, outcome: &ReloadOutcome<'_>) {}
+
+    /// At the same boundary, after `poll`: whether the code already loaded asked every UI
+    /// runtime to rebuild (a worker's own request). The loop reassembles each UI runtime once,
+    /// outside the record, and reports no outcome; as Flutter's `ext.flutter.reassemble`, it
+    /// delivers no code.
+    fn reassemble_requested(&mut self) -> bool { false }
 }
 
 #[derive(Debug)]
@@ -217,7 +223,10 @@ pub enum RestartFailure<'a> {
   its application was composed from (`composed`, empty after a restart that failed), the last
   version the hook reported (`loaded`) and, per UI runtime, the revision it was composed from or
   last reassembled to, removed when that UI runtime retires. `composed` is written when an
-  application is composed and emptied when a restart fails, and nowhere else. No tier is stored.
+  application is composed, emptied when a restart fails, and written once more in a loop whose
+  application was composed before the hook reported any version: the first version reported is
+  taken as `composed`, and each UI runtime, whose revision is still unknown, reassembles to it
+  once. Nothing else writes it. No tier is stored.
 - **The tier is derived, at the poll that reports a version.** A version equal to `loaded`
   changes nothing. Otherwise the loop records it as `loaded`, and:
   - when `composed` is empty or its layout differs, the loop restarts to it (§4) when the frame in
@@ -234,8 +243,8 @@ pub enum RestartFailure<'a> {
   that needs one (an image it cannot load) says so to its tool on its own channel and reports
   `Unchanged`. A hook mints no version.
 - **The outcome is the report's source.** The host calls `applied` once per UI runtime that
-  reassembled and once per restart, succeeded or failed. A panic in `poll` or `applied` retires the
-  hook as ADR-0311 §5 says. A panic in `run_entry` is the application's entry panicking: it fails
+  reassembled and once per restart, succeeded or failed. A panic in `poll`, `reassemble_requested`
+  or `applied` retires the hook as ADR-0311 §5 says. A panic in `run_entry` is the application's entry panicking: it fails
   that restart and the hook stays.
 - **A mechanism may add ways for a reassemble to stop.** A mechanism whose record lets an element
   refuse new code, or leave code of an earlier build running, extends `Reassembled` and this

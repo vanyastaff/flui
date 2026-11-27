@@ -6,7 +6,8 @@
 //!   the running app and replace it with the executable the build wrote, when
 //!   the build succeeded and changed it.
 //! - **Worker host** (`flui.toml` `[hot_reload]`): watch worker UI sources,
-//!   rebuild `cdylib` only; host applies `HotReloadTier::HotReload` in-process.
+//!   rebuild `cdylib` only, stage it and name it and its version in the
+//!   `.flui_worker_plugin` manifest; the host reassembles in-process.
 //!
 //! The loop multiplexes four event sources — file changes, hot-keys from the
 //! terminal (`r` reload, `R` restart, `c` clear, `h` help, `q` quit), Ctrl-C,
