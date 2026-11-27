@@ -820,7 +820,8 @@ impl AppRuntime {
 
     /// Start an application service: resolve the loop's
     /// execution services if needed, hand the service its context, and
-    /// register it with this runtime's [`ServiceRegistry`] — the named
+    /// register it with this runtime's
+    /// [`ServiceRegistry`](crate::app::lifecycle::ServiceRegistry) — the named
     /// owner that will cancel and join it at loop-exit teardown, and whose
     /// running keep-alive services [`Self::should_exit`] consults.
     ///
