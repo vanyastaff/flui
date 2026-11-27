@@ -616,13 +616,14 @@ impl AppRuntime {
         self.window_routes.find(window)
     }
 
-    /// Record `window`, opened with `routes`.
+    /// Record `window`, opened with `routes`; returns the closed windows the
+    /// book let go, for the caller to drop outside the borrow.
     pub(super) fn adopt_window_routes(
         &mut self,
         window: Rc<dyn flui_native::HostWindow>,
         routes: std::rc::Weak<super::runner::window_routes::WindowRoutes>,
-    ) {
-        self.window_routes.adopt(window, routes);
+    ) -> Vec<Rc<dyn flui_native::HostWindow>> {
+        self.window_routes.adopt(window, routes)
     }
 
     /// Every window the runner opened that has not closed, in the order it

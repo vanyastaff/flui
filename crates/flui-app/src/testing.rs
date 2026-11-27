@@ -38,7 +38,7 @@ use crate::app::{AppHandle, Application, LaunchError};
 pub use crate::app::runner::{StandInRenderer, TeardownStep};
 
 mod reload;
-pub use reload::{ReloadReport, RestartReason, ScriptedReload};
+pub use reload::{RestartReason, ScriptedOutcome, ScriptedReload};
 
 /// The process exit code of a run that ended with a panic: the code Rust's
 /// runtime gives a process whose main thread panicked.

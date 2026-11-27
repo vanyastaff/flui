@@ -46,7 +46,7 @@
   polls the hook on its wake. Files the system opens after a restart reach the later
   application's `on_open_files`. `flui_app::testing::ScriptedReload` is a hook a test drives:
   it reports the versions the test loads, runs the entry the test gives it and keeps what the
-  loop reported (`ReloadReport`, `RestartReason`).
+  loop reported (`ScriptedOutcome`, `RestartReason`).
 - **`flui-view`**: `ReloadOutcome::Restarted` carries `Unapplied`, what the later application
   configured that the restart left as the process started it: its executors, which a process
   restart applies.

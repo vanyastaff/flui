@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 /// [`HeadlessRun`](super::HeadlessRun), it reports the version
 /// [`load`](Self::load) gave last at the next poll, runs the
 /// [`entry`](Self::entry) when the loop restarts, and keeps every outcome
-/// for [`take_reports`](Self::take_reports). Clones share one script.
+/// for [`take_outcomes`](Self::take_outcomes). Clones share one script.
 #[derive(Clone, Default)]
 pub struct ScriptedReload(Arc<Mutex<Script>>);
 
@@ -25,7 +25,7 @@ struct Script {
     loaded: Option<CodeVersion>,
     wake: Option<ReloadWake>,
     entry: Option<Box<dyn FnMut() + Send>>,
-    reports: Vec<ReloadReport>,
+    outcomes: Vec<ScriptedOutcome>,
     attached: bool,
     entries_run: usize,
 }
@@ -70,8 +70,8 @@ impl ScriptedReload {
 
     /// What the loop reported since the last call, in order.
     #[must_use]
-    pub fn take_reports(&self) -> Vec<ReloadReport> {
-        std::mem::take(&mut self.0.lock().reports)
+    pub fn take_outcomes(&self) -> Vec<ScriptedOutcome> {
+        std::mem::take(&mut self.0.lock().outcomes)
     }
 
     /// How many times a restart ran the entry.
@@ -134,16 +134,16 @@ impl DevReloadHook for ScriptedReload {
 
     fn applied(&mut self, outcome: &ReloadOutcome<'_>) {
         let report = match outcome {
-            ReloadOutcome::Reassembled { version, .. } => ReloadReport::Reassembled(*version),
+            ReloadOutcome::Reassembled { version, .. } => ScriptedOutcome::Reassembled(*version),
             ReloadOutcome::Restarted {
                 version, unapplied, ..
-            } => ReloadReport::Restarted(*version, *unapplied),
+            } => ScriptedOutcome::Restarted(*version, *unapplied),
             ReloadOutcome::RestartFailed {
                 version, reason, ..
-            } => ReloadReport::RestartFailed(*version, RestartReason::of(reason)),
-            _ => ReloadReport::Other,
+            } => ScriptedOutcome::RestartFailed(*version, RestartReason::of(reason)),
+            _ => ScriptedOutcome::Other,
         };
-        self.0.lock().reports.push(report);
+        self.0.lock().outcomes.push(report);
     }
 }
 
@@ -166,7 +166,7 @@ impl Drop for Restore<'_> {
 /// One outcome the loop reported to a [`ScriptedReload`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum ReloadReport {
+pub enum ScriptedOutcome {
     /// A UI runtime reassembled to the version.
     Reassembled(CodeVersion),
     /// The application was composed again from the version, leaving what

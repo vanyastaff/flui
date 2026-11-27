@@ -1967,7 +1967,7 @@ impl Drop for OwnerHostClearGuard {
         });
         // The loop's handles of its windows go before the platform that
         // made them.
-        drop(windows);
+        crate::app::application_control::contain(|| drop(windows));
         // The loop's GPU context retires with the loop, before the platform
         // whose display it was created on, and never in the thread's
         // teardown, where the GPU driver's own thread-locals are gone.

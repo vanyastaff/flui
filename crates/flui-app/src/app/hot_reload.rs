@@ -263,9 +263,9 @@ fn contain(body: impl FnOnce()) {
     }
 }
 
-/// The desktop and iOS driver: the configuration's hook, if any.
+/// The desktop and iOS driver: the configuration's hook, if any; `Default`
+/// drives no hook.
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-/// `Default` drives no hook.
 #[derive(Clone, Default)]
 pub(crate) struct WorkerReload(Option<DevReload>);
 
@@ -384,6 +384,13 @@ impl WorkerReload {
     /// The restart a poll found due, taken; `None` when none is.
     pub(crate) fn take_restart_due(&self) -> Option<CodeVersion> {
         self.0.as_ref()?.0.lock().restart_due.take()
+    }
+
+    /// Whether a poll found a restart due that has not run yet.
+    pub(crate) fn restart_owed(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|reload| reload.0.lock().restart_due.is_some())
     }
 
     /// Run the entry of the code now loaded, with the hand-over open (§4

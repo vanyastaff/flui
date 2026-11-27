@@ -190,7 +190,8 @@ impl WindowRoutes {
     pub(crate) fn adopt(self: &Rc<Self>, window: &Rc<dyn HostWindow>) {
         let weak = Rc::downgrade(self);
         let window = Rc::clone(window);
-        APP_RUNTIME.with(|slot| slot.borrow_mut().adopt_window_routes(window, weak));
+        let closed = APP_RUNTIME.with(|slot| slot.borrow_mut().adopt_window_routes(window, weak));
+        crate::app::application_control::contain(|| drop(closed));
     }
 
     /// Route the window's input; the input heard before goes first, in order.
@@ -421,12 +422,24 @@ impl RouteBook {
     }
 
     /// Record `window`, opened with `routes`; the windows that closed since
-    /// the last one leave the book.
-    pub(crate) fn adopt(&mut self, window: Rc<dyn HostWindow>, routes: Weak<WindowRoutes>) {
+    /// the last one leave the book, and are returned for the caller to drop
+    /// outside every borrow: the last handle of a window may run its
+    /// platform's teardown.
+    pub(crate) fn adopt(
+        &mut self,
+        window: Rc<dyn HostWindow>,
+        routes: Weak<WindowRoutes>,
+    ) -> Vec<Rc<dyn HostWindow>> {
         let id = window.id();
-        self.0
-            .retain(|adopted| adopted.window.id() != id && adopted.routes_while_open().is_some());
+        let (kept, left): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.0)
+                .into_iter()
+                .partition(|adopted| {
+                    adopted.window.id() != id && adopted.routes_while_open().is_some()
+                });
+        self.0 = kept;
         self.0.push(Adopted { window, routes });
+        left.into_iter().map(|adopted| adopted.window).collect()
     }
 
     /// Every window the runner opened that has not closed, in the order it

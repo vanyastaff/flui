@@ -50,9 +50,6 @@ impl Failure {
 /// here first. Nothing when none is due, or while a UI runtime is
 /// checked out (the turn is nested in one's code): the next turn runs it.
 pub(super) fn restart_if_due() {
-    if super::owner_dispatch::any_runtime_checked_out() {
-        return;
-    }
     let Some(reload) = APP_RUNTIME.with(|slot| {
         slot.borrow()
             .desktop_loop
@@ -61,6 +58,17 @@ pub(super) fn restart_if_due() {
     }) else {
         return;
     };
+    if super::owner_dispatch::any_runtime_checked_out() {
+        // The nested turn gives way; a restart already due asks for the
+        // owner's next turn, so it does not wait for an unrelated event.
+        if reload.restart_owed() {
+            let wake = APP_RUNTIME.with(|slot| slot.borrow().owner_turn_wake.clone());
+            if let Some(wake) = wake {
+                let _ = wake();
+            }
+        }
+        return;
+    }
     reload.poll_without_ui_runtime();
     let Some(version) = reload.take_restart_due() else {
         return;
@@ -123,7 +131,12 @@ fn restart(reload: &WorkerReload) -> Result<Unapplied, Failure> {
         compose(handed, registry)
     }));
     let failure = match composed {
-        Ok(Ok(())) => return Ok(unapplied),
+        Ok(Ok(())) => {
+            // With no window kept (an earlier restart failed installing
+            // into it), the main window opens as at a start.
+            super::main_window::drive_main_window();
+            return Ok(unapplied);
+        }
         Ok(Err(error)) => Failure::Launch(error),
         Err(payload) => {
             tracing::error!(
@@ -188,6 +201,10 @@ fn retire_application() -> Option<KeptMain> {
         .into_iter()
         .filter(|window| Some(window.id()) != kept_id)
         .collect();
+    // An open the earlier application asked for that has not finished would
+    // install its root into the later one: it is cancelled, its reply
+    // answered `Cancelled` and its reservation settled, as at an exit.
+    first.contain(super::secondary_window::cancel_pending_secondary_windows);
     super::owner_dispatch::retire_installed_host(&mut first);
     // Closed once their presentations are gone, so no close request reaches
     // a handler of the earlier application.

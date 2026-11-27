@@ -27,13 +27,16 @@
 //!   before the first window opens; [`DevReloadHook::detach`] runs once when
 //!   that loop ends. A hook is never attached twice without a detach between.
 //! - [`DevReloadHook::poll`] runs on the owner thread at each UI runtime's frame
-//!   boundary, before the frame's own work, and reports the newest version the
+//!   boundary, before the frame's own work, and, in a loop with no UI runtime,
+//!   in the owner turn its wake gives; it reports the newest version the
 //!   tool built ([`ReloadEvent::Loaded`]). The host keeps one record per loop
 //!   (ADR-0393 §3): a version of the layout the application was composed from
 //!   reassembles every UI runtime once, each at its own next boundary (an idle
 //!   window reassembles when it next draws, to the latest version). A version
-//!   of another layout needs a restart (ADR-0393 §4), which the host reports as
-//!   [`RestartFailure::NoApplication`] until it builds one. A version reported
+//!   of another layout restarts the application (ADR-0393 §4): the desktop
+//!   loop runs the entry through [`DevReloadHook::run_entry`] and composes what
+//!   it hands over; a host that cannot restart in the process reports
+//!   [`RestartFailure::NoApplication`]. A version reported
 //!   twice changes nothing. The first version after `attach` is taken as the
 //!   one the application was composed from, so every UI runtime reassembles
 //!   to it once. Each result goes back through
@@ -215,7 +218,8 @@ impl Unapplied {
 pub enum RestartFailure<'a> {
     /// The application's entry panicked.
     EntryPanicked,
-    /// The entry returned without handing an application over.
+    /// The entry returned without handing an application over, or the host
+    /// cannot restart in the process.
     NoApplication,
     /// The handed application is one the host's `run` refuses, or composing it failed; the
     /// error is the host's.
@@ -314,7 +318,8 @@ pub trait DevReloadHook: Send + 'static {
     /// pairs every `attach` with one `detach`.
     fn detach(&mut self) {}
 
-    /// At each UI runtime's frame boundary: what changed since the last poll.
+    /// At each UI runtime's frame boundary, and in a loop with no UI runtime in
+    /// the owner turn the wake gives: what changed since the last poll.
     fn poll(&mut self) -> ReloadEvent;
 
     /// At the same frame boundary, after [`poll`](Self::poll): whether the code already loaded

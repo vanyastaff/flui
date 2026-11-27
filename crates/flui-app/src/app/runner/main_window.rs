@@ -45,6 +45,14 @@ type Installer = Box<
     ) -> Result<RenderedMain, AppWindowError>,
 >;
 
+/// Whether the controller is installing into the window the loop kept, and
+/// how that install failed.
+enum Adopting {
+    No,
+    Installing,
+    Failed(AppWindowError),
+}
+
 pub(in crate::app) struct MainController {
     ingress: Arc<Ingress>,
     identity: Arc<()>,
@@ -60,6 +68,10 @@ pub(in crate::app) struct MainController {
     pending_wake: Option<Arc<OpenWake>>,
     closing: bool,
     initial: bool,
+    /// While the composition installs into the window the loop kept
+    /// (`adopt_kept_main`), the failure of that install, which fails the
+    /// restart instead of reaching the observer or ending the loop.
+    adopting: Adopting,
     error: Option<WindowErrorObserver>,
     fatal: Rc<RefCell<Option<LaunchError>>>,
 }
@@ -510,7 +522,9 @@ impl MainController {
     }
     fn report_failure(&mut self, error: AppWindowError) {
         contain(|| tracing::error!(%error, "main window request failed"));
-        if self.initial {
+        if !matches!(self.adopting, Adopting::No) {
+            self.adopting = Adopting::Failed(error);
+        } else if self.initial {
             self.initial = false;
             let old = self
                 .fatal
@@ -1349,12 +1363,13 @@ where
             pending_wake: None,
             closing: false,
             initial: opens_at_start,
+            adopting: Adopting::No,
             error: window_error,
             fatal,
         });
     });
     if keeps_window {
-        adopt_kept_main();
+        adopt_kept_main()?;
     }
     for service in &config.services {
         super::host::start_service(service).map_err(|error| LaunchError::Service {
@@ -1378,7 +1393,13 @@ where
 /// Install the composed application's main window into the window the loop
 /// kept ([`DesktopLoop::kept`]), through the controller as an opened window
 /// is. The loop holds the window until the controller has it.
-fn adopt_kept_main() {
+///
+/// # Errors
+///
+/// [`LaunchError::InitialWindow`] when the install failed: the install
+/// closed the window, so the restart fails, and the next one opens a main
+/// window anew.
+fn adopt_kept_main() -> Result<(), LaunchError> {
     let leased = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
         let controller = runtime.application.main_controller.take()?;
@@ -1399,14 +1420,26 @@ fn adopt_kept_main() {
         ))
     });
     let Some((mut lease, kept)) = leased else {
-        return;
+        return Ok(());
     };
     let controller = lease
         .controller
         .as_mut()
         .expect("BUG: controller lease is populated until Drop");
     controller.opening = Some(OpeningWindow::kept(kept.routes, &controller.config));
+    controller.adopting = Adopting::Installing;
     controller.install(kept.window);
+    let failure = match std::mem::replace(&mut controller.adopting, Adopting::No) {
+        Adopting::Failed(error) => Some(error),
+        Adopting::No | Adopting::Installing => None,
+    };
+    if controller.open.is_some() || controller.installing.is_some() {
+        return Ok(());
+    }
+    // The install closed the window: a failure it reported, or a cancel.
+    Err(LaunchError::initial_window(
+        failure.unwrap_or(AppWindowError::Cancelled),
+    ))
 }
 
 impl MainController {
@@ -1457,6 +1490,7 @@ mod tests {
                 pending_wake: None,
                 closing: false,
                 initial: false,
+                adopting: Adopting::No,
                 error: observer,
                 fatal: Rc::new(RefCell::new(None)),
             });
