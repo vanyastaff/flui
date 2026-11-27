@@ -194,14 +194,31 @@ pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
     // The sidecar manifest beside the watched path names the image to load,
     // as `flui run` stages each build under a path of its own.
     let watched = directory.path().join("worker.so");
-    let manifest = directory.path().join(".flui_worker_plugin");
-    let stage = |image: &Path| {
-        std::fs::write(&manifest, image.to_string_lossy().as_bytes()).expect("write the manifest");
+    let mut revision = 0;
+    let mut stage = |image: &Path| {
+        revision += 1;
+        let manifest = flui_hot_reload::WorkerManifest {
+            path: image.to_path_buf(),
+            layout: 1,
+            revision,
+        };
+        std::fs::write(
+            flui_hot_reload::WorkerManifest::beside(&watched),
+            serde_json::to_vec(&manifest).expect("a manifest serializes"),
+        )
+        .expect("write the manifest");
     };
 
     stage(&first);
     let mut driver =
         WorkerReloadDriver::new(&watched).with_poll_interval(std::time::Duration::ZERO);
+    assert_eq!(
+        driver
+            .loaded_version()
+            .map(|version| version.revision.get()),
+        Some(1),
+        "the loaded image's version is the one its manifest named"
+    );
     stage(&refused);
     assert_eq!(driver.poll(), WorkerPollOutcome::ReloadFailed);
     stage(&second);
@@ -209,5 +226,12 @@ pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
         driver.poll(),
         WorkerPollOutcome::Reloaded { reload_count: 2 },
         "the second image loaded is the second counted"
+    );
+    assert_eq!(
+        driver
+            .loaded_version()
+            .map(|version| version.revision.get()),
+        Some(3),
+        "a reload reads the version of the image it loaded"
     );
 }
