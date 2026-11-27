@@ -127,8 +127,7 @@ fn assert_generated_project_compiles(template: &str, hot_reload: bool) {
         let features: Vec<&str> = manifest["dependencies"]["flui"]
             .get("features")
             .and_then(toml::Value::as_array)
-            .map(|features| features.iter().filter_map(toml::Value::as_str).collect())
-            .unwrap_or_default();
+            .map_or_default(|features| features.iter().filter_map(toml::Value::as_str).collect());
         if template == "widget" {
             assert_eq!(
                 features,
