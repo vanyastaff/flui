@@ -1,12 +1,14 @@
-//! [`VirtualClock`]: a target whose clock the test moves (ADR-0400 §1). It is not a
-//! [`Connection`](flui_protocol::client::Connection) bound: a device's clock is the wall's, so a
-//! scenario that pumps, settles or freezes a frame compiles only for a target that has one.
+//! [`VirtualClock`]: a target whose clock the test moves (ADR-0400 §1).
 
 use std::time::Duration;
 
 use flui_protocol::client::CallError;
 
-/// A target whose clock the test moves: see the [module docs](self).
+/// A target whose clock the test moves (ADR-0400 §1).
+///
+/// It is not a [`Connection`](flui_protocol::client::Connection) bound: a device's clock is the
+/// wall's, so a scenario that pumps, settles or freezes a frame compiles only for a target that
+/// has one.
 pub trait VirtualClock {
     /// Move the clock by `by`, running the frames due on the way.
     ///

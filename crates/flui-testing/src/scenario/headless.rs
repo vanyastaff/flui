@@ -1,18 +1,4 @@
-//! [`Headless`]: the connection of a view mounted in process, as `run_app` mounts it, on a
-//! virtual clock (ADR-0400 §1).
-//!
-//! The connection owns a private [`HeadlessHost`] and the window's development agent
-//! ([`Observed`]): every call goes to the agent through the window's one input lease, so a
-//! scenario's finders, input and conditions are evaluated in the application, as on a device.
-//!
-//! - A read is one owner turn with no frame ([`HeadlessHost::owner_turn`]): it applies the
-//!   commands queued since the last turn and presents nothing, so it does not change the frame
-//!   number.
-//! - An act or a wait the window holds runs the host's loop until it is answered
-//!   ([`HeadlessHost::run_until_answered`]): each turn at the one list's wake, the application's
-//!   timers included, so a wait's limit is reached in virtual time. An act ends with an owner
-//!   turn that drains what its frames queued.
-//! - [`VirtualClock::advance`] moves the clock in frames.
+//! [`Headless`]: the connection of a view mounted in process, on a virtual clock (ADR-0400 §1).
 
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
@@ -54,7 +40,7 @@ pub(crate) const SETTLE_LIMIT: Duration = Duration::from_secs(5);
 /// The owner turns the end of a test runs for what the unmount and the release queued, at most.
 const RELEASE_TURNS: usize = 16;
 
-/// A headless connection whose window an agent is handed: see the [module docs](self).
+/// What a [`Headless`] connection attaches to its window: the development agent it is handed.
 #[derive(Debug)]
 pub struct Observed {
     /// The window's one input lease, through which every call goes; `None` once the test ended.
@@ -65,7 +51,21 @@ pub struct Observed {
     agent: Option<HeadlessDevAgent>,
 }
 
-/// The connection of a view mounted in process: see the [module docs](self).
+/// The connection of a view mounted in process, as `run_app` mounts it, on a virtual clock
+/// (ADR-0400 §1).
+///
+/// The connection owns a private [`HeadlessHost`] and the window's development agent
+/// ([`Observed`]): every call goes to the agent through the window's one input lease, so a
+/// scenario's finders, input and conditions are evaluated in the application, as on a device.
+///
+/// - A read is one owner turn with no frame (`HeadlessHost::owner_turn`): it applies the
+///   commands queued since the last turn and presents nothing, so it does not change the frame
+///   number.
+/// - An act or a wait the window holds runs the host's loop until it is answered
+///   ([`HeadlessHost::run_until_answered`]): each turn at the one list's wake, the application's
+///   timers included, so a wait's limit is reached in virtual time. An act ends with an owner
+///   turn that drains what its frames queued.
+/// - [`VirtualClock::advance`] moves the clock in frames.
 ///
 /// `S` is what is attached to the window: [`Observed`], its agent.
 pub struct Headless<S = Observed> {

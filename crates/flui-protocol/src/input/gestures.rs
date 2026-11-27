@@ -152,7 +152,7 @@ pub enum GestureError {
         velocity: f64,
     },
     /// A fling whose distance or velocity the window chose and whose stroke is over in fewer
-    /// moves than a release velocity is measured from ([`FLING_MOVES`]), so it would lift with no
+    /// moves than a release velocity is measured from (`FLING_MOVES`), so it would lift with no
     /// speed.
     FlingTooShort {
         /// How far, in logical pixels.

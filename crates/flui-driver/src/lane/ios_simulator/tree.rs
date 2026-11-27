@@ -443,7 +443,7 @@ impl<E: Clone> Search<E> {
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] when no window has the title ([`no_window`]) or every one names another
+/// [`Error::NotFound`] when no window has the title (`no_window`) or every one names another
 /// UUID; [`Error::Ambiguous`] when two windows name the simulator, or none does and two name no
 /// UUID, or the one that names no UUID shares its title with another listed simulator.
 pub fn choose_window(screen: &ScreenRequest, identities: &[WindowIdentity]) -> Result<usize> {

@@ -1,10 +1,4 @@
 //! [`Tester`]: one test over a [`Connection`] (ADR-0400 §1).
-//!
-//! Its verbs find with a [`Find`], act through the window's agent and expect with a
-//! [`Matcher`], so each is evaluated once, in the application's runtime, on every connection.
-//! Every verb has a `try_` twin returning [`TestError`]; the plain form panics at its caller.
-//! The tester keeps no copy of the application's state: what is settled is the host's, the input
-//! held between steps is the agent's lease, and the wait loop is the connection's.
 
 use std::collections::VecDeque;
 use std::panic::Location;
@@ -49,7 +43,13 @@ const NEAREST: usize = 5;
 /// Journal steps a failure lists, the latest last.
 const JOURNAL_KEPT: usize = 32;
 
-/// One test of an application over a connection: see the [module docs](self).
+/// One test of an application over a connection (ADR-0400 §1).
+///
+/// Its verbs find with a [`Find`], act through the window's agent and expect with a
+/// [`Matcher`], so each is evaluated once, in the application's runtime, on every connection.
+/// Every verb has a `try_` twin returning [`TestError`]; the plain form panics at its caller.
+/// The tester keeps no copy of the application's state: what is settled is the host's, the input
+/// held between steps is the agent's lease, and the wait loop is the connection's.
 ///
 /// ```
 /// use flui_testing::scenario::{Tester, find, matcher::exists};

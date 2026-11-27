@@ -3027,8 +3027,10 @@ fn quarantine_one_window(wedged_here: bool, busy: bool) {
 
 /// The loop's raster host while a test has put another in its place
 /// ([`LoopRasterHost::swap_in`]), put back as the guard drops.
+#[cfg(not(target_os = "android"))]
 pub(in crate::app::runner) struct LoopRasterHost(Option<SharedRasterHost>);
 
+#[cfg(not(target_os = "android"))]
 impl LoopRasterHost {
     /// Make `shared` the loop's raster host until the answer drops: the host
     /// whose floor rule a runtime the runner's builder builds afterwards reads
@@ -3040,6 +3042,7 @@ impl LoopRasterHost {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 impl Drop for LoopRasterHost {
     fn drop(&mut self) {
         if let Some(host) = self.0.take() {
@@ -3049,6 +3052,7 @@ impl Drop for LoopRasterHost {
 }
 
 /// A threaded host over scripted slots with no window attached.
+#[cfg(not(target_os = "android"))]
 pub(in crate::app::runner) fn unattached_threaded_host() -> (SharedRasterHost, ScriptedSlots) {
     let slots = ScriptedSlots::new();
     let shared = SharedRasterHost::new(
@@ -3062,6 +3066,7 @@ pub(in crate::app::runner) fn unattached_threaded_host() -> (SharedRasterHost, S
 /// answers and `second`'s through none. For the wake tests that read the
 /// in-flight floors of a window the raster thread settled beside one it
 /// renders.
+#[cfg(not(target_os = "android"))]
 pub(in crate::app::runner) fn attach_two(
     shared: &SharedRasterHost,
     first: PresentationAddress,
