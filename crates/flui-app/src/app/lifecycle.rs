@@ -2425,18 +2425,56 @@ mod tests {
     /// a shutdown that does not wait for it returns before it ends.
     const WIND_DOWN: Duration = Duration::from_millis(50);
 
+    /// Sets its flag once dropped, after winding down for [`WIND_DOWN`].
+    struct SetOnDrop(Arc<AtomicBool>);
+
+    impl Drop for SetOnDrop {
+        fn drop(&mut self) {
+            std::thread::sleep(WIND_DOWN);
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    /// A worker whose handle dropped while its job ran: the pump holds the
+    /// last of the worker's state, and drops it, the worker's closure and
+    /// what it captured included, before it releases its hold, so the
+    /// shutdown returns after they are gone.
+    fn a_dropped_workers_state_goes_before_its_hold() {
+        let services = thread_per_job_services();
+        let mut registry = ServiceRegistry::new();
+        let spawner = TaskSpawner::new(&services, registry.work(&services));
+        let (started, starts) = mpsc::channel::<()>();
+        let (release, released) = mpsc::channel::<()>();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let captured = SetOnDrop(Arc::clone(&dropped));
+        let mut worker = spawner
+            .spawn_worker("held state", move |(): (), _: &TaskContext| {
+                let _captured = &captured;
+                let _ = started.send(());
+                let _ = released.recv();
+            })
+            .expect("the worker spawns");
+        worker.submit(()).expect("the worker takes its input");
+        starts
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the worker's job started");
+        drop(worker);
+        release.send(()).expect("the job waits for its release");
+
+        let report = registry.shutdown(Instant::now() + Duration::from_secs(10));
+        assert_eq!(report.unfinished_jobs, 0);
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "the worker's closure dropped before the pump released its hold"
+        );
+        services.shutdown(std::time::Instant::now() + Duration::from_secs(5));
+    }
+
     /// The registry's shutdown ends the application's work: a compute task,
     /// an IO task and a worker, each alone, are cancelled whoever holds
     /// their handles and have wound down when the shutdown returns; the
     /// spawner refuses from then on.
     fn shutdown_ends_the_applications_tasks_and_workers() {
-        struct SetOnDrop(Arc<AtomicBool>);
-        impl Drop for SetOnDrop {
-            fn drop(&mut self) {
-                std::thread::sleep(WIND_DOWN);
-                self.0.store(true, Ordering::SeqCst);
-            }
-        }
         fn until_cancelled(task: &TaskContext, ended: &AtomicBool) {
             while !task.is_cancelled() {
                 std::thread::sleep(Duration::from_millis(1));
@@ -2634,6 +2672,10 @@ mod tests {
                 (
                     "a_job_that_ignores_cancellation_is_reported_at_the_deadline",
                     a_job_that_ignores_cancellation_is_reported_at_the_deadline as fn(),
+                ),
+                (
+                    "a_dropped_workers_state_goes_before_its_hold",
+                    a_dropped_workers_state_goes_before_its_hold as fn(),
                 ),
             ],
         );

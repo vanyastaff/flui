@@ -84,7 +84,10 @@ impl ApplicationWork {
     /// this node, and wait until `by` for the jobs still running. Returns
     /// how many were still running at `by`: a compute job that does not
     /// check its cancellation runs on past it. A job a pool still holds
-    /// queued never starts, so it is not waited for.
+    /// queued never starts, so it is not waited for, and what it captured
+    /// drops when the pool drops it. A started job that only the joining
+    /// thread can drive (an executor whose queue the owner thread drains)
+    /// is waited for until `by` and counted.
     pub(super) fn close_and_join(&self, by: Instant) -> usize {
         self.shared.state.lock().closed = true;
         // Outside the lock: cancelling wakes the IO lane's futures, and an
@@ -102,9 +105,15 @@ impl ApplicationWork {
 }
 
 impl WorkRef {
+    /// Whether the node takes a new job: the registry has not closed it and
+    /// the loop's root is not cancelled. Read under the state lock.
+    fn is_open(&self, state: &State) -> bool {
+        !state.closed && !self.shared.token.is_cancelled()
+    }
+
     /// Refuse a new job once the node is closed.
     pub(super) fn check_open(&self) -> Result<(), SpawnError> {
-        if self.shared.state.lock().closed || self.shared.token.is_cancelled() {
+        if !self.is_open(&self.shared.state.lock()) {
             return Err(SpawnError::ShuttingDown);
         }
         Ok(())
@@ -114,7 +123,7 @@ impl WorkRef {
     /// when the job does not run.
     pub(super) fn enter(&self) -> Option<Running> {
         let mut state = self.shared.state.lock();
-        if state.closed || self.shared.token.is_cancelled() {
+        if !self.is_open(&state) {
             return None;
         }
         state.running += 1;

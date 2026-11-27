@@ -116,8 +116,8 @@ a development restart (ADR-0393 §4) runs the first alone, since the pools are t
    `Abandoned`), logged with names → then close the application's work node: every task and
    worker the services spawned is cancelled, whoever holds its handle, a job a pool still holds
    queued never starts, the running ones are joined against the same deadline and the ones
-   still running at it are counted, and every later spawn of the application's `TaskSpawner`
-   is refused.
+   still running at it are counted (one that only the joining thread could drive among them),
+   and every later spawn of the application's `TaskSpawner` is refused.
 2. **Pool shutdown** (ADR-0047, unchanged): stop admission → cancel the root token → join
    bounded per pool.
 
