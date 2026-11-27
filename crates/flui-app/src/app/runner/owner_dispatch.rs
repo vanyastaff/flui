@@ -1169,7 +1169,7 @@ impl ExitWatchdog {
 /// slot. The first panic, the runtimes' destructors included, is kept in
 /// `first_panic`.
 #[cfg(not(target_arch = "wasm32"))]
-fn retire_installed_host(first_panic: &mut FirstPanic) {
+pub(super) fn retire_installed_host(first_panic: &mut FirstPanic) {
     let displaced = APP_RUNTIME.with(|slot| {
         std::mem::replace(
             &mut slot.borrow_mut().installed_host,
@@ -1311,64 +1311,7 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     // registry is written first, whether or not a failure is held: the
     // services and the pools after it may abandon the IO pool's writes.
     let exit = ExitDeadline::start(std::time::Instant::now());
-    first_panic.contain(|| {
-        let flush = APP_RUNTIME.with(|slot| slot.borrow().application.flush_host.clone());
-        if let Some(flush) = flush {
-            let report = flush.flush_within(exit.services());
-            if !report.is_complete() {
-                tracing::warn!(
-                    failed = report.failed.len(),
-                    unfinished = report.unfinished.len(),
-                    "the flush registry did not write everything by the exit deadline"
-                );
-            }
-        }
-    });
-    // The windows' last placements, handed to storage when they closed above,
-    // are waited for within the same part of the deadline, before the pools
-    // that write them close; one not stored by then is reported. Then the
-    // host's capabilities retire.
-    #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
-    {
-        first_panic.contain(|| super::placement::flush_all_by(exit.services()));
-        if let Some(retired) = first_panic.contain(super::placement::retire) {
-            first_panic.absorb(retired);
-        }
-    }
-    log(TeardownStep::Flush);
-
-    // Service-lifecycle shutdown BEFORE the pools close: the
-    // registry cancels every application service cooperatively and joins
-    // each against one shared deadline — the flush window in which a
-    // service persists its final state. Ordering is load-bearing: the
-    // execution shutdown below cancels the pools' root token and
-    // hard-drops any future still running at its next await point, so a
-    // service joined AFTER that would lose its flush window every time.
-    first_panic.contain(|| {
-        let report =
-            APP_RUNTIME.with(|slot| slot.borrow_mut().shutdown_lifecycles(exit.services()));
-        let incomplete: Vec<&'static str> = report
-            .entries
-            .iter()
-            .filter(|entry| {
-                entry.outcome != crate::app::lifecycle::ServiceShutdownOutcome::Completed
-            })
-            .map(|entry| entry.name)
-            .collect();
-        if incomplete.is_empty() {
-            tracing::debug!(
-                services = report.entries.len(),
-                "application services shut down cleanly"
-            );
-        } else {
-            tracing::warn!(
-                services = report.entries.len(),
-                ?incomplete,
-                "some application services did not complete by the shutdown deadline"
-            );
-        }
-    });
-    log(TeardownStep::Services);
+    end_application_work(&mut first_panic, exit.services(), log);
 
     // Execution-services shutdown: the whole loop is exiting,
     // so stop background admission, cancel outstanding work, join running
@@ -1418,6 +1361,76 @@ pub(super) fn teardown_platform_ui_runtime_logged(log: &mut dyn FnMut(TeardownSt
     if let Some(payload) = first_panic.into_payload() {
         super::terminal::hold_terminal(payload, "loop exit");
     }
+}
+
+/// The application's own work ends, after its UI runtimes retired: the
+/// flush registry is written, the windows' last placements are waited for
+/// and the host's capabilities retire, then the application services are
+/// cancelled and joined, all by `by`. Shared by the loop's exit and a
+/// development restart (ADR-0393 §4 step 1); `log` hears the steps.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn end_application_work(
+    first_panic: &mut FirstPanic,
+    by: std::time::Instant,
+    log: &mut dyn FnMut(TeardownStep),
+) {
+    first_panic.contain(|| {
+        let flush = APP_RUNTIME.with(|slot| slot.borrow().application.flush_host.clone());
+        if let Some(flush) = flush {
+            let report = flush.flush_within(by);
+            if !report.is_complete() {
+                tracing::warn!(
+                    failed = report.failed.len(),
+                    unfinished = report.unfinished.len(),
+                    "the flush registry did not write everything by the exit deadline"
+                );
+            }
+        }
+    });
+    // The windows' last placements, handed to storage when they closed above,
+    // are waited for within the same part of the deadline, before the pools
+    // that write them close; one not stored by then is reported. Then the
+    // host's capabilities retire.
+    #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
+    {
+        first_panic.contain(|| super::placement::flush_all_by(by));
+        if let Some(retired) = first_panic.contain(super::placement::retire) {
+            first_panic.absorb(retired);
+        }
+    }
+    log(TeardownStep::Flush);
+
+    // Service-lifecycle shutdown BEFORE the pools close: the
+    // registry cancels every application service cooperatively and joins
+    // each against one shared deadline — the flush window in which a
+    // service persists its final state. Ordering is load-bearing: the
+    // execution shutdown below cancels the pools' root token and
+    // hard-drops any future still running at its next await point, so a
+    // service joined AFTER that would lose its flush window every time.
+    first_panic.contain(|| {
+        let report = APP_RUNTIME.with(|slot| slot.borrow_mut().shutdown_lifecycles(by));
+        let incomplete: Vec<&'static str> = report
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.outcome != crate::app::lifecycle::ServiceShutdownOutcome::Completed
+            })
+            .map(|entry| entry.name)
+            .collect();
+        if incomplete.is_empty() {
+            tracing::debug!(
+                services = report.entries.len(),
+                "application services shut down cleanly"
+            );
+        } else {
+            tracing::warn!(
+                services = report.entries.len(),
+                ?incomplete,
+                "some application services did not complete by the shutdown deadline"
+            );
+        }
+    });
+    log(TeardownStep::Services);
 }
 
 #[path = "owner_dispatch/display_tests.rs"]

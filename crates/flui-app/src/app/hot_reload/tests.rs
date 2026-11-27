@@ -393,9 +393,14 @@ fn a_version_reported_twice_changes_nothing() {
     assert_eq!(hook.applied(), [], "and nothing is reported back");
 }
 
-fn a_changed_layout_reports_a_failed_restart_and_nothing_reassembles() {
+fn a_changed_layout_is_a_due_restart_and_nothing_reassembles() {
     let hook = Scripted::default();
-    let ((a, handle_a), (b, handle_b)) = two_windows_on_the_first_version(&hook);
+    let reload = installed(&hook);
+    let ((a, handle_a), (b, handle_b)) = (registered(&reload), registered(&reload));
+    hook.then(ReloadEvent::Loaded(version(1, 1)));
+    frame_boundary(&handle_a, &a);
+    drain(&a);
+    hook.applied();
 
     hook.then(ReloadEvent::Loaded(version(2, 2)));
     frame_boundary(&handle_a, &a);
@@ -406,14 +411,23 @@ fn a_changed_layout_reports_a_failed_restart_and_nothing_reassembles() {
     );
     assert_eq!(
         hook.applied(),
-        [Applied::RestartFailed(version(2, 2))],
-        "this host cannot restart yet, and says so once"
+        [],
+        "the loop reports the restart, not a frame"
     );
+    assert_eq!(
+        reload.take_restart_due(),
+        Some(version(2, 2)),
+        "it is due once"
+    );
+    assert_eq!(reload.take_restart_due(), None);
+
+    reload.restart_failed(version(2, 2), RestartFailure::NoApplication);
+    assert_eq!(hook.applied(), [Applied::RestartFailed(version(2, 2))]);
     hook.then(ReloadEvent::Loaded(version(2, 2)));
     frame_boundary(&handle_a, &a);
     assert_eq!(
-        hook.applied(),
-        [],
+        reload.take_restart_due(),
+        None,
         "a failed restart is not tried again for the same version"
     );
 
@@ -423,7 +437,17 @@ fn a_changed_layout_reports_a_failed_restart_and_nothing_reassembles() {
         !a.widgets().has_pending_builds(),
         "after a failed restart no application runs the composed layout"
     );
-    assert_eq!(hook.applied(), [Applied::RestartFailed(version(1, 3))]);
+    assert_eq!(reload.take_restart_due(), Some(version(1, 3)));
+
+    reload.restarted(version(1, 3));
+    assert_eq!(hook.applied(), [Applied::Restarted(version(1, 3))]);
+    hook.then(ReloadEvent::Loaded(version(1, 4)));
+    frame_boundary(&handle_b, &b);
+    assert!(
+        b.widgets().has_pending_builds(),
+        "the restart's layout reassembles again"
+    );
+    assert_eq!(reload.take_restart_due(), None);
 }
 
 fn each_reassembled_runtime_and_each_restart_is_reported_once() {
@@ -445,13 +469,12 @@ fn each_reassembled_runtime_and_each_restart_is_reported_once() {
         [
             Applied::Reassembled(version(1, 1), a.id()),
             Applied::Reassembled(version(1, 1), b.id()),
-            Applied::RestartFailed(version(2, 2)),
-        ]
+        ],
+        "a restart the loop has not run yet is not reported"
     );
-    assert!(
-        !hook.applied().contains(&Applied::Restarted(version(2, 2))),
-        "a restart this host did not do is not reported as one"
-    );
+    assert_eq!(reload.take_restart_due(), Some(version(2, 2)));
+    reload.restarted(version(2, 2));
+    assert_eq!(hook.applied(), [Applied::Restarted(version(2, 2))]);
 }
 
 fn a_rebuild_the_loaded_code_asks_for_reassembles_without_a_report() {
@@ -693,8 +716,8 @@ fn dev_reload_hook_matrix() {
                 a_version_reported_twice_changes_nothing as fn(),
             ),
             (
-                "a_changed_layout_reports_a_failed_restart_and_nothing_reassembles",
-                a_changed_layout_reports_a_failed_restart_and_nothing_reassembles as fn(),
+                "a_changed_layout_is_a_due_restart_and_nothing_reassembles",
+                a_changed_layout_is_a_due_restart_and_nothing_reassembles as fn(),
             ),
             (
                 "each_reassembled_runtime_and_each_restart_is_reported_once",

@@ -603,6 +603,12 @@ pub(in crate::app) mod main_window;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
+mod restart;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
 pub(in crate::app) use main_window::run_application;
 #[cfg(all(
     feature = "testing",

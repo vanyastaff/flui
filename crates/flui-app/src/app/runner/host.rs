@@ -943,6 +943,11 @@ pub(crate) fn install_owner_platform(
                         if !first.is_held() && current() {
                             first.contain(super::main_window::drive_main_window);
                             first.contain(super::main_window::drive_program_quit);
+                            // A restart a frame of this turn found due runs
+                            // once the frames returned (ADR-0393 §4).
+                            if !first.is_held() && current() {
+                                first.contain(super::restart::restart_if_due);
+                            }
                         }
                     }
                     // What an opened URL's loan returned is routed here,

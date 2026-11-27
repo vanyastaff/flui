@@ -39,7 +39,7 @@ use flui_view::dev_reload::DevReloadHook;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use flui_view::dev_reload::ReloadWake;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-use flui_view::dev_reload::{ReloadOutcome, RestartFailure};
+use flui_view::dev_reload::{CodeVersion, ReloadOutcome, RestartFailure};
 use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -56,13 +56,6 @@ use flui_foundation::panic::FirstPanic;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no host opens the hand-over yet: the restart that runs the entry is owed (docs/gaps.md, ADR-0393)"
-    )
-)]
 pub(crate) mod hand_over;
 // Only the desktop and iOS runners poll the hook, so the record is read
 // nowhere else.
@@ -119,6 +112,11 @@ struct Slot {
     /// Whether the log said once that a host whose executor turns on a raster
     /// thread asks the hook for no scene frame.
     unlent_noted: bool,
+    /// A version of another layout the loop is to restart to, from the poll
+    /// that reported it until the owner turn after its frame (ADR-0393 §4).
+    restart_due: Option<flui_view::dev_reload::CodeVersion>,
+    /// The wake the hook was attached with, which asks for that turn.
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl DevReload {
@@ -129,6 +127,8 @@ impl DevReload {
             detach_owed: false,
             record: Record::default(),
             unlent_noted: false,
+            restart_due: None,
+            wake: None,
         })))
     }
 }
@@ -216,14 +216,17 @@ impl DevReload {
     /// The loop ended: detach the hook and forget every UI runtime.
     #[cfg(not(target_os = "android"))]
     fn detach(&self) {
-        {
+        let wake = {
             let mut slot = self.0.lock();
             if !slot.attached {
                 return;
             }
             slot.attached = false;
             slot.record.clear();
-        }
+            slot.restart_due = None;
+            slot.wake.take()
+        };
+        drop(wake);
         if let Lent::Absent = self.lend("detach", DevReloadHook::detach) {
             // A call has the hook lent (or it is gone for good, where this
             // flag is never read): that call's lender runs the detach.
@@ -306,6 +309,7 @@ impl WorkerReload {
                 return None;
             }
             slot.attached = true;
+            slot.wake = Some(Arc::clone(&wake));
         }
         let wake = ReloadWake::new(move || wake());
         match reload.lend("attach", |hook| hook.attach(wake)) {
@@ -313,7 +317,12 @@ impl WorkerReload {
                 reload: reload.clone(),
             }),
             Lent::Absent | Lent::Panicked => {
-                reload.0.lock().attached = false;
+                let wake = {
+                    let mut slot = reload.0.lock();
+                    slot.attached = false;
+                    slot.wake.take()
+                };
+                drop(wake);
                 None
             }
         }
@@ -334,6 +343,67 @@ impl WorkerReload {
             reload: self.clone(),
             runtime,
         }
+    }
+}
+
+/// Whether this target's runner restarts the application in the process
+/// (ADR-0393 §4): the desktop runner does; the iOS runner does not yet, and
+/// reports each restart as failed.
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+const RESTARTS_IN_PROCESS: bool = cfg!(not(target_os = "ios"));
+
+/// The desktop loop's side of a restart (ADR-0393 §4): it takes the restart a
+/// poll found due, runs the entry through the hand-over and reports the
+/// outcome here, which writes the record.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl WorkerReload {
+    /// The restart a poll found due, taken; `None` when none is.
+    pub(crate) fn take_restart_due(&self) -> Option<CodeVersion> {
+        self.0.as_ref()?.0.lock().restart_due.take()
+    }
+
+    /// Run the entry of the code now loaded, with the hand-over open (§4
+    /// step 2). The entry's panic is the application's: it fails this restart
+    /// and the hook stays attached.
+    ///
+    /// # Errors
+    ///
+    /// What [`hand_over::run_entry`] refuses; a hook that is gone, or lent to
+    /// a call this one runs inside, hands nothing over.
+    pub(crate) fn run_entry(&self) -> Result<hand_over::HandedRun, hand_over::EntryFailure> {
+        let Some(reload) = &self.0 else {
+            return Err(hand_over::EntryFailure::NoApplication);
+        };
+        match reload.lend("run_entry", |hook| {
+            hand_over::run_entry(|| hook.run_entry())
+        }) {
+            Lent::Returned(handed) => handed,
+            Lent::Absent | Lent::Panicked => Err(hand_over::EntryFailure::NoApplication),
+        }
+    }
+
+    /// The restart to `version` composed the application (§4 step 4): later
+    /// versions of its layout reassemble.
+    pub(crate) fn restarted(&self, version: CodeVersion) {
+        let Some(reload) = &self.0 else {
+            return;
+        };
+        reload.0.lock().record.composed_from(version.layout);
+        reload.report(&ReloadOutcome::restarted(version));
+    }
+
+    /// The restart to `version` composed nothing, for `reason`: no version
+    /// reassembles until a later restart composes an application.
+    pub(crate) fn restart_failed(&self, version: CodeVersion, reason: RestartFailure<'_>) {
+        let Some(reload) = &self.0 else {
+            return;
+        };
+        reload.0.lock().record.restart_failed();
+        reload.report(&ReloadOutcome::restart_failed(version, reason));
     }
 }
 
@@ -360,9 +430,11 @@ impl RuntimeReload {
     /// A version of the layout the application was composed from reaches
     /// every UI runtime once: each reassembles to the latest such version when
     /// its own boundary finds it on an older one. A version of another layout
-    /// needs a restart (ADR-0393 §4), which this host cannot do yet: it
-    /// reports [`RestartFailure::NoApplication`], and no later version
-    /// reassembles.
+    /// needs a restart (ADR-0393 §4): on the desktop the loop runs it in the
+    /// owner turn after this frame (`WorkerReload::take_restart_due`), which
+    /// the hook's wake asks for; no UI runtime reassembles to it. A host that
+    /// cannot restart reports [`RestartFailure::NoApplication`], and no later
+    /// version reassembles.
     pub(crate) fn poll_and_apply(&self, ui_runtime: &UiRuntime) {
         let Some(reload) = &self.reload.0 else {
             return;
@@ -377,17 +449,29 @@ impl RuntimeReload {
         // UI runtime again, at the code loaded then.
         reload.0.lock().record.mounted(id);
         let polled = reload.lend("poll", |hook| (hook.poll(), hook.reassemble_requested()));
-        let (restart, due) = {
+        let (restart, due, wake) = {
             let mut slot = reload.0.lock();
             let restart = match polled {
                 Lent::Returned((event, rebuild)) => slot.record.report(event, rebuild),
                 Lent::Absent | Lent::Panicked => None,
             };
-            if restart.is_some() {
-                slot.record.restart_failed();
-            }
-            (restart, slot.record.due(id))
+            let restart_owed = RESTARTS_IN_PROCESS && restart.is_some();
+            let restart = restart.and_then(|version| {
+                if RESTARTS_IN_PROCESS {
+                    slot.restart_due = Some(version);
+                    None
+                } else {
+                    slot.record.restart_failed();
+                    Some(version)
+                }
+            });
+            let wake = restart_owed.then(|| slot.wake.clone()).flatten();
+            (restart, slot.record.due(id), wake)
         };
+        // The turn after this frame runs the restart; asked with no lock held.
+        if let Some(wake) = wake {
+            wake();
+        }
         if let Some(version) = restart {
             tracing::warn!(
                 layout = version.layout.get(),

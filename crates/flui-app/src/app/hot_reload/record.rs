@@ -78,6 +78,16 @@ impl Record {
         }
     }
 
+    /// A restart composed the application from a build of `layout`: later
+    /// versions of it reassemble.
+    #[cfg_attr(
+        target_os = "ios",
+        expect(dead_code, reason = "only the desktop runner restarts in the process")
+    )]
+    pub(super) fn composed_from(&mut self, layout: LayoutEpoch) {
+        self.composed = Composed::Layout(layout);
+    }
+
     /// The restart for the version [`report`](Self::report) returned composed
     /// no application.
     pub(super) fn restart_failed(&mut self) {

@@ -1133,9 +1133,10 @@ where
                         reload,
                         disconnect: ended,
                         fatal: recorded,
+                        kept: None,
                     });
                 });
-                match compose(application, registry, None) {
+                match compose(application, registry) {
                     Ok(()) => {}
                     Err(failure) => {
                         let ready_panicked = matches!(failure, LaunchError::OnReadyPanicked);
@@ -1191,6 +1192,10 @@ pub(in crate::app) struct DesktopLoop {
     disconnect: Arc<Disconnect>,
     /// The loop's terminal launch failure, which the exit returns.
     fatal: Rc<RefCell<Option<LaunchError>>>,
+    /// The main window a restart kept open, from the retirement of the
+    /// earlier application until the next one is installed into it; it
+    /// stays here when no application is composed.
+    pub(super) kept: Option<KeptMain>,
 }
 
 /// The main window a development restart keeps open (ADR-0393 §4): the
@@ -1203,10 +1208,10 @@ pub(super) struct KeptMain {
 /// Compose `application` on the started loop, as its start and a
 /// development restart do (ADR-0393 §4 step 3): the application scope's
 /// ingress, storage, placements, exit policy and routes, the main window's
-/// controller, the services and `ready`. With `kept`, the main window is
-/// that window, which the new application's first UI runtime is installed
-/// into at once; without, the controller opens the window when the
-/// application asks for it.
+/// controller, the services and `ready`. When the loop kept a main window
+/// ([`DesktopLoop::kept`]), the new application's first UI runtime is
+/// installed into it at once; otherwise the controller opens the window
+/// when the application asks for it.
 ///
 /// The loop's own parts ([`DesktopLoop`], the owner platform, the raster
 /// host, the pools) are made before and kept. `registry` is the
@@ -1221,7 +1226,6 @@ pub(super) struct KeptMain {
 pub(super) fn compose<V, F>(
     application: DesktopRun<V, F>,
     registry: flui_runtime::capability::CapabilityRegistry,
-    kept: Option<KeptMain>,
 ) -> Result<(), LaunchError>
 where
     V: View + Clone + 'static,
@@ -1237,7 +1241,7 @@ where
     } = application;
     let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy)
         .expect("BUG: an application is composed on a started loop");
-    let (reload, disconnect, fatal) = APP_RUNTIME.with(|slot| {
+    let (reload, disconnect, fatal, keeps_window) = APP_RUNTIME.with(|slot| {
         let runtime = slot.borrow();
         let desktop = runtime
             .desktop_loop
@@ -1247,9 +1251,12 @@ where
             desktop.reload.reload(),
             Arc::clone(&desktop.disconnect),
             Rc::clone(&desktop.fatal),
+            desktop.kept.is_some(),
         )
     });
-    let ingress = Ingress::new(proxy, kept.is_none() && startup == StartupWindow::Open);
+    // A kept window is the main window already: nothing is opened at start.
+    let opens_at_start = !keeps_window && startup == StartupWindow::Open;
+    let ingress = Ingress::new(proxy, opens_at_start);
     let handle = ingress.handle();
     APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
@@ -1328,13 +1335,13 @@ where
             recalling: None,
             pending_wake: None,
             closing: false,
-            initial: kept.is_none() && startup == StartupWindow::Open,
+            initial: opens_at_start,
             error: window_error,
             fatal,
         });
     });
-    if let Some(kept) = kept {
-        adopt_kept_main(kept);
+    if keeps_window {
+        adopt_kept_main();
     }
     for service in &config.services {
         super::host::start_service(service).map_err(|error| LaunchError::Service {
@@ -1355,22 +1362,30 @@ where
     Ok(())
 }
 
-/// Install the composed application's main window into `kept`, the window
-/// the earlier application ran in, through the controller as an open
-/// window is.
-fn adopt_kept_main(kept: KeptMain) {
+/// Install the composed application's main window into the window the loop
+/// kept ([`DesktopLoop::kept`]), through the controller as an opened window
+/// is. The loop holds the window until the controller has it.
+fn adopt_kept_main() {
     let leased = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
-        runtime
-            .application
-            .main_controller
-            .take()
-            .map(|controller| ControllerLease {
+        let controller = runtime.application.main_controller.take()?;
+        let kept = runtime
+            .desktop_loop
+            .as_mut()
+            .and_then(|desktop| desktop.kept.take());
+        let Some(kept) = kept else {
+            runtime.application.main_controller = Some(controller);
+            return None;
+        };
+        Some((
+            ControllerLease {
                 controller: Some(controller),
                 identity: Arc::clone(&runtime.loop_identity),
-            })
+            },
+            kept,
+        ))
     });
-    let Some(mut lease) = leased else {
+    let Some((mut lease, kept)) = leased else {
         return;
     };
     let controller = lease
@@ -1379,6 +1394,17 @@ fn adopt_kept_main(kept: KeptMain) {
         .expect("BUG: controller lease is populated until Drop");
     controller.opening = Some(OpeningWindow::kept(kept.routes, &controller.config));
     controller.install(kept.window);
+}
+
+impl MainController {
+    /// Retire for a development restart: the application's window requests
+    /// are refused, and the main window it has open, or is installing, is
+    /// handed back for the loop to keep instead of discarded.
+    pub(super) fn retire_keeping_window(&mut self) -> Option<RenderedMain> {
+        let open = self.open.take().or_else(|| self.installing.take());
+        self.cancel();
+        open
+    }
 }
 
 #[cfg(test)]
