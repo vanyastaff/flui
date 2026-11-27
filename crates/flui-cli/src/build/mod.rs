@@ -53,6 +53,9 @@ pub(crate) mod android_manifest;
 pub(crate) mod platform;
 /// Platform scaffolding for new projects
 pub(crate) mod scaffold;
+
+/// The source paths a release build leaves in the binary
+pub(crate) mod source_paths;
 /// Utility functions and helpers
 pub(crate) mod util;
 

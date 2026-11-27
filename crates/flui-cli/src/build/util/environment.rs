@@ -286,11 +286,11 @@ pub(crate) fn rust_target_support(dir: &Path, triple: &str) -> BuildResult<Targe
     if libraries_installed {
         return Ok(TargetSupport::Installed);
     }
-    let cargo_home = env::var_os("CARGO_HOME").map(PathBuf::from).or_else(|| {
-        env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-            .map(|home| PathBuf::from(home).join(".cargo"))
-    });
-    if !build_std_configured(dir, env::var_os("CARGO_UNSTABLE_BUILD_STD"), cargo_home) {
+    if !build_std_configured(
+        dir,
+        env::var_os("CARGO_UNSTABLE_BUILD_STD"),
+        super::cargo_config::cargo_home(dir),
+    ) {
         return Ok(TargetSupport::of(false, BuildStd::NotConfigured));
     }
     let unstable_allowed = unstable_features_allowed(
@@ -312,9 +312,9 @@ pub(crate) fn rust_target_support(dir: &Path, triple: &str) -> BuildResult<Targe
 }
 
 /// Whether cargo builds `std` for a project in `dir`: `CARGO_UNSTABLE_BUILD_STD`
-/// (`build_std_env`) is set, or a cargo configuration file it reads (each
-/// `.cargo/config.toml` or `.cargo/config` from `dir` up, then the one in
-/// `cargo_home`) states `[unstable] build-std`.
+/// (`build_std_env`) is set, or a cargo configuration table it reads
+/// ([`tables_by_precedence`](super::cargo_config::tables_by_precedence), its
+/// includes too) states `[unstable] build-std`.
 pub(crate) fn build_std_configured(
     dir: &Path,
     build_std_env: Option<std::ffi::OsString>,
@@ -323,20 +323,34 @@ pub(crate) fn build_std_configured(
     if build_std_env.is_some_and(|value| !value.is_empty()) {
         return true;
     }
-    dir.ancestors()
-        .map(|ancestor| ancestor.join(".cargo"))
-        .chain(cargo_home)
-        .flat_map(|cargo_dir| [cargo_dir.join("config.toml"), cargo_dir.join("config")])
-        .filter_map(|file| std::fs::read_to_string(file).ok())
-        .any(|text| states_build_std(&text))
+    super::cargo_config::tables_by_precedence(dir, cargo_home)
+        .iter()
+        .any(states_build_std)
 }
 
-/// Whether the cargo configuration `text` states a non-empty
+/// The cfgs rustc gives `triple` in the toolchain the project in `dir`
+/// selects (`rustc --print cfg --target <triple>`), under a deadline.
+///
+/// # Errors
+///
+/// [`BuildError::CommandFailed`] when `rustc` cannot be started, fails or does
+/// not answer in time.
+pub(crate) fn target_cfg(dir: &Path, triple: &str) -> BuildResult<Vec<cargo_platform::Cfg>> {
+    let args = ["--print", "cfg", "--target", triple];
+    let answer = rustc_answer(dir, &args)?.ok_or_else(|| BuildError::CommandFailed {
+        command: format!("rustc {}", args.join(" ")),
+        exit_code: -1,
+        stderr: format!("rustc printed no cfg for {triple}"),
+    })?;
+    Ok(answer
+        .lines()
+        .filter_map(|line| line.parse::<cargo_platform::Cfg>().ok())
+        .collect())
+}
+
+/// Whether the cargo configuration `table` states a non-empty
 /// `[unstable] build-std`.
-fn states_build_std(text: &str) -> bool {
-    let Ok(table) = text.parse::<toml::Table>() else {
-        return false;
-    };
+fn states_build_std(table: &toml::Table) -> bool {
     table
         .get("unstable")
         .and_then(|unstable| unstable.get("build-std"))

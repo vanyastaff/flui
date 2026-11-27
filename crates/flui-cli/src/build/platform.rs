@@ -56,6 +56,27 @@ impl BuilderContext {
         }
         args
     }
+
+    /// The rustflags cargo is given for `triple` on top of the author's: a
+    /// release build rewrites the build machine's source paths
+    /// ([`source_paths`](crate::build::source_paths)), a debug build adds
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// What [`release_rustflags`](crate::build::source_paths::release_rustflags)
+    /// answers.
+    pub(crate) fn rustflags(
+        &self,
+        triple: &str,
+    ) -> crate::build::error::BuildResult<crate::build::source_paths::CargoRustflags> {
+        match self.profile {
+            Profile::Debug => Ok(crate::build::source_paths::CargoRustflags::default()),
+            Profile::Release => {
+                crate::build::source_paths::release_rustflags(&self.workspace_root, triple)
+            }
+        }
+    }
 }
 
 /// Identity an application bundle is staged under.

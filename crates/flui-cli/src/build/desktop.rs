@@ -89,7 +89,10 @@ impl DesktopBuilder {
         args.extend(selected.cargo_args());
         args.extend(ctx.mode_args(selected.framework()));
 
-        let env = Self::cargo_env(ctx, &target);
+        let rustflags = ctx.rustflags(&target)?;
+        args.extend(rustflags.args);
+        let mut env = Self::cargo_env(ctx, &target);
+        env.extend(rustflags.env);
         let executable = cargo::build_artifact(&ctx.workspace_root, &args, &selected, &env).await?;
 
         Ok(BuildArtifacts {

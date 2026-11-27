@@ -1309,8 +1309,10 @@ jobs:
           # size_of <project> <binary> [<target>]: the bytes of the binary
           # Cargo reports for this build (a wasm32 module is the `.wasm` among
           # its files), never a path guessed under the target directory. The
-          # build is the one `flui build --release` makes: with the facade's
-          # release ceiling (ADR-0398 §2).
+          # build is the one `flui build --release` makes, with the facade's
+          # release ceiling (ADR-0398 §2), except the rewrites of the build
+          # machine's source paths it adds (flui-cli's `build::source_paths`),
+          # which make its binary about 70 KB (0.35%) smaller than the one measured.
           size_of() {
             local artifact
             artifact=$(cd "$projects/$1" \
