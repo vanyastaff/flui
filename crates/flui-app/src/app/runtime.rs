@@ -381,6 +381,15 @@ pub(crate) struct AppRuntime {
     /// raster host, the engine services and the execution pools, so a
     /// teardown that leaves it installed drops it while they still live.
     pub(super) application: ApplicationScope,
+    /// What this desktop loop keeps for every application it composes, its
+    /// development reload among it, across a restart; `None` until the loop
+    /// starts and after its exit.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) desktop_loop: Option<crate::app::runner::main_window::DesktopLoop>,
     /// Where this loop's windows get their renderers.
     pub(super) raster_host: super::runner::raster_host::SharedRasterHost,
     #[cfg(target_os = "ios")]
@@ -490,9 +499,9 @@ pub(crate) struct AppRuntime {
     /// What this host gives back on a memory-pressure notice: the receivers the
     /// run start installs, reclaimed by the owner's turn for the notice.
     pub(super) host_memory: Rc<super::host_memory::HostMemory>,
-    /// The handler each window this runner opened was opened with, by window
+    /// Every window this runner opened, with the handler it was opened with
     /// (`runner::window_routes`).
-    window_routes: super::runner::window_routes::RouteBook,
+    pub(super) window_routes: super::runner::window_routes::RouteBook,
 }
 
 impl AppRuntime {
@@ -589,6 +598,12 @@ impl AppRuntime {
             host_memory: Rc::default(),
             window_routes: super::runner::window_routes::RouteBook::default(),
             application: ApplicationScope::default(),
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            desktop_loop: None,
             assets: crate::app::asset_host::AssetSlot::default(),
         }
     }
@@ -601,13 +616,24 @@ impl AppRuntime {
         self.window_routes.find(window)
     }
 
-    /// Record the routes the window `window` was opened with.
+    /// Record `window`, opened with `routes`; returns the closed windows the
+    /// book let go, for the caller to drop outside the borrow.
     pub(super) fn adopt_window_routes(
         &mut self,
-        window: flui_platform::WindowId,
+        window: Rc<dyn flui_native::HostWindow>,
         routes: std::rc::Weak<super::runner::window_routes::WindowRoutes>,
-    ) {
-        self.window_routes.adopt(window, routes);
+    ) -> Vec<Rc<dyn flui_native::HostWindow>> {
+        self.window_routes.adopt(window, routes)
+    }
+
+    /// Every window the runner opened that has not closed, in the order it
+    /// opened.
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+        expect(dead_code, reason = "only the desktop loop restarts its application")
+    )]
+    pub(super) fn open_windows(&self) -> Vec<Rc<dyn flui_native::HostWindow>> {
+        self.window_routes.open_windows()
     }
 
     /// Resolves and caches [`SharedEngineServices`] on first call; returns

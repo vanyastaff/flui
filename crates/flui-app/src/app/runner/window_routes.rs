@@ -39,6 +39,8 @@ use flui_platform::{
     SurfaceChange, WindowHandler, WindowId,
 };
 
+use flui_native::HostWindow;
+
 use super::host::APP_RUNTIME;
 use super::terminal::contained;
 
@@ -151,6 +153,8 @@ pub(crate) struct WindowRoutes {
     closed: RefCell<Option<Box<dyn FnOnce()>>>,
     /// `closed` arrived before its route.
     closed_heard: Cell<bool>,
+    /// The window closed: the book no longer holds it.
+    window_closed: Cell<bool>,
     /// A close request arrived before its route: asked once it is set.
     close_pending: Cell<bool>,
     surface_changed: Slot<SurfaceChange, ()>,
@@ -179,12 +183,15 @@ impl WindowRoutes {
         routes.expect("BUG: the runner opens every window it routes with `WindowRoutes`, adopted")
     }
 
-    /// Record that the window `window` was opened with these routes, so
-    /// [`Self::of`] finds them. The runner keeps no strong reference: the
-    /// window holds its handler and drops it when it closes.
-    pub(crate) fn adopt(self: &Rc<Self>, window: WindowId) {
+    /// Record that `window` was opened with these routes, so [`Self::of`]
+    /// finds them and the loop reaches every window it opened until it
+    /// closes. The runner keeps no strong reference to the routes: the window
+    /// holds its handler and drops it when it closes.
+    pub(crate) fn adopt(self: &Rc<Self>, window: &Rc<dyn HostWindow>) {
         let weak = Rc::downgrade(self);
-        APP_RUNTIME.with(|slot| slot.borrow_mut().adopt_window_routes(window, weak));
+        let window = Rc::clone(window);
+        let closed = APP_RUNTIME.with(|slot| slot.borrow_mut().adopt_window_routes(window, weak));
+        crate::app::application_control::contain(|| drop(closed));
     }
 
     /// Route the window's input; the input heard before goes first, in order.
@@ -366,6 +373,7 @@ impl WindowHandler for WindowRoutes {
     }
 
     fn closed(&self) {
+        self.window_closed.set(true);
         contained((), "window closed", || {
             let route = self.closed.borrow_mut().take();
             match route {
@@ -384,23 +392,68 @@ impl WindowHandler for WindowRoutes {
     }
 }
 
-/// The routes the runner opened windows with, by window: weak, so a window
-/// that closed and dropped its handler leaves nothing behind.
+/// The windows the runner opened, each with the routes it was opened with:
+/// the routes weak, so a window that dropped its handler leaves nothing
+/// behind; the window strong until it closes, so the loop reaches a window
+/// nothing else of the runner holds (one the application opened bare) to
+/// close it.
 #[derive(Default)]
-pub(crate) struct RouteBook(Vec<(WindowId, Weak<WindowRoutes>)>);
+pub(crate) struct RouteBook(Vec<Adopted>);
+
+struct Adopted {
+    window: Rc<dyn HostWindow>,
+    routes: Weak<WindowRoutes>,
+}
+
+impl Adopted {
+    fn routes_while_open(&self) -> Option<Rc<WindowRoutes>> {
+        self.routes
+            .upgrade()
+            .filter(|routes| !routes.window_closed.get())
+    }
+}
 
 impl RouteBook {
     pub(crate) fn find(&self, window: WindowId) -> Option<Rc<WindowRoutes>> {
         self.0
             .iter()
-            .find(|(id, _)| *id == window)
-            .and_then(|(_, routes)| routes.upgrade())
+            .find(|adopted| adopted.window.id() == window)
+            .and_then(|adopted| adopted.routes.upgrade())
     }
 
-    pub(crate) fn adopt(&mut self, window: WindowId, routes: Weak<WindowRoutes>) {
+    /// Record `window`, opened with `routes`; the windows that closed since
+    /// the last one leave the book, and are returned for the caller to drop
+    /// outside every borrow: the last handle of a window may run its
+    /// platform's teardown.
+    pub(crate) fn adopt(
+        &mut self,
+        window: Rc<dyn HostWindow>,
+        routes: Weak<WindowRoutes>,
+    ) -> Vec<Rc<dyn HostWindow>> {
+        let id = window.id();
+        let (kept, left): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.0)
+                .into_iter()
+                .partition(|adopted| {
+                    adopted.window.id() != id && adopted.routes_while_open().is_some()
+                });
+        self.0 = kept;
+        self.0.push(Adopted { window, routes });
+        left.into_iter().map(|adopted| adopted.window).collect()
+    }
+
+    /// Every window the runner opened that has not closed, in the order it
+    /// opened.
+    #[cfg_attr(
+        any(target_os = "android", target_os = "ios", target_arch = "wasm32"),
+        expect(dead_code, reason = "only the desktop loop restarts its application")
+    )]
+    pub(crate) fn open_windows(&self) -> Vec<Rc<dyn HostWindow>> {
         self.0
-            .retain(|(id, routes)| *id != window && routes.strong_count() > 0);
-        self.0.push((window, routes));
+            .iter()
+            .filter(|adopted| adopted.routes_while_open().is_some())
+            .map(|adopted| Rc::clone(&adopted.window))
+            .collect()
     }
 }
 
@@ -458,7 +511,7 @@ impl<P: flui_native::Platform + ?Sized> OpenRouted for P {
     ) -> Result<Self::Opened, flui_native::OpenWindowError> {
         let routes = WindowRoutes::new();
         let window = self.open_window(options, routes.clone())?;
-        routes.adopt(window.id());
+        routes.adopt(&window);
         Ok(window)
     }
 }
@@ -483,7 +536,7 @@ impl OwnerOpenRouted for flui_native::OwnerPlatform {
         let routes = WindowRoutes::new();
         let opened = self.open_window(options, routes.clone())?;
         if let flui_native::WindowOpen::Ready(window) = &opened {
-            routes.adopt(window.id());
+            routes.adopt(window);
         }
         Ok(opened)
     }

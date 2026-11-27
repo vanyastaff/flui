@@ -37,7 +37,19 @@
   development restart runs the application's entry hand the application to that restart and
   return `Ok(())` without starting a loop (ADR-0393 §4). Window options no window can be asked
   for fail there as at a start, and a second `run` in the same entry returns the new
-  `LaunchError::AlreadyHandedOver`. No host starts a restart yet.
+  `LaunchError::AlreadyHandedOver`.
+- **`flui-app`**: the desktop loop restarts the application in the process when the hook reports
+  a version of another layout (ADR-0393 §4): it disposes every `State`, closes the windows the
+  application opened without asking them, stops its services and drops what it built, runs the
+  entry again and composes the application it hands over into the main window it kept, then
+  reports `ReloadOutcome::Restarted`, or `RestartFailed` with the reason. A loop with no window
+  polls the hook on its wake. Files the system opens after a restart reach the later
+  application's `on_open_files`. `flui_app::testing::ScriptedReload` is a hook a test drives:
+  it reports the versions the test loads, runs the entry the test gives it and keeps what the
+  loop reported (`ScriptedOutcome`, `RestartReason`).
+- **`flui-view`**: `ReloadOutcome::Restarted` carries `Unapplied`, what the later application
+  configured that the restart left as the process started it: its executors, which a process
+  restart applies.
 
 ### Changed
 
@@ -76,8 +88,7 @@
   with a `ReloadOutcome` once per UI runtime that reassembled and once per restart,
   `reassemble_requested` for the loaded code's own rebuild request, and `run_entry`. The loop
   keeps one record of versions: a version is applied once to each UI runtime, an idle window
-  reassembles to the latest one, and a version reported twice changes nothing. A version of
-  another layout is reported as `RestartFailure::NoApplication`, since nothing restarts yet.
+  reassembles to the latest one, and a version reported twice changes nothing.
 - **`flui-cli`**, **`flui-hot-reload`**: `flui run` writes the worker's `.flui_worker_plugin`
   manifest as JSON, `{"path", "layout", "revision"}`, with a new revision for each staged build
   (`flui_hot_reload::WorkerManifest`). A worker loaded without a manifest has no version and is

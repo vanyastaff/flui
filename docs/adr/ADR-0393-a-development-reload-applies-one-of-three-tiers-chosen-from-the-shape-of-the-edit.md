@@ -197,12 +197,21 @@ pub enum ReloadOutcome<'a> {
     /// One UI runtime reassembled to `version`.
     #[non_exhaustive]
     Reassembled { version: CodeVersion, runtime: UiRuntimeId },
-    /// The application was composed again from `version`.
+    /// The application was composed again from `version`; `unapplied` is what the later
+    /// application configured that the restart left as the process started it (§4).
     #[non_exhaustive]
-    Restarted { version: CodeVersion },
+    Restarted { version: CodeVersion, unapplied: Unapplied },
     /// The restart did not compose an application; the loop has none until the next one does.
     #[non_exhaustive]
     RestartFailed { version: CodeVersion, reason: RestartFailure<'a> },
+}
+
+/// What a restart did not apply; a process restart applies each.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Unapplied {
+    /// The later application configures its executors; the loop keeps its pools.
+    pub executors: bool,
 }
 
 #[derive(Debug)]
@@ -252,19 +261,19 @@ pub enum RestartFailure<'a> {
 
 §4. **A restart retires the application and composes it again.** The loop holds what it builds
 from an `Application` (the capability registry, plugins, handlers, services, the exit policy, the
-main-window factory and its installer, the placement registry, the opening handler, the tasks
-on the executors, the application-control ingress, the application's font registrations, every UI
-runtime) in one value, the *application scope*, which a restart drops and builds again. What the
-loop holds outside it is what the host made before any application code ran, and only that is
-kept. The host, at the end of the turn:
+main-window factory and its installer, the placement registry, the callback for opened files, the
+tasks on the executors, the application-control ingress, the application's font registrations,
+every UI runtime) in one value, the *application scope*, which a restart drops and builds again.
+What the loop holds outside it is what the host made before any application code ran, and only
+that is kept. The host, at the end of the turn:
 
 1. **retires the application.** Each UI runtime unmounts its root, so every `State` is disposed in
    tree order by the code that created it, and its presentation detaches from its surface. A
    dispose that panics does not stop the unmount; the first payload is kept (`FirstPanic`) and
    logged. Each window the application opened is closed as the end of a run closes it: no close
    request is asked and no handler of the earlier application runs. Then the scope is dropped in
-   the reverse of the order it was built in, services stopped as at the end of a run, the first
-   panic kept.
+   the reverse of the order it was built in, its services cancelled and joined by the exit's
+   deadline as at the end of a run, the first panic kept.
 2. **runs the entry with the hand-over open.** The loop opens its hand-over, which belongs to this
    call: empty before it and drained after it on every exit. While it is open, `Application::run`
    on the owner thread hands its application and root to it and returns without starting a loop,
@@ -298,7 +307,16 @@ kept. The host, at the end of the turn:
   changed it asks for a process restart.
 - The executor pools are the loop's, not the scope's: a host runs its own IO on them (ADR-0327
   §3), started before any application code. A later application's `AppConfig::executors` is not
-  applied, and the restart's outcome says that a process restart applies them.
+  applied, and `ReloadOutcome::Restarted` names them in its `unapplied` (`Unapplied::executors`),
+  which a process restart applies. Since the pools stay, a service that ignores its cancellation
+  past the deadline is abandoned and its task keeps running, where the end of a run closes the
+  pools under it.
+- What the operating system opens is declared to it as the run starts (ADR-0307): the
+  declarations, the single-instance choice and the registered associations stay the loop's until
+  a process restart. The later application's `on_open_files` replaces the earlier one's, which
+  drops with the scope.
+- The development reload hook and the driver agent are the loop's, installed as it starts: a later
+  application's `AppConfig::dev_reload` and agent settings are not installed.
 
 `flui_runtime::reload::ReloadTier` is deleted, and the runtime's reload command loses its
 argument: a UI runtime reassembles, and the two higher tiers are not operations on a UI runtime.
@@ -363,8 +381,9 @@ scripted hook from the testing kit. They replace ADR-0311's
 | §3 `ReloadEvent` is exhaustive | the compiler: a host that does not map `Loaded` does not compile |
 | §4 step 1 | `flui-app`: `a_restart_disposes_every_state_before_the_entry_runs`, `a_panicking_dispose_does_not_stop_a_restart`, `a_restart_closes_the_windows_the_application_opened_without_asking`, `a_restart_drops_the_earlier_scope`, `an_app_handle_of_the_earlier_application_is_refused` |
 | §4 step 2 | `flui-app`: `a_panicking_entry_fails_the_restart_and_is_not_tried_again`, `an_entry_without_an_application_fails_the_restart`, `a_failed_restart_leaves_nothing_in_the_hand_over`, `a_second_run_in_one_entry_is_refused_and_the_first_is_composed` |
-| §4 step 3 | `flui-app`: `a_restart_composes_the_later_applications_capabilities`, `a_restart_keeps_the_window_and_registers_the_fonts_again`, `a_failed_composition_retires_what_it_built`, `a_panic_in_the_new_roots_mount_is_still_a_restart`, `an_answer_to_a_retired_runtime_is_refused` |
+| §4 step 3 | `flui-app`: `a_restart_composes_the_later_applications_capabilities`, `a_restart_keeps_the_window_and_registers_the_fonts_again`, `a_failed_composition_retires_what_it_built`, `a_panic_in_the_new_roots_mount_is_still_a_restart` |
 | §4 step 4 | `flui-app`: `a_resident_application_is_asked_to_exit_by_its_new_policy` |
+| §4 what stays the loop's | `flui-app`: `opened_files_after_a_restart_reach_the_later_application`, `a_restart_reports_the_executors_it_did_not_apply`; a retired `UiRuntimeId` is not issued again because it is a generational key (ADR-0313) |
 | §4 `ReloadTier` and `HotReloadTier` are gone | the compiler |
 | §5 the report | `flui-cli`: `the_report_names_the_tier_the_reason_and_the_outcome`, `a_failed_restart_restarts_the_process`, `a_build_without_an_outcome_restarts_the_process`, `a_replaced_build_is_reported_with_the_next` |
 | §6 no mechanism | `flui-cli`: `a_target_without_a_mechanism_restarts_the_process` |

@@ -39,7 +39,7 @@ use flui_view::dev_reload::DevReloadHook;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use flui_view::dev_reload::ReloadWake;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-use flui_view::dev_reload::{ReloadOutcome, RestartFailure};
+use flui_view::dev_reload::{CodeVersion, ReloadOutcome, RestartFailure, Unapplied};
 use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -56,13 +56,6 @@ use flui_foundation::panic::FirstPanic;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no host opens the hand-over yet: the restart that runs the entry is owed (docs/gaps.md, ADR-0393)"
-    )
-)]
 pub(crate) mod hand_over;
 // Only the desktop and iOS runners poll the hook, so the record is read
 // nowhere else.
@@ -119,6 +112,12 @@ struct Slot {
     /// Whether the log said once that a host whose executor turns on a raster
     /// thread asks the hook for no scene frame.
     unlent_noted: bool,
+    /// A version of another layout the loop is to restart to, from the poll
+    /// that reported it until the owner turn after its frame (ADR-0393 §4).
+    restart_due: Option<flui_view::dev_reload::CodeVersion>,
+    /// Asks the loop for an owner turn, in which a due restart runs: set by
+    /// the loop that attached the hook (`LoopReload::attach`).
+    turn: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl DevReload {
@@ -129,6 +128,8 @@ impl DevReload {
             detach_owed: false,
             record: Record::default(),
             unlent_noted: false,
+            restart_due: None,
+            turn: None,
         })))
     }
 }
@@ -216,14 +217,17 @@ impl DevReload {
     /// The loop ended: detach the hook and forget every UI runtime.
     #[cfg(not(target_os = "android"))]
     fn detach(&self) {
-        {
+        let wake = {
             let mut slot = self.0.lock();
             if !slot.attached {
                 return;
             }
             slot.attached = false;
             slot.record.clear();
-        }
+            slot.restart_due = None;
+            slot.turn.take()
+        };
+        drop(wake);
         if let Lent::Absent = self.lend("detach", DevReloadHook::detach) {
             // A call has the hook lent (or it is gone for good, where this
             // flag is never read): that call's lender runs the detach.
@@ -259,9 +263,10 @@ fn contain(body: impl FnOnce()) {
     }
 }
 
-/// The desktop and iOS driver: the configuration's hook, if any.
+/// The desktop and iOS driver: the configuration's hook, if any; `Default`
+/// drives no hook.
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct WorkerReload(Option<DevReload>);
 
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
@@ -337,6 +342,98 @@ impl WorkerReload {
     }
 }
 
+/// Whether this target's runner restarts the application in the process
+/// (ADR-0393 §4): the desktop runner does; the iOS runner does not yet, and
+/// reports each restart as failed.
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+const RESTARTS_IN_PROCESS: bool = cfg!(not(target_os = "ios"));
+
+/// The desktop loop's side of a restart (ADR-0393 §4): it takes the restart a
+/// poll found due, runs the entry through the hand-over and reports the
+/// outcome here, which writes the record.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl WorkerReload {
+    /// Poll the hook in an owner turn of a loop where no UI runtime polls it
+    /// at a frame boundary (ADR-0393 §3): no window draws, or the restart
+    /// that retired them composed nothing. A version of another layout is a
+    /// restart due now; one of the composed layout is recorded for the UI
+    /// runtimes built later.
+    pub(crate) fn poll_without_ui_runtime(&self) {
+        let Some(reload) = &self.0 else {
+            return;
+        };
+        {
+            let slot = reload.0.lock();
+            if !slot.attached || slot.record.holds_any() {
+                return;
+            }
+        }
+        let polled = reload.lend("poll", |hook| (hook.poll(), hook.reassemble_requested()));
+        if let Lent::Returned((event, rebuild)) = polled {
+            let mut slot = reload.0.lock();
+            if let Some(version) = slot.record.report(event, rebuild) {
+                slot.restart_due = Some(version);
+            }
+        }
+    }
+
+    /// The restart a poll found due, taken; `None` when none is.
+    pub(crate) fn take_restart_due(&self) -> Option<CodeVersion> {
+        self.0.as_ref()?.0.lock().restart_due.take()
+    }
+
+    /// Whether a poll found a restart due that has not run yet.
+    pub(crate) fn restart_owed(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_some_and(|reload| reload.0.lock().restart_due.is_some())
+    }
+
+    /// Run the entry of the code now loaded, with the hand-over open (§4
+    /// step 2). The entry's panic is the application's: it fails this restart
+    /// and the hook stays attached.
+    ///
+    /// # Errors
+    ///
+    /// What [`hand_over::run_entry`] refuses; a hook that is gone, or lent to
+    /// a call this one runs inside, hands nothing over.
+    pub(crate) fn run_entry(&self) -> Result<hand_over::HandedRun, hand_over::EntryFailure> {
+        let Some(reload) = &self.0 else {
+            return Err(hand_over::EntryFailure::NoApplication);
+        };
+        match reload.lend("run_entry", |hook| {
+            hand_over::run_entry(|| hook.run_entry())
+        }) {
+            Lent::Returned(handed) => handed,
+            Lent::Absent | Lent::Panicked => Err(hand_over::EntryFailure::NoApplication),
+        }
+    }
+
+    /// The restart to `version` composed the application (§4 step 4): later
+    /// versions of its layout reassemble, and `unapplied` is reported.
+    pub(crate) fn restarted(&self, version: CodeVersion, unapplied: Unapplied) {
+        let Some(reload) = &self.0 else {
+            return;
+        };
+        reload.0.lock().record.composed_from(version.layout);
+        reload.report(&ReloadOutcome::restarted(version, unapplied));
+    }
+
+    /// The restart to `version` composed nothing, for `reason`: no version
+    /// reassembles until a later restart composes an application.
+    pub(crate) fn restart_failed(&self, version: CodeVersion, reason: RestartFailure<'_>) {
+        let Some(reload) = &self.0 else {
+            return;
+        };
+        reload.0.lock().record.restart_failed();
+        reload.report(&ReloadOutcome::restart_failed(version, reason));
+    }
+}
+
 /// One UI runtime's place in the loop's record (ADR-0393 §3), which its frame
 /// driver holds as long as the UI runtime. Dropping it removes the UI runtime
 /// from the record.
@@ -360,9 +457,11 @@ impl RuntimeReload {
     /// A version of the layout the application was composed from reaches
     /// every UI runtime once: each reassembles to the latest such version when
     /// its own boundary finds it on an older one. A version of another layout
-    /// needs a restart (ADR-0393 §4), which this host cannot do yet: it
-    /// reports [`RestartFailure::NoApplication`], and no later version
-    /// reassembles.
+    /// needs a restart (ADR-0393 §4): on the desktop the loop runs it in the
+    /// owner turn after this frame (`WorkerReload::take_restart_due`), which
+    /// the hook's wake asks for; no UI runtime reassembles to it. A host that
+    /// cannot restart reports [`RestartFailure::NoApplication`], and no later
+    /// version reassembles.
     pub(crate) fn poll_and_apply(&self, ui_runtime: &UiRuntime) {
         let Some(reload) = &self.reload.0 else {
             return;
@@ -377,17 +476,29 @@ impl RuntimeReload {
         // UI runtime again, at the code loaded then.
         reload.0.lock().record.mounted(id);
         let polled = reload.lend("poll", |hook| (hook.poll(), hook.reassemble_requested()));
-        let (restart, due) = {
+        let (restart, due, wake) = {
             let mut slot = reload.0.lock();
             let restart = match polled {
                 Lent::Returned((event, rebuild)) => slot.record.report(event, rebuild),
                 Lent::Absent | Lent::Panicked => None,
             };
-            if restart.is_some() {
-                slot.record.restart_failed();
-            }
-            (restart, slot.record.due(id))
+            let restart_owed = RESTARTS_IN_PROCESS && restart.is_some();
+            let restart = restart.and_then(|version| {
+                if RESTARTS_IN_PROCESS {
+                    slot.restart_due = Some(version);
+                    None
+                } else {
+                    slot.record.restart_failed();
+                    Some(version)
+                }
+            });
+            let wake = restart_owed.then(|| slot.turn.clone()).flatten();
+            (restart, slot.record.due(id), wake)
         };
+        // The turn after this frame runs the restart; asked with no lock held.
+        if let Some(wake) = wake {
+            wake();
+        }
         if let Some(version) = restart {
             tracing::warn!(
                 layout = version.layout.get(),
@@ -431,6 +542,65 @@ pub(crate) struct WorkerWatcherGuard {
 impl Drop for WorkerWatcherGuard {
     fn drop(&mut self) {
         self.reload.detach();
+    }
+}
+
+/// The development reload a desktop loop attached when it started.
+///
+/// The loop holds it, not the application scope: the hook is the tool's that
+/// loads new code, so a restart (ADR-0393 §4) keeps it attached, and the
+/// later application's own `AppConfig::dev_reload` is not installed. Dropped
+/// at the loop's exit, which detaches the hook.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) struct LoopReload {
+    reload: WorkerReload,
+    /// Detaches the hook when dropped; `None` when none attached.
+    _attached: Option<WorkerWatcherGuard>,
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl LoopReload {
+    /// Attach the hook `config` installs, if any, handing it `wake`, which
+    /// asks for a frame; `turn` asks for an owner turn, in which a restart a
+    /// frame found due runs.
+    pub(crate) fn attach(
+        config: &AppConfig,
+        wake: Arc<dyn Fn() + Send + Sync>,
+        turn: Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
+        let reload = WorkerReload::from_config(config);
+        let attached = reload.spawn_watcher(wake);
+        if attached.is_some()
+            && let Some(hook) = &reload.0
+        {
+            hook.0.lock().turn = Some(turn);
+        }
+        Self {
+            reload,
+            _attached: attached,
+        }
+    }
+
+    /// The driver each UI runtime this loop installs registers with.
+    pub(crate) fn reload(&self) -> WorkerReload {
+        self.reload.clone()
+    }
+
+    /// Whether a hook is attached to this loop.
+    #[cfg(test)]
+    pub(crate) fn is_attached(&self) -> bool {
+        self.reload
+            .0
+            .as_ref()
+            .is_some_and(|reload| reload.0.lock().attached)
     }
 }
 

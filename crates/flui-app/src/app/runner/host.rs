@@ -943,6 +943,11 @@ pub(crate) fn install_owner_platform(
                         if !first.is_held() && current() {
                             first.contain(super::main_window::drive_main_window);
                             first.contain(super::main_window::drive_program_quit);
+                            // A restart a frame of this turn found due runs
+                            // once the frames returned (ADR-0393 §4).
+                            if !first.is_held() && current() {
+                                first.contain(super::restart::restart_if_due);
+                            }
                         }
                     }
                     // What an opened URL's loan returned is routed here,
@@ -1947,18 +1952,22 @@ impl OwnerHostClearGuard {
 
 impl Drop for OwnerHostClearGuard {
     fn drop(&mut self) {
-        let (removed, owner_turn_wake, storage) = APP_RUNTIME.with(|slot| {
+        let (removed, owner_turn_wake, storage, windows) = APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             if runtime.owner_install_generation == self.expected_generation {
                 (
                     runtime.owner_platform.take(),
                     runtime.owner_turn_wake.take(),
                     runtime.application.host_storage.take(),
+                    std::mem::take(&mut runtime.window_routes),
                 )
             } else {
-                (None, None, None)
+                (None, None, None, super::window_routes::RouteBook::default())
             }
         });
+        // The loop's handles of its windows go before the platform that
+        // made them.
+        crate::app::application_control::contain(|| drop(windows));
         // The loop's GPU context retires with the loop, before the platform
         // whose display it was created on, and never in the thread's
         // teardown, where the GPU driver's own thread-locals are gone.
