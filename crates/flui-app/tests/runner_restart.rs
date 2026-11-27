@@ -898,10 +898,18 @@ fn a_failed_install_into_the_kept_window_fails_the_restart() {
     );
     assert!(run.is_running(), "a failed restart ends no loop");
 
-    hook.entry(runs(note(&after)));
+    // The same edit again: the main window it opens anew fails as well,
+    // which the observer hears and which ends no loop.
     hook.load(version(3, 3));
     turns(&run);
-    assert_eq!(hook.take_outcomes(), [restarted(version(3, 3))]);
+    let _second = hook.take_outcomes();
+    assert!(run.is_running(), "a second failing window ends no loop");
+    assert!(run.open_windows().is_empty());
+
+    hook.entry(runs(note(&after)));
+    hook.load(version(4, 4));
+    turns(&run);
+    assert_eq!(hook.take_outcomes(), [restarted(version(4, 4))]);
     assert_eq!(
         after.created(),
         1,

@@ -577,6 +577,20 @@ impl Drop for ControllerLease {
         }
     }
 }
+
+/// Open the main window a restart composed with no window kept (an earlier
+/// restart failed installing into it), as a start opens it, except that its
+/// failure is reported to the observer and never ends the loop: the session
+/// waits for the next version.
+pub(super) fn open_main_window_after_restart() {
+    APP_RUNTIME.with(|slot| {
+        if let Some(controller) = slot.borrow_mut().application.main_controller.as_mut() {
+            controller.initial = false;
+        }
+    });
+    drive_main_window();
+}
+
 pub(super) fn drive_main_window() {
     let leased = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
@@ -1161,6 +1175,7 @@ where
                         disconnect: ended,
                         fatal: recorded,
                         kept: None,
+                        restart_turn_asked: false,
                     });
                 });
                 match compose(application, registry) {
@@ -1223,6 +1238,9 @@ pub(in crate::app) struct DesktopLoop {
     /// earlier application until the next one is installed into it; it
     /// stays here when no application is composed.
     pub(super) kept: Option<KeptMain>,
+    /// A restart was due while a UI runtime was checked out, and the owner's
+    /// next turn was asked for once; cleared when a restart runs.
+    pub(super) restart_turn_asked: bool,
 }
 
 /// The main window a development restart keeps open (ADR-0393 §4): the

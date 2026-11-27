@@ -60,9 +60,17 @@ pub(super) fn restart_if_due() {
     };
     if super::owner_dispatch::any_runtime_checked_out() {
         // The nested turn gives way; a restart already due asks for the
-        // owner's next turn, so it does not wait for an unrelated event.
+        // owner's next turn once, so it does not wait for an unrelated event
+        // and a loop that pumps nested turns does not spin on it.
         if reload.restart_owed() {
-            let wake = APP_RUNTIME.with(|slot| slot.borrow().owner_turn_wake.clone());
+            let wake = APP_RUNTIME.with(|slot| {
+                let mut runtime = slot.borrow_mut();
+                let desktop = runtime.desktop_loop.as_mut()?;
+                if std::mem::replace(&mut desktop.restart_turn_asked, true) {
+                    return None;
+                }
+                runtime.owner_turn_wake.clone()
+            });
             if let Some(wake) = wake {
                 let _ = wake();
             }
@@ -73,6 +81,11 @@ pub(super) fn restart_if_due() {
     let Some(version) = reload.take_restart_due() else {
         return;
     };
+    APP_RUNTIME.with(|slot| {
+        if let Some(desktop) = slot.borrow_mut().desktop_loop.as_mut() {
+            desktop.restart_turn_asked = false;
+        }
+    });
     tracing::info!(
         layout = version.layout.get(),
         "hot reload: the new build changed the layout of kept values; restarting the application"
@@ -134,7 +147,7 @@ fn restart(reload: &WorkerReload) -> Result<Unapplied, Failure> {
         Ok(Ok(())) => {
             // With no window kept (an earlier restart failed installing
             // into it), the main window opens as at a start.
-            super::main_window::drive_main_window();
+            super::main_window::open_main_window_after_restart();
             return Ok(unapplied);
         }
         Ok(Err(error)) => Failure::Launch(error),
@@ -201,11 +214,12 @@ fn retire_application() -> Option<KeptMain> {
         .into_iter()
         .filter(|window| Some(window.id()) != kept_id)
         .collect();
-    // An open the earlier application asked for that has not finished would
-    // install its root into the later one: it is cancelled, its reply
-    // answered `Cancelled` and its reservation settled, as at an exit.
-    first.contain(super::secondary_window::cancel_pending_secondary_windows);
     super::owner_dispatch::retire_installed_host(&mut first);
+    // An open the earlier application asked for that has not finished, its
+    // disposes' included, would install its root into the later one: it is
+    // cancelled, its reply answered `Cancelled` and its reservation settled,
+    // as at an exit.
+    first.contain(super::secondary_window::cancel_pending_secondary_windows);
     // Closed once their presentations are gone, so no close request reaches
     // a handler of the earlier application.
     for window in opened {
