@@ -3,7 +3,9 @@ use std::str::FromStr as _;
 
 use cargo_platform::Cfg;
 
-use super::{BuildDirs, CargoRustflags, Remap, RustflagsSource, SourcePathRemap};
+#[cfg(unix)]
+use super::BuildDirs;
+use super::{CargoRustflags, Remap, RustflagsSource, SourcePathRemap};
 
 const TRIPLE: &str = "x86_64-unknown-linux-gnu";
 
@@ -194,6 +196,7 @@ fn remap() -> SourcePathRemap {
     }
 }
 
+#[cfg(unix)]
 const FLAGS: [&str; 2] = [
     "--remap-path-prefix=/home/me/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/=",
     "--remap-path-prefix=/home/me/code with space/dep/=dep-0.1.0/",
