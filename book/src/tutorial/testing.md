@@ -87,7 +87,7 @@ t.expect(&find::id("new-note"), value(""));
 - `expect(&find, exists())` waits while the application has a frame or work due, then fails at once
   with the window's outline if what it expects is not there.
 
-A screen that finds nothing for a locator is usually one whose widget publishes no label; the
+A screen where a `Find` matches nothing is usually one whose widget publishes no label; the
 failure's outline shows what the window does publish. [Testing](../cookbook/testing.md) in the
 cookbook covers time, storage and the other expectations.
 
