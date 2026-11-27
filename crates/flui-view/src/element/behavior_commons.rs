@@ -391,16 +391,14 @@ where
 /// The removal half of `render_custody::unmount`: remove the associated
 /// `RenderObject` from the `RenderTree`. No-op if the behavior never
 /// got a `RenderId` (e.g. unmount before mount with no `PipelineOwner`).
-pub(crate) fn remove_render_object_from_tree<V, A>(
-    core: &ElementCore<V, A>,
+#[inline(never)]
+pub(crate) fn remove_render_object_from_tree(
+    core: &CoreState,
     render_id: Option<RenderId>,
     behavior_name: &'static str,
-) where
-    V: Clone + 'static,
-    A: ElementArity,
-{
+) {
     if let Some(render_id) = render_id
-        && let Some(pipeline_owner) = core.pipeline_owner()
+        && let Some(pipeline_owner) = core.pipeline_owner.as_ref()
     {
         // `remove_render_object` cascades; the non-cascading primitive is
         // `RenderTree::remove_shallow`. Element unmount wants the cascade —

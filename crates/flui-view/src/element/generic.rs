@@ -352,18 +352,6 @@ where
         self.state.self_id
     }
 
-    /// The element-tree parent this element was mounted under, stamped by
-    /// [`Self::mount`]. Mount-frame state: `RenderBehavior::on_mount` reads it
-    /// to tell a legal bare mount (element-tree root, no parent) from an
-    /// adoption that would orphan the render object. A retake or reparent
-    /// re-parents through [`Self::set_parent_render_id`] without re-running
-    /// `on_mount`, so this value is stale outside the mount frame and must
-    /// not be read as current tree state — the live parent edge lives on
-    /// [`crate::tree::ElementNode::parent`].
-    pub(crate) fn element_parent(&self) -> Option<ElementId> {
-        self.state.element_parent
-    }
-
     // NOTE: the production build/reconcile path reads `self_id` through
     // the element surface stamped by `set_self_id`; external consumers
     // (the build-time `LiveBuildContext` anchor) go through [`Self::self_id`].

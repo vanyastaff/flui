@@ -1303,18 +1303,9 @@ where
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
     ) -> crate::view::ChildViews {
-        if !core.should_build() {
-            tracing::trace!(
-                "RenderBehavior::build_into_views skipped render_id={:?}",
-                self.render_id
-            );
+        if !should_build_render(core.state(), self.render_id) {
             return crate::view::ChildViews::none();
         }
-
-        tracing::info!(
-            "RenderBehavior::build_into_views START render_id={:?}",
-            self.render_id
-        );
 
         // Collect the render element's child views, shared as the view holds
         // them. The RenderObject-attach side-effects already ran in
@@ -1333,13 +1324,7 @@ where
         // the tree borrowed so `update_render_object`'s `depend_on` resolves.
         self.push_config(core, owner);
 
-        core.clear_dirty();
-
-        tracing::debug!(
-            "RenderBehavior::build_into_views completed render_id={:?} children={}",
-            self.render_id,
-            child_views.len()
-        );
+        finish_render_build(core.state(), self.render_id, child_views.len());
 
         child_views
     }
@@ -1380,6 +1365,39 @@ where
     fn on_update(&mut self, _core: &ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {}
 }
 
+/// Whether a render element's build half runs, traced; compiled once rather
+/// than once per render view type.
+#[inline(never)]
+fn should_build_render(core: &super::generic::CoreState, render_id: Option<RenderId>) -> bool {
+    if core.dirty.get() && core.lifecycle.can_build() {
+        tracing::info!(
+            "RenderBehavior::build_into_views START render_id={:?}",
+            render_id
+        );
+        true
+    } else {
+        tracing::trace!(
+            "RenderBehavior::build_into_views skipped render_id={:?}",
+            render_id
+        );
+        false
+    }
+}
+
+/// Clears a render element's dirty flag once its build half is complete.
+#[inline(never)]
+fn finish_render_build(
+    core: &super::generic::CoreState,
+    render_id: Option<RenderId>,
+    children: usize,
+) {
+    core.dirty.set(false);
+    tracing::debug!(
+        "RenderBehavior::build_into_views completed render_id={:?} children={}",
+        render_id,
+        children
+    );
+}
 // ============================================================================
 // InheritedBehavior
 // ============================================================================
