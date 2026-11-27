@@ -16,6 +16,11 @@
 //! with `Tester` and finds its text: not another acceptance test for a sample
 //! app, just a compile-and-mount smoke check for the facade surface itself.
 
+#![expect(
+    deprecated,
+    reason = "ADR-0400: these cases move to `scenario::Tester`"
+)]
+
 use flui::prelude::*;
 use flui_testing::find;
 use flui_testing::tester::Tester;

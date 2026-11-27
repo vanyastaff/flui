@@ -1292,6 +1292,7 @@ fn round_of_a_scrolled_lazy_list() {
 
 /// Presses through the window's agent: the gesture arena, the recognizers, a state's signal
 /// and the semantics tree the locators read.
+#[expect(deprecated, reason = "ADR-0400: this case moves to `scenario::Tester`")]
 fn round_of_presses() {
     use flui_testing::find;
     use flui_testing::tester::Tester;

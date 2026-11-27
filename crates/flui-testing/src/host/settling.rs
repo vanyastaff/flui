@@ -221,6 +221,36 @@ impl HeadlessHost {
         }
     }
 
+    /// One owner turn with no frame, as a runner's owner delivery runs for a
+    /// command between frames (ADR-0400 §4): the owner inbox is drained
+    /// ([`UiRuntime::drain_owner_inbox`]), which applies the commands queued
+    /// since the last turn and answers the agent's reads, and nothing is
+    /// presented and the clock does not move. A redraw the drain asked for is
+    /// asked again of the next [`pump`](Self::pump), since the drain consumed
+    /// the request; then each covered window is asked for the frame it owes
+    /// and a parked settled wait is answered, as after a pump. A retired host
+    /// runs nothing.
+    ///
+    /// # Panics
+    ///
+    /// With a dropped-frame report the UI runtime made since the last pump, as
+    /// [`pump`](Self::pump) raises it, and with the first panic of code the
+    /// drain ran.
+    pub(crate) fn owner_turn(&mut self) {
+        let pending = std::mem::take(&mut *self.failures.borrow_mut());
+        if let Some(failure) = pending.into_iter().next() {
+            panic!("{failure}");
+        }
+        if self.is_retired() {
+            return;
+        }
+        if self.enter(UiRuntime::drain_owner_inbox) {
+            self.request_frame();
+        }
+        self.ask_owed_frames();
+        self.answer_settled();
+    }
+
     /// Stop [`pump`](Self::pump) running background work, so a test sees a
     /// widget while its work is still pending; the work waits until
     /// [`release_background`](Self::release_background) or

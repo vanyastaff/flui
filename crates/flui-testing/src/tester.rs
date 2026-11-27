@@ -1,4 +1,5 @@
-//! [`Tester`]: an application's test, written the way the driver and an agent
+//! The tester [`scenario::Tester`](crate::scenario::Tester) replaces (ADR-0400), deprecated
+//! until its users move. [`Tester`]: an application's test, written the way the driver and an agent
 //! drive the application.
 //!
 //! A tester mounts a view as `run_app` does, under the UI runtime's root
@@ -37,20 +38,25 @@
 //! (`flui_protocol`), re-exported here so a scenario and the agent speak one
 //! vocabulary.
 
+#![expect(
+    deprecated,
+    reason = "the module of the tester ADR-0400 replaces with `scenario::Tester`"
+)]
+
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
 use flui_protocol::method::{
-    ElementActionability, InputInject, InputRelease, InspectRender, InspectWidgets,
-    SemanticsLocate, SemanticsRead,
+    ElementActionability, ElementPressKeys, InputInject, InputRelease, InspectRender,
+    InspectWidgets, SemanticsLocate, SemanticsRead,
 };
 use flui_protocol::{
     act::Actionability, act::ActionabilityCheck, act::ActionabilityParams, error::ErrorObject,
     input::ActionSequence, input::ImeAction, input::InputParams, input::InputSource,
     input::KeyAction, input::PointerAction, input::PointerButton, input::PointerDevice,
-    inspect::InspectParams, locator::LocateParams, session::WindowParams, tree::ElementId,
-    tree::ReadParams, tree::TreeDiagnostic, tree::outline, wire::Checked,
+    input::PressKeysParams, inspect::InspectParams, locator::LocateParams, session::WindowParams,
+    tree::ElementId, tree::ReadParams, tree::TreeDiagnostic, tree::outline, wire::Checked,
 };
 // The agent protocol's types that `Tester` takes and returns (see the module docs).
 pub use flui_protocol::{
@@ -58,17 +64,16 @@ pub use flui_protocol::{
     inspect::InspectReading, inspect::InspectValue, locator::Locator, locator::Match,
     locator::Pick, locator::StateFilter, locator::TextMatch, tree::Node, tree::Tree, wire::Role,
 };
-use flui_runtime::owner_turn::CloseRequestHandler;
-use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
-use flui_view::{CloseReason, View};
-use parking_lot::Mutex;
 
-use crate::host::{AppRegistrations, HeadlessDevAgent, HeadlessHost, HeadlessWindow, KitStorage};
+use flui_view::dev_agent::{AgentAnswer, AgentWindow, InputLease};
+use flui_view::{CloseReason, View};
+
+use crate::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow, KitStorage};
 use crate::storage::{MemoryStorage, RunId};
 
 /// One frame at 60 Hz: what [`Tester::pump`] advances and what an action or
 /// an expectation waits per frame the application asks for.
-pub const FRAME: Duration = Duration::from_millis(16);
+pub use crate::scenario::FRAME;
 
 /// How long an expectation waits by default while the application works.
 pub const EXPECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -88,145 +93,13 @@ const VISIBLE_READS: usize = 4;
 /// woken completion, the rebuild it schedules and the semantics it commits.
 const DUE_NOW_FRAMES: u32 = 8;
 
-/// The window a [`Tester`] mounts its view in: its logical size, the
-/// platform whose conventions the application follows, the storage its
-/// documents are kept in, and the capability providers the application
-/// registers.
-#[derive(Clone)]
-pub struct TestWindow {
-    width: u32,
-    height: u32,
-    platform: Option<flui_platform::TargetPlatform>,
-    /// Whether the window plays a browser's page ([`TestWindow::in_browser`]).
-    in_browser: bool,
-    storage: WindowStorage,
-    registrations: AppRegistrations,
-    close_request_handler: Option<CloseRequestHandler>,
-}
-
-impl std::fmt::Debug for TestWindow {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (overrides, plugins) = self.registrations.counts();
-        f.debug_struct("TestWindow")
-            .field("width", &self.width)
-            .field("height", &self.height)
-            .field("platform", &self.platform)
-            .field("in_browser", &self.in_browser)
-            .field("storage", &self.storage)
-            .field("overrides", &overrides)
-            .field("plugins", &plugins)
-            .field("close_request_handler", &self.close_request_handler)
-            .finish()
-    }
-}
-
-/// Where a [`TestWindow`]'s application keeps its documents.
-#[derive(Debug, Clone)]
-enum WindowStorage {
-    /// A fresh, empty [`MemoryStorage`] for each mount.
-    Fresh,
-    /// This storage, as left by an earlier run.
-    Given(MemoryStorage),
-    /// None at all, as on a platform without files.
-    Absent,
-}
-
-impl TestWindow {
-    /// A window of `width` by `height` logical pixels, its application
-    /// keeping its documents in a fresh, empty [`MemoryStorage`].
-    #[must_use]
-    pub const fn new(width: u32, height: u32) -> Self {
-        Self {
-            width,
-            height,
-            platform: None,
-            in_browser: false,
-            storage: WindowStorage::Fresh,
-            registrations: AppRegistrations::new(),
-            close_request_handler: None,
-        }
-    }
-
-    /// Answer the window's close requests with `handler`, as
-    /// `AppConfig::close_request_handler` does: asked after the window's close
-    /// guard for the user's close and a quit, and first at the session's end,
-    /// on the platforms whose window system asks.
-    #[must_use]
-    pub fn close_request_handler(mut self, handler: CloseRequestHandler) -> Self {
-        self.close_request_handler = Some(handler);
-        self
-    }
-
-    /// Register `plugin`'s providers, as `Application::plugin` does: a widget
-    /// acquires what it provides and nothing else does. A
-    /// [`restart`](Tester::restart) registers it again.
-    ///
-    /// The mount panics when two registrations conflict, as a run fails
-    /// before its platform starts.
-    #[must_use]
-    pub fn plugin(mut self, plugin: impl flui_platform::capability::Plugin) -> Self {
-        self.registrations.plugin(plugin);
-        self
-    }
-
-    /// Provide the capability `C` with `provider`, in place of the built-in
-    /// one and of any plugin's, as `Application::capability` does.
-    ///
-    /// The mount panics when two registrations conflict.
-    #[must_use]
-    pub fn capability<C: flui_platform::capability::Capability>(
-        mut self,
-        provider: impl flui_platform::capability::CapabilityProvider<C>,
-    ) -> Self {
-        self.registrations.capability::<C, _>(provider);
-        self
-    }
-
-    /// Follow `platform`'s conventions (chords, handles, menus, transitions)
-    /// instead of the platform-neutral ones a headless window follows.
-    #[must_use]
-    pub fn platform(mut self, platform: flui_platform::TargetPlatform) -> Self {
-        self.platform = Some(platform);
-        self
-    }
-
-    /// Play a browser's page, on whatever target the test runs
-    /// ([`HeadlessWindow::in_browser`]): no close is put to the window's
-    /// guard or handler, and the session's end delivers its notice alone.
-    #[must_use]
-    pub fn in_browser(mut self) -> Self {
-        self.in_browser = true;
-        self
-    }
-
-    /// Keep the application's documents in `storage`: a launch over what an
-    /// earlier run left there, or over contents the test put there.
-    #[must_use]
-    pub fn storage(mut self, storage: MemoryStorage) -> Self {
-        self.storage = WindowStorage::Given(storage);
-        self
-    }
-
-    /// Give the application no storage at all, as a platform without files
-    /// runs it: a document it opens is read-only and starts from its initial
-    /// value.
-    #[must_use]
-    pub fn without_storage(mut self) -> Self {
-        self.storage = WindowStorage::Absent;
-        self
-    }
-}
-
-impl Default for TestWindow {
-    /// 800 by 600 logical pixels, as `flutter_test` sizes its surface.
-    fn default() -> Self {
-        Self::new(800, 600)
-    }
-}
+pub use crate::scenario::TestWindow;
+use crate::scenario::window::WindowStorage;
 
 /// Why a [`Tester`] action or expectation failed.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
+#[deprecated(note = "use `flui_testing::scenario::TestError` (ADR-0400)")]
 pub enum TestError {
     /// Nothing matches the locator.
     #[error(
@@ -395,20 +268,6 @@ impl From<ErrorObject> for TestError {
     }
 }
 
-/// Keeps the windows the host hands its development agent.
-// `Arc<Mutex>`: `DevAgentHook` is `Send`.
-struct Windows(Arc<Mutex<Vec<AgentWindow>>>);
-
-impl DevAgentHook for Windows {
-    fn attach(&mut self) -> bool {
-        true
-    }
-
-    fn window_opened(&mut self, window: AgentWindow) {
-        self.0.lock().push(window);
-    }
-}
-
 /// An application under test (ADR-0243): the `flui-testing` counterpart of
 /// `flutter_test`'s `WidgetTester`.
 ///
@@ -420,6 +279,9 @@ impl DevAgentHook for Windows {
 /// let mut t = Tester::mount(Center::new().child(Text::new("Hello")));
 /// t.expect(find::text("Hello")).to_exist();
 /// ```
+#[deprecated(
+    note = "use `flui_testing::scenario::Tester`, whose verbs take a `scenario::Find` (ADR-0400)"
+)]
 pub struct Tester {
     host: HeadlessHost,
     window: AgentWindow,
@@ -428,9 +290,6 @@ pub struct Tester {
     _agent: HeadlessDevAgent,
     /// The window this run mounted in, its storage the one the run keeps.
     config: TestWindow,
-    /// The keys [`Tester::key_down`] holds, which a chord neither presses
-    /// nor releases.
-    held_keys: Vec<String>,
     /// This run of the application over its storage, whose held writes a
     /// kill discards.
     run: Option<RunId>,
@@ -497,8 +356,8 @@ impl Tester {
             // A restart launches over what this run leaves.
             config.storage = WindowStorage::Given(storage.clone());
         }
-        let windows = Arc::new(Mutex::new(Vec::new()));
-        let mut agent = HeadlessDevAgent::attach(Windows(Arc::clone(&windows)));
+        let (opened, windows) = std::sync::mpsc::channel();
+        let mut agent = HeadlessDevAgent::attach(crate::scenario::Windows(opened));
         let (run_storage, run) = storage.as_ref().map(MemoryStorage::for_run).unzip();
         let mut host = HeadlessHost::with_application(
             headless,
@@ -513,8 +372,7 @@ impl Tester {
             .expect("BUG: a fresh host has no root attached");
         let _ = host.pump(FRAME);
         let window = windows
-            .lock()
-            .pop()
+            .try_recv()
             .expect("BUG: a host with an attached agent hands it its window");
         let lease = window
             .input_lease()
@@ -525,7 +383,6 @@ impl Tester {
             lease,
             _agent: agent,
             config,
-            held_keys: Vec::new(),
             run,
             relaunch: Rc::new(move |window| Self::mount_in(view.clone(), window)),
             in_background: false,
@@ -1134,23 +991,24 @@ impl Tester {
     /// read, as in `"Control+"` or `"+a"`, and when a key is neither a key name
     /// nor the text of one; nothing is pressed then.
     pub fn try_press_keys(&mut self, chords: &[&str]) -> Result<(), TestError> {
-        let mut actions = Vec::new();
-        for chord in chords {
-            let mut keys = flui_protocol::input::gestures::chord_keys(chord).map_err(|error| {
-                TestError::Agent(Box::new(ErrorObject::new(
-                    flui_protocol::error::ErrorCode::InvalidArgument,
-                    error.to_string(),
-                )))
-            })?;
-            keys.retain(|key| !self.held_keys.iter().any(|held| held == key));
-            actions.extend(keys.iter().map(|key| KeyAction::Down {
-                key: (*key).to_owned(),
-            }));
-            actions.extend(keys.iter().rev().map(|key| KeyAction::Up {
-                key: (*key).to_owned(),
-            }));
-        }
-        self.inject(vec![keyboard(actions)])
+        let keys = chords
+            .iter()
+            .map(|chord| (*chord).to_owned())
+            .collect::<Vec<String>>();
+        // Read here first, so a chord that does not read presses nothing and the budget counts
+        // the chords' ticks; the agent plays them as one act, which leaves a key the lease
+        // already holds held.
+        let sequence = flui_protocol::input::gestures::chords(&keys).map_err(|error| {
+            TestError::Agent(Box::new(ErrorObject::new(
+                flui_protocol::error::ErrorCode::InvalidArgument,
+                error.to_string(),
+            )))
+        })?;
+        let call = self
+            .lease
+            .call::<ElementPressKeys>(PressKeysParams::new(self.lease.window(), keys))?;
+        let budget = ANSWER_FRAMES.saturating_add(Self::play_frames(&sequence));
+        self.answered_within(call, budget).map(|_outcome| ())
     }
 
     /// Press `chords` in turn to the window's focused element: `"Enter"`,
@@ -1176,11 +1034,7 @@ impl Tester {
     pub fn try_key_down(&mut self, key: &str) -> Result<(), TestError> {
         self.inject(vec![keyboard(vec![KeyAction::Down {
             key: key.to_owned(),
-        }])])?;
-        if !self.held_keys.iter().any(|held| held == key) {
-            self.held_keys.push(key.to_owned());
-        }
-        Ok(())
+        }])])
     }
 
     /// Press `key` and hold it until [`Self::key_up`]; pressing it again
@@ -1204,9 +1058,7 @@ impl Tester {
     pub fn try_key_up(&mut self, key: &str) -> Result<(), TestError> {
         self.inject(vec![keyboard(vec![KeyAction::Up {
             key: key.to_owned(),
-        }])])?;
-        self.held_keys.retain(|held| held != key);
-        Ok(())
+        }])])
     }
 
     /// Release `key`, held since [`Self::key_down`].
@@ -1713,20 +1565,11 @@ impl Tester {
     /// Deliver `sources` through the window's input lease and run the frame
     /// after the last tick.
     fn inject(&mut self, sources: Vec<InputSource>) -> Result<(), TestError> {
-        // The agent plays a tick per frame, and a pause or a timed move for
-        // its whole duration, before it answers, so the budget is the ticks
-        // and that span in frames on top of the answer's own.
         let sequence = ActionSequence::new(sources);
-        let frame_ms = FRAME.as_millis();
-        let span_frames =
-            u32::try_from(sequence.span().as_millis().div_ceil(frame_ms)).unwrap_or(u32::MAX);
-        let ticks = u32::try_from(sequence.ticks()).unwrap_or(u32::MAX);
+        let budget = ANSWER_FRAMES.saturating_add(Self::play_frames(&sequence));
         let call = self
             .lease
             .call::<InputInject>(InputParams::new(self.lease.window(), sequence))?;
-        let budget = ANSWER_FRAMES
-            .saturating_add(ticks)
-            .saturating_add(span_frames);
         let outcome = self.answered_within(call, budget);
         if matches!(outcome, Err(TestError::Unanswered { .. })) {
             // The keys and contacts the sequence holds are let go once it ends:
@@ -1739,9 +1582,18 @@ impl Tester {
             {
                 let _released = self.answered_within(release, budget);
             }
-            self.held_keys.clear();
         }
         outcome.map(|_outcome| ())
+    }
+
+    /// The frames the agent takes to play `sequence` before it answers: a tick per frame, and a
+    /// pause or a timed move for its whole duration.
+    fn play_frames(sequence: &ActionSequence) -> u32 {
+        let frame_ms = FRAME.as_millis();
+        let span_frames =
+            u32::try_from(sequence.span().as_millis().div_ceil(frame_ms)).unwrap_or(u32::MAX);
+        let ticks = u32::try_from(sequence.ticks()).unwrap_or(u32::MAX);
+        ticks.saturating_add(span_frames)
     }
 
     /// The window's outline, cut to its first lines, for a failure.
@@ -1767,6 +1619,9 @@ impl Tester {
 /// What a test expects of the elements a locator matches, from
 /// [`Tester::expect`].
 #[must_use = "an expectation asserts nothing until one of its methods runs"]
+#[deprecated(
+    note = "use `flui_testing::scenario::Tester::expect` with a `scenario::matcher` (ADR-0400)"
+)]
 pub struct Expectation<'t> {
     tester: &'t mut Tester,
     locator: Locator,
