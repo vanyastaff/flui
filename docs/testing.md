@@ -15,7 +15,13 @@ the driver and an agent use (`Find<One>` for a verb aimed at one element, `Find<
 count), a read is a turn that runs no frame, an act goes through the window's own input path and
 ends with an owner turn, and `Tester::expect(&find, matcher)` waits on the virtual clock until the
 matcher holds. The end of the test (`finish`, or `Drop`) settles, audits, unmounts and checks that
-nothing was left behind, unless a failure is already on its way to the caller. The
+nothing was left behind, unless a failure is already on its way to the caller. In process,
+`Tester::frame` reads the frame through types (`flui::testing::frame`: a render object's geometry
+or a field it copies out at an element, the element's draw commands, the layer outline), which a
+scenario over another connection does not compile with; `Tester::perform` sends a
+`scenario::gesture::Gesture` (several pointers, keys, a press held for a stated time) through the
+agent; and `Tester::mount_unobserved` mounts with no agent, for a perf scenario that
+`Tester::measure`s its frames. The
 `flui::testing::{Tester, find}` at the module's root are the tester this replaces, deprecated
 until their users move ([gaps](gaps.md#accepted-adr-sections-not-built-yet)).
 `flui::testing::rendering::{RenderTester,
@@ -1303,10 +1309,9 @@ whose composition decision a subscriber is, not at the DAG's bottom.
 (or a human, working the same way) can discover the public API, build a UI, inspect it two ways,
 drive an interaction through it, and assert the result, using only `flui::…`, the surface a
 consumer of the published crate has. It is `flui`'s own `tests/`, not `flui-testing`'s, for that
-reason. Its mount, semantics read, tap and assertion run on `flui::testing::scenario::Tester`; the
-render-tree reads of steps 2 and 5 stay in a `render_tree` module on the deprecated
-`flui::testing::Tester`, because the scenario tester has no render-tree read yet
-([gaps](gaps.md#accepted-adr-sections-not-built-yet)).
+reason. Every step runs on `flui::testing::scenario::Tester`; the render-tree reads of steps 2
+and 5, in its `render_tree` module, are `Tester::frame`'s typed reads, which exist in process
+only; over a connection the agent's `inspect.render` lists the same tree.
 
 The tree is a Material counter (`Center` → `Column` → prompt `Text` / count `Text` /
 `ElevatedButton`, a `Signal` created in `create_state`), the CLI `counter` template's shape with
@@ -1315,10 +1320,10 @@ Material in place of its `RawButton`.
 | Step | What it does | API |
 |------|--------------|-----|
 | 1. Mount | Mount the tree as `run_app` does | `scenario::Tester::mount` |
-| 2. Inspect structure | Read the render tree, check a known node is there | the deprecated `Tester::inspect_render`, the agent's `inspect.render` |
+| 2. Inspect structure | Read the render tree, check a known node is there | `Tester::frame` and `Frame::render_all::<RenderPhysicalShape>`, the agent's `inspect.render` |
 | 3. Inspect semantics | Find the button by role and label | `Tester::read(&find::button("Increment"))` |
 | 4. Drive | Tap it through the window's input path, after the actionability checks | `Tester::tap` |
-| 5. Assert | The shown count advanced | `Tester::expect(&find::text("1"), exists())`, and each `RenderParagraph`'s `text` field through `inspect_render` |
+| 5. Assert | The shown count advanced | `Tester::expect(&find::text("1"), exists())`, and the text each `RenderParagraph` lays out through `Frame::read` |
 
 Steps 1, 3 and 4 are the driver's own path: `Tester` asks the window's development agent
 (`semantics.locate`, `element.actionability`, `input.inject` through the input lease), so a

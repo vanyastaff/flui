@@ -1,6 +1,6 @@
 # testing-platform: задачи
 
-- **Статус:** утверждено владельцем 2026-11-24. Сделано: ADR-0400, эта спека, TP1, TP2; TP3 — ядро (на `main`, #3189), шаблоны `flui-cli` и часть перехода (`facade_smoke`, `dialogs`, `self_rescheduling_local_post_frame`, книга, `agent_workflow` без чтений дерева рендера). Следующая: остаток перехода TP3 (`flui-cupertino`, `perf.rs` двух крейтов, фикстуры фасада, `tests/tester.rs`).
+- **Статус:** утверждено владельцем 2026-11-24. Сделано: ADR-0400, эта спека, TP1, TP2; TP3 — ядро (на `main`, #3189), шаблоны `flui-cli` и часть перехода (`facade_smoke`, `dialogs`, `self_rescheduling_local_post_frame`, книга, `agent_workflow` без чтений дерева рендера); TP4 — первый срез (`Frame` и типизированные чтения, `Gesture` и `perform`, `Headless<Unobserved>` и `measure`; на них перешли модуль `render_tree` в `agent_workflow` и фикстура `facade_extensions`, кроме одного теста). Следующая: остаток TP4 (`fixture::Constrain`, `WindowSpec`, понижение плана в `HostInput`, `scenarios!` с `each`, пометка старых форм, `flui-cupertino` с целью `perf`), затем остаток перехода TP3 (`perf.rs` двух крейтов, `acceptance_app/testing.rs`, `tests/tester.rs`).
 - **Дизайн:** [design.md](design.md); требования: [requirements.md](requirements.md); решение:
   [ADR-0400](../../../adr/ADR-0400-a-test-is-one-tester-over-a-connection-and-every-claim-has-one-instrument.md)
 - **База:** `main` @ `aa45aa8`. Числа сняты поиском по именам; перед правкой сверить.
@@ -243,12 +243,13 @@
   `crates/flui-testing/tests/self_rescheduling_local_post_frame.rs` (простой кадров проверяется
   через `connection_mut().advance(FRAME)`), все файлы `book/src/tutorial`,
   `book/src/cookbook/testing.md` и `book/src/mapping.md`, а `tests/agent_workflow.rs` — всё,
-  кроме чтений дерева рендера. Остаётся на старом `Tester`: модуль `render_tree` в
-  `agent_workflow.rs` (`inspect_render`, у `scenario::Tester` нет чтения дерева рендера),
+  кроме чтений дерева рендера (их перенёс первый срез TP4). Остаётся на старом `Tester`:
   `flui-cupertino` (`tests/button.rs`, `tests/route.rs`), `perf.rs` у `flui-widgets` и
-  `flui-material`, фикстуры `tests/fixtures/facade_extensions.rs` и
-  `tests/fixtures/acceptance_app/testing.rs` (им нужны чтения, которых у `scenario` нет) и
-  собственный набор старого `Tester` `crates/flui-testing/tests/tester.rs` (уходит вместе с ним).
+  `flui-material`, тест `presentation_lifecycle_subscription_runs_through_the_facade` фикстуры
+  `tests/fixtures/facade_extensions.rs` и фикстура `tests/fixtures/acceptance_app/testing.rs` (им
+  нужны управление окном, перезапуск приложения, чтение дерева виджетов и ввод через метод ввода,
+  которых у `scenario` нет) и собственный набор старого `Tester`
+  `crates/flui-testing/tests/tester.rs` (уходит вместе с ним).
   `rg '\.to_(exist|be_|have_)' --glob '!crates/flui-driver/**' crates packages src tests book`
   даёт 53 строки вместо 95: из них около 38 — старый `Tester` (`src/tester.rs`, `tests/tester.rs`,
   `perf.rs`, `flui-cupertino`), остальное — другие методы с тем же префиксом (`to_be_bytes` и
@@ -258,8 +259,8 @@
   `an_error_through_the_question_mark_then_drop_skips_the_end_checks`,
   `an_expected_error_dropped_before_a_leaked_ticker_reports_the_ticker`,
   `a_test_that_ends_holding_a_key_passes_its_end_checks`,
-  `a_chord_after_a_gesture_that_left_a_key_down_sends_no_second_press` (жест здесь — `perform`
-  через `connection_mut`, `Gesture` строит TP4); trybuild `scenario_ui` (`tap_on_many`). Каждый
+  `a_chord_after_a_gesture_that_left_a_key_down_sends_no_second_press` (жест здесь — `Gesture`,
+  посланный `Tester::perform`); trybuild `scenario_ui` (`tap_on_many`). Каждый
   падает с откатом своей строки; тест про клавишу в конце слушает окно глобальным обработчиком
   клавиш, который переживает снятие корня, и падает, если конец не отпускает аренду или не
   проигрывает поставленное ею отпускание.
@@ -281,6 +282,43 @@
   `FLUI_PERF_BASELINE=check` по правилу E2; `measure_unobserved_matches_pump_report`;
   `freeze_at` на `ActivityIndicator` даёт снимок, повторяющийся байт в байт; compile-fail на
   `Frame` при обобщённом `C: Connection` и на `settle` у не-`VirtualClock`.
+- **Состояние:** первый срез сделан. Построено: модуль `flui_testing::frame` (`Tester::frame` у
+  `Tester<Headless<_>>`, `Frame` с чтениями всего кадра `only`, `render_all`, `layers`,
+  `draw_list`, `report` и чтениями у элемента `geometry`, `read`, `draw_commands` у `Observed`;
+  `RenderGeometry`, `DrawList`, `LayerOutline`), `flui::testing::frame` в фасаде;
+  `scenario::gesture` (`Gesture`, `Pointer`, `Keys`, `GestureError`) и
+  `Tester::perform`/`try_perform` через аренду агента; `Headless<Unobserved>`
+  (`Tester::mount_unobserved`) с `pump`, `pump_for`, `frame` и концом без аудита;
+  `Tester::measure`; запечатанная граница `scenario::Target`; `TestError::NoRenderObject` и
+  `RenderObjectCount`; один счёт кадра `HeadlessHost::pump_reported` у `pump_report` и тестера.
+  Перешли: модуль `render_tree` в `tests/agent_workflow.rs`, `tests/fixtures/facade_extensions.rs`
+  (рисование, долгое нажатие с удержанием, перетаскивание), кроме теста
+  `presentation_lifecycle_subscription_runs_through_the_facade` (управление окном).
+  `tests/fixtures/acceptance_app/testing.rs` не перешёл: ему нужны перезапуск, управление окном,
+  `inspect_widgets` и ввод через метод ввода. Не построено так, как записано: `perform` у
+  `Headless<Unobserved>` — единственный проигрыватель плана в события окна — агент, а понижение
+  в строки `HostInput` вне среза; `settle` и `freeze_at` у `Unobserved` тоже ждут его (конец
+  `Unobserved` устаивается циклом хоста). Вне среза: `fixture::Constrain`, `WindowSpec`,
+  понижение `input::plan` в `HostInput`, `scenarios!` с `each`, пометка старых форм из списка
+  правил, `flui-cupertino` (11 файлов) с целью `perf`, опыты E1, E2 (кроме равенства на одном
+  сценарии), E3, E7; compile-fail на `settle` у не-`VirtualClock`.
+- **Доказательства среза:** модуль `scenario_frame` в `tests/main.rs` `flui-testing`:
+  `a_typed_read_copies_the_geometry_of_the_render_object_under_the_element`,
+  `a_typed_read_of_one_names_how_many_it_found`,
+  `a_read_copies_a_field_of_the_render_object_under_the_element`,
+  `draw_commands_read_the_elements_painting_and_leave_a_siblings_out`,
+  `a_gesture_held_past_the_long_press_delay_is_a_long_press_and_one_held_short_is_not`,
+  `a_gesture_refuses_an_unpaired_press_or_release`, `measure_unobserved_matches_pump_report`;
+  в `tester_scenario` —
+  `an_unobserved_end_settles_reads_the_ledger_and_names_what_is_left_behind`; trybuild
+  `scenario_ui` (`frame_on_a_connection`: `frame()` у `Tester<C>` с `C: Connection` не
+  компилируется). Каждый тест падает с ручной поломкой своей строки (матрица в `to_window`,
+  фильтр по типу, начало обхода с корня, выбор всех рисунков, `hold` без паузы, снятая проверка
+  пар, отчёт кадра не сохранён, конец `Unobserved` без устаивания). Прогоны:
+  `cargo test -p flui-testing --all-features --test flui_testing_it` (265 прошли),
+  `--test scenario_ui`, `-p flui --test facade_it -- agent_workflow` и
+  `facade_consumer::external_consumers_extend_and_test_through_the_facade`, clippy обоих крейтов
+  с `-D warnings`.
 
 ## Перенос
 
