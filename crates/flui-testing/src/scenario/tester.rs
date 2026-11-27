@@ -18,7 +18,7 @@ use flui_protocol::input::{
     Direction, DragParams, GestureOptions, LongPressParams, PressKeysParams, ScrollIntoViewParams,
     ScrollUntilParams, SwipeParams, TapParams, TypeTextParams,
 };
-use flui_protocol::locator::{LocateParams, Locator, Match, resolve_strict};
+use flui_protocol::locator::{LocateParams, Locator, Match, STRICT_CANDIDATES, resolve_strict};
 use flui_protocol::method::{
     ElementActionability, ElementDragTo, ElementFling, ElementLongPress, ElementPressKeys,
     ElementScrollIntoView, ElementScrollUntil, ElementTap, ElementTypeText, SemanticsLocate,
@@ -259,7 +259,7 @@ impl<C: Connection> Tester<C> {
     pub fn try_find_all(&mut self, find: &Find<Many>) -> Result<Vec<Match>, TestError> {
         let step = self.step("find_all", Location::caller());
         let _running = self.report.guard(step.verb, step.caller);
-        Ok(self.locate(&step, find.locator())?.matches)
+        Ok(self.locate(&step, find.locator(), None)?.matches)
     }
 
     /// The bounds of the one element `find` names, in the window's logical pixels.
@@ -744,19 +744,24 @@ impl<C: Connection> Tester<C> {
             .map_err(|error| self.call_error(step, Some(find), error))
     }
 
+    /// The matches of `locator`, at most `max_matches` of them reported and the rest counted.
     fn locate(
         &mut self,
         step: &Step,
         locator: &Locator,
+        max_matches: Option<u32>,
     ) -> Result<flui_protocol::locator::Matches, TestError> {
+        let mut params = LocateParams::new(locator.clone());
+        params.max_matches = max_matches;
         self.connection
-            .call::<SemanticsLocate>(LocateParams::new(locator.clone()))
+            .call::<SemanticsLocate>(params)
             .map_err(|error| self.call_error(step, Some(locator), error))
     }
 
-    /// The one match of `find`, or why there is not one.
+    /// The one match of `find`, or why there is not one. The locate reports at most the
+    /// [`STRICT_CANDIDATES`] an ambiguity names and counts the rest.
     fn resolve(&mut self, step: &Step, find: &Find<One>) -> Result<Match, TestError> {
-        let matches = self.locate(step, find.locator())?;
+        let matches = self.locate(step, find.locator(), Some(STRICT_CANDIDATES))?;
         match resolve_strict(matches.matches.iter(), matches.truncated) {
             Ok(Some(found)) => Ok(found.clone()),
             Ok(None) => Err(self.not_found(step, find.locator())),
@@ -1079,13 +1084,23 @@ fn excerpt(tree: &Tree) -> String {
     }
 }
 
+/// Whether a name and the text a locator looks for share text: the name holds the text, or the
+/// text holds the name as one of its words, so "Save" finds "Save draft" and "Save draft" finds
+/// "Save", and a one-letter name is not nearest to every text that contains the letter.
+fn shares_text(needle: &str, name: &str) -> bool {
+    name.contains(needle) || needle.split_whitespace().any(|word| word == name)
+}
+
 /// The published nodes nearest what `find` looks for: its identifier, a name sharing its text
 /// regardless of case, or its role.
 fn nearest(find: &Locator, tree: &Tree) -> Vec<String> {
-    let text = find
+    // The text the locator compares names with, never its `Debug` form, whose field names would
+    // match any short name.
+    let needle = find
         .name
         .as_ref()
-        .map(|name| format!("{name:?}").to_lowercase());
+        .map(|name| name.needle().to_lowercase())
+        .filter(|needle| !needle.is_empty());
     let mut found = Vec::new();
     let mut pending: Vec<&Node> = tree.roots.iter().collect();
     while let Some(node) = pending.pop() {
@@ -1096,7 +1111,10 @@ fn nearest(find: &Locator, tree: &Tree) -> Vec<String> {
             .is_some_and(|identifier| node.identifier.as_ref() == Some(identifier));
         let by_name = node.name.as_ref().is_some_and(|name| {
             let name = name.to_lowercase();
-            !name.is_empty() && text.as_ref().is_some_and(|text| text.contains(&name))
+            !name.is_empty()
+                && needle
+                    .as_ref()
+                    .is_some_and(|needle| shares_text(needle, &name))
         });
         let by_role = find.role.is_some_and(|role| role == node.role);
         if by_identifier || by_name || by_role {

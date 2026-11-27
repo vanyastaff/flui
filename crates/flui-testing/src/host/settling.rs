@@ -440,3 +440,51 @@ fn wire_window(presentation: PresentationId) -> WindowId {
     WindowId::from_u64(presentation.as_u64())
         .expect("BUG: a presentation id packs a non-zero generation")
 }
+
+#[cfg(test)]
+mod tests {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::time::Duration;
+
+    use flui_foundation::panic::payload_text;
+
+    use super::super::{HeadlessHost, HeadlessWindow};
+
+    /// A settled host: its root built, its first frames presented, nothing due.
+    fn idle() -> HeadlessHost {
+        let mut host = HeadlessHost::new(HeadlessWindow::new(100, 100));
+        host.attach(&flui_widgets::SizedBox::new(10.0, 10.0))
+            .expect("a fresh host takes a root");
+        let _ = host.pump(Duration::ZERO);
+        let _ = host.pump(Duration::ZERO);
+        assert_eq!(host.time_to_next_frame(), None, "nothing is due");
+        host
+    }
+
+    /// The drain takes the inbox's coalesced redraw request, so the turn that drained it asks
+    /// for the frame: otherwise the request is consumed and the frame it asked for never runs.
+    #[test]
+    fn an_owner_turn_asks_for_the_frame_a_drained_redraw_request_wants() {
+        let mut host = idle();
+        host.ui_runtime().command_sender().request_redraw();
+        host.owner_turn();
+        assert_eq!(host.time_to_next_frame(), Some(Duration::ZERO));
+    }
+
+    /// A failure the runtime reported since the last turn is raised before the turn drains, as
+    /// `pump` raises it, so it is the step's that caused it.
+    #[test]
+    fn an_owner_turn_raises_a_failure_reported_before_it() {
+        let mut host = idle();
+        host.failures
+            .borrow_mut()
+            .push("a frame of the window failed".to_owned());
+        let payload = catch_unwind(AssertUnwindSafe(|| host.owner_turn()))
+            .expect_err("the turn raises the reported failure");
+        assert_eq!(
+            payload_text(&*payload),
+            Some("a frame of the window failed")
+        );
+        assert!(host.failures.borrow().is_empty(), "raised once");
+    }
+}

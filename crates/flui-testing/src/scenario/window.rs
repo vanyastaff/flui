@@ -5,6 +5,7 @@ use flui_runtime::owner_turn::CloseRequestHandler;
 use crate::host::AppRegistrations;
 use crate::storage::MemoryStorage;
 
+/// The window a [`Tester`](super::Tester) mounts its view in: its logical size, the
 /// platform whose conventions the application follows, the storage its
 /// documents are kept in, and the capability providers the application
 /// registers.
