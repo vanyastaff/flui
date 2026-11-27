@@ -302,18 +302,18 @@ that is kept. The host, at the end of the turn:
   retired `UiRuntimeId` is never issued again, the earlier ingress refuses every request an
   `AppHandle` of it sends, and an accessibility action names a node of a tree that is gone. Every
   task and worker the application's services spawned is cancelled, whoever holds its handle, the
-  running ones are waited for by the same deadline, and a `TaskSpawner` of the earlier
-  application refuses from then on; a compute job that never checks its cancellation runs on
-  past the deadline. A thread the application spawned itself is its own: the framework cannot
-  end it, and it keeps running code of the earlier build.
+  running ones are waited for by the same deadline, one a pool still holds queued never starts,
+  and a `TaskSpawner` of the earlier application refuses from then on. A thread the application
+  spawned itself is its own: the framework cannot end it, and it keeps running code of the earlier
+  build.
 - The later application's window description is not applied to a kept window. An author who
   changed it asks for a process restart.
 - The executor pools are the loop's, not the scope's: a host runs its own IO on them (ADR-0327
   §3), started before any application code. A later application's `AppConfig::executors` is not
   applied, and `ReloadOutcome::Restarted` names them in its `unapplied` (`Unapplied::executors`),
   which a process restart applies. Since the pools stay, a service that ignores its cancellation
-  past the deadline is abandoned and its task keeps running, where the end of a run closes the
-  pools under it.
+  past the deadline is abandoned and its future keeps running, as does a compute job that never
+  checks its cancellation, where the end of a run closes the pools under them.
 - What the operating system opens is declared to it as the run starts (ADR-0307): the
   declarations, the single-instance choice and the registered associations stay the loop's until
   a process restart. The later application's `on_open_files` replaces the earlier one's, which
@@ -382,7 +382,7 @@ scripted hook from the testing kit. They replace ADR-0311's
 | §3 where the loop polls | `flui-app`: `an_idle_loop_restarts_on_the_wake_that_reported_the_version`, `a_loop_without_a_ui_runtime_polls_on_the_wake` |
 | §3 the outcome | `flui-app`: `each_reassembled_runtime_and_each_restart_is_reported_once`, `a_panicking_applied_retires_the_hook` |
 | §3 `ReloadEvent` is exhaustive | the compiler: a host that does not map `Loaded` does not compile |
-| §4 step 1 | `flui-app`: `a_restart_disposes_every_state_before_the_entry_runs`, `a_panicking_dispose_does_not_stop_a_restart`, `a_restart_closes_the_windows_the_application_opened_without_asking`, `a_restart_drops_the_earlier_scope`, `a_restart_cancels_and_joins_the_earlier_applications_tasks`, `an_app_handle_of_the_earlier_application_is_refused`; `shutdown_ends_the_applications_tasks_and_workers` in `crates/flui-app/src/app/lifecycle.rs` |
+| §4 step 1 | `flui-app`: `a_restart_disposes_every_state_before_the_entry_runs`, `a_panicking_dispose_does_not_stop_a_restart`, `a_restart_closes_the_windows_the_application_opened_without_asking`, `a_restart_drops_the_earlier_scope`, `a_restart_cancels_and_joins_the_earlier_applications_tasks`, `an_app_handle_of_the_earlier_application_is_refused`; in `crates/flui-app/src/app/lifecycle.rs`, `shutdown_ends_the_applications_tasks_and_workers`, `a_queued_job_is_not_waited_for_and_never_starts` and `a_job_that_ignores_cancellation_is_reported_at_the_deadline` |
 | §4 step 2 | `flui-app`: `a_panicking_entry_fails_the_restart_and_is_not_tried_again`, `an_entry_without_an_application_fails_the_restart`, `a_failed_restart_leaves_nothing_in_the_hand_over`, `a_second_run_in_one_entry_is_refused_and_the_first_is_composed` |
 | §4 step 3 | `flui-app`: `a_restart_composes_the_later_applications_capabilities`, `a_restart_keeps_the_window_and_registers_the_fonts_again`, `a_failed_composition_retires_what_it_built`, `a_panic_in_the_new_roots_mount_is_still_a_restart` |
 | §4 step 4 | `flui-app`: `a_resident_application_is_asked_to_exit_by_its_new_policy` |

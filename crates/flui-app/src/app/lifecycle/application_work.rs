@@ -33,8 +33,8 @@ pub(super) struct WorkRef {
     shared: Arc<Shared>,
 }
 
-/// One job's hold on the node, moved into the job; the node counts it
-/// running until the job is dropped, run or unrun.
+/// A job's hold on the node, taken as the job starts and released as it
+/// returns; the node counts the job running in between.
 #[derive(Debug)]
 pub(super) struct Running {
     shared: Arc<Shared>,
@@ -83,7 +83,8 @@ impl ApplicationWork {
     /// Refuse every later spawn, cancel every task and worker spawned under
     /// this node, and wait until `by` for the jobs still running. Returns
     /// how many were still running at `by`: a compute job that does not
-    /// check its cancellation runs on past it.
+    /// check its cancellation runs on past it. A job a pool still holds
+    /// queued never starts, so it is not waited for.
     pub(super) fn close_and_join(&self, by: Instant) -> usize {
         self.shared.state.lock().closed = true;
         // Outside the lock: cancelling wakes the IO lane's futures, and an
@@ -101,14 +102,23 @@ impl ApplicationWork {
 }
 
 impl WorkRef {
-    /// A job's hold on the node, refused once the node is closed.
-    pub(super) fn enter(&self) -> Result<Running, SpawnError> {
-        let mut state = self.shared.state.lock();
-        if state.closed || self.shared.token.is_cancelled() {
+    /// Refuse a new job once the node is closed.
+    pub(super) fn check_open(&self) -> Result<(), SpawnError> {
+        if self.shared.state.lock().closed || self.shared.token.is_cancelled() {
             return Err(SpawnError::ShuttingDown);
         }
+        Ok(())
+    }
+
+    /// A starting job's hold on the node; `None` once the node is closed,
+    /// when the job does not run.
+    pub(super) fn enter(&self) -> Option<Running> {
+        let mut state = self.shared.state.lock();
+        if state.closed || self.shared.token.is_cancelled() {
+            return None;
+        }
         state.running += 1;
-        Ok(Running {
+        Some(Running {
             shared: Arc::clone(&self.shared),
         })
     }

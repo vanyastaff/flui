@@ -30,9 +30,9 @@ owned by a scope or handle whose end is the work's end. Tokio's detached-by-defa
 
 | Class | Lifetime | Owner | Ends by |
 |---|---|---|---|
-| **Task** (`TaskHandle<T>`) | one-shot | whoever holds the handle | completion, explicit `cancel()`, or drop |
-| **Worker** (`WorkerHandle<I, O>`) | recurring, submission-driven | whoever holds the handle | drop (cancel-on-drop) |
-| **Service** (`ServiceDefinition`) | application-lifetime | `AppRuntime`'s `ServiceRegistry` | staged registry shutdown at loop exit |
+| **Task** (`TaskHandle<T>`) | one-shot | whoever holds the handle | completion, explicit `cancel()`, drop, or its application retiring |
+| **Worker** (`WorkerHandle<I, O>`) | recurring, submission-driven | whoever holds the handle | drop (cancel-on-drop), or its application retiring |
+| **Service** (`ServiceDefinition`) | application-lifetime | the application scope's `ServiceRegistry` | staged registry shutdown when the application retires |
 | **ProcessWorker** | process-external | — | **not implemented** (see Consequences) |
 
 **Cancel-on-drop, no detach — explicitly.** Dropping a task or worker handle requests
@@ -101,17 +101,23 @@ structurally inert — nothing exists for it to revive.
 
 Tasks and workers reach application code through `ServiceContext::spawner()`
 only — a `TaskSpawner` holding the execution services *weakly*, so a spawner outliving its
-loop refuses with `ShuttingDown` instead of keeping dead pools alive. Never ambient: no
+loop refuses with `ShuttingDown` instead of keeping dead pools alive, and the work it spawns
+belongs to the application it was handed to (below). Never ambient: no
 global, no thread-local.
 
 ### Staged shutdown, ordered before the pools
 
-Loop-exit teardown (`teardown_platform_ui_runtime`) now runs two stages in a load-bearing order:
+Loop-exit teardown (`teardown_platform_ui_runtime`) runs two stages in a load-bearing order;
+a development restart (ADR-0393 §4) runs the first alone, since the pools are the loop's:
 
 1. **Service shutdown** (`ServiceRegistry::shutdown`): stop admission → cancel *every*
    service first (flush windows overlap, they do not serialize) → join each against **one
    shared deadline** → per-service evidence (`Completed` / `Panicked` / `DeadlineExceeded` /
-   `Abandoned`), logged with names.
+   `Abandoned`), logged with names → then close the application's work node: every task and
+   worker the services spawned is cancelled, whoever holds its handle, a job a pool still holds
+   queued never starts, the running ones are joined against the same deadline and the ones
+   still running at it are counted, and every later spawn of the application's `TaskSpawner`
+   is refused.
 2. **Pool shutdown** (ADR-0047, unchanged): stop admission → cancel the root token → join
    bounded per pool.
 
@@ -119,13 +125,14 @@ The order is the whole point: the pool stage hard-drops any still-running future
 await point, so the cooperative pass must come first or no service ever gets its flush window. A service that
 ignores cancellation costs at most the shared deadline and is reported, never waited on
 unboundedly; shutdown never blocks on any optional-work queue (completion channels are
-dedicated and capacity-one; event rings drop rather than block). Every lifecycle signal is a
-child of the pools' root cancellation token, so even the last-resort `Drop` teardown path
-reaches all outstanding work.
+dedicated and capacity-one; event rings drop rather than block). Every lifecycle signal
+descends from the pools' root cancellation token (a task's or a worker's through its
+application's node), so even the last-resort `Drop` teardown path reaches all outstanding work.
 
-The registry is loop-scoped like the pools: hot-restart never touches running services; a
-second loop on the same thread reopens admission at its UI runtime install, mirroring the
-execution slot's reset.
+The registry belongs to the application, not the loop: it is held in the application scope,
+which a development restart drops and builds again (ADR-0393 §4), while the pools stay the
+loop's. A second loop on the same thread reopens admission at its UI runtime install,
+mirroring the execution slot's reset.
 
 ## Alternatives considered
 

@@ -79,7 +79,7 @@ use flui_runtime::execution::{ExecutionServices, SpawnError};
 
 mod application_work;
 
-use application_work::{ApplicationWork, Running, WorkRef};
+use application_work::{ApplicationWork, WorkRef};
 
 // ============================================================================
 // Cancellation
@@ -372,11 +372,10 @@ impl TaskSpawner {
         }
     }
 
-    /// The services and the new job's hold on the application's work.
-    fn admit(&self) -> Result<(Arc<ExecutionServices>, Running), SpawnError> {
-        let running = self.work.enter()?;
-        let services = self.services.upgrade().ok_or(SpawnError::ShuttingDown)?;
-        Ok((services, running))
+    /// The services, once the application's work is open to a new job.
+    fn admit(&self) -> Result<Arc<ExecutionServices>, SpawnError> {
+        self.work.check_open()?;
+        self.services.upgrade().ok_or(SpawnError::ShuttingDown)
     }
 
     /// Spawn a one-shot **compute** task (a pure, possibly multi-frame CPU
@@ -400,13 +399,22 @@ impl TaskSpawner {
         T: Send + 'static,
         F: FnOnce(&TaskContext) -> T + Send + 'static,
     {
-        let (services, running) = self.admit()?;
+        let services = self.admit()?;
         let signal = self.work.signal();
         let (report, completion) = mpsc::sync_channel(1);
         let task_signal = signal.clone();
+        let work = self.work.clone();
         services.spawn_compute(Box::new(move || {
-            // Counted running until the job ends or is dropped unrun.
-            let _running = running;
+            // Counted from its start: a job still queued when the application
+            // retires never starts, so the join does not wait on a queue the
+            // joining thread may be the one to drain.
+            let Some(_running) = work.enter() else {
+                let _ = report.try_send(TaskOutcome::Cancelled);
+                return;
+            };
+            // Bound after the hold, so the job and what it captured drop
+            // before the hold is released.
+            let (job, report, task_signal) = (job, report, task_signal);
             // Delivery point 1: cancelled before the body started.
             if task_signal.is_cancelled() {
                 let _ = report.try_send(TaskOutcome::Cancelled);
@@ -465,15 +473,22 @@ impl TaskSpawner {
         F: FnOnce(CancellationSignal) -> Fut,
         Fut: Future<Output = T> + Send + 'static,
     {
-        let (services, running) = self.admit()?;
+        let services = self.admit()?;
         let signal = self.work.signal();
         let (report, completion) = mpsc::sync_channel(1);
         // Boxed so `CatchUnwind`'s safe `Unpin` projection applies; the IO
         // lane takes a boxed future anyway.
         let future: Pin<Box<dyn Future<Output = T> + Send>> = Box::pin(make(signal.clone()));
         let task_signal = signal.clone();
+        let work = self.work.clone();
         services.spawn_io(Box::pin(async move {
-            let _running = running;
+            // As for a compute job: counted from its first poll, and its
+            // future dropped before the hold.
+            let Some(_running) = work.enter() else {
+                let _ = report.try_send(TaskOutcome::Cancelled);
+                return;
+            };
+            let (future, report, task_signal) = (future, report, task_signal);
             let raced = task_signal
                 .token
                 .run_until_cancelled(CatchUnwind {
@@ -709,12 +724,19 @@ where
     /// mutex. Host execution is invoked outside that mutex. Refusal releases
     /// the reservation together with its pending input in the caller.
     fn ensure_pump(&self) -> Result<(), SpawnError> {
-        let (services, running) = self.spawner.admit()?;
+        let services = self.spawner.admit()?;
         let shared = Arc::clone(&self.shared);
         let signal = self.signal.clone();
         let name = self.name;
+        let work = self.spawner.work.clone();
         services.spawn_compute(Box::new(move || {
-            let _running = running;
+            // As for a task: counted from its start, and the worker's shared
+            // state released before the hold.
+            let Some(_running) = work.enter() else {
+                shared.inbox.lock().pump_active = false;
+                return;
+            };
+            let (shared, signal) = (shared, signal);
             Self::pump(&shared, &signal, name);
         }))
     }
@@ -1317,6 +1339,8 @@ pub(crate) struct ServiceShutdownEntry {
 #[derive(Debug, Clone)]
 pub(crate) struct ServiceShutdownReport {
     pub(crate) entries: Vec<ServiceShutdownEntry>,
+    /// The application's tasks and workers still running at the deadline.
+    pub(crate) unfinished_jobs: usize,
 }
 
 impl ServiceShutdownReport {
@@ -1770,19 +1794,15 @@ impl ServiceRegistry {
         }
         // After the services' flush windows, in which a service may still
         // spawn: the application's tasks and workers end with it.
-        let work = self.work.borrow_mut().take();
-        if let Some(work) = work {
-            let unfinished = work.close_and_join(join_by);
-            if unfinished > 0 {
-                tracing::warn!(
-                    unfinished,
-                    ?join_by,
-                    "background jobs of the application ignored cancellation past the shutdown \
-                     deadline; they run on until they return"
-                );
-            }
+        let unfinished_jobs = self
+            .work
+            .get_mut()
+            .take()
+            .map_or(0, |work| work.close_and_join(join_by));
+        ServiceShutdownReport {
+            entries,
+            unfinished_jobs,
         }
-        ServiceShutdownReport { entries }
     }
 }
 
@@ -2359,55 +2379,187 @@ mod tests {
         services.shutdown(std::time::Instant::now() + Duration::from_secs(5));
     }
 
-    /// The application's work closes with the registry: its worker is
-    /// cancelled whoever holds the handle, a job that does not check its
-    /// cancellation is counted as running on past the deadline, and the
+    /// Runs each job and future on a thread of its own, so a test's jobs
+    /// all run at once whatever the machine's core count.
+    struct ThreadPerJob;
+
+    impl HostComputePool for ThreadPerJob {
+        fn spawn_job(&self, job: ComputeJob) -> Result<(), SpawnError> {
+            std::thread::spawn(job);
+            Ok(())
+        }
+
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
+        }
+    }
+
+    impl flui_runtime::execution::HostIoPool for ThreadPerJob {
+        fn spawn_future(
+            &self,
+            future: flui_runtime::execution::IoFuture,
+        ) -> Result<(), SpawnError> {
+            std::thread::spawn(move || pollster::block_on(future));
+            Ok(())
+        }
+
+        fn room(&self) -> flui_runtime::execution::RoomFuture {
+            flui_runtime::execution::RoomFuture::ready(Ok(()))
+        }
+    }
+
+    /// Services whose jobs each run on a thread of their own.
+    fn thread_per_job_services() -> Arc<ExecutionServices> {
+        let pool = Arc::new(ThreadPerJob);
+        Arc::new(ExecutionServices::with_limits(
+            Some(HostExecutors::new(
+                Arc::clone(&pool) as Arc<dyn HostComputePool>,
+                pool,
+            )),
+            COMPUTE_ADMISSION,
+            IO_ADMISSION,
+        ))
+    }
+
+    /// How long a job of these tests takes to wind down once cancelled, so
+    /// a shutdown that does not wait for it returns before it ends.
+    const WIND_DOWN: Duration = Duration::from_millis(50);
+
+    /// The registry's shutdown ends the application's work: a compute task,
+    /// an IO task and a worker, each alone, are cancelled whoever holds
+    /// their handles and have wound down when the shutdown returns; the
     /// spawner refuses from then on.
     fn shutdown_ends_the_applications_tasks_and_workers() {
-        let services = Arc::new(ExecutionServices::with_defaults());
-        let registry = ServiceRegistry::new();
+        struct SetOnDrop(Arc<AtomicBool>);
+        impl Drop for SetOnDrop {
+            fn drop(&mut self) {
+                std::thread::sleep(WIND_DOWN);
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        fn until_cancelled(task: &TaskContext, ended: &AtomicBool) {
+            while !task.is_cancelled() {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            std::thread::sleep(WIND_DOWN);
+            ended.store(true, Ordering::SeqCst);
+        }
+        type Spawn = fn(&TaskSpawner, mpsc::Sender<()>, Arc<AtomicBool>) -> Box<dyn std::any::Any>;
+        let cases: [(&str, Spawn); 3] = [
+            ("a compute task", |spawner, started, ended| {
+                Box::new(
+                    spawner
+                        .spawn_compute("compute", move |task| {
+                            let _ = started.send(());
+                            until_cancelled(task, &ended);
+                        })
+                        .expect("the compute lane admits the task"),
+                )
+            }),
+            ("an IO task", |spawner, started, ended| {
+                let dropped = SetOnDrop(ended);
+                Box::new(
+                    spawner
+                        .spawn_io("pending", move |_| async move {
+                            let _dropped = dropped;
+                            let _ = started.send(());
+                            std::future::pending::<()>().await;
+                        })
+                        .expect("the IO lane admits the task"),
+                )
+            }),
+            ("a worker", |spawner, started, ended| {
+                let mut worker = spawner
+                    .spawn_worker("worker", move |(): (), task: &TaskContext| {
+                        let _ = started.send(());
+                        until_cancelled(task, &ended);
+                    })
+                    .expect("the worker spawns");
+                worker.submit(()).expect("the worker takes its input");
+                Box::new(worker)
+            }),
+        ];
+        for (job, spawn) in cases {
+            let services = thread_per_job_services();
+            let mut registry = ServiceRegistry::new();
+            let spawner = TaskSpawner::new(&services, registry.work(&services));
+            let (started, starts) = mpsc::channel::<()>();
+            let ended = Arc::new(AtomicBool::new(false));
+            let handle = spawn(&spawner, started, Arc::clone(&ended));
+            starts
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the job started");
+
+            let report = registry.shutdown(Instant::now() + Duration::from_secs(10));
+            assert_eq!(report.unfinished_jobs, 0, "{job} wound down");
+            assert!(
+                ended.load(Ordering::SeqCst),
+                "{job} ended before the shutdown returned"
+            );
+            assert!(
+                matches!(
+                    spawner.spawn_compute("late", |_| ()),
+                    Err(SpawnError::ShuttingDown)
+                ),
+                "the spawner refuses once its application's work closed"
+            );
+            drop(handle);
+            services.shutdown(std::time::Instant::now() + Duration::from_secs(5));
+        }
+    }
+
+    /// A job that does not check its cancellation is reported still running
+    /// at the deadline, and the shutdown returns there.
+    fn a_job_that_ignores_cancellation_is_reported_at_the_deadline() {
+        let services = thread_per_job_services();
+        let mut registry = ServiceRegistry::new();
         let spawner = TaskSpawner::new(&services, registry.work(&services));
-        let worker = spawner
-            .spawn_worker("held", |(): (), _: &TaskContext| ())
-            .expect("the worker spawns");
+        let (started, starts) = mpsc::channel::<()>();
         let (release, released) = mpsc::channel::<()>();
-        let (started, running) = mpsc::channel::<()>();
         let stubborn = spawner
             .spawn_compute("ignores cancellation", move |_| {
                 let _ = started.send(());
                 let _ = released.recv();
             })
             .expect("the compute lane admits the job");
-        running
+        starts
             .recv_timeout(Duration::from_secs(10))
             .expect("the job started");
 
-        let work = registry
-            .work
-            .borrow_mut()
-            .take()
-            .expect("the registry made a node");
-        assert_eq!(
-            work.close_and_join(Instant::now() + Duration::from_millis(20)),
-            1,
-            "the job that ignores its cancellation is still running at the deadline"
-        );
-        assert!(worker.signal.is_cancelled(), "the held worker is cancelled");
-        assert!(
-            matches!(
-                spawner.spawn_compute("late", |_| ()),
-                Err(SpawnError::ShuttingDown)
-            ),
-            "the spawner refuses once its application's work closed"
-        );
+        let report = registry.shutdown(Instant::now() + WIND_DOWN);
+        assert_eq!(report.unfinished_jobs, 1, "the job runs past the deadline");
         release.send(()).expect("the job waits for its release");
-        assert_eq!(
-            work.close_and_join(Instant::now() + Duration::from_secs(10)),
-            0,
-            "a released job is waited for"
-        );
-        drop((stubborn, worker));
+        drop(stubborn);
         services.shutdown(std::time::Instant::now() + Duration::from_secs(5));
+    }
+
+    /// A job the pool still holds queued when the application's work closes
+    /// is not waited for and never starts: the owner thread that joins may
+    /// be the one that drains the queue.
+    fn a_queued_job_is_not_waited_for_and_never_starts() {
+        let (services, deterministic) = deterministic_services();
+        let mut registry = ServiceRegistry::new();
+        let spawner = TaskSpawner::new(&services, registry.work(&services));
+        let ran = Arc::new(AtomicBool::new(false));
+        let task = {
+            let ran = Arc::clone(&ran);
+            spawner.spawn_compute("queued", move |_| ran.store(true, Ordering::SeqCst))
+        }
+        .expect("the deterministic lane queues the job");
+
+        let asked = Instant::now();
+        let report = registry.shutdown(asked + Duration::from_secs(10));
+        assert_eq!(report.unfinished_jobs, 0, "a queued job is not running");
+        assert!(
+            asked.elapsed() < Duration::from_secs(5),
+            "the shutdown did not wait for the queue"
+        );
+        deterministic.run_until_idle();
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "the queued job never ran its body"
+        );
+        assert_eq!(task.try_join().ok(), Some(TaskOutcome::Cancelled));
     }
 
     #[test]
@@ -2474,6 +2626,14 @@ mod tests {
                 (
                     "shutdown_ends_the_applications_tasks_and_workers",
                     shutdown_ends_the_applications_tasks_and_workers as fn(),
+                ),
+                (
+                    "a_queued_job_is_not_waited_for_and_never_starts",
+                    a_queued_job_is_not_waited_for_and_never_starts as fn(),
+                ),
+                (
+                    "a_job_that_ignores_cancellation_is_reported_at_the_deadline",
+                    a_job_that_ignores_cancellation_is_reported_at_the_deadline as fn(),
                 ),
             ],
         );
