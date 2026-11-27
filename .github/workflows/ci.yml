@@ -1305,14 +1305,14 @@ jobs:
             # no registry version, so the builds below can be --locked.
             (cd "$projects/$1" && cargo update --workspace --offline --quiet)
           }
-          # size_of <project> <binary> [<target>]: the bytes of the binary
-          # Cargo reports for this build (a wasm32 module is the `.wasm` among
-          # its files), never a path guessed under the target directory. The
+          # artifact_of <project> <binary> [<target>]: the binary Cargo
+          # reports for this build (a wasm32 module is the `.wasm` among its
+          # files), never a path guessed under the target directory. The
           # build is the one `flui build --release` makes, with the facade's
           # release ceiling (ADR-0398 §2), except the rewrites of the build
           # machine's source paths it adds (flui-cli's `build::source_paths`),
           # which make its binary about 70 KB (0.35%) smaller than the one measured.
-          size_of() {
+          artifact_of() {
             local artifact
             artifact=$(cd "$projects/$1" \
               && cargo build --locked --release --package "$2" --bin "$2" \
@@ -1327,7 +1327,25 @@ jobs:
               echo "::error::the build reported no executable for $2" >&2
               return 1
             fi
+            echo "$artifact"
+          }
+          size_of() {  # size_of <project> <binary> [<target>]: its bytes
+            local artifact
+            artifact=$(artifact_of "$@")
             stat -c %s "$artifact"
+          }
+          # element_bytes <project> <binary>: the machine code whose symbol
+          # names `flui_view::element::`: the element's methods, compiled once
+          # per view type, and the helpers compiled once (ADR-0405), so a helper
+          # that names `V` again counts once per view type whether or not it is
+          # inlined. The same build linked again unstripped: the strip setting
+          # changes the link alone, so only the final fat-LTO link runs again.
+          element_bytes() {
+            local artifact
+            artifact=$(CARGO_PROFILE_RELEASE_STRIP=none artifact_of "$@")
+            nm --defined-only --demangle --print-size --radix=d "$artifact" \
+              | awk '$3 ~ /^[tT]$/ && index($0, "flui_view::element::") \
+                  { sum += $2 } END { print sum + 0 }'
           }
           create perf-counter
           create perf-reload --hot-reload
@@ -1336,6 +1354,7 @@ jobs:
           bytes[counter_release_bytes]=$(size_of perf-counter perf-counter)
           bytes[counter_wasm_bytes]=$(size_of perf-counter perf-counter wasm32-unknown-unknown)
           bytes[hot_reload_host_release_bytes]=$(size_of perf-reload perf-reload-host)
+          bytes[counter_element_bytes]=$(element_bytes perf-counter perf-counter)
           failed=0
           {
             echo "### Release sizes"
@@ -1343,7 +1362,8 @@ jobs:
             echo "| counter | perf/size.toml | this commit |"
             echo "|---|---:|---:|"
           } >> "$GITHUB_STEP_SUMMARY"
-          for counter in counter_release_bytes counter_wasm_bytes hot_reload_host_release_bytes; do
+          for counter in counter_release_bytes counter_wasm_bytes hot_reload_host_release_bytes \
+            counter_element_bytes; do
             current=${bytes[$counter]}
             base=$(sed -n "s/^$counter = \([0-9][0-9]*\)$/\1/p" perf/size.toml)
             echo "$counter = $current  (perf/size.toml: ${base:-none})"

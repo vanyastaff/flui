@@ -33,7 +33,10 @@ use std::any::TypeId;
 use flui_foundation::RenderId;
 use flui_foundation::panic::FirstPanic;
 
-use super::{arity::ElementArity, generic::ElementCore};
+use super::{
+    arity::ElementArity,
+    generic::{CoreState, ElementCore},
+};
 use crate::{
     owner::{LifecycleHook, RecoveredAt, RecoveredPanic},
     view::{BoxedView, FrameworkError, IntoView},
@@ -58,7 +61,11 @@ where
     V: Clone + 'static,
     A: ElementArity,
 {
-    if core.should_build() {
+    should_build_traced(core.state(), behavior_name)
+}
+
+fn should_build_traced(state: &CoreState, behavior_name: &'static str) -> bool {
+    if state.dirty.get() && state.lifecycle.can_build() {
         tracing::debug!("{}::perform_build starting", behavior_name);
         true
     } else {
@@ -179,72 +186,88 @@ where
     // is where "an element is building" is armed for the ui_runtime's reactive
     // graph — reads re-derive the reader set, writes and slot creations are
     // refused. The caller armed it (`begin_reactive_build`); it is disarmed
-    // here on both exits (the panic path below included).
-    let building = core.self_id();
+    // on both exits: here on success, in `recover_build` on a panic.
     // A build panic is replaced by an ErrorView, not unwound.
     let mut caught = FirstPanic::new();
-    let built = caught.contain(build);
-    match built.ok_or_else(move || {
-        caught
-            .into_payload()
-            .expect("BUG: a build that returned no view holds its panic")
-    }) {
-        Ok(child_view) => {
-            if let Some(id) = building {
+    match caught.contain(build) {
+        Some(child_view) => {
+            if let Some(id) = core.self_id() {
                 owner.reactive.end_element_build(id, true);
             }
             child_view
         }
-        Err(payload) => {
-            // Classification borrows the original; retire it before recovery
-            // invokes user factories or diagnostics. Opaque aggregate drop glue
-            // could otherwise abort even after successful ErrorView substitution.
-            let Some(element) = building else {
-                let error = FrameworkError::from_panic(
-                    payload.as_ref(),
-                    format!("building {behavior_name}"),
-                );
-                flui_foundation::panic::discard_payload(payload);
-                // A panicking log is contained so ErrorView substitution
-                // proceeds.
-                FirstPanic::new().contain(|| {
-                    tracing::error!(
-                        behavior_name,
-                        panic_message = %error.message,
-                        "lifecycle hook panicked outside the slab; substituting ErrorView \
-                         (no element id to record)"
-                    );
-                });
-                return crate::view::ErrorView::build_error_view(
-                    &error,
-                    owner.capabilities.error_view_builder,
-                );
-            };
-            let panic = RecoveredPanic::from_payload(
-                RecoveredAt::Element {
-                    element,
-                    parent: None,
-                },
-                TypeId::of::<V>(),
-                LifecycleHook::Build,
-                payload.as_ref(),
-                format!("building {behavior_name}"),
-            )
-            .with_site(core.creation_site());
+        None => recover_build(
+            core.state(),
+            owner,
+            behavior_name,
+            TypeId::of::<V>(),
+            caught,
+        ),
+    }
+}
+
+/// The failure half of [`build_or_recover_begun`], compiled once: records the
+/// build's panic and builds the `ErrorView` that replaces its child.
+#[inline(never)]
+#[cold]
+fn recover_build(
+    state: &CoreState,
+    owner: &mut crate::ElementOwner<'_>,
+    behavior_name: &'static str,
+    view_type: TypeId,
+    caught: FirstPanic,
+) -> BoxedView {
+    let building = state.self_id;
+    let payload = caught
+        .into_payload()
+        .expect("BUG: a build that returned no view holds its panic");
+    {
+        // Classification borrows the original; retire it before recovery
+        // invokes user factories or diagnostics. Opaque aggregate drop glue
+        // could otherwise abort even after successful ErrorView substitution.
+        let Some(element) = building else {
+            let error =
+                FrameworkError::from_panic(payload.as_ref(), format!("building {behavior_name}"));
             flui_foundation::panic::discard_payload(payload);
-            owner.reactive.end_element_build(element, false);
-            // A recovery factory failure retains its existing authority. No
-            // successful recovery record is published until it returns a view.
-            let error_view = crate::view::ErrorView::build_error_view(
-                &panic.error,
+            // A panicking log is contained so ErrorView substitution
+            // proceeds.
+            FirstPanic::new().contain(|| {
+                tracing::error!(
+                    behavior_name,
+                    panic_message = %error.message,
+                    "lifecycle hook panicked outside the slab; substituting ErrorView \
+                     (no element id to record)"
+                );
+            });
+            return crate::view::ErrorView::build_error_view(
+                &error,
                 owner.capabilities.error_view_builder,
             );
-            if let Some(flag) = owner.build_recovered {
-                flag.set(true);
-            }
-            owner.push_recovered_panic(panic);
-            error_view
+        };
+        let panic = RecoveredPanic::from_payload(
+            RecoveredAt::Element {
+                element,
+                parent: None,
+            },
+            view_type,
+            LifecycleHook::Build,
+            payload.as_ref(),
+            format!("building {behavior_name}"),
+        )
+        .with_site(state.site);
+        flui_foundation::panic::discard_payload(payload);
+        owner.reactive.end_element_build(element, false);
+        // A recovery factory failure retains its existing authority. No
+        // successful recovery record is published until it returns a view.
+        let error_view = crate::view::ErrorView::build_error_view(
+            &panic.error,
+            owner.capabilities.error_view_builder,
+        );
+        if let Some(flag) = owner.build_recovered {
+            flag.set(true);
         }
+        owner.push_recovered_panic(panic);
+        error_view
     }
 }
 
@@ -308,9 +331,14 @@ where
     R: IntoView,
 {
     let child = crate::view::ChildViews::one(child_view.into_view());
-    core.clear_dirty();
-    tracing::debug!("{}::build_into_views completed", behavior_name);
+    finish_child_views(core.state(), behavior_name);
     child
+}
+
+/// Clears the dirty flag once a build half is complete, and traces it.
+fn finish_child_views(state: &CoreState, behavior_name: &'static str) {
+    state.dirty.set(false);
+    tracing::debug!("{}::build_into_views completed", behavior_name);
 }
 
 /// Full `build_into_views` body for behaviors that delegate to a `child()`
@@ -345,8 +373,7 @@ where
     }
     let child_view = get_child(core.view());
     let child = crate::view::ChildViews::shared(child_view);
-    core.clear_dirty();
-    tracing::debug!("{}::build_into_views completed", behavior_name);
+    finish_child_views(core.state(), behavior_name);
     child
 }
 
@@ -357,16 +384,14 @@ where
 /// The removal half of `render_custody::unmount`: remove the associated
 /// `RenderObject` from the `RenderTree`. No-op if the behavior never
 /// got a `RenderId` (e.g. unmount before mount with no `PipelineOwner`).
-pub(crate) fn remove_render_object_from_tree<V, A>(
-    core: &ElementCore<V, A>,
+#[inline(never)]
+pub(crate) fn remove_render_object_from_tree(
+    core: &CoreState,
     render_id: Option<RenderId>,
     behavior_name: &'static str,
-) where
-    V: Clone + 'static,
-    A: ElementArity,
-{
+) {
     if let Some(render_id) = render_id
-        && let Some(pipeline_owner) = core.pipeline_owner()
+        && let Some(pipeline_owner) = core.pipeline_owner.as_ref()
     {
         // `remove_render_object` cascades; the non-cascading primitive is
         // `RenderTree::remove_shallow`. Element unmount wants the cascade —

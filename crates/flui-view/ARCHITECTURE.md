@@ -29,6 +29,14 @@ The behavior families, each at one arity:
 | `RenderBehavior<V>` | `Variable` | owns the render object |
 | `StatefulRenderBehavior<V>` | `Variable` | owns `V::State` and the render object the view creates; the state configures the object, publishes and builds the one child (ADR-0322 §4) |
 
+An element's code is compiled once per view type, so only what names `V` stays generic
+(ADR-0405). `CoreState`, the core's view-independent state, is what the build, update, hook and
+render-custody helpers take, with the view's `TypeId` as a value. The half that runs after a hook
+panicked (panic records, `ErrorView` substitution) is an `#[inline(never)]` `#[cold]` function
+the generic caller reaches only when `FirstPanic::is_held` says so, and the render object's
+insertion, adoption and removal are `#[inline(never)]`, since a function the optimizer inlines is
+copied into every view type again.
+
 `Leaf` and `Optional` are render-object arity (`flui_foundation::Arity`), not
 element arity: no element instantiates them. The type aliases in `element/mod.rs`
 name the concrete tuples:

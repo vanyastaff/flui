@@ -66,9 +66,9 @@ use crate::{
 /// methods on [`ElementCore`] are `#[inline]` forwarders. Hot paths
 /// (`should_build`, the dirty flag, view access) stay on the generic type —
 /// they are field reads that inline to nothing either way.
-struct CoreState {
+pub(crate) struct CoreState {
     /// Current lifecycle state (Initial, Active, Inactive, or Defunct).
-    lifecycle: Lifecycle,
+    pub(super) lifecycle: Lifecycle,
 
     /// Depth in the element tree (root = 0), stamped by
     /// [`ElementTree`](crate::tree::ElementTree) through
@@ -76,20 +76,20 @@ struct CoreState {
     /// whenever the node's depth is set, before `mount` and on every move.
     /// Held in 32 bits, which share a word with the lifecycle and the dirty
     /// flag: a tree four billion elements deep does not fit in memory.
-    depth: u32,
+    pub(super) depth: u32,
 
     /// Whether this element needs to rebuild.
     /// A listener between frames does not touch it: its rebuild handle queues
     /// the element on the external build inbox, and the drain marks it dirty.
-    dirty: Cell<bool>,
+    pub(super) dirty: Cell<bool>,
 
     /// Owner-local handle to the render tree's `PipelineOwner`, propagated
     /// from parent elements. Typed directly -- no `Arc<dyn Any>` erasure --
     /// since `PipelineCell` is already a concrete, non-generic type.
-    pipeline_owner: Option<PipelineCell>,
+    pub(super) pipeline_owner: Option<PipelineCell>,
 
     /// Parent's RenderId for tree structure.
-    parent_render_id: Option<RenderId>,
+    pub(super) parent_render_id: Option<RenderId>,
 
     /// The lazy-sliver logical index this element's render object (or the
     /// render object of its first render descendant) carries, when this
@@ -100,10 +100,10 @@ struct CoreState {
     /// `parent_render_id`; a render element consumes it (stamps its
     /// `SliverMultiBoxAdaptorParentData` at mount) and hands `None` to its
     /// own children.
-    sliver_slot: Option<SliverSlot>,
+    pub(super) sliver_slot: Option<SliverSlot>,
 
     /// This element's own `ElementId`, stamped at slab insertion.
-    self_id: Option<ElementId>,
+    pub(super) self_id: Option<ElementId>,
 
     /// The element-tree parent this element was mounted under, as handed to
     /// `mount`. Meaningful only while `on_mount` runs: the mount decision it
@@ -111,15 +111,15 @@ struct CoreState {
     /// reparent re-parents through `set_parent_render_id` directly and never
     /// re-runs `on_mount`, so this field goes stale for everything after the
     /// mount frame — nothing may read it as current tree state.
-    element_parent: Option<ElementId>,
+    pub(super) element_parent: Option<ElementId>,
 
     /// Handle for scheduling THIS element's rebuild from a listener callback
     /// fired outside a frame; captured at mount.
-    external_scheduler: Option<ExternalBuildScheduler>,
+    pub(super) external_scheduler: Option<ExternalBuildScheduler>,
 
     /// Where the view this element was mounted for was created, copied from
     /// [`View::creation_site`] at mount (zero-sized without sites).
-    site: flui_foundation::CreationSite,
+    pub(super) site: flui_foundation::CreationSite,
 }
 
 impl CoreState {
@@ -234,7 +234,7 @@ impl CoreState {
         );
     }
 
-    fn rebuild_handle(&self) -> crate::RebuildHandle {
+    pub(super) fn rebuild_handle(&self) -> crate::RebuildHandle {
         match (self.external_scheduler.clone(), self.self_id) {
             (Some(scheduler), Some(element)) => crate::RebuildHandle::new(scheduler, element),
             _ => crate::RebuildHandle::inert(),
@@ -329,6 +329,12 @@ where
         }
     }
 
+    /// The view-independent state, for the helpers that do not name `V`
+    /// (ADR-0405).
+    pub(crate) fn state(&self) -> &CoreState {
+        &self.state
+    }
+
     /// Set this element's own `ElementId`. Called by
     /// [`crate::tree::ElementTree`] immediately after slab insertion
     /// via [`crate::view::ElementBase::set_self_id`].
@@ -346,18 +352,6 @@ where
     /// so this id addresses the now-empty slot the walk skips.
     pub(crate) fn self_id(&self) -> Option<ElementId> {
         self.state.self_id
-    }
-
-    /// The element-tree parent this element was mounted under, stamped by
-    /// [`Self::mount`]. Mount-frame state: `RenderBehavior::on_mount` reads it
-    /// to tell a legal bare mount (element-tree root, no parent) from an
-    /// adoption that would orphan the render object. A retake or reparent
-    /// re-parents through [`Self::set_parent_render_id`] without re-running
-    /// `on_mount`, so this value is stale outside the mount frame and must
-    /// not be read as current tree state — the live parent edge lives on
-    /// [`crate::tree::ElementNode::parent`].
-    pub(crate) fn element_parent(&self) -> Option<ElementId> {
-        self.state.element_parent
     }
 
     // NOTE: the production build/reconcile path reads `self_id` through

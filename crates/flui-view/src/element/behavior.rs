@@ -12,7 +12,7 @@ use flui_foundation::{ElementId, Listenable, RenderId};
 
 use super::{
     arity::ElementArity,
-    generic::ElementCore,
+    generic::{CoreState, ElementCore},
     provided::{Provided, Publication},
 };
 use crate::{
@@ -100,11 +100,35 @@ pub(super) fn armed_state_hook<V, A>(
     let mut caught = FirstPanic::new();
     caught.contain(run);
     mark_lifecycle_records(owner, sink_start);
+    if caught.is_held() {
+        armed_hook_failed(
+            core.state(),
+            owner,
+            TypeId::of::<V>(),
+            hook,
+            context,
+            caught,
+        );
+    }
+}
+
+/// The failure half of [`armed_state_hook`], compiled once: records the
+/// hook's panic and resumes it.
+#[inline(never)]
+#[cold]
+fn armed_hook_failed(
+    core: &CoreState,
+    owner: &mut crate::ElementOwner<'_>,
+    view_type: TypeId,
+    hook: LifecycleHook,
+    context: &'static str,
+    caught: FirstPanic,
+) {
     if let Some(payload) = caught.held() {
         owner.record_armed_lifecycle_panic(
-            core.self_id(),
-            core.creation_site(),
-            TypeId::of::<V>(),
+            core.self_id,
+            core.site,
+            view_type,
             hook,
             payload,
             context,
@@ -176,15 +200,30 @@ pub(super) fn contained_state_hook<V, A>(
     // elements still leave.
     let mut caught = FirstPanic::new();
     caught.contain(run);
-    if let Some(payload) = caught.held() {
-        owner.record_hook_panic(
-            core.self_id(),
-            core.creation_site(),
+    if caught.is_held() {
+        record_contained_hook(
+            core.state(),
+            owner,
             TypeId::of::<V>(),
             hook,
-            payload,
             context,
+            &caught,
         );
+    }
+}
+
+#[inline(never)]
+#[cold]
+fn record_contained_hook(
+    core: &CoreState,
+    owner: &mut crate::ElementOwner<'_>,
+    view_type: TypeId,
+    hook: LifecycleHook,
+    context: &'static str,
+    caught: &FirstPanic,
+) {
+    if let Some(payload) = caught.held() {
+        owner.record_hook_panic(core.self_id, core.site, view_type, hook, payload, context);
     }
 }
 
@@ -211,14 +250,29 @@ pub(super) fn publish_provided<V, A>(
     super::behavior_commons::begin_reactive_build(core, owner);
     let mut caught = FirstPanic::new();
     caught.contain(|| publication.publish(owner, provide));
+    if caught.is_held() {
+        provide_failed(core.state(), owner, TypeId::of::<V>(), caught);
+    }
+}
+
+/// The failure half of [`publish_provided`], compiled once: disarms the build
+/// phase, records the hook's panic and resumes it.
+#[inline(never)]
+#[cold]
+fn provide_failed(
+    core: &CoreState,
+    owner: &mut crate::ElementOwner<'_>,
+    view_type: TypeId,
+    caught: FirstPanic,
+) {
     if let Some(payload) = caught.held() {
-        if let Some(id) = core.self_id() {
+        if let Some(id) = core.self_id {
             owner.reactive.end_element_build(id, false);
         }
         owner.record_armed_lifecycle_panic(
-            core.self_id(),
-            core.creation_site(),
-            TypeId::of::<V>(),
+            core.self_id,
+            core.site,
+            view_type,
             LifecycleHook::Provide,
             payload,
             "publishing the element's values",
@@ -241,12 +295,20 @@ where
     V: Clone + 'static,
     A: ElementArity,
 {
+    live_build_ctx(core.state(), owner)
+}
+
+/// The view-independent body of [`make_build_ctx`].
+fn live_build_ctx<'a>(
+    core: &CoreState,
+    owner: &crate::ElementOwner<'a>,
+) -> LiveBuildContextChoice<'a> {
     let handle = owner.build_view.expect(
         "component build requires BuildOwner::build_scope live BuildHandle; \
          ElementBuildContext::new_minimal is not a production fallback",
     );
     let element_id = core
-        .self_id()
+        .self_id
         .expect("component build requires ElementCore::self_id stamped by ElementTree insertion");
 
     // The live context carries the element's tree depth read from its node,
@@ -257,7 +319,7 @@ where
     // stamped id; the preceding `expect`s catch the intended invariants.
     let tree_depth = match handle.tree.get(element_id) {
         Some(node) => node.depth(),
-        None => core.depth(),
+        None => usize::try_from(core.depth).expect("BUG: a 32-bit depth fits in usize"),
     };
     // The rebuild capability is minted from the element's own core,
     // which already holds the `ExternalBuildScheduler` installed at mount — the
@@ -284,7 +346,7 @@ where
             presentation: owner.capabilities,
             flush_registry: owner.flush_registry,
             hit_test_handle: owner.hit_test_handle,
-            pipeline_owner: core.pipeline_owner().cloned(),
+            pipeline_owner: core.pipeline_owner.clone(),
             keep_alive: owner.keep_alive.clone(),
             unmount_hooks: owner.unmount_hooks.clone(),
             reads: crate::reactive::ElementReads::new(owner.reactive.clone(), element_id),
@@ -1294,18 +1356,9 @@ where
         core: &mut ElementCore<V, A>,
         owner: &mut crate::ElementOwner<'_>,
     ) -> crate::view::ChildViews {
-        if !core.should_build() {
-            tracing::trace!(
-                "RenderBehavior::build_into_views skipped render_id={:?}",
-                self.render_id
-            );
+        if !should_build_render(core.state(), self.render_id) {
             return crate::view::ChildViews::none();
         }
-
-        tracing::info!(
-            "RenderBehavior::build_into_views START render_id={:?}",
-            self.render_id
-        );
 
         // Collect the render element's child views, shared as the view holds
         // them. The RenderObject-attach side-effects already ran in
@@ -1324,13 +1377,7 @@ where
         // the tree borrowed so `update_render_object`'s `depend_on` resolves.
         self.push_config(core, owner);
 
-        core.clear_dirty();
-
-        tracing::debug!(
-            "RenderBehavior::build_into_views completed render_id={:?} children={}",
-            self.render_id,
-            child_views.len()
-        );
+        finish_render_build(core.state(), self.render_id, child_views.len());
 
         child_views
     }
@@ -1371,6 +1418,33 @@ where
     fn on_update(&mut self, _core: &ElementCore<V, A>, _owner: &mut crate::ElementOwner<'_>) {}
 }
 
+/// Whether a render element's build half runs, traced. It names no view type,
+/// so the optimizer may keep one copy of it (ADR-0405 §2).
+fn should_build_render(core: &CoreState, render_id: Option<RenderId>) -> bool {
+    if core.dirty.get() && core.lifecycle.can_build() {
+        tracing::info!(
+            "RenderBehavior::build_into_views START render_id={:?}",
+            render_id
+        );
+        true
+    } else {
+        tracing::trace!(
+            "RenderBehavior::build_into_views skipped render_id={:?}",
+            render_id
+        );
+        false
+    }
+}
+
+/// Clears a render element's dirty flag once its build half is complete.
+fn finish_render_build(core: &CoreState, render_id: Option<RenderId>, children: usize) {
+    core.dirty.set(false);
+    tracing::debug!(
+        "RenderBehavior::build_into_views completed render_id={:?} children={}",
+        render_id,
+        children
+    );
+}
 // ============================================================================
 // InheritedBehavior
 // ============================================================================

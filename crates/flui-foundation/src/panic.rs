@@ -319,6 +319,7 @@ impl std::fmt::Debug for RecoveryFailure {
 }
 
 impl Drop for FirstPanic {
+    #[inline]
     fn drop(&mut self) {
         if let Some(payload) = self.0.take() {
             discard_payload(payload);

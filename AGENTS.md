@@ -263,6 +263,11 @@ and the readers of "Before a merge" look for a change that breaks one:
   description type's builder method has the bare name, never `with_` (ADR-0325).
 - A production `expect` or `panic!` names its invariant (`BUG: `) or its `try_` twin
   ([`docs/PANIC-POLICY.md`](docs/PANIC-POLICY.md)).
+- In `flui-view`'s `element/`, a helper whose body names nothing of the view but its `TypeId`
+  takes `CoreState` and the `TypeId`, not `&ElementCore<V, A>`, and a body that runs only after a
+  hook panicked is `#[inline(never)]` and `#[cold]` behind `FirstPanic::is_held`: a generic one
+  is compiled again for every view type, and the `size` job's `counter_element_bytes` sees it
+  only past 2% (ADR-0405).
 
 ## ADR Policy
 
