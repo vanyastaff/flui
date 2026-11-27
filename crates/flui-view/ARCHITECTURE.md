@@ -722,7 +722,8 @@ is the only seam between a host and a reload tool.
 It sits in this crate, below the runtime, so the host (`flui-app`) and the tool
 (`flui-hot-reload`) each name it without naming each other, and a package reaches it through
 `flui-sdk`'s `view` glob re-export with no new SDK item. The trait is the driver half — `attach`, `detach`,
-`poll` and `scene_frame`; the per-call seam a code patcher needs arrives with its first
+`poll` (a `ReloadEvent::Loaded(CodeVersion)` per new build), `reassemble_requested`, `run_entry`,
+`applied` (a `ReloadOutcome`, ADR-0393 §3) and `scene_frame`; the per-call seam a code patcher needs arrives with its first
 producer (ADR-0311 §7). Its bound is still `Send + 'static` because the instance travels in the
 application's configuration; it is only ever called on the owner thread. ADR-0311 makes it
 `'static` alone, built on the owner thread from a factory, with `scene_frame` in a scene hook of

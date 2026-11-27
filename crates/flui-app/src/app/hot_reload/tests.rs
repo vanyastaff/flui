@@ -86,7 +86,17 @@ impl DevReloadHook for Scripted {
                 version, runtime, ..
             } => Applied::Reassembled(version, runtime),
             ReloadOutcome::Restarted { version, .. } => Applied::Restarted(version),
-            ReloadOutcome::RestartFailed { version, .. } => Applied::RestartFailed(version),
+            ReloadOutcome::RestartFailed {
+                version,
+                ref reason,
+                ..
+            } => {
+                assert!(
+                    matches!(reason, RestartFailure::NoApplication),
+                    "a host that cannot restart composes no application: {reason:?}"
+                );
+                Applied::RestartFailed(version)
+            }
             _ => unreachable!("a test host reports no other outcome"),
         };
         self.0.lock().applied.push(applied);

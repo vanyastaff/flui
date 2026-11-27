@@ -33,6 +33,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::{fmt, sync::Arc};
 
+#[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use flui_foundation::UiRuntimeId;
 use flui_view::dev_reload::DevReloadHook;
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
@@ -70,8 +71,8 @@ use record::Record;
 /// Built by [`AppConfig::dev_reload`]. `Clone` shares the one hook and
 /// its bookkeeping, so every window opened with clones of the same
 /// configuration is driven by the same hook: attached once per loop, polled
-/// at each UI runtime's frame boundary, and each patch applied once to every
-/// ui_runtime.
+/// at each UI runtime's frame boundary, and each version applied once to every
+/// UI runtime through the one record of versions they share.
 #[derive(Clone)]
 pub struct DevReload(Arc<Mutex<Slot>>);
 
@@ -321,6 +322,7 @@ impl WorkerReload {
 /// driver holds as long as the UI runtime. Dropping it removes the UI runtime
 /// from the record.
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
+#[must_use = "dropping the handle removes the UI runtime from the record"]
 pub(crate) struct RuntimeReload {
     reload: WorkerReload,
     runtime: UiRuntimeId,

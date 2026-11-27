@@ -59,6 +59,10 @@ pub struct WorkerReloadHook {
     /// reads it whatever the driver's poll interval says.
     artifact_changed: Arc<AtomicBool>,
     watcher: Option<ArtifactWatcher>,
+    /// The first poll after `attach` reports the version already loaded: the
+    /// host composed its application from that image, and the version tells
+    /// its record which layout that is (ADR-0393 §3).
+    report_loaded: bool,
     #[cfg(feature = "app-plugin")]
     registration: Option<crate::RebuildHookRegistration>,
 }
@@ -87,6 +91,7 @@ impl WorkerReloadHook {
             rebuild_requested: Arc::new(AtomicBool::new(false)),
             artifact_changed: Arc::new(AtomicBool::new(false)),
             watcher: None,
+            report_loaded: false,
             #[cfg(feature = "app-plugin")]
             registration: None,
         }
@@ -115,6 +120,7 @@ impl DevReloadHook for WorkerReloadHook {
         // it again, so a rebuild between the two, which the watcher's baseline
         // below already holds, is not missed.
         self.artifact_changed.store(true, Ordering::Release);
+        self.report_loaded = true;
         self.watcher = ArtifactWatcher::spawn(
             &self.watch_path,
             self.watch_interval,
@@ -144,7 +150,11 @@ impl DevReloadHook for WorkerReloadHook {
             .driver
             .as_ref()
             .and_then(WorkerReloadDriver::loaded_version);
-        event_for(outcome, version)
+        let first = std::mem::take(&mut self.report_loaded);
+        match (event_for(outcome, version), version) {
+            (ReloadEvent::Unchanged, Some(version)) if first => ReloadEvent::Loaded(version),
+            (event, _) => event,
+        }
     }
 
     fn reassemble_requested(&mut self) -> bool {
@@ -302,7 +312,7 @@ impl Drop for ArtifactWatcher {
 /// Each frame it checks the plugin library for an update, reloading it on
 /// the owner thread, and, while a plugin is loaded, has it build the frame's
 /// scene, which the host renders in place of the widget tree. It never
-/// reports a patch: a scene plugin replaces frames, not code the widget tree
+/// reports a version: a scene plugin replaces frames, not code the widget tree
 /// runs.
 pub struct ScenePluginHook {
     driver: HotReloadDriver,

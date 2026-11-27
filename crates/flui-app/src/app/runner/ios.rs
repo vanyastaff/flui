@@ -20,7 +20,7 @@
 //!
 //! iOS drives the application's development reload hook the way desktop
 //! does: the loop attaches it once, and `bootstrap_ios` polls it at every
-//! frame boundary and reassembles the UI runtime on a patch. A worker hook's
+//! frame boundary and reassembles the UI runtime to each version it reports. A worker hook's
 //! `dlopen` is usable in the Simulator (and for a dev-signed build), while a
 //! production App Store build installs no hook and the whole capability is
 //! inert. See [`super::hot_reload`] for the seam and `docs/hot-reload.md` for

@@ -295,14 +295,14 @@ user code:
   there proves "on `flui-sdk` alone". `cargo xtask globals` and `cargo xtask reach` read §7's entries,
   each with `exit = "ADR-0311"`, and report each as stale once the dlopen path is gone.
 - **Tests that exist.** The host's `dev_reload_hook_matrix` (`crates/flui-app/src/app/hot_reload/tests.rs`):
-  `a_patch_polled_through_the_hook_reassembles_the_ui_runtime`,
-  `without_a_hook_the_frame_is_unchanged`, `one_patch_reaches_every_ui_runtime_exactly_once`,
-  `a_ui_runtime_first_polled_after_a_patch_does_not_replay_it`,
-  `a_ui_runtime_mounted_before_a_patch_applies_it_at_its_first_boundary`,
+  `a_version_polled_through_the_hook_reassembles_the_ui_runtime`,
+  `without_a_hook_the_frame_is_unchanged`, `one_version_reaches_every_ui_runtime_exactly_once`,
+  `a_ui_runtime_mounted_after_a_version_does_not_replay_it`,
+  `a_ui_runtime_mounted_before_a_version_applies_it_at_its_first_boundary`,
   `a_panicking_poll_disables_the_hook_and_the_frame_continues`,
   `a_detach_that_arrives_during_a_hook_call_runs_when_the_call_returns`,
-  `a_panicking_attach_leaves_the_loop_without_reload` and
-  `each_reload_event_maps_to_the_ui_runtime_tier`; the runner's
+  `a_panicking_attach_leaves_the_loop_without_reload` (ADR-0393 §3 replaced
+  `each_reload_event_maps_to_the_ui_runtime_tier` with the record's tests); the runner's
   `main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop`. The
   package's (`packages/flui-hot-reload/src/hook/tests.rs`): `event_for_maps_each_driver_outcome`,
   `a_rebuild_request_asks_for_a_reassemble_and_wakes_once_until_detached`,

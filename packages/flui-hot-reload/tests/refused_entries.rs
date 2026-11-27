@@ -198,11 +198,13 @@ pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
     let mut revision = 0;
     let mut stage = |image: &Path| {
         revision += 1;
-        let manifest = flui_hot_reload::WorkerManifest {
-            path: image.to_path_buf(),
-            layout: 1,
-            revision,
-        };
+        let manifest = flui_hot_reload::WorkerManifest::new(
+            image.to_path_buf(),
+            flui_sdk::view::dev_reload::CodeVersion::new(
+                flui_sdk::view::dev_reload::LayoutEpoch::try_new(1).expect("not zero"),
+                flui_sdk::view::dev_reload::Revision::try_new(revision).expect("not zero"),
+            ),
+        );
         std::fs::write(
             flui_hot_reload::WorkerManifest::beside(&watched),
             serde_json::to_vec(&manifest).expect("a manifest serializes"),
@@ -248,4 +250,20 @@ pub extern "C" fn flui_worker_abi_token() -> u64 { TOKEN }
         Some(4),
         "the replacing image's version"
     );
+
+    // The hook a host installs reports the image loaded at `attach` once, so
+    // the host's record learns which layout it was composed from.
+    drop(driver);
+    #[cfg(feature = "host-hook")]
+    {
+        use flui_sdk::view::dev_reload::{DevReloadHook as _, ReloadEvent, ReloadWake};
+        let mut hook = flui_hot_reload::WorkerReloadHook::new(&watched);
+        hook.attach(ReloadWake::new(|| {}));
+        let ReloadEvent::Loaded(version) = hook.poll() else {
+            panic!("the first poll after attach reports the loaded image's version");
+        };
+        assert_eq!(version.revision.get(), 4);
+        assert_eq!(hook.poll(), ReloadEvent::Unchanged, "once");
+        hook.detach();
+    }
 }

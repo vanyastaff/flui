@@ -21,14 +21,31 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct WorkerManifest {
     /// The staged image to load in place of the canonical library.
-    pub path: PathBuf,
-    /// The build's layout epoch, fixed for a `flui run` session.
-    pub layout: u64,
-    /// The build's revision, new for every staged build.
-    pub revision: u64,
+    path: PathBuf,
+    /// The build's `LayoutEpoch`, as its integer.
+    layout: u64,
+    /// The build's `Revision`, as its integer.
+    revision: u64,
 }
 
 impl WorkerManifest {
+    /// The manifest naming the staged image `path` and the version minted
+    /// for it.
+    #[must_use]
+    pub fn new(path: PathBuf, version: CodeVersion) -> Self {
+        Self {
+            path,
+            layout: version.layout.get(),
+            revision: version.revision.get(),
+        }
+    }
+
+    /// The staged image to load in place of the canonical library.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// The manifest's file name, beside the canonical library.
     pub const FILE_NAME: &str = ".flui_worker_plugin";
 
@@ -79,10 +96,16 @@ mod tests {
         let lib = dir.path().join("libworker.so");
         assert_eq!(WorkerManifest::read(&lib).expect("no manifest"), None);
 
-        let manifest = WorkerManifest {
-            path: dir.path().join("libworker-hot-1.so"),
-            layout: 1,
-            revision: 2,
+        let manifest = WorkerManifest::new(
+            dir.path().join("libworker-hot-1.so"),
+            CodeVersion::new(
+                LayoutEpoch::try_new(1).expect("not zero"),
+                Revision::try_new(2).expect("not zero"),
+            ),
+        );
+        let zero_revision = WorkerManifest {
+            revision: 0,
+            ..manifest.clone()
         };
         let json = serde_json::to_vec(&manifest).expect("a manifest serializes");
         std::fs::write(WorkerManifest::beside(&lib), json).expect("the manifest is written");
@@ -102,13 +125,6 @@ mod tests {
             WorkerManifest::read(&lib).is_err(),
             "the plain-path form of earlier releases is refused"
         );
-        assert_eq!(
-            WorkerManifest {
-                revision: 0,
-                ..manifest
-            }
-            .version(),
-            None
-        );
+        assert_eq!(zero_revision.version(), None, "no tool mints a zero");
     }
 }

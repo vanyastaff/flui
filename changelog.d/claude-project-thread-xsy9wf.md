@@ -84,7 +84,7 @@
   watching is `flui run`'s, which keeps its own debounce; nothing read these.
 - **`flui-hot-reload`**: `HotReloadTier` and `HotReloadOutcome`, which nothing read; the tiers
   are ADR-0393's and the host derives them. **`flui-runtime`**: `reload::ReloadTier`;
-  `UiRuntime::request_hot_reload(tier)` is `request_reassemble()`, the one reload a UI runtime
+  `UiCommandSender::request_hot_reload(tier)` is `request_reassemble()`, the one reload a UI runtime
   runs.
 
 ### Fixed

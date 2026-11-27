@@ -2538,6 +2538,14 @@ fn prune_stale_staged_workers(parent: &Path, stem: &str, ext: &str, keep: &Path)
     }
 }
 
+/// One staged build's version: a layout epoch and a revision, both non-zero,
+/// as `flui_view::dev_reload::CodeVersion` holds them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WorkerVersion {
+    layout: u64,
+    revision: u64,
+}
+
 /// The versions a session stamps its worker builds with (ADR-0393 §2).
 ///
 /// One layout for the whole session: `flui run` does not place an edit by its
@@ -2552,8 +2560,8 @@ struct WorkerVersions {
 impl WorkerVersions {
     const LAYOUT: u64 = 1;
 
-    /// The version of the next staged build, as `(layout, revision)`.
-    fn next(&mut self) -> CliResult<(u64, u64)> {
+    /// The version of the next staged build.
+    fn next(&mut self) -> CliResult<WorkerVersion> {
         let revision = self
             .last_revision
             .checked_add(1)
@@ -2562,7 +2570,10 @@ impl WorkerVersions {
                     .to_owned(),
             })?;
         self.last_revision = revision;
-        Ok((Self::LAYOUT, revision))
+        Ok(WorkerVersion {
+            layout: Self::LAYOUT,
+            revision,
+        })
     }
 }
 
@@ -2584,7 +2595,7 @@ struct WorkerManifest<'a> {
 fn publish_worker_plugin(
     canonical: &Path,
     load_path: &Path,
-    (layout, revision): (u64, u64),
+    version: WorkerVersion,
 ) -> CliResult<()> {
     use std::io::Write as _;
 
@@ -2593,8 +2604,8 @@ fn publish_worker_plugin(
     std::fs::create_dir_all(dir).context("failed to create worker manifest directory")?;
     let json = serde_json::to_vec(&WorkerManifest {
         path: load_path,
-        layout,
-        revision,
+        layout: version.layout,
+        revision: version.revision,
     })
     .context("the staged worker's path is not UTF-8")?;
     let mut temporary =
@@ -3250,13 +3261,11 @@ mod tests {
             let manifest = flui_hot_reload::WorkerManifest::read(&canonical)
                 .expect("the runtime reads the CLI's manifest")
                 .expect("beside the canonical library");
+            assert_eq!(manifest.path(), staged);
+            let version = manifest.version().expect("the CLI mints no zero");
             assert_eq!(
-                manifest,
-                flui_hot_reload::WorkerManifest {
-                    path: staged.clone(),
-                    layout: 1,
-                    revision,
-                }
+                (version.layout.get(), version.revision.get()),
+                (1, revision)
             );
         }
         assert_eq!(
