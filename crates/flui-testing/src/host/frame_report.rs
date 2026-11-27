@@ -53,8 +53,7 @@ impl HeadlessHost {
             .with_build_owner_mut(|owner| owner.last_frame_build_report());
         let scene = self
             .scene_totals()
-            .map(|after| SceneReport::between(&scene_before, &after))
-            .unwrap_or_default();
+            .map_or_default(|after| SceneReport::between(&scene_before, &after));
         FrameReport {
             build,
             pipeline,

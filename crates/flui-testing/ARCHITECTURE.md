@@ -272,7 +272,8 @@ Its frame driver is `HeadlessHost`, which pumps a
   `pump_report` and the scenario tester's `pump` both run, so a scenario
   that moves from `lay_out` to `Tester::measure` keeps its baseline's keys
   (`measure_unobserved_matches_pump_report`); `Frame::report` reads the
-  frames of the tester's last pump.
+  frames of the tester's last move of its clock (`pump`, `pump_for`,
+  `freeze_at`).
 - **A gesture is a plan the agent plays.** `scenario::gesture::Gesture`
   builds the protocol's `ActionSequence` and checks it with
   `flui_protocol::input::plan`, the check every player makes; it refuses a

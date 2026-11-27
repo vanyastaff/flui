@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_foundation::geometry::{Point, Rect, Size};
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_interaction::pointer::HitTestBehavior;
 use flui_objects::{RenderConstrainedBox, RenderPadding, RenderParagraph};
 use flui_painting::{DrawOp, paint::Paint, styling::Color};
@@ -21,7 +21,8 @@ use flui_testing::widgets::{SharedSignal, lay_out, tight};
 use flui_view::BoxedView;
 use flui_view::prelude::*;
 use flui_widgets::{
-    Center, Column, CustomPaint, GestureDetector, Padding, Row, Semantics, SizedBox, Text,
+    Center, Column, CustomPaint, GestureDetector, Opacity, Padding, Row, Semantics, SizedBox, Text,
+    Transform,
 };
 
 /// A group the test finds by `id`, around `child`.
@@ -44,8 +45,8 @@ fn logical(rect: Rect) -> LogicalRect {
 /// its geometry out: its size, and its bounds in the window, which are the bounds the agent
 /// reports for the element.
 ///
-/// Fails if the selection starts above the element or below it, if the bounds are not mapped
-/// into the window, or if the size is read off another node.
+/// Fails if the selection starts above the element or below it, if the offset in the parent is
+/// lost, if the bounds are not mapped into the window, or if the size is read off another node.
 #[test]
 fn a_typed_read_copies_the_geometry_of_the_render_object_under_the_element() {
     let mut t = Tester::mount(Center::new().child(group(
@@ -65,6 +66,11 @@ fn a_typed_read_copies_the_geometry_of_the_render_object_under_the_element() {
         .expect("one sized box under the group");
     assert_eq!(child.size, Some(Size::new(40.0, 30.0)));
     assert_eq!(
+        child.offset,
+        Offset::new(10.0, 10.0),
+        "the child sits past the padding in its parent"
+    );
+    assert_eq!(
         child.rect().map(logical),
         Some(LogicalRect::new(shown.x + 10.0, shown.y + 10.0, 40.0, 30.0)),
         "the child's bounds are placed in the window, past the padding"
@@ -75,13 +81,14 @@ fn a_typed_read_copies_the_geometry_of_the_render_object_under_the_element() {
 /// A read of one render object names how many it found where it found another number: none at
 /// the element, several in the frame; a read of all of them lists each in tree order.
 ///
-/// Fails if a read of one takes the first of several, or passes on none.
+/// Fails if a read of one takes the first of several, or passes on none, or if a read at an
+/// element reads past it: the frame holds a padding, and none is at the element.
 #[test]
 fn a_typed_read_of_one_names_how_many_it_found() {
     let mut t = Tester::mount(Center::new().child(Column::new((
         Text::new("one"),
         group("two", Text::new("two")),
-        Text::new("three"),
+        Padding::all(4.0).child(Text::new("three")),
     ))));
     let mut frame = t.frame();
     assert_eq!(frame.render_all::<RenderParagraph>().len(), 3);
@@ -244,7 +251,8 @@ fn a_gesture_held_past_the_long_press_delay_is_a_long_press_and_one_held_short_i
 }
 
 /// A gesture refuses a press it leaves down and a release of a press it did not make, so no
-/// contact stays with the window's input lease past the step; a key may stay down.
+/// contact stays with the window's input lease past the step; a key may stay down. A sequence
+/// the protocol's plan refuses is refused by the builder, before any path plays it.
 #[test]
 fn a_gesture_refuses_an_unpaired_press_or_release() {
     let at = LogicalPoint::new(10.0, 10.0);
@@ -271,6 +279,15 @@ fn a_gesture_refuses_an_unpaired_press_or_release() {
             .try_build()
             .is_ok(),
         "a cancel ends the contact"
+    );
+    let too_many = (0..=flui_protocol::input::MAX_SOURCES)
+        .fold(Gesture::new(), |gesture, _| {
+            gesture.pointer(Pointer::touch(at).down().up())
+        })
+        .try_build();
+    assert!(
+        matches!(too_many, Err(GestureError::Plan(_))),
+        "a sequence the protocol's plan refuses is refused when it is built: {too_many:?}"
     );
 }
 
@@ -305,7 +322,9 @@ impl ViewState<Shown> for ShownState {
 }
 
 /// What one changed frame of `Shown` costs on the widget harness: the frame's report, counted
-/// inside a perf window as the perf scenarios count it.
+/// inside a perf window as the perf scenarios count it. It is built on `lay_out`, the form
+/// "Current forms" retires, on purpose: the perf scenarios that hold baselines still run there,
+/// and this is the count their move to `Tester::measure` must keep.
 fn harness_report() -> FrameReport {
     let number = SharedSignal::new(0);
     let mut laid = lay_out(
@@ -390,4 +409,112 @@ fn a_pump_after_the_last_window_closed_runs_no_frame_and_reports_none() {
     t.pump_for(Duration::from_millis(50));
     assert_eq!(t.frame().report(), &FrameReport::default());
     t.finish_unchecked("the application closed its window");
+}
+
+/// Each draw command is placed in the window through every layer above it: an opacity layer and
+/// the padding inside it offset one swatch, a transform layer scales the other, and each
+/// command's rectangle, carried by its transform, covers the bounds the agent reports for its
+/// element. The scene's outline names those layers, each under the one that holds it.
+///
+/// Fails if a command keeps the space of its layer, if an offset or a transform above it is
+/// dropped or applied twice, or if the outline loses a layer or its depth.
+#[test]
+fn draw_commands_are_placed_in_the_window_through_the_layers_above_them() {
+    let red = Color::rgb(200, 0, 0);
+    let blue = Color::rgb(0, 0, 200);
+    let swatch = |color| {
+        CustomPaint::new()
+            .painter(Swatch(color))
+            .size(Size::new(20.0, 20.0))
+    };
+    let mut t = Tester::mount(
+        Center::new().child(Column::new((
+            Opacity::new(0.5)
+                .child(Padding::only(30.0, 0.0, 0.0, 0.0).child(group("faded", swatch(red)))),
+            Transform::scale(2.0, 2.0).child(group("scaled", swatch(blue))),
+        ))),
+    );
+    let faded = t.rect(&find::id("faded"));
+    let scaled = t.rect(&find::id("scaled"));
+    assert_eq!(
+        (scaled.width, scaled.height),
+        (40.0, 40.0),
+        "the agent reports the scaled bounds"
+    );
+    let mut frame = t.frame();
+    for (id, shown) in [("faded", faded), ("scaled", scaled)] {
+        let drawn = frame
+            .draw_commands(&find::id(id))
+            .expect("the group is a render object's");
+        let rects: Vec<_> = drawn
+            .iter()
+            .filter_map(|command| match &command.op {
+                DrawOp::Rect { rect, .. } => Some((command, rect)),
+                _ => None,
+            })
+            .collect();
+        let [(command, rect)] = rects[..] else {
+            panic!("one rectangle under {id}: {drawn:?}");
+        };
+        assert_eq!(
+            logical(command.transform.transform_rect(rect)),
+            shown,
+            "{id}'s rectangle is placed where the window shows its element"
+        );
+    }
+    let layers = frame.layers();
+    let outline: Vec<(usize, &str)> = layers.iter().collect();
+    let depth_of = |kind: &str| {
+        outline.iter().find(|(_, k)| *k == kind).map_or_else(
+            || panic!("the outline has a {kind} layer:\n{layers}"),
+            |(depth, _)| *depth,
+        )
+    };
+    let pictures: Vec<usize> = outline
+        .iter()
+        .filter(|(_, kind)| *kind == "Picture")
+        .map(|(depth, _)| *depth)
+        .collect();
+    assert!(
+        pictures.len() >= 2
+            && pictures
+                .iter()
+                .all(|depth| *depth > depth_of("Opacity").min(depth_of("Transform"))),
+        "each swatch paints into a picture under its opacity or transform layer:\n{layers}"
+    );
+    t.finish();
+}
+
+/// Two contacts at once: the gesture plays both pointers' presses in the same tick, and each
+/// lands on the detector under its own point.
+///
+/// Fails if the second pointer of a gesture is dropped, or if both play at the first one's point.
+#[test]
+fn a_gesture_with_two_contacts_taps_under_each_of_them() {
+    let taps = Rc::new([Cell::new(0_u32), Cell::new(0_u32)]);
+    let detector = |index: usize, id: &str| {
+        let taps = Rc::clone(&taps);
+        group(
+            id,
+            GestureDetector::new()
+                .on_tap(move |_ctx| taps[index].set(taps[index].get() + 1))
+                .behavior(HitTestBehavior::Opaque)
+                .child(Text::new(id.to_owned())),
+        )
+    };
+    let mut t = Tester::mount(Center::new().child(Row::new((
+        detector(0, "left"),
+        SizedBox::new(40.0, 30.0),
+        detector(1, "right"),
+    ))));
+    let left = t.rect(&find::id("left")).center();
+    let right = t.rect(&find::id("right")).center();
+    t.perform(
+        &Gesture::new()
+            .pointer(Pointer::touch(left).down().up())
+            .pointer(Pointer::touch(right).down().up())
+            .build(),
+    );
+    assert_eq!([taps[0].get(), taps[1].get()], [1, 1]);
+    t.finish();
 }

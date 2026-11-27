@@ -144,9 +144,12 @@ where
         )
     }
 
-    /// What the frames of the tester's last [`pump`](Tester::pump) or
-    /// [`pump_for`](Tester::pump_for) did, phase by phase: the counts a perf scenario holds to
-    /// its baseline (ADR-0396). Empty before the first pump.
+    /// What the frames of the tester's last move of its clock did ([`pump`](Tester::pump),
+    /// [`pump_for`](Tester::pump_for) or [`freeze_at`](Tester::freeze_at)), phase by phase: the
+    /// counts a perf scenario holds to its baseline (ADR-0396). Empty before the clock first
+    /// moves, and after a move on a window that has closed. A step that runs frames without
+    /// moving the clock by a duration it names (an action, an `expect`, the end's settle) leaves
+    /// it as it was: what such steps cost is [`Tester::measure`]'s.
     #[must_use]
     pub fn report(&self) -> &FrameReport {
         self.tester.connection().advanced()

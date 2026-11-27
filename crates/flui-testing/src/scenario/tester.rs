@@ -46,11 +46,14 @@ const JOURNAL_KEPT: usize = 32;
 
 /// One test of an application over a connection (ADR-0400 §1).
 ///
-/// Its verbs find with a [`Find`], act through the window's agent and expect with a
-/// [`Matcher`], so each is evaluated once, in the application's runtime, on every connection.
-/// Every verb has a `try_` twin returning [`TestError`]; the plain form panics at its caller.
-/// The tester keeps no copy of the application's state: what is settled is the host's, the input
-/// held between steps is the agent's lease, and the wait loop is the connection's.
+/// Over a [`Connection`](flui_protocol::client::Connection), its verbs find with a [`Find`], act
+/// through the window's agent and expect with a [`Matcher`], so each is evaluated once, in the
+/// application's runtime, on every connection. Every verb has a `try_` twin returning
+/// [`TestError`]; the plain form panics at its caller. The tester keeps no copy of the
+/// application's state: what is settled is the host's, the input held between steps is the
+/// agent's lease, and the wait loop is the connection's. A tester over
+/// [`Headless<Unobserved>`](super::Unobserved), which has no agent, pumps, reads its frame and
+/// measures only.
 ///
 /// ```
 /// use flui_testing::scenario::{Tester, find, matcher::exists};
@@ -68,7 +71,8 @@ const JOURNAL_KEPT: usize = 32;
 /// unanswered) and the thread is not unwinding, and `Drop` only when no returned error is alive
 /// (it may be on its way to the caller through `?`; a test that calls `finish` says it is
 /// done, an error it kept included): the application is
-/// settled, its frame audited, its root unmounted, its input lease released, the tester's
+/// settled, its frame audited, its root unmounted, its input lease released (on an unobserved
+/// target, which has no agent, the end runs neither the audit nor a release), the tester's
 /// [`ledger`](Tester::ledger) read, and what keeps the application busy after that (a timer, a
 /// ticker or background work left behind) fails the end. `finish` raises what did not pass;
 /// `Drop` writes it to the test's output and raises nothing. Otherwise the end releases and

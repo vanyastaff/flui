@@ -50,20 +50,22 @@
   the frame the window presented last: `only::<R>` and `render_all::<R>` for the render objects of
   a type (`RenderGeometry`: size, sliver geometry, offset and the transform into the window),
   `geometry::<R>`, `read::<R, T>` and `draw_commands` at the element a `Find` names, `draw_list`,
-  `layers` (`LayerOutline`) and `report`, the `FrameReport` of the tester's last pump. A scenario
-  over a generic `Connection` that calls `frame` does not compile. A read of one render object
-  fails with `TestError::RenderObjectCount` when it finds another number, and a read at an
-  element no render object forms with `TestError::NoRenderObject`.
+  `layers` (`LayerOutline`) and `report`, the `FrameReport` of the tester's last move of its
+  clock (`pump`, `pump_for`, `freeze_at`). A scenario over a generic `Connection` that calls
+  `frame` does not compile. A read of one render object fails with `TestError::RenderObjectCount`
+  when it finds another number, and a read at an element no render object forms with
+  `TestError::NoRenderObject`.
 - **Gestures** (`flui-testing`, `flui::testing::scenario::gesture`; ADR-0400 §2): `Gesture`,
   `Pointer` and `Keys` build the protocol's `ActionSequence` for several pointers, keys and text,
   with a press held for a stated time (`Pointer::hold`); `try_build` refuses a press the gesture
   leaves down or a release it did not press (`GestureError`). `Tester::perform` and
   `try_perform` send it through the window's input lease.
 - **A tester with no agent** (`flui-testing`; ADR-0400 §1): `Tester::mount_unobserved` mounts a
-  view on a `Headless<Unobserved>` connection, which attaches no development agent; it pumps on
+  view on a `Headless<Unobserved>` target, which attaches no development agent; it pumps on
   the virtual clock, reads its frame and ends by settling, unmounting and checking what was left
   behind. `Tester::measure` measures the steps it runs with `flui_testing::perf::measure`, and
-  counts each frame as the widget harness's `pump_report` does.
+  counts each frame as the widget harness's `pump_report` does. It returns a `Cost`, which the
+  facade exports as `flui::testing::Cost`.
 
 ### Changed
 

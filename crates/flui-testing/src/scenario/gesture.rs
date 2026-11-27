@@ -11,9 +11,12 @@
 //! [`hold`](Pointer::hold).
 //!
 //! [`Gesture::try_build`] refuses a pointer press the gesture does not release, and a release
-//! of a press it did not make: a contact left down would stay with the window's input lease into
-//! the next step. Keys may stay down, as a modifier held across steps does; the lease keeps them,
-//! and a chord that names a key it holds sends no second press.
+//! of a press it did not make: a gesture is one whole stroke, and a contact it left down would
+//! stay with the window's input lease into the next step. Keys may stay down, as a modifier held
+//! across steps does; the lease keeps them, and a chord that names a key it holds sends no second
+//! press. A sequence built by hand and sent with `perform` may hold a contact across steps, as
+//! the protocol's `input.inject` does: the lease keeps it until a later sequence lifts it, and its
+//! release at the end of the test cancels it.
 //!
 //! ```
 //! use std::time::Duration;
