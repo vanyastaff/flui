@@ -34,6 +34,9 @@ host-hook = []
 # plugin ABI.
 flui-sdk = { workspace = true }
 parking_lot = { workspace = true, optional = true }
+# `WorkerManifest`, the sidecar `flui run` writes beside a worker (ADR-0393 §2).
+serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -47,6 +50,7 @@ libc = "0.2"
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }
 
 [dev-dependencies]
+tempfile = { workspace = true }
 # `tests/plugin_pipeline_text.rs` reads which text context a plugin's layout
 # was lent (`flui_painting::testing::text_context_lends`, through
 # `TextContextHandle::with`).

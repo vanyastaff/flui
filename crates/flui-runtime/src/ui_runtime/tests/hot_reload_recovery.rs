@@ -33,9 +33,7 @@ fn reload_failure(failures: usize, fail_reassemble: bool) {
             assert!(!fail_reassemble, "reassemble first");
             frame_sender.request_redraw();
         });
-    sender
-        .request_hot_reload(crate::reload::ReloadTier::Reassemble)
-        .expect("reload accepted");
+    sender.request_reassemble().expect("reload accepted");
     let mut tail = window
         .call::<method::SemanticsRead>(ReadParams::new(window.id()))
         .expect("tail accepted");
@@ -154,7 +152,7 @@ pub(crate) fn a_hot_reload_renews_every_scene_lineage() {
 
     ui_runtime
         .command_sender()
-        .request_hot_reload(crate::reload::ReloadTier::Reassemble)
+        .request_reassemble()
         .expect("reload accepted");
     let _ = ui_runtime.drain_commands();
     for (id, old) in [primary, secondary].into_iter().zip(before) {

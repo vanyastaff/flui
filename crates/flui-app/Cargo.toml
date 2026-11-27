@@ -118,9 +118,9 @@ flui-native = { workspace = true, features = ["native-capture"] }
 # widgets (`docs/architecture.md`).
 flui-widgets = { workspace = true }
 # The frame runtime (ADR-0083): the UI runtime core the runners drive, and the
-# per-presentation lanes it owns. `hot-reload` is its `reload::ReloadTier`, the
-# reload an installed development reload hook (ADR-0311 §1) applies to a
-# UI runtime; it names no reload tool.
+# per-presentation lanes it owns. `hot-reload` is its reassemble command, which
+# the loop's reload record (ADR-0393 §3) runs on a UI runtime for an installed
+# development reload hook (ADR-0311 §1); it names no reload tool.
 flui-runtime = { workspace = true, features = ["hot-reload"] }
 # `MotionOverride`, the motion setting `AppConfig` carries and this crate re-exports
 # (ADR-0218).

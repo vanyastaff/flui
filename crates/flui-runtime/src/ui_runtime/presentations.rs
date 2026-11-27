@@ -606,34 +606,25 @@ impl UiRuntime {
         self.presentations.primary().text_input_handle()
     }
 
-    /// Reassemble EVERY presentation this UI runtime hosts, in mount order —
-    /// under the whole-frame composite `enter()` already activates, so a
-    /// key resolved mid-fan-out still finds any presentation's tree, not
-    /// just the one currently reassembling.
-    ///
-    /// Deliberately does not short-circuit on the first presentation that
-    /// reports a change: every presentation must reassemble regardless of
-    /// what its predecessors reported, or a hot reload would silently skip
-    /// later-mounted presentations whenever an earlier one happened to
-    /// report no change. Returns whether ANY presentation requires a
-    /// redraw.
+    /// Reassemble every mounted presentation with the code now loaded, keeping every `State`
+    /// (ADR-0393 §1). Runs under the whole-frame composite `enter()` already activates, so a key
+    /// resolved mid-fan-out still finds any presentation's tree; every presentation reassembles
+    /// whatever the others did.
     #[cfg(feature = "hot-reload")]
-    #[must_use]
-    pub(crate) fn apply_hot_reload(&self, tier: crate::reload::ReloadTier) -> bool {
-        let mut needs_redraw = false;
+    pub(crate) fn reassemble_presentations(&self) -> bool {
+        let mut reassembled = false;
         for presentation in self.presentations.iter() {
-            if presentation.apply_hot_reload(tier) {
-                needs_redraw = true;
-            }
+            presentation.reassemble();
+            reassembled = true;
         }
-        needs_redraw
+        reassembled
     }
 
-    /// Apply a hot reload at the given tier,
-    /// requesting a redraw if it actually changed anything.
+    /// Reassemble every mounted presentation with the code now loaded, and redraw when there
+    /// was one (ADR-0393 §1).
     #[cfg(feature = "hot-reload")]
-    pub fn perform_hot_reload_entered(&self, tier: crate::reload::ReloadTier) {
-        if self.apply_hot_reload(tier) {
+    pub fn perform_reassemble_entered(&self) {
+        if self.reassemble_presentations() {
             self.request_redraw();
         }
     }

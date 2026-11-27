@@ -69,8 +69,10 @@ without the feature:
 - `WorkerReloadHook` owns the `WorkerReloadDriver`. `attach` starts the
   artifact watcher thread and, with `app-plugin`, registers the
   `request_rebuild` hook, which sets a flag and wakes the host; `poll` runs the
-  driver on the owner thread and reports `Patched` for a reload or a pending
-  rebuild request; `detach` (and `Drop`) joins the watcher and drops the
+  driver on the owner thread and reports `Loaded` with the version the
+  `WorkerManifest` (`src/manifest.rs`) named for the image it loaded, and
+  `reassemble_requested` answers a pending rebuild request; a reload without a
+  manifest has no version and reports `Unchanged`; `detach` (and `Drop`) joins the watcher and drops the
   registration. A degraded or failed reload is logged and keeps the last good
   tree, as before.
 - `ScenePluginHook` owns the `HotReloadDriver`. `scene_frame` builds the frame's
@@ -79,7 +81,7 @@ without the feature:
   additionally guarantee the renderer retains no cloned image-dependent
   payload; a borrowed scene alone cannot ensure this.
 
-The host applies a `Patched` poll once to every UI runtime, not to whichever UI runtime
+The host applies each version once to every UI runtime, not to whichever UI runtime
 polled first; before the hook, a worker's rebuild request reached only the most
 recently opened window. Pinned by `hook/tests.rs` here and by
 `app/hot_reload/tests.rs` in `flui-app`.

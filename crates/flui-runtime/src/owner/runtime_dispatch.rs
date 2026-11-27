@@ -22,9 +22,9 @@ pub enum RuntimeOperation {
     HostNotice(flui_platform::HostNotice),
     /// Irreversibly stop every presentation in this runtime without removing it.
     Stop,
-    /// Reassemble the runtime's mounted presentations at the requested tier.
+    /// Reassemble the runtime's mounted presentations with the code now loaded.
     #[cfg(feature = "hot-reload")]
-    Reload(crate::reload::ReloadTier),
+    Reassemble,
 }
 
 /// Weak runtime authority, independent of the window that originally hosted it.
@@ -323,8 +323,8 @@ impl RuntimeWork {
                 runtime.enter(UiRuntime::stop_presentations);
             }
             #[cfg(feature = "hot-reload")]
-            Self::Runtime(_, RuntimeOperation::Reload(tier)) => {
-                runtime.enter(|runtime| runtime.perform_hot_reload_entered(tier));
+            Self::Runtime(_, RuntimeOperation::Reassemble) => {
+                runtime.enter(UiRuntime::perform_reassemble_entered);
             }
         }
     }

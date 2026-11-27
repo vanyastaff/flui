@@ -1103,43 +1103,18 @@ impl PresentationState {
         drop(released);
     }
 
-    /// Apply a hot-reload tier to this presentation's own element tree.
-    /// Returns whether a redraw is required.
+    /// Reassemble this presentation's own element and render trees with the code now loaded,
+    /// keeping every `State` (ADR-0393 §1).
     #[cfg(feature = "hot-reload")]
-    pub(crate) fn apply_hot_reload(&self, tier: crate::reload::ReloadTier) -> bool {
-        use crate::reload::ReloadTier;
-
-        match tier {
-            ReloadTier::Reassemble => {
-                self.renew_scene();
-                self.widgets.perform_reassemble();
-                self.pipeline
-                    .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
-                tracing::info!(
-                    { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
-                    "hot reload reassembled element and render trees"
-                );
-                true
-            }
-            ReloadTier::Restart => {
-                self.renew_scene();
-                tracing::warn!(
-                    { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
-                    "HotRestart root remount is not implemented; applying reassemble"
-                );
-                self.widgets.perform_reassemble();
-                self.pipeline
-                    .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
-                true
-            }
-            ReloadTier::ProcessRestart => {
-                tracing::debug!(
-                    { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
-                    "FullRestart is owned by the CLI process supervisor"
-                );
-                false
-            }
-        }
+    pub(crate) fn reassemble(&self) {
+        self.renew_scene();
+        self.widgets.perform_reassemble();
+        self.pipeline
+            .with_mut(flui_rendering::pipeline::PipelineOwner::reassemble);
+        tracing::info!(
+            { flui_foundation::diagnostics::PRESENTATION_ID } = self.id.as_u64(),
+            "hot reload reassembled element and render trees"
+        );
     }
 
     pub(crate) fn interaction_dispatch(&self) -> Option<&InteractionDispatchHandle> {

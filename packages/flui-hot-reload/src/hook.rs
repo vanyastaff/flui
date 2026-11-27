@@ -26,7 +26,7 @@ use std::{
     time::Duration,
 };
 
-use flui_sdk::view::dev_reload::{DevReloadHook, ReloadEvent, ReloadWake};
+use flui_sdk::view::dev_reload::{CodeVersion, DevReloadHook, ReloadEvent, ReloadWake};
 
 use crate::{
     HotReloadDriver, Scene, WorkerPollOutcome, WorkerReloadDriver, timing, worker_artifact_stamp,
@@ -39,7 +39,9 @@ use crate::{
 ///   edit; with the `app-plugin` feature it also receives the worker's
 ///   [`request_rebuild`](crate::request_rebuild) calls.
 /// - **Polled**, it reloads a changed worker on the owner thread and reports
-///   [`ReloadEvent::Patched`], which reassembles every UI runtime. A reload whose
+///   [`ReloadEvent::Loaded`] with the version its sidecar manifest names
+///   ([`WorkerManifest`](crate::WorkerManifest)); a worker's rebuild request is
+///   [`DevReloadHook::reassemble_requested`]. A reload whose
 ///   shared-type layout changed, or that failed, is logged loudly and keeps
 ///   the last good tree.
 /// - **Detached** or dropped, it stops and joins the watcher and drops its
@@ -57,6 +59,10 @@ pub struct WorkerReloadHook {
     /// reads it whatever the driver's poll interval says.
     artifact_changed: Arc<AtomicBool>,
     watcher: Option<ArtifactWatcher>,
+    /// The first poll after `attach` reports the version already loaded: the
+    /// host composed its application from that image, and the version tells
+    /// its record which layout that is (ADR-0393 §3).
+    report_loaded: bool,
     #[cfg(feature = "app-plugin")]
     registration: Option<crate::RebuildHookRegistration>,
 }
@@ -85,6 +91,7 @@ impl WorkerReloadHook {
             rebuild_requested: Arc::new(AtomicBool::new(false)),
             artifact_changed: Arc::new(AtomicBool::new(false)),
             watcher: None,
+            report_loaded: false,
             #[cfg(feature = "app-plugin")]
             registration: None,
         }
@@ -113,6 +120,7 @@ impl DevReloadHook for WorkerReloadHook {
         // it again, so a rebuild between the two, which the watcher's baseline
         // below already holds, is not missed.
         self.artifact_changed.store(true, Ordering::Release);
+        self.report_loaded = true;
         self.watcher = ArtifactWatcher::spawn(
             &self.watch_path,
             self.watch_interval,
@@ -138,10 +146,19 @@ impl DevReloadHook for WorkerReloadHook {
             Some(driver) => driver.poll(),
             None => WorkerPollOutcome::NoChange,
         };
-        event_for(
-            outcome,
-            self.rebuild_requested.swap(false, Ordering::AcqRel),
-        )
+        let version = self
+            .driver
+            .as_ref()
+            .and_then(WorkerReloadDriver::loaded_version);
+        let first = std::mem::take(&mut self.report_loaded);
+        match (event_for(outcome, version), version) {
+            (ReloadEvent::Unchanged, Some(version)) if first => ReloadEvent::Loaded(version),
+            (event, _) => event,
+        }
+    }
+
+    fn reassemble_requested(&mut self) -> bool {
+        self.rebuild_requested.swap(false, Ordering::AcqRel)
     }
 }
 
@@ -152,15 +169,28 @@ impl Drop for WorkerReloadHook {
 }
 
 /// The event a worker poll reports, logging the outcomes that need the
-/// developer's attention. A rebuild request is honoured whatever the
-/// artifact did. Replacement may withdraw the old worker registration before
-/// a new image is admitted; previously admitted images and retained tree values
-/// keep ADR-0111's lifetime, which is distinct from a live build registration.
-fn event_for(outcome: WorkerPollOutcome, rebuild_requested: bool) -> ReloadEvent {
+/// developer's attention: `version` is the one the driver read for the image
+/// it has loaded now. Replacement may withdraw the old worker registration
+/// before a new image is admitted; previously admitted images and retained tree
+/// values keep ADR-0111's lifetime, which is distinct from a live build
+/// registration.
+fn event_for(outcome: WorkerPollOutcome, version: Option<CodeVersion>) -> ReloadEvent {
     match outcome {
         WorkerPollOutcome::Reloaded { reload_count } => {
-            tracing::info!(reload_count, "hot reload: worker reloaded; reassembling");
-            return ReloadEvent::Patched;
+            if let Some(version) = version {
+                tracing::info!(
+                    reload_count,
+                    revision = version.revision.get(),
+                    "hot reload: worker reloaded"
+                );
+                return ReloadEvent::Loaded(version);
+            }
+            tracing::warn!(
+                reload_count,
+                "hot reload: the worker reloaded, but no `.flui_worker_plugin` manifest beside it \
+                 names its version, so the host cannot tell a body edit from a layout change and \
+                 reassembles nothing; start the app with `flui run`"
+            );
         }
         WorkerPollOutcome::Degraded {
             old_fingerprint,
@@ -183,11 +213,7 @@ fn event_for(outcome: WorkerPollOutcome, rebuild_requested: bool) -> ReloadEvent
         }
         WorkerPollOutcome::NoChange => {}
     }
-    if rebuild_requested {
-        ReloadEvent::Patched
-    } else {
-        ReloadEvent::Unchanged
-    }
+    ReloadEvent::Unchanged
 }
 
 /// Polls the worker artifact's stamp off the owner thread and wakes the host
@@ -286,7 +312,7 @@ impl Drop for ArtifactWatcher {
 /// Each frame it checks the plugin library for an update, reloading it on
 /// the owner thread, and, while a plugin is loaded, has it build the frame's
 /// scene, which the host renders in place of the widget tree. It never
-/// reports a patch: a scene plugin replaces frames, not code the widget tree
+/// reports a version: a scene plugin replaces frames, not code the widget tree
 /// runs.
 pub struct ScenePluginHook {
     driver: HotReloadDriver,
