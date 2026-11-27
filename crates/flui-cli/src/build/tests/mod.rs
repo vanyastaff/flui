@@ -5,3 +5,4 @@
 
 mod desktop_artifacts;
 mod ios_artifacts;
+mod release_paths;

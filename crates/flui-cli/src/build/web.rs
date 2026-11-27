@@ -82,7 +82,9 @@ impl WebBuilder {
             "building {} {} for {WASM_TARGET}",
             package.name, package.version
         ));
-        let wasm = cargo::build_artifact(dir, &args, &target, &[]).await?;
+        let rustflags = ctx.rustflags(WASM_TARGET)?;
+        args.extend(rustflags.args);
+        let wasm = cargo::build_artifact(dir, &args, &target, &rustflags.env).await?;
         Ok(BuildArtifacts {
             rust_libs: vec![wasm],
             executable: None,

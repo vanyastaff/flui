@@ -1890,6 +1890,7 @@ name = "flui-cli"
 version = "0.2.0-dev"
 dependencies = [
  "assert_cmd",
+ "cargo-platform",
  "cargo_metadata",
  "clap",
  "clap_complete",

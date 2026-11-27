@@ -253,6 +253,9 @@ backtrace = "0.3.77"
 # feature) and the desktop agent server's tool parameters.
 schemars = "1.0"
 cargo_metadata = "0.23.1"
+# The `target.'cfg(…)'` keys of a cargo configuration, matched against a target the
+# way cargo matches them (the version cargo_metadata already resolves).
+cargo-platform = "0.3.3"
 sha2 = { version = "0.11", default-features = false }
 # Parity-inventory manifest parsing (flui-widgets dev-dep) + flui-cli config.
 toml = "1.1"
