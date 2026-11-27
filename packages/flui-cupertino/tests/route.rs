@@ -3,6 +3,11 @@
 //! app installs for its routes (ADR-0221): its geometry over the 500 ms
 //! duration, its edge shadow, and its reduced-motion settle.
 
+#![expect(
+    deprecated,
+    reason = "ADR-0400: these cases move to `scenario::Tester`"
+)]
+
 use crate::common;
 
 use std::cell::RefCell;

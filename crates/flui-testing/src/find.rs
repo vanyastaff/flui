@@ -14,36 +14,42 @@ use flui_protocol::{locator::Locator, locator::StateFilter, locator::TextMatch, 
 /// Elements whose accessible name is exactly `text`: a `Text` reads as its
 /// text, a button as the text it holds.
 #[must_use]
+#[deprecated(note = "use `flui_testing::scenario::find`, which returns a `Find` (ADR-0400)")]
 pub fn text(text: impl Into<String>) -> Locator {
     Locator::named(text)
 }
 
 /// Elements whose accessible name contains `text`.
 #[must_use]
+#[deprecated(note = "use `flui_testing::scenario::find`, which returns a `Find` (ADR-0400)")]
 pub fn text_containing(text: impl Into<String>) -> Locator {
     Locator::default().name_matching(TextMatch::contains(text))
 }
 
 /// The button named exactly `name`.
 #[must_use]
+#[deprecated(note = "use `flui_testing::scenario::find`, which returns a `Find` (ADR-0400)")]
 pub fn button(name: impl Into<String>) -> Locator {
     Locator::role(Role::Button).name(name)
 }
 
 /// Elements of `role`.
 #[must_use]
+#[deprecated(note = "use `flui_testing::scenario::find`, which returns a `Find` (ADR-0400)")]
 pub fn role(role: Role) -> Locator {
     Locator::role(role)
 }
 
 /// The element whose author-given identifier is `identifier` (ADR-0240).
 #[must_use]
+#[deprecated(note = "use `flui_testing::scenario::find`, which returns a `Find` (ADR-0400)")]
 pub fn id(identifier: impl Into<String>) -> Locator {
     Locator::identifier(identifier)
 }
 
 /// Elements whose states hold `state`.
 #[must_use]
+#[deprecated(note = "use `flui_testing::scenario::find`, which returns a `Find` (ADR-0400)")]
 pub fn with_state(state: StateFilter) -> Locator {
     Locator::default().state(state)
 }

@@ -76,14 +76,14 @@ impl StatelessView for Greeting {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flui::testing::{Tester, find};
+    use flui::testing::scenario::{Tester, find, matcher::exists};
 
     #[test]
     fn greeting_renders_its_name() {
         let mut t = Tester::mount(Greeting {
             name: "FLUI".to_string(),
         });
-        t.expect(find::text("Hello, FLUI!")).to_exist();
+        t.expect(&find::text("Hello, FLUI!"), exists());
     }
 }
 "#;

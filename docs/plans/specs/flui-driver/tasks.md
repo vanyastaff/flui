@@ -1700,7 +1700,7 @@ graph LR
      them: the runtime, which owns the bound, or the service, which knows the role? (first
      read 5; second read 26)
   10. **The schema.** Whatever the record adds to a closed union of the wire (a handle kind, a
-      kind of held state) is a break (ADR-0342): it is weighed there, with ADR-0403's 0.33 if
+      kind of held state) is a break (ADR-0342): it is weighed there, with ADR-0403's 0.35 if
       it can be, or as a second break if not. (second read 17)
 - **Tracked from ADR-0403's last read.** Each is owed by the change that builds the part it
   names, and is not decided in ADR-0403:

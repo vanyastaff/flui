@@ -980,8 +980,8 @@ jobs:
             targets: --test compile_fail --test painting_it
             binaries: binary_id(flui-interaction::compile_fail) | binary_id(flui-platform::compile_fail) | binary_id(flui-engine::compile_fail) | binary_id(flui-painting::painting_it)
           - shard: view
-            targets: --test compile_fail --test compiler_guards --test view_it
-            binaries: binary_id(flui-rendering::compile_fail) | binary_id(flui-runtime::compiler_guards) | binary_id(flui-view::view_it)
+            targets: --test compile_fail --test compiler_guards --test view_it --test scenario_ui
+            binaries: binary_id(flui-rendering::compile_fail) | binary_id(flui-runtime::compiler_guards) | binary_id(flui-view::view_it) | binary_id(flui-testing::scenario_ui)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

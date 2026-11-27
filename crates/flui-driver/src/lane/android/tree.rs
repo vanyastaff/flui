@@ -14,13 +14,13 @@
 //!   edge-to-edge window; a dump writes no importance for accessibility. Its place does.
 //! - **Children.** The children of a matched app node are matched among the children of the
 //!   dump's node it matched, in order: the adapter adds a node's children in the order the app's
-//!   read lists them, leaving out those `accesskit_consumer`'s filter drops ([`published`]). A
+//!   read lists them, leaving out those `accesskit_consumer`'s filter drops (`published`). A
 //!   tie is settled by that order; two candidates for one node that the order does not tell apart
 //!   answer [`TreeError::Ambiguous`].
 //! - **What fits.** A node of a dump fits an app node when its class is the one
 //!   `accesskit_android` gives the app node's AccessKit role ([`roles::class_for`]), its content
 //!   description is the app node's name (its label, or a static text's value, as the adapter sets
-//!   it), its toggled state is the app node's where the app's read reports it ([`Toggle`]:
+//!   it), its toggled state is the app node's where the app's read reports it (`Toggle`:
 //!   checkable and checked, a radio button's selection included; another selection role's is
 //!   not reported), it is enabled as the app node is, and its bounds are the app
 //!   node's surface rectangle placed at the surface's origin on the display ([`Mapping`], the

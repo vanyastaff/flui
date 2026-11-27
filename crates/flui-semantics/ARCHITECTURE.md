@@ -856,7 +856,8 @@ role, label or text, or the `Generic` or `Presentation` role) takes its identifi
 agent or OS automation locator selects it (the web mirror still writes `data-flui-id`).
 `read_wire` lists a `TreeDiagnostic::UnpublishedIdentifier` for each identifier and node it is
 lifted into, at most 4 nodes per identifier (a row template names its first rows) and 256 in all,
-and the testing kit's `TestError::UnpublishedIdentifier` gives the form that is found (a role on
+and the deprecated `flui_testing::tester::TestError::UnpublishedIdentifier` (the scenario
+tester does not raise it yet) gives the form that is found (a role on
 the node, or the identifier on the control). The kit raises it when a locator matches nothing and
 names a lifted identifier: its own, or a scope's that no published node carries. It only explains
 a failure, so `to_be_gone` still passes on a lifted identifier. Past the cap a

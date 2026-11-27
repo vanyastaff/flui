@@ -517,7 +517,7 @@ hot_reload_worker!(init_counter_worker, fingerprint: TYPE_FINGERPRINT);
 mod tests {
     use std::sync::{Arc, atomic::AtomicI32};
 
-    use flui::testing::{Tester, find};
+    use flui::testing::scenario::{Tester, find, matcher::exists};
     use __TYPES_CRATE__::{CounterApp, CounterBuild};
 
     use super::{INCREMENT_LABEL, build_counter_ui};
@@ -532,7 +532,7 @@ mod tests {
             build: CounterBuild::Linked(build_counter_ui),
         });
         t.tap(&find::text(INCREMENT_LABEL));
-        t.expect(find::text("Count: 1")).to_exist();
+        t.expect(&find::text("Count: 1"), exists());
     }
 }
 "#;

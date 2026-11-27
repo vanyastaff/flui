@@ -117,10 +117,9 @@ let cost = t.measure(|t| { label.set("b"); t.pump(); });
 BASELINES.hold("label_change_kept", &cost);
 ```
 
-`Tester::measure` зовёт `flui_testing::perf::measure` (ADR-0396 §1; её строит TP4, сейчас её нет),
-а окно сбора остаётся
-`#[inline(never)] fn perf_measured` с тем же именем, по которому собирает `callgrind` в задании
-`perf-gates`. Ввод в замере идёт через `perform` с точкой из типизированного чтения: агента в
+`Tester::measure` зовёт `flui_testing::perf::measure` (ADR-0396 §1, уже на `main`), а окно сбора —
+её `#[inline(never)] fn flui_perf_collected_window`, которое `callgrind` в задании `perf-gates`
+собирает по `--toggle-collect` (`perf::instructions::WINDOW_SYMBOL`). Ввод в замере идёт через `perform` с точкой из типизированного чтения: агента в
 замеряемых кадрах нет.
 
 ## Карта модулей

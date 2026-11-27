@@ -697,6 +697,18 @@ pub struct LongPressParams {
     pub options: GestureOptions,
 }
 
+impl LongPressParams {
+    /// A long press on `target`, held for the platform's long-press delay and a margin.
+    #[must_use]
+    pub fn new(target: impl Into<Target>) -> Self {
+        Self {
+            target: target.into(),
+            duration_ms: None,
+            options: GestureOptions::default(),
+        }
+    }
+}
+
 /// `element.drag_to`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -710,6 +722,18 @@ pub struct DragParams {
     /// How.
     #[cfg_attr(feature = "serde", serde(flatten))]
     pub options: GestureOptions,
+}
+
+impl DragParams {
+    /// Pick `target` up and drop it on `to`.
+    #[must_use]
+    pub fn new(target: impl Into<Target>, to: impl Into<Target>) -> Self {
+        Self {
+            target: target.into(),
+            to: to.into(),
+            options: GestureOptions::default(),
+        }
+    }
 }
 
 vocabulary! {
@@ -761,6 +785,20 @@ pub struct SwipeParams {
     pub options: GestureOptions,
 }
 
+impl SwipeParams {
+    /// A stroke from `target` towards `direction`, its distance and velocity the defaults.
+    #[must_use]
+    pub fn new(target: impl Into<Target>, direction: Direction) -> Self {
+        Self {
+            target: target.into(),
+            direction,
+            distance: None,
+            velocity: None,
+            options: GestureOptions::default(),
+        }
+    }
+}
+
 /// `element.pinch`: two contacts around the target's centre.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -787,6 +825,17 @@ pub struct ScrollIntoViewParams {
     /// How.
     #[cfg_attr(feature = "serde", serde(flatten))]
     pub options: GestureOptions,
+}
+
+impl ScrollIntoViewParams {
+    /// Bring `target` into view.
+    #[must_use]
+    pub fn new(target: impl Into<Target>) -> Self {
+        Self {
+            target: target.into(),
+            options: GestureOptions::default(),
+        }
+    }
 }
 
 /// `element.scroll_until`: scroll a scrollable a viewport at a time, at frame boundaries, until a
@@ -842,6 +891,18 @@ pub struct TypeTextParams {
     pub options: GestureOptions,
 }
 
+impl TypeTextParams {
+    /// Focus `target`, then commit `text` into it.
+    #[must_use]
+    pub fn new(target: impl Into<Target>, text: impl Into<String>) -> Self {
+        Self {
+            target: target.into(),
+            text: text.into(),
+            options: GestureOptions::default(),
+        }
+    }
+}
+
 /// `element.press_keys`: press chords in turn. A chord is its keys joined by `+`, each a W3C key
 /// name or the text the key types (`"Control+a"`, `"Enter"`); a `+` where a key stands is the plus
 /// key (`"+"`, `"Control++"`), and a key name has no space around it (`" "` is the space key).
@@ -868,6 +929,19 @@ pub struct PressKeysParams {
     /// How.
     #[cfg_attr(feature = "serde", serde(flatten))]
     pub options: GestureOptions,
+}
+
+impl PressKeysParams {
+    /// Press `keys` in turn to the focused element of `window`.
+    #[must_use]
+    pub fn new(window: WindowId, keys: Vec<String>) -> Self {
+        Self {
+            target: None,
+            window: Some(window),
+            keys,
+            options: GestureOptions::default(),
+        }
+    }
 }
 
 vocabulary! {

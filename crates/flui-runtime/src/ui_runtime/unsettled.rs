@@ -117,7 +117,7 @@ impl UiRuntime {
 
     /// Lists `reason`, of `presentation`'s window or of the whole application, as the next turn
     /// serves it: at that presentation's dropped-frame retry while one is ahead and a turn at it
-    /// serves it ([`PresentationState::retry_served_at`]), since the runtime attempts no frame of
+    /// serves it (`PresentationState::retry_served_at`), since the runtime attempts no frame of
     /// it sooner, and at the next turn otherwise. A retry holds only its own presentation's
     /// causes: another window's frames, and the application's own work, run at the next turn.
     /// The one rule for the runtime's half and its host's, which lists its own causes of a

@@ -21,6 +21,11 @@
 //! process-global font system and installs the kit's counting global
 //! allocator.
 
+#![expect(
+    deprecated,
+    reason = "ADR-0400: these cases move to `scenario::Tester`"
+)]
+
 use std::cell::RefCell;
 use std::rc::Rc;
 

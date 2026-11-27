@@ -12,7 +12,7 @@
 //!   `element.actionability` answers with), or only attached under `force`. An element handle
 //!   that is no longer attached answers `gone`. A point the call names is ready at once.
 //! - **Path.** The call's `via`, synthetic when it names none. Synthetic input is composed by
-//!   [`gestures`](flui_protocol::input::gestures) from where the act lands and injected through
+//!   [`gestures`] from where the act lands and injected through
 //!   the call's input lease, as `input.inject` is. The semantic path performs the semantics action
 //!   that does the same where the gesture has one (a primary tap invokes, a focus before typing
 //!   focuses), and otherwise falls back to synthetic input unless the call requires the semantic

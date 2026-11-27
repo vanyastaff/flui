@@ -26,6 +26,11 @@
 //! button node labelled by its `Text` (see `crates/flui-objects/ARCHITECTURE.md`,
 //! "Semantics mapping").
 
+#![expect(
+    deprecated,
+    reason = "ADR-0400: these cases move to `scenario::Tester`"
+)]
+
 use flui::prelude::*;
 use flui::testing::{InspectNode, InspectValue, Role, Tester, find};
 

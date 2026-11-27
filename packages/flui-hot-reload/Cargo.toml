@@ -34,11 +34,15 @@ host-hook = []
 # plugin ABI.
 flui-sdk = { workspace = true }
 parking_lot = { workspace = true, optional = true }
-# `WorkerManifest`, the sidecar `flui run` writes beside a worker (ADR-0393 §2).
-serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+# `WorkerManifest`, the sidecar `flui run` writes beside a worker (ADR-0393 §2), and its
+# JSON form. The `manifest` module is not built on wasm32, where no worker library is
+# loaded from a file.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 android_log-sys = "0.3"

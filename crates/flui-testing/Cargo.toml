@@ -151,10 +151,18 @@ flui-painting = { workspace = true }
 # locates the accesskit release `flui-runtime` resolves with `cargo_metadata`.
 syn = { workspace = true, features = ["full"] }
 cargo_metadata = { workspace = true }
+# `scenario_ui` checks the compiler refuses what the scenario tester forbids.
+trybuild = { workspace = true }
 
 [[test]]
 name = "flui_testing_it"
 path = "tests/main.rs"
+
+# Compile-fail cases of the scenario tester, run by trybuild: its own binary, a member of
+# nextest's `trybuild` group and of CI's `test-trybuild` view shard.
+[[test]]
+name = "scenario_ui"
+path = "tests/scenario_ui.rs"
 
 # Its own process: it installs a global allocator and runs the process's one DHAT profiler.
 # CI's `test-features` job runs it.

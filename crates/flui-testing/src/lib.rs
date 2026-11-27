@@ -13,7 +13,8 @@
 //! state. Two presentations that need independent clocks are two hosts.
 //!
 //! - [`widgets::lay_out`] mounts a widget tree in a host and adds geometry,
-//!   layer and semantics probes; [`Tester`](tester::Tester) is the application test API.
+//!   layer and semantics probes; [`scenario::Tester`] is the application test API
+//!   (ADR-0400), and [`tester::Tester`], which it replaces, is deprecated.
 //! - [`replay`] scripts pointer input as data on virtual time;
 //!   [`HeadlessHost::run_script`](host::HeadlessHost::run_script) and [`LaidOut::replay`](widgets::LaidOut::replay)
 //!   deliver it to the UI runtime's input path.
@@ -102,6 +103,7 @@ pub mod perf;
 pub mod portal_exports;
 pub mod recording;
 pub mod replay;
+pub mod scenario;
 pub mod storage;
 pub mod tester;
 pub mod text_store_host;
