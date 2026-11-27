@@ -27,8 +27,11 @@
 //! pressed and still holds is let go at once: a contact it put down is cancelled as above, a button
 //! it pressed on a contact the lease already held down is released with the contact left down, and
 //! its keys come up. What the lease held before it started stays held, button by button. So the
-//! lease's next gesture through the same source presses again, as it would on a fresh lease. `input.inject` composes no gesture: what it leaves held, stopped or
-//! not, stays with its lease.
+//! lease's next gesture through the same source presses again, as it would on a fresh lease. A
+//! key the lease held as an act's input started is the earlier step's: the act neither presses
+//! nor releases it, so a chord naming a key an earlier injection left down sends no second press
+//! (ADR-0400 §2). `input.inject` composes no gesture: what it leaves held, stopped or not, stays
+//! with its lease, and pressing a key it holds repeats it.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::time::Duration;
@@ -542,14 +545,21 @@ impl Held {
     }
 
     /// One input at `time`: the lease's state moves on only when it makes its event; `None` for
-    /// one that changes nothing the window sees.
+    /// one that changes nothing the window sees. `kept` is what the lease held as an act's input
+    /// started: a key it holds is the earlier step's, so the act neither presses nor releases it.
     fn step(
         &mut self,
         pointers: &mut u64,
         sources: &[Source],
         input: Input,
         time: EventTime,
+        kept: Option<&HeldMark>,
     ) -> Result<Option<PlatformInput>, AgentError> {
+        if let Input::Key { key, .. } = &input
+            && kept.is_some_and(|kept| kept.keys.contains(key))
+        {
+            return Ok(None);
+        }
         let modifiers = modifiers_of(&self.keys);
         let made = match input {
             Input::Down {
@@ -1113,7 +1123,13 @@ impl AgentInput {
                             .checked_add(step.after)
                             .unwrap_or(running.started),
                     );
-                    match held.step(pointers, &injection.script.sources, step.input, time) {
+                    match held.step(
+                        pointers,
+                        &injection.script.sources,
+                        step.input,
+                        time,
+                        injection.held_before.as_ref(),
+                    ) {
                         Ok(Some(input)) => batch.push(input),
                         Ok(None) => {}
                         Err(error) => {
