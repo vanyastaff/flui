@@ -51,10 +51,12 @@ hidden above it:
 #         let titles = notes.get(ctx);
 #         let submit = add.clone();
 #         Column::new((
-#             RawTextField::new(self.title.clone())
+#             Semantics::new()
+#                 .label("New note")
 #                 .identifier("new-note")
-#                 // Enter in the field adds the note too.
-#                 .on_submitted(move |ctx, _text| submit(ctx)),
+#                 .child(RawTextField::new(self.title.clone())
+#                     // Enter in the field adds the note too.
+#                     .on_submitted(move |ctx, _text| submit(ctx))),
 #             RawButton::new(Text::new("Add note")).on_pressed(add),
 #             Text::new(format!("Notes: {}", titles.len())),
 #             Column::new(titles.into_iter().map(Text::new).collect::<Vec<Text>>()),
@@ -74,6 +76,7 @@ t.tap(&find::button("Add note"));
 t.expect(&find::text("Groceries"), exists());
 t.expect(&find::text("Notes: 1"), exists());
 t.expect(&find::id("new-note"), value(""));
+t.finish();
 ```
 
 - `Tester::mount` mounts a view as `run_app` does, in an 800 by 600 window on a manual clock;
@@ -86,6 +89,8 @@ t.expect(&find::id("new-note"), value(""));
   is visible and enabled, as a user would find it.
 - `expect(&find, exists())` waits while the application has a frame or work due, then fails at once
   with the window's outline if what it expects is not there.
+- `finish` ends the test: it runs the end checks (work left due, a soft failure never raised)
+  and fails the test with its report if one does not pass.
 
 A screen where a `Find` matches nothing is usually one whose widget publishes no label; the
 failure's outline shows what the window does publish. [Testing](../cookbook/testing.md) in the

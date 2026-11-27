@@ -42,10 +42,12 @@ impl ViewState<NotesScreen> for NotesState {
         let titles = notes.get(ctx);
         let submit = add.clone();
         Column::new((
-            RawTextField::new(self.title.clone())
+            Semantics::new()
+                .label("New note")
                 .identifier("new-note")
-                // Enter in the field adds the note too.
-                .on_submitted(move |ctx, _text| submit(ctx)),
+                .child(RawTextField::new(self.title.clone())
+                    // Enter in the field adds the note too.
+                    .on_submitted(move |ctx, _text| submit(ctx))),
             RawButton::new(Text::new("Add note")).on_pressed(add),
             Text::new(format!("Notes: {}", titles.len())),
             Column::new(titles.into_iter().map(Text::new).collect::<Vec<Text>>()),
@@ -77,7 +79,9 @@ impl ViewState<NotesScreen> for NotesState {
   returns before writing, so pressing the button with only spaces typed adds nothing.
 - The field's `on_submitted` runs when the user presses Enter in it; it calls a clone of the same
   callback, since a closure whose captures are `Clone` is `Clone` too.
-- `identifier` names the field for tests and assistive technology without showing a label.
+- The `Semantics` label gives the field its accessible name, the one a screen reader announces,
+  without showing a label on screen. Its `identifier` is a stable name for tests (`find::id`),
+  which assistive technology never announces.
 
 The button also activates from the keyboard when it has focus, with Enter or Space.
 

@@ -28,6 +28,7 @@ pub use flui_testing::drop_ledger::{DropLedger, DropSentinel};
 pub use flui_testing::find;
 pub use flui_testing::frame;
 pub use flui_testing::host::HostClock;
+pub use flui_testing::perf::Cost;
 pub use flui_testing::scenario;
 pub use flui_testing::storage::{CommitBarrier, CopyHold, MemoryStorage, ReadHold, WriteHold};
 #[expect(
