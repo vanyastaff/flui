@@ -277,12 +277,12 @@ impl<S> Headless<S> {
     }
 
     /// The end checks of ADR-0400 §7 from the unmount on, in order; the settle and the audit
-    /// are the caller's, contained in `first`.
+    /// are the caller's, a panic in the settle held in `first`.
     ///
-    /// The settle, the audit, the unmount and the turns after it run the application's code (a
-    /// timer, a `dispose`, a `Drop`): a panic in any of them is held in `first` while the unmount
-    /// and `lease`'s release still run, and it is handed back, the first failure, with the checks
-    /// that would read the tree it left half unmounted not made.
+    /// The settle, the unmount and the turns after it run the application's code (a timer, a
+    /// `dispose`, a `Drop`): a panic in any of them is held in `first` while the unmount and
+    /// `lease`'s release still run, and it is handed back, the first failure, with the checks that
+    /// would read the tree it left half unmounted not made.
     fn teardown(
         &mut self,
         mut first: FirstPanic,
@@ -483,8 +483,9 @@ impl Connection for Headless<Observed> {
         if self.host.is_none() {
             return unpassed;
         }
-        // The settle and the audit run frames, so the application's timers and callbacks: a panic
-        // in one is held, and the unmount and the lease's release still run.
+        // The settle runs frames, so the application's timers and callbacks: a panic
+        // in one is held, and the unmount and the lease's release still run. The audit answers
+        // without a frame.
         let mut first = FirstPanic::new();
         if checks.settle {
             // A cause that repeats keeps the frame at the limit: the checks after it read that
@@ -497,8 +498,8 @@ impl Connection for Headless<Observed> {
                 )));
             }
         }
-        if !checks.audit.is_empty() && !first.is_held() {
-            first.contain(|| audit(self, &checks.audit, &mut unpassed));
+        if !checks.audit.is_empty() {
+            audit(self, &checks.audit, &mut unpassed);
         }
         let lease = self.attached.lease.take();
         let first = self.teardown(first, lease, checks, &mut unpassed);

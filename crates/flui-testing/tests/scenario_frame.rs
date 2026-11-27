@@ -406,6 +406,11 @@ fn a_pump_after_the_last_window_closed_runs_no_frame_and_reports_none() {
         .expect("the view was built in a window");
     window.request_close().expect("the window is open");
     t.pump();
+    assert_eq!(
+        t.frame().report(),
+        &FrameReport::default(),
+        "the frame in which the window closes presents nothing"
+    );
     t.pump_for(Duration::from_millis(50));
     assert_eq!(t.frame().report(), &FrameReport::default());
     t.finish_unchecked("the application closed its window");
@@ -463,24 +468,10 @@ fn draw_commands_are_placed_in_the_window_through_the_layers_above_them() {
         );
     }
     let layers = frame.layers();
-    let outline: Vec<(usize, &str)> = layers.iter().collect();
-    let depth_of = |kind: &str| {
-        outline.iter().find(|(_, k)| *k == kind).map_or_else(
-            || panic!("the outline has a {kind} layer:\n{layers}"),
-            |(depth, _)| *depth,
-        )
-    };
-    let pictures: Vec<usize> = outline
-        .iter()
-        .filter(|(_, kind)| *kind == "Picture")
-        .map(|(depth, _)| *depth)
-        .collect();
-    assert!(
-        pictures.len() >= 2
-            && pictures
-                .iter()
-                .all(|depth| *depth > depth_of("Opacity").min(depth_of("Transform"))),
-        "each swatch paints into a picture under its opacity or transform layer:\n{layers}"
+    assert_eq!(
+        layers.to_string(),
+        "Offset\n  Opacity\n    Picture\n  Transform\n    Picture",
+        "each swatch paints into a picture under its own opacity or transform layer"
     );
     t.finish();
 }

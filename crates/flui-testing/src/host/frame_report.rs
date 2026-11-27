@@ -14,8 +14,8 @@ impl HeadlessHost {
     /// scene patch cost. Counts, not timings, so a perf scenario compares them exactly against a
     /// checked-in baseline.
     ///
-    /// A host whose last window closed runs no frame and reports none. The frame in which the
-    /// window closes reports its pipeline work; its build and its scene went with the window.
+    /// A frame in which the last window closes presents nothing, and a host whose last window
+    /// closed runs no frame: each reports none.
     ///
     /// # Panics
     ///
@@ -39,15 +39,12 @@ impl HeadlessHost {
             flui_view::__runtime::BuildOwner::clear_frame_build_report_for_test,
         );
         let _outcome = self.pump(dt);
+        let (Some(runtime), Some(scene_before)) = (self.try_ui_runtime(), scene_before) else {
+            return FrameReport::default();
+        };
         let pipeline = pipeline
             .with(PipelineOwner::counters)
             .since(pipeline_before);
-        let (Some(runtime), Some(scene_before)) = (self.try_ui_runtime(), scene_before) else {
-            return FrameReport {
-                pipeline,
-                ..FrameReport::default()
-            };
-        };
         let build = runtime
             .widgets()
             .with_build_owner_mut(|owner| owner.last_frame_build_report());
