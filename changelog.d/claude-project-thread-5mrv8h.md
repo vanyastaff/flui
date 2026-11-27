@@ -33,6 +33,18 @@
   `capabilities.pointers` its injection delivers; `AuditRule::TextContrast`;
   `LogicalRect::approx_eq`; the method `element.scroll_until`.
 - `Driver::run_scenario(&mut report, name, scenario)`.
+- `flui_testing::scenario` (`flui::testing::scenario`): `Tester<C: Connection>` over the
+  in-process `Headless` connection (ADR-0400). Its finders are `Find<One>` and `Find<Many>`, so a
+  gesture aimed at many elements does not compile. Its matchers are data that `Tester::expect`
+  waits on. A read runs no frame, and an act ends with an owner turn that drains what its frames
+  queued. Each verb has a `try_` twin returning a `TestError` with its `Diagnosis`. The end of a
+  test (`finish`, `try_finish`, or `Drop`, which only reports) settles, audits unnamed elements,
+  unmounts the root, releases held input and checks the `DropLedger` and that no timer, ticker or
+  background work was left behind. It skips those checks, and says why, while a failure is on its
+  way to the caller.
+- Constructors for the gesture parameters of `flui-protocol` (`LongPressParams::new`,
+  `DragParams::new`, `SwipeParams::new`, `ScrollIntoViewParams::new`, `TypeTextParams::new`,
+  `PressKeysParams::new`).
 
 ### Changed
 
@@ -65,6 +77,15 @@
 - A trace replays only against the protocol it was recorded at: `trace::replay` refuses another
   with `Error::Version` before any command.
 - `window.placement` answers the window's platform convention and its safe area.
+- An act of the development agent leaves a key its input lease held as the act started as it
+  was: a chord naming it sends no second press and no release. `flui_testing::tester::Tester`'s
+  `press_keys` is now that act, and the tester keeps no record of held keys of its own.
+
+### Deprecated
+
+- `flui_testing::tester::{Tester, Expectation, TestError}` and the `Locator`-returning functions
+  of `flui_testing::find`, also re-exported at `flui::testing`'s root: use
+  `flui_testing::scenario`.
 
 ### Removed
 

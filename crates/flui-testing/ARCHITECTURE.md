@@ -178,7 +178,8 @@ Its frame driver is `HeadlessHost`, which pumps a
   `flui-runtime` is not an embedder API, and a public path to `UiRuntime` here
   would open the UI runtime's frame entry points (ADR-0083 §2) to every crate
   that tests with this one.
-- **An application's test goes through the agent.** `Tester` (`src/tester.rs`)
+- **An application's test goes through the agent.** `tester::Tester` (`src/tester.rs`,
+  deprecated for `scenario::Tester` below)
   holds a `HeadlessHost`, its window's `AgentWindow` and one `InputLease`, and
   nothing else: it finds with `semantics.locate`, checks with
   `element.actionability` and delivers input with `input.inject`, so it
@@ -202,9 +203,42 @@ Its frame driver is `HeadlessHost`, which pumps a
   so a timer of the application, however close, never elapses inside an
   expectation. Tests: `an_expectation_does_not_fire_a_timer_due_within_a_frame`,
   `an_expectation_does_not_pass_on_the_tree_a_ready_completion_replaced`.
-  `flui::testing` re-exports `Tester`,
+  `flui::testing` re-exports `scenario`, the deprecated `Tester` and
   `find`, the protocol's locator and node types and `rendering`, and none of
   this crate's other harnesses.
+- **A test is one `Tester` over a connection.** `scenario::Tester<C: Connection>`
+  (`src/scenario/`, ADR-0400) holds no host: each verb is an agent protocol
+  method sent through `Connection::call`, and the connection sets the depth.
+  `Headless` is the in-process connection: a `HeadlessHost` with its agent,
+  the window's `AgentWindow` and one `InputLease`. A call is answered by an
+  owner turn (`HeadlessHost::owner_turn`, `UiRuntime::drain_owner_inbox` and
+  no frame) or, when that turn did not answer it, by
+  `HeadlessHost::run_until_answered` on the virtual clock and one more owner
+  turn, which drains what those frames queued, so a read runs no frame and a
+  failure an act causes is the act's
+  (`a_read_leaves_the_frame_number_unchanged`). `Find<One>` and `Find<Many>`
+  are the protocol's `Locator` with its quantity in the type: a gesture takes
+  a `Find<One>` (`scenario_ui`'s `tap_on_many`), and a matcher on a strict
+  `Find<One>` lowers to `All([Matches { Count(1) }, Matches { .. }])`, because
+  the agent's `Matches` holds when at least one match meets it. Held input is
+  the lease's: an act naming a key the lease held as it started neither
+  presses nor releases it
+  (`a_chord_after_a_gesture_that_left_a_key_down_sends_no_second_press`).
+- **A test's end has one owner.** The tester's report, an `Rc` the tester,
+  its live `TestError`s and the guards of its running verbs share, holds the
+  first failure, the soft failures, whether a call with no answer may have
+  run and how many returned errors are alive. `finish` and `Drop` run
+  `Connection::finish` with `EndChecks::default()` (settle, audit `Unnamed`,
+  unmount the root, release the lease, run turns, the `DropLedger`, the list
+  of causes left behind) only when the report is not poisoned, no error is
+  alive and the thread is not unwinding. Otherwise the end checks nothing,
+  says why, and releases: through `Connection::finish` with
+  `EndChecks::none()`, or on an unwinding thread through the host's own drop.
+  `Drop` writes what it found as `tracing` events and to stderr and raises
+  nothing. Tests: `a_caught_panic_then_drop_skips_the_end_checks`,
+  `an_error_through_the_question_mark_then_drop_skips_the_end_checks`,
+  `an_expected_error_dropped_before_a_leaked_ticker_reports_the_ticker`,
+  `a_test_that_ends_holding_a_key_passes_its_end_checks`.
 - **A headless root is the root a runner attaches.** `HeadlessHost::attach`
   and `attach_to` pass the view through `flui_widgets::app_root`, the one
   function `flui-app`'s runners call, before the UI runtime adds its scopes,
