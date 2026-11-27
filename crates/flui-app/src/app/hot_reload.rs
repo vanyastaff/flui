@@ -434,6 +434,51 @@ impl Drop for WorkerWatcherGuard {
     }
 }
 
+/// The development reload a desktop loop attached when it started.
+///
+/// The loop holds it, not the application scope: the hook is the tool's that
+/// loads new code, so a restart (ADR-0393 §4) keeps it attached, and the
+/// later application's own `AppConfig::dev_reload` is not installed. Dropped
+/// at the loop's exit, which detaches the hook.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) struct LoopReload {
+    reload: WorkerReload,
+    /// Detaches the hook when dropped; `None` when none attached.
+    _attached: Option<WorkerWatcherGuard>,
+}
+
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+impl LoopReload {
+    /// Attach the hook `config` installs, if any, handing it `wake`.
+    pub(crate) fn attach(config: &AppConfig, wake: Arc<dyn Fn() + Send + Sync>) -> Self {
+        let reload = WorkerReload::from_config(config);
+        let attached = reload.spawn_watcher(wake);
+        Self {
+            reload,
+            _attached: attached,
+        }
+    }
+
+    /// The driver each UI runtime this loop installs registers with.
+    pub(crate) fn reload(&self) -> WorkerReload {
+        self.reload.clone()
+    }
+
+    /// Whether a hook is attached to this loop.
+    #[cfg(test)]
+    pub(crate) fn is_attached(&self) -> bool {
+        self._attached.is_some()
+    }
+}
+
 /// The scene-plugin driver every native runner holds: the configuration's
 /// hook, if any, may draw a presentation's frame itself, in place of the
 /// widget tree (ADR-0391).

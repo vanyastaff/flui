@@ -17,7 +17,7 @@ use crate::app::{
     application::WindowErrorObserver,
     application::{DesktopRun, StartupWindow},
     application_control::{AppHandle, AppWindowError, Ingress, contain},
-    hot_reload::{WorkerReload, WorkerWatcherGuard},
+    hot_reload::LoopReload,
 };
 use flui_engine::RasterPlacement;
 use flui_native::{HostWindow, PendingWindow, PlatformProxy, WindowOpen};
@@ -62,7 +62,6 @@ pub(in crate::app) struct MainController {
     initial: bool,
     error: Option<WindowErrorObserver>,
     fatal: Rc<RefCell<Option<LaunchError>>>,
-    watcher: Option<WorkerWatcherGuard>,
 }
 // Each field is dropped on its own, so one that panics does not keep the
 // rest; the first panic resumes once all are gone (ADR-0258 §5), and the
@@ -71,8 +70,6 @@ impl Drop for MainController {
     fn drop(&mut self) {
         self.cancel_pending();
         let mut first = flui_foundation::panic::FirstPanic::new();
-        let watcher = self.watcher.take();
-        first.contain(|| drop(watcher));
         let installer = self.installer.take();
         first.contain(|| drop(installer));
         let observer = self.error.take();
@@ -698,12 +695,13 @@ pub(super) fn main_window_closed(address: flui_foundation::PresentationAddress) 
 /// there is the loop's terminal failure (ADR-0258 §2), which the exit
 /// resumes once it has written what the application persisted.
 pub(super) fn shutdown_main_window() {
-    let (controller, ingress, dev_agent) = APP_RUNTIME.with(|slot| {
+    let (controller, ingress, dev_agent, reload) = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
         (
             runtime.application.main_controller.take(),
             runtime.application.main_ingress.take(),
             runtime.loop_dev_agent.end(),
+            runtime.loop_reload.take(),
         )
     });
     // The loop's hooks detach and drop first, outside the borrow and
@@ -716,8 +714,14 @@ pub(super) fn shutdown_main_window() {
     if let Some(ingress) = ingress {
         ingress.close();
     }
-    if let Some(mut controller) = controller {
+    let mut controller = controller;
+    if let Some(controller) = controller.as_mut() {
         super::terminal::contain_terminal("main window cancellation", || controller.cancel());
+    }
+    // The development reload detaches after the window's pending open is
+    // cancelled and before its factory goes.
+    super::terminal::contain_terminal("development reload detach", || drop(reload));
+    if let Some(controller) = controller {
         super::terminal::contain_terminal("main window retirement", || drop(controller));
     }
 }
@@ -1164,8 +1168,9 @@ where
                 // The loop takes the hooks and owns them until it ends
                 // (`shutdown_main_window`).
                 super::dev_agents::start(&config);
-                let reload = WorkerReload::from_config(&config);
-                let watcher = reload.spawn_watcher(runtime_wake_callback());
+                let attached = LoopReload::attach(&config, runtime_wake_callback());
+                let reload = attached.reload();
+                APP_RUNTIME.with(|slot| slot.borrow_mut().loop_reload = Some(attached));
                 let installer_config = config.clone();
                 let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
                 let factory_identity = Arc::clone(&identity);
@@ -1217,7 +1222,6 @@ where
                         initial: startup == StartupWindow::Open,
                         error: window_error,
                         fatal: recorded,
-                        watcher,
                     });
                 });
                 for service in &config.services {
@@ -1317,7 +1321,6 @@ mod tests {
                 initial: false,
                 error: observer,
                 fatal: Rc::new(RefCell::new(None)),
-                watcher: None,
             });
         });
         install_platform_quit_hook();
@@ -1917,12 +1920,9 @@ mod tests {
             assert!(
                 APP_RUNTIME.with(|slot| slot
                     .borrow()
-                    .application
-                    .main_controller
+                    .loop_reload
                     .as_ref()
-                    .expect("controller installed")
-                    .watcher
-                    .is_some()),
+                    .is_some_and(LoopReload::is_attached)),
                 "the loop holds the attachment"
             );
             for _ in 0..2 {

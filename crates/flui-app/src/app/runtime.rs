@@ -381,6 +381,14 @@ pub(crate) struct AppRuntime {
     /// raster host, the engine services and the execution pools, so a
     /// teardown that leaves it installed drops it while they still live.
     pub(super) application: ApplicationScope,
+    /// The development reload this desktop loop attached, kept across a
+    /// restart; `None` until the loop starts and after its exit.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) loop_reload: Option<crate::app::hot_reload::LoopReload>,
     /// Where this loop's windows get their renderers.
     pub(super) raster_host: super::runner::raster_host::SharedRasterHost,
     #[cfg(target_os = "ios")]
@@ -589,6 +597,12 @@ impl AppRuntime {
             host_memory: Rc::default(),
             window_routes: super::runner::window_routes::RouteBook::default(),
             application: ApplicationScope::default(),
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            loop_reload: None,
             assets: crate::app::asset_host::AssetSlot::default(),
         }
     }
