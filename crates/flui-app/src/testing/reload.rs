@@ -2,7 +2,6 @@
 //! versions the test loads, runs the entry the test gives it when the loop
 //! restarts, and keeps what the loop reported back.
 
-use std::collections::VecDeque;
 use std::sync::Arc;
 
 use flui_view::dev_reload::{
@@ -12,8 +11,8 @@ use parking_lot::Mutex;
 
 /// A [`DevReloadHook`] a test drives: installed with
 /// [`AppConfig::dev_reload`](crate::AppConfig::dev_reload) on a
-/// [`HeadlessRun`](super::HeadlessRun), it reports each version
-/// [`load`](Self::load) queues at the next frame boundary, runs the
+/// [`HeadlessRun`](super::HeadlessRun), it reports the version
+/// [`load`](Self::load) gave last at the next poll, runs the
 /// [`entry`](Self::entry) when the loop restarts, and keeps every outcome
 /// for [`take_reports`](Self::take_reports). Clones share one script.
 #[derive(Clone, Default)]
@@ -21,7 +20,9 @@ pub struct ScriptedReload(Arc<Mutex<Script>>);
 
 #[derive(Default)]
 struct Script {
-    events: VecDeque<ReloadEvent>,
+    /// The version loaded since the last poll: a later load replaces it, as
+    /// a hook reports only the version loaded now.
+    loaded: Option<CodeVersion>,
     wake: Option<ReloadWake>,
     entry: Option<Box<dyn FnMut() + Send>>,
     reports: Vec<ReloadReport>,
@@ -33,7 +34,7 @@ impl std::fmt::Debug for ScriptedReload {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let script = self.0.lock();
         f.debug_struct("ScriptedReload")
-            .field("queued", &script.events.len())
+            .field("loaded", &script.loaded)
             .field("attached", &script.attached)
             .finish_non_exhaustive()
     }
@@ -46,12 +47,13 @@ impl ScriptedReload {
         Self::default()
     }
 
-    /// The next poll reports `version` loaded; the loop is woken to poll it,
+    /// The next poll reports `version` loaded, in place of a version loaded
+    /// before it that no poll reported; the loop is woken to poll it,
     /// as a tool that finished a build wakes it.
     pub fn load(&self, version: CodeVersion) {
         let wake = {
             let mut script = self.0.lock();
-            script.events.push_back(ReloadEvent::Loaded(version));
+            script.loaded = Some(version);
             script.wake.clone()
         };
         if let Some(wake) = wake {
@@ -104,9 +106,9 @@ impl DevReloadHook for ScriptedReload {
     fn poll(&mut self) -> ReloadEvent {
         self.0
             .lock()
-            .events
-            .pop_front()
-            .unwrap_or(ReloadEvent::Unchanged)
+            .loaded
+            .take()
+            .map_or(ReloadEvent::Unchanged, ReloadEvent::Loaded)
     }
 
     fn run_entry(&mut self) {

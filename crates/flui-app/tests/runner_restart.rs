@@ -188,14 +188,6 @@ fn a_restart_disposes_every_state_before_the_entry_runs() {
     );
     assert_eq!(later.created(), 1, "the later application was composed");
     assert_eq!(window_ids(&run), window, "the restart kept the window");
-
-    hook.load(version(2, 3));
-    turns(&run);
-    assert_eq!(
-        hook.take_reports(),
-        [ReloadReport::Reassembled(version(2, 3))],
-        "a body edit of the restart's layout reassembles"
-    );
     run.join().expect("the run ends");
     assert_eq!(
         later.disposed(),
@@ -572,11 +564,268 @@ fn a_resident_application_is_asked_to_exit_by_its_new_policy() {
     run.join().expect("the run ends");
 }
 
+/// §3: a version of another layout restarts, and a later version of the
+/// restart's layout reassembles the UI runtime the restart built.
+fn a_changed_layout_restarts_and_a_later_body_edit_reassembles() {
+    let later = Lives::new();
+    let hook = ScriptedReload::new();
+    hook.entry(runs(note(&later)));
+    let run = running(&hook, note(&Lives::new()));
+
+    hook.load(version(2, 2));
+    turns(&run);
+    assert_eq!(
+        hook.take_reports(),
+        [ReloadReport::Restarted(version(2, 2))],
+        "nothing reassembles across layouts"
+    );
+
+    hook.load(version(2, 3));
+    turns(&run);
+    assert_eq!(
+        hook.take_reports(),
+        [ReloadReport::Reassembled(version(2, 3))],
+        "a body edit of the restart's layout reassembles"
+    );
+    assert_eq!(later.created(), 1, "a reassemble keeps the later state");
+    assert_eq!(hook.entries_run(), 1);
+    run.join().expect("the run ends");
+}
+
+/// §2, §3: a restart-tier save and a body save that arrive before one poll
+/// restart once, to the latest version, and the restart's UI runtime is
+/// built from it, so nothing reassembles after.
+fn a_restart_tier_save_then_a_body_save_restart_once() {
+    let later = Lives::new();
+    let hook = ScriptedReload::new();
+    hook.entry(runs(note(&later)));
+    let run = running(&hook, note(&Lives::new()));
+
+    hook.load(version(2, 2));
+    hook.load(version(2, 3));
+    turns(&run);
+    turns(&run);
+    assert_eq!(
+        hook.take_reports(),
+        [ReloadReport::Restarted(version(2, 3))]
+    );
+    assert_eq!(hook.entries_run(), 1);
+    assert_eq!(later.created(), 1);
+    run.join().expect("the run ends");
+}
+
+/// §3: the wake of the hook that reports the version gives the loop the
+/// turn that polls it and restarts: one owner turn, no frame asked for.
+fn an_idle_loop_restarts_on_the_wake_that_reported_the_version() {
+    let later = Lives::new();
+    let hook = ScriptedReload::new();
+    hook.entry(runs(note(&later)));
+    let run = running(&hook, note(&Lives::new()));
+
+    hook.load(version(2, 2));
+    run.run_owner_turn();
+    assert_eq!(
+        hook.take_reports(),
+        [ReloadReport::Restarted(version(2, 2))]
+    );
+    assert_eq!(later.created(), 1);
+    run.join().expect("the run ends");
+}
+
+/// §3: a loop with no UI runtime polls the hook when its wake arrives, and
+/// restarts on a version of another layout.
+fn a_loop_without_a_ui_runtime_polls_on_the_wake() {
+    let hook = ScriptedReload::new();
+    let later_ready = Arc::new(AtomicBool::new(false));
+    {
+        let later_ready = Arc::clone(&later_ready);
+        hook.entry(move || {
+            let later_ready = Arc::clone(&later_ready);
+            Application::new()
+                .config(AppConfig::new().exit_policy(ExitPolicy::ExplicitQuit))
+                .on_ready(move |_| later_ready.store(true, Ordering::SeqCst))
+                .run_resident(|_: &AppHandle| -> flui_widgets::Text {
+                    panic!("the later application opens no main window")
+                })
+                .expect("the run hands its application over");
+        });
+    }
+    let run = HeadlessRun::start_resident(
+        Application::new().config(development(&hook)),
+        |_: &AppHandle| -> flui_widgets::Text {
+            panic!("the earlier application opens no main window")
+        },
+    );
+    run.run_owner_turn();
+    assert!(run.open_windows().is_empty(), "no window, so no UI runtime");
+
+    hook.load(version(1, 1));
+    turns(&run);
+    assert_eq!(
+        hook.take_reports(),
+        [],
+        "the first version is the one the application was composed from"
+    );
+    hook.load(version(2, 2));
+    run.run_owner_turn();
+    assert_eq!(
+        hook.take_reports(),
+        [ReloadReport::Restarted(version(2, 2))]
+    );
+    assert!(
+        later_ready.load(Ordering::SeqCst),
+        "the later application is ready"
+    );
+    assert!(run.is_running());
+    run.join().expect("the run ends");
+}
+
+/// A capability whose handle says which application provided it.
+enum Provided {}
+
+impl flui_platform::capability::Capability for Provided {
+    type Handle = u32;
+    const NAME: &'static str = "restart-provided";
+}
+
+/// A root that asks for [`Provided`] when its state is created.
+#[derive(Clone)]
+struct Asks(Arc<Mutex<Vec<Option<u32>>>>);
+
+struct AsksState;
+
+impl flui_view::StatefulView for Asks {
+    type State = AsksState;
+
+    fn create_state(&self, ctx: &dyn flui_view::LifecycleContext) -> Self::State {
+        use flui_view::LifecycleContextExt as _;
+        let answer = ctx.capability::<Provided>().ok();
+        self.0.lock().expect("the answers lock").push(answer);
+        AsksState
+    }
+}
+
+impl flui_view::ViewState<Asks> for AsksState {
+    fn build(&self, _: &Asks, _ctx: &dyn flui_view::BuildContext) -> impl flui_view::IntoView {
+        flui_widgets::SizedBox::square(10.0)
+    }
+}
+
+impl flui_view::View for Asks {
+    fn create_element(self: std::rc::Rc<Self>) -> flui_view::element::ElementKind {
+        flui_view::element::ElementKind::stateful(self)
+    }
+}
+
+/// §4 step 3: the later application's capabilities are the ones its
+/// widgets acquire; the earlier application's provider is gone with its
+/// scope.
+fn a_restart_composes_the_later_applications_capabilities() {
+    let answers = Arc::new(Mutex::new(Vec::new()));
+    let hook = ScriptedReload::new();
+    {
+        let asks = Asks(Arc::clone(&answers));
+        hook.entry(move || {
+            Application::new()
+                .capability::<Provided>(|_: &flui_platform::capability::ProviderContext<'_>| Ok(2))
+                .run(asks.clone())
+                .expect("the run hands its application over");
+        });
+    }
+    let application = Application::new()
+        .config(development(&hook))
+        .capability::<Provided>(|_: &flui_platform::capability::ProviderContext<'_>| Ok(1));
+    let run = running_with(&hook, application, Asks(Arc::clone(&answers)));
+
+    hook.load(version(2, 2));
+    turns(&run);
+    assert_eq!(
+        hook.take_reports(),
+        [ReloadReport::Restarted(version(2, 2))]
+    );
+    assert_eq!(
+        *answers.lock().expect("the answers lock"),
+        [Some(1), Some(2)],
+        "each application's widgets acquire its own provider"
+    );
+    run.join().expect("the run ends");
+}
+
+const PROBE_FONT: &[u8] = include_bytes!("../../flui-painting/assets/fonts/probe-sans-400.ttf");
+
+/// §4 step 3: the window stays, and the font registrations, which are the
+/// application's, are made again by the later application.
+fn a_restart_keeps_the_window_and_registers_the_fonts_again() {
+    fn registers(seen: &Arc<Mutex<Vec<String>>>) -> impl FnOnce(&AppHandle) + 'static {
+        let seen = Arc::clone(seen);
+        move |_| {
+            let outcome = flui_app::register_font(PROBE_FONT);
+            seen.lock()
+                .expect("the outcomes lock")
+                .push(format!("{outcome:?}"));
+        }
+    }
+    let outcomes = Arc::new(Mutex::new(Vec::new()));
+    let hook = ScriptedReload::new();
+    {
+        let (outcomes, later) = (Arc::clone(&outcomes), note(&Lives::new()));
+        hook.entry(move || {
+            Application::new()
+                .on_ready(registers(&outcomes))
+                .run(later.clone())
+                .expect("the run hands its application over");
+        });
+    }
+    let application = Application::new()
+        .config(development(&hook))
+        .on_ready(registers(&outcomes));
+    let run = running_with(&hook, application, note(&Lives::new()));
+    let window = window_ids(&run);
+
+    hook.load(version(2, 2));
+    turns(&run);
+    assert_eq!(
+        hook.take_reports(),
+        [ReloadReport::Restarted(version(2, 2))]
+    );
+    assert_eq!(window_ids(&run), window, "the restart kept the window");
+    assert_eq!(
+        *outcomes.lock().expect("the outcomes lock"),
+        ["Ok(())", "Ok(())"],
+        "the later application registers the font the earlier one did"
+    );
+    run.join().expect("the run ends");
+}
+
 #[test]
 fn runner_restart() {
     crate::run_table(
         "runner_restart",
         &[
+            (
+                "a_changed_layout_restarts_and_a_later_body_edit_reassembles",
+                a_changed_layout_restarts_and_a_later_body_edit_reassembles,
+            ),
+            (
+                "a_restart_tier_save_then_a_body_save_restart_once",
+                a_restart_tier_save_then_a_body_save_restart_once,
+            ),
+            (
+                "an_idle_loop_restarts_on_the_wake_that_reported_the_version",
+                an_idle_loop_restarts_on_the_wake_that_reported_the_version,
+            ),
+            (
+                "a_loop_without_a_ui_runtime_polls_on_the_wake",
+                a_loop_without_a_ui_runtime_polls_on_the_wake,
+            ),
+            (
+                "a_restart_composes_the_later_applications_capabilities",
+                a_restart_composes_the_later_applications_capabilities,
+            ),
+            (
+                "a_restart_keeps_the_window_and_registers_the_fonts_again",
+                a_restart_keeps_the_window_and_registers_the_fonts_again,
+            ),
             (
                 "a_restart_disposes_every_state_before_the_entry_runs",
                 a_restart_disposes_every_state_before_the_entry_runs,
