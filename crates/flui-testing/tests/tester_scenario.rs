@@ -527,36 +527,43 @@ fn finish_unchecked_ends_without_the_checks_and_says_why() {
     assert_eq!(unpassed_checks(&log), Vec::<String>::new());
 }
 
-/// A find nothing matches lists the elements whose text shares a word with the one sought:
-/// "Save draft" for "Save", not "e", whose letter merely occurs in the find's description.
+/// A find nothing matches lists the elements whose name holds the text sought, or is one of its
+/// words: "Save draft" for "draft" and "Save" for "Save changes", never "e", whose letter merely
+/// occurs in the find's description, and nothing for an empty text, which every name holds.
 ///
-/// Fails against candidates chosen by comparing names with the debug form of the find.
+/// Fails against candidates chosen by comparing names with the debug form of the find, against
+/// one that drops the word branch, and against one that keeps an empty text.
 #[test]
 fn a_missing_text_lists_the_elements_that_share_its_text() {
+    let rows: [(&str, &[&str], &[&str]); 3] = [
+        ("draft", &["\"Save draft\""], &["\"e\"", "\"Save\""]),
+        ("Save changes", &["\"Save\""], &["\"e\"", "\"Save draft\""]),
+        ("", &[], &["\"Save\"", "\"Save draft\"", "\"e\""]),
+    ];
     let mut t = Tester::mount(flui_widgets::Column::new((
         Text::new("Save draft"),
+        Text::new("Save"),
         Text::new("e"),
     )));
-    let Err(TestError::NotFound { diagnosis, .. }) = t.try_read(&find::text("Save")) else {
-        panic!("nothing is named \"Save\"");
-    };
-    assert!(
-        diagnosis
-            .candidates
-            .iter()
-            .any(|line| line.contains("\"Save draft\"")),
-        "{:?}",
-        diagnosis.candidates
-    );
-    assert!(
-        !diagnosis
-            .candidates
-            .iter()
-            .any(|line| line.contains("\"e\"")),
-        "{:?}",
-        diagnosis.candidates
-    );
-    drop(diagnosis);
+    for (sought, listed, unlisted) in rows {
+        let Err(TestError::NotFound { diagnosis, .. }) = t.try_read(&find::text(sought)) else {
+            panic!("nothing is named {sought:?}");
+        };
+        let candidates = diagnosis.candidates.clone();
+        drop(diagnosis);
+        for name in listed {
+            assert!(
+                candidates.iter().any(|line| line.contains(name)),
+                "{sought:?} lists {name}: {candidates:?}"
+            );
+        }
+        for name in unlisted {
+            assert!(
+                !candidates.iter().any(|line| line.contains(name)),
+                "{sought:?} does not list {name}: {candidates:?}"
+            );
+        }
+    }
     t.finish();
 }
 

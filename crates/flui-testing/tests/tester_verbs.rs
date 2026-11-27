@@ -165,7 +165,7 @@ fn typed_text_is_committed_into_the_field_it_names() {
 }
 
 /// "Once"; two "Twice"; a button "Go" and a disabled one "Off"; a checked box "Agree"; and
-/// "Volume", with a value and a description.
+/// "Volume", with a value and a description; and "Tiny", laid out with no size, so never shown.
 fn catalog() -> Tester {
     Tester::mount(Column::new((
         Text::new("Once"),
@@ -185,6 +185,12 @@ fn catalog() -> Tester {
             .value("7 of 10")
             .hint("Turn it up")
             .child(SizedBox::new(20.0, 20.0)),
+        SizedBox::new(0.0, 0.0).child(
+            Semantics::new()
+                .container(true)
+                .label("Tiny")
+                .child(SizedBox::new(20.0, 20.0)),
+        ),
     )))
 }
 
@@ -315,7 +321,31 @@ fn each_matcher_holds_exactly_where_its_name_says() {
             matcher::description("Turn it up"),
             true,
         ),
+        (
+            "a wrong description",
+            One(find::text("Volume")),
+            matcher::description("Turn it down"),
+            false,
+        ),
         ("visible", One(find::text("Once")), matcher::visible(), true),
+        (
+            "published unshown",
+            One(find::text("Tiny")),
+            matcher::exists(),
+            true,
+        ),
+        (
+            "not visible",
+            One(find::text("Tiny")),
+            matcher::visible(),
+            false,
+        ),
+        (
+            "a state not held",
+            One(find::button("Go")),
+            matcher::state(disabled),
+            false,
+        ),
         (
             "not focused",
             One(find::text("Once")),
