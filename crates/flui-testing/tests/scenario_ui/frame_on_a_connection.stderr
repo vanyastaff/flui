@@ -1,0 +1,5 @@
+error[E0599]: no method named `frame` found for mutable reference `&mut flui_testing::scenario::Tester<C>` in the current scope
+ --> tests/scenario_ui/frame_on_a_connection.rs:8:20
+  |
+8 |     let _frame = t.frame();
+  |                    ^^^^^ method not found in `&mut flui_testing::scenario::Tester<C>`

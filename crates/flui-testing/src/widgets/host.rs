@@ -112,6 +112,13 @@ impl WidgetHost {
         let _outcome = self.ui_runtime.pump(dt);
     }
 
+    /// Run one frame `dt` after the last, as [`Self::pump`] does, and report what it did
+    /// ([`HeadlessHost::pump_reported`]).
+    pub(super) fn pump_reported(&mut self, dt: Duration) -> crate::FrameReport {
+        self.submits_before_last_pump = self.ui_runtime.sink().submits();
+        self.ui_runtime.pump_reported(dt)
+    }
+
     /// Deliver a pointer event through the UI runtime's input path.
     pub(super) fn dispatch_pointer(&self, event: &PointerEvent) {
         self.ui_runtime

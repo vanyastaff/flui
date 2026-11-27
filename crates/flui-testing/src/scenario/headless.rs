@@ -14,13 +14,15 @@ use flui_protocol::method::{
 use flui_protocol::report::{Check, Outcome, UnpassedCheck};
 use flui_protocol::session::WindowParams;
 use flui_protocol::tree::WindowId;
-use flui_protocol::wait::{Condition, WaitOutcome, WaitParams};
+use flui_protocol::wait::{Condition, UnsettledCause, WaitOutcome, WaitParams};
 use flui_view::IntoView;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 
 use super::clock::{Advanced, VirtualClock};
 use super::report::{TestReport, write_report};
+use super::target::sealed::Ends;
 use super::window::{TestWindow, WindowStorage};
+use crate::FrameReport;
 use crate::drop_ledger::DropLedger;
 use crate::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow, KitStorage};
 use crate::storage::MemoryStorage;
@@ -37,6 +39,10 @@ const ANSWER_LIMIT: Duration = Duration::from_secs(1);
 /// How long the end of a test holds out for the application to settle.
 pub(crate) const SETTLE_LIMIT: Duration = Duration::from_secs(5);
 
+/// The frames of [`FRAME`] the end of a test with no agent pumps to settle: as many as
+/// [`SETTLE_LIMIT`] holds.
+const SETTLE_FRAMES: usize = (SETTLE_LIMIT.as_millis() / FRAME.as_millis()) as usize;
+
 /// The owner turns the end of a test runs for what the unmount and the release queued, at most.
 const RELEASE_TURNS: usize = 16;
 
@@ -51,12 +57,25 @@ pub struct Observed {
     agent: Option<HeadlessDevAgent>,
 }
 
+/// What a [`Headless`] host with no agent attaches to its window: nothing, the state a cost
+/// baseline holds (ADR-0400 §1, ADR-0396 §1).
+///
+/// Nothing resolves a locator, so `Headless<Unobserved>` is no
+/// [`Connection`]: its tester pumps, reads its frame in process
+/// ([`Tester::frame`](super::Tester::frame)) and measures
+/// ([`Tester::measure`](super::Tester::measure)), and a scenario over a `Connection` does not
+/// compile for it. The window collects no semantics, as no assistive technology asked for them.
+#[derive(Debug)]
+pub struct Unobserved {
+    _private: (),
+}
+
 /// The connection of a view mounted in process, as `run_app` mounts it, on a virtual clock
 /// (ADR-0400 §1).
 ///
-/// The connection owns a private [`HeadlessHost`] and the window's development agent
-/// ([`Observed`]): every call goes to the agent through the window's one input lease, so a
-/// scenario's finders, input and conditions are evaluated in the application, as on a device.
+/// The connection owns a private [`HeadlessHost`] and, on [`Observed`], the window's development
+/// agent: every call goes to the agent through the window's one input lease, so a scenario's
+/// finders, input and conditions are evaluated in the application, as on a device.
 ///
 /// - A read is one owner turn with no frame (`HeadlessHost::owner_turn`): it applies the
 ///   commands queued since the last turn and presents nothing, so it does not change the frame
@@ -65,15 +84,18 @@ pub struct Observed {
 ///   ([`HeadlessHost::run_until_answered`]): each turn at the one list's wake, the application's
 ///   timers included, so a wait's limit is reached in virtual time. An act ends with an owner
 ///   turn that drains what its frames queued.
-/// - [`VirtualClock::advance`] moves the clock in frames.
+/// - [`VirtualClock::advance`] moves the clock in frames, and keeps what they did for
+///   [`Frame::report`](crate::frame::Frame::report).
 ///
-/// `S` is what is attached to the window: [`Observed`], its agent.
+/// `S` is what is attached to the window: [`Observed`], its agent, or [`Unobserved`], nothing.
 pub struct Headless<S = Observed> {
     /// The host; `None` once the end of the test closed its window and retired its runtime.
     host: Option<HeadlessHost>,
     attached: S,
     window: WindowId,
     ledger: DropLedger,
+    /// What the frames of the last [`VirtualClock::advance`] did.
+    advanced: FrameReport,
 }
 
 impl<S: std::fmt::Debug> std::fmt::Debug for Headless<S> {
@@ -101,6 +123,38 @@ impl DevAgentHook for Windows {
     }
 }
 
+/// The host `window` describes, with no root attached and no agent.
+///
+/// # Panics
+///
+/// When a registration of `window` conflicts with another.
+fn open(window: &TestWindow) -> HeadlessHost {
+    let mut headless = HeadlessWindow::new(window.width, window.height).with_text_input();
+    if let Some(platform) = window.platform {
+        headless = headless.with_platform(platform);
+    }
+    if window.in_browser {
+        headless = headless.in_browser();
+    }
+    if let Some(handler) = window.close_request_handler.clone() {
+        headless = headless.with_close_request_handler(handler);
+    }
+    let storage = match &window.storage {
+        WindowStorage::Fresh => Some(MemoryStorage::new()),
+        WindowStorage::Given(storage) => Some(storage.clone()),
+        WindowStorage::Absent => None,
+    };
+    let run_storage = storage.as_ref().map(|storage| storage.for_run().0);
+    HeadlessHost::with_application(
+        headless,
+        run_storage.map(|storage| KitStorage {
+            host: std::sync::Arc::new(storage),
+            provided: None,
+        }),
+        window.registrations.clone(),
+    )
+}
+
 impl Headless<Observed> {
     /// Mount `view` in `window`, as `run_app` mounts it: the window is handed to its agent before
     /// the root attaches, and two frames are presented, since semantics publish from the frame
@@ -110,33 +164,9 @@ impl Headless<Observed> {
     ///
     /// When a registration of `window` conflicts with another, or a first frame fails.
     pub(crate) fn mount(view: impl IntoView, window: &TestWindow) -> Self {
-        let mut headless = HeadlessWindow::new(window.width, window.height).with_text_input();
-        if let Some(platform) = window.platform {
-            headless = headless.with_platform(platform);
-        }
-        if window.in_browser {
-            headless = headless.in_browser();
-        }
-        if let Some(handler) = window.close_request_handler.clone() {
-            headless = headless.with_close_request_handler(handler);
-        }
-        let storage = match &window.storage {
-            WindowStorage::Fresh => Some(MemoryStorage::new()),
-            WindowStorage::Given(storage) => Some(storage.clone()),
-            WindowStorage::Absent => None,
-        };
         let (opened, windows): (Sender<AgentWindow>, Receiver<AgentWindow>) = channel();
         let mut agent = HeadlessDevAgent::attach(Windows(opened));
-        let run_storage = storage.as_ref().map(|storage| storage.for_run().0);
-        let mut host = HeadlessHost::with_application(
-            headless,
-            run_storage.map(|storage| KitStorage {
-                host: std::sync::Arc::new(storage),
-                provided: None,
-            }),
-            window.registrations.clone(),
-        )
-        .with_dev_agent(&mut agent);
+        let mut host = open(window).with_dev_agent(&mut agent);
         host.attach_root(view)
             .expect("BUG: a fresh host has no root attached");
         let _ = host.pump(FRAME);
@@ -157,22 +187,8 @@ impl Headless<Observed> {
                 agent: Some(agent),
             },
             ledger: DropLedger::new(),
+            advanced: FrameReport::default(),
         }
-    }
-
-    /// The ledger the end of the test checks: every sentinel planted from it must have been
-    /// dropped once the root is unmounted and what it held released.
-    pub(crate) fn ledger(&self) -> &DropLedger {
-        &self.ledger
-    }
-
-    /// The window the connection drives.
-    pub(crate) fn window_id(&self) -> WindowId {
-        self.window
-    }
-
-    fn host_mut(&mut self) -> Result<&mut HeadlessHost, CallError> {
-        self.host.as_mut().ok_or_else(ended)
     }
 
     /// The call had no answer: the lease's input is asked to be released, and whether the agent
@@ -196,16 +212,82 @@ impl Headless<Observed> {
             released,
         }
     }
+}
 
-    /// The end checks of ADR-0400 §7 from the audit on, in order; the settle is the caller's.
+impl Headless<Unobserved> {
+    /// Mount `view` in `window` with no agent attached, and present its first frame.
+    ///
+    /// # Panics
+    ///
+    /// When a registration of `window` conflicts with another, or the first frame fails.
+    pub(crate) fn mount_unobserved(view: impl IntoView, window: &TestWindow) -> Self {
+        let mut host = open(window);
+        host.attach_root(view)
+            .expect("BUG: a fresh host has no root attached");
+        let _ = host.pump(FRAME);
+        // The agent names a window by its presentation (`w<n>` on the wire): the same name, so a
+        // diagnosis reads alike at both depths.
+        let window = WindowId::from_u64(host.ui_runtime().presentation_id().as_u64())
+            .expect("BUG: a presentation id packs a non-zero generation");
+        Self {
+            host: Some(host),
+            attached: Unobserved { _private: () },
+            window,
+            ledger: DropLedger::new(),
+            advanced: FrameReport::default(),
+        }
+    }
+}
+
+impl<S> Headless<S> {
+    /// The ledger the end of the test checks: every sentinel planted from it must have been
+    /// dropped once the root is unmounted and what it held released.
+    pub(crate) fn ledger(&self) -> &DropLedger {
+        &self.ledger
+    }
+
+    /// The window the connection drives.
+    pub(crate) fn window_id(&self) -> WindowId {
+        self.window
+    }
+
+    /// The host, `None` once the end of the test retired it.
+    pub(crate) fn host(&self) -> Option<&HeadlessHost> {
+        self.host.as_ref()
+    }
+
+    /// What the frames of the last [`VirtualClock::advance`] did.
+    pub(crate) fn advanced(&self) -> &FrameReport {
+        &self.advanced
+    }
+
+    pub(crate) fn host_mut(&mut self) -> Result<&mut HeadlessHost, CallError> {
+        self.host.as_mut().ok_or_else(ended)
+    }
+
+    fn reading(&self) -> ClockReading {
+        match &self.host {
+            Some(host) => {
+                let mut reading = ClockReading::new(host.clock().elapsed(), true);
+                reading.frame = Some(host.sink().submits());
+                reading
+            }
+            None => ClockReading::new(Duration::ZERO, true),
+        }
+    }
+
+    /// The end checks of ADR-0400 §7 from the unmount on, in order; the settle and the audit
+    /// are the caller's.
     ///
     /// The unmount and the turns after it run the application's code (a `dispose`, a `Drop`): a
-    /// panic there is held while the lease's release still runs, and it is handed back, the
-    /// first failure, with the checks that would read the tree it left half unmounted not made.
-    fn end_checks(&mut self, checks: &EndChecks, unpassed: &mut Vec<UnpassedCheck>) -> FirstPanic {
-        if !checks.audit.is_empty() {
-            audit(self, &checks.audit, unpassed);
-        }
+    /// panic there is held while `lease`'s release still runs, and it is handed back, the first
+    /// failure, with the checks that would read the tree it left half unmounted not made.
+    fn teardown(
+        &mut self,
+        lease: Option<InputLease>,
+        checks: &EndChecks,
+        unpassed: &mut Vec<UnpassedCheck>,
+    ) -> FirstPanic {
         let mut first = FirstPanic::new();
         // Unmount the root, keeping the window and the runtime, and run what it dropped.
         if let Some(host) = self.host.as_mut() {
@@ -215,7 +297,7 @@ impl Headless<Observed> {
             });
         }
         // Release the lease, which queues the release of what it holds.
-        first.retire(self.attached.lease.take());
+        first.retire(lease);
         if let Some(host) = self.host.as_mut() {
             first.contain(|| {
                 for _ in 0..RELEASE_TURNS {
@@ -246,9 +328,8 @@ impl Headless<Observed> {
             && let Some(host) = &self.host
         {
             let unsettled = host.unsettled();
-            let mut left = unsettled.causes().peekable();
-            if left.peek().is_some() {
-                let mut check = Check::new(
+            if !unsettled.is_empty() {
+                let check = Check::new(
                     "left_behind",
                     Outcome::Failed {
                         reason: "the application keeps work once its root is unmounted: a timer, \
@@ -256,21 +337,52 @@ impl Headless<Observed> {
                             .to_owned(),
                     },
                 );
-                for cause in left {
-                    check = check.evidence(format!(
-                        "{:?}, cleared by {:?}{}",
-                        cause.reason,
-                        cause.cleared_by,
-                        cause
-                            .window
-                            .map_or_else(String::new, |window| format!(" in {window}"))
-                    ));
-                }
-                unpassed.extend(UnpassedCheck::try_from_check(check));
+                unpassed.extend(UnpassedCheck::try_from_check(naming(
+                    check,
+                    unsettled.causes(),
+                )));
             }
         }
         first
     }
+
+    /// The last of the end: close the window and retire the runtime, then let `agent` go; a panic
+    /// held from the teardown is the test's failure, and what the checks before it found goes to
+    /// the test's output, since a panic carries no report.
+    fn conclude(
+        &mut self,
+        mut first: FirstPanic,
+        agent: Option<HeadlessDevAgent>,
+        unpassed: Vec<UnpassedCheck>,
+    ) -> Vec<UnpassedCheck> {
+        first.retire(self.host.take());
+        first.retire(agent);
+        if first.is_held() {
+            write_report(&TestReport {
+                unpassed,
+                soft: Vec::new(),
+                skipped: None,
+            });
+            first.resume();
+            return Vec::new();
+        }
+        unpassed
+    }
+}
+
+/// `check` with each of `causes` as its evidence.
+fn naming<'a>(mut check: Check, causes: impl Iterator<Item = &'a UnsettledCause>) -> Check {
+    for cause in causes {
+        check = check.evidence(format!(
+            "{:?}, cleared by {:?}{}",
+            cause.reason,
+            cause.cleared_by,
+            cause
+                .window
+                .map_or_else(String::new, |window| format!(" in {window}"))
+        ));
+    }
+    check
 }
 
 /// `audit.a11y` of the window's settled frame by `rules`: each finding fails the audit, and a
@@ -362,14 +474,7 @@ impl Connection for Headless<Observed> {
     }
 
     fn now(&self) -> ClockReading {
-        match &self.host {
-            Some(host) => {
-                let mut reading = ClockReading::new(host.clock().elapsed(), true);
-                reading.frame = Some(host.sink().submits());
-                reading
-            }
-            None => ClockReading::new(Duration::ZERO, true),
-        }
+        self.reading()
     }
 
     fn finish(&mut self, checks: &EndChecks) -> Vec<UnpassedCheck> {
@@ -387,37 +492,66 @@ impl Connection for Headless<Observed> {
                 )));
             }
         }
-        let mut first = self.end_checks(checks, &mut unpassed);
-        // Close the window and retire the runtime, then let the agent go.
-        first.retire(self.host.take());
-        first.retire(self.attached.agent.take());
-        if first.is_held() {
-            // The panic is the test's failure; what the checks before it found goes to the
-            // test's output, since a panic carries no report.
-            write_report(&TestReport {
-                unpassed,
-                soft: Vec::new(),
-                skipped: None,
-            });
-            first.resume();
-            return Vec::new();
+        if !checks.audit.is_empty() {
+            audit(self, &checks.audit, &mut unpassed);
         }
-        unpassed
+        let lease = self.attached.lease.take();
+        let first = self.teardown(lease, checks, &mut unpassed);
+        let agent = self.attached.agent.take();
+        self.conclude(first, agent, unpassed)
     }
 }
 
-impl VirtualClock for Headless<Observed> {
+impl Ends for Headless<Unobserved> {
+    fn reading(&self) -> ClockReading {
+        Headless::reading(self)
+    }
+
+    /// The end of ADR-0400 §7 a host with no agent can run: the settle, on the host's own list
+    /// and its loop; the unmount; the drops; the ledger; what is left behind. The audit is not
+    /// among them, since nothing reads the window's semantics: the tree a cost scenario measures
+    /// is audited by the scenario's test over an [`Observed`] connection.
+    fn end(&mut self, checks: &EndChecks) -> Vec<UnpassedCheck> {
+        let mut unpassed = Vec::new();
+        let Some(host) = self.host.as_mut() else {
+            return unpassed;
+        };
+        if checks.settle && host.pump_until_settled(FRAME, SETTLE_FRAMES).is_err() {
+            let check = Check::new(
+                "settle",
+                Outcome::Failed {
+                    reason: format!("the application did not settle within {SETTLE_LIMIT:?}"),
+                },
+            );
+            unpassed.extend(UnpassedCheck::try_from_check(naming(
+                check,
+                host.unsettled().causes(),
+            )));
+        }
+        let first = self.teardown(None, checks, &mut unpassed);
+        self.conclude(first, None, unpassed)
+    }
+
+    fn outline(&mut self, _window: WindowId) -> String {
+        "(no agent is attached to the window, so its semantics are not read: read its frame with \
+         `Tester::frame`)"
+            .to_owned()
+    }
+}
+
+impl<S> VirtualClock for Headless<S> {
     fn advance(&mut self, by: Duration) -> Result<Advanced, CallError> {
-        let host = self.host_mut()?;
+        let host = self.host.as_mut().ok_or_else(ended)?;
         let before = host.sink().submits();
+        let mut report = FrameReport::default();
         let mut left = by;
         while !left.is_zero() {
             let step = left.min(FRAME);
-            let _ = host.pump(step);
+            report += &host.pump_reported(step);
             left = left.saturating_sub(step);
         }
-        Ok(Advanced {
-            frames: host.sink().submits().saturating_sub(before),
-        })
+        let frames = host.sink().submits().saturating_sub(before);
+        self.advanced = report;
+        Ok(Advanced { frames })
     }
 }

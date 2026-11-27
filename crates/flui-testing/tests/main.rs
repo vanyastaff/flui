@@ -320,6 +320,8 @@ mod runtime_driver;
 mod runtime_input_lifecycle;
 #[path = "scenario.rs"]
 mod scenario;
+#[path = "scenario_frame.rs"]
+mod scenario_frame;
 #[path = "scripts.rs"]
 mod scripts;
 #[path = "self_rescheduling_local_post_frame.rs"]
