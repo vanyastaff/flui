@@ -26,9 +26,9 @@ workspace = true
 # which names a window by value), for this crate's own tests, `flui-app`'s dev
 # edge, and `flui-testing`, the host of the headless test loop (ADR-0083 §4).
 testing = ["flui-platform/testing", "flui-layer/testing"]
-# `reload::ReloadTier`, the development reload the UI runtime applies. Names no
-# hot-reload crate; `flui-app` always turns it on and translates an installed
-# `DevReloadHook`'s event into it (ADR-0311 §1).
+# The reassemble a development reload asks of a UI runtime (`UiCommandSender::request_reassemble`,
+# `UiRuntime::perform_reassemble_entered`). Names no hot-reload crate; `flui-app` always turns it
+# on and applies an installed `DevReloadHook`'s versions with it (ADR-0393 §3).
 hot-reload = []
 # The image cache each UI runtime keeps for `Image::asset` and `Image::network`
 # (`flui_assets::ImageCacheCapability`, ADR-0387), registered among the

@@ -305,7 +305,7 @@ user code:
   `each_reload_event_maps_to_the_ui_runtime_tier`; the runner's
   `main_window_reload_hook_stays_attached_across_failed_reopens_and_detaches_with_loop`. The
   package's (`packages/flui-hot-reload/src/hook/tests.rs`): `event_for_maps_each_driver_outcome`,
-  `a_rebuild_request_polls_as_a_patch_and_wakes_once_until_detached`,
+  `a_rebuild_request_asks_for_a_reassemble_and_wakes_once_until_detached`,
   `an_artifact_change_wakes_the_host`, `dropping_an_attached_hook_joins_its_watcher`,
   `scene_frame_without_a_loaded_plugin_draws_nothing` and `scene_frame_reset_recovery_matrix`.
   `flui-view`'s `a_wake_clone_calls_the_same_host_request`.

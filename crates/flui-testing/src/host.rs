@@ -1018,7 +1018,7 @@ mod tests {
         ));
         host.ui_runtime()
             .command_sender()
-            .request_hot_reload(flui_runtime::reload::ReloadTier::Reassemble)
+            .request_reassemble()
             .expect("the inbox takes the reload");
         let _ = host.pump(Duration::ZERO);
         assert_ne!(

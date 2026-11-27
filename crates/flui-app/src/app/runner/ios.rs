@@ -43,7 +43,7 @@ use super::owner_dispatch::{
     teardown_platform_ui_runtime,
 };
 use super::raster_host::RasterSlot;
-use crate::app::hot_reload::{ScenePlugin, WorkerReload};
+use crate::app::hot_reload::{RuntimeReload, ScenePlugin, WorkerReload};
 use crate::app::{AppConfig, LaunchError};
 
 use super::session_controller::{SessionController, contain};
@@ -371,7 +371,7 @@ where
         tracing::error!("Root widget attach failed: {:?}", e);
         return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
     }
-    worker_reload.register_ui_runtime(&ui_runtime);
+    let worker_reload = worker_reload.register_ui_runtime(&ui_runtime);
     // Vended while the ui_runtime is still ours, handed over once the install
     // commits: a failed install drops it with the ui_runtime.
     let agent_window = super::dev_agents::vend(&ui_runtime, ui_runtime.presentation_id());
@@ -475,7 +475,7 @@ where
 
 pub(super) struct IosFrameDriver {
     raster: RasterSlot,
-    worker_reload: WorkerReload,
+    worker_reload: RuntimeReload,
     /// The same hook's scene plugin, which may draw this scene's frame in
     /// place of the widget tree (ADR-0391).
     scene_plugin: ScenePlugin,

@@ -26,7 +26,7 @@ use std::{
     time::Duration,
 };
 
-use flui_sdk::view::dev_reload::{DevReloadHook, ReloadEvent, ReloadWake};
+use flui_sdk::view::dev_reload::{CodeVersion, DevReloadHook, ReloadEvent, ReloadWake};
 
 use crate::{
     HotReloadDriver, Scene, WorkerPollOutcome, WorkerReloadDriver, timing, worker_artifact_stamp,
@@ -39,7 +39,9 @@ use crate::{
 ///   edit; with the `app-plugin` feature it also receives the worker's
 ///   [`request_rebuild`](crate::request_rebuild) calls.
 /// - **Polled**, it reloads a changed worker on the owner thread and reports
-///   [`ReloadEvent::Patched`], which reassembles every UI runtime. A reload whose
+///   [`ReloadEvent::Loaded`] with the version its sidecar manifest names
+///   ([`WorkerManifest`](crate::WorkerManifest)); a worker's rebuild request is
+///   [`DevReloadHook::reassemble_requested`]. A reload whose
 ///   shared-type layout changed, or that failed, is logged loudly and keeps
 ///   the last good tree.
 /// - **Detached** or dropped, it stops and joins the watcher and drops its
@@ -138,10 +140,15 @@ impl DevReloadHook for WorkerReloadHook {
             Some(driver) => driver.poll(),
             None => WorkerPollOutcome::NoChange,
         };
-        event_for(
-            outcome,
-            self.rebuild_requested.swap(false, Ordering::AcqRel),
-        )
+        let version = self
+            .driver
+            .as_ref()
+            .and_then(WorkerReloadDriver::loaded_version);
+        event_for(outcome, version)
+    }
+
+    fn reassemble_requested(&mut self) -> bool {
+        self.rebuild_requested.swap(false, Ordering::AcqRel)
     }
 }
 
@@ -152,15 +159,28 @@ impl Drop for WorkerReloadHook {
 }
 
 /// The event a worker poll reports, logging the outcomes that need the
-/// developer's attention. A rebuild request is honoured whatever the
-/// artifact did. Replacement may withdraw the old worker registration before
-/// a new image is admitted; previously admitted images and retained tree values
-/// keep ADR-0111's lifetime, which is distinct from a live build registration.
-fn event_for(outcome: WorkerPollOutcome, rebuild_requested: bool) -> ReloadEvent {
+/// developer's attention: `version` is the one the driver read for the image
+/// it has loaded now. Replacement may withdraw the old worker registration
+/// before a new image is admitted; previously admitted images and retained tree
+/// values keep ADR-0111's lifetime, which is distinct from a live build
+/// registration.
+fn event_for(outcome: WorkerPollOutcome, version: Option<CodeVersion>) -> ReloadEvent {
     match outcome {
         WorkerPollOutcome::Reloaded { reload_count } => {
-            tracing::info!(reload_count, "hot reload: worker reloaded; reassembling");
-            return ReloadEvent::Patched;
+            if let Some(version) = version {
+                tracing::info!(
+                    reload_count,
+                    revision = version.revision.get(),
+                    "hot reload: worker reloaded"
+                );
+                return ReloadEvent::Loaded(version);
+            }
+            tracing::warn!(
+                reload_count,
+                "hot reload: the worker reloaded, but no `.flui_worker_plugin` manifest beside it \
+                 names its version, so the host cannot tell a body edit from a layout change and \
+                 reassembles nothing; start the app with `flui run`"
+            );
         }
         WorkerPollOutcome::Degraded {
             old_fingerprint,
@@ -183,11 +203,7 @@ fn event_for(outcome: WorkerPollOutcome, rebuild_requested: bool) -> ReloadEvent
         }
         WorkerPollOutcome::NoChange => {}
     }
-    if rebuild_requested {
-        ReloadEvent::Patched
-    } else {
-        ReloadEvent::Unchanged
-    }
+    ReloadEvent::Unchanged
 }
 
 /// Polls the worker artifact's stamp off the owner thread and wakes the host

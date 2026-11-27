@@ -41,8 +41,6 @@
 //! - [`pump`]: what a UI runtime's frame transaction reads and reports — the
 //!   [`FrameClockSource`](pump::FrameClockSource) it samples once per frame
 //!   and the [`FrameOutcome`](pump::FrameOutcome) the host paces from;
-//! - `reload` (with the `hot-reload` feature): the development reload tier a
-//!   UI runtime applies, translated from the host's hot-reload driver;
 //! - [`settledness`]: what keeps an application from being idle at one instant, the one list a
 //!   host's loop wakes for, a settle reads and the agent's settled waits are answered from
 //!   (ADR-0400 §3);
@@ -87,8 +85,6 @@ mod presentation_forest;
 mod presentation_scene;
 pub mod pump;
 mod recording_wire;
-#[cfg(feature = "hot-reload")]
-pub mod reload;
 pub mod renderer_binding;
 mod runtime_services;
 mod semantics_host;

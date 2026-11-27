@@ -9,7 +9,7 @@
 //! `create_state`, and the mutated value still readable after the rebuild.
 //!
 //! This drives the headless frame driver's `perform_reassemble`/`reassemble_render_tree` pair — the same two
-//! calls production `PresentationState::apply_hot_reload` makes.
+//! calls production `Presentation::reassemble` makes.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -81,7 +81,7 @@ pub(crate) fn perform_reassemble_rebuilds_in_place_and_preserves_state() {
 
     // The hot-reload entry point: mark every element AND every render object
     // dirty, then pump one frame. This is exactly what
-    // `PresentationState::apply_hot_reload(HotReload)` calls.
+    // `Presentation::reassemble` calls.
     laid.perform_reassemble();
     laid.reassemble_render_tree();
     // `tick()` drives a frame WITHOUT self-marking the root dirty (unlike

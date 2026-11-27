@@ -42,42 +42,43 @@ fn channel_wake() -> (ReloadWake, mpsc::Receiver<()>) {
 
 #[test]
 fn event_for_maps_each_driver_outcome() {
-    use ReloadEvent::{Patched, Unchanged};
+    use ReloadEvent::{Loaded, Unchanged};
     use WorkerPollOutcome::{Degraded, NoChange, ReloadFailed, Reloaded};
 
+    let version = CodeVersion::new(
+        flui_sdk::view::dev_reload::LayoutEpoch::try_new(1).expect("not zero"),
+        flui_sdk::view::dev_reload::Revision::try_new(2).expect("not zero"),
+    );
     let degraded = Degraded {
         old_fingerprint: 1,
         new_fingerprint: 2,
     };
     let reloaded = Reloaded { reload_count: 2 };
-    for (outcome, requested, expected) in [
-        (reloaded, false, Patched),
-        (reloaded, true, Patched),
-        (NoChange, false, Unchanged),
-        (NoChange, true, Patched),
-        (degraded, false, Unchanged),
-        (degraded, true, Patched),
-        (ReloadFailed, false, Unchanged),
-        (ReloadFailed, true, Patched),
+    for (outcome, loaded, expected) in [
+        (reloaded, Some(version), Loaded(version)),
+        (reloaded, None, Unchanged),
+        (NoChange, Some(version), Unchanged),
+        (degraded, Some(version), Unchanged),
+        (ReloadFailed, Some(version), Unchanged),
     ] {
         assert_eq!(
-            event_for(outcome, requested),
+            event_for(outcome, loaded),
             expected,
-            "{outcome:?}, rebuild requested: {requested}"
+            "{outcome:?}, version: {loaded:?}"
         );
     }
 }
 
 #[cfg(feature = "app-plugin")]
 #[test]
-fn a_rebuild_request_polls_as_a_patch_and_wakes_once_until_detached() {
+fn a_rebuild_request_asks_for_a_reassemble_and_wakes_once_until_detached() {
     let _registry = crate::dispatch::REBUILD_HOOK_TEST_LOCK.lock();
     let mut hook = WorkerReloadHook::new(scratch_worker("rebuild-request"));
     // No watcher: only the rebuild registration may wake the host here.
     hook.watch_path = PathBuf::new();
     let (wake, wakes) = channel_wake();
     hook.attach(wake);
-    assert_eq!(hook.poll(), ReloadEvent::Unchanged, "nothing requested yet");
+    assert!(!hook.reassemble_requested(), "nothing requested yet");
 
     // A worker's gesture handler, on any thread.
     std::thread::spawn(crate::request_rebuild)
@@ -87,10 +88,11 @@ fn a_rebuild_request_polls_as_a_patch_and_wakes_once_until_detached() {
     assert!(wakes.try_recv().is_err(), "exactly once");
     assert_eq!(
         hook.poll(),
-        ReloadEvent::Patched,
-        "the next poll reports it"
+        ReloadEvent::Unchanged,
+        "a request delivers no code"
     );
-    assert_eq!(hook.poll(), ReloadEvent::Unchanged, "and only that poll");
+    assert!(hook.reassemble_requested(), "the next boundary asks for it");
+    assert!(!hook.reassemble_requested(), "once");
 
     hook.detach();
     crate::request_rebuild();
@@ -98,7 +100,7 @@ fn a_rebuild_request_polls_as_a_patch_and_wakes_once_until_detached() {
         wakes.try_recv().is_err(),
         "a detached hook's registration is gone: no wake"
     );
-    assert_eq!(hook.poll(), ReloadEvent::Unchanged, "and no patch");
+    assert!(!hook.reassemble_requested(), "and no reassemble");
 }
 
 #[test]
