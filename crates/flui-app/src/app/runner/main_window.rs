@@ -701,7 +701,7 @@ pub(super) fn shutdown_main_window() {
             runtime.application.main_controller.take(),
             runtime.application.main_ingress.take(),
             runtime.loop_dev_agent.end(),
-            runtime.loop_reload.take(),
+            runtime.desktop_loop.take(),
         )
     });
     // The loop's hooks detach and drop first, outside the borrow and
@@ -1104,163 +1104,58 @@ where
         platform.run(crate::app::runner::opening_app_handler(
             opening,
             move |owner| {
-                let DesktopRun {
-                    mut factory,
-                    config,
-                    startup,
-                    ready,
-                    window_error,
-                    ..
-                } = application;
-                let proxy = owner.proxy();
-                let ingress = Ingress::new(proxy, startup == StartupWindow::Open);
-                let handle = ingress.handle();
+                let mut application = application;
                 install_owner_platform(owner)?;
                 APP_RUNTIME.with(|slot| {
                     let mut runtime = slot.borrow_mut();
-                    runtime.application.main_ingress = Some(Arc::clone(&ingress));
-                    runtime.application.capabilities = Some(registry);
                     runtime.main_host_lifecycle = flui_scheduler::AppLifecycleState::Resumed;
                     runtime.raster_host =
                         super::raster_host::SharedRasterHost::new(renderers, placement);
-                    runtime.reopen_lifecycles();
                     runtime.ensure_execution();
                 });
-                super::host::install_host_storage(&config);
-                // Window placements are kept in the storage the run's registry
-                // provides, the application's override included.
-                super::placement::install(
-                    APP_RUNTIME.with(|slot| slot.borrow().capability_registry()),
-                );
-                install_exit_policy_hook(config.exit_policy);
                 install_platform_quit_hook();
-                let reopen = Arc::downgrade(&ingress);
-                super::host::route_reopen(move || {
-                    reopen
-                        .upgrade()
-                        .is_some_and(|ingress| ingress.request_native_show())
-                });
-                let asked = Arc::downgrade(&ingress);
-                super::host::route_quit_asked(move || {
-                    asked
-                        .upgrade()
-                        .map_or(flui_native::QuitAnswer::Quit, |ingress| {
-                            ingress.platform_quit_asked()
-                        })
-                });
                 // The driver agent (ADR-0239), beside the application's own hooks,
                 // when launched with an endpoint; a driver that goes under
                 // `EXIT_ON_DISCONNECT` quits past every close guard.
-                let mut config = config;
-                let quit = Arc::downgrade(&ingress);
-                ended.arm(move || {
-                    if let Some(ingress) = quit.upgrade() {
-                        let _ = ingress.quit_now();
-                    }
-                });
                 let served = crate::app::agent::install_from_launch(
-                    &mut config,
+                    &mut application.config,
                     |key| with_owner_platform(|owner| owner.launch_value(key)).flatten(),
                     &ended,
                     super::journals_native(),
                 );
                 super::keep_native_journal(served);
                 // The loop takes the hooks and owns them until it ends
-                // (`shutdown_main_window`).
-                super::dev_agents::start(&config);
-                let attached = LoopReload::attach(&config, runtime_wake_callback());
-                let reload = attached.reload();
-                APP_RUNTIME.with(|slot| slot.borrow_mut().loop_reload = Some(attached));
-                let installer_config = config.clone();
-                let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
-                let factory_identity = Arc::clone(&identity);
-                let installer = Box::new(move |handle: &AppHandle, window, host, carried| {
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "ADR-0287: a root factory's panic becomes a window install error"
-                    )]
-                    let root =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory(handle)))
-                            .map_err(|payload| {
-                                let message = flui_runtime::frame_failure::panic_text(
-                                    installer_config.frame_failure_detail,
-                                    payload.as_ref(),
-                                );
-                                flui_foundation::panic::discard_payload(payload);
-                                AppWindowError::FactoryPanicked { message }
-                            })?;
-                    if !handle.ingress.accepting()
-                        || !APP_RUNTIME.with(|slot| {
-                            Arc::ptr_eq(&slot.borrow().loop_identity, &factory_identity)
-                        })
-                    {
-                        return Err(AppWindowError::Cancelled);
-                    }
-                    install_desktop_window(
-                        root,
-                        &installer_config,
-                        reload.clone(),
-                        window,
-                        host,
-                        carried,
-                        true, // the run's main window
-                    )
-                });
+                // (`shutdown_main_window`), across a development restart too.
+                super::dev_agents::start(&application.config);
+                let reload = LoopReload::attach(&application.config, runtime_wake_callback());
                 APP_RUNTIME.with(|slot| {
-                    slot.borrow_mut().application.main_controller = Some(MainController {
-                        ingress: Arc::clone(&ingress),
-                        identity,
-                        installer: Some(installer),
-                        config: config.clone(),
-                        open: None,
-                        installing: None,
-                        pending: None,
-                        opening: None,
-                        recalling: None,
-                        pending_wake: None,
-                        closing: false,
-                        initial: startup == StartupWindow::Open,
-                        error: window_error,
+                    slot.borrow_mut().desktop_loop = Some(DesktopLoop {
+                        reload,
+                        disconnect: ended,
                         fatal: recorded,
                     });
                 });
-                for service in &config.services {
-                    if let Err(error) = super::host::start_service(service) {
-                        let fatal = APP_RUNTIME.with(|slot| {
-                            slot.borrow()
-                                .application
-                                .main_controller
-                                .as_ref()
-                                .map(|controller| Rc::clone(&controller.fatal))
+                match compose(application, registry, None) {
+                    Ok(()) => {}
+                    Err(failure) => {
+                        let ready_panicked = matches!(failure, LaunchError::OnReadyPanicked);
+                        let ingress = APP_RUNTIME.with(|slot| {
+                            let runtime = slot.borrow();
+                            if let Some(desktop) = runtime.desktop_loop.as_ref() {
+                                desktop.fatal.replace(Some(failure));
+                            }
+                            runtime.application.main_ingress.clone()
                         });
-                        if let Some(fatal) = fatal {
-                            fatal.replace(Some(LaunchError::Service {
-                                source: Arc::new(error),
-                            }));
+                        if let Some(ingress) = ingress {
+                            let _ = ingress.quit_now();
                         }
-                        let _ = handle.ingress.quit_now();
-                        return Ok(());
+                        // A refused service leaves the window unopened; a
+                        // `ready` that panicked still lets the controller
+                        // see the quit it asked for.
+                        if !ready_panicked {
+                            return Ok(());
+                        }
                     }
-                }
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "ADR-0287: a ready callback's panic is discarded so startup carries on"
-                )]
-                if let Some(ready) = ready
-                    && let Err(payload) =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready(&handle)))
-                {
-                    flui_foundation::panic::discard_payload(payload);
-                    APP_RUNTIME.with(|slot| {
-                        if let Some(controller) = slot.borrow().application.main_controller.as_ref()
-                        {
-                            controller
-                                .fatal
-                                .borrow_mut()
-                                .replace(LaunchError::OnReadyPanicked);
-                        }
-                    });
-                    let _ = handle.ingress.quit_now();
                 }
                 drive_main_window();
                 with_owner_platform(flui_native::OwnerPlatform::request_exit_policy_reevaluation);
@@ -1280,6 +1175,210 @@ where
         result,
         disconnect,
     }))
+}
+
+/// What a desktop loop keeps for every application it composes (ADR-0393
+/// §4): made when the loop starts, before any application code runs, and
+/// kept across a development restart. Dropped at the loop's exit
+/// (`shutdown_main_window`).
+pub(in crate::app) struct DesktopLoop {
+    /// The development reload the loop attached: the tool's, not the
+    /// application's, so a restart does not install the later application's
+    /// `AppConfig::dev_reload`.
+    pub(super) reload: LoopReload,
+    /// What the driver agent's disconnect quits; each composed application
+    /// arms it with its own ingress.
+    disconnect: Arc<Disconnect>,
+    /// The loop's terminal launch failure, which the exit returns.
+    fatal: Rc<RefCell<Option<LaunchError>>>,
+}
+
+/// The main window a development restart keeps open (ADR-0393 §4): the
+/// native window and the routes it was opened with.
+pub(super) struct KeptMain {
+    pub(super) window: Rc<dyn HostWindow>,
+    pub(super) routes: Rc<super::window_routes::WindowRoutes>,
+}
+
+/// Compose `application` on the started loop, as its start and a
+/// development restart do (ADR-0393 §4 step 3): the application scope's
+/// ingress, storage, placements, exit policy and routes, the main window's
+/// controller, the services and `ready`. With `kept`, the main window is
+/// that window, which the new application's first UI runtime is installed
+/// into at once; without, the controller opens the window when the
+/// application asks for it.
+///
+/// The loop's own parts ([`DesktopLoop`], the owner platform, the raster
+/// host, the pools) are made before and kept. `registry` is the
+/// application's capabilities, checked for conflicts against this scope's
+/// slots.
+///
+/// # Errors
+///
+/// A service that refuses to start ([`LaunchError::Service`]) and a `ready`
+/// that panicked ([`LaunchError::OnReadyPanicked`]); the controller is in the
+/// scope either way, for the caller to quit or retire.
+pub(super) fn compose<V, F>(
+    application: DesktopRun<V, F>,
+    registry: flui_runtime::capability::CapabilityRegistry,
+    kept: Option<KeptMain>,
+) -> Result<(), LaunchError>
+where
+    V: View + Clone + 'static,
+    F: FnMut(&AppHandle) -> V + 'static,
+{
+    let DesktopRun {
+        mut factory,
+        config,
+        startup,
+        ready,
+        window_error,
+        ..
+    } = application;
+    let proxy = with_owner_platform(flui_native::OwnerPlatform::proxy)
+        .expect("BUG: an application is composed on a started loop");
+    let (reload, disconnect, fatal) = APP_RUNTIME.with(|slot| {
+        let runtime = slot.borrow();
+        let desktop = runtime
+            .desktop_loop
+            .as_ref()
+            .expect("BUG: an application is composed on a started loop");
+        (
+            desktop.reload.reload(),
+            Arc::clone(&desktop.disconnect),
+            Rc::clone(&desktop.fatal),
+        )
+    });
+    let ingress = Ingress::new(proxy, kept.is_none() && startup == StartupWindow::Open);
+    let handle = ingress.handle();
+    APP_RUNTIME.with(|slot| {
+        let mut runtime = slot.borrow_mut();
+        runtime.application.main_ingress = Some(Arc::clone(&ingress));
+        runtime.application.capabilities = Some(registry);
+        runtime.reopen_lifecycles();
+    });
+    super::host::install_host_storage(&config);
+    // Window placements are kept in the storage the run's registry
+    // provides, the application's override included.
+    super::placement::install(APP_RUNTIME.with(|slot| slot.borrow().capability_registry()));
+    install_exit_policy_hook(config.exit_policy);
+    let reopen = Arc::downgrade(&ingress);
+    super::host::route_reopen(move || {
+        reopen
+            .upgrade()
+            .is_some_and(|ingress| ingress.request_native_show())
+    });
+    let asked = Arc::downgrade(&ingress);
+    super::host::route_quit_asked(move || {
+        asked
+            .upgrade()
+            .map_or(flui_native::QuitAnswer::Quit, |ingress| {
+                ingress.platform_quit_asked()
+            })
+    });
+    let quit = Arc::downgrade(&ingress);
+    disconnect.arm(move || {
+        if let Some(ingress) = quit.upgrade() {
+            let _ = ingress.quit_now();
+        }
+    });
+    let installer_config = config.clone();
+    let identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
+    let factory_identity = Arc::clone(&identity);
+    let installer = Box::new(move |handle: &AppHandle, window, host, carried| {
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "ADR-0287: a root factory's panic becomes a window install error"
+        )]
+        let root = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| factory(handle)))
+            .map_err(|payload| {
+                let message = flui_runtime::frame_failure::panic_text(
+                    installer_config.frame_failure_detail,
+                    payload.as_ref(),
+                );
+                flui_foundation::panic::discard_payload(payload);
+                AppWindowError::FactoryPanicked { message }
+            })?;
+        if !handle.ingress.accepting()
+            || !APP_RUNTIME
+                .with(|slot| Arc::ptr_eq(&slot.borrow().loop_identity, &factory_identity))
+        {
+            return Err(AppWindowError::Cancelled);
+        }
+        install_desktop_window(
+            root,
+            &installer_config,
+            reload.clone(),
+            window,
+            host,
+            carried,
+            true, // the run's main window
+        )
+    });
+    APP_RUNTIME.with(|slot| {
+        slot.borrow_mut().application.main_controller = Some(MainController {
+            ingress: Arc::clone(&ingress),
+            identity,
+            installer: Some(installer),
+            config: config.clone(),
+            open: None,
+            installing: None,
+            pending: None,
+            opening: None,
+            recalling: None,
+            pending_wake: None,
+            closing: false,
+            initial: kept.is_none() && startup == StartupWindow::Open,
+            error: window_error,
+            fatal,
+        });
+    });
+    if let Some(kept) = kept {
+        adopt_kept_main(kept);
+    }
+    for service in &config.services {
+        super::host::start_service(service).map_err(|error| LaunchError::Service {
+            source: Arc::new(error),
+        })?;
+    }
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a ready callback's panic is discarded; the caller decides what it costs"
+    )]
+    if let Some(ready) = ready
+        && let Err(payload) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready(&handle)))
+    {
+        flui_foundation::panic::discard_payload(payload);
+        return Err(LaunchError::OnReadyPanicked);
+    }
+    Ok(())
+}
+
+/// Install the composed application's main window into `kept`, the window
+/// the earlier application ran in, through the controller as an open
+/// window is.
+fn adopt_kept_main(kept: KeptMain) {
+    let leased = APP_RUNTIME.with(|slot| {
+        let mut runtime = slot.borrow_mut();
+        runtime
+            .application
+            .main_controller
+            .take()
+            .map(|controller| ControllerLease {
+                controller: Some(controller),
+                identity: Arc::clone(&runtime.loop_identity),
+            })
+    });
+    let Some(mut lease) = leased else {
+        return;
+    };
+    let controller = lease
+        .controller
+        .as_mut()
+        .expect("BUG: controller lease is populated until Drop");
+    controller.opening = Some(OpeningWindow::kept(kept.routes, &controller.config));
+    controller.install(kept.window);
 }
 
 #[cfg(test)]
@@ -1400,6 +1499,7 @@ mod tests {
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("mount root");
+                            let host_window = Rc::clone(&window);
                             let window: Rc<dyn flui_platform::PlatformWindow> = window;
                             let mut prepared =
                                 prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
@@ -1424,7 +1524,7 @@ mod tests {
                                 window.close_now();
                             }
                             Ok(RenderedMain {
-                                window,
+                                window: host_window,
                                 address,
                                 installation,
                             })
@@ -1525,6 +1625,7 @@ mod tests {
                             runtime
                                 .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
                                 .expect("mount root");
+                            let host_window = Rc::clone(&window);
                             let window: Rc<dyn flui_platform::PlatformWindow> = window;
                             let mut prepared =
                                 prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
@@ -1548,7 +1649,7 @@ mod tests {
                             );
                             window.close_now();
                             Ok(RenderedMain {
-                                window,
+                                window: host_window,
                                 address,
                                 installation,
                             })
@@ -1920,9 +2021,9 @@ mod tests {
             assert!(
                 APP_RUNTIME.with(|slot| slot
                     .borrow()
-                    .loop_reload
+                    .desktop_loop
                     .as_ref()
-                    .is_some_and(LoopReload::is_attached)),
+                    .is_some_and(|desktop| desktop.reload.is_attached())),
                 "the loop holds the attachment"
             );
             for _ in 0..2 {

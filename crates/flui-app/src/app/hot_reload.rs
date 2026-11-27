@@ -475,7 +475,10 @@ impl LoopReload {
     /// Whether a hook is attached to this loop.
     #[cfg(test)]
     pub(crate) fn is_attached(&self) -> bool {
-        self._attached.is_some()
+        self.reload
+            .0
+            .as_ref()
+            .is_some_and(|reload| reload.0.lock().attached)
     }
 }
 

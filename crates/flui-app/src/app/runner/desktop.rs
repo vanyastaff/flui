@@ -24,7 +24,7 @@ use super::window_routes::WindowRoutes;
 use crate::app::AppConfig;
 
 pub(super) struct RenderedMain {
-    pub(super) window: Rc<dyn PlatformWindow>,
+    pub(super) window: Rc<dyn HostWindow>,
     pub(super) address: flui_foundation::PresentationAddress,
     pub(super) installation: super::installed_host::Installation,
 }
@@ -67,6 +67,18 @@ impl OpeningWindow {
     pub(super) fn new(config: &AppConfig) -> Self {
         Self {
             routes: WindowRoutes::new(),
+            remembered: RememberedPlacement::recall(config),
+        }
+    }
+
+    /// What a window that is already open carries into the installation of
+    /// a new application (ADR-0393 §4): the routes it was opened with, which
+    /// the native window keeps calling, and its placement, recorded from now
+    /// on under `config`'s name. The window does not move: what its read
+    /// finds is not restored.
+    pub(super) fn kept(routes: Rc<WindowRoutes>, config: &AppConfig) -> Self {
+        Self {
+            routes,
             remembered: RememberedPlacement::recall(config),
         }
     }
@@ -130,14 +142,14 @@ impl OpeningWindow {
     }
 }
 
-/// Install `root` in `host`, the window `opening` opened, as the run's main
+/// Install `root` in `host_window`, the window `opening` opened, as the run's main
 /// window or another (`is_main_window`: whether its runtime takes the opened URL for the
 /// application).
 pub(super) fn install_desktop_window<V>(
     root: V,
     config: &AppConfig,
     worker_reload: WorkerReload,
-    host: Rc<dyn HostWindow>,
+    host_window: Rc<dyn HostWindow>,
     host_lifecycle: AppLifecycleState,
     opening: OpeningWindow,
     is_main_window: bool,
@@ -145,8 +157,8 @@ pub(super) fn install_desktop_window<V>(
 where
     V: View + Clone + 'static,
 {
-    let presentation_window =
-        super::presentation_window(host).with_pointer_resampling(config.pointer_resampling);
+    let presentation_window = super::presentation_window(Rc::clone(&host_window))
+        .with_pointer_resampling(config.pointer_resampling);
     let window = Rc::clone(presentation_window.window());
     let mut rollback = InstallRollback {
         window: Rc::clone(&window),
@@ -434,7 +446,7 @@ where
     let installation = installation.submit();
     rollback.committed = true;
     Ok(RenderedMain {
-        window,
+        window: host_window,
         address: owner_dispatch.address,
         installation,
     })
