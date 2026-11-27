@@ -195,7 +195,7 @@ fn shared() -> Option<Rc<PlacementShared>> {
     APP_RUNTIME.with(|slot| {
         slot.try_borrow()
             .ok()
-            .map(|runtime| Rc::clone(&runtime.placement.shared))
+            .map(|runtime| Rc::clone(&runtime.application.placement.shared))
     })
 }
 

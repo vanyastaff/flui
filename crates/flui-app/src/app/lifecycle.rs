@@ -1382,6 +1382,12 @@ impl fmt::Debug for ServiceRegistry {
     }
 }
 
+impl Default for ServiceRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ServiceRegistry {
     #[cfg(test)]
     fn start(

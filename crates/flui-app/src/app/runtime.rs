@@ -10,6 +10,7 @@
 //! feed. System preferences belong to the installed host's observation source
 //! (ADR-0172); semantics collection belongs to each presentation.
 
+mod application_scope;
 mod fallback_rescan;
 
 use std::sync::atomic::Ordering;
@@ -31,10 +32,11 @@ use parking_lot::Mutex;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::{
-    PreparedService, ServiceAdmission, ServiceDefinition, ServiceLaunch, ServiceRegistry,
-    ServiceShutdownReport, ServiceStartError,
+    PreparedService, ServiceAdmission, ServiceDefinition, ServiceLaunch, ServiceShutdownReport,
+    ServiceStartError,
 };
 use super::runner::{FontRegistrationError, InstalledHost};
+pub(crate) use application_scope::ApplicationScope;
 use fallback_rescan::{AskHost, FallbackRescan};
 #[cfg(not(target_arch = "wasm32"))]
 use flui_runtime::execution::SpawnError;
@@ -374,24 +376,12 @@ pub(crate) struct AppRuntime {
     pub(super) quit_notification: QuitNotification,
     #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
     pub(super) loop_identity: Arc<()>,
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    pub(super) main_controller: Option<super::runner::main_window::MainController>,
     /// Where this loop's windows get their renderers.
     pub(super) raster_host: super::runner::raster_host::SharedRasterHost,
     #[cfg(target_os = "ios")]
     pub(super) ios_controller: Option<super::runner::ios::IOSController>,
     #[cfg(target_os = "ios")]
     pub(super) ios_running: bool,
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    pub(super) main_ingress: Option<Arc<super::application_control::Ingress>>,
     /// The development agents this loop attached, the application's and the
     /// driver agent (ADR-0288 §7): every window the loop installs is handed to
     /// them, whatever configuration the application opened it with. Ended with
@@ -413,9 +403,6 @@ pub(crate) struct AppRuntime {
     /// Process-level engine services. Deliberately **not** resolved in
     /// [`AppRuntime::new`] -- see [`AppRuntime::ensure_services`] for why.
     services: OnceCell<SharedEngineServices>,
-    /// The fonts registered through [`Self::register_font`], and those still
-    /// waiting for `services`.
-    fonts: RefCell<FontRegistrations>,
     /// The collection's generation the UI runtimes were last told of
     /// ([`Self::take_font_change`]).
     fonts_announced: Cell<u64>,
@@ -442,15 +429,6 @@ pub(crate) struct AppRuntime {
     /// `SpawnError::ShuttingDown` when its upgrade fails, instead of
     /// keeping dead pools alive or reaching ambient state.
     execution: OnceCell<Arc<ExecutionServices>>,
-    /// The running application services: the named owner of
-    /// every application-lifetime unit of background work. Loop-scoped for
-    /// the same hot-restart reason as `execution` above; consulted by
-    /// [`Self::should_exit`] (a running keep-alive service vetoes exit)
-    /// and shut down — cancel, then deadline-bounded join — by
-    /// [`Self::shutdown_lifecycles`] at full loop-exit teardown, BEFORE
-    /// the pools close.
-    #[cfg(not(target_arch = "wasm32"))]
-    service_registry: ServiceRegistry,
     /// Host executors received from `AppConfig` before the first UI runtime
     /// install resolves `execution`. Taken by [`Self::ensure_execution`];
     /// ignored (with a warning) if execution services already exist.
@@ -489,31 +467,17 @@ pub(crate) struct AppRuntime {
     /// window (its Android Activity), installed and cleared with the
     /// clipboard; every registry this host builds reads it.
     host_bridge: flui_platform::capability::HostBridge,
-    /// The providers every UI runtime this host builds acquires platform
-    /// capabilities from (ADR-0152): the application's, checked for conflicts
-    /// before the loop starts, or the built-ins alone when a runner starts
-    /// without an [`Application`](crate::app::Application).
-    pub(super) capabilities: Option<flui_runtime::capability::CapabilityRegistry>,
     /// The platform instance's data-transfer source and the nonce that names
     /// this platform instance's drags (ADR-0211 §3), installed and cleared
     /// with the clipboard. Every UI runtime this host builds takes both.
     platform_data_transfer: RefCell<Option<PlatformDataTransfer>>,
-    /// The byte storage every UI runtime this host builds hands its widgets,
-    /// resolved once from the run's configuration when the host starts
-    /// ([`Self::install_host_storage`]) and released with the owner platform
-    /// at loop exit.
     /// The run's execution services as the background capability reaches
     /// them, filled by [`Self::ensure_execution`].
     execution_slot: crate::app::capability::ExecutionSlot,
-    pub(super) host_storage: crate::app::capability::StorageSlot,
     /// The application's assets every UI runtime this host builds hands its
     /// widgets (ADR-0384): the process's package, or the APK's assets the
     /// Android run installs.
     pub(super) assets: crate::app::asset_host::AssetSlot,
-    /// The flush registry over [`Self::host_storage`], kept outside every UI
-    /// runtime: what their documents publish, written on the loop's IO pool
-    /// and flushed when the application or the session ends.
-    pub(super) flush_host: Option<flui_view::__runtime::FlushHost>,
     /// The loop's terminal failure (ADR-0258 §2): the first panic nothing is
     /// left to continue after, as text, held until the exit order has
     /// written what the application persisted and then resumed.
@@ -521,18 +485,12 @@ pub(crate) struct AppRuntime {
     /// What this host gives back on a memory-pressure notice: the receivers the
     /// run start installs, reclaimed by the owner's turn for the notice.
     pub(super) host_memory: Rc<super::host_memory::HostMemory>,
-    /// The run's window placements: where the host acquires the storage they
-    /// are kept in, the windows that remember one and the writes still out
-    /// (`runner::placement`).
-    #[cfg(all(
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    pub(super) placement: super::runner::placement::PlacementHost,
     /// The handler each window this runner opened was opened with, by window
     /// (`runner::window_routes`).
     window_routes: super::runner::window_routes::RouteBook,
+    /// What the loop built from the running application (ADR-0393 §4), which
+    /// a development restart drops and builds again.
+    pub(super) application: ApplicationScope,
 }
 
 impl AppRuntime {
@@ -580,23 +538,11 @@ impl AppRuntime {
             quit_notification: QuitNotification::Active,
             #[cfg(all(not(target_os = "android"), not(target_os = "ios")))]
             loop_identity: Arc::new(()),
-            #[cfg(all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            main_controller: None,
             raster_host: super::runner::raster_host::SharedRasterHost::default(),
             #[cfg(target_os = "ios")]
             ios_controller: None,
             #[cfg(target_os = "ios")]
             ios_running: false,
-            #[cfg(all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            main_ingress: None,
             loop_dev_agent: super::dev_agent::LoopAgents::None,
             #[cfg(native_journal)]
             native_journal: None,
@@ -607,13 +553,10 @@ impl AppRuntime {
             ))]
             main_host_lifecycle: flui_scheduler::AppLifecycleState::Detached,
             services: OnceCell::new(),
-            fonts: RefCell::new(FontRegistrations::default()),
             fonts_announced: Cell::new(0),
             fallback_locale: RefCell::new(None),
             preference_reads: Cell::new(0),
             execution: OnceCell::new(),
-            #[cfg(not(target_arch = "wasm32"))]
-            service_registry: ServiceRegistry::new(),
             pending_host_executors: None,
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Rc::default(),
@@ -621,11 +564,8 @@ impl AppRuntime {
             platform_clipboard: Rc::default(),
             platform_primary_selection: Rc::default(),
             host_bridge: flui_platform::capability::HostBridge::new(),
-            capabilities: None,
             platform_data_transfer: RefCell::new(None),
             execution_slot: Rc::default(),
-            host_storage: crate::app::capability::StorageSlot::default(),
-            flush_host: None,
             terminal: None,
             window_commands: Rc::default(),
             #[cfg(feature = "native")]
@@ -645,13 +585,8 @@ impl AppRuntime {
             #[cfg(not(target_arch = "wasm32"))]
             background_writes: None,
             host_memory: Rc::default(),
-            #[cfg(all(
-                not(target_os = "android"),
-                not(target_os = "ios"),
-                not(target_arch = "wasm32")
-            ))]
-            placement: super::runner::placement::PlacementHost::default(),
             window_routes: super::runner::window_routes::RouteBook::default(),
+            application: ApplicationScope::default(),
             assets: crate::app::asset_host::AssetSlot::default(),
         }
     }
@@ -712,7 +647,7 @@ impl AppRuntime {
     /// ([`Self::take_font_change`]) even if it lands at once.
     fn resolved_services(&self) -> &SharedEngineServices {
         let services = self.services.get_or_init(SharedEngineServices::resolve);
-        let pending = std::mem::take(&mut self.fonts.borrow_mut().pending);
+        let pending = std::mem::take(&mut self.application.fonts.borrow_mut().pending);
         for font_bytes in pending {
             // Checked when it was accepted; a refusal now would be the two
             // sides disagreeing with the check, and refuses on both.
@@ -828,16 +763,16 @@ impl AppRuntime {
         font_bytes: Cow<'static, [u8]>,
     ) -> Result<(), FontRegistrationError> {
         let digest = font_digest(&font_bytes);
-        if self.fonts.borrow().digests.contains(&digest) {
+        if self.application.fonts.borrow().digests.contains(&digest) {
             return Err(FontRegistrationError::AlreadyRegistered);
         }
         if let Some(services) = self.services.get() {
             services.fonts.register_font(font_bytes)?;
         } else {
             FontCollection::check_font(&font_bytes)?;
-            self.fonts.borrow_mut().pending.push(font_bytes);
+            self.application.fonts.borrow_mut().pending.push(font_bytes);
         }
-        self.fonts.borrow_mut().digests.insert(digest);
+        self.application.fonts.borrow_mut().digests.insert(digest);
         Ok(())
     }
 
@@ -900,13 +835,15 @@ impl AppRuntime {
         // Admission first: a refused late start (after loop-exit teardown,
         // before any next install) must not resurrect execution services
         // as a side effect of the check.
-        if !self.service_registry.is_accepting() {
+        if !self.application.service_registry.is_accepting() {
             return Err(ServiceStartError::Spawn(SpawnError::ShuttingDown));
         }
         let services = Arc::clone(self.ensure_execution());
         Ok((
             self.owner_install_generation,
-            self.service_registry.prepare(definition, &services)?,
+            self.application
+                .service_registry
+                .prepare(definition, &services)?,
         ))
     }
 
@@ -919,7 +856,7 @@ impl AppRuntime {
         if generation != self.owner_install_generation {
             return Err(prepared);
         }
-        self.service_registry.commit(prepared)
+        self.application.service_registry.commit(prepared)
     }
 
     #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -953,7 +890,9 @@ impl AppRuntime {
         )
     )]
     pub(super) fn set_lifecycle_exit_notifier(&mut self, notifier: Arc<dyn Fn() + Send + Sync>) {
-        self.service_registry.set_exit_notifier(notifier);
+        self.application
+            .service_registry
+            .set_exit_notifier(notifier);
     }
 
     /// The installed exit-policy re-evaluation notifier, if any.
@@ -966,7 +905,7 @@ impl AppRuntime {
     /// `dispatch_platform_ui_runtime`'s tail.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn exit_policy_reevaluation_notifier(&self) -> Option<Arc<dyn Fn() + Send + Sync>> {
-        self.service_registry.exit_notifier()
+        self.application.service_registry.exit_notifier()
     }
 
     /// Reopen service admission for a loop that is (re)installing a UI runtime
@@ -977,14 +916,14 @@ impl AppRuntime {
     /// teardown observably changes state here.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn reopen_lifecycles(&mut self) {
-        self.service_registry.reopen();
+        self.application.service_registry.reopen();
     }
 
     /// The application's lifecycle the services watch
     /// ([`ServiceContext::lifecycle`](super::lifecycle::ServiceContext::lifecycle)).
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn service_lifecycle(&self) -> Rc<super::lifecycle::ServiceLifecycle> {
-        self.service_registry.lifecycle()
+        self.application.service_registry.lifecycle()
     }
 
     /// The staged service shutdown: stop admission, cancel
@@ -997,7 +936,7 @@ impl AppRuntime {
         &mut self,
         join_by: std::time::Instant,
     ) -> ServiceShutdownReport {
-        self.service_registry.shutdown(join_by)
+        self.application.service_registry.shutdown(join_by)
     }
 
     /// The resolved execution services, if any. `None` before the first
@@ -1156,8 +1095,9 @@ impl AppRuntime {
             not(target_arch = "wasm32")
         ))]
         let desktop = [
-            self.placement.next_due(),
-            self.main_controller
+            self.application.placement.next_due(),
+            self.application
+                .main_controller
                 .as_ref()
                 .and_then(super::runner::main_window::MainController::recall_deadline),
         ];
@@ -1219,7 +1159,7 @@ impl AppRuntime {
                         .pending_window_reservations
                         .load(std::sync::atomic::Ordering::Acquire)
                         == 0
-                    && !self.service_registry.keeps_app_alive()
+                    && !self.application.service_registry.keeps_app_alive()
             }
             #[cfg(target_arch = "wasm32")]
             ExitPolicy::OnLastWindowClosed => self.installed_host.logical().runtime_count() == 0,
@@ -1491,15 +1431,15 @@ impl AppRuntime {
         let store = match store {
             Ok(store) => store,
             Err(refusal) => {
-                self.host_storage.install(Err(refusal));
-                self.flush_host = None;
+                self.application.host_storage.install(Err(refusal));
+                self.application.flush_host = None;
                 return;
             }
         };
         let io = Arc::downgrade(self.ensure_execution());
         let storage = super::storage_host::host_storage(store, std::sync::Weak::clone(&io));
         let wake = self.frame_wake_callback();
-        self.flush_host = Some(flui_view::__runtime::FlushHost::new(
+        self.application.flush_host = Some(flui_view::__runtime::FlushHost::new(
             Box::new(move |write| {
                 // A write the pool refuses is dropped, which keeps its bytes
                 // owed for the flush at the end.
@@ -1516,13 +1456,14 @@ impl AppRuntime {
                 Ok(())
             }),
         ));
-        self.host_storage.install(Ok(storage));
+        self.application.host_storage.install(Ok(storage));
     }
 
     /// The publishing side of the host's flush registry, for the UI runtimes
     /// the runners build; `None` without storage.
     pub(super) fn flush_registry(&self) -> Option<flui_view::__runtime::FlushRegistry> {
-        self.flush_host
+        self.application
+            .flush_host
             .as_ref()
             .map(flui_view::__runtime::FlushHost::registry)
     }
@@ -1530,7 +1471,8 @@ impl AppRuntime {
     /// The providers the next UI runtime this host builds acquires platform
     /// capabilities from: the run's registry, or the built-ins alone.
     pub(super) fn capability_registry(&self) -> flui_runtime::capability::CapabilityRegistry {
-        self.capabilities
+        self.application
+            .capabilities
             .clone()
             .unwrap_or_else(|| crate::app::capability::built_in_registry(&self.capability_slots()))
     }
@@ -1538,7 +1480,7 @@ impl AppRuntime {
     /// The slots the built-in providers read the owner platform from.
     pub(super) fn capability_slots(&self) -> crate::app::capability::CapabilitySlots {
         crate::app::capability::CapabilitySlots {
-            storage: self.host_storage.clone(),
+            storage: self.application.host_storage.clone(),
             assets: self.assets.clone(),
             execution: Rc::clone(&self.execution_slot),
             clipboard: Rc::clone(&self.platform_clipboard),

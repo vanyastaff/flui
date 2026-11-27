@@ -577,7 +577,8 @@ pub(in crate::app) fn install_capabilities(
         .map_err(LaunchError::CapabilityConflict)?;
     // A displaced registry's providers are user code too: they drop after the
     // borrow is released.
-    let displaced = host::APP_RUNTIME.with(|slot| slot.borrow_mut().capabilities.replace(registry));
+    let displaced =
+        host::APP_RUNTIME.with(|slot| slot.borrow_mut().application.capabilities.replace(registry));
     drop(displaced);
     Ok(())
 }
@@ -586,7 +587,8 @@ pub(in crate::app) fn install_capabilities(
 /// platform failed to start and no teardown will run.
 #[cfg(any(target_os = "android", target_os = "ios", target_arch = "wasm32"))]
 fn discard_capabilities() {
-    let installed = host::APP_RUNTIME.with(|slot| slot.borrow_mut().capabilities.take());
+    let installed =
+        host::APP_RUNTIME.with(|slot| slot.borrow_mut().application.capabilities.take());
     drop(installed);
 }
 
