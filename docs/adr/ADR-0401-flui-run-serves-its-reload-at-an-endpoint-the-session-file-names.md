@@ -24,7 +24,7 @@ endpoint, which a process restart closes.
 |---|---|
 | `flui mcp` reaches the app at the endpoint `target/flui-agent.json` names, with its token | ADR-0239; `flui-cli`'s `agent::Credentials` |
 | The app cannot rebuild itself, and a process restart ends every connection to it | `flui-cli`'s `commands::run`, `ProcessRestart` |
-| `flui run` already reads cargo's errors for a desktop build (`Diagnostics`, at most 8) | ADR-0395 §2; `build::util::compile_errors` |
+| `flui run` already reads cargo's errors for a desktop build (`Diagnostics`, at most 8) | ADR-0395 §2; `build::util::cargo_messages` |
 | Each reload strategy wrote its own `run.reload` event (`{"kind": …, "ok": …}`), with no errors and no time | `commands::run`, before this record |
 | An observer may call only what leaves the app as it was | ADR-0288 §8, ADR-0395 §1; `ClientRole::may_call` |
 | `flutter run --machine` serves `app.restart {appId, fullRestart}` itself, the process that started the app; a request made before the first compile waits for it, and one reload runs at a time | `flutter/flutter@3.50.1`, `packages/flutter_tools/lib/src/commands/daemon.dart:840`, `:1085-1120` |
@@ -93,10 +93,12 @@ in the process, so `at_least: restart` is applied as `process_restart` (ADR-0393
 request at `restart` or above takes `R`'s path: the app stops, then builds. A failed build
 leaves the running app as it was unless the reload stopped it first: a restart does, and on
 Windows and Android every rebuild does. A build that succeeded and is the one the app runs is
-`unchanged`: the desktop process restart starts the executable cargo wrote (as `cargo run` would,
-with its library path) and starts it again only when cargo built it anew or the file changed
-since the app started, so a save and a call for the same edit restart the app once; protocol
-0.34 adds the outcome.
+`unchanged`: the desktop process restart starts the executable cargo wrote (with the library
+path `cargo run` sets, not its `CARGO_*` variables, `[env]` or runner) and starts it again only
+when cargo built it anew or the file changed since the app started, so a save and a call for the
+same edit restart the app once. On Windows the app stops before every build, so there no reload
+is `unchanged`. Protocol 0.34 adds the outcome as a break `BREAKING` lists: `Reloaded` has no
+fallback an older client could read it with.
 
 §4. **`flui mcp`'s `flui_reload`.** The tool calls `run.reload` over a connection of its own to
 the run endpoint, kept beside the app's, and waits up to 600 s: a build whose dependencies

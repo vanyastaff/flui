@@ -3,7 +3,8 @@
 //! Two hot-reload modes share one development loop ([`dev_loop`]):
 //!
 //! - **Process restart** (default): watch `src/`; on change rebuild beside
-//!   the running app and replace it with `cargo run` once the build succeeds.
+//!   the running app and replace it with the executable the build wrote, when
+//!   the build succeeded and changed it.
 //! - **Worker host** (`flui.toml` `[hot_reload]`): watch worker UI sources,
 //!   rebuild `cdylib` only; host applies `HotReloadTier::HotReload` in-process.
 //!

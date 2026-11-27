@@ -235,6 +235,15 @@ pub const BREAKING: &[Break] = &[
             "/$defs/WaitOutcome/required/end",
         ],
     },
+    Break {
+        version: ProtocolVersion::new(0, 34),
+        adr: "ADR-0401",
+        // A reload whose build is the one the app runs is `unchanged`, a value `Reloaded` had
+        // no fallback for: an older client would refuse the whole report.
+        renamed: &[],
+        removed: &[],
+        required: &[],
+    },
 ];
 
 impl fmt::Display for ProtocolVersion {

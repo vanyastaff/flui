@@ -397,7 +397,6 @@ fn run_cargo_build(
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
     use super::{LIBRARY_PATH_VARIABLE, library_path, profile_output};
@@ -433,7 +432,6 @@ mod tests {
                 PathBuf::from("/inherited"),
             ]
         );
-        let _: OsString = value;
     }
 
     /// An example's executable sits one directory below its profile's output.

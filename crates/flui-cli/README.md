@@ -192,10 +192,13 @@ Hot reload works in two modes, chosen automatically:
 - **Process restart**: `src/` and `Cargo.toml` are watched; on change the app
   is rebuilt while it keeps running and replaced only by a build that
   succeeded (on Windows, which cannot overwrite a running executable, it is
-  stopped first). The run starts the executable the build wrote, as `cargo run`
-  would, and leaves the app running when cargo built nothing new, so a save and a
-  `flui_reload` of the same edit restart it once. The changes saved while a build
-  runs are one rebuild.
+  stopped first). The run starts the executable the build wrote, with the
+  library path `cargo run` sets but not its other variables (`CARGO_*`, a
+  `.cargo/config.toml` `[env]`) or a configured `runner`; the asset root comes
+  from `FLUI_ASSET_ROOT`. Where the app keeps running through the build, it is
+  left running when cargo built nothing new, so a save and a `flui_reload` of
+  the same edit restart it once; on Windows each rebuild restarts it. The
+  changes saved while a build runs are one rebuild.
 - **Worker host** (projects created with `--hot-reload`): the host keeps
   running and only the worker `cdylib` is rebuilt, so widget state survives a
   reload. A change to the shared types crate triggers a host restart.
