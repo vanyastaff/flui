@@ -626,11 +626,25 @@ fn templates_depend_on_the_facade_and_hot_reload_on_its_package() {
                 repo_root()
             );
             // The facade names no reload package (ADR-0311 §6): no member
-            // turns a facade feature on for it.
-            assert!(
-                facade.get("features").is_none(),
-                "facade features for {name}/{member}: {facade}"
-            );
+            // turns a facade feature on for it. The application, the plain
+            // project or the reload host, names the web's WebGL2 fallback
+            // alone (ADR-0404); the reload libraries name nothing.
+            let application = !hot_reload || member == host_package;
+            let features = facade
+                .get("features")
+                .map(|features| features.as_array().expect("a feature list"));
+            if application {
+                assert_eq!(
+                    features,
+                    Some(&vec![toml::Value::String("webgl2".into())]),
+                    "facade features for {name}/{member}: {facade}"
+                );
+            } else {
+                assert!(
+                    features.is_none(),
+                    "facade features for {name}/{member}: {facade}"
+                );
+            }
             if hot_reload && member != types_package {
                 assert_eq!(
                     dependencies[&types_package]["path"].as_str(),
