@@ -449,7 +449,6 @@ jobs:
         run: |
           set -euo pipefail
           lane=full
-          EVENT=wip-full-lane  # WIP: a full run of this branch for its trybuild shard; reverted before merge
           if [ "$EVENT" = pull_request ]; then
             # The checkout is the PR merged into its base branch's current
             # tip, its first parent: the diff against it is the PR's own.
