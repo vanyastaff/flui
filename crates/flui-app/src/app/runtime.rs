@@ -328,6 +328,14 @@ pub(crate) struct AppRuntime {
     /// that function runs, for an application that set no
     /// `Application::declares`.
     pub(super) entry_declarations: Option<flui_view::navigation::OpenDeclarations>,
+    /// The development hand-over a restart runs the application's entry with
+    /// (ADR-0393 §4 step 2): open only while that entry runs.
+    #[cfg(all(
+        not(target_os = "android"),
+        not(target_os = "ios"),
+        not(target_arch = "wasm32")
+    ))]
+    pub(super) hand_over: crate::app::hot_reload::EntrySlot,
     /// The URL scheme registration an unpackaged Windows run makes once its
     /// main window shows its first frame, taken by that frame.
     #[cfg(windows)]
@@ -625,6 +633,12 @@ impl AppRuntime {
             #[cfg(target_os = "android")]
             android_entry: None,
             entry_declarations: None,
+            #[cfg(all(
+                not(target_os = "android"),
+                not(target_os = "ios"),
+                not(target_arch = "wasm32")
+            ))]
+            hand_over: crate::app::hot_reload::EntrySlot::Closed,
             #[cfg(windows)]
             pending_registration: None,
             session_end: Rc::default(),

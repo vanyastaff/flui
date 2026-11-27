@@ -51,6 +51,19 @@ use crate::app::ui_runtime::UiRuntime;
 #[cfg(not(target_arch = "wasm32"))]
 use flui_foundation::panic::FirstPanic;
 
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no host opens the hand-over yet: the restart that runs the entry is owed (docs/gaps.md, ADR-0393)"
+    )
+)]
+pub(crate) mod hand_over;
 // Only the desktop and iOS runners poll the hook, so the record is read
 // nowhere else.
 #[cfg_attr(
@@ -61,6 +74,12 @@ use flui_foundation::panic::FirstPanic;
     )
 )]
 mod record;
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+pub(crate) use hand_over::EntrySlot;
 
 #[cfg(all(not(target_os = "android"), not(target_arch = "wasm32")))]
 use record::Due;
