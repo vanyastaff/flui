@@ -27,7 +27,8 @@ use super::error::{Diagnosis, OrRaise as _, TestError};
 use super::find::{Find, Many, One, Quantity};
 use super::headless::{FRAME, Headless, Observed, SETTLE_LIMIT};
 use super::matcher::Matcher;
-use super::report::{Exit, Report, TestReport, write_report};
+use super::report::{Exit, Report, Running, TestReport, write_report};
+use super::target::Target;
 use super::window::TestWindow;
 use crate::drop_ledger::DropLedger;
 
@@ -45,11 +46,14 @@ const JOURNAL_KEPT: usize = 32;
 
 /// One test of an application over a connection (ADR-0400 §1).
 ///
-/// Its verbs find with a [`Find`], act through the window's agent and expect with a
-/// [`Matcher`], so each is evaluated once, in the application's runtime, on every connection.
-/// Every verb has a `try_` twin returning [`TestError`]; the plain form panics at its caller.
-/// The tester keeps no copy of the application's state: what is settled is the host's, the input
-/// held between steps is the agent's lease, and the wait loop is the connection's.
+/// Over a [`Connection`], its verbs find with a [`Find`], act
+/// through the window's agent and expect with a [`Matcher`], so each is evaluated once, in the
+/// application's runtime, on every connection. Every verb has a `try_` twin returning
+/// [`TestError`]; the plain form panics at its caller. The tester keeps no copy of the
+/// application's state: what is settled is the host's, the input held between steps is the
+/// agent's lease, and the wait loop is the connection's. A tester over
+/// [`Headless<Unobserved>`](super::Unobserved), which has no agent, pumps, reads its frame and
+/// measures only.
 ///
 /// ```
 /// use flui_testing::scenario::{Tester, find, matcher::exists};
@@ -67,14 +71,15 @@ const JOURNAL_KEPT: usize = 32;
 /// unanswered) and the thread is not unwinding, and `Drop` only when no returned error is alive
 /// (it may be on its way to the caller through `?`; a test that calls `finish` says it is
 /// done, an error it kept included): the application is
-/// settled, its frame audited, its root unmounted, its input lease released, the tester's
+/// settled, its frame audited, its root unmounted, its input lease released (on an unobserved
+/// target, which has no agent, the end runs neither the audit nor a release), the tester's
 /// [`ledger`](Tester::ledger) read, and what keeps the application busy after that (a timer, a
 /// ticker or background work left behind) fails the end. `finish` raises what did not pass;
 /// `Drop` writes it to the test's output and raises nothing. Otherwise the end releases and
 /// checks nothing, since the first failure is already on its way to the caller.
 ///
 /// [`finish`]: Tester::finish
-pub struct Tester<C: Connection = Headless> {
+pub struct Tester<C: Target = Headless> {
     connection: C,
     window: WindowId,
     report: Report,
@@ -85,7 +90,7 @@ pub struct Tester<C: Connection = Headless> {
     ended: bool,
 }
 
-impl<C: Connection> std::fmt::Debug for Tester<C> {
+impl<C: Target> std::fmt::Debug for Tester<C> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Tester")
             .field("window", &self.window)
@@ -95,7 +100,7 @@ impl<C: Connection> std::fmt::Debug for Tester<C> {
 }
 
 /// One step of a tester's journal.
-struct Step {
+pub(crate) struct Step {
     number: u64,
     verb: &'static str,
     caller: &'static Location<'static>,
@@ -159,7 +164,12 @@ impl Tester<Headless<Observed>> {
         let id = connection.window_id();
         Self::over(connection, id)
     }
+}
 
+impl<S> Tester<Headless<S>>
+where
+    Headless<S>: Target,
+{
     /// The ledger the end of the test reads: plant a [`DropSentinel`](crate::drop_ledger::DropSentinel)
     /// from it in each value the test hands the application, and the end fails while one is
     /// alive once the root is unmounted and what it held released.
@@ -169,8 +179,8 @@ impl Tester<Headless<Observed>> {
     }
 }
 
-impl<C: Connection> Tester<C> {
-    fn over(connection: C, window: WindowId) -> Self {
+impl<C: Target> Tester<C> {
+    pub(super) fn over(connection: C, window: WindowId) -> Self {
         Self {
             connection,
             window,
@@ -199,15 +209,58 @@ impl<C: Connection> Tester<C> {
         self.window
     }
 
+    fn step(&mut self, verb: &'static str, caller: &'static Location<'static>) -> Step {
+        self.journal.begin(verb, caller)
+    }
+
+    /// A step of the journal, and the guard that poisons the report should it unwind: what
+    /// every read of the tester's target begins with.
+    pub(crate) fn begin(
+        &mut self,
+        verb: &'static str,
+        caller: &'static Location<'static>,
+    ) -> (Step, Running) {
+        let step = self.step(verb, caller);
+        let running = self.report.guard(step.verb, step.caller);
+        (step, running)
+    }
+
+    /// The step's error for a call of the target that failed and names no find: an unanswered
+    /// call poisons the tester.
+    pub(super) fn failed(&mut self, step: &Step, error: CallError) -> TestError {
+        match error {
+            CallError::Unanswered {
+                may_have_run,
+                released,
+            } => {
+                self.report.unanswered(step.verb, may_have_run);
+                TestError::Unanswered {
+                    may_have_run,
+                    released,
+                    diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
+                }
+            }
+            CallError::Failed(object) => TestError::Agent {
+                diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
+                error: object,
+            },
+            other => TestError::Agent {
+                error: Box::new(flui_protocol::error::ErrorObject::new(
+                    ErrorCode::Platform,
+                    other.to_string(),
+                )),
+                diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
+            },
+        }
+    }
+}
+
+impl<C: Connection> Tester<C> {
     /// The protocol's options for the next gesture only: `force`, which skips every
     /// actionability check but `attached`, the act's timeout, the input path.
     pub fn with(&mut self, options: GestureOptions) -> &mut Self {
         self.options = Some(options);
         self
-    }
-
-    fn step(&mut self, verb: &'static str, caller: &'static Location<'static>) -> Step {
-        self.journal.begin(verb, caller)
     }
 
     fn take_options(&mut self) -> GestureOptions {
@@ -669,7 +722,9 @@ impl<C: Connection> Tester<C> {
         }
         result
     }
+}
 
+impl<C: Target> Tester<C> {
     // --- The end ----------------------------------------------------------
 
     /// End the test, running its end checks (see [the type's docs](Tester#the-end-of-a-test)).
@@ -706,7 +761,7 @@ impl<C: Connection> Tester<C> {
         self.ended = true;
         tracing::debug!(reason, "a test ended without its end checks");
         let soft = self.report.take_soft();
-        let _unpassed = self.connection.finish(&EndChecks::none());
+        let _unpassed = self.connection.end(&EndChecks::none());
         write_report(&TestReport {
             unpassed: Vec::new(),
             soft,
@@ -721,7 +776,7 @@ impl<C: Connection> Tester<C> {
         let soft = self.report.take_soft();
         if let Some(skipped) = self.report.skips_end_checks(exit) {
             if !std::thread::panicking() {
-                let _unpassed = self.connection.finish(&EndChecks::none());
+                let _unpassed = self.connection.end(&EndChecks::none());
             }
             return TestReport {
                 unpassed: Vec::new(),
@@ -729,14 +784,16 @@ impl<C: Connection> Tester<C> {
                 skipped: Some(skipped),
             };
         }
-        let unpassed = self.connection.finish(&EndChecks::default());
+        let unpassed = self.connection.end(&EndChecks::default());
         TestReport {
             unpassed,
             soft,
             skipped: None,
         }
     }
+}
 
+impl<C: Connection> Tester<C> {
     // --- Internals --------------------------------------------------------
 
     /// Send one gesture: what the agent refused is the step's error.
@@ -769,7 +826,7 @@ impl<C: Connection> Tester<C> {
 
     /// The one match of `find`, or why there is not one. The locate reports at most the
     /// [`STRICT_CANDIDATES`] an ambiguity names and counts the rest.
-    fn resolve(&mut self, step: &Step, find: &Find<One>) -> Result<Match, TestError> {
+    pub(crate) fn resolve(&mut self, step: &Step, find: &Find<One>) -> Result<Match, TestError> {
         let matches = self.locate(step, find.locator(), Some(STRICT_CANDIDATES))?;
         match resolve_strict(matches.matches.iter(), matches.truncated) {
             Ok(Some(found)) => Ok(found.clone()),
@@ -798,17 +855,6 @@ impl<C: Connection> Tester<C> {
     /// own variants, an unanswered call poisons the tester.
     fn call_error(&mut self, step: &Step, find: Option<&Locator>, error: CallError) -> TestError {
         match error {
-            CallError::Unanswered {
-                may_have_run,
-                released,
-            } => {
-                self.report.unanswered(step.verb, may_have_run);
-                TestError::Unanswered {
-                    may_have_run,
-                    released,
-                    diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
-                }
-            }
             CallError::Failed(object) => match (object.code, find) {
                 (ErrorCode::NotFound, Some(find)) => self.not_found(step, find),
                 (ErrorCode::Ambiguous, Some(find)) => {
@@ -836,37 +882,24 @@ impl<C: Connection> Tester<C> {
                     covered_by: object.covered_by.clone(),
                     diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
                 },
-                _ => TestError::Agent {
-                    diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
-                    error: object,
-                },
+                _ => self.failed(step, CallError::Failed(object)),
             },
-            other => TestError::Agent {
-                error: Box::new(flui_protocol::error::ErrorObject::new(
-                    ErrorCode::Platform,
-                    other.to_string(),
-                )),
-                diagnosis: Box::new(self.diagnosis(step, Vec::new(), Vec::new())),
-            },
+            other => self.failed(step, other),
         }
     }
+}
 
+impl<C: Target> Tester<C> {
     /// The diagnosis of `step`, registered with the report: the window's outline is read now, a
     /// turn with no frame.
-    fn diagnosis(
+    pub(crate) fn diagnosis(
         &mut self,
         step: &Step,
         candidates: Vec<String>,
         unsettled: Vec<UnsettledCause>,
     ) -> Diagnosis {
-        let shown = match self
-            .connection
-            .call::<SemanticsRead>(ReadParams::new(self.window))
-        {
-            Ok(tree) => excerpt(&tree),
-            Err(error) => format!("(the semantics tree could not be read: {error})"),
-        };
-        let reading = self.connection.now();
+        let shown = self.connection.outline(self.window);
+        let reading = self.connection.reading();
         Diagnosis {
             step: step.number,
             verb: step.verb,
@@ -882,7 +915,7 @@ impl<C: Connection> Tester<C> {
     }
 }
 
-impl<C: Connection + VirtualClock> Tester<C> {
+impl<C: Target + VirtualClock> Tester<C> {
     /// Run one frame, [`FRAME`] after the last.
     ///
     /// # Panics
@@ -909,10 +942,12 @@ impl<C: Connection + VirtualClock> Tester<C> {
         let step = self.step(verb, caller);
         let _running = self.report.guard(step.verb, step.caller);
         if let Err(error) = self.connection.advance(by) {
-            self.call_error(&step, None, error).raise();
+            self.failed(&step, error).raise();
         }
     }
+}
 
+impl<C: Connection + VirtualClock> Tester<C> {
     /// Run the application until nothing keeps it busy (ADR-0400 §3), on the virtual clock, at
     /// most five seconds of it: the frame it gives is still, the only one a frame-exact check
     /// reads.
@@ -971,7 +1006,7 @@ impl<C: Connection + VirtualClock> Tester<C> {
     }
 }
 
-impl<C: Connection> Drop for Tester<C> {
+impl<C: Target> Drop for Tester<C> {
     /// The end of the test in report-only mode: the end checks run as [`Tester::finish`] runs
     /// them, and what did not pass is written to the test's output, never raised.
     fn drop(&mut self) {
@@ -1061,7 +1096,7 @@ fn line_of(node: &Node) -> String {
 }
 
 /// The window's outline, cut to its first lines.
-fn excerpt(tree: &Tree) -> String {
+pub(super) fn excerpt(tree: &Tree) -> String {
     let full = outline(&tree.roots);
     let mut lines: Vec<&str> = full.lines().take(SHOWN_LINES).collect();
     if full.lines().count() > SHOWN_LINES {

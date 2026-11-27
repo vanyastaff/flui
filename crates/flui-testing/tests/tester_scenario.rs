@@ -8,18 +8,21 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use flui_animation::{AnimationController, DrivenController, RepeatMode};
+use flui_foundation::geometry::Size;
 use flui_foundation::panic::payload_text;
 use flui_interaction::focus::KeyEventResult;
 use flui_platform::input::keyboard::{Key, KeyEvent, KeyPress, KeyState, Modifiers};
 use flui_protocol::client::Connection as _;
-use flui_protocol::input::{ActionSequence, InputSource, KeyAction};
+use flui_protocol::input::ActionSequence;
+use flui_rendering::delegates::{CustomPaintContext, CustomPainter};
 use flui_testing::drop_ledger::DropSentinel;
 use flui_testing::log_capture::{CapturedLog, capture};
-use flui_testing::scenario::{TestError, TestReport, Tester, find, matcher};
+use flui_testing::scenario::gesture::{Gesture, Keys};
+use flui_testing::scenario::{TestError, TestReport, TestWindow, Tester, find, matcher};
 use flui_testing::widgets::SharedSignal;
 use flui_view::environment::VsyncScope;
 use flui_view::prelude::*;
-use flui_widgets::{SizedBox, Text};
+use flui_widgets::{CustomPaint, SizedBox, Text};
 
 /// Shows the number a test sets, as text.
 #[derive(Clone, StatefulView)]
@@ -170,12 +173,7 @@ impl ViewState<WindowKeys> for WindowKeysState {
 
 /// Shift pressed by a gesture of the test's own, and left down when it ends.
 fn shift_down() -> ActionSequence {
-    ActionSequence::new(vec![InputSource::Keys {
-        id: "held".to_owned(),
-        actions: vec![KeyAction::Down {
-            key: "Shift".to_owned(),
-        }],
-    }])
+    Gesture::new().keys(Keys::new().down("Shift")).build()
 }
 
 /// The checks the end of a test reported as not passed, by name.
@@ -314,9 +312,7 @@ fn a_test_that_ends_holding_a_key_passes_its_end_checks() {
     let mut t = Tester::mount(WindowKeys {
         heard: Rc::clone(&heard),
     });
-    t.connection_mut()
-        .perform(&shift_down())
-        .expect("the agent presses Shift");
+    t.perform(&shift_down());
     assert_eq!(*heard.borrow(), ["down Shift^"]);
     if let Err(report) = t.try_finish() {
         panic!("{report}");
@@ -335,9 +331,7 @@ fn a_test_that_ends_holding_a_key_passes_its_end_checks() {
 #[test]
 fn a_chord_after_a_gesture_that_left_a_key_down_sends_no_second_press() {
     let (mut t, log) = key_log();
-    t.connection_mut()
-        .perform(&shift_down())
-        .expect("the agent presses Shift");
+    t.perform(&shift_down());
     t.press_keys(&["Shift+Tab"]);
     assert_eq!(*log.borrow(), ["down Shift^", "down Tab^", "up Tab^"]);
 }
@@ -671,9 +665,7 @@ fn a_panic_as_the_root_unmounts_still_releases_and_keeps_the_audit() {
                 flui_interaction::focus::FocusNode::with_debug_label("unnamed"),
             )),
         )));
-        t.connection_mut()
-            .perform(&shift_down())
-            .expect("the agent presses Shift");
+        t.perform(&shift_down());
         catch_unwind(AssertUnwindSafe(move || t.try_finish()))
     });
     let payload = caught.expect_err("the drop's panic fails the end");
@@ -685,4 +677,130 @@ fn a_panic_as_the_root_unmounts_still_releases_and_keeps_the_audit() {
         "the end released the key after the panic"
     );
     assert_eq!(unpassed_checks(&log), ["audit"], "{log}");
+}
+
+/// The end of a tester with no agent runs the checks a host with no agent can (ADR-0400 §7): the
+/// settle on the host's own loop, the ledger and what the unmount leaves behind; it audits
+/// nothing, since only an agent reads the window's semantics.
+///
+/// Fails if that end skips a check, or audits a window whose semantics nothing collects.
+#[test]
+fn an_unobserved_end_settles_reads_the_ledger_and_names_what_is_left_behind() {
+    let kept = Rc::new(RefCell::new(Vec::new()));
+    let t = Tester::mount_unobserved(
+        LeftTicking {
+            kept: Rc::clone(&kept),
+        },
+        TestWindow::default(),
+    );
+    let sentinel = t.ledger().plant();
+    let report = t
+        .try_finish()
+        .expect_err("a running ticker and a kept sentinel fail the end");
+    assert_eq!(
+        report_checks(&report),
+        ["settle", "drop_ledger", "left_behind"],
+        "{report}"
+    );
+    drop(sentinel);
+    assert_eq!(
+        kept.borrow().len(),
+        1,
+        "the widget left its controller running"
+    );
+}
+
+/// Paints nothing, and panics in paint when it holds `true`.
+#[derive(Debug)]
+struct FailingPaint(bool);
+
+impl CustomPainter for FailingPaint {
+    fn paint(&self, _ctx: &mut CustomPaintContext<'_>) {
+        assert!(!self.0, "the frame the end's settle runs fails");
+    }
+
+    fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
+        (old as &dyn std::any::Any)
+            .downcast_ref::<Self>()
+            .is_none_or(|old| old.0 != self.0)
+    }
+
+    fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
+        None
+    }
+}
+
+/// A widget whose paint panics once `fail` is set, and whose disposal sets `disposed`.
+#[derive(Clone, StatefulView)]
+struct FailsLater {
+    fail: SharedSignal<bool>,
+    disposed: Rc<std::cell::Cell<bool>>,
+}
+
+struct FailsLaterState {
+    fail: SharedSignal<bool>,
+    disposed: Rc<std::cell::Cell<bool>>,
+}
+
+impl StatefulView for FailsLater {
+    type State = FailsLaterState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        FailsLaterState {
+            fail: self.fail.clone(),
+            disposed: Rc::clone(&self.disposed),
+        }
+    }
+}
+
+impl ViewState<FailsLater> for FailsLaterState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.fail.bind(ctx);
+    }
+
+    fn build(&self, _view: &FailsLater, ctx: &dyn BuildContext) -> impl IntoView {
+        CustomPaint::new()
+            .painter(FailingPaint(self.fail.get(ctx)))
+            .size(Size::new(20.0, 20.0))
+    }
+
+    fn dispose(&mut self) {
+        self.disposed.set(true);
+    }
+}
+
+/// A panic in the application's code while the end settles is held: the root is still unmounted,
+/// so the state is disposed, and the panic is the one `finish` raises. On either depth of the
+/// in-process connection.
+///
+/// Fails if the settle runs outside the end's containment, so its panic skips the unmount.
+#[test]
+fn a_panic_while_the_end_settles_still_unmounts_and_is_the_failure_raised() {
+    for observed in [true, false] {
+        let fail = SharedSignal::new(false);
+        let disposed = Rc::new(std::cell::Cell::new(false));
+        let view = FailsLater {
+            fail: fail.clone(),
+            disposed: Rc::clone(&disposed),
+        };
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            if observed {
+                let t = Tester::mount(view);
+                fail.set(true);
+                t.finish();
+            } else {
+                let t = Tester::mount_unobserved(view, TestWindow::default());
+                fail.set(true);
+                t.finish();
+            }
+        }));
+        let payload = caught.expect_err("the settle's frame panics");
+        let message = payload_text(&*payload).unwrap_or_default().to_owned();
+        let disposed = disposed.get();
+        assert!(
+            message.contains("panicked during paint"),
+            "the application's panic is the failure (observed: {observed}): {message}"
+        );
+        assert!(disposed, "the root was unmounted (observed: {observed})");
+    }
 }

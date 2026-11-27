@@ -208,10 +208,10 @@ Its frame driver is `HeadlessHost`, which pumps a
   `flui::testing` re-exports `scenario`, the deprecated `Tester` and
   `find`, the protocol's locator and node types and `rendering`, and none of
   this crate's other harnesses.
-- **A test is one `Tester` over a connection.** `scenario::Tester<C: Connection>`
-  (`src/scenario/`, ADR-0400) holds no host: each verb is an agent protocol
+- **A test is one `Tester` over a connection.** `scenario::Tester<C>`
+  (`src/scenario/`, ADR-0400) holds no host: each verb aimed through the agent is a protocol
   method sent through `Connection::call`, and the connection sets the depth.
-  `Headless` is the in-process connection: a `HeadlessHost` with its agent,
+  `Headless` (`Headless<Observed>`) is the in-process connection: a `HeadlessHost` with its agent,
   the window's `AgentWindow` and one `InputLease`. A call is answered by an
   owner turn (`HeadlessHost::owner_turn`, `UiRuntime::drain_owner_inbox` and
   no frame) or, when that turn did not answer it, by
@@ -251,6 +251,48 @@ Its frame driver is `HeadlessHost`, which pumps a
   `a_kept_error_skips_the_end_checks_only_when_the_tester_drops`,
   `finish_unchecked_writes_a_soft_failure_left_unraised`,
   `a_panic_as_the_root_unmounts_still_releases_and_keeps_the_audit`.
+- **A frame is read in process, through types.** `Tester::frame` exists on
+  `Tester<Headless<_>>` alone (`src/frame.rs`, ADR-0400 §4), so a scenario
+  over a generic `Connection` that reads one does not compile
+  (`scenario_ui`'s `frame_on_a_connection`). Lending it is one owner turn
+  with no frame. Its reads select render objects by `TypeId` inside
+  `PipelineCell::with` and copy an owned value out (`RenderGeometry`, the
+  value a `fn(&R) -> T` returns, a `DrawList`, a `LayerOutline`): no borrow
+  of a render object leaves the read. A read at an element resolves its
+  `Find` through the agent and starts at the render object whose packed id
+  is the semantics node's id, so it exists on `Headless<Observed>` alone; a
+  read of one names how many it found otherwise
+  (`a_typed_read_of_one_names_how_many_it_found`). `Frame::draw_commands`
+  selects the scene's pictures by the painter ids of that render object's
+  subtree in the pipeline, not through `inspect.render`, so no inspection
+  cut bounds it
+  (`draw_commands_read_the_elements_painting_and_leave_a_siblings_out`).
+- **One count of a frame's work.** `HeadlessHost::pump_reported`
+  (`src/host/frame_report.rs`) is the frame the widget harness's
+  `pump_report` and the scenario tester's `pump` both run, so a scenario
+  that moves from `lay_out` to `Tester::measure` keeps its baseline's keys
+  (`measure_unobserved_matches_pump_report`); `Frame::report` reads the
+  frames of the tester's last move of its clock (`pump`, `pump_for`,
+  `freeze_at`).
+- **A gesture is a plan the agent plays.** `scenario::gesture::Gesture`
+  builds the protocol's `ActionSequence` and checks it with
+  `flui_protocol::input::plan`, the check every player makes; it refuses a
+  pointer press it does not release and a release it did not press, and lets
+  keys stay down (`a_gesture_refuses_an_unpaired_press_or_release`).
+  `Tester::perform` sends it through the lease as one `input.inject`, so a
+  `hold` is a pause on the test's clock
+  (`a_gesture_held_past_the_long_press_delay_is_a_long_press_and_one_held_short_is_not`).
+- **A tester with no agent is not a connection.** `Headless<Unobserved>`
+  (`Tester::mount_unobserved`) attaches no agent and takes no lease, so it
+  implements the sealed `scenario::Target`, which the tester's end and
+  diagnosis need, and not `Connection`: a verb aimed through the agent does
+  not compile on it. It pumps, measures and reads its frame; its end settles
+  through `HeadlessHost::pump_until_settled`, runs no audit (nothing reads
+  its semantics), unmounts and checks the ledger and what was left behind
+  (`an_unobserved_end_settles_reads_the_ledger_and_names_what_is_left_behind`).
+  It has no `perform`: the one player of a plan into window events is the
+  agent's, and the host-side lowering into `HostInput` rows is not built
+  (`docs/gaps.md`).
 - **A headless root is the root a runner attaches.** `HeadlessHost::attach`
   and `attach_to` pass the view through `flui_widgets::app_root`, the one
   function `flui-app`'s runners call, before the UI runtime adds its scopes,

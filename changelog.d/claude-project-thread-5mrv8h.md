@@ -33,7 +33,7 @@
   `capabilities.pointers` its injection delivers; `AuditRule::TextContrast`;
   `LogicalRect::approx_eq`; the method `element.scroll_until`.
 - `Driver::run_scenario(&mut report, name, scenario)`.
-- `flui_testing::scenario` (`flui::testing::scenario`): `Tester<C: Connection>` over the
+- `flui_testing::scenario` (`flui::testing::scenario`): `Tester<C>` over the
   in-process `Headless` connection (ADR-0400). Its finders are `Find<One>` and `Find<Many>`, so a
   gesture aimed at many elements does not compile. Its matchers are data that `Tester::expect`
   waits on. A read runs no frame, and an act ends with an owner turn that drains what its frames
@@ -45,6 +45,27 @@
 - Constructors for the gesture parameters of `flui-protocol` (`LongPressParams::new`,
   `DragParams::new`, `SwipeParams::new`, `ScrollIntoViewParams::new`, `TypeTextParams::new`,
   `PressKeysParams::new`).
+- **Typed frame reads in process** (`flui-testing`, `flui::testing::frame`; ADR-0400 §4):
+  `Tester::frame` on a `Tester<Headless<_>>` lends a `Frame`, whose reads copy owned values out of
+  the frame the window presented last: `only::<R>` and `render_all::<R>` for the render objects of
+  a type (`RenderGeometry`: size, sliver geometry, offset and the transform into the window),
+  `geometry::<R>`, `read::<R, T>` and `draw_commands` at the element a `Find` names, `draw_list`,
+  `layers` (`LayerOutline`) and `report`, the `FrameReport` of the tester's last move of its
+  clock (`pump`, `pump_for`, `freeze_at`). A scenario over a generic `Connection` that calls
+  `frame` does not compile. A read of one render object fails with `TestError::RenderObjectCount`
+  when it finds another number, and a read at an element no render object forms with
+  `TestError::NoRenderObject`.
+- **Gestures** (`flui-testing`, `flui::testing::scenario::gesture`; ADR-0400 §2): `Gesture`,
+  `Pointer` and `Keys` build the protocol's `ActionSequence` for several pointers, keys and text,
+  with a press held for a stated time (`Pointer::hold`); `try_build` refuses a press the gesture
+  leaves down or a release it did not press (`GestureError`). `Tester::perform` and
+  `try_perform` send it through the window's input lease.
+- **A tester with no agent** (`flui-testing`; ADR-0400 §1): `Tester::mount_unobserved` mounts a
+  view on a `Headless<Unobserved>` target, which attaches no development agent; it pumps on
+  the virtual clock, reads its frame and ends by settling, unmounting and checking what was left
+  behind. `Tester::measure` measures the steps it runs with `flui_testing::perf::measure`, and
+  counts each frame as the widget harness's `pump_report` does. It returns a `Cost`, which the
+  facade exports as `flui::testing::Cost`.
 
 ### Changed
 

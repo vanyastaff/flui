@@ -946,7 +946,8 @@ where
 /// A loop whose [`Platform::run`](flui_native::Platform::run) returned, with
 /// its teardown still owed: a desktop loop's `run` returns when the loop
 /// ends, the headless platform's once it has bootstrapped, so a test drives
-/// the application between [`start_loop`] and [`StartedLoop::finish`].
+/// the application between `start_loop` (with the `testing` feature) and
+/// [`StartedLoop::finish`].
 /// Dropped unfinished, it tears the loop down all the same.
 pub(crate) struct StartedLoop {
     // Fields drop in this order: the main window and the ui_runtimes (and the
@@ -1029,7 +1030,7 @@ where
     Ok(started.expect("BUG: a platform the factory made starts a loop"))
 }
 
-/// [`start_loop`] on the host `platform` starts, its executor placed as the
+/// `start_loop` on the host `platform` starts, its executor placed as the
 /// closure says with the platform, or `None` when the
 /// application runs as one instance and another process of it took this
 /// launch: nothing started, and the services the start installed are down.

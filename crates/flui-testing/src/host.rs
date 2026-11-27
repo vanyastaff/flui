@@ -68,6 +68,7 @@ mod accessibility;
 mod clock;
 mod dev_agent;
 mod errors;
+mod frame_report;
 mod input;
 mod os_drag;
 mod registrations;

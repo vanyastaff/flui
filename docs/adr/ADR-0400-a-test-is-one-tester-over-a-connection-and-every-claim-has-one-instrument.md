@@ -356,29 +356,31 @@ impl<C: VirtualClock> Tester<C> {
 impl<S> Tester<Headless<S>> {
     pub fn frame(&mut self) -> Frame<'_, S>;   // exclusive: nothing acts or pumps while it lives
     pub fn measure(&mut self, steps: impl FnOnce(&mut Self)) -> Cost;   // ADR-0396 §1's perf::measure
-    pub fn perform(&mut self, actions: &ActionSequence) -> Result<(), TestError>;
+    pub fn perform(&mut self, actions: &ActionSequence);             // panics; §2's rule for verbs
+    pub fn try_perform(&mut self, actions: &ActionSequence) -> Result<(), TestError>;
     pub fn clock(&self) -> &HostClock;
     pub fn work(&mut self) -> Work<'_>;        // hold and run background work
     pub fn double<D: TestDouble>(&self) -> &D::Double;
 }
 impl<S> Frame<'_, S> {
-    pub fn only<R: RenderObject>(&mut self) -> Result<RenderGeometry, TestError>;
-    pub fn render_all<R: RenderObject>(&mut self) -> Vec<RenderGeometry>;
+    pub fn only<R: Any>(&mut self) -> Result<RenderGeometry, TestError>;
+    pub fn render_all<R: Any>(&mut self) -> Vec<RenderGeometry>;
     pub fn layers(&self) -> LayerOutline;
     pub fn draw_list(&self) -> DrawList;
     pub fn report(&self) -> &FrameReport;
 }
 impl Frame<'_, Observed> {
-    pub fn geometry<R: RenderObject>(&mut self, at: &Find) -> Result<RenderGeometry, TestError>;
-    pub fn read<R: RenderObject, T>(&mut self, at: &Find, read: fn(&R) -> T) -> Result<T, TestError>;
+    pub fn geometry<R: Any>(&mut self, at: &Find) -> Result<RenderGeometry, TestError>;
+    pub fn read<R: Any, T>(&mut self, at: &Find, read: fn(&R) -> T) -> Result<T, TestError>;
     pub fn draw_commands(&mut self, at: &Find) -> Result<DrawList, TestError>;
 }
 ```
 
-A typed read selects render objects by `TypeId` (`downcast_ref::<R>`) at or under the element a
-`Find` names, requires exactly one, and copies an owned value out inside the pipeline's
-closure-scoped access; no borrow of a render object leaves the frame. `Frame::read` replaces
-`LaidOut`'s one-off probes (`opacity_paint_alpha`, `clip_rrect_border_radius`,
+A typed read selects render objects by `TypeId` (`downcast_ref::<R>`; the bound is `Any`, since
+`RenderObject` is generic over its protocol and a box and a sliver are read alike) at or under
+the element a `Find` names, requires exactly one, and copies an owned value out inside the
+pipeline's closure-scoped access; no borrow of a render object leaves the frame. `Frame::read`
+replaces `LaidOut`'s one-off probes (`opacity_paint_alpha`, `clip_rrect_border_radius`,
 `fitted_box_transform`, `image_paint_rect`, …) and the name-based `find_by_render_type`; its
 counterpart is `tester.renderObject<T>` (`controller.dart:987`). No `Tester` exists before its
 first presented frame, so a read before a frame cannot be written. A test that needs a loose or
@@ -387,7 +389,8 @@ root that the test did not write.
 
 A read is one owner turn with no frame (`UiRuntime::drain_owner_inbox`): it applies commands
 queued since the last turn and presents nothing. Geometry read through one `Frame` is that of one
-presented frame.
+presented frame. `Frame::report` is what the frames of the tester's last move of its clock
+(`pump`, `pump_for`, `freeze_at`) did; a step that runs frames otherwise is measured with `measure`.
 
 `Tester<Headless<S>>::perform` plans a sequence with `input::plan` and hands it to the host's input
 path. On `Unobserved` nothing resolves a locator, so a sequence there aims at points taken from a

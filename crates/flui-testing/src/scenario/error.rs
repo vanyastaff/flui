@@ -82,6 +82,28 @@ pub enum TestError {
         /// The step.
         diagnosis: Box<Diagnosis>,
     },
+    /// A read in process starts at the render object that forms the element a find names, and
+    /// none forms it: the element is a region a render object's semantics authored.
+    #[non_exhaustive]
+    NoRenderObject {
+        /// What was read at.
+        find: Box<Locator>,
+        /// The step.
+        diagnosis: Box<Diagnosis>,
+    },
+    /// A typed read of one render object found another number of render objects of its type,
+    /// in the frame or at and under the element the find names.
+    #[non_exhaustive]
+    RenderObjectCount {
+        /// The type read, as `std::any::type_name` spells it.
+        render_type: &'static str,
+        /// What was read at; `None` for a read of the whole frame.
+        find: Option<Box<Locator>>,
+        /// How many render objects of the type were found.
+        found: usize,
+        /// The step.
+        diagnosis: Box<Diagnosis>,
+    },
     /// The call's answer did not arrive. The tester is poisoned: its end checks nothing.
     #[non_exhaustive]
     Unanswered {
@@ -105,6 +127,8 @@ impl TestError {
             | Self::Unsatisfied { diagnosis, .. }
             | Self::NotSettled { diagnosis, .. }
             | Self::Agent { diagnosis, .. }
+            | Self::NoRenderObject { diagnosis, .. }
+            | Self::RenderObjectCount { diagnosis, .. }
             | Self::Unanswered { diagnosis, .. } => diagnosis,
         }
     }
@@ -163,6 +187,22 @@ impl TestError {
                 write!(f, "the application did not settle within {limit:?}")
             }
             Self::Agent { error, .. } => write!(f, "the window answered {error}"),
+            Self::NoRenderObject { find, .. } => write!(
+                f,
+                "no render object forms the element {find:?} names: a read in process starts at one"
+            ),
+            Self::RenderObjectCount {
+                render_type,
+                find,
+                found,
+                ..
+            } => {
+                match find {
+                    Some(find) => write!(f, "{found} `{render_type}` at or under {find:?}")?,
+                    None => write!(f, "{found} `{render_type}` in the frame")?,
+                }
+                f.write_str(", where the read takes exactly one")
+            }
             Self::Unanswered {
                 may_have_run,
                 released,

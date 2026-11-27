@@ -1136,36 +1136,7 @@ impl LaidOut {
     /// [`crate::FrameReport`]). Counts, not timings, so a perf scenario
     /// compares them exactly against a checked-in baseline.
     pub fn pump_report(&mut self, dt: Duration) -> crate::FrameReport {
-        let pipeline_before = self
-            .pipeline_owner
-            .with(flui_rendering::pipeline::PipelineOwner::counters);
-        let scene_before = self.scene_totals();
-        // Cleared before the frame, the build owner's report holds nothing an
-        // earlier frame built: empty when no build pass ran. When a focus move
-        // rebuilds within the frame, a second pass that builds replaces the
-        // first pass's report (`WidgetsBinding::rebuild_within_frame`).
-        self.with_build_owner_mut(
-            flui_view::__runtime::BuildOwner::clear_frame_build_report_for_test,
-        );
-        self.pump_for(dt);
-        let pipeline_after = self
-            .pipeline_owner
-            .with(flui_rendering::pipeline::PipelineOwner::counters);
-        let scene_after = self.scene_totals();
-        let build = self.with_build_owner_mut(|owner| owner.last_frame_build_report());
-        crate::FrameReport {
-            build,
-            pipeline: pipeline_after.since(pipeline_before),
-            scene: crate::SceneReport::between(&scene_before, &scene_after),
-        }
-    }
-
-    /// The window's retained-scene totals between frames.
-    fn scene_totals(&self) -> flui_runtime::testing::SceneTotals {
-        let host = self.host.ui_runtime();
-        host.ui_runtime()
-            .presentation_scene_totals_for_test(host.ui_runtime().presentation_id())
-            .expect("BUG: between frames the window's scene is in its slot")
+        self.host.pump_reported(dt)
     }
 
     /// Every node the last frame drew, with the geometry and opacity the window shows it at

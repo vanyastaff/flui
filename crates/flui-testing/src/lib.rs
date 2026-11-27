@@ -91,6 +91,7 @@ pub mod backend_conformance;
 pub mod control_cost;
 pub mod drop_ledger;
 pub mod find;
+pub mod frame;
 pub mod gesture_alternatives;
 pub mod heap;
 pub mod host;
