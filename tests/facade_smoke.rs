@@ -16,14 +16,9 @@
 //! with `Tester` and finds its text: not another acceptance test for a sample
 //! app, just a compile-and-mount smoke check for the facade surface itself.
 
-#![expect(
-    deprecated,
-    reason = "ADR-0400: these cases move to `scenario::Tester`"
-)]
-
 use flui::prelude::*;
-use flui_testing::find;
-use flui_testing::tester::Tester;
+use flui_testing::scenario::matcher::exists;
+use flui_testing::scenario::{Tester, find};
 use flui_testing::widgets::{lay_out, tight};
 
 /// A trivial tree authored entirely off `flui::prelude::*` — the same import
@@ -42,7 +37,8 @@ impl StatelessView for FacadeSmokeApp {
 #[test]
 fn prelude_authored_tree_mounts_through_the_headless_pipeline() {
     let mut t = Tester::mount(FacadeSmokeApp);
-    t.expect(find::text("flui facade smoke test")).to_exist();
+    t.expect(&find::text("flui facade smoke test"), exists());
+    t.finish();
 }
 
 #[test]

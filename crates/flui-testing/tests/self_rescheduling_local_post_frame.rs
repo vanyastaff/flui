@@ -15,6 +15,8 @@ use std::time::Duration;
 
 use flui_scheduler::PostFrameHandle;
 use flui_testing::host::{HeadlessHost, HeadlessWindow};
+use flui_testing::scenario::matcher::value;
+use flui_testing::scenario::{FRAME, Tester, VirtualClock, find};
 use flui_widgets::SizedBox;
 
 /// Schedule one tick that increments `fire_count` and immediately reschedules
@@ -73,11 +75,11 @@ pub(crate) fn self_rescheduling_local_post_frame_callback_fires_exactly_once_per
 /// frame, which turns the loop into a frame on every vsync for as long as the
 /// field has the focus.
 pub(crate) fn a_focused_text_field_settles_after_typing() {
-    let mut t = flui_testing::tester::Tester::mount(focused_field());
-    t.enter_text(&flui_testing::find::id("field"), "notes");
-    t.expect(flui_testing::find::id("field"))
-        .to_have_value("notes");
-    t.try_pump_and_settle(300)
+    let mut t = Tester::mount(focused_field());
+    t.type_text(&find::id("field"), "notes");
+    t.expect(&find::id("field"), value("notes"));
+    let _settled = t
+        .try_settle()
         .expect("a focused field with nothing to animate settles");
 }
 
@@ -86,15 +88,18 @@ pub(crate) fn a_focused_text_field_settles_after_typing() {
 ///
 /// Fails when the cursor-area loop's re-registration asks for the next frame.
 pub(crate) fn a_focused_text_field_runs_no_frame_while_idle() {
-    let mut t = flui_testing::tester::Tester::mount(focused_field());
-    t.enter_text(&flui_testing::find::id("field"), "notes");
-    t.try_pump_and_settle(300)
+    let mut t = Tester::mount(focused_field());
+    t.type_text(&find::id("field"), "notes");
+    let _settled = t
+        .try_settle()
         .expect("a focused field with nothing to animate settles");
     for vsync in 0..60 {
-        t.pump();
+        let advanced = t
+            .connection_mut()
+            .advance(FRAME)
+            .expect("the window still runs frames");
         assert_eq!(
-            t.try_pump_and_settle(0).ok(),
-            Some(0),
+            advanced.frames, 0,
             "vsync {vsync}: an idle focused field has no frame or work due"
         );
     }
