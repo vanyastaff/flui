@@ -358,7 +358,7 @@ scripted hook from the testing kit. They replace ADR-0311's
 | §3 the outcome | `flui-app`: `each_reassembled_runtime_and_each_restart_is_reported_once`, `a_panicking_applied_retires_the_hook` |
 | §3 `ReloadEvent` is exhaustive | the compiler: a host that does not map `Loaded` does not compile |
 | §4 step 1 | `flui-app`: `a_restart_disposes_every_state_before_the_entry_runs`, `a_panicking_dispose_does_not_stop_a_restart`, `a_restart_closes_the_windows_the_application_opened_without_asking`, `a_restart_drops_the_earlier_scope`, `an_app_handle_of_the_earlier_application_is_refused` |
-| §4 step 2 | `flui-app`: `a_panicking_entry_fails_the_restart_and_is_not_tried_again`, `an_entry_without_an_application_fails_the_restart`, `a_failed_restart_leaves_nothing_in_the_hand_over` |
+| §4 step 2 | `flui-app`: `a_panicking_entry_fails_the_restart_and_is_not_tried_again`, `an_entry_without_an_application_fails_the_restart`, `a_failed_restart_leaves_nothing_in_the_hand_over`, `a_second_run_in_one_entry_is_refused_and_the_first_is_composed` |
 | §4 step 3 | `flui-app`: `a_restart_composes_the_later_applications_capabilities`, `a_restart_keeps_the_window_and_registers_the_fonts_again`, `a_failed_composition_retires_what_it_built`, `a_panic_in_the_new_roots_mount_is_still_a_restart`, `an_answer_to_a_retired_runtime_is_refused` |
 | §4 step 4 | `flui-app`: `a_resident_application_is_asked_to_exit_by_its_new_policy` |
 | §4 `ReloadTier` and `HotReloadTier` are gone | the compiler |

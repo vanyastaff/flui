@@ -35,8 +35,9 @@
   is refused.
 - **`flui-app`**: on the desktop, `Application::run` and `run_resident` called while a
   development restart runs the application's entry hand the application to that restart and
-  return `Ok(())` without starting a loop (ADR-0393 §4). A second `run` in the same entry
-  returns the new `LaunchError::AlreadyHandedOver`. No host starts a restart yet.
+  return `Ok(())` without starting a loop (ADR-0393 §4). Window options no window can be asked
+  for fail there as at a start, and a second `run` in the same entry returns the new
+  `LaunchError::AlreadyHandedOver`. No host starts a restart yet.
 
 ### Changed
 

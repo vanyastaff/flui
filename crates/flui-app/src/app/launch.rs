@@ -193,6 +193,12 @@ impl Application {
     /// Android outside a `#[flui::main]` function; and on the desktop the
     /// first window's and the services' failures.
     ///
+    /// Called by the entry a desktop development restart runs (ADR-0393 §4),
+    /// it hands the application to that restart and returns `Ok(())` without
+    /// starting a loop. It fails there with
+    /// [`LaunchError::InvalidWindowOption`] as it does at a start, and with
+    /// `LaunchError::AlreadyHandedOver` when the entry called `run` before.
+    ///
     /// # Panics
     ///
     /// With the application's own panic, when nothing is left to go on after

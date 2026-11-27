@@ -335,7 +335,7 @@ pub(crate) struct AppRuntime {
         not(target_os = "ios"),
         not(target_arch = "wasm32")
     ))]
-    pub(super) hand_over: crate::app::hot_reload::HandOver,
+    pub(super) hand_over: crate::app::hot_reload::EntrySlot,
     /// The URL scheme registration an unpackaged Windows run makes once its
     /// main window shows its first frame, taken by that frame.
     #[cfg(windows)]
@@ -638,7 +638,7 @@ impl AppRuntime {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            hand_over: crate::app::hot_reload::HandOver::Closed,
+            hand_over: crate::app::hot_reload::EntrySlot::Closed,
             #[cfg(windows)]
             pending_registration: None,
             session_end: Rc::default(),

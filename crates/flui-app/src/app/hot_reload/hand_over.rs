@@ -23,7 +23,7 @@ pub(crate) type HandedRun = DesktopRun<BoxedView, Box<dyn FnMut(&AppHandle) -> B
 
 /// The hand-over's state, held in the loop's state on the owner thread.
 #[derive(Default)]
-pub(crate) enum HandOver {
+pub(crate) enum EntrySlot {
     /// No entry runs: `run` starts a loop as it does outside a restart.
     #[default]
     Closed,
@@ -50,7 +50,7 @@ pub(crate) enum EntryFailure {
 /// Whether an entry is running with the hand-over open on this thread, so
 /// that `run` hands its application over instead of starting a loop.
 pub(crate) fn is_open() -> bool {
-    with_hand_over(|hand_over| !matches!(hand_over, HandOver::Closed)).unwrap_or(false)
+    with_hand_over(|hand_over| !matches!(hand_over, EntrySlot::Closed)).unwrap_or(false)
 }
 
 /// Hand `run` over to the open hand-over, as `run` does inside a restart.
@@ -60,18 +60,19 @@ pub(crate) fn is_open() -> bool {
 /// [`LaunchError::InvalidWindowOption`] for window options no window can be
 /// asked for, as a run outside a restart refuses them before anything starts;
 /// [`LaunchError::AlreadyHandedOver`] when this entry already called `run`,
-/// whose application stays the one the restart composes.
+/// whether that call was handed over or refused: the first call decides what
+/// the restart composes.
 pub(crate) fn hand(run: HandedRun) -> Result<(), LaunchError> {
     let checked = crate::app::runner::check_window_options(&run.config);
     let mut run = Some(run);
     let answer = with_hand_over(|hand_over| match hand_over {
-        HandOver::Open => {
+        EntrySlot::Open => {
             *hand_over = match &checked {
-                Ok(()) => HandOver::Handed(Box::new(
+                Ok(()) => EntrySlot::Handed(Box::new(
                     run.take().expect("BUG: the run is handed over once"),
                 )),
                 Err(LaunchError::InvalidWindowOption(option)) => {
-                    HandOver::Refused(LaunchError::InvalidWindowOption(*option))
+                    EntrySlot::Refused(LaunchError::InvalidWindowOption(*option))
                 }
                 Err(_) => {
                     unreachable!("BUG: the window-option check fails only with its own variant")
@@ -79,8 +80,8 @@ pub(crate) fn hand(run: HandedRun) -> Result<(), LaunchError> {
             };
             Ok(())
         }
-        HandOver::Handed(_) | HandOver::Refused(_) => Err(LaunchError::AlreadyHandedOver),
-        HandOver::Closed => {
+        EntrySlot::Handed(_) | EntrySlot::Refused(_) => Err(LaunchError::AlreadyHandedOver),
+        EntrySlot::Closed => {
             unreachable!("BUG: `run` hands over only while `is_open` holds on this thread")
         }
     })
@@ -107,6 +108,9 @@ pub(crate) fn run_entry(entry: impl FnOnce()) -> Result<HandedRun, EntryFailure>
     let ran = panic.contain(entry);
     let handed = open.drain();
     if ran.is_none() {
+        // Dropped before the event, whose subscriber is user code too: a
+        // panic there finds nothing of the application left to drop.
+        panic.retire(handed);
         let text = panic
             .held()
             .and_then(payload_text)
@@ -115,17 +119,16 @@ pub(crate) fn run_entry(entry: impl FnOnce()) -> Result<HandedRun, EntryFailure>
             panic = text,
             "the application's entry panicked during a restart"
         );
-        panic.retire(handed);
         // Reported above; nobody resumes it, and dropping the collector
         // discards it under containment.
         drop(panic);
         return Err(EntryFailure::Panicked);
     }
     match handed {
-        HandOver::Handed(run) => Ok(*run),
-        HandOver::Refused(error) => Err(EntryFailure::Launch(error)),
-        HandOver::Open => Err(EntryFailure::NoApplication),
-        HandOver::Closed => unreachable!("BUG: the hand-over stays open until it is drained"),
+        EntrySlot::Handed(run) => Ok(*run),
+        EntrySlot::Refused(error) => Err(EntryFailure::Launch(error)),
+        EntrySlot::Open => Err(EntryFailure::NoApplication),
+        EntrySlot::Closed => unreachable!("BUG: the hand-over stays open until it is drained"),
     }
 }
 
@@ -139,16 +142,16 @@ impl Opened {
     fn open() -> Self {
         with_hand_over(|hand_over| {
             assert!(
-                matches!(hand_over, HandOver::Closed),
+                matches!(hand_over, EntrySlot::Closed),
                 "BUG: one hand-over is open at a time; the hook is lent while its entry runs"
             );
-            *hand_over = HandOver::Open;
+            *hand_over = EntrySlot::Open;
         })
         .expect("BUG: a restart runs its entry with no borrow of the loop's state");
         Self { drained: false }
     }
 
-    fn drain(mut self) -> HandOver {
+    fn drain(mut self) -> EntrySlot {
         self.drained = true;
         take()
     }
@@ -168,7 +171,7 @@ impl Drop for Opened {
 
 /// Close the hand-over and take what it holds; the caller drops it with the
 /// loop's state no longer borrowed.
-fn take() -> HandOver {
+fn take() -> EntrySlot {
     with_hand_over(std::mem::take)
         .expect("BUG: the hand-over drains with no borrow of the loop's state")
 }
@@ -274,6 +277,54 @@ mod tests {
         assert!(!is_open());
         // The next restart opens a hand-over of its own.
         assert!(matches!(run_entry(|| {}), Err(EntryFailure::NoApplication)));
+    }
+
+    /// A capture whose `Drop` panics, as an application's value may.
+    struct PanicsOnDrop;
+
+    impl Drop for PanicsOnDrop {
+        fn drop(&mut self) {
+            panic!("the capture's drop fails");
+        }
+    }
+
+    #[test]
+    fn a_handed_application_whose_drop_panics_is_contained_with_the_entry() {
+        let captured = PanicsOnDrop;
+        let failure = failure_of(
+            run_entry(|| {
+                Application::new()
+                    .run_resident(move |_| {
+                        let _keep = &captured;
+                        root()
+                    })
+                    .expect("handed over");
+                panic!("the entry fails after handing over");
+            }),
+            "the entry panicked",
+        );
+        assert!(matches!(failure, EntryFailure::Panicked));
+        assert!(!is_open());
+    }
+
+    #[test]
+    fn a_run_after_a_refused_one_keeps_the_first_refusal() {
+        let mut second = None;
+        let failure = failure_of(
+            run_entry(|| {
+                let first = Application::new()
+                    .config(AppConfig::new().size(0, 0))
+                    .run(root());
+                assert!(matches!(first, Err(LaunchError::InvalidWindowOption(_))));
+                second = Some(Application::new().run(root()));
+            }),
+            "the first run was refused",
+        );
+        assert!(matches!(second, Some(Err(LaunchError::AlreadyHandedOver))));
+        assert!(matches!(
+            failure,
+            EntryFailure::Launch(LaunchError::InvalidWindowOption(_))
+        ));
     }
 
     #[test]

@@ -533,7 +533,7 @@ pub(in crate::app) fn swap_entry_declarations(
     not(target_arch = "wasm32")
 ))]
 pub(in crate::app) fn with_hand_over<R>(
-    lend: impl FnOnce(&mut crate::app::hot_reload::HandOver) -> R,
+    lend: impl FnOnce(&mut crate::app::hot_reload::EntrySlot) -> R,
 ) -> Result<R, std::cell::BorrowMutError> {
     host::APP_RUNTIME.with(|slot| Ok(lend(&mut slot.try_borrow_mut()?.hand_over)))
 }
