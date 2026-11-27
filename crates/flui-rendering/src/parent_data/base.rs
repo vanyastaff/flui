@@ -21,11 +21,10 @@ use std::any::Any;
 ///
 /// # Cloning
 ///
-/// `ParentData` requires `DynClone` from the `dyn_clone` crate, because std has no way to clone a `&dyn Trait` into a `Box`. All types
-/// that implement `Clone` automatically satisfy this bound. This enables
-/// `dyn_clone::clone_box(&*data)` to clone `&dyn ParentData` into
-/// `Box<dyn ParentData>`, which the intrinsic and dry query walks use to read
-/// a child's parent data. The layout walk lends it instead of copying it.
+/// A parent data type is `Clone`, and `Box<dyn ParentData>` is `Clone`
+/// through it: the copy is the concrete type's own `clone`. The intrinsic and
+/// dry query walks read a child's parent data through such a copy; the layout
+/// walk lends it instead of copying it.
 ///
 /// # Example
 ///
@@ -56,7 +55,7 @@ use std::any::Any;
     label = "missing `impl ParentData for {Self}`",
     note = "`impl ParentData for {Self} {{}}` is enough (every method has a default) provided `{Self}` is `Debug + Clone + 'static`"
 )]
-pub trait ParentData: Debug + Any + dyn_clone::DynClone {
+pub trait ParentData: Debug + Any + sealed::CloneParentData {
     /// Called when render object is removed from tree.
     ///
     /// Override to clean up resources (listeners, subscriptions, etc).
@@ -84,6 +83,30 @@ impl dyn ParentData {
     }
 }
 
-// Enable `Box<dyn ParentData>::clone()` — all concrete types that
-// derive `Clone` automatically satisfy the `DynClone` bound.
-dyn_clone::clone_trait_object!(ParentData);
+/// The copy behind `Box<dyn ParentData>: Clone`: std's `Clone` is not object
+/// safe, so a `&dyn ParentData` copies itself through this supertrait.
+///
+/// The trait is sealed: its module is private, so no type outside this crate
+/// names it, and the blanket implementation is the only one. A type is parent
+/// data only if it is `Clone`, and its copy is its `Clone`.
+pub(crate) mod sealed {
+    use super::ParentData;
+
+    pub trait CloneParentData {
+        /// A boxed copy of `self`.
+        #[must_use]
+        fn clone_box(&self) -> Box<dyn ParentData>;
+    }
+
+    impl<T: ParentData + Clone> CloneParentData for T {
+        fn clone_box(&self) -> Box<dyn ParentData> {
+            Box::new(self.clone())
+        }
+    }
+}
+
+impl Clone for Box<dyn ParentData> {
+    fn clone(&self) -> Self {
+        (**self).clone_box()
+    }
+}

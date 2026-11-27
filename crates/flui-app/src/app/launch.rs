@@ -299,7 +299,8 @@ pub enum UnsupportedSystem {
         requirement: &'static str,
     },
     /// No GPU backend gave a device: neither the one the target prefers nor
-    /// its fallback (GLES 3.0, or WebGL2 on the web). Each backend tried is
+    /// its fallback (GLES 3.0, or WebGL2 on the web where the application
+    /// names `webgl2`, ADR-0404). Each backend tried is
     /// named with why it failed.
     #[error(
         "no supported GPU: {}",

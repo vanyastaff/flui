@@ -17,6 +17,7 @@
 //! The walk runs on the thread that took the lease: [`SubtreeArena`] is `!Send + !Sync` (pinned
 //! in `tests`), so no callback it hands a render object can carry it elsewhere.
 
+use crate::parent_data::CloneParentData;
 use crate::pipeline::TextLender;
 use crate::storage::{EnterRefusal, EnteredNode, TreeLease};
 
@@ -161,7 +162,7 @@ impl<'a, 'tree, T: WalkedChild> LentChildren<'a, 'tree, T> {
                 *state.parent_data_slot() = if lends_to(self.arena, self.parent, child) {
                     entered.node_mut().take_parent_data()
                 } else {
-                    entered.node().parent_data().map(dyn_clone::clone_box)
+                    entered.node().parent_data().map(CloneParentData::clone_box)
                 };
             }
         }
@@ -710,7 +711,7 @@ impl<'tree> QueryWalk<'tree> {
     /// stack (its node is then borrowed, and the query treats it as absent).
     pub(super) fn child_parent_data(&self, child: RenderId) -> Option<Box<dyn ParentData>> {
         let entered = self.lease.enter(child).ok()?;
-        entered.node().parent_data().map(dyn_clone::clone_box)
+        entered.node().parent_data().map(CloneParentData::clone_box)
     }
 }
 
@@ -774,7 +775,7 @@ fn build_intrinsic_child_parent_data(
                 return seed;
             }
             let entered = arena.lease.enter(child_id).ok()?;
-            entered.node().parent_data().map(dyn_clone::clone_box)
+            entered.node().parent_data().map(CloneParentData::clone_box)
         })
         .collect()
 }

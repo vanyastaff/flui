@@ -364,6 +364,13 @@ fn additivity_violations(
                 .rsplit_once('=')
                 .is_some_and(|(at, _)| at == container)
         });
+        // A unit variant of an externally tagged union is a constant item of its `oneOf`: the
+        // first one joins a union that held only object variants, which `older` already had.
+        let unit_variant_of = container
+            .strip_suffix("/*/const")
+            .filter(|union| union.ends_with("/oneOf") || union.ends_with("/anyOf"));
+        let union_existed =
+            union_existed || unit_variant_of.is_some_and(|union| older.pointer(union).is_some());
         if union_existed && container != "/methods" && !breaking && !is_open(container) {
             added.insert(format!("value added: {value}"));
         }
@@ -639,7 +646,7 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
         })
     };
     let defined = |name: &str, union: Value| serde_json::json!({"$defs": {name: union}});
-    let shapes: [(&str, Value, Value, &str); 4] = [
+    let shapes: [(&str, Value, Value, &str); 5] = [
         (
             "a string enum",
             serde_json::json!({"enum": ["close", "keep_open"]}),
@@ -663,6 +670,12 @@ fn the_additivity_check_refuses_a_removed_field_a_respelled_name_and_a_new_requi
             serde_json::json!({"oneOf": [constant("enabled"), external("preedit")]}),
             serde_json::json!({"oneOf": [constant("enabled"), external("preedit"), external("commit")]}),
             "variant added: /$defs/{union}/oneOf/commit=commit",
+        ),
+        (
+            "the first unit variant of an externally tagged union",
+            serde_json::json!({"oneOf": [external("applied"), external("failed")]}),
+            serde_json::json!({"oneOf": [external("applied"), constant("unchanged"), external("failed")]}),
+            "value added: /$defs/{union}/oneOf/*/const=unchanged",
         ),
     ];
     for (shape, older_union, newer_union, added) in shapes {

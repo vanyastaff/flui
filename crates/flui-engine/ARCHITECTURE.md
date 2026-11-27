@@ -378,9 +378,9 @@ The Cargo features `vulkan`, `metal`, `dx12`, `webgpu`, `gles` are **additive
 pass-throughs to wgpu's own backend features, not selectors**. Nobody
 normally names them: the per-target dependency entries in `Cargo.toml` unify
 the right backends into every build (`dx12` on Windows, `metal` on
-macOS/iOS, `vulkan` + `gles` on Linux/Android, `webgpu` + `gles` on wasm32),
+macOS/iOS, `vulkan` + `gles` on Linux/Android, `webgpu` on wasm32),
 and `device::backend::Family::order` decides at runtime which to try, preferred
-first (ADR-0244 §1): Vulkan then GLES 3.0, WebGPU then WebGL2, Direct3D 12
+first (ADR-0244 §1): Vulkan then GLES 3.0, WebGPU then WebGL2 (under `webgl2`), Direct3D 12
 then WARP, Metal alone. Each attempt gets an instance of its own for that one
 backend, because a combined mask does not retry (on the web wgpu commits to
 WebGPU as soon as `navigator.gpu` exists). The chosen backend is logged once
@@ -389,7 +389,10 @@ WebGPU as soon as `navigator.gpu` exists). The chosen backend is logged once
 `WGPU_BACKEND` narrows the order, which is how the suites run on the
 fallback. Gradient stops live in a texture, not a storage buffer, because
 GLES 3.0 and WebGL2 have no storage buffers in a fragment stage. Enabling two
-compiles both; no source in this crate cfg-gates on them. The
+compiles both; no source in this crate cfg-gates on them. `webgl2` is not one of
+them but the web's fallback, which an application names (ADR-0404): it builds
+wgpu's GL backend for wasm32 (`wgpu/webgl`) and puts the WebGL2 attempt in the
+web order, so without it the module carries no GL backend and asks WebGPU alone. The
 `compile_error!` guard in `lib.rs` covers the invalid pair: wasm32 with
 atomics while `fragile-send-sync-non-atomic-wasm` is on. The per-target
 entries must stay non-optional — an `optional = true` there leaves wgpu with

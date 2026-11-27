@@ -540,7 +540,6 @@ parley = { version = "0.13.0", default-features = false, features = ["std"] }
 # the Parley layout (ADR-0092 §10 step 5): the copy Parley already builds and
 # marks its clusters with, so no second one, and no dictionary or LSTM data.
 icu_segmenter = { version = "2.1.2", default-features = false, features = ["compiled_data"] }
-dyn-clone = "1.0"
 static_assertions = "1.1"
 # Compile-fail suites (flui-painting, flui-view, flui-engine, flui-rendering):
 # each drives `tests/<dir>/*.rs` fixtures and pins the diagnostic text a
@@ -892,6 +891,13 @@ http = ["flui-app/http", "flui-testing?/http"]
 # under memory pressure. A network image also needs `http`. Off, the application
 # links no image decoder and keeps no decoded-image cache.
 images = ["dep:flui-assets", "flui-widgets/asset-images", "flui-app/images", "flui-testing?/images"]
+
+# === The WebGL2 fallback on the web (ADR-0404) ===
+# A browser that gives no WebGPU adapter draws through WebGL2. `flui create`
+# names it in the projects it writes; without it the web build ships WebGPU
+# only, about 2 MB smaller, and a browser without WebGPU is refused at start.
+# No other target builds anything for it.
+webgl2 = ["flui-app/webgl2"]
 
 # === One instance per user session ===
 # `Application::single_instance` (ADR-0254 §4): on Linux and Windows a later

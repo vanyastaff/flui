@@ -3,7 +3,8 @@
 //! Two hot-reload modes share one development loop ([`dev_loop`]):
 //!
 //! - **Process restart** (default): watch `src/`; on change rebuild beside
-//!   the running app and replace it with `cargo run` once the build succeeds.
+//!   the running app and replace it with the executable the build wrote, when
+//!   the build succeeded and changed it.
 //! - **Worker host** (`flui.toml` `[hot_reload]`): watch worker UI sources,
 //!   rebuild `cdylib` only; host applies `HotReloadTier::HotReload` in-process.
 //!
@@ -273,6 +274,8 @@ fn run_session(
                     agent,
                     build_report,
                     register_associations,
+                    started: None,
+                    toolchain_libraries: std::cell::OnceCell::new(),
                 };
                 dev_loop(&mut strategy, run_endpoint)?;
             }
@@ -1073,7 +1076,7 @@ fn drive(
 fn restart(strategy: &mut dyn ReloadStrategy, child: &mut Option<AppChild>) -> CliResult<Reloaded> {
     stop_and_report(child);
     let reloaded = strategy.build_and_spawn(child)?;
-    if !reloaded.is_applied() {
+    if matches!(reloaded, Reloaded::Failed(_)) {
         ui::warning("Build failed — fix errors and save to retry")?;
     }
     Ok(reloaded)
@@ -2192,35 +2195,6 @@ impl ReloadStrategy for AndroidSession {
     fn reload_label(&self) -> &'static str {
         "Rebuild, reinstall and restart"
     }
-}
-
-/// Spawn the application as a child process.
-fn spawn_app(
-    build: &DesktopBuild,
-    profile: Option<&str>,
-    verbose: bool,
-    agent: Option<&Session>,
-    register_associations: bool,
-) -> CliResult<AppChild> {
-    let mut cmd = Command::new("cargo");
-    cmd.arg("run");
-    let root = std::env::current_dir().context("failed to resolve application directory")?;
-    cmd.envs(crate::config::project_floors(&root)?.host_cargo_env());
-
-    if let Some(prof) = profile {
-        cmd.args(["--profile", prof]);
-    }
-
-    if verbose {
-        cmd.arg("--verbose");
-    }
-
-    with_build(&mut cmd, build, agent);
-    with_registration(&mut cmd, register_associations);
-    with_asset_root(&mut cmd, &root);
-
-    cmd.env(env::HOT_RELOAD, "1");
-    spawn_child(cmd, "Failed to spawn application")
 }
 
 // ============================================================================

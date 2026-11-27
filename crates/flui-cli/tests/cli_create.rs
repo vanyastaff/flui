@@ -111,7 +111,63 @@ fn assert_generated_project_compiles(template: &str, hot_reload: bool) {
                 .expect("features"),
             &[toml::Value::String("testing".into())]
         );
-        assert!(manifest["dependencies"]["flui"].get("features").is_none());
+    }
+
+    // An application names the WebGL2 fallback, so it draws in a browser
+    // without WebGPU, and its manifest says what removing it saves; a library
+    // leaves the choice to the application that links it (ADR-0404).
+    {
+        let flui_features = |manifest: &toml::Table| -> Vec<String> {
+            manifest["dependencies"]["flui"]
+                .get("features")
+                .and_then(toml::Value::as_array)
+                .map_or_default(|features| {
+                    features
+                        .iter()
+                        .filter_map(toml::Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                })
+        };
+        let manifest_path = if hot_reload {
+            project.join(format!("{name}-host/Cargo.toml"))
+        } else {
+            project.join("Cargo.toml")
+        };
+        let text = std::fs::read_to_string(&manifest_path).expect("the application's manifest");
+        let manifest: toml::Table = text.parse().expect("valid TOML");
+        let features = flui_features(&manifest);
+        if hot_reload {
+            for library in ["types", "logic"] {
+                let library_manifest: toml::Table =
+                    std::fs::read_to_string(project.join(format!("{name}-{library}/Cargo.toml")))
+                        .expect("a library member's manifest")
+                        .parse()
+                        .expect("valid TOML");
+                assert_eq!(
+                    flui_features(&library_manifest),
+                    Vec::<String>::new(),
+                    "the `{library}` crate leaves the web fallback to the host"
+                );
+            }
+        }
+        if template == "widget" {
+            assert_eq!(
+                features,
+                Vec::<&str>::new(),
+                "a library names no web fallback"
+            );
+        } else {
+            assert_eq!(
+                features,
+                ["webgl2"],
+                "`--template {template}` keeps the WebGL2 fallback"
+            );
+            assert!(
+                text.contains("WebGPU only"),
+                "`--template {template}` says what removing `webgl2` does:\n{text}"
+            );
+        }
     }
 
     // Reuse this checkout's resolved dependency graph and cached crates. The
@@ -570,11 +626,25 @@ fn templates_depend_on_the_facade_and_hot_reload_on_its_package() {
                 repo_root()
             );
             // The facade names no reload package (ADR-0311 §6): no member
-            // turns a facade feature on for it.
-            assert!(
-                facade.get("features").is_none(),
-                "facade features for {name}/{member}: {facade}"
-            );
+            // turns a facade feature on for it. The application, the plain
+            // project or the reload host, names the web's WebGL2 fallback
+            // alone (ADR-0404); the reload libraries name nothing.
+            let application = !hot_reload || member == host_package;
+            let features = facade
+                .get("features")
+                .map(|features| features.as_array().expect("a feature list"));
+            if application {
+                assert_eq!(
+                    features,
+                    Some(&vec![toml::Value::String("webgl2".into())]),
+                    "facade features for {name}/{member}: {facade}"
+                );
+            } else {
+                assert!(
+                    features.is_none(),
+                    "facade features for {name}/{member}: {facade}"
+                );
+            }
             if hot_reload && member != types_package {
                 assert_eq!(
                     dependencies[&types_package]["path"].as_str(),
