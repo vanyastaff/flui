@@ -219,3 +219,26 @@ impl fmt::Display for TestReport {
 }
 
 impl std::error::Error for TestReport {}
+
+/// Write what the end of a test found to the test's output, and as `tracing` events a capture
+/// reads.
+pub(crate) fn write_report(report: &TestReport) {
+    if let Some(skipped) = &report.skipped {
+        tracing::info!(reason = %skipped, "the end checks did not run");
+    }
+    for unpassed in &report.unpassed {
+        let check = unpassed.check();
+        tracing::warn!(
+            check = %check.name,
+            outcome = ?check.outcome,
+            evidence = ?check.evidence,
+            "an end check did not pass"
+        );
+    }
+    for soft in &report.soft {
+        tracing::error!(failure = %soft, "a soft failure was never raised");
+    }
+    if !report.unpassed.is_empty() || !report.soft.is_empty() {
+        eprintln!("{report}");
+    }
+}

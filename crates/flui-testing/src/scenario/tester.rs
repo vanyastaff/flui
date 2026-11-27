@@ -33,7 +33,7 @@ use super::error::{Diagnosis, OrRaise as _, TestError};
 use super::find::{Find, Many, One, Quantity};
 use super::headless::{FRAME, Headless, Observed, SETTLE_LIMIT};
 use super::matcher::Matcher;
-use super::report::{Exit, Report, TestReport};
+use super::report::{Exit, Report, TestReport, write_report};
 use super::window::TestWindow;
 use crate::drop_ledger::DropLedger;
 
@@ -700,11 +700,18 @@ impl<C: Connection> Tester<C> {
     }
 
     /// End the test without its checks, for the stated `reason`: the connection releases what it
-    /// holds and nothing is read.
+    /// holds and nothing is read. A soft failure a panic in [`Self::checks`] left unraised is
+    /// written to the test's output, as the end of a dropped tester writes it.
     pub fn finish_unchecked(mut self, reason: &str) {
         self.ended = true;
         tracing::debug!(reason, "a test ended without its end checks");
+        let soft = self.report.take_soft();
         let _unpassed = self.connection.finish(&EndChecks::none());
+        write_report(&TestReport {
+            unpassed: Vec::new(),
+            soft,
+            skipped: None,
+        });
     }
 
     /// The end of the test (ADR-0400 §7): the checks when the report lets them run, else the
@@ -969,29 +976,6 @@ impl<C: Connection> Drop for Tester<C> {
         }
         let report = self.end(Exit::Drop);
         write_report(&report);
-    }
-}
-
-/// Write what the end of a test found to the test's output, and as `tracing` events a capture
-/// reads.
-fn write_report(report: &TestReport) {
-    if let Some(skipped) = &report.skipped {
-        tracing::info!(reason = %skipped, "the end checks did not run");
-    }
-    for unpassed in &report.unpassed {
-        let check = unpassed.check();
-        tracing::warn!(
-            check = %check.name,
-            outcome = ?check.outcome,
-            evidence = ?check.evidence,
-            "an end check did not pass"
-        );
-    }
-    for soft in &report.soft {
-        tracing::error!(failure = %soft, "a soft failure was never raised");
-    }
-    if !report.unpassed.is_empty() || !report.soft.is_empty() {
-        eprintln!("{report}");
     }
 }
 

@@ -17,6 +17,7 @@
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::Duration;
 
+use flui_foundation::panic::FirstPanic;
 use flui_protocol::audit::AuditRule;
 use flui_protocol::client::{CallError, ClockReading, Connection, EndChecks, Performed};
 use flui_protocol::error::{ErrorCode, ErrorObject};
@@ -32,6 +33,7 @@ use flui_view::IntoView;
 use flui_view::dev_agent::{AgentAnswer, AgentWindow, DevAgentHook, InputLease};
 
 use super::clock::{Advanced, VirtualClock};
+use super::report::{TestReport, write_report};
 use super::window::{TestWindow, WindowStorage};
 use crate::drop_ledger::DropLedger;
 use crate::host::{HeadlessDevAgent, HeadlessHost, HeadlessWindow, KitStorage};
@@ -196,25 +198,37 @@ impl Headless<Observed> {
     }
 
     /// The end checks of ADR-0400 §7 from the audit on, in order; the settle is the caller's.
-    fn end_checks(&mut self, checks: &EndChecks, unpassed: &mut Vec<UnpassedCheck>) {
+    ///
+    /// The unmount and the turns after it run the application's code (a `dispose`, a `Drop`): a
+    /// panic there is held while the lease's release still runs, and it is handed back, the
+    /// first failure, with the checks that would read the tree it left half unmounted not made.
+    fn end_checks(&mut self, checks: &EndChecks, unpassed: &mut Vec<UnpassedCheck>) -> FirstPanic {
         if !checks.audit.is_empty() {
             audit(self, &checks.audit, unpassed);
         }
+        let mut first = FirstPanic::new();
         // Unmount the root, keeping the window and the runtime, and run what it dropped.
         if let Some(host) = self.host.as_mut() {
-            host.unmount_root();
-            let _ = host.pump(Duration::ZERO);
+            first.contain(|| {
+                host.unmount_root();
+                let _ = host.pump(Duration::ZERO);
+            });
         }
         // Release the lease, which queues the release of what it holds.
-        drop(self.attached.lease.take());
+        first.retire(self.attached.lease.take());
         if let Some(host) = self.host.as_mut() {
-            for _ in 0..RELEASE_TURNS {
-                host.owner_turn();
-                if host.time_to_next_frame() != Some(Duration::ZERO) {
-                    break;
+            first.contain(|| {
+                for _ in 0..RELEASE_TURNS {
+                    host.owner_turn();
+                    if host.time_to_next_frame() != Some(Duration::ZERO) {
+                        break;
+                    }
+                    let _ = host.pump(Duration::ZERO);
                 }
-                let _ = host.pump(Duration::ZERO);
-            }
+            });
+        }
+        if first.is_held() {
+            return first;
         }
         if checks.drop_ledger && self.ledger.live() > 0 {
             unpassed.extend(UnpassedCheck::try_from_check(Check::new(
@@ -255,6 +269,7 @@ impl Headless<Observed> {
                 unpassed.extend(UnpassedCheck::try_from_check(check));
             }
         }
+        first
     }
 }
 
@@ -372,10 +387,21 @@ impl Connection for Headless<Observed> {
                 )));
             }
         }
-        self.end_checks(checks, &mut unpassed);
+        let mut first = self.end_checks(checks, &mut unpassed);
         // Close the window and retire the runtime, then let the agent go.
-        drop(self.host.take());
-        drop(self.attached.agent.take());
+        first.retire(self.host.take());
+        first.retire(self.attached.agent.take());
+        if first.is_held() {
+            // The panic is the test's failure; what the checks before it found goes to the
+            // test's output, since a panic carries no report.
+            write_report(&TestReport {
+                unpassed,
+                soft: Vec::new(),
+                skipped: None,
+            });
+            first.resume();
+            return Vec::new();
+        }
         unpassed
     }
 }

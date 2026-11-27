@@ -582,3 +582,100 @@ fn an_ambiguous_read_counts_every_match_and_names_ten() {
     drop(diagnosis);
     t.finish();
 }
+
+/// A soft failure a panic in the `checks` body left unraised is written to the test's output when
+/// the test ends with `finish_unchecked`, which runs no end checks but loses no failure.
+///
+/// Fails against a `finish_unchecked` that drops the report's soft failures.
+#[test]
+fn finish_unchecked_writes_a_soft_failure_left_unraised() {
+    let ((), log) = capture(|| {
+        let mut t = Tester::mount(Text::new("Shown"));
+        let caught = catch_unwind(AssertUnwindSafe(|| {
+            t.checks(|c| {
+                c.expect(&find::text("Missing"), matcher::exists());
+                panic!("the body fails after a soft failure");
+            });
+        }));
+        assert!(caught.is_err());
+        t.finish_unchecked("the body's panic is the failure under test");
+    });
+    let unraised: Vec<&str> = log
+        .records()
+        .iter()
+        .filter(|record| record.message == "a soft failure was never raised")
+        .filter_map(|record| record.field("failure"))
+        .collect();
+    assert!(
+        unraised.len() == 1 && unraised[0].contains("Missing"),
+        "{log}"
+    );
+}
+
+/// A value whose destructor panics: what an application's state may hold.
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        panic!("a drop failed");
+    }
+}
+
+/// Holds a [`PanicsOnDrop`] in its state, so the state's drop panics as the end unmounts it.
+#[derive(Clone, StatefulView)]
+struct PanicsOnDispose;
+
+struct PanicsOnDisposeState {
+    _held: PanicsOnDrop,
+}
+
+impl StatefulView for PanicsOnDispose {
+    type State = PanicsOnDisposeState;
+
+    fn create_state(&self, _ctx: &dyn LifecycleContext) -> Self::State {
+        PanicsOnDisposeState {
+            _held: PanicsOnDrop,
+        }
+    }
+}
+
+impl ViewState<PanicsOnDispose> for PanicsOnDisposeState {
+    fn build(&self, _view: &PanicsOnDispose, _ctx: &dyn BuildContext) -> impl IntoView {
+        Text::new("Disposing")
+    }
+}
+
+/// A panic in the application's code as the end unmounts the root is the test's failure, raised
+/// after the end still releases the key the test left down, and what the checks before it found
+/// (an unnamed field failing the audit) is written to the test's output.
+///
+/// Fails against an end whose unmount unwinds past the release and the report of the audit.
+#[test]
+fn a_panic_as_the_root_unmounts_still_releases_and_keeps_the_audit() {
+    let heard = Rc::new(RefCell::new(Vec::new()));
+    let (caught, log) = capture(|| {
+        let mut t = Tester::mount(flui_widgets::Column::new((
+            WindowKeys {
+                heard: Rc::clone(&heard),
+            },
+            PanicsOnDispose,
+            SizedBox::new(200.0, 40.0).child(flui_widgets::EditableText::new(
+                flui_widgets::TextEditingController::new(),
+                flui_interaction::focus::FocusNode::with_debug_label("unnamed"),
+            )),
+        )));
+        t.connection_mut()
+            .perform(&shift_down())
+            .expect("the agent presses Shift");
+        catch_unwind(AssertUnwindSafe(move || t.try_finish()))
+    });
+    let payload = caught.expect_err("the drop's panic fails the end");
+    let message = payload_text(&*payload).unwrap_or_default().to_owned();
+    assert!(message.contains("a drop failed"), "{message}");
+    assert_eq!(
+        *heard.borrow(),
+        ["down Shift^", "up Shift"],
+        "the end released the key after the panic"
+    );
+    assert_eq!(unpassed_checks(&log), ["audit"], "{log}");
+}

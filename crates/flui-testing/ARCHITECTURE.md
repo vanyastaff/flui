@@ -97,7 +97,9 @@ Its frame driver is `HeadlessHost`, which pumps a
   bridge carries no activity results: a test of a widget that reaches
   `flui::native` or an activity result runs on `flui_app::testing`
   ([gap](../../docs/gaps.md#the-headless-host-lacks-the-runners-host-bridge-and-its-owner-turn-rows-run-only-headless)).
-- **A phone's trip is delivered in a phone's order.** `Tester::background`
+- **A phone's trip is delivered in a phone's order.** The deprecated
+  `tester::Tester::background` (the scenario tester has no phone trip yet;
+  [gaps](../../docs/gaps.md#accepted-adr-sections-not-built-yet))
   reports focus lost, execution suspended, hidden, then the session's
   `Ending` (the session-ended notice, then the documents' write) with the
   window kept open, as Android's `onPause`/`onStop` and a UIKit scene entering
@@ -237,10 +239,18 @@ Its frame driver is `HeadlessHost`, which pumps a
   says why, and releases: through `Connection::finish` with
   `EndChecks::none()`, or on an unwinding thread through the host's own drop.
   `Drop` writes what it found as `tracing` events and to stderr and raises
-  nothing. Tests: `a_caught_panic_then_drop_skips_the_end_checks`,
+  nothing; `finish_unchecked` writes the soft failures left unraised the same
+  way. A panic of the application's code as the root unmounts (a `Drop` of
+  its state) is held while the lease is still released and its turns run;
+  the checks after it are not made, what the checks before it found is
+  written, and the panic is resumed as the test's failure. Tests:
+  `a_caught_panic_then_drop_skips_the_end_checks`,
   `an_error_through_the_question_mark_then_drop_skips_the_end_checks`,
   `an_expected_error_dropped_before_a_leaked_ticker_reports_the_ticker`,
-  `a_test_that_ends_holding_a_key_passes_its_end_checks`.
+  `a_test_that_ends_holding_a_key_passes_its_end_checks`,
+  `a_kept_error_skips_the_end_checks_only_when_the_tester_drops`,
+  `finish_unchecked_writes_a_soft_failure_left_unraised`,
+  `a_panic_as_the_root_unmounts_still_releases_and_keeps_the_audit`.
 - **A headless root is the root a runner attaches.** `HeadlessHost::attach`
   and `attach_to` pass the view through `flui_widgets::app_root`, the one
   function `flui-app`'s runners call, before the UI runtime adds its scopes,
