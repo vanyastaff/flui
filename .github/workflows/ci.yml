@@ -480,6 +480,7 @@ jobs:
               esac
             done <<< "$files"
           fi
+          lane=full # TEMPORARY: full lane on this PR, reverted before the merge
           echo "lane=$lane" >> "$GITHUB_OUTPUT"
           echo "event=$EVENT lane=$lane"
 
