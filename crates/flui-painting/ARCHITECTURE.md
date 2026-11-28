@@ -896,7 +896,10 @@ The feed keeps what it delivered in its `HostFaceCache`: a development restart
 builds the later application's fresh collection from it, with no second scan,
 and one built before the feed lands is the collection the feed then feeds
 (ADR-0393 §4; `a_collection_from_the_cache_holds_the_hosts_faces_alone`,
-`a_collection_from_a_waiting_cache_is_the_one_fed`).
+`a_collection_from_a_waiting_cache_is_the_one_fed`). Those faces are
+registered without a second trial read, since the feed read each once; a
+rebuild that panics is contained by the restart, which keeps the earlier
+collection.
 Each source is read once on a scratch collection before it is registered, so
 a file that panics on every read is skipped; a file replaced between that
 read and the registration is not covered. The scan is fontdb's: the platform's font

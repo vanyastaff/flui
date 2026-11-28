@@ -144,4 +144,6 @@
   `Restarted` at once and send a later failure to the window-error observer.
 - **`flui-app`**: a development restart gives the later application a fresh font collection: the
   bundled faces and the host's, without a new scan. A face the earlier application registered no
-  longer stays resolvable after it, and a face registered again is not held twice.
+  longer stays resolvable after it, and the bytes the later application registers again are
+  not held twice. A family it registers that the host also has now joins the host's family,
+  where at a start the host's copy is skipped.

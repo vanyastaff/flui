@@ -300,8 +300,12 @@ fn retire_application() -> Option<KeptMain> {
     let scope = APP_RUNTIME.with(|slot| std::mem::take(&mut slot.borrow_mut().application));
     first.contain(|| drop(scope));
     // The collection is add-only, so the later application gets a fresh one:
-    // the faces it resolves are the bundled ones, the host's and its own.
-    let renewed = APP_RUNTIME.with(|slot| slot.borrow().renew_font_collection());
+    // the faces it resolves are the bundled ones, the host's and its own. A
+    // rebuild that panics (a host file that fails to parse) keeps the earlier
+    // collection.
+    let renewed = first
+        .contain(|| APP_RUNTIME.with(|slot| slot.borrow().renew_font_collection()))
+        .flatten();
     if let Some(took) = renewed {
         tracing::debug!(
             took_ms = took.as_secs_f64() * 1000.0,

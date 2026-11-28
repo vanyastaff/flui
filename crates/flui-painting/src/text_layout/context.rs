@@ -427,7 +427,10 @@ impl HostFontFeed {
                 locale: locale.clone(),
             };
             if let Some(ask) = self.ask {
-                order.set_system_fallback(&ask_contained(ask, &locale));
+                let answer = ask_contained(ask, &locale);
+                order.set_system_fallback(&answer);
+                #[cfg(not(feature = "bundled-fonts"))]
+                self.cache.answered(answer);
             }
             return order;
         }
@@ -525,6 +528,11 @@ enum CacheState {
     Delivered {
         faces: Arc<HostFaces>,
         locale: String,
+        /// The host's own fallback answer, where the feed asked for it only
+        /// after the faces were fed (without `bundled-fonts`, the faces are
+        /// fed before `with_host_feed` returns): a fresh collection installs
+        /// it as the feed did. `None` where `faces` carries it.
+        answer: Option<SystemFallback>,
     },
 }
 
@@ -544,7 +552,20 @@ impl HostFaceCache {
 
     #[cfg(not(feature = "bundled-fonts"))]
     fn delivered(faces: Arc<HostFaces>, locale: String) -> Self {
-        Self::holding(CacheState::Delivered { faces, locale })
+        Self::holding(CacheState::Delivered {
+            faces,
+            locale,
+            answer: None,
+        })
+    }
+
+    /// Keeps the host's fallback answer the feed installed after the faces.
+    #[cfg(not(feature = "bundled-fonts"))]
+    fn answered(&self, system: SystemFallback) {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if let CacheState::Delivered { answer, .. } = &mut *state {
+            *answer = Some(system);
+        }
     }
 
     /// A fresh collection, and the fallback order that writes it.
@@ -570,22 +591,36 @@ impl HostFaceCache {
                     *target = fonts.clone();
                     return (fonts, None);
                 }
-                CacheState::Delivered { faces, locale } => (Arc::clone(faces), locale.clone()),
+                CacheState::Delivered {
+                    faces,
+                    locale,
+                    answer,
+                } => (Arc::clone(faces), locale.clone(), answer.clone()),
             }
         };
-        let (faces, locale) = delivered;
+        let (faces, locale, answer) = delivered;
         let fonts = FontCollection(Arc::new(FontCollectionInner::build(Some(&faces))));
-        let order = FallbackOrder {
+        let mut order = FallbackOrder {
             fonts: fonts.clone(),
             locale,
         };
+        if let Some(answer) = answer {
+            // Before anyone reads the collection: the generation it raises
+            // announces nothing.
+            let _changed = order.set_system_fallback(&answer);
+        }
         (fonts, Some(order))
     }
 
     /// Keeps what the feed delivered, and returns the collection it feeds.
     fn deliver(&self, faces: Arc<HostFaces>, locale: String) -> FontCollection {
         let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        match std::mem::replace(&mut *state, CacheState::Delivered { faces, locale }) {
+        let delivered = CacheState::Delivered {
+            faces,
+            locale,
+            answer: None,
+        };
+        match std::mem::replace(&mut *state, delivered) {
             CacheState::Waiting(target) => target,
             CacheState::Delivered { .. } => {
                 unreachable!("BUG: a cache is delivered by the one feed it was built with")

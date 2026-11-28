@@ -70,6 +70,13 @@ pub(crate) struct SharedEngineServices {
     pub(super) fonts: RefCell<FontCollection>,
     /// The host's faces as the feed delivered them, which a fresh collection
     /// is built from without scanning the host again.
+    #[cfg_attr(
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "a development restart runs on the desktop loop alone"
+        )
+    )]
     host_faces: HostFaceCache,
     /// The feed that adds the host's faces to `fonts`, until
     /// [`AppRuntime::resolved_services`] launches it.
@@ -797,6 +804,13 @@ impl AppRuntime {
     ///
     /// Returns how long the rebuild took: it parses every font file the feed
     /// found again.
+    #[cfg_attr(
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "a development restart runs on the desktop loop alone"
+        )
+    )]
     pub(super) fn renew_font_collection(&self) -> Option<std::time::Duration> {
         let services = self.services.get()?;
         let started = web_time::Instant::now();
@@ -2026,9 +2040,6 @@ mod font_collection_tests {
         );
     }
 
-    /// Two runtimes, as on two owner threads, each hold a collection of
-    /// their own. Fails if the services share one collection between
-    /// runtimes.
     const PROBE_SANS: &[u8] =
         include_bytes!("../../../flui-painting/assets/fonts/probe-sans-400.ttf");
 
@@ -2109,6 +2120,67 @@ mod font_collection_tests {
         assert!(runtime.renew_font_collection().is_none());
     }
 
+    /// A batch that carries a restart's order serves it at the owner's last
+    /// tag: one the `Serve` carries, else one sent before it in the batch,
+    /// else the locale the replaced order followed. Fails if the fresh order
+    /// stays at the feed's locale, or a tag sent before it is dropped.
+    fn a_served_order_follows_the_owners_last_tag() {
+        let fresh_order = || {
+            let (_fonts, feed) = FontCollection::with_host_feed();
+            feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run()
+        };
+        let (ask, asked) = host_answering_ja();
+        let cases: [(&str, Vec<Request>); 2] = [
+            (
+                "a tag before the order",
+                vec![
+                    Request::Follow("ja-JP".to_owned()),
+                    Request::Serve {
+                        order: fresh_order(),
+                        follows: None,
+                    },
+                ],
+            ),
+            (
+                "a tag the order carries",
+                vec![Request::Serve {
+                    order: fresh_order(),
+                    follows: Some("ja-JP".to_owned()),
+                }],
+            ),
+        ];
+        for (case, batch) in cases {
+            let mut order = fresh_order();
+            assert!(
+                fallback_rescan::apply(&mut order, batch.into_iter(), &ask),
+                "{case}: the owner is told"
+            );
+            assert_eq!(order.locale(), "ja-JP", "{case}");
+        }
+        let mut order = fresh_order();
+        assert!(fallback_rescan::apply(
+            &mut order,
+            std::iter::once(Request::Follow("ja-JP".to_owned())),
+            &ask
+        ));
+        assert!(
+            fallback_rescan::apply(
+                &mut order,
+                std::iter::once(Request::Serve {
+                    order: fresh_order(),
+                    follows: None
+                }),
+                &ask
+            ),
+            "the fresh order is installed at the replaced one's locale"
+        );
+        assert_eq!(order.locale(), "ja-JP", "with no tag sent");
+        assert_eq!(*asked.lock(), ["ja-JP", "ja-JP", "ja-JP", "ja-JP"]);
+    }
+
+    /// Two runtimes, as on two owner threads, each hold a collection of
+    /// their own. Fails if the services share one collection between
+    /// runtimes.
     fn two_runtimes_hold_different_collections() {
         let one = AppRuntime::new();
         let two = AppRuntime::new();
@@ -2168,6 +2240,10 @@ mod font_collection_tests {
                 (
                     "nothing_is_renewed_before_the_services_resolve",
                     nothing_is_renewed_before_the_services_resolve as fn(),
+                ),
+                (
+                    "a_served_order_follows_the_owners_last_tag",
+                    a_served_order_follows_the_owners_last_tag as fn(),
                 ),
             ],
         );

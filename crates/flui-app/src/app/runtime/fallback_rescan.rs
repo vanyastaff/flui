@@ -7,10 +7,10 @@
 //! installs it, and the owner is woken when the order changed, so every UI
 //! runtime lays out again the text it measured before. A development
 //! restart builds a fresh collection (ADR-0393 §4) and sends its order: the
-//! thread serves that one from then on, at the locale the replaced one
-//! followed. Where the feed ran on the owner thread (wasm32, or no thread
-//! could start), the order stays with the owner and each request is served
-//! there.
+//! thread serves that one from then on, at the locale the owner last asked
+//! for, else the one the replaced order followed. Where the feed ran on the
+//! owner thread (wasm32, or no thread could start), the order stays with
+//! the owner and each request is served there.
 //!
 //! The order follows the host's first preferred locale. The collection is the
 //! app's one, so a window whose app resolves another locale keeps the host's
@@ -31,8 +31,19 @@ pub(crate) type AskHost = Arc<dyn Fn(&str) -> SystemFallback + Send + Sync>;
 pub(crate) enum Request {
     /// Follow this locale tag, the app's locale now.
     Follow(String),
-    /// Serve this order, a fresh collection's, in place of the one served.
-    Serve(FallbackOrder),
+    /// Serve this order, a fresh collection's, in place of the one served,
+    /// at the tag the owner sent last (`None` when it sent none).
+    #[cfg_attr(
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "a development restart runs on the desktop loop alone"
+        )
+    )]
+    Serve {
+        order: FallbackOrder,
+        follows: Option<String>,
+    },
 }
 
 impl Request {
@@ -42,7 +53,7 @@ impl Request {
     pub(crate) fn into_followed(self) -> Option<String> {
         match self {
             Self::Follow(tag) => Some(tag),
-            Self::Serve(_) => None,
+            Self::Serve { .. } => None,
         }
     }
 }
@@ -89,10 +100,19 @@ impl FallbackRescan {
     }
 
     /// Has `order`, a fresh collection's, served from now on, at the locale
-    /// the order it replaces followed. Returns whether an order served here
-    /// changed, as [`Self::follow`] does.
+    /// the owner asked for last, or the one the order it replaces followed
+    /// when it asked for none. Returns whether an order served here changed,
+    /// as [`Self::follow`] does.
+    #[cfg_attr(
+        all(target_arch = "wasm32", not(test)),
+        expect(
+            dead_code,
+            reason = "a development restart runs on the desktop loop alone"
+        )
+    )]
     pub(crate) fn replace_order(&self, order: FallbackOrder) -> bool {
-        self.send(Request::Serve(order))
+        let follows = self.sent.borrow().clone();
+        self.send(Request::Serve { order, follows })
     }
 
     fn send(&self, request: Request) -> bool {
@@ -150,10 +170,11 @@ pub(crate) fn serve(
 }
 
 /// Applies `requests` to `order` in the order sent: a fresh collection's
-/// order replaces it and keeps the locale the replaced one followed, unless
-/// a later tag asks for another. The newest locale is then installed once.
-/// Returns whether the owner has to be told ([`install`]).
-fn apply(
+/// order replaces it and is served at the tag the owner sent last, or at the
+/// locale the replaced one followed when it sent none; a later tag asks for
+/// another. The newest locale is then installed once. Returns whether the
+/// owner has to be told ([`install`]).
+pub(super) fn apply(
     order: &mut FallbackOrder,
     requests: impl Iterator<Item = Request>,
     ask: &AskHost,
@@ -162,9 +183,18 @@ fn apply(
     for request in requests {
         match request {
             Request::Follow(next) => tag = Some(next),
-            Request::Serve(fresh) => {
-                let followed = std::mem::replace(order, fresh).locale().to_owned();
-                tag.get_or_insert(followed);
+            Request::Serve {
+                order: fresh,
+                follows,
+            } => {
+                // The owner's last tag, even one whose install on the
+                // replaced order panicked part way and left its locale behind.
+                let replaced = std::mem::replace(order, fresh);
+                tag = Some(
+                    follows
+                        .or(tag)
+                        .unwrap_or_else(|| replaced.locale().to_owned()),
+                );
             }
         }
     }
