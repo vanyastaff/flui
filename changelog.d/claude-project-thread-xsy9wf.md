@@ -51,6 +51,11 @@
   configured that the restart left as the process started it: its executors, which a process
   restart applies.
 
+- **`flui-painting`**: `HostFontFeed::cache` returns the `HostFaceCache` the feed keeps what it
+  delivered in, and `HostFaceCache::collection` builds a fresh collection from it with no second
+  scan of the host, with the `FallbackOrder` that writes it. One built before the feed lands is
+  the collection the feed feeds.
+
 ### Changed
 
 - **`flui-cli`**: a project `flui create` writes declares no `cdylib`: the library is an rlib, and
@@ -137,3 +142,6 @@
   later owner turn reports its outcome once that install settles: `Restarted` when it commits,
   `RestartFailed` when it fails, with what the restart composed retired. It used to report
   `Restarted` at once and send a later failure to the window-error observer.
+- **`flui-app`**: a development restart gives the later application a fresh font collection: the
+  bundled faces and the host's, without a new scan. A face the earlier application registered no
+  longer stays resolvable after it, and a face registered again is not held twice.

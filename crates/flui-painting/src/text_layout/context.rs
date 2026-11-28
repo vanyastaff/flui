@@ -30,10 +30,15 @@
 
 use std::borrow::Cow;
 use std::fmt;
+#[expect(
+    clippy::disallowed_types,
+    reason = "the host face cache's lock, off the text path (ADR-0092 §3)"
+)]
+use std::sync::Mutex;
 #[cfg(any(test, feature = "testing"))]
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, PoisonError, Weak};
 
 use flui_foundation::memory::MemoryPressureLevel;
 
@@ -123,12 +128,23 @@ impl FontCollection {
     /// ([`HostFontFeed::with_system_fallback`]).
     pub fn with_host_feed() -> (Self, HostFontFeed) {
         #[cfg(feature = "bundled-fonts")]
-        let (fonts, faces_fed) = (Self::new(), false);
+        let (fonts, cache) = {
+            let fonts = Self::new();
+            let cache = HostFaceCache::waiting(fonts.clone());
+            (fonts, cache)
+        };
         #[cfg(not(feature = "bundled-fonts"))]
-        let (fonts, faces_fed) = (Self::with_host_fonts(&HostFonts::scan()), true);
+        let (fonts, cache) = {
+            let host = HostFonts::scan();
+            let locale = host.locale().to_owned();
+            let faces = Arc::new(host.faces());
+            let fonts = Self(Arc::new(FontCollectionInner::build(Some(&faces))));
+            (fonts, HostFaceCache::delivered(faces, locale))
+        };
         let feed = HostFontFeed {
+            faces_fed: cfg!(not(feature = "bundled-fonts")),
             fonts: fonts.clone(),
-            faces_fed,
+            cache,
             ask: None,
             #[cfg(any(test, feature = "testing"))]
             host: None,
@@ -362,8 +378,13 @@ type AskSystemFallback = Box<dyn FnOnce(&str) -> SystemFallback + Send>;
 /// leaves the collection with the faces it had.
 #[must_use = "the host's faces reach the collection only when the feed runs"]
 pub struct HostFontFeed {
-    /// The collection to feed.
+    /// The collection the feed was built with, whose order it installs when
+    /// its faces are fed already.
     fonts: FontCollection,
+    /// Where the faces it delivers are kept, and the collection it feeds:
+    /// [`HostFaceCache::collection`] may have replaced the one it was built
+    /// with before it lands.
+    cache: HostFaceCache,
     /// Whether the host's faces are in the collection already, so only the
     /// host's fallback answer is left to install.
     faces_fed: bool,
@@ -425,14 +446,20 @@ impl HostFontFeed {
         };
         #[cfg(not(any(test, feature = "testing")))]
         let host = scan(self.ask);
-        let order = FallbackOrder {
-            fonts: self.fonts,
-            locale: host.locale().to_owned(),
-        };
-        let faces = host.faces();
+        let locale = host.locale().to_owned();
+        let faces = Arc::new(host.faces());
         drop(host);
+        let fonts = self.cache.deliver(Arc::clone(&faces), locale.clone());
+        let order = FallbackOrder { fonts, locale };
         order.fonts.feed_shared(&faces);
         order
+    }
+
+    /// Where the faces this feed delivers are kept, for a later collection
+    /// built from them ([`HostFaceCache::collection`]).
+    #[must_use]
+    pub fn cache(&self) -> HostFaceCache {
+        self.cache.clone()
     }
 
     /// This feed, asking `ask` which faces the host falls back to before it
@@ -462,6 +489,120 @@ impl fmt::Debug for HostFontFeed {
             .field("faces_fed", &self.faces_fed)
             .field("asks", &self.ask.is_some())
             .finish_non_exhaustive()
+    }
+}
+
+/// The host's faces as a [`HostFontFeed`] delivered them, kept so that a
+/// later collection is built from them without scanning the host again.
+///
+/// A development restart builds a fresh collection for the later
+/// application (ADR-0393 §4): the collection is add-only, so a face the
+/// earlier application registered would otherwise stay resolvable. The
+/// host's faces do not change across a restart, so the fresh one takes the
+/// faces the feed found rather than a new scan, and shows the host's
+/// families from its first frame.
+///
+/// A clone is the same cache. `Send` and `Sync`: the feed fills it on its
+/// own thread.
+#[derive(Clone)]
+#[expect(
+    clippy::disallowed_types,
+    reason = "off the text path (ADR-0092 §3): taken by the host feed once as it lands and by a development restart, never while measuring, shaping or painting"
+)]
+pub struct HostFaceCache(Arc<Mutex<CacheState>>);
+
+enum CacheState {
+    /// The feed has not landed: it feeds this collection when it does.
+    #[cfg_attr(
+        not(feature = "bundled-fonts"),
+        expect(
+            dead_code,
+            reason = "without bundled faces the feed lands before `with_host_feed` returns"
+        )
+    )]
+    Waiting(FontCollection),
+    /// What the feed delivered, and the locale its fallback order is for.
+    Delivered {
+        faces: Arc<HostFaces>,
+        locale: String,
+    },
+}
+
+impl HostFaceCache {
+    #[expect(
+        clippy::disallowed_types,
+        reason = "the cache's own lock, off the text path (ADR-0092 §3)"
+    )]
+    fn holding(state: CacheState) -> Self {
+        Self(Arc::new(Mutex::new(state)))
+    }
+
+    #[cfg(feature = "bundled-fonts")]
+    fn waiting(fonts: FontCollection) -> Self {
+        Self::holding(CacheState::Waiting(fonts))
+    }
+
+    #[cfg(not(feature = "bundled-fonts"))]
+    fn delivered(faces: Arc<HostFaces>, locale: String) -> Self {
+        Self::holding(CacheState::Delivered { faces, locale })
+    }
+
+    /// A fresh collection, and the fallback order that writes it.
+    ///
+    /// Once the feed has landed it holds [`FontCollection::new`]'s faces and
+    /// then the host's faces, generics and fallback lists the feed delivered,
+    /// as [`FontCollection::with_host_fonts`] adds them; the order returned
+    /// is for the host's locale when the feed ran, and whoever served the
+    /// earlier collection's order takes it on. That parses every font file
+    /// the feed found again, without the scan.
+    ///
+    /// Before the feed has landed it is [`FontCollection::new`]'s
+    /// collection, which the feed feeds instead of the collection it was
+    /// built with: the order is then the one [`HostFontFeed::run`] returns,
+    /// and `None` here.
+    #[must_use]
+    pub fn collection(&self) -> (FontCollection, Option<FallbackOrder>) {
+        let delivered = {
+            let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+            match &mut *state {
+                CacheState::Waiting(target) => {
+                    let fonts = FontCollection::new();
+                    *target = fonts.clone();
+                    return (fonts, None);
+                }
+                CacheState::Delivered { faces, locale } => (Arc::clone(faces), locale.clone()),
+            }
+        };
+        let (faces, locale) = delivered;
+        let fonts = FontCollection(Arc::new(FontCollectionInner::build(Some(&faces))));
+        let order = FallbackOrder {
+            fonts: fonts.clone(),
+            locale,
+        };
+        (fonts, Some(order))
+    }
+
+    /// Keeps what the feed delivered, and returns the collection it feeds.
+    fn deliver(&self, faces: Arc<HostFaces>, locale: String) -> FontCollection {
+        let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        match std::mem::replace(&mut *state, CacheState::Delivered { faces, locale }) {
+            CacheState::Waiting(target) => target,
+            CacheState::Delivered { .. } => {
+                unreachable!("BUG: a cache is delivered by the one feed it was built with")
+            }
+        }
+    }
+}
+
+impl fmt::Debug for HostFaceCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let delivered = matches!(
+            *self.0.lock().unwrap_or_else(PoisonError::into_inner),
+            CacheState::Delivered { .. }
+        );
+        f.debug_struct("HostFaceCache")
+            .field("delivered", &delivered)
+            .finish()
     }
 }
 

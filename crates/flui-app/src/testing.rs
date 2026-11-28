@@ -229,6 +229,14 @@ impl HeadlessRunHandle {
         self.windows.all()
     }
 
+    /// The font collection the loop's UI runtimes shape over now: a test
+    /// reads which families it holds (`flui_painting::testing`). Called on
+    /// the thread the run was started on, which holds the loop.
+    #[must_use]
+    pub fn font_collection(&self) -> flui_painting::FontCollection {
+        crate::app::runner::runtime_font_collection()
+    }
+
     /// The renderer `window` presents with, while the run lasts and after:
     /// `None` for a window that opened without one.
     #[must_use]

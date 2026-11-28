@@ -24,7 +24,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 
 use flui_native::OwnerPlatform;
-use flui_painting::{FallbackOrder, FontCollection, HostFontFeed};
+use flui_painting::{FallbackOrder, FontCollection, HostFaceCache, HostFontFeed};
 #[cfg(target_os = "android")]
 use flui_platform::WindowExecutionState;
 use flui_platform::{PlatformWindow, RedrawRequester};
@@ -37,7 +37,9 @@ use super::lifecycle::{
 };
 use super::runner::{FontRegistrationError, InstalledHost};
 pub(crate) use application_scope::ApplicationScope;
-use fallback_rescan::{AskHost, FallbackRescan};
+#[cfg(test)]
+pub(super) use fallback_rescan::Request as FallbackRequest;
+use fallback_rescan::{AskHost, FallbackRescan, Request};
 #[cfg(not(target_arch = "wasm32"))]
 use flui_runtime::execution::SpawnError;
 use flui_runtime::execution::{ExecutionServices, HostExecutors};
@@ -62,7 +64,13 @@ pub(crate) struct SharedEngineServices {
     /// built on this thread gets a clone (`UiRuntime::try_new`'s `fonts`) and owns
     /// a `TextContext` over it, so a face registered here reaches every
     /// UI runtime, and the host's faces are read once per app, not per UI runtime.
-    pub(super) fonts: FontCollection,
+    /// A development restart replaces it with a fresh one
+    /// ([`AppRuntime::renew_font_collection`]), whose registrations are the
+    /// later application's alone.
+    pub(super) fonts: RefCell<FontCollection>,
+    /// The host's faces as the feed delivered them, which a fresh collection
+    /// is built from without scanning the host again.
+    host_faces: HostFaceCache,
     /// The feed that adds the host's faces to `fonts`, until
     /// [`AppRuntime::resolved_services`] launches it.
     host_feed: Cell<Option<HostFontFeed>>,
@@ -71,7 +79,7 @@ pub(crate) struct SharedEngineServices {
     fallback: FallbackRescan,
     /// The requests the feed's thread serves once it has run, launched with
     /// the feed.
-    fallback_requests: Cell<Option<Receiver<String>>>,
+    fallback_requests: Cell<Option<Receiver<Request>>>,
     /// The host's fallback query, asked by the feed and by every rescan.
     ask_host: AskHost,
 }
@@ -90,8 +98,9 @@ impl SharedEngineServices {
         // (`AppRuntime::resolved_services` launches them), and the faces they
         // add are announced like a registration's: the collection's
         // generation rises once, and every ui_runtime lays out again the text it
-        // measured before. The scan is a value the feed drops once it has
-        // fed the collection; nothing process-global keeps it. The feed asks
+        // measured before. The feed drops the scan once it has fed the
+        // collection; the faces it found stay in `host_faces`, which these
+        // services own, for a restart's fresh collection. The feed asks
         // the host which faces it falls back on, on its own thread, and puts
         // that answer ahead of FLUI's tables (ADR-0271).
         // The thread the feed runs on keeps the fallback order it hands
@@ -103,9 +112,11 @@ impl SharedEngineServices {
             move |locale: &str| ask(locale)
         });
         let (fallback, requests) = FallbackRescan::new();
+        let host_faces = feed.cache();
 
         Self {
-            fonts,
+            fonts: RefCell::new(fonts),
+            host_faces,
             host_feed: Cell::new(Some(feed)),
             fallback,
             fallback_requests: Cell::new(Some(requests)),
@@ -679,7 +690,7 @@ impl AppRuntime {
         for font_bytes in pending {
             // Checked when it was accepted; a refusal now would be the two
             // sides disagreeing with the check, and refuses on both.
-            if let Err(error) = services.fonts.register_font(font_bytes) {
+            if let Err(error) = services.fonts.borrow().register_font(font_bytes) {
                 tracing::warn!(%error, "a font registered before the first ui_runtime was refused");
             }
         }
@@ -687,7 +698,8 @@ impl AppRuntime {
             services.fallback.follow(tag);
         }
         if let Some(feed) = services.host_feed.take() {
-            self.fonts_announced.set(services.fonts.generation());
+            self.fonts_announced
+                .set(services.fonts.borrow().generation());
             let requests = services
                 .fallback_requests
                 .take()
@@ -755,20 +767,52 @@ impl AppRuntime {
         let Some(services) = self.services.get() else {
             return false;
         };
-        let now = services.fonts.generation();
+        let now = services.fonts.borrow().generation();
         self.fonts_announced.replace(now) != now
     }
 
     /// The app's font collection, for `UiRuntime::try_new`'s `fonts`: a clone of
     /// the one [`SharedEngineServices`] owns, resolving the services first if
-    /// no UI runtime has been built yet. Every call returns the same collection.
+    /// no UI runtime has been built yet. Every call returns the same collection
+    /// until a development restart renews it ([`Self::renew_font_collection`]).
     ///
     /// Takes `&self` (`OnceCell::get_or_init` needs no more), so a runner
     /// reaches it through the same shared `APP_RUNTIME` borrow as the
     /// clipboard. A panic inside the resolution leaves the cell empty and
     /// the next call retries, as [`Self::ensure_services`] does.
     pub(super) fn font_collection(&self) -> FontCollection {
-        self.resolved_services().fonts.clone()
+        self.resolved_services().fonts.borrow().clone()
+    }
+
+    /// Replaces the app's font collection with a fresh one for a
+    /// development restart's later application (ADR-0393 §4): the bundled
+    /// faces and the host's faces as the feed delivered them, or, before the
+    /// feed has landed, the bundled faces alone, which the feed then feeds.
+    /// None of the earlier application's registrations carry over: they were
+    /// made on the collection it leaves, and the later application makes its
+    /// own. Called once the earlier application's UI runtimes are gone, so
+    /// no text context still shapes over the earlier collection. Nothing
+    /// before the services resolve, since the first UI runtime builds the
+    /// collection then.
+    ///
+    /// Returns how long the rebuild took: it parses every font file the feed
+    /// found again.
+    pub(super) fn renew_font_collection(&self) -> Option<std::time::Duration> {
+        let services = self.services.get()?;
+        let started = web_time::Instant::now();
+        let (fonts, order) = services.host_faces.collection();
+        let took = started.elapsed();
+        let earlier = services.fonts.replace(fonts);
+        if let Some(order) = order {
+            // Whoever served the earlier order serves this one from now on;
+            // one served here installs at once, before any UI runtime reads
+            // the collection, so there is nothing to wake.
+            let _changed = services.fallback.replace_order(order);
+        }
+        self.fonts_announced
+            .set(services.fonts.borrow().generation());
+        drop(earlier);
+        Some(took)
     }
 
     /// Registers `font_bytes` on the app's font collection, which measures,
@@ -795,7 +839,7 @@ impl AppRuntime {
             return Err(FontRegistrationError::AlreadyRegistered);
         }
         if let Some(services) = self.services.get() {
-            services.fonts.register_font(font_bytes)?;
+            services.fonts.borrow().register_font(font_bytes)?;
         } else {
             FontCollection::check_font(&font_bytes)?;
             self.application.fonts.borrow_mut().pending.push(font_bytes);
@@ -1529,10 +1573,10 @@ impl AppRuntime {
 /// `spawn_host_feed` has its own test.
 type LaunchHostFeed = fn(
     HostFontFeed,
-    Receiver<String>,
+    Receiver<Request>,
     AskHost,
     Arc<dyn Fn() + Send + Sync>,
-) -> Option<(FallbackOrder, Receiver<String>)>;
+) -> Option<(FallbackOrder, Receiver<Request>)>;
 
 #[cfg(not(test))]
 const LAUNCH_HOST_FEED: LaunchHostFeed = spawn_host_feed;
@@ -1545,7 +1589,7 @@ const LAUNCH_HOST_FEED: LaunchHostFeed = park_host_feed;
 #[cfg(test)]
 pub(super) struct ParkedHostFeed {
     pub(super) feed: HostFontFeed,
-    pub(super) requests: Receiver<String>,
+    pub(super) requests: Receiver<Request>,
     pub(super) ask: AskHost,
     pub(super) wake: Arc<dyn Fn() + Send + Sync>,
 }
@@ -1563,10 +1607,10 @@ thread_local! {
 #[cfg(test)]
 pub(super) fn park_host_feed(
     feed: HostFontFeed,
-    requests: Receiver<String>,
+    requests: Receiver<Request>,
     ask: AskHost,
     wake: Arc<dyn Fn() + Send + Sync>,
-) -> Option<(FallbackOrder, Receiver<String>)> {
+) -> Option<(FallbackOrder, Receiver<Request>)> {
     PARKED_HOST_FEEDS.with(|parked| {
         parked.borrow_mut().push(ParkedHostFeed {
             feed,
@@ -1604,10 +1648,10 @@ pub(super) fn take_parked_host_feeds() -> Vec<ParkedHostFeed> {
 )]
 fn spawn_host_feed(
     feed: HostFontFeed,
-    requests: Receiver<String>,
+    requests: Receiver<Request>,
     ask: AskHost,
     wake: Arc<dyn Fn() + Send + Sync>,
-) -> Option<(FallbackOrder, Receiver<String>)> {
+) -> Option<(FallbackOrder, Receiver<Request>)> {
     fn feed_then_wake(
         feed: HostFontFeed,
         wake: &(dyn Fn() + Send + Sync),
@@ -1629,7 +1673,7 @@ fn spawn_host_feed(
     {
         // The feed goes to the thread only once it has started, so a failed
         // start leaves it here to run inline.
-        let (send, receive) = std::sync::mpsc::channel::<(HostFontFeed, Receiver<String>)>();
+        let (send, receive) = std::sync::mpsc::channel::<(HostFontFeed, Receiver<Request>)>();
         let thread_wake = Arc::clone(&wake);
         let spawned = std::thread::Builder::new()
             .name("flui-host-fonts".to_owned())
@@ -1679,7 +1723,8 @@ impl Drop for AppRuntime {
 #[cfg(all(test, not(target_os = "ios")))]
 mod font_collection_tests {
     use flui_painting::testing::{
-        PROBE_MONO_100, feed_with_host, host_family_names, host_fed, host_fonts_from,
+        PROBE_MONO_100, collection_holds, feed_with_host, host_family_names, host_fed,
+        host_fonts_from,
     };
     use flui_painting::{FaceRef, SystemFallback};
 
@@ -1707,7 +1752,7 @@ mod font_collection_tests {
             "every ui_runtime must get the app's one font collection, not a fresh one per call"
         );
         assert!(
-            FontCollection::ptr_eq(&first, &runtime.ensure_services().fonts),
+            FontCollection::ptr_eq(&first, &runtime.ensure_services().fonts.borrow()),
             "the collection handed to ui_runtimes is the one the services own"
         );
         assert!(
@@ -1749,7 +1794,7 @@ mod font_collection_tests {
         });
 
         // No requests: the thread ends once the feed has landed.
-        let (_, requests) = std::sync::mpsc::channel::<String>();
+        let (_, requests) = std::sync::mpsc::channel::<Request>();
         let ask: AskHost = Arc::new(|locale: &str| SystemFallback::none(locale));
 
         assert!(
@@ -1972,12 +2017,98 @@ mod font_collection_tests {
         assert!(runtime.follow_locale(nested, "fr-FR".to_owned()).is_none());
         assert!(runtime.follow_locale(outer, "ja-JP".to_owned()).is_none());
 
-        assert_eq!(requests.try_iter().collect::<Vec<String>>(), ["fr-FR"]);
+        assert_eq!(
+            requests
+                .try_iter()
+                .filter_map(Request::into_followed)
+                .collect::<Vec<String>>(),
+            ["fr-FR"]
+        );
     }
 
     /// Two runtimes, as on two owner threads, each hold a collection of
     /// their own. Fails if the services share one collection between
     /// runtimes.
+    const PROBE_SANS: &[u8] =
+        include_bytes!("../../../flui-painting/assets/fonts/probe-sans-400.ttf");
+
+    /// A restart's fresh collection (ADR-0393 §4) holds the host's faces
+    /// as the feed delivered them and none the earlier application
+    /// registered, and the thread that served the earlier order serves its
+    /// order at the locale the earlier one followed. Nothing is announced:
+    /// no UI runtime measured over it yet. Fails if the collection is kept,
+    /// keeps a registered face, loses the host's, or its order stays at the
+    /// feed's locale.
+    fn a_renewed_collection_keeps_the_hosts_faces_and_drops_the_registered() {
+        let _ = take_parked_host_feeds();
+        let mut runtime = AppRuntime::new();
+        runtime
+            .register_font(Cow::Borrowed(PROBE_SANS))
+            .expect("the probe face is accepted");
+        let earlier = runtime.font_collection();
+        let ParkedHostFeed { feed, requests, .. } = take_parked_host_feeds()
+            .pop()
+            .expect("the services launched their feed");
+        let order = feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run();
+        let (ask, asked) = host_answering_ja();
+        let _ = runtime
+            .ensure_services()
+            .fallback
+            .keep_inline(order, requests, ask);
+        follow(&runtime, "ja-JP");
+        assert_eq!(*asked.lock(), ["ja-JP"]);
+        let _ = runtime.take_font_change();
+
+        let took = runtime.renew_font_collection();
+
+        assert!(took.is_some(), "resolved services renew their collection");
+        let fresh = runtime.font_collection();
+        assert!(!FontCollection::ptr_eq(&fresh, &earlier));
+        assert!(
+            collection_holds(&fresh, "FLUI Probe Mono"),
+            "the host's face"
+        );
+        assert!(
+            !collection_holds(&fresh, "FLUI Probe Sans"),
+            "the earlier application's registration stays behind"
+        );
+        assert_eq!(
+            *asked.lock(),
+            ["ja-JP", "ja-JP"],
+            "the fresh order is asked for the locale followed"
+        );
+        assert!(!runtime.take_font_change(), "nothing measured over it yet");
+    }
+
+    /// Renewed before the feed lands, the fresh collection is the one the
+    /// feed feeds, and the landing is announced as at a start. Fails if the
+    /// feed feeds the earlier collection, or the landing goes unannounced.
+    fn a_collection_renewed_before_the_feed_lands_is_fed() {
+        let _ = take_parked_host_feeds();
+        let runtime = AppRuntime::new();
+        let earlier = runtime.font_collection();
+        let ParkedHostFeed { feed, .. } = take_parked_host_feeds()
+            .pop()
+            .expect("the services launched their feed");
+        assert!(runtime.renew_font_collection().is_some());
+        let fresh = runtime.font_collection();
+        assert!(!host_fed(&fresh));
+
+        let order = feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run();
+
+        assert!(FontCollection::ptr_eq(order.fonts(), &fresh));
+        assert!(host_fed(&fresh));
+        assert!(!host_fed(&earlier));
+        assert!(runtime.take_font_change(), "the landing is announced");
+    }
+
+    /// Before the services resolve there is no collection to renew: the
+    /// first UI runtime builds it.
+    fn nothing_is_renewed_before_the_services_resolve() {
+        let runtime = AppRuntime::new();
+        assert!(runtime.renew_font_collection().is_none());
+    }
+
     fn two_runtimes_hold_different_collections() {
         let one = AppRuntime::new();
         let two = AppRuntime::new();
@@ -2025,6 +2156,18 @@ mod font_collection_tests {
                 (
                     "two_runtimes_hold_different_collections",
                     two_runtimes_hold_different_collections as fn(),
+                ),
+                (
+                    "a_renewed_collection_keeps_the_hosts_faces_and_drops_the_registered",
+                    a_renewed_collection_keeps_the_hosts_faces_and_drops_the_registered as fn(),
+                ),
+                (
+                    "a_collection_renewed_before_the_feed_lands_is_fed",
+                    a_collection_renewed_before_the_feed_lands_is_fed as fn(),
+                ),
+                (
+                    "nothing_is_renewed_before_the_services_resolve",
+                    nothing_is_renewed_before_the_services_resolve as fn(),
                 ),
             ],
         );

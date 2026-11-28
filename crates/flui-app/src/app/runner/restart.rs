@@ -234,7 +234,8 @@ fn restart(reload: &WorkerReload) -> Result<Unapplied, Failure> {
 /// then every UI runtime unmounts (each `State` disposed by the code that
 /// made it) and every window it opened closes, with no close request asked;
 /// then its flush, placements and services end and the scope drops in
-/// reverse build order. The first panic is logged and discarded.
+/// reverse build order, and the font collection it registered on gives way
+/// to a fresh one. The first panic is logged and discarded.
 ///
 /// Returns the main window, kept open for the next application: the
 /// controller's, or the one an earlier failed restart kept.
@@ -298,6 +299,15 @@ fn retire_application() -> Option<KeptMain> {
     );
     let scope = APP_RUNTIME.with(|slot| std::mem::take(&mut slot.borrow_mut().application));
     first.contain(|| drop(scope));
+    // The collection is add-only, so the later application gets a fresh one:
+    // the faces it resolves are the bundled ones, the host's and its own.
+    let renewed = APP_RUNTIME.with(|slot| slot.borrow().renew_font_collection());
+    if let Some(took) = renewed {
+        tracing::debug!(
+            took_ms = took.as_secs_f64() * 1000.0,
+            "rebuilt the font collection for the later application"
+        );
+    }
     // Its callback for opened files goes with it: a file opened before the
     // later application is composed is logged, as with no callback.
     let open_files =

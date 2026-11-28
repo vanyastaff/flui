@@ -44,7 +44,7 @@ pub(super) fn runtime_capabilities() -> flui_runtime::capability::CapabilityRegi
 /// `fonts` parameter (ADR-0092 §2). Same borrow rule as
 /// [`runtime_wake_callback`]. The first call on a thread resolves the shared
 /// engine services.
-pub(super) fn runtime_font_collection() -> flui_painting::FontCollection {
+pub(crate) fn runtime_font_collection() -> flui_painting::FontCollection {
     APP_RUNTIME.with(|slot| slot.borrow().font_collection())
 }
 

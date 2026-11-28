@@ -1254,14 +1254,29 @@ fn an_accepted_locale_reaches_the_host_font_feed() {
                 .pop()
                 .expect("the runtime launched its host feed when its services resolved");
             let mut seen = seen.borrow_mut();
-            seen.push(requests.try_iter().collect());
+            seen.push(
+                requests
+                    .try_iter()
+                    .filter_map(crate::app::runtime::FallbackRequest::into_followed)
+                    .collect(),
+            );
             super::super::host::refresh_preferences_with(in_locale("ja-JP"))?;
             super::super::host::refresh_preferences_with(|_| {
                 Err(flui_native::PlatformError::PreferencesDeferred)
             })?;
-            seen.push(requests.try_iter().collect());
+            seen.push(
+                requests
+                    .try_iter()
+                    .filter_map(crate::app::runtime::FallbackRequest::into_followed)
+                    .collect(),
+            );
             super::super::host::refresh_preferences_with(in_locale("fr-FR"))?;
-            seen.push(requests.try_iter().collect());
+            seen.push(
+                requests
+                    .try_iter()
+                    .filter_map(crate::app::runtime::FallbackRequest::into_followed)
+                    .collect(),
+            );
             let _ = crate::app::runtime::park_host_feed(feed, requests, ask, wake);
             teardown_platform_ui_runtime();
             Ok(())

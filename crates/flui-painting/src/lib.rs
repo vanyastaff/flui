@@ -118,8 +118,8 @@ pub use display_list::{
 pub use error::RegisterFontError;
 pub use image_placement::ImagePlacement;
 pub use text_layout::{
-    FaceRef, FallbackOrder, FontCollection, HostFontFeed, HostFonts, ScriptCode, SystemFallback,
-    TextContext, TextLayoutError, TextLayoutResult,
+    FaceRef, FallbackOrder, FontCollection, HostFaceCache, HostFontFeed, HostFonts, ScriptCode,
+    SystemFallback, TextContext, TextLayoutError, TextLayoutResult,
 };
 pub use text_painter::{
     Invalidation, RetiredTextSizingCohort, TextMeasurement, TextMeasurementError, TextPainter,
