@@ -22,6 +22,7 @@ use crate::app::{
 use flui_engine::RasterPlacement;
 use flui_native::{HostWindow, PendingWindow, PlatformProxy, WindowOpen};
 use flui_view::View;
+use flui_view::dev_reload::{CodeVersion, Unapplied};
 use std::{
     cell::RefCell,
     future::Future,
@@ -45,11 +46,12 @@ type Installer = Box<
     ) -> Result<RenderedMain, AppWindowError>,
 >;
 
-/// Whether the controller is installing into the window the loop kept, and
-/// how that install failed.
+/// Where the install into the window the loop kept stands: the restart's
+/// outcome waits for it, since an install commits in a later owner turn.
 enum Adopting {
     No,
     Installing,
+    Installed,
     Failed(AppWindowError),
 }
 
@@ -451,6 +453,9 @@ impl MainController {
                 let address = open.address;
                 self.open = Some(open);
                 self.initial = false;
+                if matches!(self.adopting, Adopting::Installing) {
+                    self.adopting = Adopting::Installed;
+                }
                 self.ingress.settle(Ok(address));
             }
             outcome => {
@@ -522,7 +527,7 @@ impl MainController {
     }
     fn report_failure(&mut self, error: AppWindowError) {
         contain(|| tracing::error!(%error, "main window request failed"));
-        if !matches!(self.adopting, Adopting::No) {
+        if matches!(self.adopting, Adopting::Installing) {
             self.adopting = Adopting::Failed(error);
         } else if self.initial {
             self.initial = false;
@@ -580,12 +585,18 @@ impl Drop for ControllerLease {
 
 /// Open the main window a restart composed with no window kept (an earlier
 /// restart failed installing into it), as a start opens it, except that its
-/// failure is reported to the observer and never ends the loop: the session
-/// waits for the next version.
+/// failure fails the restart and never ends the loop: the restart's outcome
+/// waits for the open as for an install into a kept window
+/// ([`take_kept_install_outcome`]), and the session waits for the next
+/// version.
 pub(super) fn open_main_window_after_restart() {
     APP_RUNTIME.with(|slot| {
         if let Some(controller) = slot.borrow_mut().application.main_controller.as_mut() {
             controller.initial = false;
+            // An application that opens no window at start settles at once.
+            if controller.ingress.is_opening() {
+                controller.adopting = Adopting::Installing;
+            }
         }
     });
     drive_main_window();
@@ -1177,6 +1188,7 @@ where
                         fatal: recorded,
                         kept: None,
                         restart_turn_asked: false,
+                        restarting: None,
                     });
                 });
                 match compose(application, registry) {
@@ -1242,6 +1254,10 @@ pub(in crate::app) struct DesktopLoop {
     /// A restart was due while a UI runtime was checked out, and the owner's
     /// next turn was asked for once; cleared when a restart runs.
     pub(super) restart_turn_asked: bool,
+    /// The version a restart composed and what it left unapplied, while its
+    /// install into the kept window still commits: the restart is reported
+    /// once that install settles, and the next one waits for it.
+    pub(super) restarting: Option<(CodeVersion, Unapplied)>,
 }
 
 /// The main window a development restart keeps open (ADR-0393 §4): the
@@ -1419,26 +1435,33 @@ where
 /// closed the window, so the restart fails, and the next one opens a main
 /// window anew.
 fn adopt_kept_main() -> Result<(), LaunchError> {
+    let kept = APP_RUNTIME.with(|slot| {
+        slot.borrow_mut()
+            .desktop_loop
+            .as_mut()
+            .and_then(|desktop| desktop.kept.take())
+    });
+    kept.map_or(Ok(()), adopt_main_into)
+}
+
+/// [`adopt_kept_main`] into `kept`. With no controller composed, `kept`
+/// goes back to the loop.
+fn adopt_main_into(kept: KeptMain) -> Result<(), LaunchError> {
     let leased = APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
         let controller = runtime.application.main_controller.take()?;
-        let kept = runtime
-            .desktop_loop
-            .as_mut()
-            .and_then(|desktop| desktop.kept.take());
-        let Some(kept) = kept else {
-            runtime.application.main_controller = Some(controller);
-            return None;
-        };
-        Some((
-            ControllerLease {
-                controller: Some(controller),
-                identity: Arc::clone(&runtime.loop_identity),
-            },
-            kept,
-        ))
+        Some(ControllerLease {
+            controller: Some(controller),
+            identity: Arc::clone(&runtime.loop_identity),
+        })
     });
-    let Some((mut lease, kept)) = leased else {
+    let Some(mut lease) = leased else {
+        // Dropped outside the borrow: a window's drop is platform code.
+        let displaced = APP_RUNTIME.with(|slot| match slot.borrow_mut().desktop_loop.as_mut() {
+            Some(desktop) => desktop.kept.replace(kept),
+            None => Some(kept),
+        });
+        contain(|| drop(displaced));
         return Ok(());
     };
     let controller = lease
@@ -1448,17 +1471,46 @@ fn adopt_kept_main() -> Result<(), LaunchError> {
     controller.opening = Some(OpeningWindow::kept(kept.routes, &controller.config));
     controller.adopting = Adopting::Installing;
     controller.install(kept.window);
-    let failure = match std::mem::replace(&mut controller.adopting, Adopting::No) {
-        Adopting::Failed(error) => Some(error),
-        Adopting::No | Adopting::Installing => None,
-    };
-    if controller.open.is_some() || controller.installing.is_some() {
-        return Ok(());
+    match std::mem::replace(&mut controller.adopting, Adopting::No) {
+        Adopting::Failed(error) => Err(LaunchError::initial_window(error)),
+        Adopting::Installed => Ok(()),
+        // Submitted, and committing in a later owner turn: the restart's
+        // outcome waits for it (`take_kept_install_outcome`).
+        Adopting::Installing if controller.installing.is_some() => {
+            controller.adopting = Adopting::Installing;
+            Ok(())
+        }
+        // The install closed the window with no failure reported.
+        Adopting::Installing | Adopting::No => {
+            Err(LaunchError::initial_window(AppWindowError::Cancelled))
+        }
     }
-    // The install closed the window: a failure it reported, or a cancel.
-    Err(LaunchError::initial_window(
-        failure.unwrap_or(AppWindowError::Cancelled),
-    ))
+}
+
+/// How the main window a restart composed settled, once it has: `None`
+/// while its install still commits or its open is pending. A controller
+/// that is gone (the application retired) settled as cancelled; one leased
+/// out to the code driving it (its ingress still accepting) has not settled.
+pub(super) fn take_kept_install_outcome() -> Option<Result<(), AppWindowError>> {
+    APP_RUNTIME.with(|slot| {
+        let mut runtime = slot.borrow_mut();
+        let accepting = runtime
+            .application
+            .main_ingress
+            .as_ref()
+            .is_some_and(|ingress| ingress.accepting());
+        let Some(controller) = runtime.application.main_controller.as_mut() else {
+            return (!accepting).then_some(Err(AppWindowError::Cancelled));
+        };
+        match std::mem::replace(&mut controller.adopting, Adopting::No) {
+            Adopting::Installing => {
+                controller.adopting = Adopting::Installing;
+                None
+            }
+            Adopting::Installed | Adopting::No => Some(Ok(())),
+            Adopting::Failed(error) => Some(Err(error)),
+        }
+    })
 }
 
 impl MainController {
@@ -1659,6 +1711,130 @@ mod tests {
                     Ok(())
                 }))
                 .expect("headless bootstrap");
+        }
+    }
+
+    /// An install into the window a restart kept that commits after the
+    /// restart's call (here the call runs inside an owner callback, so the
+    /// install publishes once it ends) settles there: until then the
+    /// restart's outcome waits, and a window closed before the install
+    /// commits, or an ingress closed by a quit before it does, fails it
+    /// instead of reporting it installed or leaving it waiting.
+    fn a_kept_install_that_commits_later_settles_when_it_does() {
+        use super::super::frame_driver::{FrameDriver, TestFrameDriver};
+        use super::super::owner_dispatch::{
+            RuntimeTask, dispatch_platform_ui_runtime, install_platform_ui_runtime,
+            prepare_ui_runtime_alongside,
+        };
+        use flui_runtime::ui_runtime::UiRuntime;
+
+        for (close_before_publication, quit) in [(false, false), (true, false), (false, true)] {
+            let _owner = OwnerHostClearGuard::arm();
+            let _cleanup = LoopTeardown::default();
+            // Asserted after the run: a panic inside it is contained there.
+            let seen = Rc::new(Cell::new(None));
+            let settled = Rc::new(RefCell::new(None));
+            let (seen_in_run, settled_in_run) = (Rc::clone(&seen), Rc::clone(&settled));
+            let leased = Rc::new(Cell::new(None));
+            let leased_in_run = Rc::clone(&leased);
+            Box::new(HeadlessPlatform::new())
+                .run(crate::app::runner::app_handler(move |owner| {
+                    let _handle = install_test_controller(
+                        owner,
+                        Box::new(move |_, window, host, _| {
+                            let runtime = UiRuntime::for_test();
+                            runtime
+                                .attach_root_widget(&flui_widgets::SizedBox::new(20.0, 30.0))
+                                .expect("mount root");
+                            let host_window = Rc::clone(&window);
+                            let window: Rc<dyn flui_platform::PlatformWindow> = window;
+                            let mut prepared =
+                                prepare_ui_runtime_alongside(runtime, Rc::clone(&window));
+                            let address = prepared.dispatcher().address;
+                            prepared
+                                .frame_driver(FrameDriver::Test(TestFrameDriver {
+                                    installed: None,
+                                    sink: flui_runtime::testing::ScriptedSink::new(|_, _| {
+                                        flui_runtime::sink::SubmitVerdict::Presented
+                                    }),
+                                    prelude: None,
+                                    resize: None,
+                                }))
+                                .expect("prepare frame driver");
+                            prepared.lifecycle(host);
+                            let installation = prepared.submit();
+                            if close_before_publication {
+                                window.close_now();
+                            }
+                            Ok(RenderedMain {
+                                window: host_window,
+                                address,
+                                installation,
+                            })
+                        }),
+                        None,
+                    );
+                    let outer = install_platform_ui_runtime(
+                        UiRuntime::for_test(),
+                        &crate::app::window_test_support::headless_test_window(),
+                    );
+                    // The callback's own panic would be contained by the
+                    // dispatch: what it saw is asserted after it.
+                    let seen = seen_in_run;
+                    let inside = Rc::clone(&seen);
+                    dispatch_platform_ui_runtime(
+                        outer,
+                        RuntimeTask::TestCallback(Box::new(move |_| {
+                            let window =
+                                crate::app::window_test_support::headless_test_host_window();
+                            let routes =
+                                super::super::window_routes::WindowRoutes::of(window.as_ref());
+                            let adopted = adopt_main_into(KeptMain { window, routes }).is_ok();
+                            inside.set(Some((adopted, take_kept_install_outcome().is_none())));
+                            // A controller leased out to the code driving it
+                            // has not settled either.
+                            let leased = APP_RUNTIME
+                                .with(|slot| slot.borrow_mut().application.main_controller.take());
+                            leased_in_run.set(Some(take_kept_install_outcome().is_none()));
+                            APP_RUNTIME.with(|slot| {
+                                slot.borrow_mut().application.main_controller = leased;
+                            });
+                            if quit {
+                                // The ingress closes, as at a quit, before
+                                // the install commits.
+                                let ingress = APP_RUNTIME
+                                    .with(|slot| slot.borrow().application.main_ingress.clone());
+                                if let Some(ingress) = ingress {
+                                    ingress.close();
+                                }
+                            }
+                        })),
+                    )
+                    .expect("complete caller and installation");
+                    *settled_in_run.borrow_mut() = Some(take_kept_install_outcome());
+                    Ok(())
+                }))
+                .expect("headless bootstrap");
+            assert_eq!(
+                seen.get(),
+                Some((true, true)),
+                "an install that has not settled fails nothing yet, and commits after the owner \
+                 callback"
+            );
+            assert_eq!(
+                leased.get(),
+                Some(true),
+                "a leased controller has not settled its install"
+            );
+            let outcome = settled.borrow_mut().take().flatten();
+            assert!(
+                if close_before_publication || quit {
+                    matches!(outcome, Some(Err(AppWindowError::Cancelled)))
+                } else {
+                    matches!(outcome, Some(Ok(())))
+                },
+                "the install settled with its window: {outcome:?}"
+            );
         }
     }
 
@@ -2030,6 +2206,10 @@ mod tests {
                 (
                     "main_window_waits_for_deferred_runtime_publication",
                     main_window_waits_for_deferred_runtime_publication as fn(),
+                ),
+                (
+                    "a_kept_install_that_commits_later_settles_when_it_does",
+                    a_kept_install_that_commits_later_settles_when_it_does as fn(),
                 ),
                 (
                     "a_link_into_a_window_closed_before_it_commits_is_refused",

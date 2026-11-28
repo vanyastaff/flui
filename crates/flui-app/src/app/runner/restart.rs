@@ -2,16 +2,17 @@
 //! retires, its entry runs again with the hand-over open, and the
 //! application it hands over is composed into the windows the loop kept.
 //!
-//! The loop's own parts ([`DesktopLoop`]: the development reload, the driver
-//! agent's disconnect, the terminal failure; the owner platform, the raster
-//! host, the pools, the engine services) are kept. What the loop built from
+//! The loop's own parts ([`DesktopLoop`](super::main_window::DesktopLoop):
+//! the development reload, the driver agent's disconnect, the terminal
+//! failure; the owner platform, the raster host, the pools, the engine
+//! services) are kept. What the loop built from
 //! the application is its [`ApplicationScope`](crate::app::runtime::ApplicationScope),
 //! dropped and built again.
 
 use std::rc::Rc;
 
 use flui_foundation::panic::{FirstPanic, payload_text};
-use flui_view::dev_reload::{RestartFailure, Unapplied};
+use flui_view::dev_reload::{CodeVersion, RestartFailure, Unapplied};
 
 use super::host::APP_RUNTIME;
 use super::main_window::{KeptMain, compose};
@@ -78,6 +79,9 @@ pub(super) fn restart_if_due() {
         return;
     }
     reload.poll_without_ui_runtime();
+    if !settle_restart(&reload) {
+        return;
+    }
     let Some(version) = reload.take_restart_due() else {
         return;
     };
@@ -91,15 +95,74 @@ pub(super) fn restart_if_due() {
         "hot reload: the new build changed the layout of kept values; restarting the application"
     );
     match restart(&reload) {
-        Ok(unapplied) => reload.restarted(version, unapplied),
+        Ok(unapplied) => {
+            // A composition runs only on a started loop (`compose`), so the
+            // loop is there to hold the outcome until it settles.
+            APP_RUNTIME.with(|slot| {
+                if let Some(desktop) = slot.borrow_mut().desktop_loop.as_mut() {
+                    desktop.restarting = Some((version, unapplied));
+                }
+            });
+            settle_restart(&reload);
+        }
         Err(failure) => {
-            let reason = failure.reason();
-            tracing::warn!(?reason, "hot reload: the restart composed no application");
-            reload.restart_failed(version, reason);
+            report_failure(&reload, version, &failure);
+            request_exit_question();
         }
     }
-    // §4 step 4: the platform asks the exit question again, which the new
-    // application's policy answers.
+}
+
+/// Report the restart whose install into the kept window has settled: a
+/// failed install fails it, and what it composed retires as after a failed
+/// composition. Returns whether no restart still waits for its install, so
+/// that the next one may run.
+fn settle_restart(reload: &WorkerReload) -> bool {
+    let waiting = APP_RUNTIME.with(|slot| {
+        slot.borrow()
+            .desktop_loop
+            .as_ref()
+            .is_some_and(|desktop| desktop.restarting.is_some())
+    });
+    if !waiting {
+        return true;
+    }
+    let Some(outcome) = super::main_window::take_kept_install_outcome() else {
+        return false;
+    };
+    let Some((version, unapplied)) = APP_RUNTIME.with(|slot| {
+        slot.borrow_mut()
+            .desktop_loop
+            .as_mut()
+            .and_then(|desktop| desktop.restarting.take())
+    }) else {
+        return true;
+    };
+    match outcome {
+        Ok(()) => reload.restarted(version, unapplied),
+        Err(error) => {
+            // The install closed the window it was given: no window is kept,
+            // and the next restart opens one anew.
+            keep(retire_application());
+            report_failure(
+                reload,
+                version,
+                &Failure::Launch(LaunchError::initial_window(error)),
+            );
+        }
+    }
+    request_exit_question();
+    true
+}
+
+fn report_failure(reload: &WorkerReload, version: CodeVersion, failure: &Failure) {
+    let reason = failure.reason();
+    tracing::warn!(?reason, "hot reload: the restart composed no application");
+    reload.restart_failed(version, reason);
+}
+
+/// §4 step 4: the platform asks the exit question again, which the new
+/// application's policy answers.
+fn request_exit_question() {
     super::host::with_owner_platform(flui_native::OwnerPlatform::request_exit_policy_reevaluation);
 }
 

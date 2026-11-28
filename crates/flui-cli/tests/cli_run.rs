@@ -544,12 +544,16 @@ fn serve_agent() {
         serde_json::json!({ "applied": { "tier": "process_restart" } }),
         "the fixed build succeeded: {seen:?}"
     );
-    wait_for(
-        &events,
-        &mut seen,
-        says("FLUI_APP_SECOND"),
-        Duration::from_secs(60),
-    );
+    // The new build's first line and the reload's report come from two
+    // pipes, so the line may already be among the events.
+    if !seen[mark..].iter().any(says("FLUI_APP_SECOND")) {
+        wait_for(
+            &events,
+            &mut seen,
+            says("FLUI_APP_SECOND"),
+            Duration::from_secs(60),
+        );
+    }
     assert_eq!(
         names(&seen[mark..]),
         ["run.app.stop", "run.app.start"],
