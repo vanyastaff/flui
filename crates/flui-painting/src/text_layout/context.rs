@@ -83,7 +83,10 @@ impl FontCollection {
     /// (ADR-0397).
     #[must_use]
     pub fn new() -> Self {
-        Self(Arc::new(FontCollectionInner::build(None)))
+        Self(Arc::new(FontCollectionInner::build(
+            None,
+            Registration::Direct,
+        )))
     }
 
     /// A collection fed from the host: [`FontCollection::new`]'s faces, then
@@ -104,7 +107,10 @@ impl FontCollection {
     /// `host`: a face registered on it later reaches the collection alone.
     #[must_use]
     pub fn with_host_fonts(host: &HostFonts) -> Self {
-        Self(Arc::new(FontCollectionInner::build(Some(&host.faces()))))
+        Self(Arc::new(FontCollectionInner::build(
+            Some(&host.faces()),
+            Registration::Direct,
+        )))
     }
 
     /// [`FontCollection::new`]'s collection, and the feed that adds the
@@ -138,7 +144,10 @@ impl FontCollection {
             let host = HostFonts::scan();
             let locale = host.locale().to_owned();
             let faces = Arc::new(host.faces());
-            let fonts = Self(Arc::new(FontCollectionInner::build(Some(&faces))));
+            let fonts = Self(Arc::new(FontCollectionInner::build(
+                Some(&faces),
+                Registration::Direct,
+            )));
             (fonts, HostFaceCache::delivered(faces, locale))
         };
         let feed = HostFontFeed {
@@ -339,7 +348,7 @@ impl FontCollectionInner {
     /// Builds the collection unshared, so no step takes fontique's shared
     /// mutex, and shares it last: it starts at generation zero whatever it
     /// holds.
-    fn build(host: Option<&HostFaces>) -> Self {
+    fn build(host: Option<&HostFaces>, registration: Registration) -> Self {
         use parley::fontique::{Collection, CollectionOptions, SourceCache};
 
         let mut collection = Collection::new(CollectionOptions {
@@ -355,7 +364,7 @@ impl FontCollectionInner {
         if let Some(host) = host {
             // A private build starts at generation zero whatever it holds,
             // so whether the feed changed anything does not matter here.
-            let _changed = feed_host_faces(&mut collection, host, Registration::Private);
+            let _changed = feed_host_faces(&mut collection, host, registration);
         }
         collection.make_shared();
         Self {
@@ -428,9 +437,10 @@ impl HostFontFeed {
             };
             if let Some(ask) = self.ask {
                 let answer = ask_contained(ask, &locale);
-                order.set_system_fallback(&answer);
+                // Kept first, so an install that panics does not lose it.
                 #[cfg(not(feature = "bundled-fonts"))]
-                self.cache.answered(answer);
+                self.cache.answered(answer.clone());
+                order.set_system_fallback(&answer);
             }
             return order;
         }
@@ -560,7 +570,7 @@ impl HostFaceCache {
     }
 
     /// Keeps the host's fallback answer the feed installed after the faces.
-    #[cfg(not(feature = "bundled-fonts"))]
+    #[cfg(any(test, not(feature = "bundled-fonts")))]
     fn answered(&self, system: SystemFallback) {
         let mut state = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if let CacheState::Delivered { answer, .. } = &mut *state {
@@ -599,7 +609,10 @@ impl HostFaceCache {
             }
         };
         let (faces, locale, answer) = delivered;
-        let fonts = FontCollection(Arc::new(FontCollectionInner::build(Some(&faces))));
+        let fonts = FontCollection(Arc::new(FontCollectionInner::build(
+            Some(&faces),
+            Registration::TrialRead,
+        )));
         let mut order = FallbackOrder {
             fonts: fonts.clone(),
             locale,
@@ -671,7 +684,7 @@ impl FontCollection {
             announce: true,
         };
         let mut collection = self.0.collection.clone();
-        landed.announce = feed_host_faces(&mut collection, host, Registration::Shared);
+        landed.announce = feed_host_faces(&mut collection, host, Registration::TrialRead);
     }
 }
 
@@ -762,13 +775,13 @@ impl FallbackOrder {
 /// How [`feed_host_faces`] registers each source.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Registration {
-    /// On a collection no one else reads yet: each source is registered
-    /// directly.
-    Private,
-    /// On the shared collection, under fontique's lock: each source is first
-    /// read on a scratch collection, where a panic poisons nothing, and is
-    /// skipped if that read panics or finds no family.
-    Shared,
+    /// Each source is registered directly.
+    Direct,
+    /// Each source is first read on a scratch collection, where a panic
+    /// poisons nothing, and is skipped if that read panics or finds no
+    /// family: on the shared collection, under fontique's lock, and on a
+    /// restart's collection, built from sources a feed may have skipped.
+    TrialRead,
 }
 
 /// Adds `host`'s faces, generics and fallback order to `collection`.
@@ -818,7 +831,7 @@ fn feed_host_faces(
         {
             continue;
         }
-        if registration == Registration::Shared && !reads_a_family(&source.data) {
+        if registration == Registration::TrialRead && !reads_a_family(&source.data) {
             continue;
         }
         register_source(collection, &source.data);
@@ -1102,7 +1115,10 @@ mod tests {
 
     use super::super::fallback_chain::FallbackChain;
     use super::super::host::{HostData, HostFaces, HostSource};
-    use super::{FontCollection, FontCollectionInner, MemoryPressureLevel, TextContext};
+    use super::{
+        CacheState, FontCollection, FontCollectionInner, HostFaceCache, MemoryPressureLevel,
+        Registration, TextContext,
+    };
     use crate::parley_text::ParagraphSpec;
     use crate::typography::TextStyle;
     use flui_foundation::TextDirection;
@@ -1301,7 +1317,8 @@ mod tests {
             chain: FallbackChain::from_lists(&[PROBE], &[]),
             system: crate::SystemFallback::none("en-US"),
         };
-        let mut collection = FontCollectionInner::build(Some(&host)).collection;
+        let mut collection =
+            FontCollectionInner::build(Some(&host), Registration::Direct).collection;
 
         let probe = collection
             .family_id(PROBE)
@@ -1337,10 +1354,12 @@ mod tests {
 
     /// A host source that panics when read is skipped by the off-thread
     /// feed, which goes on: the source after it is fed, the generation rises
-    /// once, a context still shapes and a later registration succeeds.
+    /// once, a context still shapes and a later registration succeeds; a
+    /// restart's collection built from the same sources skips it too.
     /// Fails without the trial read: the panic then happens under fontique's
     /// shared lock, which it poisons, so the feed stops there and every
-    /// later query or registration on the collection panics.
+    /// later query or registration on the collection panics, and a restart's
+    /// rebuild panics every time.
     #[test]
     fn a_source_that_panics_is_skipped_and_the_collection_stays_usable() {
         struct Unreadable;
@@ -1401,6 +1420,48 @@ mod tests {
             .width;
         assert!(width > 1.0, "a context still shapes, got {width}");
         assert_eq!(fonts.register_font(ROBOTO), Ok(()));
+
+        // A restart's collection is built from the same sources, the one the
+        // feed skipped included, and skips it too.
+        let cache = HostFaceCache::holding(CacheState::Delivered {
+            faces: Arc::new(host),
+            locale: "en-US".to_owned(),
+            answer: None,
+        });
+        let rebuilt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| cache.collection()));
+        let (fresh, _order) = rebuilt.expect("the rebuild skips the source that panics");
+        assert!(fresh.holds(PROBE), "the source after it is held");
+    }
+
+    /// A collection from the cache holds the host's answer the feed kept
+    /// (without the bundled faces the feed asks for it after it fed the
+    /// faces), and installing it writes the answer's locale. Fails if the
+    /// cache drops the answer, so a restart's order loses the host's
+    /// fallback.
+    #[test]
+    fn a_collection_from_the_cache_holds_the_hosts_answer() {
+        const ANSWERED: &str = "x-flui-probe";
+        let host = HostFaces {
+            sources: Vec::new(),
+            sans_serif: String::new(),
+            serif: String::new(),
+            monospace: String::new(),
+            cursive: String::new(),
+            fantasy: String::new(),
+            chain: FallbackChain::from_lists(&[], &[]),
+            system: crate::SystemFallback::none("en-US"),
+        };
+        let cache = HostFaceCache::holding(CacheState::Delivered {
+            faces: Arc::new(host),
+            locale: "en-US".to_owned(),
+            answer: None,
+        });
+        cache.answered(crate::SystemFallback::none(ANSWERED));
+
+        let (_fresh, order) = cache.collection();
+
+        let order = order.expect("a delivered cache hands its order on");
+        assert_eq!(order.locale(), ANSWERED);
     }
 
     /// A host never supplies an icon family FLUI embeds, whether this build
@@ -1441,7 +1502,10 @@ mod tests {
                 .and_then(|id| collection.family(id))
                 .map_or(0, |family| family.fonts().len())
         };
-        let fed = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
+        let fed = FontCollection(Arc::new(FontCollectionInner::build(
+            Some(&host),
+            Registration::Direct,
+        )));
         assert_eq!(faces_of(&fed, PROBE), 1, "the text family is fed");
         for (family, embeds) in ICONS {
             assert_eq!(
@@ -1478,7 +1542,10 @@ mod tests {
             chain: FallbackChain::from_lists(&["Roboto"], &[]),
             system: crate::SystemFallback::none("en-US"),
         };
-        let fed = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
+        let fed = FontCollection(Arc::new(FontCollectionInner::build(
+            Some(&host),
+            Registration::Direct,
+        )));
         let bundled = FontCollection::new();
         let width = |fonts: &FontCollection, family: Option<&str>, weight: FontWeight| {
             let style = TextStyle {
@@ -1773,7 +1840,7 @@ mod tests {
         use super::super::super::fallback_chain::FallbackChain;
         use super::super::super::font_resolve::{Family, resolve_family_name};
         use super::super::super::host::{HostData, HostFaces, HostSource};
-        use super::super::{FontCollection, FontCollectionInner, TextContext};
+        use super::super::{FontCollection, FontCollectionInner, Registration, TextContext};
         use super::ROBOTO;
         use crate::parley_text::{ParagraphSpec, holds_exactly};
         use crate::typography::{FontFamilyName, TextStyle};
@@ -1884,7 +1951,10 @@ mod tests {
                 chain: FallbackChain::from_lists(&["FLUI Decoy Emoji"], &[]),
                 system: crate::SystemFallback::none("en-US"),
             };
-            let fonts = FontCollection(Arc::new(FontCollectionInner::build(Some(&host))));
+            let fonts = FontCollection(Arc::new(FontCollectionInner::build(
+                Some(&host),
+                Registration::Direct,
+            )));
             let style = TextStyle {
                 font_family: Some("CupertinoSystemText".into()),
                 ..TextStyle::default()

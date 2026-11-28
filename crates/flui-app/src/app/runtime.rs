@@ -2113,6 +2113,35 @@ mod font_collection_tests {
         assert!(runtime.take_font_change(), "the landing is announced");
     }
 
+    /// The owner's last locale reaches a restart's order even when its
+    /// install on the earlier order panicked and left that order at the
+    /// feed's locale: the fresh order is asked for it again. Fails if the
+    /// fresh order follows the earlier order's locale instead.
+    fn a_renewed_order_follows_a_locale_whose_install_panicked() {
+        let _ = take_parked_host_feeds();
+        let mut runtime = AppRuntime::new();
+        let _ = runtime.font_collection();
+        let ParkedHostFeed { feed, requests, .. } = take_parked_host_feeds()
+            .pop()
+            .expect("the services launched their feed");
+        let order = feed_with_host(feed, host_fonts_from(&[PROBE_MONO_100])).run();
+        let (ask, asked) = host_answering_ja();
+        let _ = runtime
+            .ensure_services()
+            .fallback
+            .keep_inline(order, requests, ask);
+        follow(&runtime, "de-DE");
+        assert_eq!(*asked.lock(), ["de-DE"]);
+
+        let _ = runtime.renew_font_collection();
+
+        assert_eq!(
+            *asked.lock(),
+            ["de-DE", "de-DE"],
+            "the fresh order is asked for the owner's last locale"
+        );
+    }
+
     /// Before the services resolve there is no collection to renew: the
     /// first UI runtime builds it.
     fn nothing_is_renewed_before_the_services_resolve() {
@@ -2244,6 +2273,10 @@ mod font_collection_tests {
                 (
                     "a_served_order_follows_the_owners_last_tag",
                     a_served_order_follows_the_owners_last_tag as fn(),
+                ),
+                (
+                    "a_renewed_order_follows_a_locale_whose_install_panicked",
+                    a_renewed_order_follows_a_locale_whose_install_panicked as fn(),
                 ),
             ],
         );
