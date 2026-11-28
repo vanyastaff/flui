@@ -25,7 +25,7 @@ mod host;
 mod system_fallback;
 
 pub(crate) use context::FontsKey;
-pub use context::{FallbackOrder, FontCollection, HostFontFeed, TextContext};
+pub use context::{FallbackOrder, FontCollection, HostFaceCache, HostFontFeed, TextContext};
 pub use error::TextLayoutError;
 pub use host::HostFonts;
 pub use system_fallback::{FaceRef, ScriptCode, SystemFallback};

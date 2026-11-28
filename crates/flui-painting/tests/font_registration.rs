@@ -191,6 +191,52 @@ fn a_family_held_before_the_feed_is_not_fed_again() {
     );
 }
 
+/// A collection built from the cache after the feed landed holds the
+/// host's faces without a scan, and none of what was registered on the
+/// collection before it; its fallback order writes it. Fails if the fresh
+/// collection is the earlier one, scans nothing in, or keeps a face the
+/// earlier one registered.
+fn a_collection_from_the_cache_holds_the_hosts_faces_alone() {
+    use flui_painting::testing::{collection_holds, feed_with_host, host_fed, host_fonts_from};
+
+    let (earlier, feed) = FontCollection::with_host_feed();
+    let cache = feed.cache();
+    feed_with_host(feed, host_fonts_from(&[PROBE_SANS])).run();
+    earlier
+        .register_font(PROBE_MONO)
+        .expect("the probe face loads");
+
+    let (fresh, order) = cache.collection();
+    let order = order.expect("a cache the feed delivered hands its order on");
+    assert!(FontCollection::ptr_eq(order.fonts(), &fresh));
+    assert!(!FontCollection::ptr_eq(&fresh, &earlier));
+    assert!(host_fed(&fresh));
+    assert!(collection_holds(&fresh, "FLUI Probe Sans"));
+    assert!(
+        !collection_holds(&fresh, "FLUI Probe Mono"),
+        "a face registered on the earlier collection stays there"
+    );
+}
+
+/// A collection built from the cache before the feed landed is the one
+/// the feed feeds, and the order the feed returns writes it; the
+/// collection the feed was built with gets no host face. Fails if the feed
+/// keeps feeding the collection it was built with.
+fn a_collection_from_a_waiting_cache_is_the_one_fed() {
+    use flui_painting::testing::{collection_holds, feed_with_host, host_fed, host_fonts_from};
+
+    let (earlier, feed) = FontCollection::with_host_feed();
+    let (fresh, order) = feed.cache().collection();
+    assert!(order.is_none(), "the feed's own run hands the order on");
+
+    let order = feed_with_host(feed, host_fonts_from(&[PROBE_SANS])).run();
+
+    assert!(FontCollection::ptr_eq(order.fonts(), &fresh));
+    assert!(host_fed(&fresh));
+    assert!(collection_holds(&fresh, "FLUI Probe Sans"));
+    assert!(!collection_holds(&earlier, "FLUI Probe Sans"));
+}
+
 /// A feed that changes nothing leaves the generation alone, so no
 /// pipeline lays its text out again for it: a host with no fonts (as on
 /// wasm32), and a host whose only family the collection already holds.
@@ -379,6 +425,14 @@ fn host_feed_contract() {
             (
                 "a_feed_that_adds_nothing_leaves_the_generation_alone",
                 a_feed_that_adds_nothing_leaves_the_generation_alone,
+            ),
+            (
+                "a_collection_from_the_cache_holds_the_hosts_faces_alone",
+                a_collection_from_the_cache_holds_the_hosts_faces_alone,
+            ),
+            (
+                "a_collection_from_a_waiting_cache_is_the_one_fed",
+                a_collection_from_a_waiting_cache_is_the_one_fed,
             ),
             (
                 "a_host_fallback_face_draws_a_script_the_tables_miss",

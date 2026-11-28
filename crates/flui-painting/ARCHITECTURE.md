@@ -21,7 +21,7 @@ Design decisions are recorded under [Mapping decisions](#mapping-decisions).
 | Recorder | `canvas/{mod,state,transform,clipping,drawing,scoped}.rs` | `Canvas`: the `dart:ui` surface, save/restore, transforms, clips, `draw_*`, and the `with_*` helpers that pair a save with its restore |
 | Wire vocabulary | `display_list/{mod,command,command_ops,paragraph}.rs` | `DisplayList` (interned transforms, ops, payloads and cached bounds), `DrawCommand` (the transform and op the reader yields, which resolves the op's payload ids), `DrawCommandBuf` (an owned command with its payloads), `DrawOp` (the closed enum `flui-engine` matches exhaustively), `DrawCommand::bounds`, `ShapedParagraph` (the shaped text `DrawOp::Paragraph` and `DrawOp::ParagraphShadow` carry, decision 18), `BlurSigma` (a text shadow's bounded blur) |
 | Text | `text_layout/{host,fallback_chain,fallback_tables,font_resolve}.rs`, `text_painter/{mod,measure,paint,baseline}.rs` | `TextPainter`; `HostFonts` (the one host font scan a collection is fed from), the per-platform fallback lists and the order a fed collection falls back in, family resolution |
-| Per-UI runtime text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection), `HostFontFeed` (the host's faces, added off the owner thread) and `TextContext` (one UI runtime's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per UI runtime; every `TextPainter` measurement shapes on it |
+| Per-UI runtime text context | `text_layout/context.rs` | `FontCollection` (the app's shared, add-only fontique collection), `HostFontFeed` (the host's faces, added off the owner thread), `HostFaceCache` (what the feed delivered, for a restart's fresh collection) and `TextContext` (one UI runtime's Parley font and layout contexts over it, used through `&mut`); constructed by the runtime, one context per UI runtime; every `TextPainter` measurement shapes on it |
 | Parley shaping | `parley_text/{shape,shape_cache,caret}.rs` | `TextContext::shape`: a `ParagraphSpec` (styled spans, width, line height, direction, `max_lines`, ellipsis) to a `ParagraphLayout` whose `metrics()` read the laid-out lines, whose `to_shaped()` is the paragraph paint records, and whose caret, hit-test, selection, line and word queries `TextPainter` answers from (decision 15) |
 | Text boundaries | `text_boundaries.rs` | Grapheme and word boundaries over ICU4X, the segmenters Parley clusters with: what hit-testing snaps to and word selection picks from, and what `flui-widgets`' editor steps through (ADR-0092 §6); each query segments from the start of its line |
 | Raster side | `glyphs/{mod,key,registry,swash}.rs` | `GlyphKey` (a face named by font blob), `FontRegistry` (faces and interned variation instances), `SwashRasterizer` (the engine's atlas draws through it), `GlyphRasterizer`, `PlacedGlyph`, `GlyphImage` |
@@ -892,6 +892,15 @@ per app: flui-app's shared engine services build it with the bundled faces
 thread of its own, which scans and feeds what `FontCollection::with_host_fonts`
 would, then raises the generation once if that changed the collection, and on
 unwind (ADR-0092 §7; `a_feed_that_adds_nothing_leaves_the_generation_alone`).
+The feed keeps what it delivered in its `HostFaceCache`: a development restart
+builds the later application's fresh collection from it, with no second scan,
+and one built before the feed lands is the collection the feed then feeds
+(ADR-0393 §4; `a_collection_from_the_cache_holds_the_hosts_faces_alone`,
+`a_collection_from_a_waiting_cache_is_the_one_fed` and, in `context.rs`,
+`a_collection_from_the_cache_holds_the_hosts_answer`). That build reads each
+source on a scratch collection first, as the feed does, since it may register
+a source the feed skipped (its family was held then); a rebuild that panics
+anyway is contained by the restart, which keeps the earlier collection.
 Each source is read once on a scratch collection before it is registered, so
 a file that panics on every read is skipped; a file replaced between that
 read and the registration is not covered. The scan is fontdb's: the platform's font

@@ -835,6 +835,37 @@ fn a_restart_keeps_the_window_and_registers_the_fonts_again() {
     run.join().expect("the run ends");
 }
 
+/// §4 step 1: the font collection is add-only, so the later application
+/// shapes over a fresh one, and a face only the earlier application
+/// registered is not in it. Fails if the restart keeps the collection.
+fn a_face_only_the_earlier_application_registered_is_gone() {
+    use flui_painting::testing::collection_holds;
+    /// A face no other case of this thread registers: the loop's collection
+    /// outlives a run on its thread.
+    const PROBE_MONO: &[u8] = include_bytes!("../../flui-painting/assets/fonts/probe-mono-600.ttf");
+
+    let hook = ScriptedReload::new();
+    hook.entry(runs(note(&Lives::new())));
+    let application = Application::new().config(development(&hook)).on_ready(|_| {
+        flui_app::register_font(PROBE_MONO).expect("the probe face is accepted");
+    });
+    let run = running_with(&hook, application, note(&Lives::new()));
+    let earlier = run.font_collection();
+    assert!(collection_holds(&earlier, "FLUI Probe Mono"));
+
+    hook.load(version(2, 2));
+    turns(&run);
+
+    assert_eq!(hook.take_outcomes(), [restarted(version(2, 2))]);
+    let later = run.font_collection();
+    assert!(!flui_painting::FontCollection::ptr_eq(&later, &earlier));
+    assert!(
+        !collection_holds(&later, "FLUI Probe Mono"),
+        "the later application registered no face"
+    );
+    run.join().expect("the run ends");
+}
+
 /// §4: what the operating system opens after a restart reaches the later
 /// application's callback; the earlier application's is gone with it.
 fn opened_files_after_a_restart_reach_the_later_application() {
@@ -1038,6 +1069,10 @@ fn runner_restart() {
             (
                 "a_restart_keeps_the_window_and_registers_the_fonts_again",
                 a_restart_keeps_the_window_and_registers_the_fonts_again,
+            ),
+            (
+                "a_face_only_the_earlier_application_registered_is_gone",
+                a_face_only_the_earlier_application_registered_is_gone,
             ),
             (
                 "a_restart_disposes_every_state_before_the_entry_runs",

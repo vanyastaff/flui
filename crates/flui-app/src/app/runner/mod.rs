@@ -663,7 +663,10 @@ pub(crate) use stand_in_renderer::StandInRenderers;
     not(target_os = "ios"),
     not(target_arch = "wasm32")
 ))]
-pub(crate) use {host::loop_turn_deadline, host::loop_wake_deadline, raster_host::RasterFactory};
+pub(crate) use {
+    host::loop_turn_deadline, host::loop_wake_deadline, host::runtime_font_collection,
+    raster_host::RasterFactory,
+};
 
 /// Whether this loop journals its backend, so the agent's hello lists the `native` layer.
 fn journals_native() -> bool {
