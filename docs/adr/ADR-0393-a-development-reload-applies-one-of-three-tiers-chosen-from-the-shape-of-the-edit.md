@@ -292,7 +292,8 @@ that is kept. The host, at the end of the turn:
    restart, and what step 3 composed is retired as in step 1. A panic in the new root's mount
    shows what a build's panic shows (ADR-0287) and does not fail it.
 4. **writes `composed`**, answers the exit-policy question with the new application's policy, and
-   reports `Restarted` once the install into the kept window has committed. An install that commits
+   reports `Restarted` once the install into the kept window has committed (or, with no window kept,
+   once the main window it opens anew has). An install that commits
    in a later owner turn (one queued behind an owner callback) holds the outcome until it settles,
    and the next restart waits for it; one that fails as it commits fails the restart, and what step
    3 composed is retired as in step 1, with no window kept.
@@ -388,7 +389,7 @@ scripted hook from the testing kit. They replace ADR-0311's
 | §4 step 1 | `flui-app`: `a_restart_disposes_every_state_before_the_entry_runs`, `a_panicking_dispose_does_not_stop_a_restart`, `a_restart_closes_the_windows_the_application_opened_without_asking`, `a_restart_drops_the_earlier_scope`, `a_restart_cancels_and_joins_the_earlier_applications_tasks`, `an_app_handle_of_the_earlier_application_is_refused`; in `crates/flui-app/src/app/lifecycle.rs`, `shutdown_ends_the_applications_tasks_and_workers`, `a_queued_job_is_not_waited_for_and_never_starts`, `a_job_that_ignores_cancellation_is_reported_at_the_deadline` and `a_dropped_workers_state_goes_before_its_hold` |
 | §4 step 2 | `flui-app`: `a_panicking_entry_fails_the_restart_and_is_not_tried_again`, `an_entry_without_an_application_fails_the_restart`, `a_failed_restart_leaves_nothing_in_the_hand_over`, `a_second_run_in_one_entry_is_refused_and_the_first_is_composed` |
 | §4 step 3 | `flui-app`: `a_restart_composes_the_later_applications_capabilities`, `a_restart_keeps_the_window_and_registers_the_fonts_again`, `a_failed_composition_retires_what_it_built`, `a_panic_in_the_new_roots_mount_is_still_a_restart` |
-| §4 step 4 | `flui-app`: `a_resident_application_is_asked_to_exit_by_its_new_policy`; `a_kept_install_that_commits_later_settles_when_it_does` in `crates/flui-app/src/app/runner/main_window.rs` |
+| §4 step 4 | `flui-app`: `a_resident_application_is_asked_to_exit_by_its_new_policy`, `a_failed_install_into_the_kept_window_fails_the_restart`; `a_kept_install_that_commits_later_settles_when_it_does` in `crates/flui-app/src/app/runner/main_window.rs` |
 | §4 what stays the loop's | `flui-app`: `opened_files_after_a_restart_reach_the_later_application`, `a_restart_reports_the_executors_it_did_not_apply`; a retired `UiRuntimeId` is not issued again because it is a generational key (ADR-0313) |
 | §4 `ReloadTier` and `HotReloadTier` are gone | the compiler |
 | §5 the report | `flui-cli`: `the_report_names_the_tier_the_reason_and_the_outcome`, `a_failed_restart_restarts_the_process`, `a_build_without_an_outcome_restarts_the_process`, `a_replaced_build_is_reported_with_the_next` |

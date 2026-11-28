@@ -95,12 +95,20 @@ pub(super) fn restart_if_due() {
     );
     match restart(&reload) {
         Ok(unapplied) => {
-            APP_RUNTIME.with(|slot| {
-                if let Some(desktop) = slot.borrow_mut().desktop_loop.as_mut() {
+            let held = APP_RUNTIME.with(|slot| match slot.borrow_mut().desktop_loop.as_mut() {
+                Some(desktop) => {
                     desktop.restarting = Some((version, unapplied));
+                    None
                 }
+                None => Some((version, unapplied)),
             });
-            settle_restart(&reload);
+            match held {
+                // No loop is left to settle it on: the composition stands.
+                Some((version, unapplied)) => reload.restarted(version, unapplied),
+                None => {
+                    settle_restart(&reload);
+                }
+            }
         }
         Err(failure) => {
             report_failure(&reload, version, &failure);

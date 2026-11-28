@@ -585,12 +585,18 @@ impl Drop for ControllerLease {
 
 /// Open the main window a restart composed with no window kept (an earlier
 /// restart failed installing into it), as a start opens it, except that its
-/// failure is reported to the observer and never ends the loop: the session
-/// waits for the next version.
+/// failure fails the restart and never ends the loop: the restart's outcome
+/// waits for the open as for an install into a kept window
+/// ([`take_kept_install_outcome`]), and the session waits for the next
+/// version.
 pub(super) fn open_main_window_after_restart() {
     APP_RUNTIME.with(|slot| {
         if let Some(controller) = slot.borrow_mut().application.main_controller.as_mut() {
             controller.initial = false;
+            // An application that opens no window at start settles at once.
+            if controller.ingress.is_opening() {
+                controller.adopting = Adopting::Installing;
+            }
         }
     });
     drive_main_window();
@@ -1481,14 +1487,20 @@ fn adopt_main_into(kept: KeptMain) -> Result<(), LaunchError> {
     }
 }
 
-/// How the install into the window the loop kept settled, once it has:
-/// `None` while it still commits. A controller that is gone (the
-/// application retired) settled as cancelled.
+/// How the main window a restart composed settled, once it has: `None`
+/// while its install still commits or its open is pending. A controller
+/// that is gone (the application retired) settled as cancelled; one leased
+/// out to the code driving it (its ingress still accepting) has not settled.
 pub(super) fn take_kept_install_outcome() -> Option<Result<(), AppWindowError>> {
     APP_RUNTIME.with(|slot| {
         let mut runtime = slot.borrow_mut();
+        let accepting = runtime
+            .application
+            .main_ingress
+            .as_ref()
+            .is_some_and(|ingress| ingress.accepting());
         let Some(controller) = runtime.application.main_controller.as_mut() else {
-            return Some(Err(AppWindowError::Cancelled));
+            return (!accepting).then_some(Err(AppWindowError::Cancelled));
         };
         match std::mem::replace(&mut controller.adopting, Adopting::No) {
             Adopting::Installing => {
@@ -1706,7 +1718,8 @@ mod tests {
     /// restart's call (here the call runs inside an owner callback, so the
     /// install publishes once it ends) settles there: until then the
     /// restart's outcome waits, and a window closed before the install
-    /// commits fails it instead of reporting it installed.
+    /// commits, or an ingress closed by a quit before it does, fails it
+    /// instead of reporting it installed or leaving it waiting.
     fn a_kept_install_that_commits_later_settles_when_it_does() {
         use super::super::frame_driver::{FrameDriver, TestFrameDriver};
         use super::super::owner_dispatch::{
@@ -1715,13 +1728,15 @@ mod tests {
         };
         use flui_runtime::ui_runtime::UiRuntime;
 
-        for close_before_publication in [false, true] {
+        for (close_before_publication, quit) in [(false, false), (true, false), (false, true)] {
             let _owner = OwnerHostClearGuard::arm();
             let _cleanup = LoopTeardown::default();
             // Asserted after the run: a panic inside it is contained there.
             let seen = Rc::new(Cell::new(None));
             let settled = Rc::new(RefCell::new(None));
             let (seen_in_run, settled_in_run) = (Rc::clone(&seen), Rc::clone(&settled));
+            let leased = Rc::new(Cell::new(None));
+            let leased_in_run = Rc::clone(&leased);
             Box::new(HeadlessPlatform::new())
                 .run(crate::app::runner::app_handler(move |owner| {
                     let _handle = install_test_controller(
@@ -1776,6 +1791,23 @@ mod tests {
                                 super::super::window_routes::WindowRoutes::of(window.as_ref());
                             let adopted = adopt_main_into(KeptMain { window, routes }).is_ok();
                             inside.set(Some((adopted, take_kept_install_outcome().is_none())));
+                            // A controller leased out to the code driving it
+                            // has not settled either.
+                            let leased = APP_RUNTIME
+                                .with(|slot| slot.borrow_mut().application.main_controller.take());
+                            leased_in_run.set(Some(take_kept_install_outcome().is_none()));
+                            APP_RUNTIME.with(|slot| {
+                                slot.borrow_mut().application.main_controller = leased;
+                            });
+                            if quit {
+                                // The ingress closes, as at a quit, before
+                                // the install commits.
+                                let ingress = APP_RUNTIME
+                                    .with(|slot| slot.borrow().application.main_ingress.clone());
+                                if let Some(ingress) = ingress {
+                                    ingress.close();
+                                }
+                            }
                         })),
                     )
                     .expect("complete caller and installation");
@@ -1789,9 +1821,14 @@ mod tests {
                 "an install that has not settled fails nothing yet, and commits after the owner \
                  callback"
             );
+            assert_eq!(
+                leased.get(),
+                Some(true),
+                "a leased controller has not settled its install"
+            );
             let outcome = settled.borrow_mut().take().flatten();
             assert!(
-                if close_before_publication {
+                if close_before_publication || quit {
                     matches!(outcome, Some(Err(AppWindowError::Cancelled)))
                 } else {
                     matches!(outcome, Some(Ok(())))
