@@ -320,6 +320,77 @@ fn a_restart_drops_the_earlier_scope() {
     run.join().expect("the run ends");
 }
 
+/// §4 step 1: the earlier application's tasks end with it. A task whose
+/// handle outlived its service is cancelled and waited for before the entry
+/// runs, and a spawner it kept refuses from then on.
+fn a_restart_cancels_and_joins_the_earlier_applications_tasks() {
+    type Kept = Arc<Mutex<Option<(flui_app::TaskSpawner, flui_app::TaskHandle<()>)>>>;
+    let kept: Kept = Arc::default();
+    let ended = Arc::new(AtomicBool::new(false));
+    let service = {
+        let (kept, ended) = (Arc::clone(&kept), Arc::clone(&ended));
+        ServiceDefinition::new(
+            "spawns",
+            ServiceLifetime::StopsWithLastWindow,
+            move |context| {
+                let ended = Arc::clone(&ended);
+                let task = context
+                    .spawner()
+                    .spawn_compute("until cancelled", move |task| {
+                        while !task.is_cancelled() {
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
+                        ended.store(true, Ordering::SeqCst);
+                    })
+                    .expect("the compute lane admits the task");
+                *kept.lock().expect("the test's slot") = Some((context.spawner().clone(), task));
+                let cancellation = context.cancellation().clone();
+                Box::pin(async move { cancellation.cancelled().await })
+            },
+        )
+    };
+    let hook = ScriptedReload::new();
+    let ended_when_entered = Arc::new(AtomicBool::new(false));
+    {
+        let (ended, seen, mut entry) = (
+            Arc::clone(&ended),
+            Arc::clone(&ended_when_entered),
+            runs(note(&Lives::new())),
+        );
+        hook.entry(move || {
+            seen.store(ended.load(Ordering::SeqCst), Ordering::SeqCst);
+            entry();
+        });
+    }
+    let run = running_with(
+        &hook,
+        Application::new().config(development(&hook).service(service)),
+        note(&Lives::new()),
+    );
+    let (spawner, task) = kept
+        .lock()
+        .expect("the test's slot")
+        .take()
+        .expect("the service spawned its task");
+    assert!(!ended.load(Ordering::SeqCst), "the task runs");
+
+    hook.load(version(2, 2));
+    turns(&run);
+    assert_eq!(hook.take_outcomes(), [restarted(version(2, 2))]);
+    assert!(
+        ended_when_entered.load(Ordering::SeqCst),
+        "the task was cancelled, and had returned, before the entry ran"
+    );
+    assert!(
+        matches!(
+            spawner.spawn_compute("late", |_| ()),
+            Err(flui_app::SpawnError::ShuttingDown)
+        ),
+        "a spawner of the earlier application refuses"
+    );
+    drop(task);
+    run.join().expect("the run ends");
+}
 /// §4: an `AppHandle` of the earlier application is refused once it
 /// retired.
 fn an_app_handle_of_the_earlier_application_is_refused() {
@@ -975,6 +1046,10 @@ fn runner_restart() {
             (
                 "a_restart_drops_the_earlier_scope",
                 a_restart_drops_the_earlier_scope,
+            ),
+            (
+                "a_restart_cancels_and_joins_the_earlier_applications_tasks",
+                a_restart_cancels_and_joins_the_earlier_applications_tasks,
             ),
             (
                 "an_app_handle_of_the_earlier_application_is_refused",

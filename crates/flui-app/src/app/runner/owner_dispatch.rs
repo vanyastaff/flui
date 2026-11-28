@@ -1429,6 +1429,13 @@ pub(super) fn end_application_work(
                 "some application services did not complete by the shutdown deadline"
             );
         }
+        if report.unfinished_jobs > 0 {
+            tracing::warn!(
+                unfinished = report.unfinished_jobs,
+                "background jobs of the application ignored cancellation past the shutdown \
+                 deadline; they run on until they return"
+            );
+        }
     });
     log(TeardownStep::Services);
 }
