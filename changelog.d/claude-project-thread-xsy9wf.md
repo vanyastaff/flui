@@ -133,3 +133,7 @@
   earlier application kept refuses with `SpawnError::ShuttingDown`. They used to hang under the
   loop's pools, which a restart keeps, and ran on into the later application. The loop's exit
   ends them the same way.
+- **`flui-app`**: a development restart whose install into the kept main window commits in a
+  later owner turn reports its outcome once that install settles: `Restarted` when it commits,
+  `RestartFailed` when it fails, with what the restart composed retired. It used to report
+  `Restarted` at once and send a later failure to the window-error observer.
