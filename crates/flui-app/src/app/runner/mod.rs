@@ -186,6 +186,24 @@ pub(super) fn opened_window(
     }
 }
 
+/// Runs `body`, containing a panic in it: the payload is discarded and the
+/// panic logged. For cleanup that drops what user code captured, on every
+/// target (ADR-0287).
+pub(crate) fn discard_contained(body: impl FnOnce()) {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "ADR-0287: a capture or callback panic is contained; cleanup panics too"
+    )]
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        flui_foundation::panic::discard_payload(payload);
+        if let Err(payload) = std::panic::catch_unwind(|| {
+            tracing::error!("contained application callback or capture cleanup panic");
+        }) {
+            flui_foundation::panic::discard_payload(payload);
+        }
+    }
+}
+
 /// Close a window the runner is discarding: one whose installation failed or
 /// was cancelled, or whose open nobody waits for any more. No caller is left
 /// to hear a refusal (Android's one window does not close) or a failure, and

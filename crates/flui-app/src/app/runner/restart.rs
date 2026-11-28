@@ -2,9 +2,10 @@
 //! retires, its entry runs again with the hand-over open, and the
 //! application it hands over is composed into the windows the loop kept.
 //!
-//! The loop's own parts ([`DesktopLoop`]: the development reload, the driver
-//! agent's disconnect, the terminal failure; the owner platform, the raster
-//! host, the pools, the engine services) are kept. What the loop built from
+//! The loop's own parts ([`DesktopLoop`](super::main_window::DesktopLoop):
+//! the development reload, the driver agent's disconnect, the terminal
+//! failure; the owner platform, the raster host, the pools, the engine
+//! services) are kept. What the loop built from
 //! the application is its [`ApplicationScope`](crate::app::runtime::ApplicationScope),
 //! dropped and built again.
 

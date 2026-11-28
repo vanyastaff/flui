@@ -191,7 +191,7 @@ impl WindowRoutes {
         let weak = Rc::downgrade(self);
         let window = Rc::clone(window);
         let closed = APP_RUNTIME.with(|slot| slot.borrow_mut().adopt_window_routes(window, weak));
-        crate::app::application_control::contain(|| drop(closed));
+        super::discard_contained(|| drop(closed));
     }
 
     /// Route the window's input; the input heard before goes first, in order.
